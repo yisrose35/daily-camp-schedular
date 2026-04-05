@@ -1101,8 +1101,8 @@
                 const availableSpace = nextWall - start;
                 const leftover = availableSpace - d;
                 if (leftover > 0 && leftover < _mf) {
-                    // Option A: expand to wall (if within dMax+10)
-                    if (availableSpace <= dMax + 10) {
+                    // Option A: expand to wall ONLY if still within dMax (never exceed)
+                    if (availableSpace <= dMax) {
                         d = availableSpace;
                     } else {
                         // Option B: shrink league so leftover becomes >= minFillable
@@ -1112,6 +1112,8 @@
                             if (shrunk >= dMin) d = shrunk;
                         }
                     }
+                    // ★ v6.0: Hard cap — league must NEVER exceed dMax
+                    d = Math.min(d, dMax);
                 }
 
                 return d;
@@ -2408,6 +2410,8 @@
                         const dur = special.duration || special.dMin || 30;
                         if (dur > rEnd - cur) continue;
                         if (!canUseSpecialAtTime(special.name, grade, cur, cur + dur)) continue;
+                        // ★ v6.0: Explicit cross-grade conflict check for specials
+                        if (getCrossGradeConflicts('special', cur, cur + dur, grade, special.name) > 0) continue;
                         // ★ v6.0: Fillability check — skip special if remainder is a dead zone
                         const remainderAfter = (rEnd - cur) - dur;
                         if (remainderAfter > 0 && remainderAfter < fillMinDur) continue;
@@ -2612,6 +2616,8 @@
                         if (need.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
                         if (need.type === 'special' && need._assignedSpecial &&
                             !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
+                        if (ok && need.type === 'special' && need._assignedSpecial &&
+                            getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
 
                         if (ok) {
                             placeNeed(need, cursor, dur);

@@ -504,7 +504,7 @@
     border-left: none;
     border-top: 2px solid #e2e8f0;
     border-bottom: 2px solid #e2e8f0;
-    overflow: visible;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
 }
@@ -993,9 +993,10 @@
                 'top:' + leagueTop + 'px',
                 'left:0',
                 'right:0',
-                'min-height:' + leagueH + 'px',
+                'height:' + leagueH + 'px',
                 'z-index:3',
-                'border-radius:0'
+                'border-radius:0',
+                'overflow:hidden'
             ].join(';');
 
             var lHdr = document.createElement('div');
