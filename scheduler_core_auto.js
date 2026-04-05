@@ -3935,51 +3935,87 @@
             if (window.SchedulerCoreSpecialtyLeagues?.processSpecialtyLeagues) { try { lctx.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'specialty_league'); window.SchedulerCoreSpecialtyLeagues.processSpecialtyLeagues(lctx); } catch (e) { warn('[3] Specialty: ' + e.message); } }
             if (window.SchedulerCoreLeagues?.processRegularLeagues) { try { lctx.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'league'); window.SchedulerCoreLeagues.processRegularLeagues(lctx); } catch (e) { warn('[3] Regular: ' + e.message); } }
 
+            // ★ v6.0: Read matchups from processed leagueBlocks → populate leagueAssignments + scheduleAssignments
             let leagueWriteCount = 0;
-            Object.entries(window.leagueAssignments || {}).forEach(([gn, gs]) => {
-                const lsb = autoSkeleton.find(b => b.division === gn && b.type === 'league');
-                if (!lsb) return;
-                const asgn = Object.values(gs)[0];
-                if (!asgn) return;
-                const pbs = window.divisionTimes?.[gn]?._perBunkSlots;
+            leagueBlocks.forEach(lb => {
+                const matchups = lb._allMatchups || [];
+                const sport = lb._sport || lb.sport || '';
+                const leagueName = lb._leagueName || lb._activity || '';
+                const gameLabel = lb._gameLabel || '';
+
+                // Write to leagueAssignments (authoritative source for grid renderer)
+                if (!window.leagueAssignments[lb.divName]) window.leagueAssignments[lb.divName] = {};
+                window.leagueAssignments[lb.divName][lb.startMin] = {
+                    matchups, gameLabel, sport, leagueName
+                };
+
+                // Write to scheduleAssignments for each bunk (triggers league row detection in grid)
+                const pbs = window.divisionTimes?.[lb.divName]?._perBunkSlots;
                 if (!pbs) return;
                 Object.entries(pbs).forEach(([bk, bs]) => {
-                    const fi = bs.findIndex(s => s.startMin === lsb.startMin);
+                    const fi = bs.findIndex(s => s.startMin === lb.startMin);
                     if (fi === -1 || !window.scheduleAssignments[bk]) return;
                     window.scheduleAssignments[bk][fi] = {
-                        field: asgn.sport || 'League Game', sport: asgn.sport || null,
-                        _activity: 'League Game', _league: true, _leagueName: asgn.leagueName || '',
-                        _gameLabel: asgn.gameLabel || '', matchups: asgn.matchups || [],
+                        field: sport || 'League Game', sport: sport || null,
+                        _activity: 'League Game', _league: true, _leagueName: leagueName,
+                        _gameLabel: gameLabel, matchups: matchups,
                         _fixed: true, continuation: false
                     };
                     leagueWriteCount++;
+                });
+            });
+
+            // Also read from storeLeagueMatchups callback results (if any)
+            Object.entries(window.leagueAssignments || {}).forEach(([gn, gs]) => {
+                Object.entries(gs).forEach(([startMinStr, asgn]) => {
+                    if (!asgn || !asgn.matchups || asgn.matchups.length === 0) return;
+                    const pbs = window.divisionTimes?.[gn]?._perBunkSlots;
+                    if (!pbs) return;
+                    Object.entries(pbs).forEach(([bk, bs]) => {
+                        const fi = bs.findIndex(s => s.startMin === parseInt(startMinStr));
+                        if (fi === -1 || !window.scheduleAssignments[bk]) return;
+                        const existing = window.scheduleAssignments[bk][fi];
+                        if (existing && existing._league && existing.matchups && existing.matchups.length > 0) return; // already written
+                        window.scheduleAssignments[bk][fi] = {
+                            field: asgn.sport || 'League Game', sport: asgn.sport || null,
+                            _activity: 'League Game', _league: true, _leagueName: asgn.leagueName || '',
+                            _gameLabel: asgn.gameLabel || '', matchups: asgn.matchups || [],
+                            _fixed: true, continuation: false
+                        };
+                        leagueWriteCount++;
+                    });
                 });
             });
             log('[3] Wrote ' + leagueWriteCount + ' league slots');
 
             // ★ v6.0: Write matchup info back to bunkTimelines league blocks
             // Source 1: processed leagueBlocks (have _allMatchups after processRegularLeagues)
+            // ★ v6.0: Write ALL matchups to every bunk's league block (leagues are grade-wide, not bunk-based)
+            // Source 1: processed leagueBlocks
             leagueBlocks.forEach(lb => {
-                if (!lb._allMatchups || lb._allMatchups.length === 0) return;
+                const matchups = lb._allMatchups || [];
+                const sport = lb._sport || lb.sport || '';
+                const leagueName = lb._leagueName || lb._activity || '';
+                const gameLabel = lb._gameLabel || '';
                 const divBunks = getBunksForGrade(lb.divName, divisions);
                 divBunks.forEach(bk => {
                     const tl = bunkTimelines[bk] || [];
                     const block = tl.find(b => (b.type || '').toLowerCase() === 'league' && b.startMin === lb.startMin);
                     if (!block) return;
-                    block._matchups = lb._allMatchups;
-                    block._leagueSport = lb._sport || lb.sport || '';
-                    block._gameLabel = lb._gameLabel || '';
-                    // Find this bunk's specific matchup
-                    const bunkStr = String(bk);
-                    const myMatchup = lb._allMatchups.find(m =>
-                        m.includes(bunkStr) || m.toLowerCase().includes(('bunk ' + bunkStr).toLowerCase())
-                    );
-                    if (myMatchup) block.event = myMatchup;
-                    else if (lb._sport) block.event = 'League - ' + lb._sport;
+                    block._matchups = matchups;
+                    block._leagueSport = sport;
+                    block._leagueName = leagueName;
+                    block._gameLabel = gameLabel;
+                    // Show all matchups summary on event (grade-wide, teams ≠ bunks)
+                    if (matchups.length > 0) {
+                        block.event = matchups.join(' | ');
+                    } else if (sport) {
+                        block.event = 'League - ' + sport;
+                    }
                 });
             });
 
-            // Source 2: window.leagueAssignments (populated by storeLeagueMatchups)
+            // Source 2: window.leagueAssignments
             Object.entries(window.leagueAssignments || {}).forEach(([divName, slots]) => {
                 const bunks = getBunksForGrade(divName, divisions);
                 Object.entries(slots).forEach(([startMinStr, asgn]) => {
@@ -3990,17 +4026,16 @@
                         const block = tl.find(b =>
                             (b.type || '').toLowerCase() === 'league' && b.startMin === startMin
                         );
-                        if (!block || block._matchups) return; // skip if already set by source 1
+                        if (!block || block._matchups) return;
                         block._matchups = asgn.matchups;
                         block._leagueSport = asgn.sport || '';
                         block._leagueName = asgn.leagueName || '';
                         block._gameLabel = asgn.gameLabel || '';
-                        const bunkStr = String(bk);
-                        const myMatchup = asgn.matchups.find(m =>
-                            m.includes(bunkStr) || m.toLowerCase().includes(('bunk ' + bunkStr).toLowerCase())
-                        );
-                        if (myMatchup) block.event = myMatchup;
-                        else if (asgn.sport) block.event = 'League - ' + asgn.sport;
+                        if (asgn.matchups.length > 0) {
+                            block.event = asgn.matchups.join(' | ');
+                        } else if (asgn.sport) {
+                            block.event = 'League - ' + asgn.sport;
+                        }
                     });
                 });
             });
