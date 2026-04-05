@@ -2190,10 +2190,13 @@
                     usedNames.add(special.name);
                 }
             }
+            // ★ v6.0: Get the specials layer for this grade (used as fallback for duration constraints)
+            const gradeSpecialLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'special');
             (draftResult.specials || []).forEach(special => {
                 const hasFixedDur = special.duration && special.duration > 0;
-                const sDMin = hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMin;
-                const sDMax = hasFixedDur ? special.duration : resolveConstraints(special.layer, 'special', special).dMax;
+                const effectiveLayer = special.layer || gradeSpecialLayer || null;
+                const sDMin = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMin;
+                const sDMax = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMax;
                 needs.push({
                     type: 'special', event: special.name, layer: special.layer,
                     dMin: sDMin, dMax: sDMax,
@@ -2942,17 +2945,17 @@
                         const nextT = (next.type || '').toLowerCase();
                         const prevDur = prev.endMin - prev.startMin;
                         const nextDur = next.endMin - next.startMin;
-                        // Get effective max: specials have strict dMax, sports are flexible
-                        const prevMax = prevT === 'special' ? (prev.dMax || prevDur) : Infinity;
-                        const nextMax = nextT === 'special' ? (next.dMax || nextDur) : Infinity;
+                        // ★ v6.0: Check dMax for ALL types, not just specials
+                        const prevMax = ['sport', 'slot'].includes(prevT) ? (sportC.dMax || 60) : (prev.dMax || prevDur);
+                        const nextMax = ['sport', 'slot'].includes(nextT) ? (sportC.dMax || 60) : (next.dMax || nextDur);
 
                         if (prev._source !== 'phase0' && prevDur + gs <= prevMax) {
                             prev.endMin += gs;
                         } else if (next._source !== 'phase0' && nextDur + gs <= nextMax) {
                             next.startMin -= gs;
-                        } else if (prev._source !== 'phase0' && prevT !== 'special') {
-                            prev.endMin += gs; // sports/slots can always grow
-                        } else if (next._source !== 'phase0' && nextT !== 'special') {
+                        } else if (prev._source !== 'phase0' && ['sport', 'slot'].includes(prevT)) {
+                            prev.endMin += gs; // sports/slots can always grow (solver reassigns)
+                        } else if (next._source !== 'phase0' && ['sport', 'slot'].includes(nextT)) {
                             next.startMin -= gs;
                         } else if (prev._source === 'phase0' || next._source === 'phase0') {
                             // Extend the wall
