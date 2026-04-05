@@ -3598,14 +3598,30 @@ function renderResourceOverridesUI() {
   `;
   
   const saveOverrides = () => {
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const fullOverrides = dailyData.overrides || {};
-    fullOverrides.leagues = currentOverrides.leagues;
-    fullOverrides.disabledFields = currentOverrides.disabledFields;
-    fullOverrides.disabledSpecials = currentOverrides.disabledSpecials;
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    const fullOverrides = {
+      leagues: currentOverrides.leagues || [],
+      disabledFields: currentOverrides.disabledFields || [],
+      disabledSpecials: currentOverrides.disabledSpecials || []
+    };
+    // Save to dailyData (cloud sync)
     window.saveCurrentDailyData("overrides", fullOverrides);
     window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
     window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+    window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+    // ★ v7.0: Also save to dedicated localStorage key (survives cloud overwrites)
+    try {
+      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+        overrides: fullOverrides,
+        dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
+        dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
+        disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+      }));
+    } catch(e) {}
+    console.log('[ResourceOverrides] Saved for ' + dateKey + ': ' +
+      fullOverrides.disabledFields.length + ' disabled fields, ' +
+      fullOverrides.disabledSpecials.length + ' disabled specials, ' +
+      fullOverrides.leagues.length + ' disabled leagues');
   };
   
   const fields = masterSettings.app1?.fields || [];
@@ -3661,7 +3677,7 @@ function renderResourceOverridesUI() {
     const onToggle = (isEnabled) => {
       if (isEnabled) currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== name);
       else if (!currentOverrides.disabledSpecialtyLeagues.includes(name)) currentOverrides.disabledSpecialtyLeagues.push(name);
-      window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+      saveOverrides(); // ★ v7.0: Use unified save (includes dedicated localStorage key)
     };
     specialtyLeaguesListEl.appendChild(createResourceToggleItem('specialty_league', name, !isDisabled, onToggle));
   });
@@ -4404,8 +4420,40 @@ function refreshFromCloud() {
 }
 
 function loadCurrentOverrides() {
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const dailyData = window.loadCurrentDailyData?.() || {};
-  const dailyOverrides = dailyData.overrides || {};
+  let dailyOverrides = dailyData.overrides || {};
+
+  // ★ v7.0: Fallback to dedicated localStorage key (survives cloud overwrites)
+  if (!dailyOverrides.disabledFields?.length && !dailyOverrides.disabledSpecials?.length && !dailyOverrides.leagues?.length) {
+    try {
+      const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.overrides) {
+          dailyOverrides = parsed.overrides;
+          // Also restore other override data
+          if (parsed.dailyDisabledSportsByField) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
+          if (parsed.dailyFieldAvailability) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
+          if (parsed.disabledSpecialtyLeagues) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
+          // Sync back to dailyData for cloud
+          window.saveCurrentDailyData?.("overrides", dailyOverrides);
+          console.log('[ResourceOverrides] Restored from localStorage for ' + dateKey);
+        }
+      }
+    } catch(e) {}
+  } else {
+    // Sync to dedicated key for fast reload
+    try {
+      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+        overrides: dailyOverrides,
+        dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
+        dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
+        disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || []
+      }));
+    } catch(e) {}
+  }
+
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
   currentOverrides.leagues = dailyOverrides.leagues || [];
   currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
@@ -4413,7 +4461,6 @@ function loadCurrentOverrides() {
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
   // Load bunk overrides from multiple sources (same pattern as trips)
-  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   let bunkOv = dailyData.bunkActivityOverrides || [];
   if (bunkOv.length === 0) {
     try {

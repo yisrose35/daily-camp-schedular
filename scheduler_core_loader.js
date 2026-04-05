@@ -397,7 +397,20 @@
         // STEP 1: Disable outdoor fields during rainy day
         // -----------------------------------------------------------------
         // ★ v7.0: Read from correct path — overrides are nested under dailyData.overrides
-        const dailyOvNested = dailyOverrides.overrides || {};
+        let dailyOvNested = dailyOverrides.overrides || {};
+        // Fallback: dedicated localStorage key (survives cloud overwrites)
+        if (!dailyOvNested.disabledFields?.length && !dailyOvNested.disabledSpecials?.length) {
+            try {
+                const dateKey = window.currentScheduleDate || '';
+                const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed?.overrides) dailyOvNested = parsed.overrides;
+                    if (parsed?.dailyFieldAvailability) dailyOverrides.dailyFieldAvailability = parsed.dailyFieldAvailability;
+                    if (parsed?.dailyDisabledSportsByField) dailyOverrides.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
+                }
+            } catch(e) {}
+        }
         let effectiveDisabledFields = [...(dailyOvNested.disabledFields || dailyOverrides.disabledFields || [])];
         
         if (isRainyMode) {
