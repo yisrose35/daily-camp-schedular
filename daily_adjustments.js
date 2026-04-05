@@ -3496,9 +3496,13 @@ function renderBunkOverridesUI() {
       });
     });
     
+    // Save to both dailyData (cloud sync) AND dedicated localStorage key (survives overwrites)
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
     window.saveCurrentDailyData("bunkActivityOverrides", overrides);
+    try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(overrides)); } catch(e) {}
     currentOverrides.bunkActivityOverrides = overrides;
-    
+    console.log('[BunkOverrides] Saved ' + overrides.length + ' overrides for ' + dateKey);
+
     activityEl.value = "";
     startEl.value = "";
     endEl.value = "";
@@ -3528,7 +3532,9 @@ function renderBunkOverridesUI() {
       el.querySelector('button').onclick = () => {
         let currentList = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
         currentList = currentList.filter(o => o.id !== item.id);
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         window.saveCurrentDailyData("bunkActivityOverrides", currentList);
+        try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(currentList)); } catch(e) {}
         currentOverrides.bunkActivityOverrides = currentList;
         renderBunkOverridesUI();
       };
@@ -4406,7 +4412,26 @@ function loadCurrentOverrides() {
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
-  currentOverrides.bunkActivityOverrides = dailyData.bunkActivityOverrides || [];
+  // Load bunk overrides from multiple sources (same pattern as trips)
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  let bunkOv = dailyData.bunkActivityOverrides || [];
+  if (bunkOv.length === 0) {
+    try {
+      const stored = localStorage.getItem('campBunkOverrides_' + dateKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          bunkOv = parsed;
+          // Sync back to dailyData
+          window.saveCurrentDailyData?.("bunkActivityOverrides", bunkOv);
+        }
+      }
+    } catch(e) {}
+  } else {
+    // Sync to dedicated key for fast reload
+    try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(bunkOv)); } catch(e) {}
+  }
+  currentOverrides.bunkActivityOverrides = bunkOv;
 }
 
 // =================================================================

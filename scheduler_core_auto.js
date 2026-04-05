@@ -3594,15 +3594,31 @@
             if (tripBlockCount > 0) allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
 
             // ★ v7.0: Inject bunk-specific overrides as pinned blocks
+            // Re-load fresh from localStorage to catch recently added overrides
             let overrideBlockCount = 0;
-            const bunkOverrides = dailyData?.bunkActivityOverrides || [];
+            const freshDailyData = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+            let bunkOverrides = freshDailyData?.bunkActivityOverrides || dailyData?.bunkActivityOverrides || [];
+            // Fallback: dedicated localStorage key (same pattern as trips)
+            if (bunkOverrides.length === 0) {
+                try {
+                    const stored = localStorage.getItem('campBunkOverrides_' + (window.currentScheduleDate || ''));
+                    if (stored) { const parsed = JSON.parse(stored); if (Array.isArray(parsed)) bunkOverrides = parsed; }
+                } catch(e) {}
+            }
+            if (totalIters < 1) log('[P0] Bunk overrides found: ' + bunkOverrides.length + ' | bunkTimelines keys: ' + Object.keys(bunkTimelines).length);
             bunkOverrides.forEach(ov => {
                 if (!ov.bunk || !ov.activity) return;
                 const tStart = ov.startMin ?? parseTimeToMinutes(ov.startTime);
                 const tEnd = ov.endMin ?? parseTimeToMinutes(ov.endTime);
-                if (tStart == null || tEnd == null) return;
+                if (tStart == null || tEnd == null) {
+                    if (totalIters < 1) warn('[P0] Override skipped — bad times: ' + ov.activity + ' start=' + ov.startTime + ' end=' + ov.endTime);
+                    return;
+                }
                 const bunk = String(ov.bunk);
-                if (!bunkTimelines[bunk]) return;
+                if (!bunkTimelines[bunk]) {
+                    if (totalIters < 1) warn('[P0] Override skipped — bunk not found: "' + bunk + '" (available: ' + Object.keys(bunkTimelines).slice(0, 5).join(', ') + '...)');
+                    return;
+                }
                 // Determine block type
                 const blockType = ov.type === 'sport' ? 'sport' : (ov.type === 'special' ? 'special' : 'custom');
                 bunkTimelines[bunk].push({
