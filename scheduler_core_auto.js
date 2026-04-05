@@ -2688,6 +2688,34 @@
                 if (!swept) break;
             }
 
+            // ── Step 5: Wall-clamp safety ─────────────────────────────
+            // No non-wall block may overlap a wall. If it does, shrink it.
+            template.sort((a, b) => a.startMin - b.startMin);
+            const wallBlocks = template.filter(b => b._source === 'phase0');
+            for (const blk of template) {
+                if (blk._source === 'phase0') continue;
+                for (const wall of wallBlocks) {
+                    // Block bleeds into wall from the left
+                    if (blk.endMin > wall.startMin && blk.startMin < wall.startMin) {
+                        blk.endMin = wall.startMin;
+                    }
+                    // Block bleeds into wall from the right
+                    if (blk.startMin < wall.endMin && blk.endMin > wall.endMin) {
+                        blk.startMin = wall.endMin;
+                    }
+                }
+                // Remove zero/negative duration blocks
+                if (blk.endMin <= blk.startMin) {
+                    blk._deleted = true;
+                }
+            }
+            // Filter out deleted blocks
+            const finalTemplate = template.filter(b => !b._deleted);
+            finalTemplate.sort((a, b) => a.startMin - b.startMin);
+            // Replace template contents
+            template.length = 0;
+            finalTemplate.forEach(b => template.push(b));
+
             template.sort((a, b) => a.startMin - b.startMin);
             // ── Step 7: Post-expand enforcement ──────────────────────────
             // Clamp configured specials to exact duration
