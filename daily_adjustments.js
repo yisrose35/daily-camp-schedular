@@ -3481,15 +3481,18 @@ function renderBunkOverridesUI() {
     const dailyData = window.loadCurrentDailyData?.() || {};
     const overrides = dailyData.bunkActivityOverrides || [];
     
+    const ovStartMin = parseTimeToMinutes(startEl.value);
+    const ovEndMin = parseTimeToMinutes(endEl.value);
     selectedBunks.forEach(bunk => {
-      overrides.push({ 
-        id: uid(), 
-        bunk, 
-        activity, 
+      overrides.push({
+        id: uid(),
+        bunk,
+        activity,
         location,
-        startTime: startEl.value, 
-        endTime: endEl.value, 
-        type 
+        startTime: startEl.value,
+        endTime: endEl.value,
+        startMin: ovStartMin, endMin: ovEndMin,
+        type
       });
     });
     

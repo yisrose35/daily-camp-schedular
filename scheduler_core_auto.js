@@ -3593,6 +3593,39 @@
             });
             if (tripBlockCount > 0) allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
 
+            // ★ v7.0: Inject bunk-specific overrides as pinned blocks
+            let overrideBlockCount = 0;
+            const bunkOverrides = dailyData?.bunkActivityOverrides || [];
+            bunkOverrides.forEach(ov => {
+                if (!ov.bunk || !ov.activity) return;
+                const tStart = ov.startMin ?? parseTimeToMinutes(ov.startTime);
+                const tEnd = ov.endMin ?? parseTimeToMinutes(ov.endTime);
+                if (tStart == null || tEnd == null) return;
+                const bunk = String(ov.bunk);
+                if (!bunkTimelines[bunk]) return;
+                // Determine block type
+                const blockType = ov.type === 'sport' ? 'sport' : (ov.type === 'special' ? 'special' : 'custom');
+                bunkTimelines[bunk].push({
+                    startMin: tStart, endMin: tEnd,
+                    type: blockType, event: ov.activity,
+                    field: ov.location || null,
+                    layer: null, _classification: 'pinned', _committed: true, _fixed: true,
+                    _bunkOverride: true, _activityLocked: true, _noBacktrack: true
+                });
+                // Claim the field if specified
+                if (ov.location) {
+                    const bunkGrade = Object.keys(divisions).find(g =>
+                        getBunksForGrade(g, divisions).map(String).includes(bunk)
+                    );
+                    if (bunkGrade) claimField(ov.location, tStart, tEnd, bunk, bunkGrade, ov.activity);
+                }
+                overrideBlockCount++;
+            });
+            if (overrideBlockCount > 0) {
+                log('[P0] Injected ' + overrideBlockCount + ' bunk overrides');
+                allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
+            }
+
             buildResourceCalendar(_iterSeed);
 
             // Leagues in stagger order
