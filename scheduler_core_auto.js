@@ -2913,27 +2913,22 @@
             // ★ v6.0 TINY BLOCK MERGER — eliminate blocks shorter than fillMinDur
             // by merging them into adjacent sport/slot blocks.
             // ═══════════════════════════════════════════════════════════
+            // ★ v6.1: Tiny block merger — ONLY merge into sport/slot blocks (never stretch
+            // snacks, specials, swim, or other typed blocks past their dMax)
             template.sort((a, b) => a.startMin - b.startMin);
             for (let mi = 0; mi < template.length; mi++) {
                 const blk = template[mi];
                 if (blk._source === 'phase0') continue;
                 const dur = blk.endMin - blk.startMin;
                 const t = (blk.type || '').toLowerCase();
-                // Only merge sport/slot fillers that are too short
                 if (!['sport', 'slot'].includes(t)) continue;
                 if (dur >= fillMinDur) continue;
-                // Merge into prev or next sport/slot
+                // ONLY merge into adjacent sport/slot — never into snacks/specials/swim
                 let merged = false;
                 if (mi > 0 && ['sport', 'slot'].includes((template[mi - 1].type || '').toLowerCase()) && template[mi - 1]._source !== 'phase0') {
                     template[mi - 1].endMin = blk.endMin;
                     merged = true;
                 } else if (mi < template.length - 1 && ['sport', 'slot'].includes((template[mi + 1].type || '').toLowerCase()) && template[mi + 1]._source !== 'phase0') {
-                    template[mi + 1].startMin = blk.startMin;
-                    merged = true;
-                } else if (mi > 0 && template[mi - 1]._source !== 'phase0') {
-                    template[mi - 1].endMin = blk.endMin;
-                    merged = true;
-                } else if (mi < template.length - 1 && template[mi + 1]._source !== 'phase0') {
                     template[mi + 1].startMin = blk.startMin;
                     merged = true;
                 }
@@ -2963,7 +2958,14 @@
                             _activityLocked: false, _assignedSport: sp ? sp.name : null,
                             field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
                             _sportFallbacks: priorityList.map(s => s.name), _final: true });
-                    } else { template[0].startMin = gradeStart; }
+                    } else {
+                        // Small start gap — only extend if first block is sport/slot
+                        const firstT = (template[0].type || '').toLowerCase();
+                        if (['sport', 'slot'].includes(firstT) && template[0]._source !== 'phase0') {
+                            template[0].startMin = gradeStart;
+                        }
+                        // else: leave the small gap (scorer handles it)
+                    }
                     foundGap = true; continue;
                 }
 
@@ -3064,11 +3066,33 @@
                             _activityLocked: false, _assignedSport: sp ? sp.name : null,
                             field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
                             _sportFallbacks: priorityList.map(s => s.name), _final: true });
-                    } else { template[template.length - 1].endMin = gradeEnd; }
+                    } else {
+                        const lastT = (template[template.length - 1].type || '').toLowerCase();
+                        if (['sport', 'slot'].includes(lastT) && template[template.length - 1]._source !== 'phase0') {
+                            template[template.length - 1].endMin = gradeEnd;
+                        }
+                    }
                     foundGap = true; continue;
                 }
 
                 if (!foundGap) break;
+            }
+
+            // ═══════════════════════════════════════════════════════════
+            // ★ v6.1 dMAX ENFORCEMENT — final pass to ensure NO block exceeds its layer dMax.
+            // If the gap eliminator or merger stretched something past dMax, shrink it back.
+            // The leftover space becomes a gap that the next iteration can score.
+            // ═══════════════════════════════════════════════════════════
+            template.sort((a, b) => a.startMin - b.startMin);
+            for (const blk of template) {
+                if (blk._source === 'phase0') continue;
+                const t = (blk.type || '').toLowerCase();
+                if (['sport', 'slot'].includes(t)) continue; // sports are flexible
+                const dur = blk.endMin - blk.startMin;
+                const maxDur = blk.dMax || dur;
+                if (dur > maxDur) {
+                    blk.endMin = blk.startMin + maxDur;
+                }
             }
 
             return template.sort((a, b) => a.startMin - b.startMin);
