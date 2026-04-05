@@ -2910,6 +2910,40 @@
             }
 
             // ═══════════════════════════════════════════════════════════
+            // ★ v6.0 TINY BLOCK MERGER — eliminate blocks shorter than fillMinDur
+            // by merging them into adjacent sport/slot blocks.
+            // ═══════════════════════════════════════════════════════════
+            template.sort((a, b) => a.startMin - b.startMin);
+            for (let mi = 0; mi < template.length; mi++) {
+                const blk = template[mi];
+                if (blk._source === 'phase0') continue;
+                const dur = blk.endMin - blk.startMin;
+                const t = (blk.type || '').toLowerCase();
+                // Only merge sport/slot fillers that are too short
+                if (!['sport', 'slot'].includes(t)) continue;
+                if (dur >= fillMinDur) continue;
+                // Merge into prev or next sport/slot
+                let merged = false;
+                if (mi > 0 && ['sport', 'slot'].includes((template[mi - 1].type || '').toLowerCase()) && template[mi - 1]._source !== 'phase0') {
+                    template[mi - 1].endMin = blk.endMin;
+                    merged = true;
+                } else if (mi < template.length - 1 && ['sport', 'slot'].includes((template[mi + 1].type || '').toLowerCase()) && template[mi + 1]._source !== 'phase0') {
+                    template[mi + 1].startMin = blk.startMin;
+                    merged = true;
+                } else if (mi > 0 && template[mi - 1]._source !== 'phase0') {
+                    template[mi - 1].endMin = blk.endMin;
+                    merged = true;
+                } else if (mi < template.length - 1 && template[mi + 1]._source !== 'phase0') {
+                    template[mi + 1].startMin = blk.startMin;
+                    merged = true;
+                }
+                if (merged) {
+                    template.splice(mi, 1);
+                    mi--; // re-check at this index
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════
             // ★ v6.0 FINAL GAP ELIMINATOR — absolute last line of defense.
             // Guarantees ZERO gaps from gradeStart to gradeEnd.
             // ═══════════════════════════════════════════════════════════
@@ -2950,48 +2984,66 @@
                             field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
                             _sportFallbacks: priorityList.map(s => s.name), _final: true });
                     } else {
-                        // Small gap — extend a neighbor, respecting dMax for specials
+                        // ★ v6.0: Small gap — NEVER create a tiny filler (causes duration violations).
+                        // Search for the nearest sport/slot block that can absorb the gap.
+                        // Sports/slots are flexible — the solver will reassign them.
                         const prev = template[i], next = template[i + 1];
                         const prevT = (prev.type || '').toLowerCase();
                         const nextT = (next.type || '').toLowerCase();
                         const prevDur = prev.endMin - prev.startMin;
                         const nextDur = next.endMin - next.startMin;
-                        // ★ v6.0: Check dMax for ALL types, not just specials
-                        const prevMax = ['sport', 'slot'].includes(prevT) ? (sportC.dMax || 60) : (prev.dMax || prevDur);
-                        const nextMax = ['sport', 'slot'].includes(nextT) ? (sportC.dMax || 60) : (next.dMax || nextDur);
+                        const prevMax = ['sport', 'slot'].includes(prevT) ? Infinity : (prev.dMax || prevDur);
+                        const nextMax = ['sport', 'slot'].includes(nextT) ? Infinity : (next.dMax || nextDur);
 
-                        if (prev._source !== 'phase0' && prevDur + gs <= prevMax) {
-                            prev.endMin += gs;
-                        } else if (next._source !== 'phase0' && nextDur + gs <= nextMax) {
-                            next.startMin -= gs;
-                        } else if (prev._source !== 'phase0' && ['sport', 'slot'].includes(prevT)) {
-                            prev.endMin += gs; // sports/slots can always grow (solver reassigns)
-                        } else if (next._source !== 'phase0' && ['sport', 'slot'].includes(nextT)) {
-                            next.startMin -= gs;
-                        } else if (prev._source === 'phase0' || next._source === 'phase0') {
-                            // ★ v6.0: Extend a wall, but respect dMax (leagues have strict dMax)
-                            const wallPrev = prev._source === 'phase0';
-                            const wallBlock = wallPrev ? prev : next;
-                            const wallDur = wallBlock.endMin - wallBlock.startMin;
-                            const wallMax = wallBlock.dMax || Infinity;
-                            if (wallDur + gs <= wallMax) {
-                                if (wallPrev) prev.endMin += gs;
-                                else next.startMin -= gs;
-                            } else {
-                                // Wall can't grow — create a tiny filler
-                                template.push({ startMin: prev.endMin, endMin: next.startMin,
-                                    type: 'slot', event: 'General Activity Slot',
-                                    layer: null, dMin: gs, dMax: gs,
-                                    _activityLocked: false, _source: 'filler', _final: true,
-                                    _sportFallbacks: priorityList.map(s => s.name) });
+                        let absorbed = false;
+                        // Try immediate neighbors first (respecting dMax for non-sport types)
+                        if (!absorbed && prev._source !== 'phase0' && prevDur + gs <= prevMax) {
+                            prev.endMin += gs; absorbed = true;
+                        }
+                        if (!absorbed && next._source !== 'phase0' && nextDur + gs <= nextMax) {
+                            next.startMin -= gs; absorbed = true;
+                        }
+                        // Sports/slots can ALWAYS grow (solver handles duration)
+                        if (!absorbed && prev._source !== 'phase0' && ['sport', 'slot'].includes(prevT)) {
+                            prev.endMin += gs; absorbed = true;
+                        }
+                        if (!absorbed && next._source !== 'phase0' && ['sport', 'slot'].includes(nextT)) {
+                            next.startMin -= gs; absorbed = true;
+                        }
+                        // Search wider — find ANY sport/slot in the template near this gap
+                        if (!absorbed) {
+                            // Look backward for nearest sport/slot
+                            for (let j = i; j >= 0; j--) {
+                                const blk = template[j];
+                                if (['sport', 'slot'].includes((blk.type || '').toLowerCase()) && blk._source !== 'phase0') {
+                                    // Shift everything between blk and the gap
+                                    blk.endMin += gs;
+                                    for (let k = j + 1; k <= i; k++) {
+                                        template[k].startMin += gs;
+                                        template[k].endMin += gs;
+                                    }
+                                    absorbed = true; break;
+                                }
                             }
-                        } else {
-                            // Neither can grow — create a tiny filler
-                            template.push({ startMin: prev.endMin, endMin: next.startMin,
-                                type: 'slot', event: 'General Activity Slot',
-                                layer: null, dMin: gs, dMax: gs,
-                                _activityLocked: false, _source: 'filler', _final: true,
-                                _sportFallbacks: priorityList.map(s => s.name) });
+                        }
+                        if (!absorbed) {
+                            // Look forward for nearest sport/slot
+                            for (let j = i + 1; j < template.length; j++) {
+                                const blk = template[j];
+                                if (['sport', 'slot'].includes((blk.type || '').toLowerCase()) && blk._source !== 'phase0') {
+                                    blk.startMin -= gs;
+                                    for (let k = i + 1; k < j; k++) {
+                                        template[k].startMin -= gs;
+                                        template[k].endMin -= gs;
+                                    }
+                                    absorbed = true; break;
+                                }
+                            }
+                        }
+                        // Absolute last resort: extend a wall (even past dMax if necessary)
+                        if (!absorbed) {
+                            if (prev._source === 'phase0') prev.endMin += gs;
+                            else next.startMin -= gs;
                         }
                     }
                     fixed = true; break;
@@ -3107,12 +3159,13 @@
                 for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; score += scoreGap(gap); }
                 if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) score += scoreGap(dayEnd - sorted[sorted.length - 1].endMin);
 
-                // Duration violations
+                // Duration violations — ★ v6.0: Much heavier penalty than Free blocks.
+                // A duration violation is NEVER acceptable. Prefer a Free over a short sport.
                 timeline.forEach(block => {
                     if (block._fromGapDetection && !block.layer) return;
                     const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                     const dur = block.endMin - block.startMin;
-                    if (dur < dMin) score += (dMin - dur) * 200;
+                    if (dur < dMin) score += (dMin - dur) * 10000 + 100000;
                 });
 
                 // Out of bounds
