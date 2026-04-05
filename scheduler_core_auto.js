@@ -2267,7 +2267,84 @@
                 return gaps;
             }
 
+            // ═══════════════════════════════════════════════════════════
+            // ★ v7.0 LOOK-AHEAD CONSTRAINT SOLVER
+            // Before committing any placement, verify the REST of the day
+            // is still solvable. This prevents creating arrangements that
+            // inevitably lead to unfillable gaps or dMax violations.
+            // ═══════════════════════════════════════════════════════════
             function canFitRemaining(currentPlaced, remainingNeeds) {
+                if (remainingNeeds.length === 0) return true;
+                const gaps = getGaps(currentPlaced);
+
+                // 1. Every remaining need must fit in at least one gap
+                for (const need of remainingNeeds) {
+                    const ok = gaps.some(g => {
+                        const es = Math.max(g.start, need.windowStart || gradeStart);
+                        const ee = Math.min(g.end, need.windowEnd || gradeEnd);
+                        if (ee - es < need.dMin) return false;
+                        // Check resource availability for this need in this gap
+                        if (need.type === 'swim') {
+                            for (let t = es; t + need.dMin <= ee; t += 5) {
+                                if (canUsePoolAtTime(grade, t, t + need.dMin)) return true;
+                            }
+                            return false;
+                        }
+                        if (need.type === 'special' && need._assignedSpecial) {
+                            for (let t = es; t + need.dMin <= ee; t += 5) {
+                                if (canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) return true;
+                            }
+                            return false;
+                        }
+                        return true;
+                    });
+                    if (!ok) return false;
+                }
+
+                // 2. Total remaining need time must fit in total gap time
+                const totalNeed = remainingNeeds.reduce((s, n) => s + n.dMin, 0);
+                const totalGap = gaps.reduce((s, g) => s + g.size, 0);
+                if (totalNeed > totalGap) return false;
+
+                // 3. After placing all needs, remaining gaps must be fillable with sports
+                // (every leftover gap must be either 0 or >= fillMinDur)
+                const needsByGap = new Map();
+                const sortedNeeds = [...remainingNeeds].sort((a, b) => {
+                    const aFlex = (Math.min(a.windowEnd || gradeEnd, gradeEnd) - Math.max(a.windowStart || gradeStart, gradeStart)) - a.dMin;
+                    const bFlex = (Math.min(b.windowEnd || gradeEnd, gradeEnd) - Math.max(b.windowStart || gradeStart, gradeStart)) - b.dMin;
+                    return aFlex - bFlex; // tightest first
+                });
+                // Simulate greedy assignment to check leftover gaps
+                const simGaps = gaps.map(g => ({ ...g, remaining: g.size }));
+                for (const need of sortedNeeds) {
+                    let assigned = false;
+                    for (const sg of simGaps) {
+                        const es = Math.max(sg.start, need.windowStart || gradeStart);
+                        const ee = Math.min(sg.end, need.windowEnd || gradeEnd);
+                        if (ee - es >= need.dMin && sg.remaining >= need.dMin) {
+                            sg.remaining -= need.dMin;
+                            assigned = true;
+                            break;
+                        }
+                    }
+                    if (!assigned) return false;
+                }
+                // Check leftover gaps are fillable
+                for (const sg of simGaps) {
+                    if (sg.remaining > 0 && sg.remaining < fillMinDur) return false;
+                }
+
+                return true;
+            }
+
+            // Validate a proposed placement: would placing this need here leave the day solvable?
+            function isPlacementSafe(proposedBlock, remainingNeeds, existingBlocks) {
+                const simBlocks = [...existingBlocks, proposedBlock];
+                return canFitRemaining(simBlocks, remainingNeeds);
+            }
+
+            // Original simple version kept as fallback
+            function canFitRemainingSimple(currentPlaced, remainingNeeds) {
                 if (remainingNeeds.length === 0) return true;
                 const gaps = getGaps(currentPlaced);
                 for (const need of remainingNeeds) {
@@ -2621,6 +2698,17 @@
                             !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
                         if (ok && need.type === 'special' && need._assignedSpecial &&
                             getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
+
+                        // ★ v7.0: Look-ahead — verify placing this need here leaves
+                        // the rest of the day solvable (no unfillable gaps)
+                        if (ok) {
+                            const remainingAfterThis = sortedNeeds.slice(ni + 1).filter(n => !deferred.includes(n));
+                            const proposedBlock = { startMin: cursor, endMin: cursor + dur };
+                            const allPlaced = [...template, ...walls, proposedBlock];
+                            if (!canFitRemaining(allPlaced, remainingAfterThis)) {
+                                ok = false; // placing here creates unsolvable day — defer instead
+                            }
+                        }
 
                         if (ok) {
                             placeNeed(need, cursor, dur);
