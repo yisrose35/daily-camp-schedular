@@ -2633,8 +2633,13 @@
                         swept = true;
                     } else if (gapSize > 0) {
                         if (!absorbResidual(gapSize)) {
-                            // Extend first block backward if not a wall
-                            if (template[0]._source !== 'phase0') { template[0].startMin = gradeStart; swept = true; }
+                            // Extend first block backward if not a wall AND within its max
+                            const fb = template[0];
+                            const fbT = (fb.type || '').toLowerCase();
+                            const fbMax = ['sport', 'slot'].includes(fbT) ? sportCeiling : (fb.dMax || Infinity);
+                            if (fb._source !== 'phase0' && (fb.endMin - gradeStart) <= fbMax) {
+                                fb.startMin = gradeStart; swept = true;
+                            }
                         } else { swept = true; }
                     }
                 }
@@ -2681,11 +2686,9 @@
                             prev.endMin += gapSize; swept = true;
                         } else if (next._source !== 'phase0' && nextDur + gapSize <= nextMax) {
                             next.startMin -= gapSize; swept = true;
-                        } else if (prev._source !== 'phase0' && ['sport', 'slot'].includes(prevT)) {
-                            prev.endMin += gapSize; swept = true; // sports can always grow (solver reassigns)
-                        } else if (next._source !== 'phase0' && ['sport', 'slot'].includes(nextT)) {
-                            next.startMin -= gapSize; swept = true;
                         }
+                        // If neither can absorb within dMax/sportCeiling, gap stays.
+                        // Iteration loop scores it and retries.
                     }
                 }
 
