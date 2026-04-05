@@ -3619,27 +3619,36 @@
                     if (totalIters < 1) warn('[P0] Override skipped — bunk not found: "' + bunk + '" (available: ' + Object.keys(bunkTimelines).slice(0, 5).join(', ') + '...)');
                     return;
                 }
-                // Determine block type and find a field for sports
-                const blockType = ov.type === 'sport' ? 'sport' : (ov.type === 'special' ? 'special' : 'custom');
+                // ★ v7.0: Auto-detect type from field ledger — don't rely on UI type tag
                 const bunkGrade = Object.keys(divisions).find(g =>
                     getBunksForGrade(g, divisions).map(String).includes(bunk)
                 ) || '';
+                const sportName = ov.activity;
 
-                // Auto-assign field for sports if not specified
+                // Check if ANY field hosts this activity (case-insensitive) → it's a sport
+                const sportNameLower = sportName.toLowerCase().trim();
+                let isSport = false;
+                for (const fn of Object.keys(fieldLedger)) {
+                    if (fieldLedger[fn].activities.some(a => a.toLowerCase().trim() === sportNameLower)) {
+                        isSport = true;
+                        break;
+                    }
+                }
+                const blockType = isSport ? 'sport' : (ov.type === 'special' ? 'special' : 'custom');
+
+                // Auto-assign field if not specified
                 let assignedField = ov.location || null;
-                if (!assignedField && blockType === 'sport') {
-                    // Search for an available field that hosts this sport
-                    const sportName = ov.activity;
+                if (!assignedField && isSport) {
                     for (const fn of Object.keys(fieldLedger)) {
                         const ledger = fieldLedger[fn];
-                        if (!ledger.activities.includes(sportName)) continue;
+                        if (!ledger.activities.some(a => a.toLowerCase().trim() === sportNameLower)) continue;
                         if (isFieldAvailable(fn, tStart, tEnd, bunk, bunkGrade, sportName)) {
                             assignedField = fn;
                             break;
                         }
                     }
-                    if (totalIters < 1) log('[P0] Override "' + sportName + '" for ' + bunk + ': field=' + (assignedField || 'NONE'));
                 }
+                if (totalIters < 1) log('[P0] Override "' + sportName + '" for ' + bunk + ': type=' + blockType + ' field=' + (assignedField || 'NONE'));
 
                 bunkTimelines[bunk].push({
                     startMin: tStart, endMin: tEnd,
@@ -3647,7 +3656,8 @@
                     field: assignedField,
                     layer: null, _classification: 'pinned', _committed: true, _fixed: true,
                     _bunkOverride: true, _activityLocked: true, _noBacktrack: true,
-                    _assignedSport: blockType === 'sport' ? ov.activity : null
+                    _assignedSport: isSport ? ov.activity : null,
+                    _source: 'capacity_checked'
                 });
                 // Claim the field
                 if (assignedField && bunkGrade) {
