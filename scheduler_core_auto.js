@@ -2121,11 +2121,15 @@
                 const c = (isLeague && b.layer) ? resolveConstraints(b.layer, t) : null;
                 return {
                     startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
-                    layer: b.layer, _fixed: true, _source: 'phase0',
+                    layer: b.layer, _fixed: true, _source: b._source || 'phase0',
+                    field: b.field || null,
                     dMin: c ? c.dMin : (b.endMin - b.startMin),
                     dMax: c ? c.dMax : (b.endMin - b.startMin),
                     _gradeWide: b._gradeWide || false, _activityLocked: true,
-                    _classification: b._classification || 'pinned', _noBacktrack: b._noBacktrack || false
+                    _classification: b._classification || 'pinned', _noBacktrack: b._noBacktrack || false,
+                    _bunkOverride: b._bunkOverride || false,
+                    _assignedSport: b._assignedSport || null,
+                    _isTrip: b._isTrip || false
                 };
             });
 
@@ -4030,15 +4034,15 @@
                     if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
 
                     const isCustom = (block.type || '').toLowerCase() === 'custom' && block._customField;
-                    // ★ v7.0: Skip sport overrides — let the sport writer handle them (it includes field name)
-                    if (block._assignedSport && block.field && block._source === 'capacity_checked') return;
+                    // ★ v7.0: Skip bunk overrides with field — dedicated override writer handles them
+                    if (block._bunkOverride && block._assignedSport) return;
                     if (block._fixed || block._classification === 'pinned' || isCustom) {
                         window.scheduleAssignments[String(bunk)][idx] = {
                             field: isCustom ? block._customField : block.event,
                             sport: null,
                             _activity: isCustom ? (block._customActivity || block.event) : block.event,
                             _fixed: true, _pinned: block._classification === 'pinned',
-                            _bunkOverride: true, _activityLocked: isCustom || false,
+                            _bunkOverride: block._bunkOverride || false, _activityLocked: isCustom || false,
                             _customActivity: block._customActivity || null,
                             _customField: block._customField || null,
                             _autoMode: true, continuation: false
@@ -4095,11 +4099,11 @@
                 const arr = pbs[String(bunk)] || [];
                 const sa = window.scheduleAssignments[String(bunk)];
                 if (!sa) return;
-                (bunkTimelines[bunk] || []).filter(b => b._bunkOverride).forEach(block => {
+                (bunkTimelines[bunk] || []).filter(b => b._bunkOverride && b._assignedSport).forEach(block => {
                     // Find the slot that best overlaps this override (not exact match)
+                    // Override takes priority — overwrite ANY existing entry
                     let bestIdx = -1, bestOverlap = 0;
                     arr.forEach((s, idx) => {
-                        if (sa[idx] && (sa[idx]._fixed || sa[idx]._capacityChecked)) return; // already written
                         const overlapStart = Math.max(s.startMin, block.startMin);
                         const overlapEnd = Math.min(s.endMin, block.endMin);
                         const overlap = overlapEnd - overlapStart;
