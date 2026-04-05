@@ -1682,13 +1682,20 @@ function renderDAWTimeline(gridEl) {
     }
   });
 
-  // ★ Overlay daily trips on the DAW grid
+  // ★ Overlay daily trips on the DAW grid — use requestAnimationFrame
+  // to ensure the DOM is painted before looking for track elements
   overlayTripsOnDAW(gridEl);
+  requestAnimationFrame(function() { overlayTripsOnDAW(gridEl); });
+  setTimeout(function() { overlayTripsOnDAW(gridEl); }, 200);
 }
 
 function overlayTripsOnDAW(gridEl) {
-  const dailyData = window.loadCurrentDailyData?.() || {};
-  const trips = Array.isArray(dailyData.dailyTrips) ? dailyData.dailyTrips : [];
+  // Remove existing trip overlays to prevent duplicates on re-render
+  gridEl.querySelectorAll('.da-trip-overlay, .da-trip-regen-warning').forEach(el => el.remove());
+
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const trips = loadDailyTrips(dateKey);
+  console.log('[TripOverlay] dateKey=' + dateKey + ', trips=' + trips.length + ', tracks=' + gridEl.querySelectorAll('.ms-daw-track').length);
   if (trips.length === 0) return;
 
   // Find global start from ruler (same logic as DAW grid)
@@ -1704,6 +1711,7 @@ function overlayTripsOnDAW(gridEl) {
 
   trips.forEach(trip => {
     const track = gridEl.querySelector('.ms-daw-track[data-grade="' + trip.division + '"]');
+    console.log('[TripOverlay] trip=' + trip.event + ' div=' + trip.division + ' trackFound=' + !!track);
     if (!track) return;
     const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
     const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
