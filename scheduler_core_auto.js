@@ -1054,7 +1054,7 @@
                 return league ? league.name : null;
             })();
 
-            function expandLeagueDur(start, bunkList) {
+           function expandLeagueDur(start, bunkList) {
                 let nextWall = start + dMax;
                 bunkList.forEach(bk => {
                     (bunkTimelines[bk] || []).forEach(b => {
@@ -1064,7 +1064,26 @@
                 const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
                 if (ge < nextWall) nextWall = ge;
                 let d = Math.max(dMin, Math.min(dMax, nextWall - start));
-                return snapTo5(d) < dMin ? dMin : snapTo5(d);
+                d = snapTo5(d) < dMin ? dMin : snapTo5(d);
+ 
+                // ★ v5.2: Smart expansion — if leftover creates a dead zone,
+                // SHRINK the league to make room for a fillable activity.
+                // A 35min league + 25min sport is better than a 50min league + 10min gap.
+                const _mf = getMinFillable(grade);
+                const availableSpace = nextWall - start;
+                const leftover = availableSpace - d;
+                if (leftover > 0 && leftover < _mf) {
+                    // Shrink league so leftover becomes >= minFillable
+                    const shrunkTarget = availableSpace - _mf;
+                    if (shrunkTarget >= dMin) {
+                        const shrunk = snapTo5(shrunkTarget);
+                        if (shrunk >= dMin) d = shrunk;
+                    }
+                    // Also check the BEFORE gap — look for the previous wall
+                    // If we can't shrink enough, check if starting later works
+                }
+ 
+                return d;
             }
 
             if (leagueName && sharedLeagueTime[leagueName] != null) {
