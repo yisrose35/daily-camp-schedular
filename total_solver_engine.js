@@ -1213,8 +1213,9 @@ else penalty += 200;
         var numBlocks = activityBlocks.length, numCands = allCands.length;
         var domains = new Map(), slotGroups = new Map();
         var disabledSet = new Set(window.currentDisabledFields || gCfg?.disabledFields || []);
+        var dailyDisabledSports = (window.loadCurrentDailyData?.() || {}).dailyDisabledSportsByField || {};
         var globallyValid = new Uint8Array(numCands);
-        for (var ci = 0; ci < numCands; ci++) { var c = allCands[ci]; if (disabledSet.has(c.field)) continue; if (!actProps[c.field] && !actProps[c.activityName] && c.type !== 'special') continue; globallyValid[ci] = 1; }
+        for (var ci = 0; ci < numCands; ci++) { var c = allCands[ci]; if (disabledSet.has(c.field)) continue; if (!actProps[c.field] && !actProps[c.activityName] && c.type !== 'special') continue; var fieldSportBlock = dailyDisabledSports[c.field]; if (fieldSportBlock && fieldSportBlock.length > 0 && c.activityName && fieldSportBlock.indexOf(c.activityName) !== -1) continue; globallyValid[ci] = 1; }
         for (var bi = 0; bi < numBlocks; bi++) {
             var block = activityBlocks[bi]; block._blockIdx = bi;
             var domain = new Set(), bunk = block.bunk;

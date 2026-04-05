@@ -718,15 +718,25 @@
         function initFieldLedger() {
             Object.keys(fieldLedger).forEach(k => delete fieldLedger[k]);
             const fields = getFields(globalSettings);
-            const disabled = globalSettings.app1?.disabledFields || globalSettings.disabledFields || [];
+            const baseDisabled = globalSettings.app1?.disabledFields || globalSettings.disabledFields || [];
+            const dailyDisabled = window.currentDisabledFields || [];
+            const disabled = [...new Set([...baseDisabled, ...dailyDisabled])];
+            const dailyDisabledSports = dailyData.dailyDisabledSportsByField || {};
 
             fields.forEach(field => {
                 if (disabled.includes(field.name)) return;
                 const props = activityProperties[field.name] || {};
                 const timeRules = [];
+                const unavailableRules = [];
                 if (props.timeRules && Array.isArray(props.timeRules)) {
                     props.timeRules.forEach(rule => {
-                        if (rule.type === 'Available' || !rule.type) {
+                        if (rule.type === 'Unavailable' || rule.available === false) {
+                            unavailableRules.push({
+                                startMin: rule.startMin ?? parseTimeToMinutes(rule.start),
+                                endMin: rule.endMin ?? parseTimeToMinutes(rule.end),
+                                divisions: rule.divisions || null
+                            });
+                        } else if (rule.type === 'Available' || !rule.type) {
                             timeRules.push({
                                 startMin: rule.startMin ?? parseTimeToMinutes(rule.start),
                                 endMin: rule.endMin ?? parseTimeToMinutes(rule.end),
@@ -748,7 +758,9 @@
                     name: field.name, capacity, shareType,
                     allowedDivisions: props.sharableWith?.divisions || [],
                     isIndoor: field.isIndoor || false,
-                    timeRules, activities: field.activities || [],
+                    timeRules, unavailableRules,
+                    disabledSports: dailyDisabledSports[field.name] || [],
+                    activities: field.activities || [],
                     claims: []
                 };
             });
@@ -771,12 +783,21 @@
             });
         }
 
-        function isFieldAvailable(fieldName, startMin, endMin, bunk, grade) {
+        function isFieldAvailable(fieldName, startMin, endMin, bunk, grade, activity) {
             const ledger = fieldLedger[fieldName];
             if (!ledger) return false;
 
             // Rainy: no outdoor fields
             if (isRainy && !ledger.isIndoor) return false;
+
+            // Unavailable rules check — if any unavailable rule overlaps, block it
+            if (ledger.unavailableRules && ledger.unavailableRules.length > 0) {
+                const unavail = ledger.unavailableRules.some(rule => {
+                    if (rule.divisions && !rule.divisions.includes(grade)) return false;
+                    return rule.startMin < endMin && rule.endMin > startMin;
+                });
+                if (unavail) return false;
+            }
 
             // Time rules
             const timeOk = ledger.timeRules.some(rule => {
@@ -817,11 +838,16 @@
                 }
             }
 
+            // Sport restriction check — field may have certain sports disabled for the day
+            if (activity && ledger.disabledSports && ledger.disabledSports.length > 0) {
+                if (ledger.disabledSports.includes(activity)) return false;
+            }
+
             return true;
         }
 
         function claimField(fieldName, startMin, endMin, bunk, grade, activity) {
-            if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade)) return false;
+            if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade, activity)) return false;
             fieldLedger[fieldName].claims.push({ bunk, grade, activity, startMin, endMin });
             return true;
         }
@@ -926,6 +952,7 @@
                 if (c.dMin < minD) minD = c.dMin;
             });
             if (minD === Infinity) minD = GAP_MIN_DUR;
+            minD = Math.min(minD, TYPE_FLOORS.sport || 25);
             _minFillableByGrade[grade] = minD;
             return minD;
         }
@@ -1073,16 +1100,19 @@
                 const availableSpace = nextWall - start;
                 const leftover = availableSpace - d;
                 if (leftover > 0 && leftover < _mf) {
-                    // Shrink league so leftover becomes >= minFillable
-                    const shrunkTarget = availableSpace - _mf;
-                    if (shrunkTarget >= dMin) {
-                        const shrunk = snapTo5(shrunkTarget);
-                        if (shrunk >= dMin) d = shrunk;
+                    // Option A: expand to wall (if within dMax+10)
+                    if (availableSpace <= dMax + 10) {
+                        d = availableSpace;
+                    } else {
+                        // Option B: shrink league so leftover becomes >= minFillable
+                        const shrunkTarget = availableSpace - _mf;
+                        if (shrunkTarget >= dMin) {
+                            const shrunk = snapTo5(shrunkTarget);
+                            if (shrunk >= dMin) d = shrunk;
+                        }
                     }
-                    // Also check the BEFORE gap — look for the previous wall
-                    // If we can't shrink enough, check if starting later works
                 }
- 
+
                 return d;
             }
 
@@ -2073,6 +2103,10 @@
             const sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
             const minFill = getMinFillable(grade);
             const ABSORB_MAX = 10;
+            // ★ v6.0: fillMinDur — absolute minimum for gap filling (25min).
+            // The layer's sportC.dMin is the *preferred* minimum, but gaps >= 25min
+            // MUST be filled. A 25-30min sport is always better than an empty gap.
+            const fillMinDur = TYPE_FLOORS.sport || 25;
             // ★ v4.0: Rotation matrix — preferred time bands per activity type
             const rotation = staggerPlan[grade] || {};
             const typeBands = rotation.typeBands || {};
@@ -2278,19 +2312,19 @@
                     const sportInfo = priorityList.find(s => s.name === ds.name);
                     if (sportInfo) {
                         for (const fn of (sportInfo.fields || [])) {
-                            if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: ds.name, field: fn };
+                            if (isFieldAvailable(fn, startMin, endMin, bunk, grade, ds.name)) return { name: ds.name, field: fn };
                         }
                     }
                 }
                 for (const sport of priorityList) {
                     if (usedSportsForBunk.has(sport.name)) continue;
                     for (const fn of (sport.fields || [])) {
-                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
+                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade, sport.name)) return { name: sport.name, field: fn };
                     }
                 }
                 for (const sport of priorityList) {
                     for (const fn of (sport.fields || [])) {
-                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
+                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade, sport.name)) return { name: sport.name, field: fn };
                     }
                 }
                 return null;
@@ -2373,6 +2407,9 @@
                         const dur = special.duration || special.dMin || 30;
                         if (dur > rEnd - cur) continue;
                         if (!canUseSpecialAtTime(special.name, grade, cur, cur + dur)) continue;
+                        // ★ v6.0: Fillability check — skip special if remainder is a dead zone
+                        const remainderAfter = (rEnd - cur) - dur;
+                        if (remainderAfter > 0 && remainderAfter < fillMinDur) continue;
 
                         template.push({
                             startMin: cur, endMin: cur + dur,
@@ -2401,10 +2438,10 @@
                 // ★ v5.1.1: Hard cap sport duration at type ceiling (60min)
                 // sportC.dMax comes from layer config and may be too wide
                 const sportMaxDur = sportCeiling;
-                if (sportSpace >= sportC.dMin) {
+                if (sportSpace >= fillMinDur) {
                     // ★ v5.1: Calculate slot count so no slot exceeds ceiling
                     let numSports = Math.max(1, Math.ceil(sportSpace / sportMaxDur));
-                    while (numSports > 1 && numSports * sportC.dMin > sportSpace) numSports--;
+                    while (numSports > 1 && numSports * fillMinDur > sportSpace) numSports--;
                     if (numSports < 1) numSports = 1;
                     // Distribute evenly
                     const baseDur = snapTo5(Math.floor(sportSpace / numSports));
@@ -2419,7 +2456,7 @@
                         } else {
                             dur = baseDur;
                         }
-                        dur = Math.max(sportC.dMin, Math.min(sportMaxDur, dur));
+                        dur = Math.max(fillMinDur, Math.min(sportMaxDur, dur));
                         // ★ HARD GUARD: No single sport block may exceed 60min
                         if (dur > 60 || isNaN(dur)) dur = Math.min(60, leftover);
                         const sp = findSportWithField(cur, cur + dur);
@@ -2438,7 +2475,7 @@
                         cur += dur;
                     }
                     // ★ v5.1: If there's STILL leftover (shouldn't happen, but safety)
-                    if (leftover >= sportC.dMin) {
+                    if (leftover >= fillMinDur) {
                         let safetyDur = Math.min(leftover, 60); // HARD GUARD
                         const sp = findSportWithField(cur, cur + safetyDur);
                         if (sp) { claimField(sp.field, cur, cur + safetyDur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
@@ -2658,7 +2695,7 @@
                     const sportFillEnd = targetStart - reservedSpace;
                     if (cursor < sportFillEnd) {
                         const fillSpace = sportFillEnd - cursor;
-                        if (fillSpace >= sportC.dMin) {
+                        if (fillSpace >= fillMinDur) {
                             cursor = fillRegion(cursor, sportFillEnd);
                         } else if (fillSpace > 0) {
                             if (absorbResidual(fillSpace)) {
@@ -2717,7 +2754,7 @@
                 // Start-of-day gap
                 if (template.length > 0 && template[0].startMin > gradeStart) {
                     const gapSize = template[0].startMin - gradeStart;
-                    if (gapSize >= sportC.dMin) {
+                    if (gapSize >= fillMinDur) {
                         fillRegion(gradeStart, template[0].startMin);
                         swept = true;
                     } else if (gapSize > 0) {
@@ -2737,7 +2774,7 @@
                 template.sort((a, b) => a.startMin - b.startMin);
                 if (template.length > 0 && template[template.length - 1].endMin < gradeEnd) {
                     const gapSize = gradeEnd - template[template.length - 1].endMin;
-                    if (gapSize >= sportC.dMin) {
+                    if (gapSize >= fillMinDur) {
                         fillRegion(template[template.length - 1].endMin, gradeEnd);
                         swept = true;
                     } else if (gapSize > 0) {
@@ -2757,7 +2794,7 @@
                     const gapSize = template[i + 1].startMin - template[i].endMin;
                     if (gapSize <= 0) continue;
 
-                    if (gapSize >= sportC.dMin) {
+                    if (gapSize >= fillMinDur) {
                         fillRegion(template[i].endMin, template[i + 1].startMin);
                         swept = true;
                         break; // re-sort and re-scan
@@ -2851,6 +2888,77 @@
                 }
             }
 
+            // ═══════════════════════════════════════════════════════════
+            // ★ v6.0 FINAL GAP ELIMINATOR — absolute last line of defense.
+            // Guarantees ZERO gaps from gradeStart to gradeEnd.
+            // ═══════════════════════════════════════════════════════════
+            for (let gapPass = 0; gapPass < 15; gapPass++) {
+                template.sort((a, b) => a.startMin - b.startMin);
+                let foundGap = false;
+
+                // Start-of-day gap
+                if (template.length > 0 && template[0].startMin > gradeStart) {
+                    const gs = template[0].startMin - gradeStart;
+                    if (gs >= fillMinDur) {
+                        const sp = findSportWithField(gradeStart, template[0].startMin);
+                        if (sp) claimField(sp.field, gradeStart, template[0].startMin, bunk, grade, sp.name);
+                        template.push({ startMin: gradeStart, endMin: template[0].startMin,
+                            type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
+                            layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
+                            _activityLocked: false, _assignedSport: sp ? sp.name : null,
+                            field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
+                            _sportFallbacks: priorityList.map(s => s.name), _final: true });
+                    } else { template[0].startMin = gradeStart; }
+                    foundGap = true; continue;
+                }
+
+                // Inter-block gaps
+                template.sort((a, b) => a.startMin - b.startMin);
+                let fixed = false;
+                for (let i = 0; i < template.length - 1; i++) {
+                    const gs = template[i + 1].startMin - template[i].endMin;
+                    if (gs <= 0) continue;
+                    if (gs >= fillMinDur) {
+                        const gS = template[i].endMin, gE = template[i + 1].startMin;
+                        const sp = findSportWithField(gS, gE);
+                        if (sp) claimField(sp.field, gS, gE, bunk, grade, sp.name);
+                        template.push({ startMin: gS, endMin: gE,
+                            type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
+                            layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
+                            _activityLocked: false, _assignedSport: sp ? sp.name : null,
+                            field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
+                            _sportFallbacks: priorityList.map(s => s.name), _final: true });
+                    } else {
+                        const prev = template[i], next = template[i + 1];
+                        if (prev._source !== 'phase0') { prev.endMin += gs; }
+                        else if (next._source !== 'phase0') { next.startMin -= gs; }
+                        else { prev.endMin += gs; } // both walls — extend first
+                    }
+                    fixed = true; break;
+                }
+                if (fixed) { foundGap = true; continue; }
+
+                // End-of-day gap
+                template.sort((a, b) => a.startMin - b.startMin);
+                if (template.length > 0 && template[template.length - 1].endMin < gradeEnd) {
+                    const gs = gradeEnd - template[template.length - 1].endMin;
+                    if (gs >= fillMinDur) {
+                        const gS = template[template.length - 1].endMin;
+                        const sp = findSportWithField(gS, gradeEnd);
+                        if (sp) claimField(sp.field, gS, gradeEnd, bunk, grade, sp.name);
+                        template.push({ startMin: gS, endMin: gradeEnd,
+                            type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
+                            layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
+                            _activityLocked: false, _assignedSport: sp ? sp.name : null,
+                            field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
+                            _sportFallbacks: priorityList.map(s => s.name), _final: true });
+                    } else { template[template.length - 1].endMin = gradeEnd; }
+                    foundGap = true; continue;
+                }
+
+                if (!foundGap) break;
+            }
+
             return template.sort((a, b) => a.startMin - b.startMin);
         }
 
@@ -2899,8 +3007,8 @@
         // SCORING ENGINE
         // =====================================================================
 
-        const MAX_ITERATIONS = 30;
-        const STALE_STOP = 8;
+        const MAX_ITERATIONS = 40;
+        const STALE_STOP = 12;
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
 
@@ -2932,10 +3040,12 @@
                 const dayEnd = gradeKey ? (parseTimeToMinutes(divisions[gradeKey]?.endTime) || 960) : 960;
                 const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
 
-                // Gaps
-                if (sorted.length > 0 && sorted[0].startMin > dayStart) score += (sorted[0].startMin - dayStart) * 15;
-                for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; if (gap > 0) score += gap * 15; }
-                if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) score += (dayEnd - sorted[sorted.length - 1].endMin) * 15;
+                // Gaps — ★ v6.0: Dead zones (gaps < 25min) get 10× penalty
+                const _mfScore = getMinFillable(gradeKey || '') || GAP_MIN_DUR;
+                const scoreGap = (g) => g <= 0 ? 0 : (g < _mfScore ? g * 150 : g * 15);
+                if (sorted.length > 0 && sorted[0].startMin > dayStart) score += scoreGap(sorted[0].startMin - dayStart);
+                for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; score += scoreGap(gap); }
+                if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) score += scoreGap(dayEnd - sorted[sorted.length - 1].endMin);
 
                 // Duration violations
                 timeline.forEach(block => {
