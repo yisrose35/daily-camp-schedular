@@ -3095,31 +3095,80 @@ if (success) {
 // DAILY TRIPS: Persistent load/save (survives reload + cloud sync)
 // =================================================================
 function loadDailyTrips(dateKey) {
-  // Primary: dedicated localStorage key
+  if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  let fromLS = null, fromCloud = null;
+
+  // Source 1: dedicated localStorage key (fast, survives cloud overwrites)
   try {
     const stored = localStorage.getItem('campDailyTrips_' + dateKey);
     if (stored) {
-      const trips = JSON.parse(stored);
-      if (trips.length > 0) return trips;
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length > 0) fromLS = parsed;
     }
   } catch (e) { /* ignore */ }
-  // Fallback: dailyData (from cloud sync)
+
+  // Source 2: dailyData (from cloud — authoritative after sync)
   try {
-    const dd = window.loadCurrentDailyData?.() || {};
-    if (Array.isArray(dd.dailyTrips) && dd.dailyTrips.length > 0) {
-      // Sync back to localStorage for fast subsequent loads
-      try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(dd.dailyTrips)); } catch (e) { /* ignore */ }
-      return dd.dailyTrips;
+    const allDaily = window.loadAllDailyData?.() || {};
+    const dateData = allDaily[dateKey];
+    if (dateData && Array.isArray(dateData.dailyTrips) && dateData.dailyTrips.length > 0) {
+      fromCloud = dateData.dailyTrips;
     }
   } catch (e) { /* ignore */ }
-  return [];
+
+  // Merge: use whichever has more trips (handles partial sync)
+  let result = [];
+  if (fromLS && fromCloud) {
+    result = fromLS.length >= fromCloud.length ? fromLS : fromCloud;
+  } else {
+    result = fromLS || fromCloud || [];
+  }
+
+  // Cross-sync: ensure both sources have the data
+  if (result.length > 0) {
+    if (!fromLS) {
+      try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(result)); } catch (e) { /* ignore */ }
+    }
+    if (!fromCloud) {
+      // Save to dailyData for cloud sync — use direct write to avoid currentScheduleDate dependency
+      try {
+        const allDaily = window.loadAllDailyData?.() || {};
+        if (!allDaily[dateKey]) allDaily[dateKey] = {};
+        allDaily[dateKey].dailyTrips = result;
+        allDaily[dateKey].updated_at = new Date().toISOString();
+        if (typeof window.saveGlobalSettings === 'function') {
+          window.saveGlobalSettings('daily_schedules', allDaily);
+        }
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  return result;
 }
 
 function saveDailyTrips(dateKey, trips) {
-  // Save to dedicated localStorage key (primary — survives cloud overwrites)
+  if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+
+  // 1. Save to dedicated localStorage key (fast, survives cloud overwrites)
   try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(trips)); } catch (e) { /* ignore */ }
-  // Also save to dailyData (for cloud sync + other modules)
-  window.saveCurrentDailyData?.('dailyTrips', trips);
+
+  // 2. Save directly to dailyData using the SPECIFIC dateKey (not currentScheduleDate)
+  // This ensures trips for future dates are saved correctly
+  try {
+    const allDaily = window.loadAllDailyData?.() || {};
+    if (!allDaily[dateKey]) allDaily[dateKey] = {};
+    allDaily[dateKey].dailyTrips = trips;
+    allDaily[dateKey].updated_at = new Date().toISOString();
+    // Save to localStorage
+    const DAILY_DATA_KEY = 'campDailyData_v1';
+    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDaily));
+    // Sync to cloud
+    if (typeof window.saveGlobalSettings === 'function') {
+      window.saveGlobalSettings('daily_schedules', allDaily);
+    }
+  } catch (e) {
+    console.error('[saveDailyTrips] Cloud sync error:', e);
+  }
 }
 
 // Expose globally for other modules
@@ -4404,6 +4453,18 @@ function init() {
   renderBunkOverridesUI();
   renderResourceOverridesUI();
   if (window.RotationEvents?.injectSubtab) window.RotationEvents.injectSubtab();
+
+  // ★ v7.0: Re-render trips when cloud data syncs (trips may arrive after init)
+  window.addEventListener('campistry-cloud-sync', function() {
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    // Merge: if cloud has trips that localStorage doesn't, sync them in
+    loadDailyTrips(dateKey); // triggers cross-sync
+    renderTripsForm();
+  });
+  // Also listen for schedule-saved events (trips are part of daily_schedules)
+  window.addEventListener('campistry-schedule-saved', function() {
+    renderTripsForm();
+  });
 }
     
 function cleanup() {
