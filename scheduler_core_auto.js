@@ -3821,6 +3821,9 @@
 
         // Restore best
         allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = bestTimelines[bunk] || []; }));
+        // ★ v6.1: Expose bunkTimelines for grid renderers (trip detection, diagnostics)
+        window._autoBuilderTimelines = {};
+        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { window._autoBuilderTimelines[String(bunk)] = bunkTimelines[bunk]; }));
         warnings.length = 0;
         bestWarnings.forEach(w => warnings.push(w));
 

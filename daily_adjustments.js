@@ -3098,12 +3098,19 @@ function loadDailyTrips(dateKey) {
   // Primary: dedicated localStorage key
   try {
     const stored = localStorage.getItem('campDailyTrips_' + dateKey);
-    if (stored) return JSON.parse(stored);
+    if (stored) {
+      const trips = JSON.parse(stored);
+      if (trips.length > 0) return trips;
+    }
   } catch (e) { /* ignore */ }
-  // Fallback: dailyData
+  // Fallback: dailyData (from cloud sync)
   try {
     const dd = window.loadCurrentDailyData?.() || {};
-    if (Array.isArray(dd.dailyTrips)) return dd.dailyTrips;
+    if (Array.isArray(dd.dailyTrips) && dd.dailyTrips.length > 0) {
+      // Sync back to localStorage for fast subsequent loads
+      try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(dd.dailyTrips)); } catch (e) { /* ignore */ }
+      return dd.dailyTrips;
+    }
   } catch (e) { /* ignore */ }
   return [];
 }
@@ -3114,6 +3121,10 @@ function saveDailyTrips(dateKey, trips) {
   // Also save to dailyData (for cloud sync + other modules)
   window.saveCurrentDailyData?.('dailyTrips', trips);
 }
+
+// Expose globally for other modules
+window.loadDailyTrips = loadDailyTrips;
+window.saveDailyTrips = saveDailyTrips;
   // =================================================================
 // TRIPS FORM
 // =================================================================

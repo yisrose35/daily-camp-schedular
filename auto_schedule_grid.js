@@ -158,6 +158,9 @@
         if (!entry) return { bg: '#f3f4f6', border: '#d1d5db', text: '#9ca3af', label: 'Free' };
         var act = (entry._activity || entry.field || '').toLowerCase();
 
+        // Trip — green theme (off-campus)
+        if (entry._isTrip || (entry.type || '').toLowerCase() === 'trip') return { bg: '#ecfdf5', border: '#34d399', text: '#065f46', accent: '#10b981' };
+
         if (entry._fixed || entry._pinned) {
             if (act.includes('lunch'))    return { bg: '#fff7ed', border: '#fb923c', text: '#9a3412', accent: '#f97316' };
             if (act.includes('snack'))    return { bg: '#fefce8', border: '#facc15', text: '#854d0e', accent: '#eab308' };
@@ -256,6 +259,30 @@
                         sport:     sport
                     });
                 }
+            });
+        });
+        return result;
+    }
+
+    // ─────────────────────────────────────────────
+    // COLLECT TRIP SLOTS FOR A DIVISION
+    // ─────────────────────────────────────────────
+    function getTripSlotsForDiv(divName, bunks) {
+        // Check bunkTimelines for trip blocks
+        var seen = {}, result = [];
+        bunks.forEach(function (bunk) {
+            var tl = (window._autoBuilderTimelines || {})[String(bunk)] || [];
+            tl.forEach(function (block) {
+                if ((block.type || '').toLowerCase() !== 'trip' && !block._isTrip) return;
+                var key = block.startMin + '-' + block.endMin;
+                if (seen[key]) return;
+                seen[key] = true;
+                result.push({
+                    startMin: block.startMin,
+                    endMin: block.endMin,
+                    event: block.event || 'Trip',
+                    _isTrip: true
+                });
             });
         });
         return result;
@@ -707,6 +734,11 @@
         var leagueByStart = {};
         leagueSlots.forEach(function (ls) { leagueByStart[ls.startMin] = ls; });
 
+        // Trip slots
+        var tripSlots = getTripSlotsForDiv(divName, bunks);
+        var tripByStart = {};
+        tripSlots.forEach(function (ts) { tripByStart[ts.startMin] = ts; });
+
         // Draw ruler ticks
         for (var tm = dayStart; tm <= dayEnd; tm += increment) {
             var topPx = (tm - dayStart) * PX_PER_MIN;
@@ -717,6 +749,11 @@
             for (var ls2 in leagueByStart) {
                 var lsData = leagueByStart[parseInt(ls2)];
                 if (tm > parseInt(ls2) && tm < lsData.endMin) { inLeague = true; break; }
+            }
+            var inTrip = false;
+            for (var ts2 in tripByStart) {
+                var tsData = tripByStart[parseInt(ts2)];
+                if (tm > parseInt(ts2) && tm < tsData.endMin) { inTrip = true; break; }
             }
 
             var tick = document.createElement('div');
@@ -730,14 +767,14 @@
                 'display:flex',
                 'align-items:flex-start',
                 'padding:2px 6px 0',
-                inLeague ? 'background:#1e3a8a;' : ''
+                inLeague ? 'background:#1e3a8a;' : (inTrip ? 'background:#065f46;' : '')
             ].join(';');
 
             if (showLabel) {
                 var lbl = document.createElement('span');
                 lbl.style.cssText = [
                     'font-size:' + (isMajor ? '0.7rem' : '0.63rem'),
-                    'color:' + (inLeague ? 'rgba(255,255,255,0.7)' : (isMajor ? '#4b5563' : '#9ca3af')),
+                    'color:' + ((inLeague || inTrip) ? 'rgba(255,255,255,0.7)' : (isMajor ? '#4b5563' : '#9ca3af')),
                     'font-weight:' + (isMajor ? '600' : '400'),
                     'white-space:nowrap'
                 ].join(';');
@@ -1050,6 +1087,44 @@
 
             overlay.appendChild(muGrid);
             bodyRow.appendChild(overlay);
+        });
+
+        // ★ v6.1: Trip overlays — span full width with green theme
+        tripSlots.forEach(function (ts) {
+            var tripTop = (ts.startMin - dayStart) * PX_PER_MIN;
+            var tripH = (ts.endMin - ts.startMin) * PX_PER_MIN;
+
+            var tripOverlay = document.createElement('div');
+            tripOverlay.style.cssText = [
+                'position:absolute',
+                'top:' + tripTop + 'px',
+                'left:0', 'right:0',
+                'height:' + tripH + 'px',
+                'z-index:3',
+                'box-sizing:border-box',
+                'background:linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+                'border-left:4px solid #10b981',
+                'border-top:1px solid #6ee7b7',
+                'border-bottom:1px solid #6ee7b7',
+                'border-right:1px solid #6ee7b7',
+                'display:flex',
+                'flex-direction:column',
+                'align-items:center',
+                'justify-content:center',
+                'overflow:hidden'
+            ].join(';');
+
+            var tripLabel = document.createElement('div');
+            tripLabel.style.cssText = 'font-size:0.85rem; font-weight:700; color:#065f46;';
+            tripLabel.textContent = '🚌 ' + ts.event;
+            tripOverlay.appendChild(tripLabel);
+
+            var tripTime = document.createElement('div');
+            tripTime.style.cssText = 'font-size:0.65rem; color:#047857; margin-top:2px;';
+            tripTime.textContent = toLabel(ts.startMin) + ' – ' + toLabel(ts.endMin);
+            tripOverlay.appendChild(tripTime);
+
+            bodyRow.appendChild(tripOverlay);
         });
 
         columnsWrap.appendChild(bodyRow);
