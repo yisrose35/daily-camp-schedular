@@ -158,6 +158,9 @@
         if (!entry) return { bg: '#f3f4f6', border: '#d1d5db', text: '#9ca3af', label: 'Free' };
         var act = (entry._activity || entry.field || '').toLowerCase();
 
+        // Trip — green theme (off-campus)
+        if (entry._isTrip || (entry.type || '').toLowerCase() === 'trip') return { bg: '#ecfdf5', border: '#34d399', text: '#065f46', accent: '#10b981' };
+
         if (entry._fixed || entry._pinned) {
             if (act.includes('lunch'))    return { bg: '#fff7ed', border: '#fb923c', text: '#9a3412', accent: '#f97316' };
             if (act.includes('snack'))    return { bg: '#fefce8', border: '#facc15', text: '#854d0e', accent: '#eab308' };
@@ -256,6 +259,30 @@
                         sport:     sport
                     });
                 }
+            });
+        });
+        return result;
+    }
+
+    // ─────────────────────────────────────────────
+    // COLLECT TRIP SLOTS FOR A DIVISION
+    // ─────────────────────────────────────────────
+    function getTripSlotsForDiv(divName, bunks) {
+        // Check bunkTimelines for trip blocks
+        var seen = {}, result = [];
+        bunks.forEach(function (bunk) {
+            var tl = (window._autoBuilderTimelines || {})[String(bunk)] || [];
+            tl.forEach(function (block) {
+                if ((block.type || '').toLowerCase() !== 'trip' && !block._isTrip) return;
+                var key = block.startMin + '-' + block.endMin;
+                if (seen[key]) return;
+                seen[key] = true;
+                result.push({
+                    startMin: block.startMin,
+                    endMin: block.endMin,
+                    event: block.event || 'Trip',
+                    _isTrip: true
+                });
             });
         });
         return result;
@@ -500,121 +527,99 @@
    ════════════════════════════════════════ */
 .asg-league-row {
     position: relative;
-    background: #f8fafc;
-    border-left: none;
-    border-top: 2px solid #e2e8f0;
-    border-bottom: 2px solid #e2e8f0;
-    overflow: visible;
+    background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+    border-left: 4px solid #0284c7;
+    border-top: 1px solid #7dd3fc;
+    border-bottom: 1px solid #7dd3fc;
+    border-right: 1px solid #7dd3fc;
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
+    box-sizing: border-box;
 }
-
-/* Diagonal shine effect */
-.asg-league-row::before {
-    content: '';
-    position: absolute;
-    top: -40%; left: -20%;
-    width: 60%; height: 200%;
-    background: linear-gradient(105deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0) 60%);
-    pointer-events: none;
-}
+.asg-league-row::before { display: none; }
 
 .asg-league-header {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 7px 14px 6px;
-    background: #f1f5f9;
-    border-bottom: 1px solid #e2e8f0;
+    gap: 8px;
+    padding: 4px 10px;
     flex-shrink: 0;
-    border-bottom: 1px solid rgba(255,255,255,0.12);
 }
 .asg-league-badge {
-    display: flex; align-items: center; gap: 5px;
-    background: #e2e8f0;
-    border: 1px solid #cbd5e1;
-    border-radius: 999px;
-    padding: 2px 10px 2px 7px;
-    font-size: 0.68rem; font-weight: 700;
-    color: #1e293b; text-transform: uppercase; letter-spacing: 0.07em;
+    font-size: 0.7rem; font-weight: 600;
+    color: #0369a1;
     white-space: nowrap;
 }
 .asg-league-name {
-    font-size: 0.75rem; font-weight: 600; color: #334155;
+    font-size: 0.7rem; font-weight: 600; color: #0369a1;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .asg-league-label {
     margin-left: auto;
-    font-size: 0.65rem; color: #64748b;
+    font-size: 0.6rem; color: #0369a1; font-weight: 500;
     white-space: nowrap;
 }
 
 .asg-league-matchups {
     flex: 1;
     overflow-y: auto;
-    padding: 6px 10px 8px;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 5px;
+    padding: 2px 8px 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
     align-content: start;
 }
-.asg-league-matchups::-webkit-scrollbar { width: 4px; }
+.asg-league-matchups::-webkit-scrollbar { width: 3px; }
 .asg-league-matchups::-webkit-scrollbar-track { background: transparent; }
-.asg-league-matchups::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+.asg-league-matchups::-webkit-scrollbar-thumb { background: #7dd3fc; border-radius: 2px; }
 
 .asg-matchup-card {
     display: flex;
-    align-items: stretch;
+    align-items: center;
     background: #fff;
-    border: 1px solid #e2e8f0;
     border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
     overflow: hidden;
-    min-height: 36px;
+    padding: 3px 8px;
+    flex-shrink: 0;
 }
 .asg-matchup-sport-pill {
     display: flex; align-items: center; justify-content: center;
-    background: #e2e8f0;
-    border-right: 1px solid #cbd5e1;
-    padding: 4px 8px;
-    font-size: 0.6rem; font-weight: 700;
-    color: #1e293b;
-    text-transform: uppercase; letter-spacing: 0.06em;
+    background: #e0f2fe;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.55rem; font-weight: 700;
+    color: #0369a1;
+    text-transform: uppercase; letter-spacing: 0.04em;
     white-space: nowrap;
     flex-shrink: 0;
+    margin-right: 6px;
 }
 .asg-matchup-body {
     display: flex; flex-direction: column; justify-content: center;
-    padding: 4px 10px;
     flex: 1;
-    gap: 1px;
+    gap: 0;
 }
 .asg-matchup-teams {
-    font-size: 0.75rem; font-weight: 700; color: #1e293b;
+    font-size: 0.7rem; font-weight: 600; color: #1e3a5f;
     line-height: 1.2;
 }
 .asg-matchup-field {
-   font-size: 0.63rem; color: #64748b;
-    display: flex; align-items: center; gap: 3px;
+    font-size: 0.55rem; color: #64748b;
+    display: flex; align-items: center; gap: 2px;
 }
 
 .asg-league-empty {
-    color: rgba(255,255,255,0.45);
-    font-size: 0.75rem;
+    color: #64748b;
+    font-size: 0.7rem;
     font-style: italic;
-    padding: 10px 14px;
+    padding: 4px 8px;
 }
 
-.asg-league-time-ruler {
-    grid-column: 1;
-    background: #1e3a8a;
-    border-right: 1px solid rgba(255,255,255,0.15);
-    display: flex; align-items: flex-start;
-    padding: 8px 6px 0;
-}
-.asg-league-time-ruler .asg-time-label {
-    color: rgba(255,255,255,0.7);
-    font-weight: 600;
-}
+.asg-league-time-ruler { display: none; }
+.asg-league-time-ruler .asg-time-label { display: none; }
         `;
         document.head.appendChild(s);
     }
@@ -729,6 +734,11 @@
         var leagueByStart = {};
         leagueSlots.forEach(function (ls) { leagueByStart[ls.startMin] = ls; });
 
+        // Trip slots
+        var tripSlots = getTripSlotsForDiv(divName, bunks);
+        var tripByStart = {};
+        tripSlots.forEach(function (ts) { tripByStart[ts.startMin] = ts; });
+
         // Draw ruler ticks
         for (var tm = dayStart; tm <= dayEnd; tm += increment) {
             var topPx = (tm - dayStart) * PX_PER_MIN;
@@ -739,6 +749,11 @@
             for (var ls2 in leagueByStart) {
                 var lsData = leagueByStart[parseInt(ls2)];
                 if (tm > parseInt(ls2) && tm < lsData.endMin) { inLeague = true; break; }
+            }
+            var inTrip = false;
+            for (var ts2 in tripByStart) {
+                var tsData = tripByStart[parseInt(ts2)];
+                if (tm > parseInt(ts2) && tm < tsData.endMin) { inTrip = true; break; }
             }
 
             var tick = document.createElement('div');
@@ -752,14 +767,14 @@
                 'display:flex',
                 'align-items:flex-start',
                 'padding:2px 6px 0',
-                inLeague ? 'background:#1e3a8a;' : ''
+                inLeague ? 'background:#1e3a8a;' : (inTrip ? 'background:#065f46;' : '')
             ].join(';');
 
             if (showLabel) {
                 var lbl = document.createElement('span');
                 lbl.style.cssText = [
                     'font-size:' + (isMajor ? '0.7rem' : '0.63rem'),
-                    'color:' + (inLeague ? 'rgba(255,255,255,0.7)' : (isMajor ? '#4b5563' : '#9ca3af')),
+                    'color:' + ((inLeague || inTrip) ? 'rgba(255,255,255,0.7)' : (isMajor ? '#4b5563' : '#9ca3af')),
                     'font-weight:' + (isMajor ? '600' : '400'),
                     'white-space:nowrap'
                 ].join(';');
@@ -993,9 +1008,9 @@
                 'top:' + leagueTop + 'px',
                 'left:0',
                 'right:0',
-                'min-height:' + leagueH + 'px',
+                'height:' + leagueH + 'px',
                 'z-index:3',
-                'border-radius:0'
+                'box-sizing:border-box'
             ].join(';');
 
             var lHdr = document.createElement('div');
@@ -1012,11 +1027,6 @@
                 lName.textContent = ls.leagueName;
                 lHdr.appendChild(lName);
             }
-
-            var timeRange = document.createElement('span');
-            timeRange.style.cssText = 'margin-left:auto; font-size:0.65rem; color:#64748b; white-space:nowrap; flex-shrink:0;';
-            timeRange.textContent = toLabel(ls.startMin) + ' – ' + toLabel(ls.endMin);
-            lHdr.appendChild(timeRange);
 
             if (ls.gameLabel) {
                 var lLabel = document.createElement('span');
@@ -1077,6 +1087,44 @@
 
             overlay.appendChild(muGrid);
             bodyRow.appendChild(overlay);
+        });
+
+        // ★ v6.1: Trip overlays — span full width with green theme
+        tripSlots.forEach(function (ts) {
+            var tripTop = (ts.startMin - dayStart) * PX_PER_MIN;
+            var tripH = (ts.endMin - ts.startMin) * PX_PER_MIN;
+
+            var tripOverlay = document.createElement('div');
+            tripOverlay.style.cssText = [
+                'position:absolute',
+                'top:' + tripTop + 'px',
+                'left:0', 'right:0',
+                'height:' + tripH + 'px',
+                'z-index:3',
+                'box-sizing:border-box',
+                'background:linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+                'border-left:4px solid #10b981',
+                'border-top:1px solid #6ee7b7',
+                'border-bottom:1px solid #6ee7b7',
+                'border-right:1px solid #6ee7b7',
+                'display:flex',
+                'flex-direction:column',
+                'align-items:center',
+                'justify-content:center',
+                'overflow:hidden'
+            ].join(';');
+
+            var tripLabel = document.createElement('div');
+            tripLabel.style.cssText = 'font-size:0.85rem; font-weight:700; color:#065f46;';
+            tripLabel.textContent = '🚌 ' + ts.event;
+            tripOverlay.appendChild(tripLabel);
+
+            var tripTime = document.createElement('div');
+            tripTime.style.cssText = 'font-size:0.65rem; color:#047857; margin-top:2px;';
+            tripTime.textContent = toLabel(ts.startMin) + ' – ' + toLabel(ts.endMin);
+            tripOverlay.appendChild(tripTime);
+
+            bodyRow.appendChild(tripOverlay);
         });
 
         columnsWrap.appendChild(bodyRow);

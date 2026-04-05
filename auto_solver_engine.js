@@ -684,17 +684,39 @@
                 if (!slot) return;
                 const startMin = slot.startMin, endMin = slot.endMin;
 
-                // Try to find ANY available sport (allows repeats)
+                // ★ v7.0: Relaxed field check — skip GlobalFieldLocks in fallback
+                // League locks protect against cross-grade interference, but the fallback
+                // is filling within the SAME grade. A Free block is worse than any sport.
                 for (const cand of candidates) {
                     if (window.isRainyDay && !cand.isIndoor) continue;
-                    if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) continue;
+
+                    // Simplified availability check (no GlobalFieldLocks)
+                    const fn = normName(cand.field);
+                    const entries = fieldIndex.get(fn) || [];
+                    const overlapping = entries.filter(e => e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk);
+                    const st = cand.shareType || 'same_division';
+                    const cap = cand.capacity || 2;
+                    let blocked = false;
+
+                    if (st === 'not_sharable' && overlapping.length > 0) blocked = true;
+                    else if (st === 'same_division') {
+                        if (overlapping.some(e => e.grade !== grade)) blocked = true;
+                        if (!blocked && overlapping.filter(e => e.grade === grade).length >= cap) blocked = true;
+                    } else if (overlapping.length >= cap) blocked = true;
+
+                    // Exact time match
+                    if (!blocked && overlapping.length > 0 && cap > 1) {
+                        const sameGrade = overlapping.filter(e => e.grade === grade);
+                        if (sameGrade.length > 0 && sameGrade.some(e => e.startMin !== startMin || e.endMin !== endMin)) blocked = true;
+                    }
+
+                    if (blocked) continue;
 
                     sa[bunk][idx] = {
                         field: cand.field, sport: cand.sport, _activity: cand.sport,
                         _autoMode: true, _autoSolved: true, _fallbackFill: true, continuation: false
                     };
 
-                    const fn = cand.fieldNorm;
                     if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
                     fieldIndex.get(fn).push({ startMin, endMin, bunk, grade, activity: cand.sportNorm });
                     filled++;

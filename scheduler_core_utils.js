@@ -600,6 +600,16 @@
             return false;
         }
 
+        // ★ v6.0: Sport-to-field restriction check
+        if (actName) {
+            const dailyDisabledSports = (window.loadCurrentDailyData?.() || {}).dailyDisabledSportsByField || {};
+            const blockedSports = dailyDisabledSports[fieldName];
+            if (blockedSports && blockedSports.length > 0 && blockedSports.includes(actName)) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sport "${actName}" is disabled on this field today`);
+                return false;
+            }
+        }
+
         // Get slots for this block
         let uniqueSlots = [];
         if (block.slots && block.slots.length > 0) {
