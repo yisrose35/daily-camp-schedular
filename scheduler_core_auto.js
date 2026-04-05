@@ -4085,6 +4085,42 @@
             });
         });
 
+        // �� v7.0: Write bunk override blocks — uses overlap match instead of exact match
+        // Overrides may not align exactly with per-bunk slot boundaries
+        let overrideWriteCount = 0;
+        allGrades.forEach(grade => {
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const arr = pbs[String(bunk)] || [];
+                const sa = window.scheduleAssignments[String(bunk)];
+                if (!sa) return;
+                (bunkTimelines[bunk] || []).filter(b => b._bunkOverride).forEach(block => {
+                    // Find the slot that best overlaps this override (not exact match)
+                    let bestIdx = -1, bestOverlap = 0;
+                    arr.forEach((s, idx) => {
+                        if (sa[idx] && (sa[idx]._fixed || sa[idx]._capacityChecked)) return; // already written
+                        const overlapStart = Math.max(s.startMin, block.startMin);
+                        const overlapEnd = Math.min(s.endMin, block.endMin);
+                        const overlap = overlapEnd - overlapStart;
+                        if (overlap > bestOverlap) { bestOverlap = overlap; bestIdx = idx; }
+                    });
+                    if (bestIdx === -1) return;
+                    const isSport = block._assignedSport && block.field;
+                    sa[bestIdx] = {
+                        field: isSport ? block.field : (block.event || block.field),
+                        sport: isSport ? block._assignedSport : null,
+                        _activity: block._assignedSport || block.event,
+                        _fixed: true, _bunkOverride: true,
+                        _activityLocked: true, _autoMode: true,
+                        _capacityChecked: isSport, continuation: false
+                    };
+                    overrideWriteCount++;
+                });
+            });
+        });
+        if (overrideWriteCount > 0) log('[2.7] Wrote ' + overrideWriteCount + ' bunk override slots');
+
         // Write anchor blocks (swim, snacks, etc.)
         let anchorWriteCount = 0;
         allGrades.forEach(grade => {
