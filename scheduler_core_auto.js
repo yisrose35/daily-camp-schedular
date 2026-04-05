@@ -3890,7 +3890,10 @@
                 seen.add(k);
                 return true;
             }).map(b => ({
-                divName: b.division, bunk: String(b._bunk || ''),
+                divName: b.division,
+                // ★ v6.0: Set bunks array (not single bunk) so fillBlock takes the league path
+                // League teams ≠ bunks — fillBlock stores matchups when it sees bunks array
+                bunks: getBunksForGrade(b.division, divisions).map(String),
                 event: b.type === 'league' ? 'League Game' : 'Specialty League',
                 type: b.type, startTime: b.startTime, endTime: b.endTime,
                 startMin: b.startMin, endMin: b.endMin,
@@ -3930,6 +3933,21 @@
                         if (!window.leagueAssignments[div]) window.leagueAssignments[div] = {};
                         window.leagueAssignments[div][lb.startMin] = { matchups: matchups || [], gameLabel: gameLabel || '', sport: sport || '', leagueName: leagueName || '' };
                     });
+                }
+            };
+            // ★ v6.0: Override fillBlock to also copy matchup data onto the block object
+            // The default fillBlock stores in leagueAssignments but doesn't modify the block
+            const origFillBlock = lctx.fillBlock;
+            lctx.fillBlock = function(block, pick, fubs, yh, isLeague, ap) {
+                // Call original to store in leagueAssignments
+                if (origFillBlock) origFillBlock(block, pick, fubs, yh, isLeague, ap);
+                // Also copy matchup data directly onto the block for our writeback
+                if (pick && block) {
+                    if (pick._allMatchups) block._allMatchups = pick._allMatchups;
+                    if (pick._gameLabel) block._gameLabel = pick._gameLabel;
+                    if (pick._leagueName) block._leagueName = pick._leagueName;
+                    if (pick.sport) block._sport = pick.sport;
+                    if (pick._h2h) block._h2h = pick._h2h;
                 }
             };
             if (window.SchedulerCoreSpecialtyLeagues?.processSpecialtyLeagues) { try { lctx.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'specialty_league'); window.SchedulerCoreSpecialtyLeagues.processSpecialtyLeagues(lctx); } catch (e) { warn('[3] Specialty: ' + e.message); } }
