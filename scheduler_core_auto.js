@@ -1092,13 +1092,31 @@
             for (const ts of times) {
                 const te = ts + dMin;
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
-               let score = scorePositionByContention(ts, te, 'league', null, null);
+              let score = scorePositionByContention(ts, te, 'league', null, null);
                 score += getCrossGradeConflicts('league', ts, te, grade) * 10000;
                 // Iteration jitter: vary league placement across iterations
                 score += (seedJitter(_iterSeed, ts) - 0.5) * 2000;
                 // ★ v4.0: Prefer the rotation matrix's league band (strong suggestion)
                 if (leagueBand && ts >= leagueBand.start && te <= leagueBand.end) score -= 500;
                 else if (leagueBand) score += 200;
+                // ★ v5.1: Penalize positions that create un-fillable dead zones
+                // Check gap between this league and adjacent walls
+                const leagueDur = expandLeagueDur(ts, bunks);
+                const leagueEnd = ts + leagueDur;
+                const _minFill = getMinFillable(grade);
+                bunks.forEach(bk => {
+                    const tl = bunkTimelines[bk] || [];
+                    // Check gap BEFORE this league
+                    let prevEnd = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    tl.forEach(b => { if (b.endMin <= ts && b.endMin > prevEnd) prevEnd = b.endMin; });
+                    const gapBefore = ts - prevEnd;
+                    if (gapBefore > 0 && gapBefore < _minFill) score += 5000;
+                    // Check gap AFTER this league
+                    let nextStart = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    tl.forEach(b => { if (b.startMin >= leagueEnd && b.startMin < nextStart) nextStart = b.startMin; });
+                    const gapAfter = nextStart - leagueEnd;
+                    if (gapAfter > 0 && gapAfter < _minFill) score += 5000;
+                });
                 if (score < bestScore) { bestScore = score; bestStart = ts; }
             }
             if (bestStart === null) { warn('[P0] No free league gap for ' + grade); return null; }
@@ -2209,22 +2227,14 @@
             
 
             // ══════════════════════════════════════════════════════════
-            // Steps 3–7: CURSOR WALK WITH LOOK-AHEAD (v5.0)
+            // Steps 3–7: CURSOR WALK WITH LOOK-AHEAD (v5.1)
             // ══════════════════════════════════════════════════════════
-            // 1. Get gaps between walls
-            // 2. Assign each need to a gap (window overlap + space)
-            // 3. For each gap — cursor walk:
-            //    a. Sort needs by tightest flexibility
-            //    b. Walk: place if in window, defer if not
-            //    c. Fill toward deferred item's windowStart with
-            //       unplaced specials from shopping list, then sports
-            //    d. Place deferred item when cursor reaches its window
-            //    e. Fill remaining with specials then sports
-            // 4. Sports sized to fill exactly — no gaps, no stretching
-            //
-            // Every block lands at its CONFIGURED duration.
-            // Sports absorb whatever's left.
-            // If it can't fit → bad score → iteration retries.
+            // v5.1 FIXES:
+            //   - Sport last-slot dMax clamp (no more 70min sports)
+            //   - fillRegion specials capped at required count
+            //   - Tiny residual extends ANY block (not just sports)
+            //   - Final sweep catches any unfilled gaps in template
+            //   - Empty gaps between walls get fillRegion directly
             // ══════════════════════════════════════════════════════════
 
             // ── Shared state ──────────────────────────────────────────
@@ -2232,6 +2242,14 @@
             (draftResult.sports || []).forEach(s => usedSportsForBunk.add(s.name));
             const priorityList = shoppingList.sports?.priorityList || [];
             const placedSpecialNames = new Set();
+            // ★ v5.1: Track how many specials this bunk has placed (draft + fill)
+            let specialsPlacedCount = (draftResult.specials || []).length;
+            const maxSpecialsForBunk = Math.max(
+                shoppingList.specials?.required || 1,
+                (draftResult.specials || []).length + 2  // allow up to 2 extra from fillRegion
+            );
+            // Mark draft specials as already placed
+            (draftResult.specials || []).forEach(s => { if (s.name) placedSpecialNames.add(s.name); });
 
             function findSportWithField(startMin, endMin) {
                 for (const ds of (draftResult.sports || [])) {
@@ -2293,52 +2311,92 @@
                 });
             }
 
+            // ── Extend last template block to absorb tiny residual ────
+            // ★ v5.1: Extends ANY block type (not just sports), respecting dMax
+            function absorbResidual(residual) {
+                if (residual <= 0) return false;
+                const lastBlk = template.length > 0 ? template[template.length - 1] : null;
+                if (!lastBlk || lastBlk._source === 'phase0') return false;
+                const curDur = lastBlk.endMin - lastBlk.startMin;
+                const t = (lastBlk.type || '').toLowerCase();
+                // Sports/slots: use sportC.dMax
+                if (['sport', 'slot'].includes(t)) {
+                    if (curDur + residual <= sportC.dMax) {
+                        lastBlk.endMin += residual;
+                        return true;
+                    }
+                } else {
+                    // Other blocks: use their own dMax
+                    const maxDur = lastBlk.dMax || Infinity;
+                    if (curDur + residual <= maxDur) {
+                        lastBlk.endMin += residual;
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             // ── Fill a region with unplaced specials then sports ───────
             function fillRegion(rStart, rEnd) {
                 const space = rEnd - rStart;
                 if (space <= 0) return rStart;
                 let cur = rStart;
 
-                // Try unplaced specials from shopping list
-                for (const special of (shoppingList.specials?.priorityList || [])) {
-                    if (cur >= rEnd) break;
-                    if (placedSpecialNames.has(special.name)) continue;
-                    const dur = special.duration || special.dMin || 30;
-                    if (dur > rEnd - cur) continue;
-                    if (!canUseSpecialAtTime(special.name, grade, cur, cur + dur)) continue;
+                // ★ v5.1: Only add specials if under the cap
+                if (specialsPlacedCount < maxSpecialsForBunk) {
+                    for (const special of (shoppingList.specials?.priorityList || [])) {
+                        if (cur >= rEnd) break;
+                        if (specialsPlacedCount >= maxSpecialsForBunk) break;
+                        if (placedSpecialNames.has(special.name)) continue;
+                        const dur = special.duration || special.dMin || 30;
+                        if (dur > rEnd - cur) continue;
+                        if (!canUseSpecialAtTime(special.name, grade, cur, cur + dur)) continue;
 
-                    template.push({
-                        startMin: cur, endMin: cur + dur,
-                        type: 'special', event: special.name,
-                        layer: special._layer || shoppingList.specials?.layer || null,
-                        field: special.location || null,
-                        dMin: dur, dMax: dur,
-                        _source: 'cursor_fill',
-                        _activityLocked: true,
-                        _assignedSpecial: special.name,
-                        _specialLocation: special.location || null,
-                        _specialDuration: dur,
-                        _final: true
-                    });
-                    registerCrossGrade(grade, 'special', cur, cur + dur, special.name);
-                    registerSpecialUsage(special.name, grade, cur, cur + dur);
-                    if (special.location) claimField(special.location, cur, cur + dur, bunk, grade, special.name);
-                    placedSpecialNames.add(special.name);
-                    cur += dur;
+                        template.push({
+                            startMin: cur, endMin: cur + dur,
+                            type: 'special', event: special.name,
+                            layer: special._layer || shoppingList.specials?.layer || null,
+                            field: special.location || null,
+                            dMin: dur, dMax: dur,
+                            _source: 'cursor_fill',
+                            _activityLocked: true,
+                            _assignedSpecial: special.name,
+                            _specialLocation: special.location || null,
+                            _specialDuration: dur,
+                            _final: true
+                        });
+                        registerCrossGrade(grade, 'special', cur, cur + dur, special.name);
+                        registerSpecialUsage(special.name, grade, cur, cur + dur);
+                        if (special.location) claimField(special.location, cur, cur + dur, bunk, grade, special.name);
+                        placedSpecialNames.add(special.name);
+                        specialsPlacedCount++;
+                        cur += dur;
+                    }
                 }
 
                 // Fill remainder with sports
                 const sportSpace = rEnd - cur;
                 if (sportSpace >= sportC.dMin) {
-                    let numSports = Math.ceil(sportSpace / sportC.dMax);
+                    // ★ v5.1: Calculate slot count so no slot exceeds dMax
+                    let numSports = Math.max(1, Math.ceil(sportSpace / sportC.dMax));
                     while (numSports > 1 && numSports * sportC.dMin > sportSpace) numSports--;
                     if (numSports < 1) numSports = 1;
+                    // Distribute evenly
                     const baseDur = snapTo5(Math.floor(sportSpace / numSports));
                     let leftover = sportSpace;
                     for (let s = 0; s < numSports; s++) {
-                        let dur = (s === numSports - 1) ? leftover : baseDur;
+                        let dur;
+                        if (s === numSports - 1) {
+                            // ★ v5.1 FIX: Last slot gets remainder BUT clamped to dMax
+                            dur = leftover;
+                            if (dur > sportC.dMax) {
+                                // Still too big — need another slot
+                                dur = sportC.dMax;
+                            }
+                        } else {
+                            dur = baseDur;
+                        }
                         dur = Math.max(sportC.dMin, Math.min(sportC.dMax, dur));
-                        if (s === numSports - 1) dur = Math.max(sportC.dMin, leftover);
                         const sp = findSportWithField(cur, cur + dur);
                         if (sp) { claimField(sp.field, cur, cur + dur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
@@ -2354,15 +2412,34 @@
                         leftover -= dur;
                         cur += dur;
                     }
-                } else if (sportSpace > 0) {
-                    // Tiny residual < sportC.dMin — extend last placed sport if possible
-                    const lastBlk = template[template.length - 1];
-                    if (lastBlk && ['sport', 'slot'].includes((lastBlk.type || '').toLowerCase()) &&
-                        (lastBlk.endMin - lastBlk.startMin + sportSpace) <= sportC.dMax) {
-                        lastBlk.endMin += sportSpace;
-                        cur += sportSpace;
+                    // ★ v5.1: If there's STILL leftover (shouldn't happen, but safety)
+                    if (leftover >= sportC.dMin) {
+                        const sp = findSportWithField(cur, cur + leftover);
+                        if (sp) { claimField(sp.field, cur, cur + leftover, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
+                        template.push({
+                            startMin: cur, endMin: cur + leftover,
+                            type: sp ? 'sport' : 'slot',
+                            event: sp ? sp.name : 'General Activity Slot',
+                            layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
+                            _activityLocked: false,
+                            _assignedSport: sp ? sp.name : null, field: sp ? sp.field : null,
+                            _source: sp ? 'capacity_checked' : 'filler',
+                            _sportFallbacks: priorityList.map(s => s.name), _final: true
+                        });
+                        cur += leftover;
                     }
-                    // Otherwise dead zone — iteration scores it
+                } else if (sportSpace > 0) {
+                    // ★ v5.1 FIX: Try extending ANY last block, not just sports
+                    if (!absorbResidual(sportSpace)) {
+                        // Can't absorb — create a tiny slot (dead zone, iteration scores it)
+                        template.push({
+                            startMin: cur, endMin: cur + sportSpace,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: shoppingList.sports?.layer, dMin: sportSpace, dMax: sportSpace,
+                            _activityLocked: false, _source: 'residual', _final: true
+                        });
+                    }
+                    cur = rEnd;
                 }
                 return cur;
             }
@@ -2411,7 +2488,6 @@
                 if (bestGapIdx >= 0) {
                     gapAssignments[bestGapIdx].needs.push(need);
                 } else if (need.type === 'swim' && need.layer) {
-                    // Swim fallback: retry with full layer window
                     const fullWinStart = Math.max(need.layer.startMin || 0, gradeStart);
                     const fullWinEnd = Math.min(need.layer.endMin || 1440, gradeEnd);
                     for (let gi = 0; gi < gapAssignments.length; gi++) {
@@ -2439,8 +2515,13 @@
             for (const gap of gapAssignments) {
                 if (gap.size <= 0) continue;
 
+                // ★ v5.1: Empty gap (no assigned needs) → fill directly
+                if (gap.needs.length === 0) {
+                    fillRegion(gap.start, gap.end);
+                    continue;
+                }
+
                 // Sort needs: tightest flexibility first
-                // Flexibility = (window overlap with gap) minus duration
                 const sortedNeeds = [...gap.needs].sort((a, b) => {
                     const aWin = Math.min(a.windowEnd || gap.end, gap.end) - Math.max(a.windowStart || gap.start, gap.start);
                     const bWin = Math.min(b.windowEnd || gap.end, gap.end) - Math.max(b.windowStart || gap.start, gap.start);
@@ -2461,7 +2542,6 @@
                     const winStart = Math.max(need.windowStart || gap.start, gap.start);
                     const winEnd = Math.min(need.windowEnd || gap.end, gap.end);
 
-                    // Is cursor inside this need's window?
                     if (cursor >= winStart && cursor + dur <= winEnd) {
                         let ok = true;
                         if (need.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
@@ -2480,7 +2560,6 @@
                 // ── Pass 2: Handle deferred with look-ahead fill ──────
                 let safety = 0;
                 while (deferred.length > 0 && safety++ < 20) {
-                    // Find deferred item with earliest window start
                     deferred.sort((a, b) => {
                         const aWs = Math.max(a.windowStart || gap.start, gap.start);
                         const bWs = Math.max(b.windowStart || gap.start, gap.start);
@@ -2491,26 +2570,21 @@
                     const nextWinEnd = Math.min(next.windowEnd || gap.end, gap.end);
                     const dur = next.dMin;
 
-                    // Can't fit in this gap at all?
                     if (nextWinStart + dur > gap.end || nextWinEnd < nextWinStart + dur) {
                         deferred.shift();
                         continue;
                     }
 
-                    // Fill cursor → nextWinStart with specials + sports
+                    // Fill cursor → nextWinStart
                     if (cursor < nextWinStart) {
                         const fillSpace = nextWinStart - cursor;
                         if (fillSpace >= sportC.dMin) {
                             cursor = fillRegion(cursor, nextWinStart);
                         } else if (fillSpace > 0) {
-                            // Tiny gap to window start — extend last sport if possible
-                            const lastBlk = template.length > 0 ? template[template.length - 1] : null;
-                            if (lastBlk && ['sport', 'slot'].includes((lastBlk.type || '').toLowerCase()) &&
-                                (lastBlk.endMin - lastBlk.startMin + fillSpace) <= sportC.dMax) {
-                                lastBlk.endMin += fillSpace;
-                                cursor = lastBlk.endMin;
+                            // ★ v5.1 FIX: Try extending ANY last block, not just sports
+                            if (absorbResidual(fillSpace)) {
+                                cursor += fillSpace;
                             } else {
-                                // Can't fill — advance cursor (dead zone)
                                 cursor = nextWinStart;
                             }
                         }
@@ -2530,7 +2604,6 @@
                             continue;
                         }
                     }
-                    // Can't place — give up on this item
                     deferred.shift();
                 }
 
@@ -2538,6 +2611,81 @@
                 if (cursor < gap.end) {
                     cursor = fillRegion(cursor, gap.end);
                 }
+            }
+
+            // ── Step 4: Final sweep — fill any remaining gaps ─────────
+            // Catches gaps the main loop missed (e.g. between walls
+            // that no needs were assigned to but fillRegion didn't fire)
+            template.sort((a, b) => a.startMin - b.startMin);
+            for (let sweep = 0; sweep < 3; sweep++) {
+                template.sort((a, b) => a.startMin - b.startMin);
+                let swept = false;
+
+                // Start-of-day gap
+                if (template.length > 0 && template[0].startMin > gradeStart) {
+                    const gapSize = template[0].startMin - gradeStart;
+                    if (gapSize >= sportC.dMin) {
+                        fillRegion(gradeStart, template[0].startMin);
+                        swept = true;
+                    } else if (gapSize > 0) {
+                        if (!absorbResidual(gapSize)) {
+                            // Extend first block backward if not a wall
+                            if (template[0]._source !== 'phase0') { template[0].startMin = gradeStart; swept = true; }
+                        } else { swept = true; }
+                    }
+                }
+
+                // End-of-day gap
+                template.sort((a, b) => a.startMin - b.startMin);
+                if (template.length > 0 && template[template.length - 1].endMin < gradeEnd) {
+                    const gapSize = gradeEnd - template[template.length - 1].endMin;
+                    if (gapSize >= sportC.dMin) {
+                        fillRegion(template[template.length - 1].endMin, gradeEnd);
+                        swept = true;
+                    } else if (gapSize > 0) {
+                        const last = template[template.length - 1];
+                        const t = (last.type || '').toLowerCase();
+                        const curDur = last.endMin - last.startMin;
+                        const maxDur = ['sport', 'slot'].includes(t) ? sportC.dMax : (last.dMax || Infinity);
+                        if (last._source !== 'phase0' && curDur + gapSize <= maxDur) {
+                            last.endMin = gradeEnd; swept = true;
+                        }
+                    }
+                }
+
+                // Inter-block gaps
+                template.sort((a, b) => a.startMin - b.startMin);
+                for (let i = 0; i < template.length - 1; i++) {
+                    const gapSize = template[i + 1].startMin - template[i].endMin;
+                    if (gapSize <= 0) continue;
+
+                    if (gapSize >= sportC.dMin) {
+                        fillRegion(template[i].endMin, template[i + 1].startMin);
+                        swept = true;
+                        break; // re-sort and re-scan
+                    } else if (gapSize > 0) {
+                        // ★ v5.1: Try extending prev or next, respecting dMax
+                        const prev = template[i], next = template[i + 1];
+                        const prevT = (prev.type || '').toLowerCase();
+                        const nextT = (next.type || '').toLowerCase();
+                        const prevMax = ['sport', 'slot'].includes(prevT) ? sportC.dMax : (prev.dMax || Infinity);
+                        const nextMax = ['sport', 'slot'].includes(nextT) ? sportC.dMax : (next.dMax || Infinity);
+                        const prevDur = prev.endMin - prev.startMin;
+                        const nextDur = next.endMin - next.startMin;
+
+                        if (prev._source !== 'phase0' && prevDur + gapSize <= prevMax) {
+                            prev.endMin += gapSize; swept = true;
+                        } else if (next._source !== 'phase0' && nextDur + gapSize <= nextMax) {
+                            next.startMin -= gapSize; swept = true;
+                        } else if (prev._source !== 'phase0' && ['sport', 'slot'].includes(prevT)) {
+                            prev.endMin += gapSize; swept = true; // sports can always grow (solver reassigns)
+                        } else if (next._source !== 'phase0' && ['sport', 'slot'].includes(nextT)) {
+                            next.startMin -= gapSize; swept = true;
+                        }
+                    }
+                }
+
+                if (!swept) break;
             }
 
             template.sort((a, b) => a.startMin - b.startMin);
