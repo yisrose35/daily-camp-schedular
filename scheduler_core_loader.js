@@ -396,7 +396,9 @@
         // -----------------------------------------------------------------
         // STEP 1: Disable outdoor fields during rainy day
         // -----------------------------------------------------------------
-        let effectiveDisabledFields = [...(dailyOverrides.disabledFields || [])];
+        // ★ v7.0: Read from correct path — overrides are nested under dailyData.overrides
+        const dailyOvNested = dailyOverrides.overrides || {};
+        let effectiveDisabledFields = [...(dailyOvNested.disabledFields || dailyOverrides.disabledFields || [])];
         
         if (isRainyMode) {
             // Get all outdoor fields (those without rainyDayAvailable === true)
@@ -497,8 +499,8 @@
             masterLeagues: window.masterLeagues || {},
             masterSpecialtyLeagues: window.masterSpecialtyLeagues || {},
             disabledFields: effectiveDisabledFields,
-            disabledSpecials: dailyOverrides.disabledSpecials || [],
-            disabledLeagues: dailyOverrides.disabledLeagues || [],
+            disabledSpecials: dailyOvNested.disabledSpecials || dailyOverrides.disabledSpecials || [],
+            disabledLeagues: dailyOvNested.leagues || dailyOverrides.disabledLeagues || [],
             disabledSpecialtyLeagues: dailyOverrides.disabledSpecialtyLeagues || [],
             historicalCounts: window.loadHistoricalCounts?.() || {},
             yesterdayHistory: window.loadYesterdayHistory?.() || {},

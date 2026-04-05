@@ -1224,6 +1224,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (s.rainyDayAvailable === false || s.availableOnRainyDay === false) return false;
                 }
 
+                // ★ v7.0: Filter out daily-disabled specials
+                if (disabledSpecials && disabledSpecials.length > 0) {
+                    if (disabledSpecials.includes(s.name)) return false;
+                }
+
                 return true;
             });
 

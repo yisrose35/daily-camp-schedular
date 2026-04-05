@@ -377,9 +377,15 @@
         const allowedSet = allowedDivisions ? new Set(allowedDivisions.map(String)) : null;
 
         const allSpecials = getSpecialActivitiesList(globalSettings);
-        const todaysSpecials = allSpecials.filter(s => isSpecialAvailableOnDay(s.name, dayName, isRainy, globalSettings));
+        // ★ v7.0: Filter out daily-disabled specials from resource overrides
+        const dailyDisabledSpecials = (dailyData?.overrides?.disabledSpecials) || [];
+        const todaysSpecials = allSpecials.filter(s => {
+            if (!isSpecialAvailableOnDay(s.name, dayName, isRainy, globalSettings)) return false;
+            if (dailyDisabledSpecials.includes(s.name)) return false;
+            return true;
+        });
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
-        log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)');
+        log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
 
         const fieldUsageBySlot = window.fieldUsageBySlot;
 
@@ -3672,12 +3678,23 @@
 
             buildResourceCalendar(_iterSeed);
 
-            // Leagues in stagger order
+            // ★ v7.0: Load disabled leagues from daily overrides
+            const dailyDisabledLeagues = dailyData?.overrides?.leagues || [];
+            const dailyDisabledSpecialtyLeagues = dailyData?.disabledSpecialtyLeagues || [];
+            window.disabledLeagues = dailyDisabledLeagues; // Expose for league engine
+
+            // Leagues in stagger order (filter out disabled)
             const leagueLayers = nonPinnedLayers.filter(l => {
                 const grade = l.grade || l.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return false;
                 const t = (l.type || '').toLowerCase();
-                return (t === 'league' || t === 'specialty_league') && l._classification !== 'pinned';
+                if ((t === 'league' || t === 'specialty_league') && l._classification === 'pinned') return false;
+                if (t !== 'league' && t !== 'specialty_league') return false;
+                // Check if this league is disabled
+                const leagueName = l.event || l.name || '';
+                if (dailyDisabledLeagues.includes(leagueName) || dailyDisabledLeagues.includes(grade)) return false;
+                if (t === 'specialty_league' && dailyDisabledSpecialtyLeagues.includes(leagueName)) return false;
+                return true;
             });
             leagueLayers.sort((a, b) => ((staggerPlan[a.grade || a.division] || {}).offset || 0) - ((staggerPlan[b.grade || b.division] || {}).offset || 0));
             leagueLayers.forEach(layer => placeLeagueForGrade(layer.grade || layer.division, layer));
