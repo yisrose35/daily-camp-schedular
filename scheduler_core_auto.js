@@ -2206,65 +2206,7 @@
                 return totalNeed <= totalGap;
             }
 
-            // ══════════════════════════════════════════════════════════
-            // Steps 3-6: GAP BUDGETING (v4.5.1)
-            // ══════════════════════════════════════════════════════════
-            // 1. Find gaps between walls
-            // 2. Assign each need to a gap (respecting time windows)
-            // 3. Budget each gap: start at dMax, compress if over
-            // 4. Add sport fillers for remaining space
-            // 5. Sort by windowStart, lay out CONTIGUOUSLY — math
-            //    guarantees sum(durations) === gap size → zero holes
-            // 6. Validate resource constraints, swap if needed
-            //
-            // Compression order (most compressible first):
-            //   1. Sports        (if dMin != dMax)
-            //   2. Specials      (if dMin != dMax, no fixed duration)
-            //   3. Snack         (if dMin != dMax)
-            //   4. Swim          (if dMin != dMax)
-            //   5. Leagues       (if dMin != dMax)
-            // Blocks with dMin === dMax are NEVER compressed.
-            // ══════════════════════════════════════════════════════════
-
-            // ── Shared helpers used by budgeting + Step 7 ─────────────
-            const usedSportsForBunk = new Set();
-            (draftResult.sports || []).forEach(s => usedSportsForBunk.add(s.name));
-            const priorityList = shoppingList.sports?.priorityList || [];
-
-            function findSportWithField(startMin, endMin) {
-                for (const ds of (draftResult.sports || [])) {
-                    if (usedSportsForBunk.has(ds.name)) continue;
-                    const sportInfo = priorityList.find(s => s.name === ds.name);
-                    if (sportInfo) {
-                        for (const fn of (sportInfo.fields || [])) {
-                            if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: ds.name, field: fn };
-                        }
-                    }
-                }
-                for (const sport of priorityList) {
-                    if (usedSportsForBunk.has(sport.name)) continue;
-                    for (const fn of (sport.fields || [])) {
-                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
-                    }
-                }
-                for (const sport of priorityList) {
-                    for (const fn of (sport.fields || [])) {
-                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade)) return { name: sport.name, field: fn };
-                    }
-                }
-                return null;
-            }
-
-            function getCompressionPriority(block) {
-                if (block.dMin === block.dMax) return 99;
-                const t = (block.type || '').toLowerCase();
-                if (t === 'sport' || t === 'sports' || t === 'slot') return 1;
-                if (t === 'special') return 2;
-                if (t === 'snacks' || t === 'snack') return 3;
-                if (t === 'swim') return 4;
-                if (t === 'league' || t === 'specialty_league') return 5;
-                return 6;
-            }
+            
 
             // ══════════════════════════════════════════════════════════
             // Steps 3–7: CURSOR WALK WITH LOOK-AHEAD (v5.0)
