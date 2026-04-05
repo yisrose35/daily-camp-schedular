@@ -1352,7 +1352,13 @@
                             window.unifiedTimes = result.data.unifiedTimes;
                         }
                         if (result.data.divisionTimes) {
-                            window.divisionTimes = result.data.divisionTimes;
+                            // ★ v7.0: Don't overwrite divisionTimes if local generation is fresh
+                            var localGenTime = window._localGenerationTimestamp || 0;
+                            if (Date.now() - localGenTime > 60000) {
+                                window.divisionTimes = result.data.divisionTimes;
+                            } else {
+                                console.log('🔗 Skipped divisionTimes overwrite — local generation is fresh');
+                            }
                         }
                         
                         // Update localStorage with merged data

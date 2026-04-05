@@ -4674,6 +4674,9 @@
         warnings.forEach((w, i) => log('  ' + (i + 1) + '. [' + w.type + '] ' + (w.message || JSON.stringify(w))));
         log('═══════════════════════════════════════════════════════════');
 
+        // ★ v7.0: Mark local generation time — prevents cloud sync from overwriting fresh results
+        window._localGenerationTimestamp = Date.now();
+
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 
 
