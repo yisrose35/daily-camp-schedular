@@ -2242,6 +2242,8 @@
             (draftResult.sports || []).forEach(s => usedSportsForBunk.add(s.name));
             const priorityList = shoppingList.sports?.priorityList || [];
             const placedSpecialNames = new Set();
+            // ★ v5.1.1: Hard ceiling for sport duration — layer dMax may be too wide
+            const sportCeiling = Math.min(sportC.dMax, TYPE_CEILINGS.sport || GAP_MAX_DUR);
             // ★ v5.1: Track how many specials this bunk has placed (draft + fill)
             let specialsPlacedCount = (draftResult.specials || []).length;
             const maxSpecialsForBunk = Math.max(
@@ -2319,9 +2321,10 @@
                 if (!lastBlk || lastBlk._source === 'phase0') return false;
                 const curDur = lastBlk.endMin - lastBlk.startMin;
                 const t = (lastBlk.type || '').toLowerCase();
-                // Sports/slots: use sportC.dMax
+                // Sports/slots: cap at type ceiling
                 if (['sport', 'slot'].includes(t)) {
-                    if (curDur + residual <= sportC.dMax) {
+                    const sportCeil = sportCeiling;
+                    if (curDur + residual <= sportCeil) {
                         lastBlk.endMin += residual;
                         return true;
                     }
@@ -2376,9 +2379,12 @@
 
                 // Fill remainder with sports
                 const sportSpace = rEnd - cur;
+                // ★ v5.1.1: Hard cap sport duration at type ceiling (60min)
+                // sportC.dMax comes from layer config and may be too wide
+                const sportMaxDur = sportCeiling;
                 if (sportSpace >= sportC.dMin) {
-                    // ★ v5.1: Calculate slot count so no slot exceeds dMax
-                    let numSports = Math.max(1, Math.ceil(sportSpace / sportC.dMax));
+                    // ★ v5.1: Calculate slot count so no slot exceeds ceiling
+                    let numSports = Math.max(1, Math.ceil(sportSpace / sportMaxDur));
                     while (numSports > 1 && numSports * sportC.dMin > sportSpace) numSports--;
                     if (numSports < 1) numSports = 1;
                     // Distribute evenly
@@ -2387,16 +2393,14 @@
                     for (let s = 0; s < numSports; s++) {
                         let dur;
                         if (s === numSports - 1) {
-                            // ★ v5.1 FIX: Last slot gets remainder BUT clamped to dMax
                             dur = leftover;
-                            if (dur > sportC.dMax) {
-                                // Still too big — need another slot
-                                dur = sportC.dMax;
+                            if (dur > sportMaxDur) {
+                                dur = sportMaxDur;
                             }
                         } else {
                             dur = baseDur;
                         }
-                        dur = Math.max(sportC.dMin, Math.min(sportC.dMax, dur));
+                        dur = Math.max(sportC.dMin, Math.min(sportMaxDur, dur));
                         const sp = findSportWithField(cur, cur + dur);
                         if (sp) { claimField(sp.field, cur, cur + dur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
@@ -2646,7 +2650,7 @@
                         const last = template[template.length - 1];
                         const t = (last.type || '').toLowerCase();
                         const curDur = last.endMin - last.startMin;
-                        const maxDur = ['sport', 'slot'].includes(t) ? sportC.dMax : (last.dMax || Infinity);
+                        const maxDur = ['sport', 'slot'].includes(t) ? sportCeiling : (last.dMax || Infinity);
                         if (last._source !== 'phase0' && curDur + gapSize <= maxDur) {
                             last.endMin = gradeEnd; swept = true;
                         }
@@ -2668,8 +2672,8 @@
                         const prev = template[i], next = template[i + 1];
                         const prevT = (prev.type || '').toLowerCase();
                         const nextT = (next.type || '').toLowerCase();
-                        const prevMax = ['sport', 'slot'].includes(prevT) ? sportC.dMax : (prev.dMax || Infinity);
-                        const nextMax = ['sport', 'slot'].includes(nextT) ? sportC.dMax : (next.dMax || Infinity);
+                        const prevMax = ['sport', 'slot'].includes(prevT) ? sportCeiling : (prev.dMax || Infinity);
+                        const nextMax = ['sport', 'slot'].includes(nextT) ? sportCeiling : (next.dMax || Infinity);
                         const prevDur = prev.endMin - prev.startMin;
                         const nextDur = next.endMin - next.startMin;
 
