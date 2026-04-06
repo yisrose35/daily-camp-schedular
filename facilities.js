@@ -979,67 +979,6 @@ function renderGeneralConfig(container, fac) {
         });
     }
 
-    // Swim config — if swim is selected
-    const hasSwim = fac.generalActivities.some(ga => ga.quickType === 'swim');
-    if (hasSwim) {
-        if (!fac.swimConfig) fac.swimConfig = { preSwimMin: 5, postSwimMin: 5 };
-
-        const swimSection = document.createElement("div");
-        swimSection.style.cssText = "margin-top:16px; padding:16px; background:#EFF6FF; border:1px solid #BFDBFE; border-radius:10px;";
-
-        swimSection.innerHTML = `
-            <div style="font-weight:600; font-size:0.95rem; color:#1E40AF; margin-bottom:12px;">
-                Swim Change Time Configuration
-            </div>
-            <p style="font-size:0.82rem; color:#3B82F6; margin:0 0 12px 0;">
-                Define how much time campers need to change before and after swimming.
-            </p>
-        `;
-
-        const configRow = document.createElement("div");
-        configRow.style.cssText = "display:flex; gap:16px; flex-wrap:wrap;";
-
-        // Pre-swim
-        const preWrap = document.createElement("div");
-        preWrap.style.cssText = "display:flex; align-items:center; gap:8px;";
-        preWrap.innerHTML = `<label style="font-size:0.85rem; font-weight:500; color:#1E40AF;">Pre-swim change:</label>`;
-        const preInput = document.createElement("input");
-        preInput.type = "number";
-        preInput.min = "0";
-        preInput.max = "30";
-        preInput.value = fac.swimConfig.preSwimMin || 5;
-        preInput.style.cssText = "width:60px; padding:6px; border:1px solid #93C5FD; border-radius:6px; text-align:center;";
-        preInput.onchange = () => {
-            fac.swimConfig.preSwimMin = Math.max(0, Math.min(30, parseInt(preInput.value) || 0));
-            preInput.value = fac.swimConfig.preSwimMin;
-            saveData();
-        };
-        preWrap.appendChild(preInput);
-        preWrap.innerHTML += `<span style="font-size:0.8rem; color:#6B7280;">min</span>`;
-        configRow.appendChild(preWrap);
-
-        // Post-swim
-        const postWrap = document.createElement("div");
-        postWrap.style.cssText = "display:flex; align-items:center; gap:8px;";
-        postWrap.innerHTML = `<label style="font-size:0.85rem; font-weight:500; color:#1E40AF;">Post-swim change:</label>`;
-        const postInput = document.createElement("input");
-        postInput.type = "number";
-        postInput.min = "0";
-        postInput.max = "30";
-        postInput.value = fac.swimConfig.postSwimMin || 5;
-        postInput.style.cssText = "width:60px; padding:6px; border:1px solid #93C5FD; border-radius:6px; text-align:center;";
-        postInput.onchange = () => {
-            fac.swimConfig.postSwimMin = Math.max(0, Math.min(30, parseInt(postInput.value) || 0));
-            postInput.value = fac.swimConfig.postSwimMin;
-            saveData();
-        };
-        postWrap.appendChild(postInput);
-        postWrap.innerHTML += `<span style="font-size:0.8rem; color:#6B7280;">min</span>`;
-        configRow.appendChild(postWrap);
-
-        swimSection.appendChild(configRow);
-        container.appendChild(swimSection);
-    }
 }
 
 // =========================================================================
