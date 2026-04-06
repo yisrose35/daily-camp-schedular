@@ -961,6 +961,10 @@
     // =========================================================================
 
     async function generateRoutes() {
+        // Clear intersection cache on each generation so fresh data is fetched
+        // for the full service area (not stale single-region data)
+        _intersectionCache = null;
+
         const roster = getRoster();
         const mode = document.getElementById('routeMode')?.value || 'door-to-door';
         const reserveSeats = parseInt(document.getElementById('routeReserveSeats')?.value) || 0;
@@ -1130,6 +1134,22 @@
                 if (!campersByRegion[bestReg]) campersByRegion[bestReg] = [];
                 campersByRegion[bestReg].push(c);
             });
+
+            // Pre-fetch intersections for ALL campers at once (corner-stops mode)
+            // so the bbox covers the entire service area, not just one ZIP region.
+            // Without this, the first region's fetch populates the cache, and
+            // subsequent regions (e.g., Hewlett) reuse that cache which only
+            // covers the first region's area — resulting in address ranges
+            // instead of intersection names.
+            if (mode === 'corner-stops' && !_intersectionCache) {
+                showProgress('Fetching real intersections...', 15);
+                const allIntersections = await fetchIntersections(campers);
+                if (allIntersections?.length) {
+                    _intersectionCache = allIntersections;
+                    try { localStorage.setItem('campistry_go_intersections', JSON.stringify({ intersections: allIntersections, timestamp: Date.now() })); } catch (_) {}
+                    console.log('[Go] OSM: ' + allIntersections.length + ' real intersections (full service area)');
+                }
+            }
 
             // Create stops per region — each with its own density
             for (const [regId, regCampers] of Object.entries(campersByRegion)) {
@@ -2869,7 +2889,8 @@
     async function fetchIntersections(campers) {
         let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
         campers.forEach(c => { if (c.lat < minLat) minLat = c.lat; if (c.lat > maxLat) maxLat = c.lat; if (c.lng < minLng) minLng = c.lng; if (c.lng > maxLng) maxLng = c.lng; });
-        const buf = 0.003;
+        // Buffer of ~0.005 deg ≈ ~0.35mi — ensures intersections near cluster edges are included
+        const buf = 0.005;
         const bbox = (minLat - buf) + ',' + (minLng - buf) + ',' + (maxLat + buf) + ',' + (maxLng + buf);
 
         const query = '[out:json][timeout:30];' +
