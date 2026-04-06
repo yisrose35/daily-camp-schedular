@@ -1126,6 +1126,9 @@
         }
         if (!stops.length) return [];
 
+        // FIX 14: Use user's maxWalkDistance setting instead of hard-coded 500ft
+        const MAX_WALK_FT = (D.setup.maxWalkDistance && D.setup.maxWalkDistance > 0) ? D.setup.maxWalkDistance : 500;
+
         // Post-clustering deduplication (~200ft)
         const dedupDist = 0.038;
         let dedups = 0;
@@ -1154,8 +1157,6 @@
         // ── Walk audit: split stops where any kid walks too far ──
         // The cluster centroid may be close to all kids, but the actual stop
         // (at an intersection) can be at one end of a long street cluster.
-        // FIX 14: Use user's maxWalkDistance setting instead of hard-coded 500ft
-        const MAX_WALK_FT = (D.setup.maxWalkDistance && D.setup.maxWalkDistance > 0) ? D.setup.maxWalkDistance : 500;
         let walkSplits = 0;
         for (let i = 0; i < stops.length; i++) {
             const st = stops[i];
