@@ -115,35 +115,51 @@
                         <div class="form-group"><label class="form-label">Max Walk (ft)</label><input type="number" class="form-input" id="maxWalkDistance" value="500" min="100" max="2640" step="50"><span class="form-hint">For optimized stops mode</span></div>
                     </div>
                 </div>
-                <div class="setup-card" id="orsKeyCard" style="display:none;">
-                    <h3>OpenRouteService API Key</h3>
-                    <p class="muted">Only needed if no platform key is configured</p>
-                    <div class="form-group full-width">
-                        <label class="form-label">API Key</label>
-                        <input type="text" class="form-input" id="orsApiKey" placeholder="Paste your ORS token">
-                        <span class="form-hint">Get free at <a href="https://openrouteservice.org/dev/#/signup" target="_blank" style="color:var(--blue-600)">openrouteservice.org</a> (geocoding & directions)</span>
-                    </div>
-                    <div class="form-group full-width" style="margin-top:.75rem;">
-                        <label class="form-label">GraphHopper Key <span style="background:#059669;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">RECOMMENDED</span></label>
-                        <input type="text" class="form-input" id="ghApiKey" placeholder="Paste your GraphHopper key">
-                        <span class="form-hint">Get free at <a href="https://graphhopper.com/dashboard/signup" target="_blank" style="color:var(--blue-600)">graphhopper.com</a> (route optimization — makes routes 10x better)</span>
-                    </div>
-                    <div style="margin-top:1rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
-                        <button class="btn btn-secondary btn-sm" onclick="CampistryGo.testApiKey()">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Test
-                        </button>
-                        <span id="apiKeyStatus" style="font-size:.8125rem;"></span>
+                <div class="setup-card" style="padding:0;overflow:hidden;">
+                    <button type="button" onclick="this.parentElement.classList.toggle('advanced-open')" style="width:100%;padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;background:none;border:none;cursor:pointer;font:inherit;">
+                        <div><h3 style="margin:0;">Advanced Settings</h3><p class="muted" style="margin:0;">API keys &amp; map configuration</p></div>
+                        <svg class="advanced-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform .2s;flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div class="advanced-panel" style="max-height:0;overflow:hidden;transition:max-height .3s ease;">
+                        <div style="padding:0 1.25rem 1.25rem;display:flex;flex-direction:column;gap:1rem;">
+                            <div id="orsKeyCard">
+                                <h4 style="margin:0 0 .25rem;">OpenRouteService API Key</h4>
+                                <p class="muted" style="margin:0 0 .5rem;font-size:.8125rem;">Only needed if no platform key is configured</p>
+                                <div class="form-group full-width">
+                                    <label class="form-label">API Key</label>
+                                    <input type="text" class="form-input" id="orsApiKey" placeholder="Paste your ORS token">
+                                    <span class="form-hint">Get free at <a href="https://openrouteservice.org/dev/#/signup" target="_blank" style="color:var(--blue-600)">openrouteservice.org</a> (geocoding & directions)</span>
+                                </div>
+                            </div>
+                            <div>
+                                <h4 style="margin:0 0 .5rem;">GraphHopper Key <span style="background:#059669;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">RECOMMENDED</span></h4>
+                                <div class="form-group full-width">
+                                    <input type="text" class="form-input" id="ghApiKey" placeholder="Paste your GraphHopper key">
+                                    <span class="form-hint">Get free at <a href="https://graphhopper.com/dashboard/signup" target="_blank" style="color:var(--blue-600)">graphhopper.com</a> (route optimization — makes routes 10x better)</span>
+                                </div>
+                                <div style="margin-top:.5rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+                                    <button class="btn btn-secondary btn-sm" onclick="CampistryGo.testApiKey()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Test
+                                    </button>
+                                    <span id="apiKeyStatus" style="font-size:.8125rem;"></span>
+                                </div>
+                            </div>
+                            <div>
+                                <h4 style="margin:0 0 .5rem;">Mapbox Access Token</h4>
+                                <p class="muted" style="margin:0 0 .5rem;font-size:.8125rem;">Shows road-accurate route lines on the map (free)</p>
+                                <div class="form-group full-width">
+                                    <label class="form-label">Access Token</label>
+                                    <input type="text" class="form-input" id="mapboxToken" placeholder="pk.eyJ1Ijo...">
+                                    <span class="form-hint">Get free at <a href="https://account.mapbox.com/access-tokens/" target="_blank" style="color:var(--blue-600)">mapbox.com</a> — 100K requests/month free. Without this, route lines use OSRM (less accurate in some neighborhoods).</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="setup-card">
-                    <h3>Mapbox Access Token</h3>
-                    <p class="muted">Shows road-accurate route lines on the map (free)</p>
-                    <div class="form-group full-width">
-                        <label class="form-label">Access Token</label>
-                        <input type="text" class="form-input" id="mapboxToken" placeholder="pk.eyJ1Ijo...">
-                        <span class="form-hint">Get free at <a href="https://account.mapbox.com/access-tokens/" target="_blank" style="color:var(--blue-600)">mapbox.com</a> — 100K requests/month free. Without this, route lines use OSRM (less accurate in some neighborhoods).</span>
-                    </div>
-                </div>
+                <style>
+                    .advanced-open .advanced-chevron { transform: rotate(180deg); }
+                    .advanced-open .advanced-panel { max-height: 600px !important; }
+                </style>
                 <div class="setup-card" style="display:flex;align-items:center;justify-content:space-between;">
                     <div><h3>Save Configuration</h3><p class="muted" style="margin-bottom:0">Sync across devices</p></div>
                     <button class="btn btn-primary" onclick="CampistryGo.saveSetup()">Save Setup</button>
