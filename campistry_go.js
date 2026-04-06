@@ -39,6 +39,8 @@
 //  FIX 19: Dynamic capacity enforcement — expands search from 1mi to 2mi if needed
 //  FIX 20: Boundary-aware scoring for cap moves — prefers stops far from own bus
 //          and close to target bus (actual boundary stops), not arbitrary closest
+//  FIX 21: Aggressive outlier swap (10 passes, 0.85 threshold) + compactness
+//          enforcement — moves stops >2x avg radius to nearest cluster
 // =============================================================================
 (function () {
     'use strict';
@@ -1515,9 +1517,14 @@
                 // geographically "in" one neighborhood into the wrong zone.
                 // Move any stop that is significantly closer to another zone's centroid.
                 // Respects capacity: won't push a zone over bus seat limit.
+                // FIX 21: More aggressive outlier swap — 10 passes, 0.85 threshold
+                // The old 0.7 threshold (must be 30% closer) missed stops that were
+                // clearly in the wrong zone but only ~20% closer to the right one.
+                // Also recalculate centroids each pass so swaps cascade correctly.
                 const perBusCapForSwap = vehicles.length ? Math.floor(vehicles.reduce((s, v) => s + v.capacity, 0) / vehicles.length) : 47;
-                for (let pass = 0; pass < 3; pass++) {
+                for (let pass = 0; pass < 10; pass++) {
                     let swapped = false;
+                    // Recalculate centroids every pass (swaps change them)
                     const centroids = subClusters.map(sc => {
                         if (!sc.length) return { lat: 0, lng: 0 };
                         return {
@@ -1536,7 +1543,7 @@
                                 // Don't push target zone over capacity
                                 if (scKids[ti] + st.campers.length > perBusCapForSwap) continue;
                                 const tDist = haversineMi(st.lat, st.lng, centroids[ti].lat, centroids[ti].lng);
-                                if (tDist < myDist * 0.7) {
+                                if (tDist < myDist * 0.85) {
                                     subClusters[ci].splice(si, 1);
                                     subClusters[ti].push(idx);
                                     scKids[ci] -= st.campers.length;
@@ -1548,6 +1555,54 @@
                         }
                     }
                     if (!swapped) break;
+                }
+
+                // FIX 21b: Compactness enforcement — if any stop is an outlier
+                // (> 2x the cluster's avg radius from centroid), move it to the
+                // nearest cluster with room. This catches geoBisect artifacts
+                // where a far-flung stop ends up in the wrong zone.
+                for (let compPass = 0; compPass < 5; compPass++) {
+                    let moved = false;
+                    for (let ci = 0; ci < subClusters.length; ci++) {
+                        if (subClusters[ci].length < 3) continue;
+                        const cent = {
+                            lat: subClusters[ci].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ci].length,
+                            lng: subClusters[ci].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ci].length
+                        };
+                        const dists = subClusters[ci].map(i => haversineMi(groupStops[i].lat, groupStops[i].lng, cent.lat, cent.lng));
+                        const avgDist = dists.reduce((s, d) => s + d, 0) / dists.length;
+                        // Find worst outlier
+                        let worstSi = -1, worstDist = 0;
+                        for (let si = 0; si < subClusters[ci].length; si++) {
+                            if (dists[si] > worstDist) { worstDist = dists[si]; worstSi = si; }
+                        }
+                        if (worstSi < 0 || worstDist <= avgDist * 2.0) continue;
+
+                        const st = groupStops[subClusters[ci][worstSi]];
+                        const kids = subClusters[ci].reduce((s, i) => s + groupStops[i].campers.length, 0);
+                        // Find nearest other cluster with room
+                        let bestTi = -1, bestTDist = Infinity;
+                        for (let ti = 0; ti < subClusters.length; ti++) {
+                            if (ti === ci || !subClusters[ti].length) continue;
+                            const tKids = subClusters[ti].reduce((s, i) => s + groupStops[i].campers.length, 0);
+                            if (tKids + st.campers.length > perBusCapForSwap) continue;
+                            const tCent = {
+                                lat: subClusters[ti].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ti].length,
+                                lng: subClusters[ti].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ti].length
+                            };
+                            const d = haversineMi(st.lat, st.lng, tCent.lat, tCent.lng);
+                            if (d < bestTDist) { bestTDist = d; bestTi = ti; }
+                        }
+                        if (bestTi >= 0 && bestTDist < worstDist) {
+                            const movedIdx = subClusters[ci][worstSi];
+                            console.log('[Go]   Compactness fix: moved ' + st.campers.length + ' kids (' + st.address + ') from zone ' + ci + ' → ' + bestTi + ' (was ' + worstDist.toFixed(2) + 'mi from centroid, avg ' + avgDist.toFixed(2) + 'mi)');
+                            subClusters[ci].splice(worstSi, 1);
+                            subClusters[bestTi].push(movedIdx);
+                            moved = true;
+                            break;
+                        }
+                    }
+                    if (!moved) break;
                 }
 
                 // Log sub-cluster sizes
