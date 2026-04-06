@@ -2755,7 +2755,7 @@
                     osmIntersections.forEach(inter => {
                         // Quick reject: too far from any kid
                         const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                        if (d > walkMi * 3) return;
+                        if (d > walkMi * 4) return;
 
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
                         const mainMatch = interStreets.some(s => streetMatch(s, mainStreet));
@@ -2778,25 +2778,53 @@
                         stopLng = bestInter.lng;
                         stopName = bestInter.name;
                         console.log('[Go]   Best corner: ' + bestInter.name + ' (score ' + bestScore.toFixed(1) + ', total walk ' + (totalWalkTo(bestInter.lat, bestInter.lng) * 5280).toFixed(0) + 'ft)');
+                    } else {
+                        // No street-matched intersection — find nearest of ANY kind
+                        let nearestDist = Infinity, nearestInter = null;
+                        osmIntersections.forEach(inter => {
+                            const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
+                            if (d < nearestDist && d <= walkMi * 4) { nearestDist = d; nearestInter = inter; }
+                        });
+                        if (nearestInter) {
+                            stopLat = nearestInter.lat; stopLng = nearestInter.lng;
+                            stopName = nearestInter.name;
+                            console.log('[Go]   No match for ' + mainStreet + '/' + crossStreet + ' — nearest: ' + nearestInter.name + ' (' + (nearestDist * 5280).toFixed(0) + 'ft)');
+                        }
                     }
                 }
             } else if (mainStreet) {
+                // Default: address range (used only if no intersection found)
                 const nums = cluster.map(c => parseAddress(c.address).num).filter(n => n > 0).sort((a, b) => a - b);
                 if (nums.length >= 2) stopName = nums[0] + '-' + nums[nums.length - 1] + ' ' + mainStreet;
                 else stopName = mainStreet;
 
                 if (osmIntersections) {
-                    // Single street — find the intersection on this street
-                    // that minimizes total walk from all kids
+                    // Single street — first try intersections ON this street
                     let bestInter = null, bestWalk = Infinity;
                     osmIntersections.forEach(inter => {
                         const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                        if (d > walkMi * 3) return;
+                        if (d > walkMi * 4) return;
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
                         if (!interStreets.some(s => streetMatch(s, mainStreet))) return;
                         const tw = totalWalkTo(inter.lat, inter.lng);
                         if (tw < bestWalk) { bestWalk = tw; bestInter = inter; }
                     });
+
+                    // Fallback: find the NEAREST intersection of ANY kind
+                    // Drivers need cross-street names, not address ranges
+                    if (!bestInter) {
+                        let nearestDist = Infinity;
+                        osmIntersections.forEach(inter => {
+                            const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
+                            if (d < nearestDist && d <= walkMi * 4) {
+                                nearestDist = d; bestInter = inter;
+                            }
+                        });
+                        if (bestInter) {
+                            console.log('[Go]   No intersection on ' + mainStreet + ' — using nearest: ' + bestInter.name + ' (' + (nearestDist * 5280).toFixed(0) + 'ft)');
+                        }
+                    }
+
                     if (bestInter) { stopLat = bestInter.lat; stopLng = bestInter.lng; stopName = bestInter.name; }
                 }
             } else {
