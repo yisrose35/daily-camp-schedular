@@ -240,15 +240,15 @@
 
     function getLocationForPinnedEvent(skeletonEvent) {
         // 1. Direct location on skeleton item
-        if (skeletonEvent.location) {
+        if (skeletonEvent.location && typeof skeletonEvent.location === 'string') {
             return skeletonEvent.location;
         }
         // 2. Special activity with assigned location
         const specialLoc = getLocationForActivity(skeletonEvent.event);
-        if (specialLoc) return specialLoc;
+        if (specialLoc && typeof specialLoc === 'string') return specialLoc;
         // 3. ★ v17.11: Pinned tile default location (Snacks→Lunchroom, Lunch→Lunchroom, etc.)
         const pinnedDefault = window.getPinnedTileDefaultLocation?.(skeletonEvent.event);
-        if (pinnedDefault) return pinnedDefault;
+        if (pinnedDefault && typeof pinnedDefault === 'string') return pinnedDefault;
         return null;
     }
 
@@ -2163,7 +2163,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
                     // ★ v17.11: Lock physical location if pinned event uses one
                     const pinnedLocName = getLocationForPinnedEvent(item);
-                    if (pinnedLocName && window.GlobalFieldLocks) {
+                    if (pinnedLocName && typeof pinnedLocName === 'string' && window.GlobalFieldLocks) {
                         window.GlobalFieldLocks.lockField(pinnedLocName, slots, {
                             lockedBy: 'pinned_event_location',
                             division: divName,
