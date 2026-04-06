@@ -37,6 +37,8 @@
 //  FIX 17: Toast warning when Overpass API fails and corner-stops degrade to fallback
 //  FIX 18: Boundary-swap pass — moves stops between buses if it reduces total drive time
 //  FIX 19: Dynamic capacity enforcement — expands search from 1mi to 2mi if needed
+//  FIX 20: Boundary-aware scoring for cap moves — prefers stops far from own bus
+//          and close to target bus (actual boundary stops), not arbitrary closest
 // =============================================================================
 (function () {
     'use strict';
@@ -1934,22 +1936,30 @@
             }
             if (!overBus) break;
 
-            // Find best (stop, receiving bus) pair — stop closest to receiving bus
-            // FIX 19: Dynamic max distance — try 1mi first, expand to 2mi if needed
+            // Find best (stop, receiving bus) pair — prefer stops on the BOUNDARY
+            // FIX 19+20: Score = distFromOwnCentroid - distToTargetCentroid
+            // This picks stops that are far from their own bus AND close to the target.
+            // Dynamic max distance: try 1mi first, expand to 2mi if needed.
+            const overCentLat = overBus.stops.reduce((s, x) => s + (x.lat || 0), 0) / overBus.stops.length;
+            const overCentLng = overBus.stops.reduce((s, x) => s + (x.lng || 0), 0) / overBus.stops.length;
             let capMaxMoveMi = 1.0;
-            let bestStopIdx = -1, bestBus = null, bestDist = Infinity;
+            let bestStopIdx = -1, bestBus = null, bestScore = -Infinity;
             for (let attempt = 0; attempt < 2; attempt++) {
-                bestStopIdx = -1; bestBus = null; bestDist = Infinity;
+                bestStopIdx = -1; bestBus = null; bestScore = -Infinity;
                 for (let si = 0; si < overBus.stops.length; si++) {
                     const st = overBus.stops[si];
                     if (!st.lat) continue;
+                    const distFromOwn = haversineMi(st.lat, st.lng, overCentLat, overCentLng);
                     for (const r of allRoutes) {
                         if (r === overBus) continue;
                         if (r.camperCount + st.campers.length > r._cap) continue;
                         const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
                         const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                        const d = haversineMi(st.lat, st.lng, rLat, rLng);
-                        if (d < bestDist && d <= capMaxMoveMi) { bestDist = d; bestStopIdx = si; bestBus = r; }
+                        const distToTarget = haversineMi(st.lat, st.lng, rLat, rLng);
+                        if (distToTarget > capMaxMoveMi) continue;
+                        // Higher score = better candidate (far from own bus, close to target)
+                        const score = distFromOwn - distToTarget;
+                        if (score > bestScore) { bestScore = score; bestStopIdx = si; bestBus = r; }
                     }
                 }
                 if (bestBus) break;
@@ -1959,7 +1969,8 @@
             if (bestBus && bestStopIdx >= 0) {
                 // Whole-stop move — stop keeps its geographic location
                 const stopToMove = overBus.stops[bestStopIdx];
-                console.log('[Go]   Cap move: ' + stopToMove.campers.length + ' kids (' + stopToMove.address + ') from ' + overBus.busName + ' → ' + bestBus.busName + ' (' + bestDist.toFixed(2) + 'mi)');
+                const moveDist = haversineMi(stopToMove.lat, stopToMove.lng, bestBus.stops.length ? bestBus.stops.reduce((s, x) => s + x.lat, 0) / bestBus.stops.length : campLat, bestBus.stops.length ? bestBus.stops.reduce((s, x) => s + x.lng, 0) / bestBus.stops.length : campLng);
+                console.log('[Go]   Cap move: ' + stopToMove.campers.length + ' kids (' + stopToMove.address + ') from ' + overBus.busName + ' → ' + bestBus.busName + ' (' + moveDist.toFixed(2) + 'mi, boundary score ' + bestScore.toFixed(2) + ')');
                 overBus.stops.splice(bestStopIdx, 1);
                 overBus.camperCount -= stopToMove.campers.length;
                 overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
@@ -1969,19 +1980,23 @@
             } else {
                 // No whole-stop fits — split: move campers individually
                 // Creates a NEW stop on the receiving bus at the same location
-                let splitStopIdx = -1, splitBus = null, splitDist = Infinity;
+                // Use same boundary scoring: prefer stops far from own bus, close to target
+                let splitStopIdx = -1, splitBus = null, splitScore = -Infinity;
                 capMaxMoveMi = 1.0;
                 for (let attempt = 0; attempt < 2; attempt++) {
-                    splitStopIdx = -1; splitBus = null; splitDist = Infinity;
+                    splitStopIdx = -1; splitBus = null; splitScore = -Infinity;
                     for (let si = 0; si < overBus.stops.length; si++) {
                         const st = overBus.stops[si];
                         if (!st.lat || st.campers.length <= 1) continue;
+                        const distFromOwn = haversineMi(st.lat, st.lng, overCentLat, overCentLng);
                         for (const r of allRoutes) {
                             if (r === overBus || r.camperCount >= r._cap) continue;
                             const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
                             const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                            const d = haversineMi(st.lat, st.lng, rLat, rLng);
-                            if (d < splitDist && d <= capMaxMoveMi) { splitDist = d; splitStopIdx = si; splitBus = r; }
+                            const distToTarget = haversineMi(st.lat, st.lng, rLat, rLng);
+                            if (distToTarget > capMaxMoveMi) continue;
+                            const score = distFromOwn - distToTarget;
+                            if (score > splitScore) { splitScore = score; splitStopIdx = si; splitBus = r; }
                         }
                     }
                     if (splitBus) break;
@@ -1998,6 +2013,7 @@
                 const movedCampers = stopToSplit.campers.splice(0, toMove);
                 overBus.camperCount -= toMove;
                 // Create a NEW stop on receiving bus at the SAME location — kids stay near their home
+                const splitDist = haversineMi(stopToSplit.lat, stopToSplit.lng, splitBus.stops.length ? splitBus.stops.reduce((s, x) => s + x.lat, 0) / splitBus.stops.length : campLat, splitBus.stops.length ? splitBus.stops.reduce((s, x) => s + x.lng, 0) / splitBus.stops.length : campLng);
                 console.log('[Go]   Cap split: ' + toMove + ' kids from ' + stopToSplit.address + ' → new stop on ' + splitBus.busName + ' (' + splitDist.toFixed(2) + 'mi)');
                 cheapestInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToSplit.address, lat: stopToSplit.lat, lng: stopToSplit.lng });
                 splitBus.camperCount += toMove;
