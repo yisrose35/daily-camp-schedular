@@ -77,8 +77,18 @@
     const esc = s => { if (s == null) return ''; const m = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'}; return String(s).replace(/[&<>"']/g, c => m[c]); };
     const uid = () => 'go_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6);
     function toast(msg, type) { const el = document.getElementById('toastEl'); el.textContent = msg; el.className = 'toast' + (type === 'error' ? ' error' : ''); clearTimeout(_toastTimer); requestAnimationFrame(() => { el.classList.add('show'); _toastTimer = setTimeout(() => el.classList.remove('show'), 2500); }); }
-    function openModal(id) { document.getElementById(id)?.classList.add('open'); }
-    function closeModal(id) { document.getElementById(id)?.classList.remove('open'); }
+    function openModal(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.add('open', 'modal-entering');
+        requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove('modal-entering')));
+    }
+    function closeModal(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.add('modal-entering');
+        setTimeout(() => { el.classList.remove('open', 'modal-entering'); }, 200);
+    }
     function getApiKey() { return window.__CAMPISTRY_ORS_KEY__ || D.setup.orsApiKey || ''; }
     let _campCoordsCache = null;
 

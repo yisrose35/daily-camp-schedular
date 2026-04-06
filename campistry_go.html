@@ -22,10 +22,10 @@
 </head>
 <body>
 <!-- Auth Loading Screen (matches other Campistry pages) -->
-<div id="auth-loading-screen" style="position:fixed;inset:0;z-index:9999;background:#fafafa;display:flex;align-items:center;justify-content:center;">
-    <div style="text-align:center;color:#a1a1aa;font-family:'DM Sans',sans-serif;">
-        <div style="font-size:1.25rem;font-weight:600;margin-bottom:.5rem;color:#059669;">Campistry Go</div>
-        <div style="font-size:.875rem;">Loading...</div>
+<div id="auth-loading-screen" class="auth-loading">
+    <div class="auth-loading-inner">
+        <div class="auth-loading-brand">Campistry Go</div>
+        <div class="auth-loading-spinner"></div>
     </div>
 </div>
 
@@ -56,10 +56,12 @@
     <main class="main">
         <header class="page-header">
             <h1 class="page-title">Bus Routing & Transportation</h1>
-            <div style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem;">
-                <button class="btn btn-secondary mode-btn" data-mode="arrival" onclick="CampistryGo.switchMode('arrival')" style="padding:.4rem 1rem;font-size:.8125rem;">Arrival (AM)</button>
-                <button class="btn btn-secondary mode-btn active" data-mode="dismissal" onclick="CampistryGo.switchMode('dismissal')" style="padding:.4rem 1rem;font-size:.8125rem;">Dismissal (PM)</button>
-                <span id="modeLabel" style="margin-left:.5rem;font-size:.8125rem;color:var(--text-muted);">Afternoon Drop-off Routes</span>
+            <div style="display:flex;align-items:center;gap:.5rem;margin-top:.625rem;">
+                <div class="mode-toggle">
+                    <button class="mode-btn" data-mode="arrival" onclick="CampistryGo.switchMode('arrival')">Arrival (AM)</button>
+                    <button class="mode-btn active" data-mode="dismissal" onclick="CampistryGo.switchMode('dismissal')">Dismissal (PM)</button>
+                </div>
+                <span id="modeLabel">Afternoon Drop-off Routes</span>
             </div>
         </header>
 
@@ -71,7 +73,7 @@
             <button class="tab-btn" data-tab="staff">Staff</button>
             <button class="tab-btn" data-tab="addresses">Addresses</button>
             <button class="tab-btn" data-tab="preflight">Preflight</button>
-            <button class="tab-btn" data-tab="routes" style="font-weight:700;color:#059669;">Routes & Map</button>
+            <button class="tab-btn" data-tab="routes">Routes & Map</button>
         </div>
 
         <!-- SETUP -->
@@ -156,10 +158,6 @@
                         </div>
                     </div>
                 </div>
-                <style>
-                    .advanced-open .advanced-chevron { transform: rotate(180deg); }
-                    .advanced-open .advanced-panel { max-height: 600px !important; }
-                </style>
                 <div class="setup-card" style="display:flex;align-items:center;justify-content:space-between;">
                     <div><h3>Save Configuration</h3><p class="muted" style="margin-bottom:0">Sync across devices</p></div>
                     <button class="btn btn-primary" onclick="CampistryGo.saveSetup()">Save Setup</button>
