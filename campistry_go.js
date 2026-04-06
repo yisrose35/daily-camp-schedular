@@ -1615,10 +1615,12 @@
             let sortedClusterIdx = clusterKids.map((k, i) => ({ k, i })).sort((a, b) => b.k - a.k).map(x => x.i);
             const sortedBusIdx = [...busIndices].sort((a, b) => vehicles[b].capacity - vehicles[a].capacity);
 
-            // ── FIX 16: Pre-VROOM capacity check — rebalance clusters before routing ──
-            // If a sub-cluster has more kids than its assigned bus, move boundary
-            // stops to the nearest under-capacity cluster. This prevents wasted
-            // VROOM calls and avoids post-hoc capacity enforcement.
+            // ── FIX 16+22: Pre-VROOM capacity check — rebalance clusters before routing ──
+            // If a sub-cluster has more kids than its assigned bus, move the stop
+            // that best fits the receiving cluster (closest to target centroid AND
+            // won't become an outlier there). Old version picked the farthest stop
+            // from source centroid, which could dump a far-away stop into a
+            // geographically unrelated cluster.
             for (let capCheck = 0; capCheck < 20; capCheck++) {
                 let anyOver = false;
                 for (let rank = 0; rank < sortedClusterIdx.length; rank++) {
@@ -1628,35 +1630,34 @@
                     if (kids <= busCap) continue;
                     anyOver = true;
 
-                    // Find the stop in this cluster farthest from its centroid (boundary stop)
-                    const cLat = subClusters[ci].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ci].length;
-                    const cLng = subClusters[ci].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ci].length;
-                    let farthestIdx = -1, farthestDist = 0;
+                    // For each stop in the over-capacity cluster, score how well it
+                    // would fit in each under-capacity cluster. Pick the best (stop, target) pair.
+                    let bestSi = -1, bestTarget = -1, bestScore = -Infinity;
                     for (let si = 0; si < subClusters[ci].length; si++) {
                         const st = groupStops[subClusters[ci][si]];
-                        const d = haversineMi(st.lat, st.lng, cLat, cLng);
-                        if (d > farthestDist) { farthestDist = d; farthestIdx = si; }
+                        for (let ti = 0; ti < subClusters.length; ti++) {
+                            if (ti === ci || !subClusters[ti].length) continue;
+                            const tRank = sortedClusterIdx.indexOf(ti);
+                            const tCap = vehicles[sortedBusIdx[tRank >= 0 ? tRank : 0]].capacity;
+                            const tKids = subClusters[ti].reduce((s, i) => s + groupStops[i].campers.length, 0);
+                            if (tKids + st.campers.length > tCap) continue;
+                            // Target centroid and avg radius
+                            const tCentLat = subClusters[ti].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ti].length;
+                            const tCentLng = subClusters[ti].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ti].length;
+                            const distToTarget = haversineMi(st.lat, st.lng, tCentLat, tCentLng);
+                            // Reject if stop would be >2x target's avg radius (would be outlier)
+                            const tAvgRadius = subClusters[ti].reduce((s, i) => s + haversineMi(groupStops[i].lat, groupStops[i].lng, tCentLat, tCentLng), 0) / subClusters[ti].length;
+                            if (tAvgRadius > 0 && distToTarget > tAvgRadius * 2.5) continue;
+                            // Score: closer to target = better (negative distance = higher score)
+                            const score = -distToTarget;
+                            if (score > bestScore) { bestScore = score; bestSi = si; bestTarget = ti; }
+                        }
                     }
-                    if (farthestIdx < 0) break;
-
-                    // Find nearest under-capacity cluster to receive it
-                    const stopToMove = groupStops[subClusters[ci][farthestIdx]];
-                    let bestTarget = -1, bestTDist = Infinity;
-                    for (let ti = 0; ti < subClusters.length; ti++) {
-                        if (ti === ci || !subClusters[ti].length) continue;
-                        const tRank = sortedClusterIdx.indexOf(ti);
-                        const tCap = vehicles[sortedBusIdx[tRank >= 0 ? tRank : 0]].capacity;
-                        const tKids = subClusters[ti].reduce((s, i) => s + groupStops[i].campers.length, 0);
-                        if (tKids + stopToMove.campers.length > tCap) continue;
-                        const tCentLat = subClusters[ti].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ti].length;
-                        const tCentLng = subClusters[ti].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ti].length;
-                        const d = haversineMi(stopToMove.lat, stopToMove.lng, tCentLat, tCentLng);
-                        if (d < bestTDist) { bestTDist = d; bestTarget = ti; }
-                    }
-                    if (bestTarget >= 0) {
-                        const movedIdx = subClusters[ci].splice(farthestIdx, 1)[0];
+                    if (bestSi >= 0 && bestTarget >= 0) {
+                        const stopToMove = groupStops[subClusters[ci][bestSi]];
+                        const movedIdx = subClusters[ci].splice(bestSi, 1)[0];
                         subClusters[bestTarget].push(movedIdx);
-                        console.log('[Go]   Pre-VROOM rebalance: moved ' + stopToMove.campers.length + ' kids from zone ' + ci + ' → ' + bestTarget);
+                        console.log('[Go]   Pre-VROOM rebalance: moved ' + stopToMove.campers.length + ' kids (' + stopToMove.address + ') from zone ' + ci + ' → ' + bestTarget);
                     } else break;
                 }
                 if (!anyOver) break;
