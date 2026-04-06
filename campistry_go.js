@@ -47,6 +47,16 @@
     console.log('[Go] Campistry Go v3.1 loading...');
 
     // =========================================================================
+    // PLATFORM API KEYS — loaded from config.js via window globals
+    // Users never need to configure these; setup fields are optional overrides
+    // =========================================================================
+    const _PLATFORM_KEYS = {
+        ors: window.__CAMPISTRY_ORS_KEY__ || '',
+        graphhopper: window.__CAMPISTRY_GH_KEY__ || '',
+        mapbox: window.__CAMPISTRY_MAPBOX_TOKEN__ || ''
+    };
+
+    // =========================================================================
     // STATE
     // =========================================================================
     let D = {
@@ -89,7 +99,7 @@
         el.classList.add('modal-entering');
         setTimeout(() => { el.classList.remove('open', 'modal-entering'); }, 200);
     }
-    function getApiKey() { return window.__CAMPISTRY_ORS_KEY__ || D.setup.orsApiKey || ''; }
+    function getApiKey() { return window.__CAMPISTRY_ORS_KEY__ || D.setup.orsApiKey || _PLATFORM_KEYS.ors; }
     let _campCoordsCache = null;
 
     function haversineMi(lat1, lng1, lat2, lng2) {
@@ -327,7 +337,7 @@
         const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
 
         // ── Try Mapbox Matrix API first ──
-        const mbToken = D.setup.mapboxToken || '';
+        const mbToken = D.setup.mapboxToken || _PLATFORM_KEYS.mapbox;
         if (mbToken) {
             try {
                 // Mapbox allows up to 25 coordinates per request
@@ -2346,7 +2356,7 @@
         // ── Try Mapbox Optimization API first ──
         let optimizedOrder = null;
         let matrix = null;
-        const mbTok = D.setup.mapboxToken || '';
+        const mbTok = D.setup.mapboxToken || _PLATFORM_KEYS.mapbox;
 
         if (nn <= 11 && mbTok) {
             // Build coords for Mapbox Optimize
@@ -3146,7 +3156,7 @@
                 tempLine._goRouteKey = cacheKey; _mapLayers.push(tempLine);
 
                 if (straightCoords.length >= 2) {
-                    const mbToken = D.setup.mapboxToken || '';
+                    const mbToken = D.setup.mapboxToken || _PLATFORM_KEYS.mapbox;
                     const wp = [];
                     if (!isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
                     stopsWithCoords.forEach(s => wp.push(s.lng + ',' + s.lat));
