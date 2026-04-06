@@ -529,10 +529,10 @@
     async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const unifiedTimes = window.unifiedTimes || [];
-        
+
         // ★ DEMO FIX: Guard against undefined activity
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
-            console.error('[PostEdit] ❌ Demo: applyEdit called with undefined activity:', editData);
+            console.error('[PostEdit] Demo: applyEdit called with undefined activity:', editData);
             alert('Error: No activity specified.');
             return;
         }
@@ -540,6 +540,13 @@
        const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         // UPDATED: Use SchedulerCoreUtils
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
+
+        // Dispatch pre-edit event so analytics can snapshot the old activity
+        try {
+            document.dispatchEvent(new CustomEvent('campistry-pre-edit', {
+                detail: { bunk, slots, activity }
+            }));
+        } catch(e) { /* ignore */ }
         
         if (slots.length === 0) {
             console.error('[PostEdit] ❌ No slots found for time range:', startMin, '-', endMin);

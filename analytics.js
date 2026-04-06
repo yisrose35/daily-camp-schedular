@@ -290,28 +290,34 @@
                         Check
                     </button>
                 </div>
-                
+
+                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;padding:12px;background:#f0f9fb;border-radius:12px;border:1px solid #b2dce6;">
+                    <div style="flex:1;min-width:200px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#0F5F6E;text-transform:uppercase;display:block;margin-bottom:4px;">Search by Activity (e.g., Basketball)</label>
+                        <input id="avail-activity-search" type="text" placeholder="Type an activity name..." style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #b2dce6;font-size:0.85rem;box-sizing:border-box;" />
+                    </div>
+                    <button id="avail-activity-search-btn" style="padding:8px 20px;background:#147D91;color:#fff;border:none;border-radius:999px;font-size:0.85rem;font-weight:600;cursor:pointer;">
+                        Find Fields
+                    </button>
+                </div>
+
                 <div id="avail-search-result" style="display:none;margin-bottom:14px;"></div>
-                
+
                 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
                     <select id="avail-type-filter" style="padding:6px 14px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
                         <option value="all">All Resources</option>
                         <option value="field">Fields Only</option>
                         <option value="special">Special Activities Only</option>
                     </select>
-                    
+
                     <div style="display:flex;gap:12px;font-size:0.8rem;color:#4b5563;">
                         <span style="display:flex;align-items:center;gap:4px;">
-                            <span style="width:18px;height:18px;background:#d1fae5;border:2px solid #10b981;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#047857;">✓</span>
+                            <span style="width:18px;height:18px;background:#d1fae5;border:2px solid #10b981;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#047857;">+</span>
                             Free
                         </span>
                         <span style="display:flex;align-items:center;gap:4px;">
-                            <span style="width:18px;height:18px;background:#fee2e2;border:2px solid #ef4444;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#b91c1c;">✗</span>
+                            <span style="width:18px;height:18px;background:#fee2e2;border:2px solid #ef4444;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#b91c1c;">-</span>
                             In Use
-                        </span>
-                        <span style="display:flex;align-items:center;gap:4px;">
-                            <span style="width:36px;height:18px;background:linear-gradient(90deg,#fee2e2 50%,#d1fae5 50%);border:2px solid #6b7280;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;color:#374151;">→</span>
-                            Partial
                         </span>
                     </div>
                 </div>
@@ -325,6 +331,8 @@
 
         document.getElementById("avail-type-filter").onchange = buildAvailabilityGrid;
         document.getElementById("avail-search-btn").onclick = performAvailabilitySearch;
+        document.getElementById("avail-activity-search-btn").onclick = performActivitySearch;
+        document.getElementById("avail-activity-search").onkeyup = (e) => { if (e.key === 'Enter') performActivitySearch(); };
     }
 
     /**
@@ -364,7 +372,7 @@
 
         if (!fieldName || !timeVal) {
             resultDiv.style.display = 'block';
-            resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;color:#92400e;font-size:0.85rem;">⚠️ Please select both a field/activity and a time slot.</div>`;
+            resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;color:#92400e;font-size:0.85rem;">Please select both a field/activity and a time slot.</div>`;
             return;
         }
 
@@ -380,7 +388,7 @@
         if (overlapping.length === 0) {
             resultDiv.innerHTML = `
                 <div style="padding:12px 16px;background:#d1fae5;border:2px solid #10b981;border-radius:12px;color:#047857;font-size:0.9rem;">
-                    ✅ <strong>${fieldName}</strong> is <strong>AVAILABLE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}
+                    <strong>${fieldName}</strong> is <strong>AVAILABLE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}
                 </div>`;
         } else {
             const fullyBlocked = overlapping.some(u => u.startMin <= slotStartMin && u.endMin >= slotEndMin);
@@ -389,7 +397,7 @@
                 const usage = overlapping[0];
                 resultDiv.innerHTML = `
                     <div style="padding:12px 16px;background:#fee2e2;border:2px solid #ef4444;border-radius:12px;color:#b91c1c;font-size:0.9rem;">
-                        ❌ <strong>${fieldName}</strong> is <strong>IN USE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}<br>
+                        <strong>${fieldName}</strong> is <strong>IN USE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}<br>
                         <span style="font-size:0.85em;color:#7f1d1d;">Used by: <strong>${usage.bunk}</strong> → ${usage.activity} (${minutesToTimeLabel(usage.startMin)} - ${minutesToTimeLabel(usage.endMin)})</span>
                     </div>`;
             } else {
@@ -399,11 +407,70 @@
                 
                 resultDiv.innerHTML = `
                     <div style="padding:12px 16px;background:#fef3c7;border:2px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.9rem;">
-                        ⚠️ <strong>${fieldName}</strong> is <strong>PARTIALLY AVAILABLE</strong><br>
+                        <strong>${fieldName}</strong> is <strong>PARTIALLY AVAILABLE</strong><br>
                         <span style="font-size:0.85em;">${details}</span>
                     </div>`;
             }
         }
+    }
+
+    /**
+     * Search by activity name — find all fields that support it and show availability
+     */
+    function performActivitySearch() {
+        const query = (document.getElementById("avail-activity-search")?.value || '').trim().toLowerCase();
+        const resultDiv = document.getElementById("avail-search-result");
+        if (!query) {
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.85rem;">Please type an activity name to search.</div>`;
+            return;
+        }
+
+        const gs = window.loadGlobalSettings?.().app1 || {};
+        const fields = gs.fields || [];
+
+        // Find fields whose activities array includes the search term
+        const matchingFields = fields.filter(f =>
+            (f.activities || []).some(a => a.toLowerCase().includes(query))
+        );
+
+        if (matchingFields.length === 0) {
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = `<div style="padding:12px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;color:#6b7280;font-size:0.9rem;">No fields found that support "<strong>${query}</strong>".</div>`;
+            return;
+        }
+
+        const usageMap = buildDetailedUsageMap();
+        const slots = generate30MinSlots();
+
+        let html = `<div style="border:1px solid #b2dce6;border-radius:12px;overflow:hidden;margin-bottom:4px;">
+            <div style="padding:10px 14px;background:#e0f2fe;font-weight:600;color:#0c4a6e;font-size:0.9rem;">
+                Fields that support "${query}" (${matchingFields.length} found)
+            </div>
+            <div style="overflow-x:auto;">
+            <table style="border-collapse:collapse;width:100%;font-size:0.8rem;">
+                <thead><tr style="background:#f0f9fb;">
+                    <th style="position:sticky;left:0;z-index:10;background:#f0f9fb;padding:8px 12px;border:1px solid #d1d5db;min-width:140px;text-align:left;font-weight:600;color:#374151;">Field</th>`;
+
+        slots.forEach(slot => {
+            html += `<th style="padding:6px 4px;border:1px solid #d1d5db;min-width:60px;font-weight:600;color:#374151;white-space:nowrap;font-size:0.75rem;">${slot.shortLabel}</th>`;
+        });
+        html += `</tr></thead><tbody>`;
+
+        matchingFields.forEach((f, i) => {
+            const resourceUsage = usageMap[f.name] || [];
+            const rowBg = i % 2 === 0 ? '#ffffff' : '#fafafa';
+            html += `<tr style="background:${rowBg};"><td style="position:sticky;left:0;background:${rowBg};padding:8px 10px;border:1px solid #d1d5db;font-weight:600;color:#111827;white-space:nowrap;">${f.name}</td>`;
+            slots.forEach(slot => {
+                const cellData = getCellAvailability(slot.startMin, slot.endMin, resourceUsage);
+                html += renderAvailabilityCell(cellData, slot);
+            });
+            html += `</tr>`;
+        });
+
+        html += `</tbody></table></div></div>`;
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = html;
     }
 
     /**
@@ -425,13 +492,15 @@
 
             schedule.forEach((entry, idx) => {
                 if (!entry || entry.continuation) return;
-                
-                const field = entry.field || entry._field;
-                const activity = entry._activity || entry.activity;
-                
-                if (!field || field === 'Free' || field === 'No Field') return;
 
-                const fName = fieldLabel(field);
+                const activity = entry._activity || entry.activity;
+                if (!activity || activity === 'Free' || activity === 'Free (timeout)') return;
+
+                // Use _location or _field for the physical field name; fall back to field display
+                const rawField = entry._location || entry._field || entry.field;
+                if (!rawField || rawField === 'Free' || rawField === 'No Field') return;
+
+                const fName = fieldLabel(rawField);
                 if (!usageMap[fName]) usageMap[fName] = [];
 
                 const slotInfo = times[idx];
@@ -606,12 +675,10 @@
         resources.forEach((r, rowIdx) => {
             const resourceUsage = usageMap[r.name] || [];
             const rowBg = rowIdx % 2 === 0 ? '#ffffff' : '#fafafa';
-            const typeIcon = r.type === 'special' ? '⭐' : '🏟️';
-            
             html += `
                 <tr style="background:${rowBg};">
                     <td style="position:sticky;left:0;background:${rowBg};padding:8px 10px;border:1px solid #d1d5db;font-weight:600;color:#111827;white-space:nowrap;">
-                        <span style="margin-right:4px;">${typeIcon}</span>${r.name}
+                        ${r.name}
                     </td>
             `;
 
@@ -671,50 +738,21 @@
 
         if (status === 'available') {
             return `<td style="background:#d1fae5;text-align:center;padding:6px 2px;border:1px solid #d1d5db;">
-                <span style="color:#047857;font-weight:700;font-size:1em;">✓</span>
+                <span style="color:#047857;font-weight:700;font-size:0.9em;">+</span>
             </td>`;
         }
 
         if (status === 'unavailable') {
             const title = usage ? `${usage.bunk}: ${usage.activity}` : '';
             return `<td style="background:#fee2e2;text-align:center;padding:6px 2px;border:1px solid #d1d5db;" title="${title}">
-                <span style="color:#b91c1c;font-weight:700;font-size:1em;">✗</span>
+                <span style="color:#b91c1c;font-weight:700;font-size:0.9em;">-</span>
             </td>`;
         }
 
-        // Partial availability - clearer design
-        const timeLabel = minutesToShortLabel(transitionTime);
         const title = usage ? `${usage.bunk}: ${usage.activity}` : '';
-
-        if (transitionType === 'ends') {
-            // Busy until transitionTime, then free
-            return `
-                <td style="padding:0;border:1px solid #d1d5db;position:relative;height:36px;" title="${title}: Free from ${timeLabel}">
-                    <div style="display:flex;height:100%;">
-                        <div style="flex:1;background:#fee2e2;display:flex;align-items:center;justify-content:center;">
-                            <span style="color:#b91c1c;font-weight:700;font-size:0.85em;">✗</span>
-                        </div>
-                        <div style="flex:1;background:#d1fae5;display:flex;align-items:center;justify-content:center;">
-                            <span style="color:#047857;font-weight:700;font-size:0.85em;">✓</span>
-                        </div>
-                    </div>
-                    <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:600;color:#374151;background:rgba(255,255,255,0.95);padding:0 3px;border-radius:2px;white-space:nowrap;">${timeLabel}</div>
-                </td>`;
-        } else {
-            // Free until transitionTime, then busy
-            return `
-                <td style="padding:0;border:1px solid #d1d5db;position:relative;height:36px;" title="${title}: In use from ${timeLabel}">
-                    <div style="display:flex;height:100%;">
-                        <div style="flex:1;background:#d1fae5;display:flex;align-items:center;justify-content:center;">
-                            <span style="color:#047857;font-weight:700;font-size:0.85em;">✓</span>
-                        </div>
-                        <div style="flex:1;background:#fee2e2;display:flex;align-items:center;justify-content:center;">
-                            <span style="color:#b91c1c;font-weight:700;font-size:0.85em;">✗</span>
-                        </div>
-                    </div>
-                    <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:600;color:#374151;background:rgba(255,255,255,0.95);padding:0 3px;border-radius:2px;white-space:nowrap;">${timeLabel}</div>
-                </td>`;
-        }
+        return `<td style="background:#fef3c7;text-align:center;padding:6px 2px;border:1px solid #d1d5db;" title="${title}: Partial">
+            <span style="color:#92400e;font-weight:700;font-size:0.8em;">~</span>
+        </td>`;
     }
 
     // ========================================================================
@@ -810,7 +848,7 @@
         const container = document.getElementById("rotation-table-container");
         if (!divName) {
             container.innerHTML = `<div style="padding:30px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;border:1px dashed #d1d5db;">
-                <span style="font-size:1.5em;">📋</span><br>
+                <span style="font-size:1.5em;"></span><br>
                 <span style="font-size:0.9rem;">Select a division to view rotation data</span>
             </div>`;
             return;
@@ -945,8 +983,8 @@
                 }
 
                 const typeIcon = act.type === 'special' ? 
-                    '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">⭐</span>' : 
-                    '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">🏟️</span>';
+                    '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">SA</span>' :
+                    '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">S</span>';
 
                 html += `
                     <tr style="background:${rowBg};">
@@ -1054,7 +1092,7 @@
         if (neverDone.length > 0) {
             html += `
                 <div style="margin-bottom:10px;padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;">
-                    <strong style="color:#92400e;">⚠️ Never Done (${neverDone.length}):</strong>
+                    <strong style="color:#92400e;">Never Done (${neverDone.length}):</strong>
                     <span style="font-size:0.85em;color:#78350f;margin-left:6px;">
                         ${neverDone.slice(0, 8).map(n => `${n.bunk}→${n.activity}`).join(', ')}${neverDone.length > 8 ? '...' : ''}
                     </span>
@@ -1062,14 +1100,14 @@
         } else {
             html += `
                 <div style="margin-bottom:10px;padding:10px 12px;background:#d1fae5;border:1px solid #10b981;border-radius:999px;">
-                    <strong style="color:#047857;">✅ All bunks have done all activities at least once!</strong>
+                    <strong style="color:#047857;">All bunks have done all activities at least once!</strong>
                 </div>`;
         }
 
         if (atLimit.length > 0) {
             html += `
                 <div style="padding:10px 12px;background:#fee2e2;border:1px solid #ef4444;border-radius:999px;">
-                    <strong style="color:#b91c1c;">🛑 At Limit (${atLimit.length}):</strong>
+                    <strong style="color:#b91c1c;">At Limit (${atLimit.length}):</strong>
                     <span style="font-size:0.85em;color:#7f1d1d;margin-left:6px;">
                         ${atLimit.map(a => `${a.bunk}→${a.activity}`).join(', ')}
                     </span>
@@ -1079,6 +1117,86 @@
         html += `</div>`;
         return html;
     }
+
+    // ========================================================================
+    // POST-EDIT USAGE TRACKING
+    // Automatically adjusts historicalCounts when user edits schedule cells
+    // ========================================================================
+
+    document.addEventListener('campistry-post-edit-complete', function(e) {
+        const detail = e.detail;
+        if (!detail || !detail.bunk || !detail.slots) return;
+
+        const bunk = detail.bunk;
+        const slots = detail.slots;
+        const newActivity = detail.activity;
+
+        // We need to know what WAS in this slot before the edit
+        // The event fires AFTER the edit is applied, so we check what's stored
+        // The old activity was tracked in _preEditActivity if available,
+        // otherwise we derive from the current date's saved data
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const historicalCounts = globalSettings.historicalCounts || {};
+
+        // Get old activity from the pre-edit snapshot if available
+        let oldActivity = null;
+        if (window._preEditSnapshot && window._preEditSnapshot[bunk]) {
+            const oldEntry = window._preEditSnapshot[bunk][slots[0]];
+            if (oldEntry && oldEntry._activity && oldEntry._activity !== 'Free') {
+                oldActivity = oldEntry._activity;
+            }
+        }
+
+        let changed = false;
+
+        // Subtract old activity count
+        if (oldActivity && oldActivity !== 'Free' && !oldActivity.toLowerCase().includes('transition')) {
+            if (!historicalCounts[bunk]) historicalCounts[bunk] = {};
+            const oldCount = historicalCounts[bunk][oldActivity] || 0;
+            if (oldCount > 0) {
+                historicalCounts[bunk][oldActivity] = oldCount - 1;
+                changed = true;
+                console.log(`[Analytics] Usage -1: ${bunk} "${oldActivity}" (${oldCount} -> ${oldCount - 1})`);
+            }
+        }
+
+        // Add new activity count
+        const isClear = !newActivity || newActivity === 'Free' || newActivity.toUpperCase() === 'CLEAR';
+        if (!isClear && !newActivity.toLowerCase().includes('transition')) {
+            if (!historicalCounts[bunk]) historicalCounts[bunk] = {};
+            const newCount = historicalCounts[bunk][newActivity] || 0;
+            historicalCounts[bunk][newActivity] = newCount + 1;
+            changed = true;
+            console.log(`[Analytics] Usage +1: ${bunk} "${newActivity}" (${newCount} -> ${newCount + 1})`);
+        }
+
+        if (changed) {
+            window.saveGlobalSettings?.('historicalCounts', historicalCounts);
+        }
+    });
+
+    // Capture pre-edit snapshot so we know what was there before
+    // Hook into the edit modal opening to save current state
+    document.addEventListener('campistry-pre-edit', function(e) {
+        const detail = e.detail;
+        if (!detail || !detail.bunk || !detail.slots) return;
+
+        if (!window._preEditSnapshot) window._preEditSnapshot = {};
+        const bunk = detail.bunk;
+        const slots = detail.slots;
+        const assignments = window.scheduleAssignments?.[bunk] || [];
+
+        window._preEditSnapshot[bunk] = {};
+        slots.forEach(function(slotIdx) {
+            const entry = assignments[slotIdx];
+            if (entry) {
+                window._preEditSnapshot[bunk][slotIdx] = {
+                    _activity: entry._activity || entry.field || 'Free',
+                    field: entry.field
+                };
+            }
+        });
+    });
 
     // ========================================================================
     // EXPORT
