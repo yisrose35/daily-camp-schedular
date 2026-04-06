@@ -1,0 +1,559 @@
+/* =============================================================================
+   campistry-unified.css — Campistry Design System v1.0
+
+   The single source of truth for the entire Campistry product suite.
+   Load BEFORE any product-specific CSS. Each product activates its theme
+   via a data attribute: <html data-product="go|me|flow|snacks|link|health">
+
+   Products inherit all shared tokens, components, and animations.
+   They override only --product-* variables to get their branded look.
+   ============================================================================= */
+
+/* ==================== CORE DESIGN TOKENS ==================== */
+:root {
+    /* ── Typography ── */
+    --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+    --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+    /* ── Neutral Palette (Slate) ── */
+    --slate-25: #FCFCFD;
+    --slate-50: #F8FAFC; --slate-100: #F1F5F9; --slate-200: #E2E8F0;
+    --slate-300: #CBD5E1; --slate-400: #94A3B8; --slate-500: #64748B;
+    --slate-600: #475569; --slate-700: #334155; --slate-800: #1E293B;
+    --slate-900: #0F172A; --slate-950: #020617;
+
+    /* ── Product Brand Colors ── */
+    /* Platform / Dashboard (Teal) */
+    --teal-50: #F0FDFA; --teal-100: #CCFBF1; --teal-200: #99F6E4;
+    --teal-400: #2DD4BF; --teal-500: #147D91; --teal-600: #0F5F6E;
+    --teal-700: #0A4A56;
+
+    /* Go (Emerald) */
+    --emerald-50: #ECFDF5; --emerald-100: #D1FAE5; --emerald-200: #A7F3D0;
+    --emerald-400: #34D399; --emerald-500: #10B981; --emerald-600: #059669;
+    --emerald-700: #047857;
+
+    /* Me (Amber) */
+    --amber-50: #FFFBEB; --amber-100: #FEF3C7; --amber-200: #FDE68A;
+    --amber-400: #FBBF24; --amber-500: #F59E0B; --amber-600: #D97706;
+    --amber-700: #B45309;
+
+    /* Flow (Teal — same as platform) */
+
+    /* Link (Forest Green) */
+    --forest-50: #F0FDF4; --forest-100: #DCFCE7; --forest-200: #BBF7D0;
+    --forest-400: #4ADE80; --forest-500: #2A7A35; --forest-600: #1F6B2B;
+    --forest-700: #16532A;
+
+    /* Snacks (Warm Brown) */
+    --brown-50: #FDF8F6; --brown-100: #F2E8E5; --brown-200: #EADDD7;
+    --brown-400: #B08968; --brown-500: #6B3110; --brown-600: #55270C;
+    --brown-700: #451F0A;
+
+    /* Health (Purple) */
+    --violet-50: #FAF5FF; --violet-100: #F3E8FF; --violet-200: #E9D5FF;
+    --violet-400: #C084FC; --violet-500: #8B5CF6; --violet-600: #7C3AED;
+    --violet-700: #6D28D9;
+
+    /* Status Colors */
+    --green-50: #F0FDF4; --green-500: #22C55E; --green-600: #16A34A;
+    --red-50: #FEF2F2; --red-100: #FEE2E2; --red-500: #EF4444; --red-600: #DC2626;
+    --blue-50: #EFF6FF; --blue-500: #3B82F6; --blue-600: #2563EB;
+
+    /* ── Active Product Theme (defaults to platform teal) ── */
+    --product-50: var(--teal-50);
+    --product-100: var(--teal-100);
+    --product-200: var(--teal-200);
+    --product-400: var(--teal-400);
+    --product-500: var(--teal-500);
+    --product-600: var(--teal-600);
+    --product-700: var(--teal-700);
+
+    /* ── Semantic Aliases (used by components — always reference product) ── */
+    --bg-page: var(--slate-25);
+    --bg-primary: var(--slate-50);
+    --bg-card: #FFFFFF;
+    --bg-elevated: #FFFFFF;
+    --bg-sunken: var(--slate-100);
+    --bg-hover: var(--slate-50);
+
+    --text-primary: var(--slate-900);
+    --text-secondary: var(--slate-600);
+    --text-tertiary: var(--slate-500);
+    --text-muted: var(--slate-400);
+    --text-inverse: #FFFFFF;
+
+    --border-subtle: var(--slate-200);
+    --border-default: var(--slate-200);
+    --border-strong: var(--slate-300);
+    --border-focus: var(--product-500);
+
+    /* ── Elevation ── */
+    --shadow-xs: 0 1px 2px rgba(15,23,42,.04);
+    --shadow-sm: 0 1px 3px rgba(15,23,42,.06), 0 1px 2px rgba(15,23,42,.04);
+    --shadow-md: 0 4px 12px rgba(15,23,42,.07), 0 2px 4px rgba(15,23,42,.03);
+    --shadow-lg: 0 12px 32px rgba(15,23,42,.08), 0 4px 8px rgba(15,23,42,.04);
+    --shadow-xl: 0 20px 48px rgba(15,23,42,.12), 0 8px 16px rgba(15,23,42,.06);
+
+    /* ── Radii ── */
+    --radius-xs: 4px; --radius-sm: 8px; --radius-md: 12px;
+    --radius-lg: 16px; --radius-xl: 20px; --radius-2xl: 24px;
+    --radius-full: 999px;
+
+    /* ── Spacing (4px base grid) ── */
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+    --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+    --space-12: 48px; --space-16: 64px;
+
+    /* ── Motion ── */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --duration-fast: 150ms;
+    --duration-base: 250ms;
+    --duration-slow: 400ms;
+}
+
+/* ==================== PRODUCT THEMES ==================== */
+/* Each product sets data-product on <html> or <body> */
+
+[data-product="go"] {
+    --product-50: var(--emerald-50); --product-100: var(--emerald-100);
+    --product-200: var(--emerald-200); --product-400: var(--emerald-400);
+    --product-500: var(--emerald-500); --product-600: var(--emerald-600);
+    --product-700: var(--emerald-700);
+}
+
+[data-product="me"] {
+    --product-50: var(--amber-50); --product-100: var(--amber-100);
+    --product-200: var(--amber-200); --product-400: var(--amber-400);
+    --product-500: var(--amber-500); --product-600: var(--amber-600);
+    --product-700: var(--amber-700);
+}
+
+[data-product="flow"], [data-product="dashboard"] {
+    --product-50: var(--teal-50); --product-100: var(--teal-100);
+    --product-200: var(--teal-200); --product-400: var(--teal-400);
+    --product-500: var(--teal-500); --product-600: var(--teal-600);
+    --product-700: var(--teal-700);
+}
+
+[data-product="link"] {
+    --product-50: var(--forest-50); --product-100: var(--forest-100);
+    --product-200: var(--forest-200); --product-400: var(--forest-400);
+    --product-500: var(--forest-500); --product-600: var(--forest-600);
+    --product-700: var(--forest-700);
+}
+
+[data-product="snacks"] {
+    --product-50: var(--brown-50); --product-100: var(--brown-100);
+    --product-200: var(--brown-200); --product-400: var(--brown-400);
+    --product-500: var(--brown-500); --product-600: var(--brown-600);
+    --product-700: var(--brown-700);
+}
+
+[data-product="health"] {
+    --product-50: var(--violet-50); --product-100: var(--violet-100);
+    --product-200: var(--violet-200); --product-400: var(--violet-400);
+    --product-500: var(--violet-500); --product-600: var(--violet-600);
+    --product-700: var(--violet-700);
+}
+
+/* ==================== BASE RESET ==================== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+    font-family: var(--font-body);
+    font-size: 16px; line-height: 1.6;
+    color: var(--text-primary);
+    background: var(--bg-page);
+    min-height: 100vh;
+}
+
+/* ==================== SHARED NAVIGATION ==================== */
+.c-nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border-bottom: 1px solid rgba(0,0,0,.06);
+    padding: var(--space-2) 0; min-height: 52px;
+}
+.c-nav-inner {
+    max-width: 1280px; margin: 0 auto;
+    padding: 0 var(--space-8);
+    display: flex; align-items: center; justify-content: space-between;
+}
+.c-nav-left { display: flex; align-items: center; gap: var(--space-4); }
+.c-nav-back {
+    color: var(--text-secondary); text-decoration: none;
+    font-weight: 500; font-size: .8125rem;
+    display: flex; align-items: center; gap: var(--space-1);
+    transition: color var(--duration-fast);
+}
+.c-nav-back:hover { color: var(--product-600); }
+.c-nav-logo img { height: 43px; width: auto; object-fit: contain; }
+.c-nav-app-link {
+    display: flex; align-items: center;
+    text-decoration: none; margin-left: var(--space-1);
+    transition: transform var(--duration-fast) var(--ease-spring), opacity var(--duration-fast);
+}
+.c-nav-app-link:hover { opacity: .8; transform: scale(1.04); }
+.c-nav-app-link img { height: 38px; width: auto; object-fit: contain; }
+
+/* ── Sync Badge ── */
+.c-sync {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    background: rgba(0,0,0,.04); border-radius: var(--radius-full);
+    font-size: .6875rem; font-weight: 600; letter-spacing: .02em;
+    color: var(--text-secondary);
+}
+.c-sync-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green-500); transition: all .2s;
+}
+.c-sync-dot.syncing { background: var(--amber-500); animation: c-pulse 1.2s ease-in-out infinite; }
+.c-sync-dot.error { background: var(--red-500); }
+
+/* ==================== SHARED LAYOUT ==================== */
+.c-main {
+    max-width: 1280px; margin: 0 auto;
+    padding: var(--space-8) var(--space-8) var(--space-16);
+}
+.c-page-title {
+    font-family: var(--font-body);
+    font-size: 1.875rem; font-weight: 800;
+    letter-spacing: -.035em; line-height: 1.2;
+    color: var(--text-primary);
+}
+.c-page-title.gradient {
+    background: linear-gradient(135deg, var(--slate-900), var(--slate-700));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.c-page-subtitle {
+    font-size: .9375rem; color: var(--text-muted);
+    margin-top: var(--space-1);
+}
+
+/* ==================== SHARED CARD ==================== */
+.c-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    overflow: hidden;
+    transition: box-shadow var(--duration-base) var(--ease-out),
+                border-color var(--duration-base);
+}
+.c-card:hover { box-shadow: var(--shadow-sm); }
+.c-card-header {
+    padding: var(--space-4) var(--space-6);
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.c-card-header h2, .c-card-header h3 {
+    font-size: .9375rem; font-weight: 700; letter-spacing: -.01em;
+}
+.c-card-body { padding: var(--space-6); }
+.c-card-footer {
+    padding: var(--space-3) var(--space-6);
+    background: var(--slate-50);
+    border-top: 1px solid var(--border-subtle);
+    font-size: .75rem; color: var(--text-muted);
+}
+
+/* ── Product-accent card ── */
+.c-card.accent { border-left: 3px solid var(--product-500); }
+
+/* ==================== SHARED BUTTONS ==================== */
+.c-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: var(--space-2); padding: .5625rem 1.125rem;
+    font-family: var(--font-body); font-size: .8125rem; font-weight: 600;
+    border: 1.5px solid transparent; border-radius: var(--radius-sm);
+    cursor: pointer; text-decoration: none; white-space: nowrap;
+    transition: all var(--duration-fast) var(--ease-out);
+    user-select: none;
+}
+.c-btn:active:not(:disabled) { transform: scale(0.97); }
+.c-btn:disabled { opacity: .5; cursor: not-allowed; }
+.c-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+/* Product-branded primary */
+.c-btn-primary {
+    background: linear-gradient(180deg, var(--product-500), var(--product-600));
+    color: var(--text-inverse);
+    box-shadow: 0 1px 3px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.12);
+}
+.c-btn-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, var(--product-400), var(--product-600));
+    box-shadow: 0 2px 8px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.12);
+}
+.c-btn-secondary {
+    background: var(--bg-card); color: var(--text-secondary);
+    border-color: var(--border-default); box-shadow: var(--shadow-xs);
+}
+.c-btn-secondary:hover:not(:disabled) { background: var(--slate-50); border-color: var(--border-strong); }
+.c-btn-ghost { background: none; color: var(--text-secondary); border: none; }
+.c-btn-ghost:hover:not(:disabled) { background: var(--slate-100); }
+.c-btn-danger { background: var(--red-50); color: var(--red-600); border-color: var(--red-100); }
+.c-btn-danger:hover:not(:disabled) { background: var(--red-100); }
+.c-btn-sm { padding: .375rem .75rem; font-size: .75rem; }
+
+/* ==================== SHARED FORMS ==================== */
+.c-input, .c-select {
+    width: 100%; padding: .6875rem 1rem; height: 44px;
+    font-family: var(--font-body); font-size: .875rem;
+    color: var(--text-primary); background: var(--bg-card);
+    border: 1.5px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+.c-input:focus, .c-select:focus {
+    outline: none; border-color: var(--product-500);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--product-500) 12%, transparent),
+                0 0 16px color-mix(in srgb, var(--product-500) 4%, transparent);
+}
+.c-input::placeholder { color: var(--text-muted); }
+.c-label { display: block; font-size: .8125rem; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-1); }
+.c-hint { font-size: .75rem; color: var(--text-muted); margin-top: var(--space-1); line-height: 1.5; }
+
+/* ==================== SHARED BADGES ==================== */
+.c-badge {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    padding: .2rem .625rem; border-radius: var(--radius-full);
+    font-size: .6875rem; font-weight: 700; letter-spacing: .02em;
+}
+.c-badge-product { background: var(--product-50); color: var(--product-600); }
+.c-badge-success { background: var(--green-50); color: var(--green-600); }
+.c-badge-warning { background: var(--amber-50); color: var(--amber-700); }
+.c-badge-danger { background: var(--red-50); color: var(--red-600); }
+.c-badge-neutral { background: var(--slate-100); color: var(--text-tertiary); }
+.c-badge-count {
+    font-size: .6875rem; font-weight: 700; color: var(--text-muted);
+    background: var(--slate-100); padding: .2rem .625rem;
+    border-radius: var(--radius-full);
+}
+
+/* ==================== SHARED TABLE ==================== */
+.c-table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+.c-table th {
+    padding: .75rem 1rem; text-align: left;
+    font-size: .6875rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em;
+    color: var(--text-muted); background: var(--slate-50);
+    border-bottom: 1px solid var(--border-default);
+    white-space: nowrap; position: sticky; top: 0;
+}
+.c-table td {
+    padding: .75rem 1rem;
+    border-bottom: 1px solid var(--slate-100);
+    color: var(--text-secondary); vertical-align: middle;
+    transition: background var(--duration-fast);
+}
+.c-table tr:last-child td { border-bottom: none; }
+.c-table tr:hover td { background: var(--product-50); }
+
+/* ==================== SHARED MODAL ==================== */
+.c-modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.3);
+    z-index: 1000; justify-content: center; align-items: center;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    opacity: 0; transition: opacity var(--duration-base) var(--ease-out);
+}
+.c-modal-overlay.open { display: flex; opacity: 1; }
+.c-modal-overlay.c-entering { opacity: 0; }
+.c-modal-overlay.c-entering .c-modal { transform: scale(.96) translateY(8px); opacity: 0; }
+.c-modal {
+    background: var(--bg-card); border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-xl);
+    width: 90vw; max-width: 520px; max-height: 85vh; overflow-y: auto;
+    transition: transform var(--duration-slow) var(--ease-out), opacity var(--duration-base);
+}
+.c-modal-header {
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--slate-100);
+    display: flex; align-items: center; justify-content: space-between;
+}
+.c-modal-header h3 { font-size: 1.125rem; font-weight: 700; letter-spacing: -.015em; }
+.c-modal-close {
+    width: 34px; height: 34px; border: none; border-radius: 50%;
+    background: var(--slate-100); color: var(--text-muted);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: all var(--duration-fast);
+}
+.c-modal-close:hover { background: var(--slate-200); color: var(--text-primary); transform: scale(1.05); }
+.c-modal-body { padding: var(--space-6); }
+.c-modal-footer {
+    padding: var(--space-4) var(--space-6);
+    border-top: 1px solid var(--slate-100);
+    display: flex; justify-content: flex-end; gap: var(--space-3);
+}
+
+/* ==================== SHARED EMPTY STATE ==================== */
+.c-empty {
+    text-align: center; padding: var(--space-12) var(--space-8);
+    color: var(--text-muted);
+}
+.c-empty-icon {
+    width: 64px; height: 64px; margin: 0 auto var(--space-5);
+    background: linear-gradient(135deg, var(--product-50), var(--product-100));
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--product-500);
+    animation: c-float 3s ease-in-out infinite;
+}
+.c-empty h3 { font-size: 1rem; font-weight: 700; color: var(--text-secondary); margin-bottom: var(--space-1); }
+.c-empty p { font-size: .875rem; }
+
+/* ==================== SHARED TOAST ==================== */
+.c-toast {
+    position: fixed; bottom: var(--space-8); left: 50%;
+    transform: translateX(-50%) translateY(120%);
+    background: var(--slate-900); color: var(--text-inverse);
+    padding: var(--space-3) var(--space-6);
+    border-radius: var(--radius-md);
+    font-size: .8125rem; font-weight: 600;
+    box-shadow: var(--shadow-xl); z-index: 2000;
+    transition: transform .35s var(--ease-out);
+    white-space: nowrap;
+}
+.c-toast.show { transform: translateX(-50%) translateY(0); }
+.c-toast.error { background: var(--red-600); }
+.c-toast.success { background: var(--green-600); }
+
+/* ==================== SHARED PROGRESS BAR ==================== */
+.c-progress {
+    width: 100%; height: 10px;
+    background: var(--slate-100); border-radius: var(--radius-full);
+    overflow: hidden;
+}
+.c-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--product-400), var(--product-600));
+    border-radius: var(--radius-full);
+    transition: width .4s var(--ease-out);
+    position: relative;
+}
+.c-progress-fill::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.3) 50%, transparent 100%);
+    animation: c-shimmer 2s ease-in-out infinite;
+}
+
+/* ==================== SHARED LOADING ==================== */
+.c-loading {
+    position: fixed; inset: 0; z-index: 9999;
+    background: var(--bg-page);
+    display: flex; align-items: center; justify-content: center;
+}
+.c-loading-inner { text-align: center; }
+.c-loading-brand {
+    font-family: var(--font-body);
+    font-size: 1.5rem; font-weight: 800;
+    color: var(--product-600);
+    letter-spacing: -.03em;
+    margin-bottom: var(--space-3);
+}
+.c-loading-spinner {
+    width: 24px; height: 24px; margin: 0 auto;
+    border: 2.5px solid var(--slate-200);
+    border-top-color: var(--product-500);
+    border-radius: 50%;
+    animation: c-spin .7s linear infinite;
+}
+
+/* ==================== SHARED SEGMENTED CONTROL ==================== */
+.c-segmented {
+    display: inline-flex; align-items: center;
+    background: var(--slate-100); border-radius: var(--radius-full);
+    padding: 3px;
+}
+.c-segmented-btn {
+    padding: .4rem 1.125rem; font-size: .8125rem; font-weight: 600;
+    font-family: var(--font-body);
+    border: none; background: none; border-radius: var(--radius-full);
+    color: var(--text-secondary); cursor: pointer;
+    transition: color var(--duration-fast), background var(--duration-base) var(--ease-out);
+    position: relative; z-index: 1;
+}
+.c-segmented-btn.active {
+    color: var(--text-inverse);
+    background: var(--product-600);
+    box-shadow: 0 1px 4px color-mix(in srgb, var(--product-600) 30%, transparent);
+}
+.c-segmented-btn:not(.active):hover { color: var(--text-primary); }
+
+/* ==================== SHARED TAB BAR ==================== */
+.c-tabs {
+    display: flex; gap: var(--space-1);
+    padding: 4px; background: var(--slate-100);
+    border-radius: var(--radius-md);
+}
+.c-tab {
+    padding: .625rem 1.125rem;
+    background: none; border: none;
+    font-family: var(--font-body); font-size: .8125rem; font-weight: 600;
+    color: var(--text-muted); cursor: pointer;
+    border-radius: calc(var(--radius-md) - 2px);
+    transition: all var(--duration-base) var(--ease-out);
+    white-space: nowrap;
+}
+.c-tab:hover { color: var(--text-secondary); }
+.c-tab.active {
+    color: var(--text-primary); background: var(--bg-card);
+    box-shadow: var(--shadow-sm);
+}
+
+/* ==================== SHARED ANIMATIONS ==================== */
+@keyframes c-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes c-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(.85); } }
+@keyframes c-spin { to { transform: rotate(360deg); } }
+@keyframes c-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+@keyframes c-fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes c-slideIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0); } }
+
+.c-fade-in { animation: c-fadeIn var(--duration-slow) var(--ease-out); }
+.c-slide-in { animation: c-slideIn var(--duration-slow) var(--ease-out); }
+
+/* ==================== FOCUS ACCESSIBILITY ==================== */
+:focus-visible { outline: 2px solid var(--product-500); outline-offset: 2px; }
+.c-input:focus-visible, .c-select:focus-visible { outline: none; } /* handled by box-shadow */
+
+/* ==================== UTILITY CLASSES ==================== */
+/* Typography */
+.font-display { font-family: var(--font-display); }
+.font-mono { font-family: var(--font-mono); }
+.text-product { color: var(--product-600); }
+.bg-product { background: var(--product-50); }
+
+/* Layout */
+.flex { display: flex; }
+.flex-center { display: flex; align-items: center; justify-content: center; }
+.gap-1 { gap: var(--space-1); } .gap-2 { gap: var(--space-2); }
+.gap-3 { gap: var(--space-3); } .gap-4 { gap: var(--space-4); }
+
+/* ==================== RESPONSIVE ==================== */
+@media (max-width: 768px) {
+    .c-main { padding: var(--space-4) var(--space-3) var(--space-10); }
+    .c-nav-inner { padding: 0 var(--space-4); }
+    .c-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
+    .c-tab { font-size: .75rem; padding: .5rem .875rem; }
+    .c-modal { width: 95vw; max-width: 95vw; border-radius: var(--radius-lg); }
+    .c-btn { min-height: 44px; }
+    .c-page-title { font-size: 1.5rem; }
+}
+
+@media (max-width: 480px) {
+    .c-btn { width: 100%; justify-content: center; }
+}
