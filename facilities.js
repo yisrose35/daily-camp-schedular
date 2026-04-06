@@ -71,7 +71,7 @@ function initFacilitiesTab() {
                   <button id="add-facility-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
                 </div>
 
-                <div id="facilities-master-list" class="master-list" style="max-height:600px; overflow-y:auto;"></div>
+                <div id="facilities-master-list" style="max-height:600px; overflow-y:auto;"></div>
               </div>
 
               <!-- RIGHT SIDE: DETAIL PANE -->
@@ -448,19 +448,24 @@ function renderMasterList() {
 
 function masterListItem(fac) {
     const id = `fac-${fac.name}`;
+    const isSelected = id === selectedFacilityId;
     const el = document.createElement("div");
-    el.className = "list-item" + (id === selectedFacilityId ? " selected" : "");
-    el.style.cursor = "pointer";
+    el.style.cssText = `
+        padding:12px 16px; margin:4px 0; border-radius:12px; cursor:pointer;
+        display:flex; align-items:center; justify-content:space-between;
+        transition:all 0.15s ease;
+        background:${isSelected ? 'rgba(20,125,145,0.08)' : '#F9FAFB'};
+        border:1px solid ${isSelected ? '#147D91' : '#E5E7EB'};
+        ${isSelected ? 'box-shadow:0 0 0 1px rgba(20,125,145,0.3), 0 4px 12px rgba(20,125,145,0.1);' : ''}
+    `;
+    el.onmouseenter = () => { if (!isSelected) { el.style.background = '#F3F4F6'; el.style.borderColor = 'rgba(20,125,145,0.4)'; } };
+    el.onmouseleave = () => { if (!isSelected) { el.style.background = '#F9FAFB'; el.style.borderColor = '#E5E7EB'; } };
     el.onclick = () => { selectedFacilityId = id; renderMasterList(); renderDetailPane(); };
 
-    const infoDiv = document.createElement("div");
-    infoDiv.style.cssText = "display:flex; align-items:center; justify-content:space-between; width:100%;";
-
     const name = document.createElement("div");
-    name.className = "list-item-name";
+    name.style.cssText = "font-weight:500; font-size:0.9rem; color:#1F2937;";
     name.textContent = fac.name;
-
-    infoDiv.appendChild(name);
+    el.appendChild(name);
 
     // Type badges
     if (fac.usedFor.length > 0) {
@@ -472,13 +477,11 @@ function masterListItem(fac) {
             const labels = { sports: 'S', special: 'SA', general: 'G' };
             badge.style.cssText = `font-size:0.6rem; color:white; background:${colors[type] || '#6B7280'}; border-radius:3px; padding:2px 6px; font-weight:600; line-height:1;`;
             badge.textContent = labels[type] || type;
-            badge.title = type === 'sports' ? 'Sports' : type === 'special' ? 'Special Activity' : 'General Activity';
             badgeWrap.appendChild(badge);
         });
-        infoDiv.appendChild(badgeWrap);
+        el.appendChild(badgeWrap);
     }
 
-    el.appendChild(infoDiv);
     return el;
 }
 

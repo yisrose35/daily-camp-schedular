@@ -54,7 +54,7 @@ function initZonesTab() {
                   <button id="add-zone-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
                 </div>
 
-                <div id="zones-master-list" class="master-list" style="max-height:600px; overflow-y:auto;"></div>
+                <div id="zones-master-list" style="max-height:600px; overflow-y:auto;"></div>
               </div>
 
               <!-- RIGHT: ZONE DETAIL -->
@@ -228,38 +228,51 @@ function renderZonesList() {
 
     zoneNames.forEach(name => {
         const zone = locationZones[name];
+        const isSelected = name === selectedZoneId;
         const el = document.createElement("div");
-        el.className = "list-item" + (name === selectedZoneId ? " selected" : "");
-        el.style.cursor = "pointer";
+        el.style.cssText = `
+            padding:12px 16px; margin:4px 0; border-radius:12px; cursor:pointer;
+            transition:all 0.15s ease;
+            background:${isSelected ? 'rgba(20,125,145,0.08)' : '#F9FAFB'};
+            border:1px solid ${isSelected ? '#147D91' : '#E5E7EB'};
+            ${isSelected ? 'box-shadow:0 0 0 1px rgba(20,125,145,0.3), 0 4px 12px rgba(20,125,145,0.1);' : ''}
+        `;
+        el.onmouseenter = () => { if (!isSelected) { el.style.background = '#F3F4F6'; el.style.borderColor = 'rgba(20,125,145,0.4)'; } };
+        el.onmouseleave = () => { if (!isSelected) { el.style.background = '#F9FAFB'; el.style.borderColor = '#E5E7EB'; } };
         el.onclick = () => { selectedZoneId = name; renderZonesList(); renderDetailPane(); };
 
-        const infoDiv = document.createElement("div");
-        const nameEl = document.createElement("div");
-        nameEl.className = "list-item-name";
-        nameEl.textContent = name;
+        const topRow = document.createElement("div");
+        topRow.style.cssText = "display:flex; align-items:center; justify-content:space-between;";
 
+        const nameEl = document.createElement("div");
+        nameEl.style.cssText = "font-weight:500; font-size:0.9rem; color:#1F2937;";
+        nameEl.textContent = name;
+        topRow.appendChild(nameEl);
+
+        const badgeWrap = document.createElement('div');
+        badgeWrap.style.cssText = 'display:flex; gap:3px;';
         if (zone.isDefault) {
             const badge = document.createElement('span');
-            badge.style.cssText = 'font-size:0.6rem; color:white; background:#147D91; border-radius:3px; padding:1px 5px; margin-left:6px; vertical-align:middle; font-weight:600;';
+            badge.style.cssText = 'font-size:0.6rem; color:white; background:#147D91; border-radius:3px; padding:2px 6px; font-weight:600; line-height:1;';
             badge.textContent = 'DEFAULT';
-            nameEl.appendChild(badge);
+            badgeWrap.appendChild(badge);
         }
         if (zone.isOffCampus) {
             const badge = document.createElement('span');
-            badge.style.cssText = 'font-size:0.6rem; color:white; background:#D97706; border-radius:3px; padding:1px 5px; margin-left:4px; vertical-align:middle; font-weight:600;';
+            badge.style.cssText = 'font-size:0.6rem; color:white; background:#D97706; border-radius:3px; padding:2px 6px; font-weight:600; line-height:1;';
             badge.textContent = 'OFF CAMPUS';
-            nameEl.appendChild(badge);
+            badgeWrap.appendChild(badge);
         }
+        topRow.appendChild(badgeWrap);
+        el.appendChild(topRow);
 
         // Facility count
         const count = (zone.fields?.length || 0) + (zone.specialActivities?.length || 0) + Object.keys(zone.locations || {}).length;
         const countEl = document.createElement("div");
-        countEl.style.cssText = "font-size:0.75rem; color:#9CA3AF;";
+        countEl.style.cssText = "font-size:0.75rem; color:#9CA3AF; margin-top:2px;";
         countEl.textContent = `${count} facilit${count === 1 ? 'y' : 'ies'}`;
+        el.appendChild(countEl);
 
-        infoDiv.appendChild(nameEl);
-        infoDiv.appendChild(countEl);
-        el.appendChild(infoDiv);
         zonesListEl.appendChild(el);
     });
 }
