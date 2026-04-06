@@ -221,20 +221,19 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 3px;
     margin-bottom: 28px;
 }
 .hex-row {
     display: flex;
     justify-content: center;
-    gap: 6px;
+    gap: 3px;
 }
-/* Offset rows of 2 sit naturally; the row of 3 is wider and creates the honeycomb stagger */
 
 /* --- Individual hex tile --- */
 .hex-tile {
-    width: 100px;
-    height: 110px;
+    width: 74px;
+    height: 82px;
     clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
     background: white;
     text-decoration: none;
@@ -265,28 +264,19 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     position: absolute;
     inset: 0;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
     z-index: 1;
 }
 .hex-logo {
-    height: 30px;
+    height: 28px;
     width: auto;
-    max-width: 56px;
+    max-width: 48px;
     object-fit: contain;
     display: block;
 }
 .hex-tile span {
-    font-size: 0.65rem;
-    font-weight: 700;
-    color: var(--slate-600);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-.hex-tile:not(.hex-disabled) span {
-    color: var(--slate-800);
+    display: none;
 }
 
 /* Disabled state */
@@ -303,9 +293,8 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 
 /* Responsive: shrink hexagons on small screens */
 @media (max-width: 480px) {
-    .hex-tile { width: 80px; height: 88px; }
-    .hex-logo { height: 24px; }
-    .hex-tile span { font-size: 0.58rem; }
+    .hex-tile { width: 60px; height: 66px; }
+    .hex-logo { height: 22px; }
 }
 
 /* ============================================
