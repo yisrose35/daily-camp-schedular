@@ -2123,16 +2123,29 @@
         if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' move(s)');
 
         // ══════════════════════════════════════════════════════════════
-        // ORIENT ROUTES (final step — after all moves)
+        // SORT ROUTES BY DISTANCE FROM CAMP (final step)
+        //
+        // VROOM optimizes total drive time, but camp buses need a clean
+        // sweep pattern with no backtracking:
+        //   Arrival:   farthest stop first → sweep toward camp
+        //   Dismissal: nearest stop first → sweep away from camp
+        //
+        // This overrides VROOM's internal ordering but keeps its bus
+        // assignment (which stops belong to which bus).
         // ══════════════════════════════════════════════════════════════
         showProgress('Finalizing routes...', 95);
         allRoutes.forEach(r => {
             if (r.stops.length < 2) return;
-            const fd = haversineMi(campLat, campLng, r.stops[0].lat, r.stops[0].lng);
-            const ld = haversineMi(campLat, campLng, r.stops[r.stops.length - 1].lat, r.stops[r.stops.length - 1].lng);
-            if (isArrival && fd < ld) r.stops.reverse();
-            if (!isArrival && fd > ld) r.stops.reverse();
-            r.stops.forEach((s, i) => { s.stopNum = i + 1; });
+            // Sort by distance from camp
+            r.stops.forEach(s => {
+                s._campDist = (s.lat && s.lng) ? haversineMi(campLat, campLng, s.lat, s.lng) : 0;
+            });
+            if (isArrival) {
+                r.stops.sort((a, b) => b._campDist - a._campDist); // farthest first
+            } else {
+                r.stops.sort((a, b) => a._campDist - b._campDist); // nearest first
+            }
+            r.stops.forEach((s, i) => { s.stopNum = i + 1; delete s._campDist; });
         });
 
         // Route quality summary
