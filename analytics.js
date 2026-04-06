@@ -260,6 +260,17 @@
         if (!wrapper) return;
 
         const { startTime, endTime } = getCampTimes();
+        const gs = window.loadGlobalSettings?.().app1 || {};
+
+        // Build sport/special dropdown options
+        const allSports = window.getAllGlobalSports?.() || [];
+        const specials = (gs.specialActivities || []).map(s => s.name);
+        const sportOpts = allSports.sort().map(s => `<option value="sport:${s}">${s}</option>`).join('');
+        const specialOpts = specials.sort().map(s => `<option value="special:${s}">${s}</option>`).join('');
+
+        // Build field dropdown options
+        const fields = (gs.fields || []).map(f => f.name).sort();
+        const fieldOpts = fields.map(f => `<option value="field:${f}">${f}</option>`).join('');
 
         wrapper.innerHTML = `
             <div class="setup-card" style="margin-bottom:16px;">
@@ -272,32 +283,27 @@
                         </p>
                     </div>
                 </div>
-                
+
                 <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;padding:12px;background:#f9fafb;border-radius:12px;border:1px solid #e5e7eb;">
                     <div style="flex:1;min-width:180px;">
-                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Search Field/Activity</label>
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Search Field or Activity</label>
                         <select id="avail-field-search" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
                             <option value="">-- Select --</option>
+                            <optgroup label="Fields">${fieldOpts}</optgroup>
+                            <optgroup label="Sports">${sportOpts}</optgroup>
+                            <optgroup label="Special Activities">${specialOpts}</optgroup>
                         </select>
                     </div>
-                    <div style="flex:1;min-width:140px;">
-                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Time Slot</label>
-                        <select id="avail-time-search" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
-                            <option value="">-- Select --</option>
-                        </select>
+                    <div style="min-width:100px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Start Time</label>
+                        <input id="avail-time-start" type="text" placeholder="e.g. 9:00am" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;box-sizing:border-box;" />
                     </div>
-                    <button id="avail-search-btn" style="padding:8px 20px;background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none;border-radius:999px;font-size:0.85rem;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(37,99,235,0.3);">
+                    <div style="min-width:100px;">
+                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">End Time</label>
+                        <input id="avail-time-end" type="text" placeholder="e.g. 10:00am" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;box-sizing:border-box;" />
+                    </div>
+                    <button id="avail-search-btn" style="padding:8px 20px;background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none;border-radius:999px;font-size:0.85rem;font-weight:600;cursor:pointer;">
                         Check
-                    </button>
-                </div>
-
-                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;padding:12px;background:#f0f9fb;border-radius:12px;border:1px solid #b2dce6;">
-                    <div style="flex:1;min-width:200px;">
-                        <label style="font-size:0.75rem;font-weight:600;color:#0F5F6E;text-transform:uppercase;display:block;margin-bottom:4px;">Search by Activity (e.g., Basketball)</label>
-                        <input id="avail-activity-search" type="text" placeholder="Type an activity name..." style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #b2dce6;font-size:0.85rem;box-sizing:border-box;" />
-                    </div>
-                    <button id="avail-activity-search-btn" style="padding:8px 20px;background:#147D91;color:#fff;border:none;border-radius:999px;font-size:0.85rem;font-weight:600;cursor:pointer;">
-                        Find Fields
                     </button>
                 </div>
 
@@ -312,12 +318,13 @@
 
                     <div style="display:flex;gap:12px;font-size:0.8rem;color:#4b5563;">
                         <span style="display:flex;align-items:center;gap:4px;">
-                            <span style="width:18px;height:18px;background:#d1fae5;border:2px solid #10b981;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#047857;">+</span>
-                            Free
+                            <span style="width:18px;height:18px;background:#d1fae5;border:1px solid #10b981;border-radius:4px;"></span> Free
                         </span>
                         <span style="display:flex;align-items:center;gap:4px;">
-                            <span style="width:18px;height:18px;background:#fee2e2;border:2px solid #ef4444;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#b91c1c;">-</span>
-                            In Use
+                            <span style="width:18px;height:18px;background:#fee2e2;border:1px solid #ef4444;border-radius:4px;"></span> In Use
+                        </span>
+                        <span style="display:flex;align-items:center;gap:4px;">
+                            <span style="width:36px;height:18px;background:linear-gradient(90deg,#d1fae5 50%,#fee2e2 50%);border:1px solid #9ca3af;border-radius:4px;"></span> Partial
                         </span>
                     </div>
                 </div>
@@ -326,151 +333,116 @@
             <div id="avail-grid-wrapper" class="schedule-view-wrapper" style="border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;"></div>
         `;
 
-        populateAvailabilityDropdowns();
         buildAvailabilityGrid();
 
         document.getElementById("avail-type-filter").onchange = buildAvailabilityGrid;
         document.getElementById("avail-search-btn").onclick = performAvailabilitySearch;
-        document.getElementById("avail-activity-search-btn").onclick = performActivitySearch;
-        document.getElementById("avail-activity-search").onkeyup = (e) => { if (e.key === 'Enter') performActivitySearch(); };
     }
 
     /**
-     * Populate the search dropdowns with fields and times
-     */
-    function populateAvailabilityDropdowns() {
-        const gs = window.loadGlobalSettings?.().app1 || {};
-        const fields = (gs.fields || []).map(f => ({ name: f.name, type: 'field' }));
-        const specials = (gs.specialActivities || []).map(s => ({ name: s.name, type: 'special' }));
-        const resources = [...fields, ...specials].sort((a, b) => a.name.localeCompare(b.name));
-
-        const fieldSelect = document.getElementById("avail-field-search");
-        resources.forEach(r => {
-            const opt = document.createElement('option');
-            opt.value = r.name;
-            opt.textContent = r.name;
-            fieldSelect.appendChild(opt);
-        });
-
-        const timeSelect = document.getElementById("avail-time-search");
-        const slots = generate30MinSlots();
-        slots.forEach(slot => {
-            const opt = document.createElement('option');
-            opt.value = slot.startMin;
-            opt.textContent = slot.label;
-            timeSelect.appendChild(opt);
-        });
-    }
-
-    /**
-     * Perform quick availability search
+     * Perform search — handles fields directly, sports/specials by finding matching fields
      */
     function performAvailabilitySearch() {
-        const fieldName = document.getElementById("avail-field-search").value;
-        const timeVal = document.getElementById("avail-time-search").value;
+        const selectVal = document.getElementById("avail-field-search").value;
+        const startStr = document.getElementById("avail-time-start").value.trim();
+        const endStr = document.getElementById("avail-time-end").value.trim();
         const resultDiv = document.getElementById("avail-search-result");
 
-        if (!fieldName || !timeVal) {
+        if (!selectVal) {
             resultDiv.style.display = 'block';
-            resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;color:#92400e;font-size:0.85rem;">Please select both a field/activity and a time slot.</div>`;
+            resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.85rem;">Please select a field or activity.</div>`;
             return;
         }
 
-        const slotStartMin = parseInt(timeVal, 10);
-        const slotEndMin = slotStartMin + 30;
-        const usageData = buildDetailedUsageMap();
-        const resourceUsage = usageData[fieldName] || [];
+        // Parse selection: "field:Court 1", "sport:Basketball", "special:Canteen"
+        const [searchType, searchName] = selectVal.split(':');
+        const gs = window.loadGlobalSettings?.().app1 || {};
+        const usageMap = buildDetailedUsageMap();
 
-        const overlapping = resourceUsage.filter(u => u.startMin < slotEndMin && u.endMin > slotStartMin);
-
-        resultDiv.style.display = 'block';
-
-        if (overlapping.length === 0) {
-            resultDiv.innerHTML = `
-                <div style="padding:12px 16px;background:#d1fae5;border:2px solid #10b981;border-radius:12px;color:#047857;font-size:0.9rem;">
-                    <strong>${fieldName}</strong> is <strong>AVAILABLE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}
-                </div>`;
-        } else {
-            const fullyBlocked = overlapping.some(u => u.startMin <= slotStartMin && u.endMin >= slotEndMin);
-            
-            if (fullyBlocked) {
-                const usage = overlapping[0];
-                resultDiv.innerHTML = `
-                    <div style="padding:12px 16px;background:#fee2e2;border:2px solid #ef4444;border-radius:12px;color:#b91c1c;font-size:0.9rem;">
-                        <strong>${fieldName}</strong> is <strong>IN USE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}<br>
-                        <span style="font-size:0.85em;color:#7f1d1d;">Used by: <strong>${usage.bunk}</strong> → ${usage.activity} (${minutesToTimeLabel(usage.startMin)} - ${minutesToTimeLabel(usage.endMin)})</span>
-                    </div>`;
-            } else {
-                let details = overlapping.map(u => 
-                    `• <strong>${u.bunk}</strong>: ${u.activity} (${minutesToTimeLabel(u.startMin)} - ${minutesToTimeLabel(u.endMin)})`
-                ).join('<br>');
-                
-                resultDiv.innerHTML = `
-                    <div style="padding:12px 16px;background:#fef3c7;border:2px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.9rem;">
-                        <strong>${fieldName}</strong> is <strong>PARTIALLY AVAILABLE</strong><br>
-                        <span style="font-size:0.85em;">${details}</span>
-                    </div>`;
+        // Parse time range (optional)
+        let rangeStart = null, rangeEnd = null;
+        if (startStr && endStr) {
+            rangeStart = parseTimeToMinutes(startStr);
+            rangeEnd = parseTimeToMinutes(endStr);
+            if (rangeStart === null || rangeEnd === null) {
+                resultDiv.style.display = 'block';
+                resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.85rem;">Invalid time format. Use e.g. 9:00am or 13:00.</div>`;
+                return;
             }
         }
-    }
 
-    /**
-     * Search by activity name — find all fields that support it and show availability
-     */
-    function performActivitySearch() {
-        const query = (document.getElementById("avail-activity-search")?.value || '').trim().toLowerCase();
-        const resultDiv = document.getElementById("avail-search-result");
-        if (!query) {
-            resultDiv.style.display = 'block';
-            resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.85rem;">Please type an activity name to search.</div>`;
-            return;
+        // Determine which fields/resources to show
+        let resources = [];
+        if (searchType === 'field') {
+            resources = [{ name: searchName }];
+        } else if (searchType === 'sport') {
+            // Find all fields that support this sport
+            resources = (gs.fields || []).filter(f => (f.activities || []).some(a => a.toLowerCase() === searchName.toLowerCase()));
+            if (resources.length === 0) {
+                resultDiv.style.display = 'block';
+                resultDiv.innerHTML = `<div style="padding:12px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;color:#6b7280;font-size:0.9rem;">No fields support "<strong>${searchName}</strong>".</div>`;
+                return;
+            }
+        } else if (searchType === 'special') {
+            resources = [{ name: searchName }];
         }
 
-        const gs = window.loadGlobalSettings?.().app1 || {};
-        const fields = gs.fields || [];
+        // If time range provided, show a quick status result
+        if (rangeStart !== null && rangeEnd !== null) {
+            let html = '';
+            resources.forEach(r => {
+                const resourceUsage = usageMap[r.name] || [];
+                const overlapping = resourceUsage.filter(u => u.startMin < rangeEnd && u.endMin > rangeStart);
+                const fullyBlocked = overlapping.some(u => u.startMin <= rangeStart && u.endMin >= rangeEnd);
 
-        // Find fields whose activities array includes the search term
-        const matchingFields = fields.filter(f =>
-            (f.activities || []).some(a => a.toLowerCase().includes(query))
-        );
-
-        if (matchingFields.length === 0) {
+                if (overlapping.length === 0) {
+                    html += `<div style="padding:10px 14px;background:#d1fae5;border:1px solid #10b981;border-radius:10px;color:#047857;font-size:0.88rem;margin-bottom:6px;">
+                        <strong>${r.name}</strong> is <strong>AVAILABLE</strong> from ${minutesToTimeLabel(rangeStart)} to ${minutesToTimeLabel(rangeEnd)}</div>`;
+                } else if (fullyBlocked) {
+                    const u = overlapping[0];
+                    html += `<div style="padding:10px 14px;background:#fee2e2;border:1px solid #ef4444;border-radius:10px;color:#b91c1c;font-size:0.88rem;margin-bottom:6px;">
+                        <strong>${r.name}</strong> is <strong>IN USE</strong> from ${minutesToTimeLabel(rangeStart)} to ${minutesToTimeLabel(rangeEnd)}
+                        <span style="font-size:0.82em;color:#7f1d1d;display:block;margin-top:2px;">Used by: ${u.bunk} - ${u.activity} (${minutesToTimeLabel(u.startMin)} - ${minutesToTimeLabel(u.endMin)})</span></div>`;
+                } else {
+                    const details = overlapping.map(u => `${u.bunk}: ${u.activity} (${minutesToTimeLabel(u.startMin)} - ${minutesToTimeLabel(u.endMin)})`).join(', ');
+                    html += `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;color:#92400e;font-size:0.88rem;margin-bottom:6px;">
+                        <strong>${r.name}</strong> is <strong>PARTIALLY AVAILABLE</strong>
+                        <span style="font-size:0.82em;display:block;margin-top:2px;">${details}</span></div>`;
+                }
+            });
             resultDiv.style.display = 'block';
-            resultDiv.innerHTML = `<div style="padding:12px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;color:#6b7280;font-size:0.9rem;">No fields found that support "<strong>${query}</strong>".</div>`;
-            return;
+            resultDiv.innerHTML = html;
         }
 
-        const usageMap = buildDetailedUsageMap();
+        // Also show the grid for these resources
         const slots = generate30MinSlots();
-
-        let html = `<div style="border:1px solid #b2dce6;border-radius:12px;overflow:hidden;margin-bottom:4px;">
-            <div style="padding:10px 14px;background:#e0f2fe;font-weight:600;color:#0c4a6e;font-size:0.9rem;">
-                Fields that support "${query}" (${matchingFields.length} found)
+        let gridHtml = `<div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;margin-top:8px;">
+            <div style="padding:10px 14px;background:#f3f4f6;font-weight:600;color:#374151;font-size:0.88rem;">
+                ${searchType === 'sport' ? 'Fields for ' + searchName + ' (' + resources.length + ')' : searchName}
             </div>
             <div style="overflow-x:auto;">
             <table style="border-collapse:collapse;width:100%;font-size:0.8rem;">
-                <thead><tr style="background:#f0f9fb;">
-                    <th style="position:sticky;left:0;z-index:10;background:#f0f9fb;padding:8px 12px;border:1px solid #d1d5db;min-width:140px;text-align:left;font-weight:600;color:#374151;">Field</th>`;
-
+                <thead><tr style="background:#f3f4f6;">
+                    <th style="position:sticky;left:0;z-index:10;background:#f3f4f6;padding:8px 12px;border:1px solid #d1d5db;min-width:140px;text-align:left;font-weight:600;color:#374151;">Resource</th>`;
         slots.forEach(slot => {
-            html += `<th style="padding:6px 4px;border:1px solid #d1d5db;min-width:60px;font-weight:600;color:#374151;white-space:nowrap;font-size:0.75rem;">${slot.shortLabel}</th>`;
+            gridHtml += `<th style="padding:6px 4px;border:1px solid #d1d5db;min-width:60px;font-weight:600;color:#374151;white-space:nowrap;font-size:0.75rem;">${slot.shortLabel}</th>`;
         });
-        html += `</tr></thead><tbody>`;
+        gridHtml += `</tr></thead><tbody>`;
 
-        matchingFields.forEach((f, i) => {
-            const resourceUsage = usageMap[f.name] || [];
+        resources.forEach((r, i) => {
+            const resourceUsage = usageMap[r.name] || [];
             const rowBg = i % 2 === 0 ? '#ffffff' : '#fafafa';
-            html += `<tr style="background:${rowBg};"><td style="position:sticky;left:0;background:${rowBg};padding:8px 10px;border:1px solid #d1d5db;font-weight:600;color:#111827;white-space:nowrap;">${f.name}</td>`;
+            gridHtml += `<tr style="background:${rowBg};"><td style="position:sticky;left:0;background:${rowBg};padding:8px 10px;border:1px solid #d1d5db;font-weight:600;color:#111827;white-space:nowrap;">${r.name}</td>`;
             slots.forEach(slot => {
                 const cellData = getCellAvailability(slot.startMin, slot.endMin, resourceUsage);
-                html += renderAvailabilityCell(cellData, slot);
+                gridHtml += renderAvailabilityCell(cellData, slot);
             });
-            html += `</tr>`;
+            gridHtml += `</tr>`;
         });
+        gridHtml += `</tbody></table></div></div>`;
 
-        html += `</tbody></table></div></div>`;
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = html;
+        resultDiv.innerHTML = (resultDiv.innerHTML || '') + gridHtml;
     }
 
     /**
@@ -737,22 +709,40 @@
         const { status, transitionTime, transitionType, usage } = cellData;
 
         if (status === 'available') {
-            return `<td style="background:#d1fae5;text-align:center;padding:6px 2px;border:1px solid #d1d5db;">
-                <span style="color:#047857;font-weight:700;font-size:0.9em;">+</span>
-            </td>`;
+            return `<td style="background:#d1fae5;border:1px solid #d1d5db;padding:0;height:32px;"></td>`;
         }
 
         if (status === 'unavailable') {
             const title = usage ? `${usage.bunk}: ${usage.activity}` : '';
-            return `<td style="background:#fee2e2;text-align:center;padding:6px 2px;border:1px solid #d1d5db;" title="${title}">
-                <span style="color:#b91c1c;font-weight:700;font-size:0.9em;">-</span>
-            </td>`;
+            return `<td style="background:#fee2e2;border:1px solid #d1d5db;padding:0;height:32px;" title="${title}"></td>`;
         }
 
+        // Partial: split green/red with transition time in center
         const title = usage ? `${usage.bunk}: ${usage.activity}` : '';
-        return `<td style="background:#fef3c7;text-align:center;padding:6px 2px;border:1px solid #d1d5db;" title="${title}: Partial">
-            <span style="color:#92400e;font-weight:700;font-size:0.8em;">~</span>
-        </td>`;
+        const timeLabel = minutesToShortLabel(transitionTime);
+        // Calculate percentage of the 30-min slot where transition occurs
+        const slotDuration = slot.endMin - slot.startMin;
+        const pct = Math.round(((transitionTime - slot.startMin) / slotDuration) * 100);
+
+        if (transitionType === 'ends') {
+            // Busy first, then free
+            return `<td style="padding:0;border:1px solid #d1d5db;position:relative;height:32px;" title="${title}">
+                <div style="display:flex;height:100%;">
+                    <div style="width:${pct}%;background:#fee2e2;"></div>
+                    <div style="flex:1;background:#d1fae5;"></div>
+                </div>
+                <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:8px;font-weight:700;color:#374151;background:rgba(255,255,255,0.9);padding:1px 4px;border-radius:3px;white-space:nowrap;">${timeLabel}</div>
+            </td>`;
+        } else {
+            // Free first, then busy
+            return `<td style="padding:0;border:1px solid #d1d5db;position:relative;height:32px;" title="${title}">
+                <div style="display:flex;height:100%;">
+                    <div style="width:${pct}%;background:#d1fae5;"></div>
+                    <div style="flex:1;background:#fee2e2;"></div>
+                </div>
+                <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:8px;font-weight:700;color:#374151;background:rgba(255,255,255,0.9);padding:1px 4px;border-radius:3px;white-space:nowrap;">${timeLabel}</div>
+            </td>`;
+        }
     }
 
     // ========================================================================
