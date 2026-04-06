@@ -31,6 +31,12 @@
 //  FIX 12: Post-routing same-street merge — consecutive stops on the same
 //          street within 300ft get consolidated into one stop
 //  FIX 13: Real bus capacity in VROOM — no artificial inflation or balancing.
+//  FIX 14: Walk-split threshold uses user's maxWalkDistance setting (not hard-coded 500ft)
+//  FIX 15: Or-opt (single-stop relocation) pass after 2-opt for better route ordering
+//  FIX 16: Pre-VROOM capacity check — rebalances geographic clusters before routing
+//  FIX 17: Toast warning when Overpass API fails and corner-stops degrade to fallback
+//  FIX 18: Boundary-swap pass — moves stops between buses if it reduces total drive time
+//  FIX 19: Dynamic capacity enforcement — expands search from 1mi to 2mi if needed
 // =============================================================================
 (function () {
     'use strict';
@@ -1126,12 +1132,12 @@
         for (let i = 0; i < stops.length; i++) {
             for (let j = i + 1; j < stops.length; j++) {
                 if (haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= dedupDist) {
-                    // Don't merge if any kid would walk > 500ft to combined stop
+                    // Don't merge if any kid would walk > MAX_WALK_FT to combined stop
                     const keepLat = stops[i].lat, keepLng = stops[i].lng;
                     let tooFar = false;
                     for (const c of [...stops[i].campers, ...stops[j].campers]) {
                         const a = D.addresses[c.name];
-                        if (a?.lat && a.lng && manhattanMi(a.lat, a.lng, keepLat, keepLng) * 5280 > 500) {
+                        if (a?.lat && a.lng && manhattanMi(a.lat, a.lng, keepLat, keepLng) * 5280 > MAX_WALK_FT) {
                             tooFar = true; break;
                         }
                     }
@@ -1145,10 +1151,11 @@
         }
         if (dedups) console.log('[Go] Dedup: merged ' + dedups + ' nearby duplicate stop(s)');
 
-        // ── Walk audit: split stops where any kid walks > 500ft ──
+        // ── Walk audit: split stops where any kid walks too far ──
         // The cluster centroid may be close to all kids, but the actual stop
         // (at an intersection) can be at one end of a long street cluster.
-        const MAX_WALK_FT = 500;
+        // FIX 14: Use user's maxWalkDistance setting instead of hard-coded 500ft
+        const MAX_WALK_FT = (D.setup.maxWalkDistance && D.setup.maxWalkDistance > 0) ? D.setup.maxWalkDistance : 500;
         let walkSplits = 0;
         for (let i = 0; i < stops.length; i++) {
             const st = stops[i];
@@ -1546,9 +1553,59 @@
             }
 
             // ── Assign buses to sub-clusters (biggest cluster → biggest bus) ──
-            const clusterKids = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
-            const sortedClusterIdx = clusterKids.map((k, i) => ({ k, i })).sort((a, b) => b.k - a.k).map(x => x.i);
+            let clusterKids = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
+            let sortedClusterIdx = clusterKids.map((k, i) => ({ k, i })).sort((a, b) => b.k - a.k).map(x => x.i);
             const sortedBusIdx = [...busIndices].sort((a, b) => vehicles[b].capacity - vehicles[a].capacity);
+
+            // ── FIX 16: Pre-VROOM capacity check — rebalance clusters before routing ──
+            // If a sub-cluster has more kids than its assigned bus, move boundary
+            // stops to the nearest under-capacity cluster. This prevents wasted
+            // VROOM calls and avoids post-hoc capacity enforcement.
+            for (let capCheck = 0; capCheck < 20; capCheck++) {
+                let anyOver = false;
+                for (let rank = 0; rank < sortedClusterIdx.length; rank++) {
+                    const ci = sortedClusterIdx[rank];
+                    const busCap = vehicles[sortedBusIdx[rank]].capacity;
+                    const kids = subClusters[ci].reduce((s, i) => s + groupStops[i].campers.length, 0);
+                    if (kids <= busCap) continue;
+                    anyOver = true;
+
+                    // Find the stop in this cluster farthest from its centroid (boundary stop)
+                    const cLat = subClusters[ci].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ci].length;
+                    const cLng = subClusters[ci].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ci].length;
+                    let farthestIdx = -1, farthestDist = 0;
+                    for (let si = 0; si < subClusters[ci].length; si++) {
+                        const st = groupStops[subClusters[ci][si]];
+                        const d = haversineMi(st.lat, st.lng, cLat, cLng);
+                        if (d > farthestDist) { farthestDist = d; farthestIdx = si; }
+                    }
+                    if (farthestIdx < 0) break;
+
+                    // Find nearest under-capacity cluster to receive it
+                    const stopToMove = groupStops[subClusters[ci][farthestIdx]];
+                    let bestTarget = -1, bestTDist = Infinity;
+                    for (let ti = 0; ti < subClusters.length; ti++) {
+                        if (ti === ci || !subClusters[ti].length) continue;
+                        const tRank = sortedClusterIdx.indexOf(ti);
+                        const tCap = vehicles[sortedBusIdx[tRank >= 0 ? tRank : 0]].capacity;
+                        const tKids = subClusters[ti].reduce((s, i) => s + groupStops[i].campers.length, 0);
+                        if (tKids + stopToMove.campers.length > tCap) continue;
+                        const tCentLat = subClusters[ti].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ti].length;
+                        const tCentLng = subClusters[ti].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ti].length;
+                        const d = haversineMi(stopToMove.lat, stopToMove.lng, tCentLat, tCentLng);
+                        if (d < bestTDist) { bestTDist = d; bestTarget = ti; }
+                    }
+                    if (bestTarget >= 0) {
+                        const movedIdx = subClusters[ci].splice(farthestIdx, 1)[0];
+                        subClusters[bestTarget].push(movedIdx);
+                        console.log('[Go]   Pre-VROOM rebalance: moved ' + stopToMove.campers.length + ' kids from zone ' + ci + ' → ' + bestTarget);
+                    } else break;
+                }
+                if (!anyOver) break;
+                // Refresh sorted order
+                clusterKids = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
+                sortedClusterIdx = clusterKids.map((k, i) => ({ k, i })).sort((a, b) => b.k - a.k).map(x => x.i);
+            }
 
             // ── Per-bus VROOM calls (1 vehicle each = just ordering) ──
             const busPromises = sortedClusterIdx.map(async (ci, rank) => {
@@ -1639,6 +1696,55 @@
                                 }
                             }
                         }
+                        // FIX 15: Or-opt — relocate individual stops to better positions
+                        // Catches cases 2-opt misses (e.g., one stop slightly out of place)
+                        if (orderedStops.length >= 4) {
+                            for (let pass = 0; pass < 3; pass++) {
+                                let relocated = false;
+                                for (let i = 0; i < orderedStops.length; i++) {
+                                    const s = orderedStops[i];
+                                    if (!s?.lat) continue;
+                                    const prev = i > 0 ? orderedStops[i - 1] : null;
+                                    const next = i < orderedStops.length - 1 ? orderedStops[i + 1] : null;
+                                    // Cost of removing stop i
+                                    let removeCost = 0;
+                                    if (prev?.lat && next?.lat) removeCost = haversineMi(prev.lat, prev.lng, next.lat, next.lng);
+                                    let currentCost = 0;
+                                    if (prev?.lat) currentCost += haversineMi(prev.lat, prev.lng, s.lat, s.lng);
+                                    if (next?.lat) currentCost += haversineMi(s.lat, s.lng, next.lat, next.lng);
+                                    const savings = currentCost - removeCost;
+
+                                    // Try inserting at every other position
+                                    let bestJ = -1, bestInsertCost = Infinity;
+                                    for (let j = 0; j <= orderedStops.length - 1; j++) {
+                                        if (j === i || j === i + 1) continue;
+                                        const pj = j > 0 ? orderedStops[j === i + 1 ? j + 1 : (j > i ? j : j - 1)] : null;
+                                        // Simpler: just compute insertion cost at position j (after removing i)
+                                        const tempStops = [...orderedStops];
+                                        tempStops.splice(i, 1);
+                                        const insertAt = j > i ? j - 1 : j;
+                                        const pBefore = insertAt > 0 ? tempStops[insertAt - 1] : null;
+                                        const pAfter = insertAt < tempStops.length ? tempStops[insertAt] : null;
+                                        let ic = 0;
+                                        if (pBefore?.lat) ic += haversineMi(pBefore.lat, pBefore.lng, s.lat, s.lng);
+                                        if (pAfter?.lat) ic += haversineMi(s.lat, s.lng, pAfter.lat, pAfter.lng);
+                                        if (pBefore?.lat && pAfter?.lat) ic -= haversineMi(pBefore.lat, pBefore.lng, pAfter.lat, pAfter.lng);
+                                        if (ic < bestInsertCost) { bestInsertCost = ic; bestJ = j; }
+                                    }
+
+                                    if (bestJ >= 0 && bestInsertCost < savings * 0.9) {
+                                        // Relocate: remove from i, insert at bestJ
+                                        orderedStops.splice(i, 1);
+                                        const insertAt = bestJ > i ? bestJ - 1 : bestJ;
+                                        orderedStops.splice(insertAt, 0, s);
+                                        relocated = true;
+                                        break; // restart pass
+                                    }
+                                }
+                                if (!relocated) break;
+                            }
+                        }
+
                         return { busStops: orderedStops, v, duration: Math.round((vroomRoute.duration || 0) / 60) };
                     }
                     return { busStops, v, duration: 0 };
@@ -1707,7 +1813,7 @@
                     for (const c of allKids) {
                         const addr = D.addresses[c.name];
                         if (!addr?.lat || !addr.lng) continue;
-                        if (manhattanMi(addr.lat, addr.lng, mergedLat, mergedLng) * 5280 > 500) {
+                        if (manhattanMi(addr.lat, addr.lng, mergedLat, mergedLng) * 5280 > MAX_WALK_FT) {
                             wouldBeFar = true; break;
                         }
                     }
@@ -1724,6 +1830,91 @@
             }
         });
         if (totalMerged) console.log('[Go] Post-route merge: ' + totalMerged + ' stop(s) consolidated');
+
+        // ══════════════════════════════════════════════════════════════
+        // FIX 18: BOUNDARY-SWAP — inter-bus optimization
+        //
+        // For each bus, check its first and last stops (boundary stops).
+        // If moving a boundary stop to an adjacent bus reduces total
+        // driving distance for both buses, swap it.
+        // ══════════════════════════════════════════════════════════════
+        let boundarySwaps = 0;
+        const routeDist = (r) => {
+            let d = 0;
+            for (let i = 0; i < r.stops.length - 1; i++) {
+                const a = r.stops[i], b = r.stops[i + 1];
+                if (a.lat && b.lat) d += haversineMi(a.lat, a.lng, b.lat, b.lng);
+            }
+            return d;
+        };
+        for (let swapPass = 0; swapPass < 5; swapPass++) {
+            let didSwap = false;
+            for (const srcRoute of allRoutes) {
+                if (srcRoute.stops.length < 2) continue;
+                // Check first and last stops as boundary candidates
+                for (const boundaryIdx of [0, srcRoute.stops.length - 1]) {
+                    const stop = srcRoute.stops[boundaryIdx];
+                    if (!stop?.lat) continue;
+                    const srcDistBefore = routeDist(srcRoute);
+
+                    for (const tgtRoute of allRoutes) {
+                        if (tgtRoute === srcRoute) continue;
+                        // Capacity check: target must have room
+                        if (tgtRoute.camperCount + stop.campers.length > tgtRoute._cap) continue;
+                        // Proximity check: stop must be near target route
+                        const tgtCentLat = tgtRoute.stops.length ? tgtRoute.stops.reduce((s, x) => s + x.lat, 0) / tgtRoute.stops.length : 0;
+                        const tgtCentLng = tgtRoute.stops.length ? tgtRoute.stops.reduce((s, x) => s + x.lng, 0) / tgtRoute.stops.length : 0;
+                        if (!tgtCentLat || haversineMi(stop.lat, stop.lng, tgtCentLat, tgtCentLng) > 1.5) continue;
+
+                        const tgtDistBefore = routeDist(tgtRoute);
+
+                        // Simulate removal from source
+                        const srcStopsAfter = srcRoute.stops.filter((_, i) => i !== boundaryIdx);
+                        const srcDistAfter = (() => {
+                            let d = 0;
+                            for (let i = 0; i < srcStopsAfter.length - 1; i++) {
+                                const a = srcStopsAfter[i], b = srcStopsAfter[i + 1];
+                                if (a.lat && b.lat) d += haversineMi(a.lat, a.lng, b.lat, b.lng);
+                            }
+                            return d;
+                        })();
+
+                        // Simulate cheapest insertion into target
+                        let bestPos = tgtRoute.stops.length, bestAddedDist = Infinity;
+                        for (let j = 0; j <= tgtRoute.stops.length; j++) {
+                            const prev = j > 0 ? tgtRoute.stops[j - 1] : null;
+                            const next = j < tgtRoute.stops.length ? tgtRoute.stops[j] : null;
+                            let cost = 0;
+                            if (prev?.lat) cost += haversineMi(prev.lat, prev.lng, stop.lat, stop.lng);
+                            if (next?.lat) cost += haversineMi(stop.lat, stop.lng, next.lat, next.lng);
+                            if (prev?.lat && next?.lat) cost -= haversineMi(prev.lat, prev.lng, next.lat, next.lng);
+                            if (cost < bestAddedDist) { bestAddedDist = cost; bestPos = j; }
+                        }
+                        const tgtDistAfter = tgtDistBefore + bestAddedDist;
+
+                        // Accept if total distance improves by at least 5%
+                        const totalBefore = srcDistBefore + tgtDistBefore;
+                        const totalAfter = srcDistAfter + tgtDistAfter;
+                        if (totalAfter < totalBefore * 0.95) {
+                            srcRoute.stops.splice(boundaryIdx, 1);
+                            srcRoute.camperCount -= stop.campers.length;
+                            srcRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
+                            tgtRoute.stops.splice(bestPos, 0, stop);
+                            tgtRoute.camperCount += stop.campers.length;
+                            tgtRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
+                            boundarySwaps++;
+                            didSwap = true;
+                            console.log('[Go]   Boundary swap: ' + stop.address + ' (' + stop.campers.length + ' kids) ' + srcRoute.busName + ' → ' + tgtRoute.busName + ' (saved ' + ((1 - totalAfter / totalBefore) * 100).toFixed(0) + '%)');
+                            break;
+                        }
+                    }
+                    if (didSwap) break;
+                }
+                if (didSwap) break;
+            }
+            if (!didSwap) break;
+        }
+        if (boundarySwaps) console.log('[Go] Boundary swaps: ' + boundarySwaps + ' stop(s) moved between buses');
 
         // ══════════════════════════════════════════════════════════════
         // CAPACITY ENFORCEMENT
@@ -1743,20 +1934,25 @@
             if (!overBus) break;
 
             // Find best (stop, receiving bus) pair — stop closest to receiving bus
-            // Max distance: only move stops to buses within 1 mile (same neighborhood)
-            const CAP_MAX_MOVE_MI = 1.0;
+            // FIX 19: Dynamic max distance — try 1mi first, expand to 2mi if needed
+            let capMaxMoveMi = 1.0;
             let bestStopIdx = -1, bestBus = null, bestDist = Infinity;
-            for (let si = 0; si < overBus.stops.length; si++) {
-                const st = overBus.stops[si];
-                if (!st.lat) continue;
-                for (const r of allRoutes) {
-                    if (r === overBus) continue;
-                    if (r.camperCount + st.campers.length > r._cap) continue;
-                    const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
-                    const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                    const d = haversineMi(st.lat, st.lng, rLat, rLng);
-                    if (d < bestDist && d <= CAP_MAX_MOVE_MI) { bestDist = d; bestStopIdx = si; bestBus = r; }
+            for (let attempt = 0; attempt < 2; attempt++) {
+                bestStopIdx = -1; bestBus = null; bestDist = Infinity;
+                for (let si = 0; si < overBus.stops.length; si++) {
+                    const st = overBus.stops[si];
+                    if (!st.lat) continue;
+                    for (const r of allRoutes) {
+                        if (r === overBus) continue;
+                        if (r.camperCount + st.campers.length > r._cap) continue;
+                        const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
+                        const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
+                        const d = haversineMi(st.lat, st.lng, rLat, rLng);
+                        if (d < bestDist && d <= capMaxMoveMi) { bestDist = d; bestStopIdx = si; bestBus = r; }
+                    }
                 }
+                if (bestBus) break;
+                capMaxMoveMi = 2.0; // widen search on second attempt
             }
 
             if (bestBus && bestStopIdx >= 0) {
@@ -1770,22 +1966,28 @@
                 bestBus.camperCount += stopToMove.campers.length;
                 capMoves++;
             } else {
-                // No whole-stop fits within 1mi — split: move campers individually
+                // No whole-stop fits — split: move campers individually
                 // Creates a NEW stop on the receiving bus at the same location
                 let splitStopIdx = -1, splitBus = null, splitDist = Infinity;
-                for (let si = 0; si < overBus.stops.length; si++) {
-                    const st = overBus.stops[si];
-                    if (!st.lat || st.campers.length <= 1) continue;
-                    for (const r of allRoutes) {
-                        if (r === overBus || r.camperCount >= r._cap) continue;
-                        const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
-                        const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                        const d = haversineMi(st.lat, st.lng, rLat, rLng);
-                        if (d < splitDist && d <= CAP_MAX_MOVE_MI) { splitDist = d; splitStopIdx = si; splitBus = r; }
+                capMaxMoveMi = 1.0;
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    splitStopIdx = -1; splitBus = null; splitDist = Infinity;
+                    for (let si = 0; si < overBus.stops.length; si++) {
+                        const st = overBus.stops[si];
+                        if (!st.lat || st.campers.length <= 1) continue;
+                        for (const r of allRoutes) {
+                            if (r === overBus || r.camperCount >= r._cap) continue;
+                            const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
+                            const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
+                            const d = haversineMi(st.lat, st.lng, rLat, rLng);
+                            if (d < splitDist && d <= capMaxMoveMi) { splitDist = d; splitStopIdx = si; splitBus = r; }
+                        }
                     }
+                    if (splitBus) break;
+                    capMaxMoveMi = 2.0;
                 }
                 if (!splitBus || splitStopIdx < 0) {
-                    console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no nearby bus with room (max ' + CAP_MAX_MOVE_MI + 'mi)');
+                    console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no nearby bus with room (max ' + capMaxMoveMi + 'mi)');
                     break;
                 }
                 const stopToSplit = overBus.stops[splitStopIdx];
@@ -2412,7 +2614,10 @@
                 try { localStorage.setItem('campistry_go_intersections', JSON.stringify({ intersections: osmIntersections, timestamp: Date.now() })); } catch (_) {}
                 console.log('[Go] OSM: ' + osmIntersections.length + ' real intersections');
             } else {
+                // FIX 17: Warn user when OSM intersection fetch fails
                 osmIntersections = null;
+                console.warn('[Go] ⚠ Overpass API failed — corner stops will use approximate locations instead of real intersections');
+                toast('Corner stops: intersection data unavailable — using approximate locations', 'error');
             }
         }
 
