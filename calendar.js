@@ -924,22 +924,16 @@ all[date].updated_at = new Date().toISOString();
                 console.log("  ✓ App1 (Setup)");
             }
             
-            // Re-initialize fields tab
-            if (typeof window.initFieldsTab === 'function') {
-                window.initFieldsTab();
-                console.log("  ✓ Fields");
+            // Re-initialize facilities tab
+            if (typeof window.initFacilitiesTab === 'function') {
+                window.initFacilitiesTab();
+                console.log("  ✓ Facilities");
             }
-            
-            // Re-initialize locations tab
-            if (typeof window.initLocationsTab === 'function') {
-                window.initLocationsTab();
-                console.log("  ✓ Locations");
-            }
-            
-            // Re-initialize special activities
-            if (typeof window.initSpecialActivitiesTab === 'function') {
-                window.initSpecialActivitiesTab();
-                console.log("  ✓ Special Activities");
+
+            // Re-initialize zones tab
+            if (typeof window.initZonesTab === 'function') {
+                window.initZonesTab();
+                console.log("  ✓ Zones");
             }
             
             // Re-initialize leagues
