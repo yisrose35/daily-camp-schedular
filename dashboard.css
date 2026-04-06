@@ -215,65 +215,97 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .dash-weather-desc { font-size: 0.72rem; opacity: 0.7; }
 
 /* ============================================
-   QUICK LAUNCH TILES
+   QUICK LAUNCH TILES — HONEYCOMB
    ============================================ */
-.dash-quick-launch {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 24px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-}
-.dash-quick-launch::-webkit-scrollbar { display: none; }
-.dash-ql-tile {
+.dash-honeycomb {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    padding: 14px 16px 10px;
-    min-width: 88px;
+    margin-bottom: 28px;
+}
+.hex-row {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+}
+/* Offset rows of 2 sit naturally; the row of 3 is wider and creates the honeycomb stagger */
+
+/* --- Individual hex tile --- */
+.hex-tile {
+    width: 100px;
+    height: 110px;
+    clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
     background: white;
-    border: 1px solid var(--slate-200);
-    border-radius: var(--radius-md);
     text-decoration: none;
     color: inherit;
-    transition: all 0.2s ease;
     cursor: pointer;
+    transition: transform 0.2s ease, filter 0.2s ease;
     position: relative;
-    border-bottom: 3px solid var(--ql-color, var(--slate-200));
 }
-.dash-ql-tile:hover {
-    box-shadow: var(--shadow-md);
-    transform: translateY(-2px);
-    border-color: var(--ql-color, var(--slate-300));
+.hex-tile::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+    background: linear-gradient(160deg, var(--ql-color) 0%, color-mix(in srgb, var(--ql-color) 60%, white) 100%);
+    opacity: 0.12;
+    z-index: 0;
+    transition: opacity 0.2s ease;
 }
-.dash-ql-tile.dash-ql-disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-    background: var(--slate-50);
+.hex-tile:hover {
+    transform: scale(1.08);
 }
-.dash-ql-tile.dash-ql-disabled:hover {
-    box-shadow: none;
-    transform: none;
+.hex-tile:hover::before {
+    opacity: 0.25;
 }
-.dash-ql-logo {
-    height: 28px;
+
+/* Inner content centered inside the hex */
+.hex-inner {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    z-index: 1;
+}
+.hex-logo {
+    height: 30px;
     width: auto;
-    max-width: 64px;
+    max-width: 56px;
     object-fit: contain;
     display: block;
 }
-.dash-ql-tile span {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: var(--slate-500);
+.hex-tile span {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--slate-600);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
 }
-.dash-ql-tile:not(.dash-ql-disabled) span {
-    color: var(--slate-700);
+.hex-tile:not(.hex-disabled) span {
+    color: var(--slate-800);
+}
+
+/* Disabled state */
+.hex-tile.hex-disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.hex-tile.hex-disabled:hover {
+    transform: none;
+}
+.hex-tile.hex-disabled::before {
+    opacity: 0.06;
+}
+
+/* Responsive: shrink hexagons on small screens */
+@media (max-width: 480px) {
+    .hex-tile { width: 80px; height: 88px; }
+    .hex-logo { height: 24px; }
+    .hex-tile span { font-size: 0.58rem; }
 }
 
 /* ============================================
