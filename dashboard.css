@@ -231,10 +231,9 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    gap: 6px;
     padding: 14px 16px 10px;
     min-width: 88px;
-    min-height: 70px;
     background: white;
     border: 1px solid var(--slate-200);
     border-radius: var(--radius-md);
@@ -242,6 +241,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     color: inherit;
     transition: all 0.2s ease;
     cursor: pointer;
+    position: relative;
     border-bottom: 3px solid var(--ql-color, var(--slate-200));
 }
 .dash-ql-tile:hover {
@@ -249,12 +249,31 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     transform: translateY(-2px);
     border-color: var(--ql-color, var(--slate-300));
 }
+.dash-ql-tile.dash-ql-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: var(--slate-50);
+}
+.dash-ql-tile.dash-ql-disabled:hover {
+    box-shadow: none;
+    transform: none;
+}
 .dash-ql-logo {
     height: 28px;
     width: auto;
     max-width: 64px;
     object-fit: contain;
     display: block;
+}
+.dash-ql-tile span {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--slate-500);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.dash-ql-tile:not(.dash-ql-disabled) span {
+    color: var(--slate-700);
 }
 
 /* ============================================
