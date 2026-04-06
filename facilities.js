@@ -64,9 +64,7 @@ function initFacilitiesTab() {
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
               <!-- LEFT SIDE: MASTER LIST -->
               <div style="flex:1; min-width:280px;">
-                <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
-                    <div class="setup-subtitle">All Facilities</div>
-                </div>
+                <div class="setup-subtitle" style="margin-bottom:8px;">All Facilities</div>
 
                 <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
                   <input id="new-facility-input" placeholder="New Facility (e.g., Court 1, Gym, Lunchroom)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
@@ -77,9 +75,9 @@ function initFacilitiesTab() {
               </div>
 
               <!-- RIGHT SIDE: DETAIL PANE -->
-              <div style="flex:1.4; min-width:340px;">
+              <div style="flex:1.4; min-width:340px; position:sticky; top:0; align-self:flex-start;">
                 <div class="setup-subtitle">Facility Configuration</div>
-                <div id="facilities-detail-pane" style="margin-top:8px;"></div>
+                <div id="facilities-detail-pane" style="margin-top:8px; max-height:calc(100vh - 120px); overflow-y:auto; padding-right:4px;"></div>
               </div>
             </div>
           </section>
@@ -452,31 +450,34 @@ function masterListItem(fac) {
     const id = `fac-${fac.name}`;
     const el = document.createElement("div");
     el.className = "list-item" + (id === selectedFacilityId ? " selected" : "");
+    el.style.cursor = "pointer";
     el.onclick = () => { selectedFacilityId = id; renderMasterList(); renderDetailPane(); };
 
     const infoDiv = document.createElement("div");
+    infoDiv.style.cssText = "display:flex; align-items:center; justify-content:space-between; width:100%;";
 
     const name = document.createElement("div");
     name.className = "list-item-name";
     name.textContent = fac.name;
 
+    infoDiv.appendChild(name);
+
     // Type badges
     if (fac.usedFor.length > 0) {
-        const badgeWrap = document.createElement('span');
-        badgeWrap.style.cssText = 'margin-left:8px;';
+        const badgeWrap = document.createElement('div');
+        badgeWrap.style.cssText = 'display:flex; gap:3px;';
         fac.usedFor.forEach(type => {
             const badge = document.createElement('span');
             const colors = { sports: '#147D91', special: '#7C3AED', general: '#D97706' };
             const labels = { sports: 'S', special: 'SA', general: 'G' };
-            badge.style.cssText = `font-size:0.6rem; color:white; background:${colors[type] || '#6B7280'}; border-radius:3px; padding:1px 5px; margin-left:3px; vertical-align:middle; font-weight:600;`;
+            badge.style.cssText = `font-size:0.6rem; color:white; background:${colors[type] || '#6B7280'}; border-radius:3px; padding:2px 6px; font-weight:600; line-height:1;`;
             badge.textContent = labels[type] || type;
             badge.title = type === 'sports' ? 'Sports' : type === 'special' ? 'Special Activity' : 'General Activity';
             badgeWrap.appendChild(badge);
         });
-        name.appendChild(badgeWrap);
+        infoDiv.appendChild(badgeWrap);
     }
 
-    infoDiv.appendChild(name);
     el.appendChild(infoDiv);
     return el;
 }
@@ -591,9 +592,9 @@ function renderUsedForSelector(fac) {
     chipRow.style.cssText = "display:flex; gap:10px; flex-wrap:wrap;";
 
     const types = [
-        { key: 'sports', label: 'Sports', icon: '⚽', color: '#147D91', desc: 'Courts, fields for sports games' },
-        { key: 'special', label: 'Special Activity', icon: '⭐', color: '#7C3AED', desc: 'Hosts named special activities' },
-        { key: 'general', label: 'General Activity', icon: '🏢', color: '#D97706', desc: 'Lunch, swim, snacks, etc.' }
+        { key: 'sports', label: 'Sports', color: '#147D91', desc: 'Courts, fields for sports games' },
+        { key: 'special', label: 'Special Activity', color: '#7C3AED', desc: 'Hosts named special activities' },
+        { key: 'general', label: 'General Activity', color: '#D97706', desc: 'Lunch, swim, snacks, etc.' }
     ];
 
     types.forEach(t => {
@@ -606,7 +607,7 @@ function renderUsedForSelector(fac) {
             background:${isActive ? t.color + '15' : 'white'};
             color:${isActive ? t.color : '#6B7280'};
         `;
-        chip.innerHTML = `<span style="font-size:1.2rem;">${t.icon}</span> ${escapeHtml(t.label)}`;
+        chip.textContent = t.label;
         chip.title = t.desc;
 
         chip.onclick = () => {
@@ -635,8 +636,18 @@ function renderTypeGroup(type, title, color, fac) {
     group.style.cssText = `margin-bottom:20px; border-left:4px solid ${color}; border-radius:12px; background:white; border:1px solid #E5E7EB; border-left:4px solid ${color}; overflow:hidden;`;
 
     const header = document.createElement("div");
-    header.style.cssText = `padding:14px 16px; background:${color}10; border-bottom:1px solid #E5E7EB; display:flex; align-items:center; gap:8px;`;
-    header.innerHTML = `<span style="font-weight:600; font-size:0.95rem; color:${color};">${escapeHtml(title)}</span>`;
+    header.style.cssText = `padding:14px 16px; background:${color}10; border-bottom:1px solid #E5E7EB; display:flex; align-items:center; justify-content:space-between; cursor:pointer; user-select:none;`;
+
+    const titleEl = document.createElement("span");
+    titleEl.style.cssText = `font-weight:600; font-size:0.95rem; color:${color};`;
+    titleEl.textContent = title;
+
+    const caret = document.createElement("span");
+    caret.innerHTML = `<svg width="20" height="20" fill="none" stroke="${color}" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>`;
+    caret.style.cssText = "transition:transform 0.2s; transform:rotate(0deg);";
+
+    header.appendChild(titleEl);
+    header.appendChild(caret);
     group.appendChild(header);
 
     const body = document.createElement("div");
@@ -649,6 +660,13 @@ function renderTypeGroup(type, title, color, fac) {
     } else if (type === 'general') {
         renderGeneralConfig(body, fac);
     }
+
+    header.onclick = () => {
+        const isOpen = body.style.display !== "none";
+        body.style.display = isOpen ? "none" : "block";
+        caret.style.transform = isOpen ? "rotate(-90deg)" : "rotate(0deg)";
+        header.style.borderBottom = isOpen ? "none" : "1px solid #E5E7EB";
+    };
 
     group.appendChild(body);
     return group;
@@ -869,10 +887,10 @@ function renderGeneralConfig(container, fac) {
     quickRow.style.cssText = "display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;";
 
     const quickOptions = [
-        { name: 'Lunch', quickType: 'lunch', icon: '🍽️' },
-        { name: 'Snacks', quickType: 'snacks', icon: '🍪' },
-        { name: 'Dinner', quickType: 'dinner', icon: '🥘' },
-        { name: 'Swim', quickType: 'swim', icon: '🏊' }
+        { name: 'Lunch', quickType: 'lunch' },
+        { name: 'Snacks', quickType: 'snacks' },
+        { name: 'Dinner', quickType: 'dinner' },
+        { name: 'Swim', quickType: 'swim' }
     ];
 
     quickOptions.forEach(opt => {
@@ -880,7 +898,7 @@ function renderGeneralConfig(container, fac) {
         const btn = document.createElement("button");
         btn.style.cssText = `padding:8px 14px; border-radius:8px; cursor:pointer; font-size:0.85rem; font-weight:500; transition:all 0.2s; display:flex; align-items:center; gap:6px;
             border:1px solid ${exists ? '#D97706' : '#E5E7EB'}; background:${exists ? '#FEF3C7' : 'white'}; color:${exists ? '#92400E' : '#6B7280'};`;
-        btn.innerHTML = `${opt.icon} ${escapeHtml(opt.name)}`;
+        btn.textContent = opt.name;
 
         btn.onclick = () => {
             if (exists) {
@@ -941,8 +959,7 @@ function renderGeneralConfig(container, fac) {
             row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; margin-bottom:6px;";
 
             const info = document.createElement("div");
-            const icons = { lunch: '🍽️', snacks: '🍪', dinner: '🥘', swim: '🏊', custom: '📌' };
-            info.innerHTML = `<span style="margin-right:8px;">${icons[ga.quickType] || '📌'}</span><strong>${escapeHtml(ga.name)}</strong>`;
+            info.innerHTML = `<strong>${escapeHtml(ga.name)}</strong>`;
 
             const removeBtn = document.createElement("button");
             removeBtn.textContent = "✕";
@@ -968,8 +985,8 @@ function renderGeneralConfig(container, fac) {
         swimSection.style.cssText = "margin-top:16px; padding:16px; background:#EFF6FF; border:1px solid #BFDBFE; border-radius:10px;";
 
         swimSection.innerHTML = `
-            <div style="font-weight:600; font-size:0.95rem; color:#1E40AF; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
-                🏊 Swim Change Time Configuration
+            <div style="font-weight:600; font-size:0.95rem; color:#1E40AF; margin-bottom:12px;">
+                Swim Change Time Configuration
             </div>
             <p style="font-size:0.82rem; color:#3B82F6; margin:0 0 12px 0;">
                 Define how much time campers need to change before and after swimming.
@@ -1081,7 +1098,7 @@ function summaryAccess(f) {
     return `${count} grade${count !== 1 ? 's' : ''} allowed${pStr}`;
 }
 function summaryTime(f) { return f.timeRules?.length ? `${f.timeRules.length} rule(s) active` : "Available all day"; }
-function summaryWeather(f) { return f.rainyDayAvailable ? "Indoor (Rain OK)" : "Outdoor"; }
+function summaryWeather(f) { return f.rainyDayAvailable ? "Indoor (available on rain days)" : "Outdoor"; }
 function summaryCombo(fieldItem) {
     const combo = getComboForField(fieldItem.name);
     if (!combo) return 'Not configured';
@@ -1425,7 +1442,6 @@ function renderWeatherSettings(item) {
                 Indoor/covered facilities stay available during Rainy Day Mode.
             </p>
             <div style="display:flex; align-items:center; gap:12px; padding:14px; background:${isIndoor ? '#e6f4f7' : '#fef3c7'}; border:1px solid ${isIndoor ? '#b2dce6' : '#fcd34d'}; border-radius:10px;">
-                <span style="font-size:28px;">${isIndoor ? '🏠' : '🌳'}</span>
                 <div style="flex:1;">
                     <div style="font-weight:600; color:${isIndoor ? '#0a4a56' : '#92400e'};">${isIndoor ? 'Indoor / Covered' : 'Outdoor'}</div>
                     <div style="font-size:0.85rem; color:${isIndoor ? '#0F5F6E' : '#b45309'};">${isIndoor ? 'Available on rainy days' : 'Disabled during rainy days'}</div>
@@ -1738,7 +1754,6 @@ function renderSpecialWeather(saData) {
 
     container.innerHTML = `
         <div style="display:flex; align-items:center; gap:12px; padding:14px; background:${isIndoor ? '#e6f4f7' : '#fef3c7'}; border:1px solid ${isIndoor ? '#b2dce6' : '#fcd34d'}; border-radius:10px;">
-            <span style="font-size:28px;">${isIndoor ? '🏠' : '🌳'}</span>
             <div style="flex:1;">
                 <div style="font-weight:600; color:${isIndoor ? '#0a4a56' : '#92400e'};">${isIndoor ? 'Indoor' : 'Outdoor'}</div>
                 <div style="font-size:0.85rem; color:${isIndoor ? '#0F5F6E' : '#b45309'};">${isIndoor ? 'Available on rainy days' : 'Unavailable on rainy days'}</div>

@@ -47,9 +47,7 @@ function initZonesTab() {
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
               <!-- LEFT: ZONE LIST -->
               <div style="flex:1; min-width:280px;">
-                <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
-                    <div class="setup-subtitle">All Zones</div>
-                </div>
+                <div class="setup-subtitle" style="margin-bottom:8px;">All Zones</div>
 
                 <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
                   <input id="new-zone-input" placeholder="New Zone (e.g., Off Campus)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
@@ -60,9 +58,9 @@ function initZonesTab() {
               </div>
 
               <!-- RIGHT: ZONE DETAIL -->
-              <div style="flex:1.4; min-width:340px;">
+              <div style="flex:1.4; min-width:340px; position:sticky; top:0; align-self:flex-start;">
                 <div class="setup-subtitle">Zone Configuration</div>
-                <div id="zones-detail-pane" style="margin-top:8px;"></div>
+                <div id="zones-detail-pane" style="margin-top:8px; max-height:calc(100vh - 120px); overflow-y:auto; padding-right:4px;"></div>
               </div>
             </div>
           </section>
@@ -232,6 +230,7 @@ function renderZonesList() {
         const zone = locationZones[name];
         const el = document.createElement("div");
         el.className = "list-item" + (name === selectedZoneId ? " selected" : "");
+        el.style.cursor = "pointer";
         el.onclick = () => { selectedZoneId = name; renderZonesList(); renderDetailPane(); };
 
         const infoDiv = document.createElement("div");
@@ -354,7 +353,7 @@ function renderDetailPane() {
     if (zone.isOffCampus) {
         const travelRow = document.createElement("div");
         travelRow.style.cssText = "display:flex; align-items:center; gap:8px; padding:12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px;";
-        travelRow.innerHTML = `<span style="font-size:1.1rem;">🚌</span><span style="font-size:0.9rem; font-weight:500;">Travel time:</span>`;
+        travelRow.innerHTML = `<span style="font-size:0.9rem; font-weight:500;">Travel time:</span>`;
 
         const travelInput = document.createElement("input");
         travelInput.type = "number";
@@ -376,8 +375,9 @@ function renderDetailPane() {
     detailPaneEl.appendChild(offCampusSection);
 
     // -- ACCORDION SECTIONS --
-    detailPaneEl.appendChild(section("Transition Times",
-        `${zone.transition.preMin}m pre / ${zone.transition.postMin}m post`,
+    const transTime = zone.transition.preMin || zone.transition.postMin || 0;
+    detailPaneEl.appendChild(section("Transition Time",
+        transTime ? `${transTime} min` : "None",
         () => renderTransitionSection(zone)));
 
     detailPaneEl.appendChild(section("Assign Facilities",
@@ -399,40 +399,28 @@ function countFacilitiesInZone(zone) {
 // =========================================================================
 function renderTransitionSection(zone) {
     const container = document.createElement("div");
+    const currentVal = zone.transition.preMin || zone.transition.postMin || 0;
 
     container.innerHTML = `
         <p style="font-size:0.82rem; color:#6B7280; margin:0 0 12px 0;">
-            Buffer time before and after activities in this zone.
+            Buffer time for activities in this zone (applied before and after each activity).
         </p>
-        <div style="display:flex; gap:16px; flex-wrap:wrap;">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <label style="font-size:0.85rem; font-weight:500;">Pre-buffer:</label>
-                <input type="number" id="zone-pre-min" min="0" max="30" value="${zone.transition.preMin}"
-                    style="width:60px; padding:6px; border:1px solid #D1D5DB; border-radius:6px; text-align:center;">
-                <span style="font-size:0.8rem; color:#6B7280;">min</span>
-            </div>
-            <div style="display:flex; align-items:center; gap:8px;">
-                <label style="font-size:0.85rem; font-weight:500;">Post-buffer:</label>
-                <input type="number" id="zone-post-min" min="0" max="30" value="${zone.transition.postMin}"
-                    style="width:60px; padding:6px; border:1px solid #D1D5DB; border-radius:6px; text-align:center;">
-                <span style="font-size:0.8rem; color:#6B7280;">min</span>
-            </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <label style="font-size:0.85rem; font-weight:500;">Transition time:</label>
+            <input type="number" id="zone-transition-min" min="0" max="30" value="${currentVal}"
+                style="width:60px; padding:6px; border:1px solid #D1D5DB; border-radius:6px; text-align:center;">
+            <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
         </div>`;
 
     setTimeout(() => {
-        const preInput = container.querySelector('#zone-pre-min');
-        const postInput = container.querySelector('#zone-post-min');
-        if (preInput) preInput.onchange = () => {
-            zone.transition.preMin = Math.max(0, Math.min(30, parseInt(preInput.value) || 0));
+        const input = container.querySelector('#zone-transition-min');
+        if (input) input.onchange = () => {
+            const val = Math.max(0, Math.min(30, parseInt(input.value) || 0));
+            zone.transition.preMin = val;
+            zone.transition.postMin = val;
             saveData();
             const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-            if (el) el.textContent = `${zone.transition.preMin}m pre / ${zone.transition.postMin}m post`;
-        };
-        if (postInput) postInput.onchange = () => {
-            zone.transition.postMin = Math.max(0, Math.min(30, parseInt(postInput.value) || 0));
-            saveData();
-            const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-            if (el) el.textContent = `${zone.transition.preMin}m pre / ${zone.transition.postMin}m post`;
+            if (el) el.textContent = val ? `${val} min` : "None";
         };
     }, 0);
 
@@ -535,20 +523,6 @@ function renderFacilityAssignment(zone) {
     });
 
     container.appendChild(chipWrap);
-
-    // Show assigned summary
-    if (assignedNames.size > 0) {
-        const summaryDiv = document.createElement("div");
-        summaryDiv.style.cssText = "padding:12px; background:#F0F9FB; border:1px solid #B2DCE6; border-radius:8px;";
-
-        let html = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:8px; color:#0A4A56;">Assigned to this zone:</div>';
-        assignedNames.forEach(name => {
-            html += `<span style="display:inline-block; padding:4px 10px; background:white; border:1px solid #B2DCE6; border-radius:6px; margin:2px 4px 2px 0; font-size:0.82rem;">${escapeHtml(name)}</span>`;
-        });
-
-        summaryDiv.innerHTML = html;
-        container.appendChild(summaryDiv);
-    }
 
     return container;
 }
