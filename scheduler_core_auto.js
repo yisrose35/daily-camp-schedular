@@ -3802,9 +3802,63 @@
                 });
             });
 
-            // Phase 3: Greedy pack in stagger order
+            // Phase 3: Greedy pack — most-constrained-first + per-iter variance
+            // ★ v8.0: Pack order is the #1 lever for cross-grade field contention.
+            // Grades with the tightest (need ÷ free-window) ratio pack FIRST so
+            // they claim contended fields before more-flexible grades siphon them.
+            // The iteration loop shuffles / rotates the order so every grade gets
+            // a chance at first pick across iterations.
             const allTemplates = {};
-            const staggeredGrades = [...allGrades].sort((a, b) => ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0));
+
+            function computeGradeFlexibility(grade) {
+                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const dayMin = Math.max(1, ge - gs);
+                const bunks = getBunksForGrade(grade, divisions);
+                if (bunks.length === 0) return 999;
+                const repBunk = bunks[0];
+                // Walls = Phase 0 blocks already placed (pinned, leagues, trips)
+                const walls = (bunkTimelines[repBunk] || []).filter(b => b._fixed);
+                const wallMin = walls.reduce((s, w) => s + Math.max(0, w.endMin - w.startMin), 0);
+                const freeMin = Math.max(1, dayMin - wallMin);
+                // Total need = sports + specials + fixed-duration needs (swim, snack, rotation events)
+                const sl = shoppingLists[repBunk] || {};
+                const sportNeed = (sl.sports?.required || 0) * (sl.sports?.constraints?.dMin || 30);
+                const specialNeed = (sl.specials?.priorityList || [])
+                    .slice(0, sl.specials?.required || 0)
+                    .reduce((s, sp) => s + (sp.totalDuration || 30), 0);
+                const snackNeed = sl.snack ? sl.snack.reduce((s, sn) => s + (sn.duration || 0), 0) : 0;
+                const totalNeed = sportNeed + specialNeed + snackNeed;
+                // Flexibility = freeMin ÷ totalNeed. Lower = more constrained = pack first.
+                return totalNeed > 0 ? (freeMin / totalNeed) : 999;
+            }
+
+            const gradeFlex = {};
+            allGrades.forEach(g => { gradeFlex[g] = computeGradeFlexibility(g); });
+
+            // Base order: most constrained (lowest flex) first; tiebreak by stagger offset
+            const baseOrder = [...allGrades].sort((a, b) => {
+                const fa = gradeFlex[a], fb = gradeFlex[b];
+                if (Math.abs(fa - fb) > 0.01) return fa - fb;
+                return ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0);
+            });
+
+            // Iter 0 = pure MRV. Even iters = rotate. Odd iters = seeded shuffle.
+            // This gives both structured exploration and random variance.
+            let staggeredGrades;
+            if (_iterSeed === 0) {
+                staggeredGrades = baseOrder;
+            } else if (_iterSeed % 2 === 0) {
+                const rot = (_iterSeed / 2) % baseOrder.length;
+                staggeredGrades = [...baseOrder.slice(rot), ...baseOrder.slice(0, rot)];
+            } else {
+                staggeredGrades = seedShuffle(baseOrder, _iterSeed);
+            }
+
+            if (totalIters < 1 || _iterSeed % 5 === 0) {
+                log('[PACK ORDER iter ' + totalIters + '] ' +
+                    staggeredGrades.map(g => g + '(flex=' + gradeFlex[g].toFixed(2) + ')').join(' → '));
+            }
 
             todaysSwimmers = {};
             staggeredGrades.forEach(grade => {
