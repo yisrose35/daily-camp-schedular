@@ -4066,9 +4066,70 @@
 
                     const isCustom = (block.type || '').toLowerCase() === 'custom' && block._customField;
                     if (block._fixed || block._classification === 'pinned' || isCustom) {
+                        // ★ FIX: Sport overrides arrive as fixed blocks with event="Basketball"
+                        // but no court assigned. Look up an available court at write time.
+                        let resolvedField = isCustom ? block._customField : block.event;
+                        let resolvedSport = null;
+                        const blockType = (block.type || '').toLowerCase();
+                        const isSportOverride = !isCustom && blockType === 'sport';
+
+                        if (isSportOverride) {
+                            const sportName = block.event;
+                            const app1 = window.loadGlobalSettings?.().app1 || {};
+                            const allFields = app1.fields || [];
+                            const courts = allFields
+                                .filter(f => (f.activities || []).some(a =>
+                                    String(a).toLowerCase().trim() === String(sportName).toLowerCase().trim()
+                                ))
+                                .map(f => f.name);
+
+                            // Pick first court not already claimed at this time across the day
+                            let pickedCourt = null;
+                            for (const court of courts) {
+                                let inUse = false;
+                                // Check existing scheduleAssignments for cross-bunk conflicts at this time
+                                for (const [otherBunk, otherSlots] of Object.entries(window.scheduleAssignments || {})) {
+                                    if (String(otherBunk) === String(bunk)) continue;
+                                    if (!Array.isArray(otherSlots)) continue;
+                                    // Find that bunk's grade + per-bunk slots to resolve times
+                                    const otherGrade = Object.entries(divisions).find(([g, d]) =>
+                                        (d.bunks || []).map(String).includes(String(otherBunk))
+                                    )?.[0];
+                                    const otherPbs = otherGrade ? (window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
+                                    for (let oi = 0; oi < otherSlots.length; oi++) {
+                                        const oe = otherSlots[oi];
+                                        if (!oe || oe.continuation) continue;
+                                        const oslot = otherPbs[oi];
+                                        if (!oslot) continue;
+                                        if (oslot.endMin <= block.startMin || oslot.startMin >= block.endMin) continue;
+                                        const oField = typeof oe.field === 'object' ? oe.field?.name : oe.field;
+                                        if (oField && String(oField).toLowerCase() === String(court).toLowerCase()) {
+                                            inUse = true; break;
+                                        }
+                                    }
+                                    if (inUse) break;
+                                }
+                                if (!inUse) { pickedCourt = court; break; }
+                            }
+
+                            // Last resort: take first court even if "in use" — override is user-mandated
+                            if (!pickedCourt && courts.length > 0) {
+                                pickedCourt = courts[0];
+                                console.warn(`[Override] No clean court for ${sportName}, forcing ${pickedCourt} for ${bunk}`);
+                            }
+
+                            if (pickedCourt) {
+                                resolvedField = pickedCourt;
+                                resolvedSport = sportName;
+                                console.log(`[Override] ${bunk}: ${sportName} → ${pickedCourt}`);
+                            } else {
+                                console.warn(`[Override] No fields configured for sport "${sportName}" — keeping activity name as field`);
+                            }
+                        }
+
                         window.scheduleAssignments[String(bunk)][idx] = {
-                            field: isCustom ? block._customField : block.event,
-                            sport: null,
+                            field: resolvedField,
+                            sport: resolvedSport,
                             _activity: isCustom ? (block._customActivity || block.event) : block.event,
                             _fixed: true, _pinned: block._classification === 'pinned',
                             _bunkOverride: true, _activityLocked: isCustom || false,
@@ -4076,7 +4137,16 @@
                             _customField: block._customField || null,
                             _autoMode: true, continuation: false
                         };
-                        if (isCustom) {
+
+                        // Lock the resolved court so other writers/solvers can't double-book it
+                        if (isSportOverride && resolvedField && resolvedField !== block.event) {
+                            if (window.AutoFieldLocks) {
+                                window.AutoFieldLocks.lockField(resolvedField, block.startMin, block.endMin, grade, resolvedSport, 'auto_override');
+                            }
+                            if (window.GlobalFieldLocks) {
+                                window.GlobalFieldLocks.lockField(resolvedField, [idx], { lockedBy: 'auto_override', division: grade, activity: resolvedSport, startMin: block.startMin, endMin: block.endMin });
+                            }
+                        }                        if (isCustom) {
                             customWriteCount++;
                             if (block._customField) {
                                 if (window.AutoFieldLocks) {
