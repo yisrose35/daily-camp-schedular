@@ -2294,8 +2294,12 @@
 
            // Draft specials — full window, rotation band applied at scoring
             // ★ v4.3: If draft didn't assign enough specials, pick from priority list
-            const draftSpecialCount = (draftResult.specials || []).length;
+            // ★ FIX: Cap draft specials to required count — prevent over-assignment
             const requiredSpecials = shoppingList.specials?.required || 0;
+            if (draftResult.specials && draftResult.specials.length > requiredSpecials && requiredSpecials > 0) {
+                draftResult.specials.length = requiredSpecials;
+            }
+            const draftSpecialCount = (draftResult.specials || []).length;
             if (draftSpecialCount < requiredSpecials) {
                 const usedNames = new Set((draftResult.specials || []).map(s => s.name));
                 const priorityList = shoppingList.specials?.priorityList || [];
