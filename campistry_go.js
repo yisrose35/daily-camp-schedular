@@ -2123,53 +2123,75 @@
         if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' move(s)');
 
         // ══════════════════════════════════════════════════════════════
-        // SORT ROUTES BY DRIVING TIME FROM CAMP (final step)
+        // FINAL ROUTE ORDERING — nearest-neighbor chain using road matrix
         //
-        // VROOM optimizes total drive time, but camp buses need a clean
-        // sweep pattern with no backtracking:
-        //   Arrival:   farthest stop first → sweep toward camp
-        //   Dismissal: nearest stop first → sweep away from camp
-        //
-        // Uses actual road driving time (Mapbox/OSRM matrix) not
-        // haversine straight-line distance.
+        // Builds each route as a nearest-neighbor chain from the starting
+        // point (farthest stop for arrival, camp for dismissal), using
+        // actual driving times from Mapbox/OSRM. This produces a natural
+        // path with no backtracking — the bus always goes to the closest
+        // unvisited stop from where it currently is.
         // ══════════════════════════════════════════════════════════════
         showProgress('Finalizing routes...', 95);
 
-        // Fetch driving time from camp per bus and sort stops by it.
-        // Each bus has <25 stops so fits within Mapbox's matrix limit.
-        const sortPromises = allRoutes.map(async (r) => {
+        const orderPromises = allRoutes.map(async (r) => {
             if (r.stops.length < 2) return;
             const validStops = r.stops.filter(s => s.lat && s.lng);
             if (validStops.length < 2) return;
 
             // Build coords: [camp, stop0, stop1, ...]
-            const coords = [{ lat: campLat, lng: campLng }];
-            validStops.forEach((s, i) => { s._sortIdx = i + 1; coords.push({ lat: s.lat, lng: s.lng }); });
+            const coords = [{ lat: campLat, lng: campLng }]; // index 0 = camp
+            r.stops.forEach((s, i) => { s._mIdx = i + 1; coords.push({ lat: s.lat || campLat, lng: s.lng || campLng }); });
 
             let matrix = null;
             try {
                 matrix = await fetchDistanceMatrix(coords, campLat, campLng);
             } catch (_) {}
 
-            // Assign drive time from camp (matrix row 0)
-            r.stops.forEach(s => {
-                if (!s.lat || !s.lng) { s._campDrive = 0; return; }
-                if (matrix && s._sortIdx != null && matrix[0]?.[s._sortIdx] != null && matrix[0][s._sortIdx] >= 0) {
-                    s._campDrive = matrix[0][s._sortIdx];
-                } else {
-                    s._campDrive = haversineMi(campLat, campLng, s.lat, s.lng) * 3600 / (D.setup.avgSpeed || 25);
-                }
-            });
-
-            if (isArrival) {
-                r.stops.sort((a, b) => b._campDrive - a._campDrive);
-            } else {
-                r.stops.sort((a, b) => a._campDrive - b._campDrive);
+            // Drive time helper: matrix-based or haversine fallback
+            function driveSec(fromIdx, toIdx) {
+                if (matrix?.[fromIdx]?.[toIdx] != null && matrix[fromIdx][toIdx] >= 0) return matrix[fromIdx][toIdx];
+                const a = coords[fromIdx], b = coords[toIdx];
+                return haversineMi(a.lat, a.lng, b.lat, b.lng) * 3600 / (D.setup.avgSpeed || 25);
             }
-            r.stops.forEach((s, i) => { s.stopNum = i + 1; delete s._campDrive; delete s._sortIdx; });
+
+            // Find starting point
+            let startIdx; // matrix index of the first stop
+            if (isArrival) {
+                // Arrival: start at stop farthest from camp (by drive time)
+                let maxTime = 0;
+                r.stops.forEach(s => {
+                    const t = driveSec(0, s._mIdx);
+                    if (t > maxTime) { maxTime = t; startIdx = s._mIdx; }
+                });
+            } else {
+                // Dismissal: start at camp, go to nearest stop first
+                startIdx = 0; // will pick nearest from camp
+            }
+
+            // Nearest-neighbor chain
+            const ordered = [];
+            const used = new Set();
+            let currentIdx = isArrival ? startIdx : 0; // matrix index of current position
+
+            while (ordered.length < r.stops.length) {
+                let bestStop = null, bestTime = Infinity;
+                for (const s of r.stops) {
+                    if (used.has(s._mIdx)) continue;
+                    const t = driveSec(currentIdx, s._mIdx);
+                    if (t < bestTime) { bestTime = t; bestStop = s; }
+                }
+                if (!bestStop) break;
+                ordered.push(bestStop);
+                used.add(bestStop._mIdx);
+                currentIdx = bestStop._mIdx;
+            }
+
+            // Replace stops with ordered version
+            r.stops = ordered;
+            r.stops.forEach((s, i) => { s.stopNum = i + 1; delete s._mIdx; });
         });
-        await Promise.all(sortPromises);
-        console.log('[Go] Route sort: stops ordered by road driving time from camp');
+        await Promise.all(orderPromises);
+        console.log('[Go] Route sort: nearest-neighbor chain using road driving times');
 
         // Route quality summary
         const totalKids = allRoutes.reduce((s, r) => s + r.camperCount, 0);
