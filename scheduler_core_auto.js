@@ -2184,16 +2184,31 @@
                 needs.push({
                     type: 'snacks', event: snackLayer.event || 'snacks', layer: snackLayer,
                     dMin: c.dMin, dMax: c.dMax,
-                   windowStart: (() => {
-                        const base = Math.max(snackLayer.startMin || 0, gradeStart);
-                        const end = Math.min(snackLayer.endMin || 1440, gradeEnd);
-                        const range = end - base - c.dMin;
-                        if (range <= 0 || _iterSeed === 0) return base;
-                        const shift = Math.floor(seedJitter(_iterSeed, 777) * Math.min(range, 30));
-                        return base + snapTo5(shift);
-                    })(),
+                    windowStart: Math.max(snackLayer.startMin || 0, gradeStart),
                     windowEnd: Math.min(snackLayer.endMin || 1440, gradeEnd),
-                    _activityLocked: true, _source: 'layer'                });
+                    _activityLocked: true, _source: 'layer'
+                });
+            }
+
+            // Rotation events (camp-wide pass-through activities like lice checks, photo day)
+            // These come from rotation_events.js and are placed by the gap-walker the same
+            // way swim/snack/specials are. Walls are already respected — rotation events can
+            // never overlap pinned blocks because the gap-walker only walks free gaps.
+            if (window.RotationEvents && typeof window.RotationEvents.getNeedsForBunk === 'function') {
+                try {
+                    const reNeeds = window.RotationEvents.getNeedsForBunk(String(bunk), currentDate);
+                    if (reNeeds && reNeeds.length) {
+                        // Clamp window to grade bounds (rotation event window may extend
+                        // beyond a particular grade's day)
+                        reNeeds.forEach(n => {
+                            n.windowStart = Math.max(n.windowStart, gradeStart);
+                            n.windowEnd = Math.min(n.windowEnd, gradeEnd);
+                            if (n.windowEnd - n.windowStart >= n.dMin) needs.push(n);
+                        });
+                    }
+                } catch (e) {
+                    console.warn('[greedyPackBunk] rotation event needs failed for ' + bunk + ':', e);
+                }
             }
 
            // Draft specials — full window, rotation band applied at scoring
@@ -3933,15 +3948,42 @@
 
         // Restore best
         allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = bestTimelines[bunk] || []; }));
-        // ★ v6.1: Expose bunkTimelines for grid renderers (trip detection, diagnostics)
-        window._autoBuilderTimelines = {};
-        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { window._autoBuilderTimelines[String(bunk)] = bunkTimelines[bunk]; }));
         warnings.length = 0;
         bestWarnings.forEach(w => warnings.push(w));
 
         // Debug exports
         window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
+
+        // ─── Mark rotation event completions (so tomorrow's build skips these bunks) ───
+        // Read directly from bunkTimelines because scheduleAssignments hasn't been written yet.
+        // Any block where _source === 'rotation_event' (from greedyPackBunk needs) means a
+        // rotation event was successfully placed for that bunk.
+        try {
+            if (window.RotationEvents && typeof window.RotationEvents.markCompleted === 'function' && currentDate) {
+                const byEvent = {}; // { eventId: Set<bunk> }
+                allGrades.forEach(grade => {
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const tl = bunkTimelines[bunk] || [];
+                        tl.forEach(b => {
+                            if (b && b._source === 'rotation_event' && b._rotationEventId) {
+                                if (!byEvent[b._rotationEventId]) byEvent[b._rotationEventId] = new Set();
+                                byEvent[b._rotationEventId].add(String(bunk));
+                            }
+                        });
+                    });
+                });
+                let totalMarked = 0;
+                Object.entries(byEvent).forEach(([eid, bunkSet]) => {
+                    const bunks = Array.from(bunkSet);
+                    window.RotationEvents.markCompleted(eid, currentDate, bunks);
+                    totalMarked += bunks.length;
+                });
+                if (totalMarked > 0) log('[2.5+] ✅ Rotation events: marked ' + totalMarked + ' bunk completions');
+            }
+        } catch (e) {
+            console.warn('[scheduler_core_auto] Rotation event completion tracking failed:', e);
+        }
 
 
         // =====================================================================
