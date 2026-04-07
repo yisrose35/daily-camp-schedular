@@ -598,33 +598,23 @@
         }
 
         // ── Rotation event concurrency tracking ─────────────────────
-        // Rotation events are camp-wide: any bunk from any grade can go,
-        // but only N bunks at the same time (evt.concurrency). Unlike pool/
-        // specials there's no division restriction or exact-time-match — bunks
-        // stagger independently within the window.
-        const _rotEvtBuckets = {}; // { eventId: { minute: count } }
+        // Rotation events work like activities: concurrency is PER GRADE,
+        // no cross-division mixing. If concurrency=2, at any 10-min slot
+        // only 2 bunks from the SAME grade can be there. A different grade
+        // must wait until that slot is free. Uses the same rtRegister/rtCanUse
+        // infrastructure as pool & specials — gets exact-time-match enforcement
+        // for free (all bunks sharing a slot must start/end at the same time).
 
-        function registerRotationEventUsage(eventId, startMin, endMin) {
+        function registerRotationEventUsage(eventId, grade, startMin, endMin) {
             if (!eventId) return;
-            if (!_rotEvtBuckets[eventId]) _rotEvtBuckets[eventId] = {};
-            const buckets = _rotEvtBuckets[eventId];
-            for (let m = startMin; m < endMin; m += 5) {
-                buckets[m] = (buckets[m] || 0) + 1;
-            }
+            rtRegister('rotevt', eventId, grade, startMin, endMin);
         }
 
-        function canUseRotationSlotAtTime(eventId, concurrency, startMin, endMin) {
+        function canUseRotationSlotAtTime(eventId, concurrency, grade, startMin, endMin) {
             if (!eventId || !concurrency) return true;
-            const buckets = _rotEvtBuckets[eventId];
-            if (!buckets) return true;
-            for (let m = startMin; m < endMin; m += 5) {
-                if ((buckets[m] || 0) >= concurrency) return false;
-            }
-            return true;
-        }
-
-        function rotEvtReset() {
-            Object.keys(_rotEvtBuckets).forEach(k => delete _rotEvtBuckets[k]);
+            // not_sharable = only same-grade bunks can share the slot
+            return rtCanUse('rotevt', eventId, grade, startMin, endMin,
+                'not_sharable', concurrency, []);
         }
 
         // Cross-grade tracker for stagger scoring
@@ -2501,7 +2491,7 @@
                     registerCrossGrade(grade, 'custom', startMin, endMin, need._customActivity || need.event);
                 }
                 if (need.type === 'rotation_event' && need._rotationEventId) {
-                    registerRotationEventUsage(need._rotationEventId, startMin, endMin);
+                    registerRotationEventUsage(need._rotationEventId, grade, startMin, endMin);
                 }
                template.push({
                     startMin, endMin,
@@ -2694,7 +2684,7 @@
                     if (need.type === 'rotation_event' && need._rotationEventId) {
                         let rotOk = false;
                         for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
-                            if (canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, t, t + need.dMin)) { rotOk = true; break; }
+                            if (canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, grade, t, t + need.dMin)) { rotOk = true; break; }
                         }
                         if (!rotOk) continue;
                     }
@@ -2782,11 +2772,11 @@
                         if (ok && need.type === 'special' && need._assignedSpecial &&
                             getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
                         if (ok && need.type === 'rotation_event' && need._rotationEventId &&
-                            !canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, cursor, cursor + dur)) {
+                            !canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, grade, cursor, cursor + dur)) {
                             // Concurrency full at cursor — scan forward within the window for an open slot
                             let found = false;
                             for (let t = cursor + 5; t + dur <= winEnd && t + dur <= gap.end; t += 5) {
-                                if (canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, t, t + dur)) {
+                                if (canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, grade, t, t + dur)) {
                                     // Defer to pass 2 with adjusted windowStart so it lands at this time
                                     need._rotEvtEarliestOpen = t;
                                     found = true;
@@ -2886,7 +2876,7 @@
                                 if (cand.type === 'special' && cand._assignedSpecial &&
                                     !canUseSpecialAtTime(cand._assignedSpecial, grade, proposedStart, proposedStart + candDur)) candOk = false;
                                 if (cand.type === 'rotation_event' && cand._rotationEventId &&
-                                    !canUseRotationSlotAtTime(cand._rotationEventId, cand._rotationEventConcurrency, proposedStart, proposedStart + candDur)) candOk = false;
+                                    !canUseRotationSlotAtTime(cand._rotationEventId, cand._rotationEventConcurrency, grade, proposedStart, proposedStart + candDur)) candOk = false;
                                 if (candOk) {
                                     bridges.unshift({ idx: di, need: cand, dur: candDur });
                                     reservedSpace += candDur;
@@ -2935,11 +2925,11 @@
                         if (next.type === 'special' && next._assignedSpecial &&
                             !canUseSpecialAtTime(next._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
                         if (next.type === 'rotation_event' && next._rotationEventId &&
-                            !canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, cursor, cursor + dur)) {
+                            !canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, grade, cursor, cursor + dur)) {
                             // Scan forward for an open slot within this gap
                             let slotFound = false;
                             for (let t = cursor + 5; t + dur <= gap.end && t + dur <= targetWinEnd; t += 5) {
-                                if (canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, t, t + dur)) {
+                                if (canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, grade, t, t + dur)) {
                                     // Fill sports up to t, then place the rotation event
                                     if (t > cursor) fillRegion(cursor, t);
                                     placeNeed(next, t, dur);
@@ -3667,7 +3657,6 @@
             resourceCalendar.swim = {};
             // ★ v4.0: Reset resource tracker + field ledger between iterations
             rtReset();
-            rotEvtReset();
             initFieldLedger();
         }
 
