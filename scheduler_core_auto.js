@@ -1559,7 +1559,7 @@
 // =====================================================================
         // PHASE 2B: GLOBAL PLANNER (replaces old runDraft call)
         // =====================================================================
-        function runGlobalPlanner(shoppingLists, gradeOrder) {
+        function runGlobalPlanner(shoppingLists) {
             const GP = '[GlobalPlanner]';
             log(GP + ' Starting...');
 
@@ -1631,8 +1631,8 @@
                 plannerFieldClaims.push({ field: fieldName, startMin, endMin, bunk, grade: _gpCurrentGrade, activity });
             }
 
-            // ─── Process each grade (in MRV order if provided) ────────
-            (gradeOrder || allGrades).forEach(grade => {
+            // ─── Process each grade ──────────────────────────────────
+            allGrades.forEach(grade => {
                 _gpCurrentGrade = grade;
                 plannerFieldClaims.length = 0; // reset per grade
 
@@ -1763,9 +1763,9 @@
                 });
 
                 // ── Step D0: Guarantee required specials per bunk ─────
-                // Assign specials for every bunk that needs them. Since
-                // specials are pinned as walls after the draft, cross-grade
-                // contention is resolved here, not in the packer.
+                // Before allocating sports in windows, assign specials for
+                // every bunk that needs them. This ensures specials aren't
+                // squeezed out when field supply >= demand (no deficit).
                 bunks.forEach(bunk => {
                     const sl = shoppingLists[bunk];
                     if (!sl) return;
@@ -1774,8 +1774,9 @@
                     if (needed <= 0) return;
 
                     for (const special of (sl.specials?.priorityList || [])) {
-                        if (result.specials.length >= (sl.specials?.required || 0)) break;
+                        if (result.specials.length >= sl.specials.required) break;
                         if (result.usedActivities.has(special.name)) continue;
+                        if (!canAssignSpecialToGrade(special.name, grade, gradeStart, gradeEnd)) continue;
 
                         const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                         const dur = special.totalDuration || special.dMin || 30;
@@ -1783,8 +1784,6 @@
                             ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                             : findAnyWindowGP(fw, dur);
                         if (!time) continue;
-
-                        if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                         if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
                         registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
@@ -1905,6 +1904,7 @@
                         for (const special of (sl.specials?.priorityList || [])) {
                             if (result.specials.length >= sl.specials.required) break;
                             if (result.usedActivities.has(special.name)) continue;
+                            if (!canAssignSpecialToGrade(special.name, grade, gradeStart, gradeEnd)) continue;
 
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             const dur = special.totalDuration || special.dMin || 30;
@@ -1912,7 +1912,6 @@
                                 ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                                 : findAnyWindowGP(fw, dur);
                             if (!time) continue;
-                            if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                             if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
                             registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
@@ -2048,6 +2047,9 @@
                 for (const special of (sl.specials?.priorityList || [])) {
                     if (result.specials.length >= (sl.specials?.required || 0)) break;
                     if (result.usedActivities.has(special.name)) continue;
+                    if (!canAssignSpecialToGrade(special.name, grade,
+                        parseTimeToMinutes(divisions[grade]?.startTime) || 540,
+                        parseTimeToMinutes(divisions[grade]?.endTime) || 960)) continue;
 
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     const dur = special.totalDuration || special.dMin || 30;
@@ -2055,7 +2057,6 @@
                         ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                         : findAnyWindowGP(fw, dur);
                     if (!time) continue;
-                    if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                     if (special.location) claimField(special.location, time.startMin, time.endMin, bunk, grade, special.name);
                     registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
@@ -2230,20 +2231,15 @@
                 }
             }
 
-           // Draft specials — skip any already pinned as walls (from SPECIAL-INJECT)
-            // ★ v8.0: Specials with claimedTime are now injected as pinned walls
-            // before the packer. Only add un-pinned specials as needs here.
-            const pinnedSpecialNames = new Set(
-                walls.filter(w => w.type === 'special' && w._assignedSpecial && w._source === 'draft_pinned')
-                    .map(w => w._assignedSpecial)
-            );
-            const draftSpecialCount = (draftResult.specials || []).filter(s => !pinnedSpecialNames.has(s.name)).length;
-            const requiredSpecials = Math.max(0, (shoppingList.specials?.required || 0) - pinnedSpecialNames.size);
+           // Draft specials — full window, rotation band applied at scoring
+            // ★ v4.3: If draft didn't assign enough specials, pick from priority list
+            const draftSpecialCount = (draftResult.specials || []).length;
+            const requiredSpecials = shoppingList.specials?.required || 0;
             if (draftSpecialCount < requiredSpecials) {
-                const usedNames = new Set([...(draftResult.specials || []).map(s => s.name), ...pinnedSpecialNames]);
+                const usedNames = new Set((draftResult.specials || []).map(s => s.name));
                 const priorityList = shoppingList.specials?.priorityList || [];
                 for (const special of priorityList) {
-                    if (draftSpecialCount + pinnedSpecialNames.size >= (shoppingList.specials?.required || 0)) break;
+                    if (draftResult.specials.length >= requiredSpecials) break;
                     if (usedNames.has(special.name)) continue;
                     draftResult.specials.push({
                         ...special,
@@ -2255,7 +2251,7 @@
             }
             // ★ v6.0: Get the specials layer for this grade (used as fallback for duration constraints)
             const gradeSpecialLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'special');
-            (draftResult.specials || []).filter(s => !pinnedSpecialNames.has(s.name)).forEach(special => {
+            (draftResult.specials || []).forEach(special => {
                 const hasFixedDur = special.duration && special.duration > 0;
                 const effectiveLayer = special.layer || gradeSpecialLayer || null;
                 const sDMin = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMin;
@@ -2683,24 +2679,6 @@
                         for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
                             if (canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) { specOk = true; break; }
                         }
-                        // ★ v8.0: If drafted special is blocked everywhere, try swapping
-                        // to another special from the priority list before giving up
-                        if (!specOk && shoppingList.specials?.priorityList) {
-                            for (const alt of shoppingList.specials.priorityList) {
-                                if (alt.name === need._assignedSpecial) continue;
-                                if (placedSpecialNames.has(alt.name)) continue;
-                                for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
-                                    if (canUseSpecialAtTime(alt.name, grade, t, t + need.dMin)) {
-                                        need._assignedSpecial = alt.name;
-                                        need.event = alt.name;
-                                        need._specialLocation = alt.location || null;
-                                        specOk = true;
-                                        break;
-                                    }
-                                }
-                                if (specOk) break;
-                            }
-                        }
                         if (!specOk) continue;
                     }
                     if (need.type === 'rotation_event' && need._rotationEventId) {
@@ -2790,24 +2768,7 @@
                         let ok = true;
                         if (need.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
                         if (need.type === 'special' && need._assignedSpecial &&
-                            !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) {
-                            // Try swapping to an alternative special that IS available here
-                            let swapped = false;
-                            if (shoppingList.specials?.priorityList) {
-                                for (const alt of shoppingList.specials.priorityList) {
-                                    if (alt.name === need._assignedSpecial || placedSpecialNames.has(alt.name)) continue;
-                                    if (canUseSpecialAtTime(alt.name, grade, cursor, cursor + dur) &&
-                                        getCrossGradeConflicts('special', cursor, cursor + dur, grade, alt.name) === 0) {
-                                        need._assignedSpecial = alt.name;
-                                        need.event = alt.name;
-                                        need._specialLocation = alt.location || null;
-                                        swapped = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (!swapped) ok = false;
-                        }
+                            !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
                         if (ok && need.type === 'special' && need._assignedSpecial &&
                             getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
                         if (ok && need.type === 'rotation_event' && need._rotationEventId &&
@@ -3828,9 +3789,27 @@
             const shoppingLists = {};
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { shoppingLists[bunk] = buildBunkShoppingList(bunk, grade); }));
 
-            // ★ v8.0: Compute MRV grade ordering BEFORE Phase 2 so the draft,
-            // packer, and solver simulation all use the same priority order.
-            // Most-constrained grades (tightest free-window-to-need ratio) go first.
+            // Phase 2: Draft
+            const draftResults = runGlobalPlanner(shoppingLists);
+
+            // ★ v4.0: Clear ONLY DRAFT field claims — keep pinned/phase0 claims
+            // The draft used temporary times. The packer will re-claim at actual times.
+            Object.values(fieldLedger).forEach(ledger => {
+                ledger.claims = ledger.claims.filter(c => {
+                    // Keep claims from Phase 0 blocks (walls)
+                    const bunkTl = bunkTimelines[c.bunk] || [];
+                    return bunkTl.some(b => b._fixed && overlaps(b.startMin, b.endMin, c.startMin, c.endMin));
+                });
+            });
+
+            // Phase 3: Greedy pack — most-constrained-first + per-iter variance
+            // ★ v8.0: Pack order is the #1 lever for cross-grade field contention.
+            // Grades with the tightest (need ÷ free-window) ratio pack FIRST so
+            // they claim contended fields before more-flexible grades siphon them.
+            // The iteration loop shuffles / rotates the order so every grade gets
+            // a chance at first pick across iterations.
+            const allTemplates = {};
+
             function computeGradeFlexibility(grade) {
                 const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                 const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
@@ -3838,9 +3817,11 @@
                 const bunks = getBunksForGrade(grade, divisions);
                 if (bunks.length === 0) return 999;
                 const repBunk = bunks[0];
+                // Walls = Phase 0 blocks already placed (pinned, leagues, trips)
                 const walls = (bunkTimelines[repBunk] || []).filter(b => b._fixed);
                 const wallMin = walls.reduce((s, w) => s + Math.max(0, w.endMin - w.startMin), 0);
                 const freeMin = Math.max(1, dayMin - wallMin);
+                // Total need = sports + specials + fixed-duration needs (swim, snack, rotation events)
                 const sl = shoppingLists[repBunk] || {};
                 const sportNeed = (sl.sports?.required || 0) * (sl.sports?.constraints?.dMin || 30);
                 const specialNeed = (sl.specials?.priorityList || [])
@@ -3848,12 +3829,14 @@
                     .reduce((s, sp) => s + (sp.totalDuration || 30), 0);
                 const snackNeed = sl.snack ? sl.snack.reduce((s, sn) => s + (sn.duration || 0), 0) : 0;
                 const totalNeed = sportNeed + specialNeed + snackNeed;
+                // Flexibility = freeMin ÷ totalNeed. Lower = more constrained = pack first.
                 return totalNeed > 0 ? (freeMin / totalNeed) : 999;
             }
 
             const gradeFlex = {};
             allGrades.forEach(g => { gradeFlex[g] = computeGradeFlexibility(g); });
 
+            // Base order: most constrained (lowest flex) first; tiebreak by stagger offset
             const baseOrder = [...allGrades].sort((a, b) => {
                 const fa = gradeFlex[a], fb = gradeFlex[b];
                 if (Math.abs(fa - fb) > 0.01) return fa - fb;
@@ -3861,6 +3844,7 @@
             });
 
             // Iter 0 = pure MRV. Even iters = rotate. Odd iters = seeded shuffle.
+            // This gives both structured exploration and random variance.
             let staggeredGrades;
             if (_iterSeed === 0) {
                 staggeredGrades = baseOrder;
@@ -3875,58 +3859,6 @@
                 log('[PACK ORDER iter ' + totalIters + '] ' +
                     staggeredGrades.map(g => g + '(flex=' + gradeFlex[g].toFixed(2) + ')').join(' → '));
             }
-
-            // Phase 2: Draft — use MRV grade order so constrained grades claim fields first
-            const draftResults = runGlobalPlanner(shoppingLists, staggeredGrades);
-
-            // ★ v8.0: Inject drafted specials as pinned walls BEFORE the packer.
-            // The draft assigned each bunk a specific special at a specific time.
-            // By writing them as fixed blocks now, the packer builds AROUND them
-            // instead of trying to re-place them (which fails due to cross-grade
-            // resource tracker conflicts from sequential processing).
-            let injectedSpecials = 0;
-            allGrades.forEach(grade => {
-                getBunksForGrade(grade, divisions).forEach(bunk => {
-                    const dr = draftResults[bunk];
-                    if (!dr || !dr.specials) return;
-                    dr.specials.forEach(special => {
-                        if (!special.claimedTime) return;
-                        const { startMin, endMin } = special.claimedTime;
-                        if (startMin == null || endMin == null) return;
-                        bunkTimelines[bunk].push({
-                            startMin, endMin,
-                            type: 'special', event: special.name,
-                            layer: special._layer || null,
-                            _classification: 'pinned',
-                            _committed: true, _fixed: true,
-                            _activityLocked: true, _noBacktrack: true,
-                            _assignedSpecial: special.name,
-                            _specialLocation: special.location || null,
-                            _specialDuration: endMin - startMin,
-                            _source: 'draft_pinned'
-                        });
-                        // Register in resource tracker so the packer respects it
-                        registerSpecialUsage(special.name, grade, startMin, endMin);
-                        registerCrossGrade(grade, 'special', startMin, endMin, special.name);
-                        if (special.location) claimField(special.location, startMin, endMin, String(bunk), grade, special.name);
-                        injectedSpecials++;
-                    });
-                    bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
-                });
-            });
-            if (totalIters < 1) log('[SPECIAL-INJECT] Pinned ' + injectedSpecials + ' drafted specials as walls');
-
-            // ★ v4.0: Clear ONLY DRAFT field claims — keep pinned/phase0 claims
-            // (now includes injected special blocks)
-            Object.values(fieldLedger).forEach(ledger => {
-                ledger.claims = ledger.claims.filter(c => {
-                    const bunkTl = bunkTimelines[c.bunk] || [];
-                    return bunkTl.some(b => b._fixed && overlaps(b.startMin, b.endMin, c.startMin, c.endMin));
-                });
-            });
-
-            // Phase 3: Greedy pack in MRV order
-            const allTemplates = {};
 
             todaysSwimmers = {};
             staggeredGrades.forEach(grade => {
@@ -3949,23 +3881,6 @@
 
             // Phase 4: Execute
             executeTemplates(allTemplates);
-
-            // ── SPECIAL PLACEMENT DIAGNOSTIC (iter 0 only) ────────────
-            if (totalIters < 1) {
-                const _spDiag = { drafted: 0, placed: 0, missing: [] };
-                allGrades.forEach(grade => {
-                    getBunksForGrade(grade, divisions).forEach(bunk => {
-                        const req = shoppingLists[bunk]?.specials?.required || 0;
-                        const drafted = (draftResults[bunk]?.specials || []).length;
-                        const placed = (bunkTimelines[bunk] || []).filter(b => b.type === 'special' && b._assignedSpecial).length;
-                        _spDiag.drafted += drafted;
-                        _spDiag.placed += placed;
-                        if (placed < req) _spDiag.missing.push(grade + ':' + bunk + '(req=' + req + ',draft=' + drafted + ',placed=' + placed + ')');
-                    });
-                });
-                log('[SPECIAL-DIAG] drafted=' + _spDiag.drafted + ' placed=' + _spDiag.placed + ' missing=' + _spDiag.missing.length);
-                if (_spDiag.missing.length > 0) log('[SPECIAL-DIAG] Missing: ' + _spDiag.missing.join(', '));
-            }
 
             // Propagate sport fallbacks
             allGrades.forEach(grade => {
@@ -4009,9 +3924,7 @@
                 });
 
                 // Simulate solving each unassigned sport/slot block
-                // ★ v8.0: Use staggeredGrades (MRV order) so the simulation matches
-                // the actual pack order — most constrained grades get first pick of fields.
-                staggeredGrades.forEach(grade => {
+                allGrades.forEach(grade => {
                     getBunksForGrade(grade, divisions).forEach(bunk => {
                         const bunkStr = String(bunk);
                         const done = simBunkDone[bunkStr];
@@ -4107,27 +4020,6 @@
             let iterScore = scoreTimelines(bunkTimelines, iterWarnings);
             // ★ Massive penalty for estimated Frees — #1 priority to minimize
             iterScore += iterFreeEstimate * 50000;
-            // ★ v8.0: Penalty for missing specials — count from ACTUAL placed
-            // blocks in bunkTimelines, not from the draft. A bunk might be drafted
-            // a special but the packer failed to place it.
-            let missingSpecials = 0;
-            let totalSpecialsPlaced = 0;
-            allGrades.forEach(grade => {
-                getBunksForGrade(grade, divisions).forEach(bunk => {
-                    const sl = shoppingLists[bunk];
-                    if (!sl) return;
-                    const required = sl.specials?.required || 0;
-                    if (required <= 0) return;
-                    const placed = (bunkTimelines[bunk] || []).filter(b =>
-                        b.type === 'special' && b._assignedSpecial
-                    ).length;
-                    totalSpecialsPlaced += placed;
-                    if (placed < required) missingSpecials += (required - placed);
-                });
-            });
-            // Weight must dominate base score swings (~4M). Each missing special
-            // adds 500K so even 3 missing specials outweigh a 1M base score advantage.
-            iterScore += missingSpecials * 500000;
             totalIters++;
             extractFragments(bunkTimelines);
 
@@ -4141,7 +4033,7 @@
             } else staleCount++;
 
             if (improved || totalIters <= 3 || totalIters % 10 === 0) {
-               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate + ' | specials=' + totalSpecialsPlaced + ' | missingSpecials=' + missingSpecials);            }
+               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate);            }
 
             if (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
 
