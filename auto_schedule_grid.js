@@ -161,15 +161,6 @@
         // Trip — green theme (off-campus)
         if (entry._isTrip || (entry.type || '').toLowerCase() === 'trip') return { bg: '#ecfdf5', border: '#34d399', text: '#065f46', accent: '#10b981' };
 
-        // Rotation event — use configured color or default amber/orange
-        if (entry._isRotationEvent) {
-            if (entry._rotationEventColor) {
-                var c = entry._rotationEventColor;
-                return { bg: c + '22', border: c, text: '#1f2937', accent: c };
-            }
-            return { bg: '#fffbeb', border: '#f59e0b', text: '#92400e', accent: '#d97706' };
-        }
-
         if (entry._fixed || entry._pinned) {
             if (act.includes('lunch'))    return { bg: '#fff7ed', border: '#fb923c', text: '#9a3412', accent: '#f97316' };
             if (act.includes('snack'))    return { bg: '#fefce8', border: '#facc15', text: '#854d0e', accent: '#eab308' };
