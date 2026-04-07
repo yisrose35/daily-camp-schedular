@@ -2487,8 +2487,9 @@
                     _rotationEventId: need._rotationEventId || null,
                     _rotationEventLocation: need._rotationEventLocation || null,
                     _rotationEventColor: need._rotationEventColor || null,
-                    _final: true
+                   _final: true
                 });
+            }
 
             // ── Extend last template block to absorb tiny residual ────
             // ★ v5.1: Extends ANY block type (not just sports), respecting dMax
