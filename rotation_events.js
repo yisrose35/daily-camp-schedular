@@ -885,6 +885,110 @@ function init() {
     }
 }
 
+
+// =================================================================
+// SCHEDULER NEEDS API — for greedyPackBunk integration
+// =================================================================
+
+/**
+ * Returns an array of need objects for a specific bunk on a specific date.
+ * Each active rotation event the bunk is eligible for (not excluded, not yet
+ * completed) produces one need shaped like the swim/snack needs the packer
+ * already consumes. The packer will fit them into available gaps inside the
+ * event's daily window with the exact specified duration.
+ *
+ * Called from scheduler_core_auto.js → greedyPackBunk during needs assembly.
+ */
+function getNeedsForBunk(bunkName, dateKey) {
+    if (!bunkName || !dateKey) return [];
+    const events = loadRotationEvents();
+    if (!events.length) return [];
+
+    const bunkStr = String(bunkName);
+    const needs = [];
+
+    events.forEach(evt => {
+        if (!isDateInRange(dateKey, evt.dateRange.start, evt.dateRange.end)) return;
+
+        // Excluded?
+        if (Array.isArray(evt.excludedBunks) && evt.excludedBunks.includes(bunkStr)) return;
+
+        // Already completed (any day in the range)?
+        const completed = getCompletedBunks(evt);
+        if (completed.has(bunkStr)) return;
+
+        const dur = parseInt(evt.durationPerBunk) || 0;
+        if (dur <= 0) return;
+        const winStart = evt.dailyWindow?.startMin;
+        const winEnd = evt.dailyWindow?.endMin;
+        if (winStart == null || winEnd == null || winEnd - winStart < dur) return;
+
+        needs.push({
+            type: 'rotation_event',
+            event: evt.name,
+            layer: {
+                type: 'rotation_event',
+                event: evt.name,
+                startMin: winStart,
+                endMin: winEnd,
+                durationMin: dur,
+                durationMax: dur,
+                periodMin: dur,
+                _rotationEventId: evt.id
+            },
+            dMin: dur,
+            dMax: dur,
+            windowStart: winStart,
+            windowEnd: winEnd,
+            _activityLocked: true,
+            _source: 'rotation_event',
+            _rotationEventId: evt.id,
+            _rotationEventColor: evt.color || '#F59E0B',
+            _rotationEventLocation: evt.location || null
+        });
+    });
+
+    return needs;
+}
+
+/**
+ * Walk a finalized scheduleAssignments object and mark every bunk that
+ * received a rotation event block as completed for the given date.
+ * Called from scheduler_core_auto.js after the build finishes.
+ */
+function markCompletionsFromSchedule(dateKey, scheduleAssignments) {
+    if (!dateKey || !scheduleAssignments) return { marked: 0 };
+    const events = loadRotationEvents();
+    if (!events.length) return { marked: 0 };
+
+    // Build event-name → eventId map for fast lookup
+    const nameToId = {};
+    events.forEach(e => { if (e.name) nameToId[e.name] = e.id; });
+
+    // Group bunks by eventId
+    const byEvent = {}; // { eventId: Set<bunkName> }
+    Object.entries(scheduleAssignments).forEach(([bunk, slots]) => {
+        if (!Array.isArray(slots)) return;
+        slots.forEach(entry => {
+            if (!entry || entry.continuation) return;
+            // Match by explicit marker first, fall back to activity name
+            const eid = entry._rotationEventId || nameToId[entry._activity];
+            if (!eid) return;
+            if (!byEvent[eid]) byEvent[eid] = new Set();
+            byEvent[eid].add(String(bunk));
+        });
+    });
+
+    let marked = 0;
+    Object.entries(byEvent).forEach(([eid, bunkSet]) => {
+        const bunks = Array.from(bunkSet);
+        markCompleted(eid, dateKey, bunks);
+        marked += bunks.length;
+    });
+
+    return { marked };
+}
+
 // =================================================================
 // EXPORTS
 // =================================================================
@@ -898,13 +1002,14 @@ const RotationEvents = {
     getSchedulerHook,
     getRemainingBunks,
     getCompletedBunks,
+    getNeedsForBunk,
+    markCompletionsFromSchedule,
     renderRotationEventsPane,
     injectSubtab,
     removeSubtab,
     updateTabBadge,
     init
 };
-
 window.RotationEvents = RotationEvents;
 
 // Auto-init
