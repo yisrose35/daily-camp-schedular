@@ -4015,22 +4015,27 @@
             let iterScore = scoreTimelines(bunkTimelines, iterWarnings);
             // ★ Massive penalty for estimated Frees — #1 priority to minimize
             iterScore += iterFreeEstimate * 50000;
-            // ★ v8.0: Penalty for missing specials — each bunk that didn't get its
-            // required specials counts as a major scoring hit. Without this, the
-            // iteration loop picks iterations with fewer Free sport blocks but
-            // where half the bunks are missing their specials entirely.
+            // ★ v8.0: Penalty for missing specials — count from ACTUAL placed
+            // blocks in bunkTimelines, not from the draft. A bunk might be drafted
+            // a special but the packer failed to place it.
             let missingSpecials = 0;
+            let totalSpecialsPlaced = 0;
             allGrades.forEach(grade => {
                 getBunksForGrade(grade, divisions).forEach(bunk => {
                     const sl = shoppingLists[bunk];
-                    const dr = draftResults[bunk];
-                    if (!sl || !dr) return;
+                    if (!sl) return;
                     const required = sl.specials?.required || 0;
-                    const got = dr.specials?.length || 0;
-                    if (got < required) missingSpecials += (required - got);
+                    if (required <= 0) return;
+                    const placed = (bunkTimelines[bunk] || []).filter(b =>
+                        b.type === 'special' && b._assignedSpecial
+                    ).length;
+                    totalSpecialsPlaced += placed;
+                    if (placed < required) missingSpecials += (required - placed);
                 });
             });
-            iterScore += missingSpecials * 40000;
+            // Weight must dominate base score swings (~4M). Each missing special
+            // adds 500K so even 3 missing specials outweigh a 1M base score advantage.
+            iterScore += missingSpecials * 500000;
             totalIters++;
             extractFragments(bunkTimelines);
 
@@ -4044,7 +4049,7 @@
             } else staleCount++;
 
             if (improved || totalIters <= 3 || totalIters % 10 === 0) {
-               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate + ' | missingSpecials=' + missingSpecials);            }
+               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate + ' | specials=' + totalSpecialsPlaced + ' | missingSpecials=' + missingSpecials);            }
 
             if (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
 
