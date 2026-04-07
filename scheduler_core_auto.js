@@ -1776,7 +1776,6 @@
                     for (const special of (sl.specials?.priorityList || [])) {
                         if (result.specials.length >= sl.specials.required) break;
                         if (result.usedActivities.has(special.name)) continue;
-                        if (!canAssignSpecialToGrade(special.name, grade, gradeStart, gradeEnd)) continue;
 
                         const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                         const dur = special.totalDuration || special.dMin || 30;
@@ -1784,6 +1783,7 @@
                             ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                             : findAnyWindowGP(fw, dur);
                         if (!time) continue;
+                        if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                         if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
                         registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
@@ -1904,7 +1904,6 @@
                         for (const special of (sl.specials?.priorityList || [])) {
                             if (result.specials.length >= sl.specials.required) break;
                             if (result.usedActivities.has(special.name)) continue;
-                            if (!canAssignSpecialToGrade(special.name, grade, gradeStart, gradeEnd)) continue;
 
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             const dur = special.totalDuration || special.dMin || 30;
@@ -1912,6 +1911,7 @@
                                 ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                                 : findAnyWindowGP(fw, dur);
                             if (!time) continue;
+                            if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                             if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
                             registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
