@@ -3926,6 +3926,23 @@
             // Phase 4: Execute
             executeTemplates(allTemplates);
 
+            // ── SPECIAL PLACEMENT DIAGNOSTIC (iter 0 only) ────────────
+            if (totalIters < 1) {
+                const _spDiag = { drafted: 0, placed: 0, missing: [] };
+                allGrades.forEach(grade => {
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const req = shoppingLists[bunk]?.specials?.required || 0;
+                        const drafted = (draftResults[bunk]?.specials || []).length;
+                        const placed = (bunkTimelines[bunk] || []).filter(b => b.type === 'special' && b._assignedSpecial).length;
+                        _spDiag.drafted += drafted;
+                        _spDiag.placed += placed;
+                        if (placed < req) _spDiag.missing.push(grade + ':' + bunk + '(req=' + req + ',draft=' + drafted + ',placed=' + placed + ')');
+                    });
+                });
+                log('[SPECIAL-DIAG] drafted=' + _spDiag.drafted + ' placed=' + _spDiag.placed + ' missing=' + _spDiag.missing.length);
+                if (_spDiag.missing.length > 0) log('[SPECIAL-DIAG] Missing: ' + _spDiag.missing.join(', '));
+            }
+
             // Propagate sport fallbacks
             allGrades.forEach(grade => {
                 const pl = shoppingLists[getBunksForGrade(grade, divisions)[0]]?.sports?.priorityList || [];
