@@ -856,9 +856,9 @@
             const overlapping = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
             if (overlapping.length >= ledger.capacity) return false;
 
-            // Sharing rules
+            // Sharing rules — special locations defer cross-grade checks to canAssignSpecialToGrade
             if (ledger.shareType === 'not_sharable' && overlapping.length > 0) return false;
-            if (ledger.shareType === 'same_division') {
+            if (ledger.shareType === 'same_division' && !ledger._isSpecialLocation) {
                 if (overlapping.some(c => c.grade !== grade)) return false;
             }
             if (ledger.shareType === 'custom') {
@@ -874,7 +874,8 @@
             // ★ EXACT TIME MATCH: Bunks sharing a field must start and end together.
             // No mid-game joins or early departures. If any same-grade claim exists
             // on this field with overlapping time, it must have identical start/end.
-            if (overlapping.length > 0 && ledger.capacity > 1) {
+            // Skip this for special locations — bunks rotate through independently.
+            if (overlapping.length > 0 && ledger.capacity > 1 && !ledger._isSpecialLocation) {
                 const sameGradeOverlaps = overlapping.filter(c => c.grade === grade);
                 if (sameGradeOverlaps.length > 0) {
                     if (sameGradeOverlaps.some(c => c.startMin !== startMin || c.endMin !== endMin)) {
