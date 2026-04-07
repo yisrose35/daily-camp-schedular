@@ -1762,21 +1762,19 @@
                     win.deficit = Math.max(0, win.demand - fieldSupply);
                 });
 
-                // ── Step D0: Guarantee 1 special per bunk ───────────
-                // ★ v8.0: Cap at 1 special per bunk in Step D0 to ensure
-                // cross-grade fairness. Without this cap, grades needing
-                // 3 specials/bunk consume all special capacity before other
-                // grades get any. Remaining specials are picked up by the
-                // packer fallback (Phase 3) which adds from the priority list.
+                // ── Step D0: Guarantee required specials per bunk ─────
+                // Assign specials for every bunk that needs them. Since
+                // specials are pinned as walls after the draft, cross-grade
+                // contention is resolved here, not in the packer.
                 bunks.forEach(bunk => {
                     const sl = shoppingLists[bunk];
                     if (!sl) return;
                     const result = draftResults[bunk];
-                    if (result.specials.length >= 1) return; // already has one
-                    if ((sl.specials?.required || 0) <= 0) return;
+                    const needed = (sl.specials?.required || 0) - result.specials.length;
+                    if (needed <= 0) return;
 
                     for (const special of (sl.specials?.priorityList || [])) {
-                        if (result.specials.length >= 1) break; // cap at 1
+                        if (result.specials.length >= (sl.specials?.required || 0)) break;
                         if (result.usedActivities.has(special.name)) continue;
 
                         const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
@@ -1962,58 +1960,6 @@
                     });
                 }
             }); // end allGrades.forEach
-
-            // ── Step D0b: Second pass — assign remaining specials ─────
-            // After all grades got their 1st special, come back for 2nd, 3rd, etc.
-            // Process in MRV order again so constrained grades still get priority.
-            (gradeOrder || allGrades).forEach(grade => {
-                const bunks = getBunksForGrade(grade, divisions).map(String);
-                bunks.forEach(bunk => {
-                    const sl = shoppingLists[bunk];
-                    if (!sl) return;
-                    const result = draftResults[bunk];
-                    const required = sl.specials?.required || 0;
-                    if (result.specials.length >= required) return;
-
-                    for (const special of (sl.specials?.priorityList || [])) {
-                        if (result.specials.length >= required) break;
-                        if (result.usedActivities.has(special.name)) continue;
-
-                        const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                        const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-                        const fw = [];
-                        const claimed = [...result.sports, ...result.specials, ...result.elective, ...result.generic]
-                            .map(c => c.claimedTime).filter(Boolean).sort((a, b) => a.startMin - b.startMin);
-                        let cur = gradeStart;
-                        (bunkTimelines[bunk] || []).concat(claimed.map(c => ({ startMin: c.startMin, endMin: c.endMin }))).sort((a, b) => a.startMin - b.startMin).forEach(b => {
-                            if (b.startMin > cur) fw.push({ start: cur, end: b.startMin, duration: b.startMin - cur });
-                            cur = Math.max(cur, b.endMin);
-                        });
-                        if (cur < gradeEnd) fw.push({ start: cur, end: gradeEnd, duration: gradeEnd - cur });
-
-                        const dur = special.totalDuration || special.dMin || 30;
-                        let time = null;
-                        if (special.location) {
-                            for (const w of fw) {
-                                if (w.duration < dur) continue;
-                                for (let t = w.start; t + dur <= w.end; t += 5) {
-                                    if (isFieldAvailable(special.location, t, t + dur, bunk, grade)) { time = { startMin: t, endMin: t + dur }; break; }
-                                }
-                                if (time) break;
-                            }
-                        } else {
-                            for (const w of fw) { if (w.duration >= dur) { time = { startMin: w.start, endMin: w.start + dur }; break; } }
-                        }
-                        if (!time) continue;
-                        if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
-
-                        if (special.location) claimField(special.location, time.startMin, time.endMin, bunk, grade, special.name);
-                        registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
-                        result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
-                        result.usedActivities.add(special.name);
-                    }
-                });
-            });
 
             // Log summary
             let totalSports = 0, totalSpecials = 0;
