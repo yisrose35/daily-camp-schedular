@@ -2470,7 +2470,7 @@
                 if (need.type === 'custom') {
                     registerCrossGrade(grade, 'custom', startMin, endMin, need._customActivity || need.event);
                 }
-                template.push({
+               template.push({
                     startMin, endMin,
                     type: need.type, event: need.event,
                     layer: need.layer, field: need.field || null,
@@ -2484,9 +2484,11 @@
                     _customActivity: need._customActivity || null,
                     _customField: need._customField || null,
                     _customBunks: need._customBunks || null,
+                    _rotationEventId: need._rotationEventId || null,
+                    _rotationEventLocation: need._rotationEventLocation || null,
+                    _rotationEventColor: need._rotationEventColor || null,
                     _final: true
                 });
-            }
 
             // ── Extend last template block to absorb tiny residual ────
             // ★ v5.1: Extends ANY block type (not just sports), respecting dMax
@@ -3236,7 +3238,7 @@
                 const grade = Object.entries(divisions).find(([g, d]) => (d.bunks || []).map(String).includes(String(bunk)))?.[0];
                 if (!grade) return;
                 bunkTimelines[bunk] = [];
-                template.forEach(block => {
+               template.forEach(block => {
                     bunkTimelines[bunk].push({
                         startMin: block.startMin, endMin: block.endMin,
                         type: block.type, event: block.event || block.type,
@@ -3258,7 +3260,10 @@
                         _customActivity: block._customActivity || null,
                         _customField: block._customField || null,
                         _customBunks: block._customBunks || null,
-                        _source: block._source || null
+                        _source: block._source || null,
+                        _rotationEventId: block._rotationEventId || null,
+                        _rotationEventLocation: block._rotationEventLocation || null,
+                        _rotationEventColor: block._rotationEventColor || null
                     });
                 });
                 bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
@@ -4095,6 +4100,33 @@
             });
         });
 
+        // Write rotation event blocks (camp-wide pass-through activities)
+        let rotationEventWriteCount = 0;
+        allGrades.forEach(grade => {
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const arr = pbs[String(bunk)] || [];
+                (bunkTimelines[bunk] || []).filter(b => b._source === 'rotation_event').forEach(block => {
+                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    if (idx === -1) return;
+                    window.scheduleAssignments[String(bunk)][idx] = {
+                        field: block._rotationEventLocation || block.event,
+                        sport: null,
+                        _activity: block.event,
+                        _fixed: true,
+                        _bunkOverride: true,
+                        _activityLocked: true,
+                        _isRotationEvent: true,
+                        _rotationEventId: block._rotationEventId || null,
+                        _autoMode: true,
+                        continuation: false
+                    };
+                    rotationEventWriteCount++;
+                });
+            });
+        });
+
         // Write pinned + custom blocks
         let pinnedWriteCount = 0, customWriteCount = 0;
         allGrades.forEach(grade => {
@@ -4254,7 +4286,7 @@
         window._autoDivisionTimesBuilt = true;
         window._preGenClearActive = false;
 
-        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom');
+        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom, ' + rotationEventWriteCount + ' rotation events');
 
         // ★ v4.0: Sync auto locks → GlobalFieldLocks so downstream code (fillers, post-edit, canBlockFit) sees them
         if (window.AutoFieldLocks?.syncToGlobalFieldLocks) {
@@ -4271,13 +4303,13 @@
                 arr.forEach((block, idx) => {
                     if ((block._classification || block.type || '') === 'pinned') return;
                     if ((block.type || '') === 'special') return;
+                    if ((block.type || '') === 'rotation_event') return;
                     if (block._activityLocked) return;
                     const ex = window.scheduleAssignments[String(bunk)][idx];
                     if (ex && ex._fixed) return;
                     if (ex && ex.field === 'Free' && !ex._fixed) window.scheduleAssignments[String(bunk)][idx] = null;
-                    const skipTypes = ['swim', 'snacks', 'lunch', 'dismissal', 'pinned', 'league', 'specialty_league'];
+                    const skipTypes = ['swim', 'snacks', 'lunch', 'dismissal', 'pinned', 'league', 'specialty_league', 'rotation_event'];
                     if (skipTypes.includes((block.type || '').toLowerCase())) return;
-
                     const timelineBlock = (bunkTimelines[bunk] || []).find(b => b.startMin === block.startMin && b.endMin === block.endMin);
                     schedulableSlotBlocks.push({
                         divName: grade, bunk: String(bunk),
