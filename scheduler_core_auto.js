@@ -4111,20 +4111,21 @@
                 (bunkTimelines[bunk] || []).filter(b => b._source === 'rotation_event').forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1) return;
-                    window.scheduleAssignments[String(bunk)][idx] = {
+                   window.scheduleAssignments[String(bunk)][idx] = {
                         field: block._rotationEventLocation || block.event,
                         sport: null,
                         _activity: block.event,
                         _fixed: true,
+                        _pinned: true,
                         _bunkOverride: true,
                         _activityLocked: true,
+                        _autoSpecial: true,
                         _isRotationEvent: true,
                         _rotationEventId: block._rotationEventId || null,
                         _autoMode: true,
                         continuation: false
                     };
-                    rotationEventWriteCount++;
-                });
+                    rotationEventWriteCount++;                });
             });
         });
 
