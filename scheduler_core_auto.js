@@ -1693,8 +1693,23 @@
 
                 // Log results
                 let prePassSpecials = 0;
-                Object.values(draftResults).forEach(r => { prePassSpecials += r.specials.length; });
+                const prePassByGrade = {};
+                const prePassFailed = [];
+                Object.entries(draftResults).forEach(([bunk, r]) => {
+                    const g = r.grade;
+                    if (!prePassByGrade[g]) prePassByGrade[g] = { got: 0, total: 0 };
+                    prePassByGrade[g].total++;
+                    if (r.specials.length > 0) { prePassByGrade[g].got++; prePassSpecials++; }
+                    else {
+                        const sl = shoppingLists[bunk];
+                        if (sl && (sl.specials?.required || 0) > 0) prePassFailed.push(bunk + '(g' + g + ')');
+                    }
+                });
                 log(GP + ' Pre-pass: assigned ' + prePassSpecials + ' specials across all grades');
+                Object.entries(prePassByGrade).sort((a,b) => a[0]-b[0]).forEach(([g, info]) => {
+                    log(GP + '   Grade ' + g + ': ' + info.got + '/' + info.total + ' bunks got specials');
+                });
+                if (prePassFailed.length > 0) log(GP + '   Failed bunks: ' + prePassFailed.join(', '));
             }
 
             // ─── Process each grade ──────────────────────────────────
@@ -2057,6 +2072,8 @@
                     const sl = shoppingLists[bunk];
                     if (!sl) continue;
                     const result = draftResults[bunk];
+                    // Don't give extra specials beyond what's required
+                    if (result.specials.length >= (sl.specials?.required || 1)) continue;
                     const done = bunkDoneToday[bunk] || new Set();
 
                     for (const special of (sl.specials?.priorityList || [])) {
