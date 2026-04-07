@@ -1666,16 +1666,24 @@
                             }
 
                             let assigned = false;
+                            const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             for (const special of (sl.specials?.priorityList || [])) {
                                 if (result.usedActivities.has(special.name)) continue;
-
-                                const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                                 const dur = special.totalDuration || special.dMin || 30;
-                                const time = special.location
-                                    ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
-                                    : findAnyWindowGP(fw, dur);
+
+                                // Scan all free windows for a valid time
+                                let time = null;
+                                for (const win of fw) {
+                                    if (win.duration < dur) continue;
+                                    for (let t = win.start; t + dur <= win.end; t += 5) {
+                                        if (special.location && !isFieldAvailable(special.location, t, t + dur, bunk, grade)) continue;
+                                        if (!canAssignSpecialToGrade(special.name, grade, t, t + dur)) continue;
+                                        time = { startMin: t, endMin: t + dur };
+                                        break;
+                                    }
+                                    if (time) break;
+                                }
                                 if (!time) continue;
-                                if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                                 if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
                                 registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
