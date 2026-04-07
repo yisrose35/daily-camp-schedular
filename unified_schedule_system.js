@@ -829,11 +829,15 @@ function shouldHighlightBunk(bunkName) {
         const activity = entry._activity || '';
         const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
-        if (entry._h2h) return entry._gameLabel || sport || 'League Game';
-        if (entry._fixed) return activity || field;
-        if (field && sport && field !== sport) return `${field} – ${sport}`;
-        return activity || field || '';
-    }
+       if (entry._h2h) return entry._gameLabel || sport || 'League Game';
+// ★ FIX: Bunk overrides set _fixed but also have a meaningful field — show both
+if (entry._fixed) {
+    if (field && activity && field !== activity) return `${field} – ${activity}`;
+    if (field && sport && field !== sport) return `${field} – ${sport}`;
+    return activity || field;
+}
+if (field && sport && field !== sport) return `${field} – ${sport}`;
+return activity || field || '';    }
 
     function getEntryBackground(entry, blockEvent) {
         if (!entry) return blockEvent && isFixedBlockType(blockEvent) ? '#fff8e1' : '#f9fafb';
