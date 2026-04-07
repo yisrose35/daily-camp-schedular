@@ -1776,7 +1776,6 @@
                     for (const special of (sl.specials?.priorityList || [])) {
                         if (result.specials.length >= sl.specials.required) break;
                         if (result.usedActivities.has(special.name)) continue;
-                        if (!canAssignSpecialToGrade(special.name, grade, gradeStart, gradeEnd)) continue;
 
                         const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                         const dur = special.totalDuration || special.dMin || 30;
@@ -1784,6 +1783,11 @@
                             ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                             : findAnyWindowGP(fw, dur);
                         if (!time) continue;
+
+                        // ★ v8.0: Check cross-grade sharing with ACTUAL time, not full day.
+                        // Using gradeStart→gradeEnd was too broad — it rejected specials
+                        // that were available at non-overlapping times with other grades.
+                        if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                         if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
                         registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
@@ -1904,7 +1908,6 @@
                         for (const special of (sl.specials?.priorityList || [])) {
                             if (result.specials.length >= sl.specials.required) break;
                             if (result.usedActivities.has(special.name)) continue;
-                            if (!canAssignSpecialToGrade(special.name, grade, gradeStart, gradeEnd)) continue;
 
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             const dur = special.totalDuration || special.dMin || 30;
@@ -1912,6 +1915,7 @@
                                 ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                                 : findAnyWindowGP(fw, dur);
                             if (!time) continue;
+                            if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                             if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
                             registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
@@ -2047,9 +2051,6 @@
                 for (const special of (sl.specials?.priorityList || [])) {
                     if (result.specials.length >= (sl.specials?.required || 0)) break;
                     if (result.usedActivities.has(special.name)) continue;
-                    if (!canAssignSpecialToGrade(special.name, grade,
-                        parseTimeToMinutes(divisions[grade]?.startTime) || 540,
-                        parseTimeToMinutes(divisions[grade]?.endTime) || 960)) continue;
 
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     const dur = special.totalDuration || special.dMin || 30;
@@ -2057,6 +2058,7 @@
                         ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                         : findAnyWindowGP(fw, dur);
                     if (!time) continue;
+                    if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
 
                     if (special.location) claimField(special.location, time.startMin, time.endMin, bunk, grade, special.name);
                     registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
