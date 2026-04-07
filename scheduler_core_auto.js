@@ -4015,6 +4015,22 @@
             let iterScore = scoreTimelines(bunkTimelines, iterWarnings);
             // ★ Massive penalty for estimated Frees — #1 priority to minimize
             iterScore += iterFreeEstimate * 50000;
+            // ★ v8.0: Penalty for missing specials — each bunk that didn't get its
+            // required specials counts as a major scoring hit. Without this, the
+            // iteration loop picks iterations with fewer Free sport blocks but
+            // where half the bunks are missing their specials entirely.
+            let missingSpecials = 0;
+            allGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const sl = shoppingLists[bunk];
+                    const dr = draftResults[bunk];
+                    if (!sl || !dr) return;
+                    const required = sl.specials?.required || 0;
+                    const got = dr.specials?.length || 0;
+                    if (got < required) missingSpecials += (required - got);
+                });
+            });
+            iterScore += missingSpecials * 40000;
             totalIters++;
             extractFragments(bunkTimelines);
 
@@ -4028,7 +4044,7 @@
             } else staleCount++;
 
             if (improved || totalIters <= 3 || totalIters % 10 === 0) {
-               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate);            }
+               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate + ' | missingSpecials=' + missingSpecials);            }
 
             if (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
 
