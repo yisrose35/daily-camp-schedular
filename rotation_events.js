@@ -943,6 +943,7 @@ function getNeedsForBunk(bunkName, dateKey) {
             _activityLocked: true,
             _source: 'rotation_event',
             _rotationEventId: evt.id,
+            _rotationEventConcurrency: parseInt(evt.concurrency) || 1,
             _rotationEventColor: evt.color || '#F59E0B',
             _rotationEventLocation: evt.location || null
         });

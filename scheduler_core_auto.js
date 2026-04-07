@@ -597,6 +597,36 @@
             return true;
         }
 
+        // ── Rotation event concurrency tracking ─────────────────────
+        // Rotation events are camp-wide: any bunk from any grade can go,
+        // but only N bunks at the same time (evt.concurrency). Unlike pool/
+        // specials there's no division restriction or exact-time-match — bunks
+        // stagger independently within the window.
+        const _rotEvtBuckets = {}; // { eventId: { minute: count } }
+
+        function registerRotationEventUsage(eventId, startMin, endMin) {
+            if (!eventId) return;
+            if (!_rotEvtBuckets[eventId]) _rotEvtBuckets[eventId] = {};
+            const buckets = _rotEvtBuckets[eventId];
+            for (let m = startMin; m < endMin; m += 5) {
+                buckets[m] = (buckets[m] || 0) + 1;
+            }
+        }
+
+        function canUseRotationSlotAtTime(eventId, concurrency, startMin, endMin) {
+            if (!eventId || !concurrency) return true;
+            const buckets = _rotEvtBuckets[eventId];
+            if (!buckets) return true;
+            for (let m = startMin; m < endMin; m += 5) {
+                if ((buckets[m] || 0) >= concurrency) return false;
+            }
+            return true;
+        }
+
+        function rotEvtReset() {
+            Object.keys(_rotEvtBuckets).forEach(k => delete _rotEvtBuckets[k]);
+        }
+
         // Cross-grade tracker for stagger scoring
         function registerCrossGrade(grade, type, startMin, endMin, eventName) {
             rtRegister('xgrade', type, grade, startMin, endMin);
@@ -2470,6 +2500,9 @@
                 if (need.type === 'custom') {
                     registerCrossGrade(grade, 'custom', startMin, endMin, need._customActivity || need.event);
                 }
+                if (need.type === 'rotation_event' && need._rotationEventId) {
+                    registerRotationEventUsage(need._rotationEventId, startMin, endMin);
+                }
                template.push({
                     startMin, endMin,
                     type: need.type, event: need.event,
@@ -2485,6 +2518,7 @@
                     _customField: need._customField || null,
                     _customBunks: need._customBunks || null,
                     _rotationEventId: need._rotationEventId || null,
+                    _rotationEventConcurrency: need._rotationEventConcurrency || null,
                     _rotationEventLocation: need._rotationEventLocation || null,
                     _rotationEventColor: need._rotationEventColor || null,
                    _final: true
@@ -2657,6 +2691,13 @@
                         }
                         if (!specOk) continue;
                     }
+                    if (need.type === 'rotation_event' && need._rotationEventId) {
+                        let rotOk = false;
+                        for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
+                            if (canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, t, t + need.dMin)) { rotOk = true; break; }
+                        }
+                        if (!rotOk) continue;
+                    }
 
                     const assignedTotal = gap.needs.reduce((s, n) => s + n.dMin, 0);
                     const remainingSpace = gap.size - assignedTotal;
@@ -2740,6 +2781,20 @@
                             !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
                         if (ok && need.type === 'special' && need._assignedSpecial &&
                             getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
+                        if (ok && need.type === 'rotation_event' && need._rotationEventId &&
+                            !canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, cursor, cursor + dur)) {
+                            // Concurrency full at cursor — scan forward within the window for an open slot
+                            let found = false;
+                            for (let t = cursor + 5; t + dur <= winEnd && t + dur <= gap.end; t += 5) {
+                                if (canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, t, t + dur)) {
+                                    // Defer to pass 2 with adjusted windowStart so it lands at this time
+                                    need._rotEvtEarliestOpen = t;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            ok = false; // defer either way — pass 2 will pick it up
+                        }
 
                         // ★ v7.0: Look-ahead — verify placing this need here leaves
                         // the rest of the day solvable (no unfillable gaps)
@@ -2830,6 +2885,8 @@
                                 if (cand.type === 'swim' && !canUsePoolAtTime(grade, proposedStart, proposedStart + candDur)) candOk = false;
                                 if (cand.type === 'special' && cand._assignedSpecial &&
                                     !canUseSpecialAtTime(cand._assignedSpecial, grade, proposedStart, proposedStart + candDur)) candOk = false;
+                                if (cand.type === 'rotation_event' && cand._rotationEventId &&
+                                    !canUseRotationSlotAtTime(cand._rotationEventId, cand._rotationEventConcurrency, proposedStart, proposedStart + candDur)) candOk = false;
                                 if (candOk) {
                                     bridges.unshift({ idx: di, need: cand, dur: candDur });
                                     reservedSpace += candDur;
@@ -2877,6 +2934,24 @@
                         if (next.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
                         if (next.type === 'special' && next._assignedSpecial &&
                             !canUseSpecialAtTime(next._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
+                        if (next.type === 'rotation_event' && next._rotationEventId &&
+                            !canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, cursor, cursor + dur)) {
+                            // Scan forward for an open slot within this gap
+                            let slotFound = false;
+                            for (let t = cursor + 5; t + dur <= gap.end && t + dur <= targetWinEnd; t += 5) {
+                                if (canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, t, t + dur)) {
+                                    // Fill sports up to t, then place the rotation event
+                                    if (t > cursor) fillRegion(cursor, t);
+                                    placeNeed(next, t, dur);
+                                    cursor = t + dur;
+                                    deferred.shift();
+                                    slotFound = true;
+                                    break;
+                                }
+                            }
+                            if (slotFound) continue;
+                            ok = false; // no open slot — skip this bunk for today
+                        }
 
                         if (ok) {
                             placeNeed(next, cursor, dur);
@@ -3592,6 +3667,7 @@
             resourceCalendar.swim = {};
             // ★ v4.0: Reset resource tracker + field ledger between iterations
             rtReset();
+            rotEvtReset();
             initFieldLedger();
         }
 
@@ -4122,6 +4198,7 @@
                         _autoSpecial: true,
                         _isRotationEvent: true,
                         _rotationEventId: block._rotationEventId || null,
+                        _rotationEventColor: block._rotationEventColor || null,
                         _autoMode: true,
                         continuation: false
                     };
