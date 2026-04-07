@@ -1559,7 +1559,7 @@
 // =====================================================================
         // PHASE 2B: GLOBAL PLANNER (replaces old runDraft call)
         // =====================================================================
-        function runGlobalPlanner(shoppingLists) {
+        function runGlobalPlanner(shoppingLists, gradeOrder) {
             const GP = '[GlobalPlanner]';
             log(GP + ' Starting...');
 
@@ -1631,8 +1631,8 @@
                 plannerFieldClaims.push({ field: fieldName, startMin, endMin, bunk, grade: _gpCurrentGrade, activity });
             }
 
-            // ─── Process each grade ──────────────────────────────────
-            allGrades.forEach(grade => {
+            // ─── Process each grade (in MRV order if provided) ────────
+            (gradeOrder || allGrades).forEach(grade => {
                 _gpCurrentGrade = grade;
                 plannerFieldClaims.length = 0; // reset per grade
 
@@ -3789,27 +3789,9 @@
             const shoppingLists = {};
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { shoppingLists[bunk] = buildBunkShoppingList(bunk, grade); }));
 
-            // Phase 2: Draft
-            const draftResults = runGlobalPlanner(shoppingLists);
-
-            // ★ v4.0: Clear ONLY DRAFT field claims — keep pinned/phase0 claims
-            // The draft used temporary times. The packer will re-claim at actual times.
-            Object.values(fieldLedger).forEach(ledger => {
-                ledger.claims = ledger.claims.filter(c => {
-                    // Keep claims from Phase 0 blocks (walls)
-                    const bunkTl = bunkTimelines[c.bunk] || [];
-                    return bunkTl.some(b => b._fixed && overlaps(b.startMin, b.endMin, c.startMin, c.endMin));
-                });
-            });
-
-            // Phase 3: Greedy pack — most-constrained-first + per-iter variance
-            // ★ v8.0: Pack order is the #1 lever for cross-grade field contention.
-            // Grades with the tightest (need ÷ free-window) ratio pack FIRST so
-            // they claim contended fields before more-flexible grades siphon them.
-            // The iteration loop shuffles / rotates the order so every grade gets
-            // a chance at first pick across iterations.
-            const allTemplates = {};
-
+            // ★ v8.0: Compute MRV grade ordering BEFORE Phase 2 so the draft,
+            // packer, and solver simulation all use the same priority order.
+            // Most-constrained grades (tightest free-window-to-need ratio) go first.
             function computeGradeFlexibility(grade) {
                 const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                 const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
@@ -3817,11 +3799,9 @@
                 const bunks = getBunksForGrade(grade, divisions);
                 if (bunks.length === 0) return 999;
                 const repBunk = bunks[0];
-                // Walls = Phase 0 blocks already placed (pinned, leagues, trips)
                 const walls = (bunkTimelines[repBunk] || []).filter(b => b._fixed);
                 const wallMin = walls.reduce((s, w) => s + Math.max(0, w.endMin - w.startMin), 0);
                 const freeMin = Math.max(1, dayMin - wallMin);
-                // Total need = sports + specials + fixed-duration needs (swim, snack, rotation events)
                 const sl = shoppingLists[repBunk] || {};
                 const sportNeed = (sl.sports?.required || 0) * (sl.sports?.constraints?.dMin || 30);
                 const specialNeed = (sl.specials?.priorityList || [])
@@ -3829,14 +3809,12 @@
                     .reduce((s, sp) => s + (sp.totalDuration || 30), 0);
                 const snackNeed = sl.snack ? sl.snack.reduce((s, sn) => s + (sn.duration || 0), 0) : 0;
                 const totalNeed = sportNeed + specialNeed + snackNeed;
-                // Flexibility = freeMin ÷ totalNeed. Lower = more constrained = pack first.
                 return totalNeed > 0 ? (freeMin / totalNeed) : 999;
             }
 
             const gradeFlex = {};
             allGrades.forEach(g => { gradeFlex[g] = computeGradeFlexibility(g); });
 
-            // Base order: most constrained (lowest flex) first; tiebreak by stagger offset
             const baseOrder = [...allGrades].sort((a, b) => {
                 const fa = gradeFlex[a], fb = gradeFlex[b];
                 if (Math.abs(fa - fb) > 0.01) return fa - fb;
@@ -3844,7 +3822,6 @@
             });
 
             // Iter 0 = pure MRV. Even iters = rotate. Odd iters = seeded shuffle.
-            // This gives both structured exploration and random variance.
             let staggeredGrades;
             if (_iterSeed === 0) {
                 staggeredGrades = baseOrder;
@@ -3859,6 +3836,20 @@
                 log('[PACK ORDER iter ' + totalIters + '] ' +
                     staggeredGrades.map(g => g + '(flex=' + gradeFlex[g].toFixed(2) + ')').join(' → '));
             }
+
+            // Phase 2: Draft — use MRV grade order so constrained grades claim fields first
+            const draftResults = runGlobalPlanner(shoppingLists, staggeredGrades);
+
+            // ★ v4.0: Clear ONLY DRAFT field claims — keep pinned/phase0 claims
+            Object.values(fieldLedger).forEach(ledger => {
+                ledger.claims = ledger.claims.filter(c => {
+                    const bunkTl = bunkTimelines[c.bunk] || [];
+                    return bunkTl.some(b => b._fixed && overlaps(b.startMin, b.endMin, c.startMin, c.endMin));
+                });
+            });
+
+            // Phase 3: Greedy pack in MRV order
+            const allTemplates = {};
 
             todaysSwimmers = {};
             staggeredGrades.forEach(grade => {
@@ -3924,7 +3915,9 @@
                 });
 
                 // Simulate solving each unassigned sport/slot block
-                allGrades.forEach(grade => {
+                // ★ v8.0: Use staggeredGrades (MRV order) so the simulation matches
+                // the actual pack order — most constrained grades get first pick of fields.
+                staggeredGrades.forEach(grade => {
                     getBunksForGrade(grade, divisions).forEach(bunk => {
                         const bunkStr = String(bunk);
                         const done = simBunkDone[bunkStr];
