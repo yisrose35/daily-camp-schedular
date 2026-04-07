@@ -2772,19 +2772,7 @@
                         if (ok && need.type === 'special' && need._assignedSpecial &&
                             getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
                         if (ok && need.type === 'rotation_event' && need._rotationEventId &&
-                            !canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, grade, cursor, cursor + dur)) {
-                            // Concurrency full at cursor — scan forward within the window for an open slot
-                            let found = false;
-                            for (let t = cursor + 5; t + dur <= winEnd && t + dur <= gap.end; t += 5) {
-                                if (canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, grade, t, t + dur)) {
-                                    // Defer to pass 2 with adjusted windowStart so it lands at this time
-                                    need._rotEvtEarliestOpen = t;
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            ok = false; // defer either way — pass 2 will pick it up
-                        }
+                            !canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, grade, cursor, cursor + dur)) ok = false;
 
                         // ★ v7.0: Look-ahead — verify placing this need here leaves
                         // the rest of the day solvable (no unfillable gaps)
@@ -2835,7 +2823,7 @@
                     // ★ v6.0: If the gap between cursor and target is tiny (< fillMinDur)
                     // and the target is flexible (not swim/special), pull target to cursor
                     // to avoid creating an unfillable gap.
-                    const isFlexNeed = next.type !== 'swim' && !(next.type === 'special' && next._assignedSpecial);
+                    const isFlexNeed = next.type !== 'swim' && !(next.type === 'special' && next._assignedSpecial) && next.type !== 'rotation_event';
                     if (isFlexNeed && cursor < targetStart && (targetStart - cursor) < fillMinDur && (targetStart - cursor) > 0) {
                         targetStart = cursor;
                     }
@@ -2916,7 +2904,7 @@
                     bridgeIndicesToRemove.forEach(idx => deferred.splice(idx, 1));
 
                     // Place the target — allow flexible needs (snack, custom) to start up to 15min early
-                    const isFlexTarget = next.type !== 'swim' && !(next.type === 'special' && next._assignedSpecial);
+                    const isFlexTarget = next.type !== 'swim' && !(next.type === 'special' && next._assignedSpecial) && next.type !== 'rotation_event';
                     const targetEarly = isFlexTarget ? 15 : 0;
                     const targetWinStartAdj = Math.max(next.windowStart || gap.start, gap.start) - targetEarly;
                     if (cursor >= targetWinStartAdj && cursor + dur <= targetWinEnd + targetEarly) {
@@ -2925,23 +2913,7 @@
                         if (next.type === 'special' && next._assignedSpecial &&
                             !canUseSpecialAtTime(next._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
                         if (next.type === 'rotation_event' && next._rotationEventId &&
-                            !canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, grade, cursor, cursor + dur)) {
-                            // Scan forward for an open slot within this gap
-                            let slotFound = false;
-                            for (let t = cursor + 5; t + dur <= gap.end && t + dur <= targetWinEnd; t += 5) {
-                                if (canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, grade, t, t + dur)) {
-                                    // Fill sports up to t, then place the rotation event
-                                    if (t > cursor) fillRegion(cursor, t);
-                                    placeNeed(next, t, dur);
-                                    cursor = t + dur;
-                                    deferred.shift();
-                                    slotFound = true;
-                                    break;
-                                }
-                            }
-                            if (slotFound) continue;
-                            ok = false; // no open slot — skip this bunk for today
-                        }
+                            !canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, grade, cursor, cursor + dur)) ok = false;
 
                         if (ok) {
                             placeNeed(next, cursor, dur);
