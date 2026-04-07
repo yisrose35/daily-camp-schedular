@@ -2284,15 +2284,20 @@
                 }
             }
 
-           // Draft specials — full window, rotation band applied at scoring
-            // ★ v4.3: If draft didn't assign enough specials, pick from priority list
-            const draftSpecialCount = (draftResult.specials || []).length;
-            const requiredSpecials = shoppingList.specials?.required || 0;
+           // Draft specials — skip any already pinned as walls (from SPECIAL-INJECT)
+            // ★ v8.0: Specials with claimedTime are now injected as pinned walls
+            // before the packer. Only add un-pinned specials as needs here.
+            const pinnedSpecialNames = new Set(
+                walls.filter(w => w.type === 'special' && w._assignedSpecial && w._source === 'draft_pinned')
+                    .map(w => w._assignedSpecial)
+            );
+            const draftSpecialCount = (draftResult.specials || []).filter(s => !pinnedSpecialNames.has(s.name)).length;
+            const requiredSpecials = Math.max(0, (shoppingList.specials?.required || 0) - pinnedSpecialNames.size);
             if (draftSpecialCount < requiredSpecials) {
-                const usedNames = new Set((draftResult.specials || []).map(s => s.name));
+                const usedNames = new Set([...(draftResult.specials || []).map(s => s.name), ...pinnedSpecialNames]);
                 const priorityList = shoppingList.specials?.priorityList || [];
                 for (const special of priorityList) {
-                    if (draftResult.specials.length >= requiredSpecials) break;
+                    if (draftSpecialCount + pinnedSpecialNames.size >= (shoppingList.specials?.required || 0)) break;
                     if (usedNames.has(special.name)) continue;
                     draftResult.specials.push({
                         ...special,
@@ -2304,7 +2309,7 @@
             }
             // ★ v6.0: Get the specials layer for this grade (used as fallback for duration constraints)
             const gradeSpecialLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'special');
-            (draftResult.specials || []).forEach(special => {
+            (draftResult.specials || []).filter(s => !pinnedSpecialNames.has(s.name)).forEach(special => {
                 const hasFixedDur = special.duration && special.duration > 0;
                 const effectiveLayer = special.layer || gradeSpecialLayer || null;
                 const sDMin = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMin;
@@ -3928,7 +3933,45 @@
             // Phase 2: Draft — use MRV grade order so constrained grades claim fields first
             const draftResults = runGlobalPlanner(shoppingLists, staggeredGrades);
 
+            // ★ v8.0: Inject drafted specials as pinned walls BEFORE the packer.
+            // The draft assigned each bunk a specific special at a specific time.
+            // By writing them as fixed blocks now, the packer builds AROUND them
+            // instead of trying to re-place them (which fails due to cross-grade
+            // resource tracker conflicts from sequential processing).
+            let injectedSpecials = 0;
+            allGrades.forEach(grade => {
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const dr = draftResults[bunk];
+                    if (!dr || !dr.specials) return;
+                    dr.specials.forEach(special => {
+                        if (!special.claimedTime) return;
+                        const { startMin, endMin } = special.claimedTime;
+                        if (startMin == null || endMin == null) return;
+                        bunkTimelines[bunk].push({
+                            startMin, endMin,
+                            type: 'special', event: special.name,
+                            layer: special._layer || null,
+                            _classification: 'pinned',
+                            _committed: true, _fixed: true,
+                            _activityLocked: true, _noBacktrack: true,
+                            _assignedSpecial: special.name,
+                            _specialLocation: special.location || null,
+                            _specialDuration: endMin - startMin,
+                            _source: 'draft_pinned'
+                        });
+                        // Register in resource tracker so the packer respects it
+                        registerSpecialUsage(special.name, grade, startMin, endMin);
+                        registerCrossGrade(grade, 'special', startMin, endMin, special.name);
+                        if (special.location) claimField(special.location, startMin, endMin, String(bunk), grade, special.name);
+                        injectedSpecials++;
+                    });
+                    bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+                });
+            });
+            if (totalIters < 1) log('[SPECIAL-INJECT] Pinned ' + injectedSpecials + ' drafted specials as walls');
+
             // ★ v4.0: Clear ONLY DRAFT field claims — keep pinned/phase0 claims
+            // (now includes injected special blocks)
             Object.values(fieldLedger).forEach(ledger => {
                 ledger.claims = ledger.claims.filter(c => {
                     const bunkTl = bunkTimelines[c.bunk] || [];
