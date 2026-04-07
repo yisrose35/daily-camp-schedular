@@ -856,9 +856,9 @@
             const overlapping = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
             if (overlapping.length >= ledger.capacity) return false;
 
-            // Sharing rules — special locations defer cross-grade checks to canAssignSpecialToGrade
+            // Sharing rules
             if (ledger.shareType === 'not_sharable' && overlapping.length > 0) return false;
-            if (ledger.shareType === 'same_division' && !ledger._isSpecialLocation) {
+            if (ledger.shareType === 'same_division') {
                 if (overlapping.some(c => c.grade !== grade)) return false;
             }
             if (ledger.shareType === 'custom') {
@@ -1632,6 +1632,71 @@
                 plannerFieldClaims.push({ field: fieldName, startMin, endMin, bunk, grade: _gpCurrentGrade, activity });
             }
 
+            // ─── PRE-PASS: Assign 1 special to every bunk across all grades ──
+            // Process grades in round-robin to ensure fair distribution.
+            // Each grade gets one bunk assigned per round until all bunks have a special.
+            {
+                const gradeQueues = {};
+                allGrades.forEach(grade => {
+                    const bunks = getBunksForGrade(grade, divisions).map(String);
+                    // Shuffle bunks for variety across iterations
+                    const shuffled = _iterSeed > 0 ? seedShuffle([...bunks], _iterSeed) : [...bunks];
+                    gradeQueues[grade] = shuffled;
+                });
+
+                let anyAssigned = true;
+                while (anyAssigned) {
+                    anyAssigned = false;
+                    allGrades.forEach(grade => {
+                        _gpCurrentGrade = grade;
+                        const queue = gradeQueues[grade];
+                        if (!queue || queue.length === 0) return;
+
+                        const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                        const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+
+                        // Find next bunk that still needs a special
+                        while (queue.length > 0) {
+                            const bunk = queue[0];
+                            const sl = shoppingLists[bunk];
+                            const result = draftResults[bunk];
+                            if (!sl || result.specials.length >= (sl.specials?.required || 0)) {
+                                queue.shift();
+                                continue;
+                            }
+
+                            let assigned = false;
+                            for (const special of (sl.specials?.priorityList || [])) {
+                                if (result.usedActivities.has(special.name)) continue;
+
+                                const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                                const dur = special.totalDuration || special.dMin || 30;
+                                const time = special.location
+                                    ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
+                                    : findAnyWindowGP(fw, dur);
+                                if (!time) continue;
+                                if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
+
+                                if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
+                                registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
+                                result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
+                                result.usedActivities.add(special.name);
+                                assigned = true;
+                                break;
+                            }
+
+                            queue.shift();
+                            if (assigned) { anyAssigned = true; break; }
+                        }
+                    });
+                }
+
+                // Log results
+                let prePassSpecials = 0;
+                Object.values(draftResults).forEach(r => { prePassSpecials += r.specials.length; });
+                log(GP + ' Pre-pass: assigned ' + prePassSpecials + ' specials across all grades');
+            }
+
             // ─── Process each grade ──────────────────────────────────
             allGrades.forEach(grade => {
                 _gpCurrentGrade = grade;
@@ -1763,35 +1828,7 @@
                     win.deficit = Math.max(0, win.demand - fieldSupply);
                 });
 
-                // ── Step D0: Guarantee required specials per bunk ─────
-                // Before allocating sports in windows, assign specials for
-                // every bunk that needs them. This ensures specials aren't
-                // squeezed out when field supply >= demand (no deficit).
-                bunks.forEach(bunk => {
-                    const sl = shoppingLists[bunk];
-                    if (!sl) return;
-                    const result = draftResults[bunk];
-                    const needed = (sl.specials?.required || 0) - result.specials.length;
-                    if (needed <= 0) return;
-
-                    for (const special of (sl.specials?.priorityList || [])) {
-                        if (result.specials.length >= sl.specials.required) break;
-                        if (result.usedActivities.has(special.name)) continue;
-
-                        const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
-                        const dur = special.totalDuration || special.dMin || 30;
-                        const time = special.location
-                            ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
-                            : findAnyWindowGP(fw, dur);
-                        if (!time) continue;
-                        if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
-
-                        if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
-                        registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
-                        result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
-                        result.usedActivities.add(special.name);
-                    }
-                });
+                // ── Step D0: (handled by cross-grade pre-pass above) ────
 
                 // ── Step D: Allocate (tightest first) ────────────────
                 const windowsToProcess = mergedWindows
