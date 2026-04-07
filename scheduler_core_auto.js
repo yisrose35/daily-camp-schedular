@@ -2732,6 +2732,24 @@
                         for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
                             if (canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) { specOk = true; break; }
                         }
+                        // ★ v8.0: If drafted special is blocked everywhere, try swapping
+                        // to another special from the priority list before giving up
+                        if (!specOk && shoppingList.specials?.priorityList) {
+                            for (const alt of shoppingList.specials.priorityList) {
+                                if (alt.name === need._assignedSpecial) continue;
+                                if (placedSpecialNames.has(alt.name)) continue;
+                                for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
+                                    if (canUseSpecialAtTime(alt.name, grade, t, t + need.dMin)) {
+                                        need._assignedSpecial = alt.name;
+                                        need.event = alt.name;
+                                        need._specialLocation = alt.location || null;
+                                        specOk = true;
+                                        break;
+                                    }
+                                }
+                                if (specOk) break;
+                            }
+                        }
                         if (!specOk) continue;
                     }
                     if (need.type === 'rotation_event' && need._rotationEventId) {
@@ -2821,7 +2839,24 @@
                         let ok = true;
                         if (need.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
                         if (need.type === 'special' && need._assignedSpecial &&
-                            !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
+                            !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) {
+                            // Try swapping to an alternative special that IS available here
+                            let swapped = false;
+                            if (shoppingList.specials?.priorityList) {
+                                for (const alt of shoppingList.specials.priorityList) {
+                                    if (alt.name === need._assignedSpecial || placedSpecialNames.has(alt.name)) continue;
+                                    if (canUseSpecialAtTime(alt.name, grade, cursor, cursor + dur) &&
+                                        getCrossGradeConflicts('special', cursor, cursor + dur, grade, alt.name) === 0) {
+                                        need._assignedSpecial = alt.name;
+                                        need.event = alt.name;
+                                        need._specialLocation = alt.location || null;
+                                        swapped = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!swapped) ok = false;
+                        }
                         if (ok && need.type === 'special' && need._assignedSpecial &&
                             getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
                         if (ok && need.type === 'rotation_event' && need._rotationEventId &&
