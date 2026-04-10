@@ -3010,7 +3010,7 @@
             // try alternative specials from the priority list (the "audible")
             function trySpecialAtTime(need, startMin, endMin) {
                 // Try the assigned special first
-                if (trySpecialAtTime(need, startMin, endMin)) {
+                if (canUseSpecialAtTime(need._assignedSpecial, grade, startMin, endMin)) {
                     return true;
                 }
                 // Audible: try fallback specials
