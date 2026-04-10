@@ -2677,14 +2677,19 @@
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
             // ── Helper: build a template block with all required fields ──
-            // ★ v8.3: Hard guard — sport/slot blocks NEVER exceed 60 min at creation
+            // ★ v8.3: Hard guard — sport/slot blocks NEVER exceed dMax or go below dMin
             function makeBlock(opts) {
                 var blockType = (opts.type || 'slot').toLowerCase();
                 if (['sport', 'slot'].includes(blockType) && !opts._fixed) {
                     var blockDur = opts.endMin - opts.startMin;
                     var maxDur = opts.dMax || 60;
+                    var minDur = opts.dMin || 0;
                     if (blockDur > maxDur) {
                         opts.endMin = opts.startMin + maxDur;
+                    }
+                    if (minDur > 0 && blockDur < minDur) {
+                        // Block too short — reject it entirely (return null)
+                        return null;
                     }
                 }
                 return {
@@ -2720,7 +2725,7 @@
                     // Fits in one block
                     opts.startMin = startMin;
                     opts.endMin = endMin;
-                    targetArray.push(makeBlock(opts));
+                    var _b = makeBlock(opts); if (_b) targetArray.push(_b);
                     return;
                 }
                 // Split into evenly-sized blocks
@@ -2734,7 +2739,7 @@
                     for (var k in opts) blockOpts[k] = opts[k];
                     blockOpts.startMin = cursor;
                     blockOpts.endMin = cursor + dur;
-                    targetArray.push(makeBlock(blockOpts));
+                    var _b2 = makeBlock(blockOpts); if (_b2) targetArray.push(_b2);
                     cursor += dur;
                 }
             }
@@ -3238,14 +3243,16 @@
                             }
                         }
                         if (!absorbed) {
-                            // Can't absorb — create slot (scorer will handle the duration violation)
-                            tmpl.push(makeBlock({
+                            // Can't absorb — create slot only if >= dMin
+                            var _lastResort = makeBlock({
                                 startMin: rgap.start, endMin: rgap.end,
                                 type: 'slot', event: 'General Activity Slot',
                                 layer: fMeta.sportLayer, field: null,
-                                dMin: gapSize, dMax: fMeta.sportCeiling,
+                                dMin: fMeta.fillMinDur, dMax: fMeta.sportCeiling,
                                 _source: 'filler', _final: true
-                            }));
+                            });
+                            if (_lastResort) tmpl.push(_lastResort);
+                            // else: gap is below dMin, left unfilled (scorer handles it)
                         }
                     }
                 }
