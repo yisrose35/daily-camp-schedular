@@ -3774,10 +3774,20 @@
                                 }
                             }
                         }
-                        // Absolute last resort: extend a wall (even past dMax if necessary)
+                        // Absolute last resort: extend a flexible neighbor (never a pinned wall)
                         if (!absorbed) {
-                            if (prev._source === 'phase0') prev.endMin += gs;
-                            else next.startMin -= gs;
+                            const prevIsPinned = prev._source === 'phase0' && prev.layer && prev.layer.endMin != null;
+                            const nextIsPinned = next._source === 'phase0' && next.layer && next.layer.startMin != null;
+                            if (!prevIsPinned) { prev.endMin += gs; }
+                            else if (!nextIsPinned) { next.startMin -= gs; }
+                            else {
+                                // Both neighbors are pinned walls — create a tiny filler rather than violating windows
+                                template.push({ startMin: prev.endMin, endMin: next.startMin,
+                                    type: 'slot', event: 'General Activity Slot',
+                                    layer: shoppingList.sports?.layer, dMin: gs, dMax: gs,
+                                    _activityLocked: false, _source: 'filler',
+                                    _sportFallbacks: priorityList.map(s => s.name), _final: true });
+                            }
                         }
                     }
                     fixed = true; break;
