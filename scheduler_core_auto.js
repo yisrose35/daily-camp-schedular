@@ -2854,14 +2854,17 @@
                             _customField: cl.customField || null, _customBunks: cl.customBunks || null, _source: 'need' });
                     });
 
-                    // Sort needs: tightest window first (ratio of window to duration)
-                    // This ensures snack (20min window) is placed before swim (90min window)
-                    // before specials (full-day window). Tight windows MUST go first or they
-                    // get blocked by earlier placements.
+                    // Sort needs: shortest duration first, then tightest window.
+                    // Short needs (snack 10min) go before long needs (swim 30min) because
+                    // short needs can fit in small gaps that long needs would consume.
+                    // This prevents swim from taking the only gap where snack could fit.
                     needs.sort(function(a, b) {
-                        var aWindow = (a.windowEnd - a.windowStart) / Math.max(1, a.dMin);
-                        var bWindow = (b.windowEnd - b.windowStart) / Math.max(1, b.dMin);
-                        return aWindow - bWindow; // smallest ratio = tightest fit = first
+                        // 1. Shortest duration first
+                        if (a.dMin !== b.dMin) return a.dMin - b.dMin;
+                        // 2. Tightest absolute window second
+                        var aSlack = (a.windowEnd - a.windowStart) - a.dMin;
+                        var bSlack = (b.windowEnd - b.windowStart) - b.dMin;
+                        return aSlack - bSlack;
                     });
 
                     // ── 2: Place each need into the best-fitting gap ──
