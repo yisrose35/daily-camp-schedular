@@ -2913,7 +2913,58 @@
                                 _rotationEventColor: need._rotationEventColor || null, _final: true
                             }));
                         } else {
-                            log('[Phase3] WARN: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk);
+                            // ★ v8.0: Required layers get a second chance with relaxed window
+                            var isRequired = ['swim', 'snacks', 'snack', 'special', 'custom'].includes((need.type || '').toLowerCase());
+                            if (isRequired) {
+                                // Retry with full grade window (ignore layer window constraints)
+                                var retryGaps = findGaps(template, gradeStart, gradeEnd);
+                                var retryPlaced = false;
+                                for (var rg = 0; rg < retryGaps.length; rg++) {
+                                    var retryGap = retryGaps[rg];
+                                    if (retryGap.end - retryGap.start < need.dMin) continue;
+                                    var retryDur = Math.min(need.dMax, retryGap.end - retryGap.start);
+                                    var retryStart = retryGap.start;
+                                    // For swim, still check pool
+                                    if (need.type === 'swim') {
+                                        var poolOk = false;
+                                        for (var rpt = retryStart; rpt + need.dMin <= retryGap.end; rpt += 5) {
+                                            var rpEnd = Math.min(rpt + retryDur, retryGap.end);
+                                            if (rpEnd - rpt < need.dMin) continue;
+                                            if (canUsePoolAtTime(grade, rpt, rpEnd)) { retryStart = rpt; retryDur = rpEnd - rpt; poolOk = true; break; }
+                                        }
+                                        if (!poolOk) continue;
+                                    }
+                                    // Place it
+                                    var retryEnd = retryStart + retryDur;
+                                    if (need.type === 'swim') { registerCrossGrade(grade, 'swim', retryStart, retryEnd, need.event); registerPoolUsage(grade, retryStart, retryEnd); }
+                                    if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, retryStart, retryEnd, need.event); }
+                                    if (need.type === 'custom') { registerCrossGrade(grade, 'custom', retryStart, retryEnd, need._customActivity || need.event); }
+                                    if (need.type === 'special' && need._assignedSpecial) {
+                                        registerCrossGrade(grade, 'special', retryStart, retryEnd, need.event);
+                                        registerSpecialUsage(need._assignedSpecial, grade, retryStart, retryEnd);
+                                        placedSpecialNames.add(need._assignedSpecial);
+                                    }
+                                    template.push(makeBlock({
+                                        startMin: retryStart, endMin: retryEnd, type: need.type, event: need.event,
+                                        layer: need.layer, dMin: need.dMin, dMax: need.dMax,
+                                        _source: 'need', _activityLocked: need._activityLocked || false,
+                                        _assignedSpecial: need._assignedSpecial || null,
+                                        _specialLocation: need._specialLocation || null, _specialDuration: need._specialDuration || null,
+                                        _customActivity: need._customActivity || null, _customField: need._customField || null,
+                                        _customBunks: need._customBunks || null,
+                                        _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
+                                        _rotationEventColor: need._rotationEventColor || null, _final: true
+                                    }));
+                                    retryPlaced = true;
+                                    log('[Phase3] Retry placed ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' at ' + retryStart + '-' + retryEnd + ' (outside configured window)');
+                                    break;
+                                }
+                                if (!retryPlaced) {
+                                    log('[Phase3] ERROR: required layer ' + need.type + '/' + need.event + ' could not be placed for bunk ' + bunk + ' even with relaxed window');
+                                }
+                            } else {
+                                log('[Phase3] WARN: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk);
+                            }
                         }
                     }
 
