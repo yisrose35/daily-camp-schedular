@@ -3848,6 +3848,45 @@
                 }
             }
 
+            // ═══════════════════════════════════════════════════════════
+            // ★ v7.1 dMIN ENFORCEMENT — ensure NO block is shorter than its layer dMin.
+            // If gap elimination compressed a block below dMin, extend it by
+            // stealing time from an adjacent flexible (sport/slot) block.
+            // ═══════════════════════════════════════════════════════════
+            template.sort((a, b) => a.startMin - b.startMin);
+            for (let i = 0; i < template.length; i++) {
+                const blk = template[i];
+                const dur = blk.endMin - blk.startMin;
+                const minDur = blk.dMin || 0;
+                if (minDur <= 0 || dur >= minDur) continue;
+                const deficit = minDur - dur;
+
+                // Try extending forward (shrink next block)
+                if (i < template.length - 1) {
+                    const next = template[i + 1];
+                    const nextT = (next.type || '').toLowerCase();
+                    const nextDur = next.endMin - next.startMin;
+                    const nextMin = next.dMin || fillMinDur;
+                    if (['sport', 'slot'].includes(nextT) && next._source !== 'phase0' && nextDur - deficit >= nextMin) {
+                        blk.endMin += deficit;
+                        next.startMin += deficit;
+                        continue;
+                    }
+                }
+                // Try extending backward (shrink prev block)
+                if (i > 0) {
+                    const prev = template[i - 1];
+                    const prevT = (prev.type || '').toLowerCase();
+                    const prevDur = prev.endMin - prev.startMin;
+                    const prevMin = prev.dMin || fillMinDur;
+                    if (['sport', 'slot'].includes(prevT) && prev._source !== 'phase0' && prevDur - deficit >= prevMin) {
+                        blk.startMin -= deficit;
+                        prev.endMin -= deficit;
+                        continue;
+                    }
+                }
+            }
+
             return template.sort((a, b) => a.startMin - b.startMin);
         }
 
