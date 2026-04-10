@@ -2665,1243 +2665,497 @@
             }
         } // end dead code guard
 
+
         // =====================================================================
-        // PHASE 3: GREEDY CONSTRAINT PACKER (per-bunk)
-        // ★ v4.0 KEY FIXES:
-        //   - Specials register worst-case (dMax) in RT at placement
-        //   - Swim gated by canUsePoolAtTime
-        //   - Field claims persist — no clearing between grades
-        //   - Post-expand validation sweep for fields
-        //   - Expand phase NEVER stretches specials past dMax
+        // PHASE 3: TIME-SWEEP SPORT FILLER (v8.0)
+        // Replaces the old greedyPackBunk. Processes ALL 38 bunks simultaneously.
+        // Walls never move. Sports + fields assigned together. Sharing-aware.
         // =====================================================================
 
-        function greedyPackBunk(bunk, grade, draftResult, shoppingList, staggerOffset, swimsToday) {
-            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-            const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-            const sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
-            const minFill = getMinFillable(grade);
-            const ABSORB_MAX = 10;
-            // ★ v7.1: fillMinDur — use the layer's configured dMin, not a hardcoded floor.
-            // This ensures no sport block is created shorter than the layer allows.
-            const fillMinDur = Math.max(sportC.dMin || 25, TYPE_FLOORS.sport || 25);
-            // ★ v4.0: Rotation matrix — preferred time bands per activity type
-            const rotation = staggerPlan[grade] || {};
-            const typeBands = rotation.typeBands || {};
+        function timeSweepFillAll(shoppingLists, draftResults, allGrades) {
+            var allTemplates = {};
+            log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
-            // ── Step 1: Walls (Phase 0 blocks) ───────────────────────────
-            const walls = (bunkTimelines[bunk] || []).map(b => {
-                const t = (b.type || '').toLowerCase();
-                const isLeague = t === 'league' || t === 'specialty_league';
-                const c = (isLeague && b.layer) ? resolveConstraints(b.layer, t) : null;
+            // ── Helper: build a template block with all required fields ──
+            function makeBlock(opts) {
                 return {
-                    startMin: b.startMin, endMin: b.endMin, type: b.type, event: b.event,
-                    layer: b.layer, _fixed: true, _source: 'phase0',
-                    dMin: c ? c.dMin : (b.endMin - b.startMin),
-                    dMax: c ? c.dMax : (b.endMin - b.startMin),
-                    _gradeWide: b._gradeWide || false, _activityLocked: true,
-                    _classification: b._classification || 'pinned', _noBacktrack: b._noBacktrack || false
+                    startMin: opts.startMin, endMin: opts.endMin,
+                    type: opts.type || 'slot', event: opts.event || '',
+                    layer: opts.layer || null, field: opts.field || null,
+                    dMin: opts.dMin || (opts.endMin - opts.startMin),
+                    dMax: opts.dMax || (opts.endMin - opts.startMin),
+                    _fixed: opts._fixed || false, _source: opts._source || 'sport-fill',
+                    _activityLocked: opts._activityLocked || false,
+                    _assignedSport: opts._assignedSport || null,
+                    _assignedSpecial: opts._assignedSpecial || null,
+                    _specialLocation: opts._specialLocation || null,
+                    _specialDuration: opts._specialDuration || null,
+                    _gradeWide: opts._gradeWide || false, _noBacktrack: opts._noBacktrack || false,
+                    _sportFallbacks: opts._sportFallbacks || null,
+                    _customActivity: opts._customActivity || null,
+                    _customField: opts._customField || null,
+                    _customBunks: opts._customBunks || null,
+                    _rotationEventId: opts._rotationEventId || null,
+                    _rotationEventLocation: opts._rotationEventLocation || null,
+                    _rotationEventColor: opts._rotationEventColor || null,
+                    _final: opts._final || false
                 };
-            });
+            }
 
-            // ── Step 2: Build needs ──────────────────────────────────────
-            const needs = [];
-
-            // Swim — MRC band narrows the window (hard constraint for pool exclusivity),
-            // but rotation band is only a scoring preference (applied at candidate sort)
-            const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
-            if (swimLayer && swimsToday !== false && !walls.some(w => (w.type || '').toLowerCase() === 'swim')) {
-                const c = resolveConstraints(swimLayer, 'swim');
-                const mrc = getSwimWindow(grade);
-                let winStart = Math.max(swimLayer.startMin || 0, gradeStart);
-                let winEnd = Math.min(swimLayer.endMin || 1440, gradeEnd);
-                // MRC narrows (pool exclusivity is a real constraint)
-                if (mrc && (Math.min(mrc.end, winEnd) - Math.max(mrc.start, winStart)) >= c.dMin) {
-                    winStart = Math.max(mrc.start, winStart);
-                    winEnd = Math.min(mrc.end, winEnd);
+            // ── Helper: find gaps between sorted blocks ──
+            function findGaps(blocks, gStart, gEnd) {
+                var sorted = blocks.slice().sort(function(a, b) { return a.startMin - b.startMin; });
+                var gaps = [];
+                var cur = gStart;
+                for (var i = 0; i < sorted.length; i++) {
+                    if (sorted[i].startMin > cur) gaps.push({ start: cur, end: sorted[i].startMin });
+                    cur = Math.max(cur, sorted[i].endMin);
                 }
-                needs.push({
-                    type: 'swim', event: swimLayer.event || 'Swim', layer: swimLayer,
-                    dMin: c.dMin, dMax: c.dMax,
-                    windowStart: winStart, windowEnd: winEnd,
-                    _activityLocked: true, _source: 'layer'
-                });
-            }
-
-            // Snack
-            const snackLayer = (layersByGrade[grade] || []).find(l => ['snacks', 'snack'].includes((l.type || '').toLowerCase()));
-            if (snackLayer && !walls.some(w => ['snacks', 'snack'].includes((w.type || '').toLowerCase()))) {
-                const c = resolveConstraints(snackLayer, 'snacks');
-                needs.push({
-                    type: 'snacks', event: snackLayer.event || 'snacks', layer: snackLayer,
-                    dMin: c.dMin, dMax: c.dMax,
-                    windowStart: Math.max(snackLayer.startMin || 0, gradeStart),
-                    windowEnd: Math.min(snackLayer.endMin || 1440, gradeEnd),
-                    _activityLocked: true, _source: 'layer'
-                });
-            }
-
-            // Rotation events (camp-wide pass-through activities like lice checks, photo day)
-            // These come from rotation_events.js and are placed by the gap-walker the same
-            // way swim/snack/specials are. Walls are already respected — rotation events can
-            // never overlap pinned blocks because the gap-walker only walks free gaps.
-            if (window.RotationEvents && typeof window.RotationEvents.getNeedsForBunk === 'function') {
-                try {
-                    const reNeeds = window.RotationEvents.getNeedsForBunk(String(bunk), currentDate);
-                    if (reNeeds && reNeeds.length) {
-                        // Clamp window to grade bounds (rotation event window may extend
-                        // beyond a particular grade's day)
-                        reNeeds.forEach(n => {
-                            n.windowStart = Math.max(n.windowStart, gradeStart);
-                            n.windowEnd = Math.min(n.windowEnd, gradeEnd);
-                            if (n.windowEnd - n.windowStart >= n.dMin) needs.push(n);
-                        });
-                    }
-                } catch (e) {
-                    console.warn('[greedyPackBunk] rotation event needs failed for ' + bunk + ':', e);
-                }
-            }
-
-           // Draft specials — add as highest-priority needs
-            // ★ v7.0: If specials are already pre-placed as walls, skip adding needs
-            const specialsAlreadyWalls = walls.some(w => w._source === 'pre-placed' && w.type === 'special');
-            const requiredSpecials = specialsAlreadyWalls ? 0 : (shoppingList.specials?.required || 0);
-            if (!specialsAlreadyWalls) {
-                if (draftResult.specials && draftResult.specials.length > requiredSpecials && requiredSpecials > 0) {
-                    draftResult.specials.length = requiredSpecials;
-                }
-                if ((draftResult.specials || []).length < requiredSpecials) {
-                    const usedNames = new Set((draftResult.specials || []).map(s => s.name));
-                    const priorityList = shoppingList.specials?.priorityList || [];
-                    for (const special of priorityList) {
-                        if (draftResult.specials.length >= requiredSpecials) break;
-                        if (usedNames.has(special.name)) continue;
-                        draftResult.specials.push({ ...special, claimedTime: null, claimedField: special.location || null });
-                        usedNames.add(special.name);
-                    }
-                }
-            } else {
-                // Specials are walls — clear draft specials so packer doesn't double-add
-                draftResult.specials = [];
-            }
-            const gradeSpecialLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'special');
-            // Build full fallback list for specials (so packer can try alternatives)
-            const _specialFallbackList = (shoppingList.specials?.priorityList || []).map(function(sp) {
-                return { name: sp.name, location: sp.location, duration: sp.totalDuration || sp.dMin || 30 };
-            });
-            (draftResult.specials || []).forEach(special => {
-                const hasFixedDur = special.duration && special.duration > 0;
-                const effectiveLayer = special.layer || gradeSpecialLayer || null;
-                const sDMin = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMin;
-                const sDMax = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMax;
-                needs.push({
-                    type: 'special', event: special.name, layer: special.layer,
-                    dMin: sDMin, dMax: sDMax,
-                    windowStart: gradeStart, windowEnd: gradeEnd,
-                    _activityLocked: true, _assignedSpecial: special.name,
-                    _specialLocation: special.location, _specialDuration: special.duration,
-                    _specialFallbacks: _specialFallbackList,
-                    _source: 'draft'
-                });
-            });
-
-            // Custom windowed layers
-            (layersByGrade[grade] || []).filter(l =>
-                (l.type || '').toLowerCase() === 'custom' && l._classification !== 'pinned'
-            ).forEach(cl => {
-                if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
-                const dur = cl.durationMin || cl.periodMin || 30;
-                needs.push({
-                    type: 'custom', event: cl.customActivity || cl.event || 'Custom', layer: cl,
-                    dMin: dur, dMax: cl.durationMax || dur,
-                    windowStart: Math.max(cl.startMin || 0, gradeStart),
-                    windowEnd: Math.min(cl.endMin || 1440, gradeEnd),
-                    _activityLocked: true,
-                    _customActivity: cl.customActivity || null, _customField: cl.customField || null,
-                    _customBunks: cl.customBunks || null, _source: 'custom-layer'
-                });
-            });
-
-            // Sort: fixed-duration first, then tighter flexibility
-            needs.sort((a, b) => {
-                const aFixed = a.dMin === a.dMax ? 0 : 1;
-                const bFixed = b.dMin === b.dMax ? 0 : 1;
-                if (aFixed !== bFixed) return aFixed - bFixed;
-                return ((a.windowEnd - a.windowStart) / Math.max(1, a.dMin)) - ((b.windowEnd - b.windowStart) / Math.max(1, b.dMin));
-            });
-
-            // Stagger rotation for flex needs
-            if (staggerOffset > 0 && needs.length > 1) {
-                const fixedPart = needs.filter(n => n.dMin === n.dMax);
-                const flexPart = needs.filter(n => n.dMin !== n.dMax);
-                if (flexPart.length > 1) {
-                    const rot = staggerOffset % flexPart.length;
-                    const rotated = [...flexPart.slice(rot), ...flexPart.slice(0, rot)];
-                    needs.length = 0;
-                    needs.push(...fixedPart, ...rotated);
-                }
-            }
-
-           // ── TEMP DEBUG ───────────────────────────────────────────────
-            if (grade === '2nd Grade' && String(bunk) === String(getBunksForGrade(grade, divisions)[0])) {
-                console.log('[PACKER-DBG] 2nd Grade bunk ' + bunk + ': ' + needs.length + ' needs');
-                needs.forEach(function(n, i) { console.log('  need[' + i + ']: type=' + n.type + ' event=' + (n.event || n._assignedSpecial || '?') + ' dMin=' + n.dMin + ' dMax=' + n.dMax + ' win=' + n.windowStart + '-' + n.windowEnd); });
-                var dbgWalls = walls.map(function(w) { return w.startMin + '-' + w.endMin + '(' + w.event + ')'; });
-                console.log('  Walls: ' + dbgWalls.join(', '));
-                console.log('  draftResult.specials: ' + (draftResult.specials || []).length);
-                console.log('  shoppingList.specials.required: ' + (shoppingList.specials?.required || 0));
-                console.log('  shoppingList.specials.priorityList: ' + (shoppingList.specials?.priorityList?.length || 0));
-                (shoppingList.specials?.priorityList || []).forEach(function(s) { console.log('    priority: ' + s.name + ' dur=' + s.totalDuration + ' scarce=' + s.isScarce); });
-                (draftResult.specials || []).forEach(function(s) { console.log('    draft special: ' + s.name + ' dur=' + s.totalDuration); });
-            }
-
-            // ── Helpers ───────────────────────────────────────────────────
-            function getGaps(blockList) {
-                const sorted = [...blockList].sort((a, b) => a.startMin - b.startMin);
-                const gaps = [];
-                let cur = gradeStart;
-                sorted.forEach(b => { if (b.startMin > cur) gaps.push({ start: cur, end: b.startMin, size: b.startMin - cur }); cur = Math.max(cur, b.endMin); });
-                if (cur < gradeEnd) gaps.push({ start: cur, end: gradeEnd, size: gradeEnd - cur });
+                if (cur < gEnd) gaps.push({ start: cur, end: gEnd });
                 return gaps;
             }
 
-            // ═══════════════════════════════════════════════════════════
-            // ★ v7.0 LOOK-AHEAD CONSTRAINT SOLVER
-            // Before committing any placement, verify the REST of the day
-            // is still solvable. This prevents creating arrangements that
-            // inevitably lead to unfillable gaps or dMax violations.
-            // ═══════════════════════════════════════════════════════════
-            function canFitRemaining(currentPlaced, remainingNeeds) {
-                if (remainingNeeds.length === 0) return true;
-                const gaps = getGaps(currentPlaced);
+            // ══════════════════════════════════════════════════════════
+            // STEP 1 & 2: Extract walls + place needs (swim/snack/custom/rotation)
+            // ══════════════════════════════════════════════════════════
+            var bunkMeta = {};
 
-                // 1. Every remaining need must fit in at least one gap
-                for (const need of remainingNeeds) {
-                    const ok = gaps.some(g => {
-                        const es = Math.max(g.start, need.windowStart || gradeStart);
-                        const ee = Math.min(g.end, need.windowEnd || gradeEnd);
-                        if (ee - es < need.dMin) return false;
-                        // Check resource availability for this need in this gap
-                        if (need.type === 'swim') {
-                            for (let t = es; t + need.dMin <= ee; t += 5) {
-                                if (canUsePoolAtTime(grade, t, t + need.dMin)) return true;
+            for (var gi = 0; gi < allGrades.length; gi++) {
+                var grade = allGrades[gi];
+                var bunks = getBunksForGrade(grade, divisions);
+                var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+
+                for (var bi = 0; bi < bunks.length; bi++) {
+                    var bunk = bunks[bi];
+                    var shoppingList = shoppingLists[bunk];
+                    var draftResult = draftResults[bunk];
+                    if (!shoppingList || !draftResult) continue;
+
+                    var sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
+                    var fillMinDur = Math.max(sportC.dMin || 25, TYPE_FLOORS.sport || 25);
+                    var sportCeiling = Math.min(sportC.dMax || 60, TYPE_CEILINGS.sport || 60, 60);
+                    var priorityList = shoppingList.sports?.priorityList || [];
+                    var swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : false;
+                    var template = [];
+                    var placedSpecialNames = new Set();
+
+                    // ── 1a: Copy walls from bunkTimelines ────────────
+                    var timeline = bunkTimelines[bunk] || [];
+                    for (var wi = 0; wi < timeline.length; wi++) {
+                        var b = timeline[wi];
+                        var bType = (b.type || '').toLowerCase();
+                        var isLeague = bType === 'league' || bType === 'specialty_league';
+                        var c = (isLeague && b.layer) ? resolveConstraints(b.layer, bType) : null;
+                        template.push(makeBlock({
+                            startMin: b.startMin, endMin: b.endMin,
+                            type: b.type, event: b.event,
+                            layer: b.layer, field: b.field || null,
+                            dMin: c ? c.dMin : (b.endMin - b.startMin),
+                            dMax: c ? c.dMax : (b.endMin - b.startMin),
+                            _fixed: true, _source: 'phase0',
+                            _gradeWide: b._gradeWide || false,
+                            _activityLocked: true,
+                            _noBacktrack: b._noBacktrack || false,
+                            _assignedSpecial: b._assignedSpecial || null,
+                            _specialLocation: b._specialLocation || null,
+                            _specialDuration: b._specialDuration || null
+                        }));
+                        if (bType === 'special' && b.event) placedSpecialNames.add(b.event);
+                    }
+
+                    // ── 1b: Build needs (non-sport layers not yet walls) ──
+                    var needs = [];
+
+                    // Swim
+                    var swimLayer = (layersByGrade[grade] || []).find(function(l) { return (l.type || '').toLowerCase() === 'swim'; });
+                    if (swimLayer && swimsToday && !template.some(function(w) { return (w.type || '').toLowerCase() === 'swim'; })) {
+                        var sc = resolveConstraints(swimLayer, 'swim');
+                        var mrc = getSwimWindow(grade);
+                        var sWinStart = Math.max(swimLayer.startMin || 0, gradeStart);
+                        var sWinEnd = Math.min(swimLayer.endMin || 1440, gradeEnd);
+                        if (mrc && (Math.min(mrc.end, sWinEnd) - Math.max(mrc.start, sWinStart)) >= sc.dMin) {
+                            sWinStart = Math.max(mrc.start, sWinStart);
+                            sWinEnd = Math.min(mrc.end, sWinEnd);
+                        }
+                        needs.push({ type: 'swim', event: swimLayer.event || 'Swim', layer: swimLayer,
+                            dMin: sc.dMin, dMax: sc.dMax, windowStart: sWinStart, windowEnd: sWinEnd,
+                            _activityLocked: true, _source: 'need' });
+                    }
+
+                    // Snack
+                    var snackLayer = (layersByGrade[grade] || []).find(function(l) { return ['snacks', 'snack'].includes((l.type || '').toLowerCase()); });
+                    if (snackLayer && !template.some(function(w) { return ['snacks', 'snack'].includes((w.type || '').toLowerCase()); })) {
+                        var snC = resolveConstraints(snackLayer, 'snacks');
+                        needs.push({ type: 'snacks', event: snackLayer.event || 'snacks', layer: snackLayer,
+                            dMin: snC.dMin, dMax: snC.dMax,
+                            windowStart: Math.max(snackLayer.startMin || 0, gradeStart),
+                            windowEnd: Math.min(snackLayer.endMin || 1440, gradeEnd),
+                            _activityLocked: true, _source: 'need' });
+                    }
+
+                    // Rotation events
+                    if (window.RotationEvents && typeof window.RotationEvents.getNeedsForBunk === 'function') {
+                        try {
+                            var reNeeds = window.RotationEvents.getNeedsForBunk(String(bunk), currentDate);
+                            if (reNeeds && reNeeds.length) {
+                                for (var ri = 0; ri < reNeeds.length; ri++) {
+                                    var rn = reNeeds[ri];
+                                    rn.windowStart = Math.max(rn.windowStart, gradeStart);
+                                    rn.windowEnd = Math.min(rn.windowEnd, gradeEnd);
+                                    if (rn.windowEnd - rn.windowStart >= rn.dMin) needs.push(rn);
+                                }
                             }
-                            return false;
-                        }
-                        if (need.type === 'special' && need._assignedSpecial) {
-                            for (let t = es; t + need.dMin <= ee; t += 5) {
-                                if (trySpecialAtTime(need, t, t + need.dMin)) return true;
+                        } catch (e) { console.warn('[Phase3] rotation event needs failed for bunk ' + bunk, e); }
+                    }
+
+                    // Draft specials (only if not already pre-placed as walls)
+                    var specialsAlreadyWalls = template.some(function(w) { return w._source === 'phase0' && (w.type || '').toLowerCase() === 'special'; });
+                    if (!specialsAlreadyWalls && draftResult.specials && draftResult.specials.length > 0) {
+                        var gradeSpecialLayer = (layersByGrade[grade] || []).find(function(l) { return (l.type || '').toLowerCase() === 'special'; });
+                        var _specialFallbackList = (shoppingList.specials?.priorityList || []).map(function(sp) {
+                            return { name: sp.name, location: sp.location, duration: sp.totalDuration || sp.dMin || 30 };
+                        });
+                        (draftResult.specials || []).forEach(function(special) {
+                            if (placedSpecialNames.has(special.name)) return;
+                            var hasFixedDur = special.duration && special.duration > 0;
+                            var effectiveLayer = special.layer || gradeSpecialLayer || null;
+                            var sDMin = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMin;
+                            var sDMax = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMax;
+                            needs.push({ type: 'special', event: special.name, layer: special.layer,
+                                dMin: sDMin, dMax: sDMax, windowStart: gradeStart, windowEnd: gradeEnd,
+                                _activityLocked: true, _assignedSpecial: special.name,
+                                _specialLocation: special.location, _specialDuration: special.duration,
+                                _specialFallbacks: _specialFallbackList, _source: 'need' });
+                        });
+                    }
+
+                    // Custom windowed layers
+                    (layersByGrade[grade] || []).filter(function(l) {
+                        return (l.type || '').toLowerCase() === 'custom' && l._classification !== 'pinned';
+                    }).forEach(function(cl) {
+                        if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
+                        var dur = cl.durationMin || cl.periodMin || 30;
+                        needs.push({ type: 'custom', event: cl.customActivity || cl.event || 'Custom', layer: cl,
+                            dMin: dur, dMax: cl.durationMax || dur,
+                            windowStart: Math.max(cl.startMin || 0, gradeStart),
+                            windowEnd: Math.min(cl.endMin || 1440, gradeEnd),
+                            _activityLocked: true, _customActivity: cl.customActivity || null,
+                            _customField: cl.customField || null, _customBunks: cl.customBunks || null, _source: 'need' });
+                    });
+
+                    // Sort needs: fixed-duration first, then tightest window
+                    needs.sort(function(a, b) {
+                        var aFixed = a.dMin === a.dMax ? 0 : 1;
+                        var bFixed = b.dMin === b.dMax ? 0 : 1;
+                        if (aFixed !== bFixed) return aFixed - bFixed;
+                        return ((a.windowEnd - a.windowStart) / Math.max(1, a.dMin)) - ((b.windowEnd - b.windowStart) / Math.max(1, b.dMin));
+                    });
+
+                    // ── 2: Place each need into the best-fitting gap ──
+                    for (var ni = 0; ni < needs.length; ni++) {
+                        var need = needs[ni];
+                        var gaps = findGaps(template, gradeStart, gradeEnd);
+                        var bestStart = -1, bestDur = 0, bestScore = Infinity;
+
+                        for (var gj = 0; gj < gaps.length; gj++) {
+                            var gap = gaps[gj];
+                            var es = Math.max(gap.start, need.windowStart || gradeStart);
+                            var ee = Math.min(gap.end, need.windowEnd || gradeEnd);
+                            if (ee - es < need.dMin) continue;
+                            var dur = Math.min(need.dMax, ee - es);
+
+                            // Resource checks: scan 5-min increments for valid placement
+                            if (need.type === 'swim') {
+                                var poolFound = false;
+                                for (var pt = es; pt + need.dMin <= ee; pt += 5) {
+                                    var pEnd = Math.min(pt + dur, ee);
+                                    if (pEnd - pt < need.dMin) continue;
+                                    if (canUsePoolAtTime(grade, pt, pEnd)) { es = pt; dur = pEnd - pt; poolFound = true; break; }
+                                }
+                                if (!poolFound) continue;
                             }
-                            return false;
+                            if (need.type === 'special' && need._assignedSpecial) {
+                                var specFound = false;
+                                for (var st = es; st + need.dMin <= ee; st += 5) {
+                                    var sEnd = Math.min(st + dur, ee);
+                                    if (sEnd - st < need.dMin) continue;
+                                    if (canUseSpecialAtTime(need._assignedSpecial, grade, st, sEnd)) { es = st; dur = sEnd - st; specFound = true; break; }
+                                }
+                                if (!specFound) continue;
+                            }
+
+                            var score = (ee - es) - dur; // tightest fit = lowest score
+                            if (score < bestScore) { bestScore = score; bestStart = es; bestDur = dur; }
                         }
-                        return true;
-                    });
-                    if (!ok) return false;
-                }
 
-                // 2. Total remaining need time must fit in total gap time
-                const totalNeed = remainingNeeds.reduce((s, n) => s + n.dMin, 0);
-                const totalGap = gaps.reduce((s, g) => s + g.size, 0);
-                if (totalNeed > totalGap) return false;
+                        if (bestStart >= 0) {
+                            var placeEnd = bestStart + bestDur;
+                            // Register resources
+                            if (need.type === 'swim') { registerCrossGrade(grade, 'swim', bestStart, placeEnd, need.event); registerPoolUsage(grade, bestStart, placeEnd); }
+                            if (need.type === 'special' && need._assignedSpecial) {
+                                registerCrossGrade(grade, 'special', bestStart, placeEnd, need.event);
+                                registerSpecialUsage(need._assignedSpecial, grade, bestStart, placeEnd);
+                                placedSpecialNames.add(need._assignedSpecial);
+                            }
+                            if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, bestStart, placeEnd, need.event); }
+                            if (need.type === 'custom') { registerCrossGrade(grade, 'custom', bestStart, placeEnd, need._customActivity || need.event); }
 
-                // 3. After placing all needs, remaining gaps must be fillable with sports
-                // (every leftover gap must be either 0 or >= fillMinDur)
-                const needsByGap = new Map();
-                const sortedNeeds = [...remainingNeeds].sort((a, b) => {
-                    const aFlex = (Math.min(a.windowEnd || gradeEnd, gradeEnd) - Math.max(a.windowStart || gradeStart, gradeStart)) - a.dMin;
-                    const bFlex = (Math.min(b.windowEnd || gradeEnd, gradeEnd) - Math.max(b.windowStart || gradeStart, gradeStart)) - b.dMin;
-                    return aFlex - bFlex; // tightest first
-                });
-                // Simulate greedy assignment to check leftover gaps
-                const simGaps = gaps.map(g => ({ ...g, remaining: g.size }));
-                for (const need of sortedNeeds) {
-                    let assigned = false;
-                    for (const sg of simGaps) {
-                        const es = Math.max(sg.start, need.windowStart || gradeStart);
-                        const ee = Math.min(sg.end, need.windowEnd || gradeEnd);
-                        if (ee - es >= need.dMin && sg.remaining >= need.dMin) {
-                            sg.remaining -= need.dMin;
-                            assigned = true;
-                            break;
-                        }
-                    }
-                    if (!assigned) return false;
-                }
-                // Check leftover gaps are fillable
-                for (const sg of simGaps) {
-                    if (sg.remaining > 0 && sg.remaining < fillMinDur) return false;
-                }
-
-                return true;
-            }
-
-            // Validate a proposed placement: would placing this need here leave the day solvable?
-            function isPlacementSafe(proposedBlock, remainingNeeds, existingBlocks) {
-                const simBlocks = [...existingBlocks, proposedBlock];
-                return canFitRemaining(simBlocks, remainingNeeds);
-            }
-
-            // Original simple version kept as fallback
-            function canFitRemainingSimple(currentPlaced, remainingNeeds) {
-                if (remainingNeeds.length === 0) return true;
-                const gaps = getGaps(currentPlaced);
-                for (const need of remainingNeeds) {
-                    const ok = gaps.some(g => {
-                        const es = Math.max(g.start, need.windowStart);
-                        const ee = Math.min(g.end, need.windowEnd);
-                        return ee - es >= need.dMin;
-                    });
-                    if (!ok) return false;
-                }
-                const totalNeed = remainingNeeds.reduce((s, n) => s + n.dMin, 0);
-                const totalGap = gaps.reduce((s, g) => s + g.size, 0);
-                return totalNeed <= totalGap;
-            }
-
-            
-
-            // ══════════════════════════════════════════════════════════
-            // Steps 3–7: CURSOR WALK WITH LOOK-AHEAD (v5.1)
-            // ══════════════════════════════════════════════════════════
-            // v5.1 FIXES:
-            //   - Sport last-slot dMax clamp (no more 70min sports)
-            //   - fillRegion specials capped at required count
-            //   - Tiny residual extends ANY block (not just sports)
-            //   - Final sweep catches any unfilled gaps in template
-            //   - Empty gaps between walls get fillRegion directly
-            // ══════════════════════════════════════════════════════════
-
-            // ── Shared state ──────────────────────────────────────────
-            const usedSportsForBunk = new Set();
-            (draftResult.sports || []).forEach(s => usedSportsForBunk.add(s.name));
-            const priorityList = shoppingList.sports?.priorityList || [];
-            const placedSpecialNames = new Set();
-            // ★ v5.1.1: Hard ceiling for sport duration — layer dMax may be too wide or NaN
-            const sportCeiling = Math.min(sportC.dMax || 60, TYPE_CEILINGS.sport || 60, 60);
-            // ★ v7.0: Track how many specials this bunk has placed (walls + draft + fill)
-            const wallSpecialCount = walls.filter(w => w.type === 'special').length;
-            let specialsPlacedCount = wallSpecialCount + (draftResult.specials || []).length;
-            // ★ v7.0: Respect user config — at least 1 (guaranteed by pre-placed wall), up to configured amount
-            const maxSpecialsForBunk = Math.max(1, shoppingList.specials?.required || 1);
-            // Mark wall specials + draft specials as already placed
-            walls.filter(w => w.type === 'special').forEach(w => { if (w.event) placedSpecialNames.add(w.event); });
-            (draftResult.specials || []).forEach(s => { if (s.name) placedSpecialNames.add(s.name); });
-
-            function findSportWithField(startMin, endMin) {
-                for (const ds of (draftResult.sports || [])) {
-                    if (usedSportsForBunk.has(ds.name)) continue;
-                    const sportInfo = priorityList.find(s => s.name === ds.name);
-                    if (sportInfo) {
-                        for (const fn of (sportInfo.fields || [])) {
-                            if (isFieldAvailable(fn, startMin, endMin, bunk, grade, ds.name)) return { name: ds.name, field: fn };
+                            template.push(makeBlock({
+                                startMin: bestStart, endMin: placeEnd, type: need.type, event: need.event,
+                                layer: need.layer, dMin: need.dMin, dMax: need.dMax,
+                                _source: 'need', _activityLocked: need._activityLocked || false,
+                                _assignedSpecial: need._assignedSpecial || null,
+                                _specialLocation: need._specialLocation || null, _specialDuration: need._specialDuration || null,
+                                _customActivity: need._customActivity || null, _customField: need._customField || null,
+                                _customBunks: need._customBunks || null,
+                                _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
+                                _rotationEventColor: need._rotationEventColor || null, _final: true
+                            }));
+                        } else {
+                            log('[Phase3] WARN: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk);
                         }
                     }
+
+                    bunkMeta[bunk] = { grade: grade, template: template, sportC: sportC, fillMinDur: fillMinDur,
+                        sportCeiling: sportCeiling, priorityList: priorityList, gradeStart: gradeStart, gradeEnd: gradeEnd,
+                        draftSports: draftResult.sports || [], sportLayer: shoppingList.sports?.layer || null };
                 }
-                for (const sport of priorityList) {
-                    if (usedSportsForBunk.has(sport.name)) continue;
-                    for (const fn of (sport.fields || [])) {
-                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade, sport.name)) return { name: sport.name, field: fn };
+            }
+
+            // ══════════════════════════════════════════════════════════
+            // STEP 3: Compute sport gaps for all bunks
+            // ══════════════════════════════════════════════════════════
+            var sportGaps = [];
+            var allBunkIds = Object.keys(bunkMeta);
+            for (var k = 0; k < allBunkIds.length; k++) {
+                var bId = allBunkIds[k];
+                var meta = bunkMeta[bId];
+                var gaps = findGaps(meta.template, meta.gradeStart, meta.gradeEnd);
+                for (var gk = 0; gk < gaps.length; gk++) {
+                    sportGaps.push({ bunk: bId, grade: meta.grade, start: gaps[gk].start, end: gaps[gk].end, cursor: gaps[gk].start, filled: false });
+                }
+            }
+            log('[Phase3] ' + sportGaps.length + ' sport gaps across ' + allBunkIds.length + ' bunks');
+
+            // ══════════════════════════════════════════════════════════
+            // STEP 4: Time-sweep sport assignment (THE CORE)
+            // ══════════════════════════════════════════════════════════
+
+            // Track used sports per bunk
+            var usedSports = {};
+            for (var ui = 0; ui < allBunkIds.length; ui++) {
+                usedSports[allBunkIds[ui]] = new Set();
+            }
+
+            // Find sport + field for a bunk at a given time window
+            function findSportField(bunk, grade, startMin, endMin, meta) {
+                var pList = meta.priorityList;
+                var used = usedSports[bunk];
+                // Pass 1: drafted sports not yet used
+                for (var d = 0; d < (meta.draftSports || []).length; d++) {
+                    var ds = meta.draftSports[d];
+                    if (used.has(ds.name)) continue;
+                    var sportInfo = pList.find(function(s) { return s.name === ds.name; });
+                    if (!sportInfo) continue;
+                    for (var f = 0; f < (sportInfo.fields || []).length; f++) {
+                        if (isFieldAvailable(sportInfo.fields[f], startMin, endMin, bunk, grade, ds.name))
+                            return { name: ds.name, field: sportInfo.fields[f] };
                     }
                 }
-                for (const sport of priorityList) {
-                    for (const fn of (sport.fields || [])) {
-                        if (isFieldAvailable(fn, startMin, endMin, bunk, grade, sport.name)) return { name: sport.name, field: fn };
+                // Pass 2: unused priority list sports
+                for (var p = 0; p < pList.length; p++) {
+                    if (used.has(pList[p].name)) continue;
+                    for (var f2 = 0; f2 < (pList[p].fields || []).length; f2++) {
+                        if (isFieldAvailable(pList[p].fields[f2], startMin, endMin, bunk, grade, pList[p].name))
+                            return { name: pList[p].name, field: pList[p].fields[f2] };
+                    }
+                }
+                // Pass 3: allow sport reuse
+                for (var p2 = 0; p2 < pList.length; p2++) {
+                    for (var f3 = 0; f3 < (pList[p2].fields || []).length; f3++) {
+                        if (isFieldAvailable(pList[p2].fields[f3], startMin, endMin, bunk, grade, pList[p2].name))
+                            return { name: pList[p2].name, field: pList[p2].fields[f3] };
                     }
                 }
                 return null;
             }
 
-            // ── Try special with fallbacks ────────────────────────────
-            // If the assigned special's capacity is full at this time,
-            // try alternative specials from the priority list (the "audible")
-            function trySpecialAtTime(need, startMin, endMin) {
-                // Try the assigned special first
-                if (canUseSpecialAtTime(need._assignedSpecial, grade, startMin, endMin)) {
-                    return true;
-                }
-                // Audible: try fallback specials
-                if (need._specialFallbacks && need._specialFallbacks.length > 0) {
-                    for (var fi = 0; fi < need._specialFallbacks.length; fi++) {
-                        var fb = need._specialFallbacks[fi];
-                        if (fb.name === need._assignedSpecial) continue;
-                        if (placedSpecialNames.has(fb.name)) continue;
-                        if (canUseSpecialAtTime(fb.name, grade, startMin, endMin)) {
-                            // Swap to the fallback special
-                            need._assignedSpecial = fb.name;
-                            need._specialLocation = fb.location;
-                            need.event = fb.name;
-                            return true;
-                        }
-                    }
-                }
-                return false;
+            // Collect time boundaries and sweep
+            var boundarySet = {};
+            for (var sg = 0; sg < sportGaps.length; sg++) {
+                boundarySet[sportGaps[sg].start] = true;
+                boundarySet[sportGaps[sg].end] = true;
             }
+            var boundaries = Object.keys(boundarySet).map(Number).sort(function(a, b) { return a - b; });
 
-            // ── Place a need at a specific position ───────────────────
-            function placeNeed(need, startMin, dur) {
-                const endMin = startMin + dur;
-                if (need.type === 'special' && need._assignedSpecial) {
-                    registerCrossGrade(grade, 'special', startMin, endMin, need.event);
-                    registerSpecialUsage(need._assignedSpecial, grade, startMin, endMin);
-                    placedSpecialNames.add(need._assignedSpecial);
-                }
-                if (need.type === 'swim') {
-                    registerCrossGrade(grade, 'swim', startMin, endMin, need.event);
-                    registerPoolUsage(grade, startMin, endMin);
-                }
-                if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) {
-                    registerCrossGrade(grade, need.type, startMin, endMin, need.event);
-                }
-                if (need.type === 'custom') {
-                    registerCrossGrade(grade, 'custom', startMin, endMin, need._customActivity || need.event);
-                }
-                if (need.type === 'rotation_event' && need._rotationEventId) {
-                    registerRotationEventUsage(need._rotationEventId, grade, startMin, endMin);
-                }
-               template.push({
-                    startMin, endMin,
-                    type: need.type, event: need.event,
-                    layer: need.layer, field: need.field || null,
-                    dMin: need.dMin, dMax: need.dMax,
-                    _source: need._source || 'cursor',
-                    _activityLocked: need._activityLocked || false,
-                    _assignedSpecial: need._assignedSpecial || null,
-                    _specialLocation: need._specialLocation || null,
-                    _specialDuration: need._specialDuration || null,
-                    _assignedSport: need._assignedSport || null,
-                    _customActivity: need._customActivity || null,
-                    _customField: need._customField || null,
-                    _customBunks: need._customBunks || null,
-                    _rotationEventId: need._rotationEventId || null,
-                    _rotationEventConcurrency: need._rotationEventConcurrency || null,
-                    _rotationEventLocation: need._rotationEventLocation || null,
-                    _rotationEventColor: need._rotationEventColor || null,
-                   _final: true
-                });
-            }
+            for (var ti = 0; ti < boundaries.length; ti++) {
+                var T = boundaries[ti];
 
-            // ── Extend last template block to absorb tiny residual ────
-            // ★ v5.1: Extends ANY block type (not just sports), respecting dMax
-            function absorbResidual(residual) {
-                if (residual <= 0) return false;
-                const lastBlk = template.length > 0 ? template[template.length - 1] : null;
-                if (!lastBlk || lastBlk._source === 'phase0') return false;
-                const curDur = lastBlk.endMin - lastBlk.startMin;
-                const t = (lastBlk.type || '').toLowerCase();
-                // Sports/slots: cap at type ceiling
-                if (['sport', 'slot'].includes(t)) {
-                    const sportCeil = sportCeiling;
-                    if (curDur + residual <= sportCeil) {
-                        lastBlk.endMin += residual;
-                        return true;
-                    }
-                } else {
-                    // Other blocks: use their own dMax
-                    const maxDur = lastBlk.dMax || Infinity;
-                    if (curDur + residual <= maxDur) {
-                        lastBlk.endMin += residual;
-                        return true;
-                    }
+                // Find gaps whose cursor is at or before T and end is past T
+                var activeGaps = [];
+                for (var ag = 0; ag < sportGaps.length; ag++) {
+                    var sgap = sportGaps[ag];
+                    if (sgap.filled) continue;
+                    if (sgap.cursor <= T && sgap.end > T) activeGaps.push(sgap);
                 }
-                return false;
-            }
+                if (activeGaps.length === 0) continue;
 
-            // ── Fill a region with unplaced specials then sports ───────
-            function fillRegion(rStart, rEnd) {
-                const space = rEnd - rStart;
-                if (space <= 0) return rStart;
-                let cur = rStart;
-
-                // ★ v5.1: Only add specials if under the cap
-                if (specialsPlacedCount < maxSpecialsForBunk) {
-                    for (const special of (shoppingList.specials?.priorityList || [])) {
-                        if (cur >= rEnd) break;
-                        if (specialsPlacedCount >= maxSpecialsForBunk) break;
-                        if (placedSpecialNames.has(special.name)) continue;
-                        const dur = special.duration || special.dMin || 30;
-                        if (dur > rEnd - cur) continue;
-                        if (!canUseSpecialAtTime(special.name, grade, cur, cur + dur)) continue;
-                        // ★ v6.0: Explicit cross-grade conflict check for specials
-                        if (getCrossGradeConflicts('special', cur, cur + dur, grade, special.name) > 0) continue;
-                        // ★ v6.0: Fillability check — skip special if remainder is a dead zone
-                        const remainderAfter = (rEnd - cur) - dur;
-                        if (remainderAfter > 0 && remainderAfter < fillMinDur) continue;
-
-                        template.push({
-                            startMin: cur, endMin: cur + dur,
-                            type: 'special', event: special.name,
-                            layer: special._layer || shoppingList.specials?.layer || null,
-                            field: special.location || null,
-                            dMin: dur, dMax: dur,
-                            _source: 'cursor_fill',
-                            _activityLocked: true,
-                            _assignedSpecial: special.name,
-                            _specialLocation: special.location || null,
-                            _specialDuration: dur,
-                            _final: true
-                        });
-                        registerCrossGrade(grade, 'special', cur, cur + dur, special.name);
-                        registerSpecialUsage(special.name, grade, cur, cur + dur);
-                        if (special.location) claimField(special.location, cur, cur + dur, bunk, grade, special.name);
-                        placedSpecialNames.add(special.name);
-                        specialsPlacedCount++;
-                        cur += dur;
-                    }
+                // Group by grade for coordinated field sharing
+                var gradeGroups = {};
+                for (var gg = 0; gg < activeGaps.length; gg++) {
+                    var gr = activeGaps[gg].grade;
+                    if (!gradeGroups[gr]) gradeGroups[gr] = [];
+                    gradeGroups[gr].push(activeGaps[gg]);
                 }
 
-                // Fill remainder with sports
-                const sportSpace = rEnd - cur;
-                // ★ v5.1.1: Hard cap sport duration at type ceiling (60min)
-                // sportC.dMax comes from layer config and may be too wide
-                const sportMaxDur = sportCeiling;
-                if (sportSpace >= fillMinDur) {
-                    // ★ v5.1: Calculate slot count so no slot exceeds ceiling
-                    let numSports = Math.max(1, Math.ceil(sportSpace / sportMaxDur));
-                    while (numSports > 1 && numSports * fillMinDur > sportSpace) numSports--;
-                    if (numSports < 1) numSports = 1;
-                    // Distribute evenly
-                    const baseDur = snapTo5(Math.floor(sportSpace / numSports));
-                    let leftover = sportSpace;
-                    for (let s = 0; s < numSports; s++) {
-                        let dur;
-                        if (s === numSports - 1) {
-                            dur = leftover;
-                            if (dur > sportMaxDur) {
-                                dur = sportMaxDur;
-                            }
+                var gradeKeys = Object.keys(gradeGroups);
+                for (var ggi = 0; ggi < gradeKeys.length; ggi++) {
+                    var group = gradeGroups[gradeKeys[ggi]];
+                    // Sort by urgency: smallest remaining gap = highest priority
+                    group.sort(function(a, b) { return (a.end - a.cursor) - (b.end - b.cursor); });
+
+                    for (var bi2 = 0; bi2 < group.length; bi2++) {
+                        var gapItem = group[bi2];
+                        var m = bunkMeta[gapItem.bunk];
+                        if (!m) continue;
+
+                        var effectiveStart = Math.max(gapItem.cursor, T);
+                        var remaining = gapItem.end - effectiveStart;
+                        if (remaining <= 0) continue;
+
+                        // Calculate sport duration: fill up to ceiling, split if needed
+                        var dur = Math.min(remaining, m.sportCeiling);
+                        if (dur < m.fillMinDur) continue; // too small, handle in Step 5
+
+                        // If remaining > ceiling, only take one ceiling-worth
+                        var endMin = effectiveStart + dur;
+
+                        var result = findSportField(gapItem.bunk, gapItem.grade, effectiveStart, endMin, m);
+                        if (result) {
+                            claimField(result.field, effectiveStart, endMin, gapItem.bunk, gapItem.grade, result.name);
+                            usedSports[gapItem.bunk].add(result.name);
+                            m.template.push(makeBlock({
+                                startMin: effectiveStart, endMin: endMin,
+                                type: 'sport', event: result.name,
+                                layer: m.sportLayer, field: result.field,
+                                dMin: m.sportC.dMin, dMax: m.sportCeiling,
+                                _source: 'sport-fill', _assignedSport: result.name,
+                                _sportFallbacks: m.priorityList.map(function(s) { return s.name; }), _final: true
+                            }));
                         } else {
-                            dur = baseDur;
+                            // No field — create slot for downstream solver
+                            m.template.push(makeBlock({
+                                startMin: effectiveStart, endMin: endMin,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: m.sportLayer, field: null,
+                                dMin: m.sportC.dMin, dMax: m.sportCeiling,
+                                _source: 'sport-fill',
+                                _sportFallbacks: m.priorityList.map(function(s) { return s.name; }), _final: true
+                            }));
                         }
-                        dur = Math.max(fillMinDur, Math.min(sportMaxDur, dur));
-                        // ★ HARD GUARD: No single sport block may exceed 60min
-                        if (dur > 60 || isNaN(dur)) dur = Math.min(60, leftover);
-                        const sp = findSportWithField(cur, cur + dur);
-                        if (sp) { claimField(sp.field, cur, cur + dur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
-                        template.push({
-                            startMin: cur, endMin: cur + dur,
-                            type: sp ? 'sport' : 'slot',
-                            event: sp ? sp.name : 'General Activity Slot',
-                            layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
-                            _activityLocked: false,
-                            _assignedSport: sp ? sp.name : null, field: sp ? sp.field : null,
-                            _source: sp ? 'capacity_checked' : 'filler',
-                            _sportFallbacks: priorityList.map(s => s.name), _final: true
-                        });
-                        leftover -= dur;
-                        cur += dur;
-                    }
-                    // ★ v5.1: If there's STILL leftover (shouldn't happen, but safety)
-                    if (leftover >= fillMinDur) {
-                        let safetyDur = Math.min(leftover, 60); // HARD GUARD
-                        const sp = findSportWithField(cur, cur + safetyDur);
-                        if (sp) { claimField(sp.field, cur, cur + safetyDur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
-                        template.push({
-                            startMin: cur, endMin: cur + safetyDur,
-                            type: sp ? 'sport' : 'slot',
-                            event: sp ? sp.name : 'General Activity Slot',
-                            layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
-                            _activityLocked: false,
-                            _assignedSport: sp ? sp.name : null, field: sp ? sp.field : null,
-                            _source: sp ? 'capacity_checked' : 'filler',
-                            _sportFallbacks: priorityList.map(s => s.name), _final: true
-                        });
-                        cur += safetyDur;
-                    }
-                } else if (sportSpace > 0) {
-                    // ★ v5.2: Try extending last block. If can't, leave gap empty.
-                    // NEVER create a block below sportC.dMin — that violates the invariant.
-                    absorbResidual(sportSpace);
-                    cur = rEnd;
-                }
-                return cur;
-            }
-
-            // ── Step 3a: Get gaps ─────────────────────────────────────
-            const allGaps = getGaps(walls);
-            const gapAssignments = allGaps.map(g => ({
-                start: g.start, end: g.end, size: g.size, needs: []
-            }));
-
-            // ── Step 3b: Assign needs to gaps ─────────────────────────
-            for (const need of needs) {
-                let bestGapIdx = -1, bestRemaining = -1;
-
-                for (let gi = 0; gi < gapAssignments.length; gi++) {
-                    const gap = gapAssignments[gi];
-                    const overlapStart = Math.max(gap.start, need.windowStart);
-                    const overlapEnd = Math.min(gap.end, need.windowEnd);
-                    if (overlapEnd - overlapStart < need.dMin) continue;
-
-                    if (need.type === 'swim') {
-                        let poolOk = false;
-                        for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
-                            if (canUsePoolAtTime(grade, t, t + need.dMin)) { poolOk = true; break; }
-                        }
-                        if (!poolOk) continue;
-                    }
-                    if (need.type === 'special' && need._assignedSpecial) {
-                        let specOk = false;
-                        for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
-                            if (trySpecialAtTime(need, t, t + need.dMin)) { specOk = true; break; }
-                        }
-                        if (!specOk) continue;
-                    }
-                    if (need.type === 'rotation_event' && need._rotationEventId) {
-                        let rotOk = false;
-                        for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
-                            if (canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, grade, t, t + need.dMin)) { rotOk = true; break; }
-                        }
-                        if (!rotOk) continue;
-                    }
-
-                    const assignedTotal = gap.needs.reduce((s, n) => s + n.dMin, 0);
-                    const remainingSpace = gap.size - assignedTotal;
-                    if (remainingSpace < need.dMin) continue;
-
-                    // ★ v5.2: Prefer gaps where the remainder is fillable
-                    // A 50min gap with a 30min need leaves 20min — unfillable (< sportC.dMin).
-                    // Prefer a 90min gap where 60min remains — room for a sport.
-                    const remainingAfter = remainingSpace - need.dMin;
-                    const isFillable = remainingAfter === 0 || remainingAfter >= sportC.dMin;
-                    // Score: fillable gaps get massive bonus, then prefer more remaining space
-                    const gapScore = (isFillable ? 100000 : 0) + remainingAfter;
-                    if (gapScore > bestRemaining) {
-                        bestRemaining = gapScore;
-                        bestGapIdx = gi;
-                    }
-                }
-
-                if (bestGapIdx >= 0) {
-                    gapAssignments[bestGapIdx].needs.push(need);
-                } else if (need.type === 'swim' && need.layer) {
-                    const fullWinStart = Math.max(need.layer.startMin || 0, gradeStart);
-                    const fullWinEnd = Math.min(need.layer.endMin || 1440, gradeEnd);
-                    for (let gi = 0; gi < gapAssignments.length; gi++) {
-                        const gap = gapAssignments[gi];
-                        const os = Math.max(gap.start, fullWinStart);
-                        const oe = Math.min(gap.end, fullWinEnd);
-                        if (oe - os < need.dMin) continue;
-                        let poolOk = false;
-                        for (let t = os; t + need.dMin <= oe; t += 5) {
-                            if (canUsePoolAtTime(grade, t, t + need.dMin)) { poolOk = true; break; }
-                        }
-                        if (!poolOk) continue;
-                        const assignedTotal = gap.needs.reduce((s, n) => s + n.dMin, 0);
-                        if (gap.size - assignedTotal < need.dMin) continue;
-                        gapAssignments[gi].needs.push(need);
-                        break;
+                        gapItem.cursor = endMin;
+                        if (gapItem.cursor >= gapItem.end) gapItem.filled = true;
                     }
                 }
             }
 
-            // ── Step 3c: Cursor walk each gap ─────────────────────────
-            const template = [];
-            walls.forEach(w => template.push({ ...w, _final: true }));
+            // ══════════════════════════════════════════════════════════
+            // STEP 5: Fill remaining gaps
+            // ══════════════════════════════════════════════════════════
+            for (var fi = 0; fi < allBunkIds.length; fi++) {
+                var fBunk = allBunkIds[fi];
+                var fMeta = bunkMeta[fBunk];
+                var tmpl = fMeta.template;
+                tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
-            for (const gap of gapAssignments) {
-                if (gap.size <= 0) continue;
-
-                // ★ v5.1: Empty gap (no assigned needs) → fill directly
-                if (gap.needs.length === 0) {
-                    fillRegion(gap.start, gap.end);
-                    continue;
-                }
-
-                // Sort needs: tightest flexibility first
-                const sortedNeeds = [...gap.needs].sort((a, b) => {
-                    const aWin = Math.min(a.windowEnd || gap.end, gap.end) - Math.max(a.windowStart || gap.start, gap.start);
-                    const bWin = Math.min(b.windowEnd || gap.end, gap.end) - Math.max(b.windowStart || gap.start, gap.start);
-                    const aFlex = aWin - a.dMin;
-                    const bFlex = bWin - b.dMin;
-                    const aFixed = a.dMin === a.dMax ? 0 : 1;
-                    const bFixed = b.dMin === b.dMax ? 0 : 1;
-                    if (aFixed !== bFixed) return aFixed - bFixed;
-                    return aFlex - bFlex;
-                });
-
-                let cursor = gap.start;
-                const deferred = [];
-
-                // ── Pass 1: Place what fits at cursor, defer the rest ─
-                for (let ni = 0; ni < sortedNeeds.length; ni++) {
-                    const need = sortedNeeds[ni];
-                    const dur = need.dMin;
-                    const winStart = Math.max(need.windowStart || gap.start, gap.start);
-                    const winEnd = Math.min(need.windowEnd || gap.end, gap.end);
-
-                    if (cursor >= winStart && cursor + dur <= winEnd) {
-                        let ok = true;
-                        if (need.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
-                        if (need.type === 'special' && need._assignedSpecial &&
-                            !trySpecialAtTime(need, cursor, cursor + dur)) ok = false;
-                        if (ok && need.type === 'special' && need._assignedSpecial &&
-                            getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
-                        if (ok && need.type === 'rotation_event' && need._rotationEventId &&
-                            !canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency, grade, cursor, cursor + dur)) ok = false;
-
-                        // ★ v7.0: Look-ahead — verify placing this need here leaves
-                        // the rest of the day solvable (no unfillable gaps)
-                        if (ok) {
-                            const remainingAfterThis = sortedNeeds.slice(ni + 1).filter(n => !deferred.includes(n));
-                            const proposedBlock = { startMin: cursor, endMin: cursor + dur };
-                            const allPlaced = [...template, ...walls, proposedBlock];
-                            if (!canFitRemaining(allPlaced, remainingAfterThis)) {
-                                ok = false; // placing here creates unsolvable day — defer instead
-                            }
-                        }
-
-                        if (ok) {
-                            placeNeed(need, cursor, dur);
-                            cursor += dur;
-                            continue;
-                        }
-                    }
-                    deferred.push(need);
-                }
-
-                // ── Pass 2: Chain-aware backward planning ──────────────
-                // For each target (earliest window), plan the entire chain:
-                //   1. Check if placing target creates dead zone to NEXT deferred
-                //   2. If so, delay target to close the gap
-                //   3. Find bridge items between sport fill and (delayed) target
-                //   4. Fill sports, place bridges, place target
-                let safety = 0;
-                while (deferred.length > 0 && safety++ < 20) {
-                    deferred.sort((a, b) => {
-                        const aWs = Math.max(a.windowStart || gap.start, gap.start);
-                        const bWs = Math.max(b.windowStart || gap.start, gap.start);
-                        return aWs - bWs;
-                    });
-                    const next = deferred[0];
-                    let targetStart = Math.max(next.windowStart || gap.start, gap.start);
-                    const targetWinEnd = Math.min(next.windowEnd || gap.end, gap.end);
-                    const dur = next.dMin;
-
-                    if (targetStart + dur > gap.end || targetWinEnd < targetStart + dur) {
-                        deferred.shift();
-                        continue;
-                    }
-
-                    // ★ v5.2: Chain check — would placing target at targetStart
-                    // leave a dead zone before the next deferred item?
-                    // If so, delay target to butt up against the next item.
-                    // ★ v6.0: If the gap between cursor and target is tiny (< fillMinDur)
-                    // and the target is flexible (not swim/special), pull target to cursor
-                    // to avoid creating an unfillable gap.
-                    const isFlexNeed = next.type !== 'swim' && !(next.type === 'special' && next._assignedSpecial) && next.type !== 'rotation_event';
-                    if (isFlexNeed && cursor < targetStart && (targetStart - cursor) < fillMinDur && (targetStart - cursor) > 0) {
-                        targetStart = cursor;
-                    }
-
-                    if (cursor <= targetStart) {
-                        const targetEndIfPlaced = Math.max(cursor, targetStart) + dur;
-                        for (let di = 1; di < deferred.length; di++) {
-                            const nextDef = deferred[di];
-                            const nextDefWinStart = Math.max(nextDef.windowStart || gap.start, gap.start);
-                            const gapAfterTarget = nextDefWinStart - targetEndIfPlaced;
-                            if (gapAfterTarget > 0 && gapAfterTarget < sportC.dMin) {
-                                // Dead zone! Delay target so it ends at nextDefWinStart
-                                const delayedStart = nextDefWinStart - dur;
-                                // Only delay if: still in target's window AND still reachable
-                                if (delayedStart >= cursor && delayedStart >= Math.max(next.windowStart || gap.start, gap.start) &&
-                                    delayedStart + dur <= targetWinEnd) {
-                                    targetStart = delayedStart;
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    // Find bridge items between sport fill and target
-                    const bridges = [];
-                    let reservedSpace = 0;
-                    if (cursor < targetStart) {
-                        for (let di = 1; di < deferred.length; di++) {
-                            const cand = deferred[di];
-                            const candDur = cand.dMin;
-                            const candWinStart = Math.max(cand.windowStart || gap.start, gap.start);
-                            const candWinEnd = Math.min(cand.windowEnd || gap.end, gap.end);
-                            const proposedStart = targetStart - reservedSpace - candDur;
-                            if (proposedStart >= cursor && proposedStart >= candWinStart &&
-                                proposedStart + candDur <= candWinEnd) {
-                                let candOk = true;
-                                if (cand.type === 'swim' && !canUsePoolAtTime(grade, proposedStart, proposedStart + candDur)) candOk = false;
-                                if (cand.type === 'special' && cand._assignedSpecial &&
-                                    !trySpecialAtTime(cand, proposedStart, proposedStart + candDur)) candOk = false;
-                                if (cand.type === 'rotation_event' && cand._rotationEventId &&
-                                    !canUseRotationSlotAtTime(cand._rotationEventId, cand._rotationEventConcurrency, grade, proposedStart, proposedStart + candDur)) candOk = false;
-                                if (candOk) {
-                                    bridges.unshift({ idx: di, need: cand, dur: candDur });
-                                    reservedSpace += candDur;
-                                }
-                            }
-                            if (reservedSpace >= targetStart - cursor) break;
-                        }
-                    }
-
-                    // Fill sports up to (targetStart - reservedSpace)
-                    const sportFillEnd = targetStart - reservedSpace;
-                    if (cursor < sportFillEnd) {
-                        const fillSpace = sportFillEnd - cursor;
-                        if (fillSpace >= fillMinDur) {
-                            cursor = fillRegion(cursor, sportFillEnd);
-                        } else if (fillSpace > 0) {
-                            if (absorbResidual(fillSpace)) {
-                                cursor += fillSpace;
-                            } else {
-                                cursor = sportFillEnd;
-                            }
-                        }
-                    }
-
-                    // Place bridge items
-                    const bridgeIndicesToRemove = [];
-                    for (const br of bridges) {
-                        const bWinStart = Math.max(br.need.windowStart || gap.start, gap.start);
-                        const bWinEnd = Math.min(br.need.windowEnd || gap.end, gap.end);
-                        if (cursor >= bWinStart && cursor + br.dur <= bWinEnd) {
-                            placeNeed(br.need, cursor, br.dur);
-                            cursor += br.dur;
-                            bridgeIndicesToRemove.push(br.idx);
-                        }
-                    }
-                    bridgeIndicesToRemove.sort((a, b) => b - a);
-                    bridgeIndicesToRemove.forEach(idx => deferred.splice(idx, 1));
-
-                    // Place the target — allow flexible needs (snack, custom) to start up to 15min early
-                    const isFlexTarget = next.type !== 'swim' && !(next.type === 'special' && next._assignedSpecial) && next.type !== 'rotation_event';
-                    const targetEarly = isFlexTarget ? 15 : 0;
-                    const targetWinStartAdj = Math.max(next.windowStart || gap.start, gap.start) - targetEarly;
-                    if (cursor >= targetWinStartAdj && cursor + dur <= targetWinEnd + targetEarly) {
-                        let ok = true;
-                        if (next.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
-                        if (next.type === 'special' && next._assignedSpecial &&
-                            !trySpecialAtTime(next, cursor, cursor + dur)) ok = false;
-                        if (next.type === 'rotation_event' && next._rotationEventId &&
-                            !canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, grade, cursor, cursor + dur)) ok = false;
-
-                        if (ok) {
-                            placeNeed(next, cursor, dur);
-                            cursor += dur;
-                            deferred.shift();
-                            continue;
-                        }
-                    }
-                    deferred.shift();
-                }
-
-                // ── Pass 3: Fill remaining space ──────────────────────
-                if (cursor < gap.end) {
-                    cursor = fillRegion(cursor, gap.end);
-                }
-            }
-
-            // ── Step 4: Final sweep — fill any remaining gaps ─────────
-            // Catches gaps the main loop missed (e.g. between walls
-            // that no needs were assigned to but fillRegion didn't fire)
-            template.sort((a, b) => a.startMin - b.startMin);
-            for (let sweep = 0; sweep < 3; sweep++) {
-                template.sort((a, b) => a.startMin - b.startMin);
-                let swept = false;
-
-                // Start-of-day gap
-                if (template.length > 0 && template[0].startMin > gradeStart) {
-                    const gapSize = template[0].startMin - gradeStart;
-                    if (gapSize >= fillMinDur) {
-                        fillRegion(gradeStart, template[0].startMin);
-                        swept = true;
-                    } else if (gapSize > 0) {
-                        if (!absorbResidual(gapSize)) {
-                            // Extend first block backward if not a wall AND within its max
-                            const fb = template[0];
-                            const fbT = (fb.type || '').toLowerCase();
-                            const fbMax = ['sport', 'slot'].includes(fbT) ? sportCeiling : (fb.dMax || Infinity);
-                            if (fb._source !== 'phase0' && (fb.endMin - gradeStart) <= fbMax) {
-                                fb.startMin = gradeStart; swept = true;
-                            }
-                        } else { swept = true; }
-                    }
-                }
-
-                // End-of-day gap
-                template.sort((a, b) => a.startMin - b.startMin);
-                if (template.length > 0 && template[template.length - 1].endMin < gradeEnd) {
-                    const gapSize = gradeEnd - template[template.length - 1].endMin;
-                    if (gapSize >= fillMinDur) {
-                        fillRegion(template[template.length - 1].endMin, gradeEnd);
-                        swept = true;
-                    } else if (gapSize > 0) {
-                        const last = template[template.length - 1];
-                        const t = (last.type || '').toLowerCase();
-                        const curDur = last.endMin - last.startMin;
-                        const maxDur = ['sport', 'slot'].includes(t) ? sportCeiling : (last.dMax || Infinity);
-                        if (last._source !== 'phase0' && curDur + gapSize <= maxDur) {
-                            last.endMin = gradeEnd; swept = true;
-                        }
-                    }
-                }
-
-                // Inter-block gaps
-                template.sort((a, b) => a.startMin - b.startMin);
-                for (let i = 0; i < template.length - 1; i++) {
-                    const gapSize = template[i + 1].startMin - template[i].endMin;
+                var remainingGaps = findGaps(tmpl, fMeta.gradeStart, fMeta.gradeEnd);
+                for (var rg = 0; rg < remainingGaps.length; rg++) {
+                    var rgap = remainingGaps[rg];
+                    var gapSize = rgap.end - rgap.start;
                     if (gapSize <= 0) continue;
 
-                    if (gapSize >= fillMinDur) {
-                        fillRegion(template[i].endMin, template[i + 1].startMin);
-                        swept = true;
-                        break; // re-sort and re-scan
-                    } else if (gapSize > 0) {
-                        // ★ v5.1: Try extending prev or next, respecting dMax
-                        const prev = template[i], next = template[i + 1];
-                        const prevT = (prev.type || '').toLowerCase();
-                        const nextT = (next.type || '').toLowerCase();
-                        const prevMax = ['sport', 'slot'].includes(prevT) ? sportCeiling : (prev.dMax || Infinity);
-                        const nextMax = ['sport', 'slot'].includes(nextT) ? sportCeiling : (next.dMax || Infinity);
-                        const prevDur = prev.endMin - prev.startMin;
-                        const nextDur = next.endMin - next.startMin;
-
-                        if (prev._source !== 'phase0' && prevDur + gapSize <= prevMax) {
-                            prev.endMin += gapSize; swept = true;
-                        } else if (next._source !== 'phase0' && nextDur + gapSize <= nextMax) {
-                            next.startMin -= gapSize; swept = true;
+                    if (gapSize >= fMeta.fillMinDur) {
+                        // Big enough for a sport
+                        var numBlocks = Math.max(1, Math.ceil(gapSize / fMeta.sportCeiling));
+                        var blockDur = Math.floor(gapSize / numBlocks);
+                        var cursor = rgap.start;
+                        for (var nb = 0; nb < numBlocks; nb++) {
+                            var bDur = (nb === numBlocks - 1) ? (rgap.end - cursor) : blockDur;
+                            if (bDur < fMeta.fillMinDur && nb > 0) {
+                                // Too small — extend previous block
+                                var prev = tmpl[tmpl.length - 1];
+                                if (prev && !prev._fixed) prev.endMin = rgap.end;
+                                break;
+                            }
+                            var rResult = findSportField(fBunk, fMeta.grade, cursor, cursor + bDur, fMeta);
+                            if (rResult) {
+                                claimField(rResult.field, cursor, cursor + bDur, fBunk, fMeta.grade, rResult.name);
+                                usedSports[fBunk].add(rResult.name);
+                            }
+                            tmpl.push(makeBlock({
+                                startMin: cursor, endMin: cursor + bDur,
+                                type: rResult ? 'sport' : 'slot', event: rResult ? rResult.name : 'General Activity Slot',
+                                layer: fMeta.sportLayer, field: rResult ? rResult.field : null,
+                                dMin: fMeta.sportC.dMin, dMax: fMeta.sportCeiling,
+                                _source: 'filler', _assignedSport: rResult ? rResult.name : null,
+                                _sportFallbacks: fMeta.priorityList.map(function(s) { return s.name; }), _final: true
+                            }));
+                            cursor += bDur;
                         }
-                        // If neither can absorb within dMax/sportCeiling, gap stays.
-                        // Iteration loop scores it and retries.
-                    }
-                }
-
-                if (!swept) break;
-            }
-
-            // ── Step 5: Wall-clamp safety ─────────────────────────────
-            // No non-wall block may overlap a wall. If it does, shrink it.
-            template.sort((a, b) => a.startMin - b.startMin);
-            const wallBlocks = template.filter(b => b._source === 'phase0');
-            for (const blk of template) {
-                if (blk._source === 'phase0') continue;
-                for (const wall of wallBlocks) {
-                    // Block bleeds into wall from the left
-                    if (blk.endMin > wall.startMin && blk.startMin < wall.startMin) {
-                        blk.endMin = wall.startMin;
-                    }
-                    // Block bleeds into wall from the right
-                    if (blk.startMin < wall.endMin && blk.endMin > wall.endMin) {
-                        blk.startMin = wall.endMin;
-                    }
-                }
-                // Remove zero/negative duration blocks
-                if (blk.endMin <= blk.startMin) {
-                    blk._deleted = true;
-                }
-            }
-            // Filter out deleted blocks
-            const finalTemplate = template.filter(b => !b._deleted);
-            finalTemplate.sort((a, b) => a.startMin - b.startMin);
-            // Replace template contents
-            template.length = 0;
-            finalTemplate.forEach(b => template.push(b));
-
-            template.sort((a, b) => a.startMin - b.startMin);
-            // ── Step 7: Post-expand enforcement ──────────────────────────
-            // Clamp configured specials to exact duration
-            for (const blk of template) {
-                if ((blk.type || '').toLowerCase() !== 'special') continue;
-                const eName = blk.event || blk._assignedSpecial;
-                if (!eName) continue;
-                const cfgDur = getSpecialDuration(eName, activityProperties, globalSettings);
-                if (cfgDur && cfgDur > 0 && (blk.endMin - blk.startMin) !== cfgDur) {
-                    blk.endMin = blk.startMin + cfgDur;
-                }
-            }
-
-            // ★ v4.0: Post-expand field validation — re-check all capacity_checked sport claims
-            // ★ v4.1 FIX: Re-sync field ledger FIRST so later grades see actual expanded times.
-            // 1. Unclaim all stale pre-expansion claims for this bunk
-            unclaimFieldsForBunk(bunk);
-            // 2. Re-claim at actual expanded times; demote blocks that can't re-claim
-            for (const blk of template) {
-                if (!blk.field || blk._source === 'phase0') continue;
-                const canReclaim = claimField(blk.field, blk.startMin, blk.endMin, bunk, grade, blk.event || blk._assignedSport || 'sport');
-                if (!canReclaim) {
-                    // Field is no longer available at expanded time — find alternative
-                    const alt = findSportWithField(blk.startMin, blk.endMin);
-                    if (alt && claimField(alt.field, blk.startMin, blk.endMin, bunk, grade, alt.name)) {
-                        blk.field = alt.field;
-                        blk.event = alt.name;
-                        blk._assignedSport = alt.name;
                     } else {
-                        // No alternative — demote to unassigned slot
-                        blk.field = null;
-                        blk.type = 'slot';
-                        blk.event = 'General Activity Slot';
-                        blk._assignedSport = null;
-                        blk._source = 'filler';
-                    }
-                }
-            }
-
-            // ═══════════════════════════════════════════════════════════
-            // ★ v6.0 TINY BLOCK MERGER — eliminate blocks shorter than fillMinDur
-            // by merging them into adjacent sport/slot blocks.
-            // ═══════════════════════════════════════════════════════════
-            // ★ v6.1: Tiny block merger — ONLY merge into sport/slot blocks (never stretch
-            // snacks, specials, swim, or other typed blocks past their dMax)
-            template.sort((a, b) => a.startMin - b.startMin);
-            for (let mi = 0; mi < template.length; mi++) {
-                const blk = template[mi];
-                if (blk._source === 'phase0') continue;
-                const dur = blk.endMin - blk.startMin;
-                const t = (blk.type || '').toLowerCase();
-                if (!['sport', 'slot'].includes(t)) continue;
-                if (dur >= fillMinDur) continue;
-                // ONLY merge into adjacent sport/slot — never into snacks/specials/swim
-                let merged = false;
-                if (mi > 0 && ['sport', 'slot'].includes((template[mi - 1].type || '').toLowerCase()) && template[mi - 1]._source !== 'phase0') {
-                    template[mi - 1].endMin = blk.endMin;
-                    merged = true;
-                } else if (mi < template.length - 1 && ['sport', 'slot'].includes((template[mi + 1].type || '').toLowerCase()) && template[mi + 1]._source !== 'phase0') {
-                    template[mi + 1].startMin = blk.startMin;
-                    merged = true;
-                }
-                if (merged) {
-                    template.splice(mi, 1);
-                    mi--; // re-check at this index
-                }
-            }
-
-            // ═══════════════════════════════════════════════════════════
-            // ★ v6.0 FINAL GAP ELIMINATOR — absolute last line of defense.
-            // Guarantees ZERO gaps from gradeStart to gradeEnd.
-            // ═══════════════════════════════════════════════════════════
-            for (let gapPass = 0; gapPass < 15; gapPass++) {
-                template.sort((a, b) => a.startMin - b.startMin);
-                let foundGap = false;
-
-                // Start-of-day gap
-                if (template.length > 0 && template[0].startMin > gradeStart) {
-                    const gs = template[0].startMin - gradeStart;
-                    if (gs >= fillMinDur) {
-                        const sp = findSportWithField(gradeStart, template[0].startMin);
-                        if (sp) claimField(sp.field, gradeStart, template[0].startMin, bunk, grade, sp.name);
-                        template.push({ startMin: gradeStart, endMin: template[0].startMin,
-                            type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
-                            layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
-                            _activityLocked: false, _assignedSport: sp ? sp.name : null,
-                            field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
-                            _sportFallbacks: priorityList.map(s => s.name), _final: true });
-                    } else {
-                        // Small start gap — only extend if first block is sport/slot
-                        const firstT = (template[0].type || '').toLowerCase();
-                        if (['sport', 'slot'].includes(firstT) && template[0]._source !== 'phase0') {
-                            template[0].startMin = gradeStart;
-                        }
-                        // else: leave the small gap (scorer handles it)
-                    }
-                    foundGap = true; continue;
-                }
-
-                // Inter-block gaps
-                template.sort((a, b) => a.startMin - b.startMin);
-                let fixed = false;
-                for (let i = 0; i < template.length - 1; i++) {
-                    const gs = template[i + 1].startMin - template[i].endMin;
-                    if (gs <= 0) continue;
-                    if (gs >= fillMinDur) {
-                        const gS = template[i].endMin, gE = template[i + 1].startMin;
-                        const sp = findSportWithField(gS, gE);
-                        if (sp) claimField(sp.field, gS, gE, bunk, grade, sp.name);
-                        template.push({ startMin: gS, endMin: gE,
-                            type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
-                            layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
-                            _activityLocked: false, _assignedSport: sp ? sp.name : null,
-                            field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
-                            _sportFallbacks: priorityList.map(s => s.name), _final: true });
-                    } else {
-                        // ★ v6.0: Small gap — NEVER create a tiny filler (causes duration violations).
-                        // Search for the nearest sport/slot block that can absorb the gap.
-                        // Sports/slots are flexible — the solver will reassign them.
-                        const prev = template[i], next = template[i + 1];
-                        const prevT = (prev.type || '').toLowerCase();
-                        const nextT = (next.type || '').toLowerCase();
-                        const prevDur = prev.endMin - prev.startMin;
-                        const nextDur = next.endMin - next.startMin;
-                        const prevMax = ['sport', 'slot'].includes(prevT) ? Infinity : (prev.dMax || prevDur);
-                        const nextMax = ['sport', 'slot'].includes(nextT) ? Infinity : (next.dMax || nextDur);
-
-                        let absorbed = false;
-                        // Try immediate neighbors first (respecting dMax for non-sport types)
-                        if (!absorbed && prev._source !== 'phase0' && prevDur + gs <= prevMax) {
-                            prev.endMin += gs; absorbed = true;
-                        }
-                        if (!absorbed && next._source !== 'phase0' && nextDur + gs <= nextMax) {
-                            next.startMin -= gs; absorbed = true;
-                        }
-                        // Sports/slots can ALWAYS grow (solver handles duration)
-                        if (!absorbed && prev._source !== 'phase0' && ['sport', 'slot'].includes(prevT)) {
-                            prev.endMin += gs; absorbed = true;
-                        }
-                        if (!absorbed && next._source !== 'phase0' && ['sport', 'slot'].includes(nextT)) {
-                            next.startMin -= gs; absorbed = true;
-                        }
-                        // Search wider — find ANY sport/slot in the template near this gap
-                        if (!absorbed) {
-                            // Look backward for nearest sport/slot
-                            for (let j = i; j >= 0; j--) {
-                                const blk = template[j];
-                                if (['sport', 'slot'].includes((blk.type || '').toLowerCase()) && blk._source !== 'phase0') {
-                                    // ★ v7.1: Check if any intermediate block is phase0 — if so, skip this chain
-                                    let hasWallBetween = false;
-                                    for (let k = j + 1; k <= i; k++) {
-                                        if (template[k]._source === 'phase0') { hasWallBetween = true; break; }
-                                    }
-                                    if (hasWallBetween) continue; // don't shift through a pinned wall
-                                    blk.endMin += gs;
-                                    for (let k = j + 1; k <= i; k++) {
-                                        template[k].startMin += gs;
-                                        template[k].endMin += gs;
-                                    }
-                                    absorbed = true; break;
-                                }
+                        // Too small for a sport — absorb into adjacent non-fixed block
+                        tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                        var absorbed = false;
+                        for (var m2 = 0; m2 < tmpl.length; m2++) {
+                            // Find block ending at gap start
+                            if (tmpl[m2].endMin === rgap.start && !tmpl[m2]._fixed) {
+                                var m2Dur = tmpl[m2].endMin - tmpl[m2].startMin;
+                                var m2Max = ['sport', 'slot'].includes((tmpl[m2].type || '').toLowerCase()) ? fMeta.sportCeiling : (tmpl[m2].dMax || Infinity);
+                                if (m2Dur + gapSize <= m2Max) { tmpl[m2].endMin += gapSize; absorbed = true; break; }
+                            }
+                            // Find block starting at gap end
+                            if (tmpl[m2].startMin === rgap.end && !tmpl[m2]._fixed) {
+                                var m2Dur2 = tmpl[m2].endMin - tmpl[m2].startMin;
+                                var m2Max2 = ['sport', 'slot'].includes((tmpl[m2].type || '').toLowerCase()) ? fMeta.sportCeiling : (tmpl[m2].dMax || Infinity);
+                                if (m2Dur2 + gapSize <= m2Max2) { tmpl[m2].startMin -= gapSize; absorbed = true; break; }
                             }
                         }
                         if (!absorbed) {
-                            // Look forward for nearest sport/slot
-                            for (let j = i + 1; j < template.length; j++) {
-                                const blk = template[j];
-                                if (['sport', 'slot'].includes((blk.type || '').toLowerCase()) && blk._source !== 'phase0') {
-                                    // ★ v7.1: Check if any intermediate block is phase0 — if so, skip this chain
-                                    let hasWallBetween = false;
-                                    for (let k = i + 1; k < j; k++) {
-                                        if (template[k]._source === 'phase0') { hasWallBetween = true; break; }
-                                    }
-                                    if (hasWallBetween) continue; // don't shift through a pinned wall
-                                    blk.startMin -= gs;
-                                    for (let k = i + 1; k < j; k++) {
-                                        template[k].startMin -= gs;
-                                        template[k].endMin -= gs;
-                                    }
-                                    absorbed = true; break;
-                                }
-                            }
-                        }
-                        // Absolute last resort: extend a flexible neighbor
-                        if (!absorbed) {
-                            const prevT = (prev.type || '').toLowerCase();
-                            const nextT = (next.type || '').toLowerCase();
-                            const prevFlex = ['sport', 'slot'].includes(prevT) && prev._source !== 'phase0';
-                            const nextFlex = ['sport', 'slot'].includes(nextT) && next._source !== 'phase0';
-                            if (prevFlex) { prev.endMin += gs; }
-                            else if (nextFlex) { next.startMin -= gs; }
-                            else {
-                                // Both neighbors are rigid — extend the one with more room within its dMax
-                                const prevRoom = (prev.dMax || Infinity) - (prev.endMin - prev.startMin);
-                                const nextRoom = (next.dMax || Infinity) - (next.endMin - next.startMin);
-                                if (prevRoom >= gs) prev.endMin += gs;
-                                else if (nextRoom >= gs) next.startMin -= gs;
-                                else prev.endMin += gs; // absolute fallback
-                            }
+                            // Can't absorb — create slot (scorer will handle the duration violation)
+                            tmpl.push(makeBlock({
+                                startMin: rgap.start, endMin: rgap.end,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: fMeta.sportLayer, field: null,
+                                dMin: gapSize, dMax: fMeta.sportCeiling,
+                                _source: 'filler', _final: true
+                            }));
                         }
                     }
-                    fixed = true; break;
-                }
-                if (fixed) { foundGap = true; continue; }
-
-                // End-of-day gap
-                template.sort((a, b) => a.startMin - b.startMin);
-                if (template.length > 0 && template[template.length - 1].endMin < gradeEnd) {
-                    const gs = gradeEnd - template[template.length - 1].endMin;
-                    if (gs >= fillMinDur) {
-                        const gS = template[template.length - 1].endMin;
-                        const sp = findSportWithField(gS, gradeEnd);
-                        if (sp) claimField(sp.field, gS, gradeEnd, bunk, grade, sp.name);
-                        template.push({ startMin: gS, endMin: gradeEnd,
-                            type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
-                            layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
-                            _activityLocked: false, _assignedSport: sp ? sp.name : null,
-                            field: sp ? sp.field : null, _source: sp ? 'capacity_checked' : 'filler',
-                            _sportFallbacks: priorityList.map(s => s.name), _final: true });
-                    } else {
-                        const lastT = (template[template.length - 1].type || '').toLowerCase();
-                        if (['sport', 'slot'].includes(lastT) && template[template.length - 1]._source !== 'phase0') {
-                            template[template.length - 1].endMin = gradeEnd;
-                        }
-                    }
-                    foundGap = true; continue;
-                }
-
-                if (!foundGap) break;
-            }
-
-            // ═══════════════════════════════════════════════════════════
-            // ★ v6.1 dMAX ENFORCEMENT — final pass to ensure NO block exceeds its layer dMax.
-            // If the gap eliminator or merger stretched something past dMax, shrink it back.
-            // The leftover space becomes a gap that the next iteration can score.
-            // ═══════════════════════════════════════════════════════════
-            template.sort((a, b) => a.startMin - b.startMin);
-            for (const blk of template) {
-                if (blk._source === 'phase0') continue;
-                const t = (blk.type || '').toLowerCase();
-                const dur = blk.endMin - blk.startMin;
-                // ★ v7.0: Enforce dMax for ALL types including sports (hard cap at 60min for sports)
-                const maxDur = ['sport', 'slot'].includes(t) ? (sportC.dMax || 60) : (blk.dMax || dur);
-                if (dur > maxDur) {
-                    blk.endMin = blk.startMin + maxDur;
                 }
             }
 
-            // ═══════════════════════════════════════════════════════════
-            // ★ v7.1 dMIN ENFORCEMENT — ensure NO block is shorter than its layer dMin.
-            // If gap elimination compressed a block below dMin, extend it by
-            // stealing time from an adjacent flexible (sport/slot) block.
-            // Also removes any block that is impossibly short (< 5min).
-            // ═══════════════════════════════════════════════════════════
-            template.sort((a, b) => a.startMin - b.startMin);
-            // First: remove impossibly short blocks (< 5min) that aren't phase0
-            for (let i = template.length - 1; i >= 0; i--) {
-                const blk = template[i];
-                if (blk._source === 'phase0') continue;
-                if (blk.endMin - blk.startMin < 5) {
-                    template.splice(i, 1);
-                }
-            }
-            template.sort((a, b) => a.startMin - b.startMin);
-            // Then: enforce dMin by stealing from flexible neighbors
-            for (let i = 0; i < template.length; i++) {
-                const blk = template[i];
-                const dur = blk.endMin - blk.startMin;
-                // Use block's dMin, or layer's dMin, or fillMinDur for sports
-                const t = (blk.type || '').toLowerCase();
-                const minDur = blk.dMin || ((['sport','slot'].includes(t) && blk._source !== 'phase0') ? fillMinDur : 0);
-                if (minDur <= 0 || dur >= minDur) continue;
-                const deficit = minDur - dur;
+            // ══════════════════════════════════════════════════════════
+            // STEP 6: Validate and return
+            // ══════════════════════════════════════════════════════════
+            var totalWarnings = 0;
+            for (var vi = 0; vi < allBunkIds.length; vi++) {
+                var vBunk = allBunkIds[vi];
+                var vMeta = bunkMeta[vBunk];
+                var vTmpl = vMeta.template;
+                vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
-                // Try extending forward (shrink next block)
-                if (i < template.length - 1) {
-                    const next = template[i + 1];
-                    const nextT = (next.type || '').toLowerCase();
-                    const nextDur = next.endMin - next.startMin;
-                    const nextMin = next.dMin || fillMinDur;
-                    if (['sport', 'slot'].includes(nextT) && next._source !== 'phase0' && nextDur - deficit >= nextMin) {
-                        blk.endMin += deficit;
-                        next.startMin += deficit;
-                        continue;
-                    }
+                var vGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
+                if (vGaps.length > 0) {
+                    log('[Phase3] WARN: bunk ' + vBunk + ' has ' + vGaps.length + ' unfilled gaps');
+                    totalWarnings++;
                 }
-                // Try extending backward (shrink prev block)
-                if (i > 0) {
-                    const prev = template[i - 1];
-                    const prevT = (prev.type || '').toLowerCase();
-                    const prevDur = prev.endMin - prev.startMin;
-                    const prevMin = prev.dMin || fillMinDur;
-                    if (['sport', 'slot'].includes(prevT) && prev._source !== 'phase0' && prevDur - deficit >= prevMin) {
-                        blk.startMin -= deficit;
-                        prev.endMin -= deficit;
-                        continue;
-                    }
-                }
+
+                allTemplates[vBunk] = vTmpl;
             }
 
-            return template.sort((a, b) => a.startMin - b.startMin);
+            log('[Phase3] ★ timeSweepFillAll complete: ' + Object.keys(allTemplates).length + ' bunks, ' + totalWarnings + ' warnings');
+            return allTemplates;
         }
 
 
@@ -4510,34 +3764,10 @@
                 });
             }
 
-            // ── Phase 3: Fill sports/swim/snack for ALL bunks (round-robin) ──
-            // Specials are already walls. The packer only fills gaps with sports.
-            {
-                const gradeQueues = {};
-                staggeredGrades.forEach(grade => {
-                    gradeQueues[grade] = [...getBunksForGrade(grade, divisions)];
-                });
-
-                let anyLeft = true;
-                while (anyLeft) {
-                    anyLeft = false;
-                    for (const grade of staggeredGrades) {
-                        if (gradeQueues[grade].length === 0) continue;
-                        anyLeft = true;
-                        const bunk = gradeQueues[grade].shift();
-                        const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
-                        // Pass empty specials — they're already walls, packer shouldn't add more
-                        const draftForPacker = draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() };
-                        draftForPacker.specials = []; // ★ specials already pre-placed as walls
-                        allTemplates[bunk] = greedyPackBunk(
-                            bunk, grade,
-                            draftForPacker,
-                            shoppingLists[bunk], (staggerPlan[grade] || { offset: 0 }).offset, swimsToday
-                        );
-                    }
-                }
-                log('[Phase3] ★ SIMULTANEOUS v7.0: Round-robin sport fill complete — ' + Object.keys(allTemplates).length + ' bunks');
-            }
+            // ── Phase 3: Time-sweep sport filler (v8.0) ──
+            // All bunks processed simultaneously. Walls never move.
+            const sweepResult = timeSweepFillAll(shoppingLists, draftResults, allGrades);
+            Object.assign(allTemplates, sweepResult);
 
             // Phase 4: Execute
             executeTemplates(allTemplates);
@@ -4714,7 +3944,7 @@
 
         // ─── Mark rotation event completions (so tomorrow's build skips these bunks) ───
         // Read directly from bunkTimelines because scheduleAssignments hasn't been written yet.
-        // Any block where _source === 'rotation_event' (from greedyPackBunk needs) means a
+        // Any block where _source === 'rotation_event' (from timeSweepFillAll needs) means a
         // rotation event was successfully placed for that bunk.
         try {
             if (window.RotationEvents && typeof window.RotationEvents.markCompleted === 'function' && currentDate) {
