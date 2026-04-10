@@ -3741,46 +3741,55 @@
                         const sEnd = special.claimedTime.endMin;
                         const fieldName = special.claimedField || special.location;
 
-                        // ★ v8.1: Simulate whether ALL required layers still fit after placing this special.
-                        // Build the full wall list (Phase 0 + this special), then check if each
-                        // required layer (swim, snack, custom) can find a gap within its window.
+                        // ★ v8.1: Only skip special if it CAUSES a required layer to become unplaceable.
+                        // Compare gaps BEFORE vs AFTER adding the special.
                         const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                         const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-                        const simWalls = (bunkTimelines[bunk] || []).map(w => ({ s: w.startMin, e: w.endMin }));
-                        simWalls.push({ s: sStart, e: sEnd }); // add the proposed special
-                        simWalls.sort((a, b) => a.s - b.s);
-                        // Compute gaps after adding the special
-                        const simGaps = [];
-                        let simCur = gradeStart;
-                        for (const w of simWalls) {
-                            if (w.s > simCur) simGaps.push({ s: simCur, e: w.s });
-                            simCur = Math.max(simCur, w.e);
+
+                        function computeGaps(walls, gs, ge) {
+                            var sorted = walls.slice().sort(function(a, b) { return a.s - b.s; });
+                            var gaps = [], cur = gs;
+                            for (var i = 0; i < sorted.length; i++) {
+                                if (sorted[i].s > cur) gaps.push({ s: cur, e: sorted[i].s });
+                                cur = Math.max(cur, sorted[i].e);
+                            }
+                            if (cur < ge) gaps.push({ s: cur, e: ge });
+                            return gaps;
                         }
-                        if (simCur < gradeEnd) simGaps.push({ s: simCur, e: gradeEnd });
+                        function canLayerFit(gaps, ll) {
+                            var lt = (ll.type || '').toLowerCase();
+                            var lc = resolveConstraints(ll, lt);
+                            var needDMin = lc.dMin || 15;
+                            for (var g = 0; g < gaps.length; g++) {
+                                var os = Math.max(gaps[g].s, ll.startMin);
+                                var oe = Math.min(gaps[g].e, ll.endMin);
+                                if (oe - os >= needDMin) return true;
+                            }
+                            return false;
+                        }
+
+                        const existingWalls = (bunkTimelines[bunk] || []).map(w => ({ s: w.startMin, e: w.endMin }));
+                        const withSpecial = existingWalls.concat([{ s: sStart, e: sEnd }]);
+                        const gapsBefore = computeGaps(existingWalls, gradeStart, gradeEnd);
+                        const gapsAfter = computeGaps(withSpecial, gradeStart, gradeEnd);
 
                         const gradeLayers = layersByGrade[grade] || [];
-                        let blocksRequired = false;
+                        let specialCausesConflict = false;
                         for (const ll of gradeLayers) {
                             const lt = (ll.type || '').toLowerCase();
                             if (!['swim', 'snack', 'snacks', 'custom'].includes(lt)) continue;
-                            if (lt === 'custom' && ll._classification === 'pinned') continue; // already a wall
+                            if (lt === 'custom' && ll._classification === 'pinned') continue;
                             if (ll.startMin == null || ll.endMin == null) continue;
-                            const lc = resolveConstraints(ll, lt);
-                            const needDMin = lc.dMin || 15;
-                            // Check if ANY gap overlaps the layer window with enough room
-                            let canFit = false;
-                            for (const gap of simGaps) {
-                                const overlapStart = Math.max(gap.s, ll.startMin);
-                                const overlapEnd = Math.min(gap.e, ll.endMin);
-                                if (overlapEnd - overlapStart >= needDMin) { canFit = true; break; }
-                            }
-                            if (!canFit) {
-                                blocksRequired = true;
-                                log('[Phase2.5] Skipping special "' + special.name + '" for bunk ' + bunk + ' — would block ' + lt + ' (no gap >= ' + needDMin + 'min in window ' + ll.startMin + '-' + ll.endMin + ')');
+                            const fittedBefore = canLayerFit(gapsBefore, ll);
+                            const fittedAfter = canLayerFit(gapsAfter, ll);
+                            // Only block if the layer COULD fit before but CAN'T after
+                            if (fittedBefore && !fittedAfter) {
+                                specialCausesConflict = true;
+                                log('[Phase2.5] Skipping special "' + special.name + '" for bunk ' + bunk + ' — would block ' + lt);
                                 break;
                             }
                         }
-                        if (blocksRequired) return;
+                        if (specialCausesConflict) return;
 
                         // Add as immovable wall in bunkTimelines
                         bunkTimelines[bunk].push({
