@@ -3425,7 +3425,7 @@
 
                     if (gapSize >= fMeta.fillMinDur) {
                         // Use addSportBlocks — it auto-splits if gap exceeds ceiling
-                        var rResult = findSportField(fBunk, fMeta.grade, rgap.start, rgap.end, fMeta);
+                        var rResult = findBestSport(fBunk, fMeta.grade, rgap.start, rgap.end, fMeta, usedSports[fBunk]);
                         if (rResult) {
                             claimField(rResult.field, rgap.start, rgap.end, fBunk, fMeta.grade, rResult.name);
                             usedSports[fBunk].add(rResult.name);
