@@ -2779,6 +2779,10 @@
                 }
             }
             const gradeSpecialLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'special');
+            // Build full fallback list for specials (so packer can try alternatives)
+            const _specialFallbackList = (shoppingList.specials?.priorityList || []).map(function(sp) {
+                return { name: sp.name, location: sp.location, duration: sp.totalDuration || sp.dMin || 30 };
+            });
             (draftResult.specials || []).forEach(special => {
                 const hasFixedDur = special.duration && special.duration > 0;
                 const effectiveLayer = special.layer || gradeSpecialLayer || null;
@@ -2790,6 +2794,7 @@
                     windowStart: gradeStart, windowEnd: gradeEnd,
                     _activityLocked: true, _assignedSpecial: special.name,
                     _specialLocation: special.location, _specialDuration: special.duration,
+                    _specialFallbacks: _specialFallbackList,
                     _source: 'draft'
                 });
             });
@@ -2879,7 +2884,7 @@
                         }
                         if (need.type === 'special' && need._assignedSpecial) {
                             for (let t = es; t + need.dMin <= ee; t += 5) {
-                                if (canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) return true;
+                                if (trySpecialAtTime(need, t, t + need.dMin)) return true;
                             }
                             return false;
                         }
@@ -2998,6 +3003,32 @@
                     }
                 }
                 return null;
+            }
+
+            // ── Try special with fallbacks ────────────────────────────
+            // If the assigned special's capacity is full at this time,
+            // try alternative specials from the priority list (the "audible")
+            function trySpecialAtTime(need, startMin, endMin) {
+                // Try the assigned special first
+                if (trySpecialAtTime(need, startMin, endMin)) {
+                    return true;
+                }
+                // Audible: try fallback specials
+                if (need._specialFallbacks && need._specialFallbacks.length > 0) {
+                    for (var fi = 0; fi < need._specialFallbacks.length; fi++) {
+                        var fb = need._specialFallbacks[fi];
+                        if (fb.name === need._assignedSpecial) continue;
+                        if (placedSpecialNames.has(fb.name)) continue;
+                        if (canUseSpecialAtTime(fb.name, grade, startMin, endMin)) {
+                            // Swap to the fallback special
+                            need._assignedSpecial = fb.name;
+                            need._specialLocation = fb.location;
+                            need.event = fb.name;
+                            return true;
+                        }
+                    }
+                }
+                return false;
             }
 
             // ── Place a need at a specific position ───────────────────
@@ -3205,7 +3236,7 @@
                     if (need.type === 'special' && need._assignedSpecial) {
                         let specOk = false;
                         for (let t = overlapStart; t + need.dMin <= overlapEnd; t += 5) {
-                            if (canUseSpecialAtTime(need._assignedSpecial, grade, t, t + need.dMin)) { specOk = true; break; }
+                            if (trySpecialAtTime(need, t, t + need.dMin)) { specOk = true; break; }
                         }
                         if (!specOk) continue;
                     }
@@ -3296,7 +3327,7 @@
                         let ok = true;
                         if (need.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
                         if (need.type === 'special' && need._assignedSpecial &&
-                            !canUseSpecialAtTime(need._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
+                            !trySpecialAtTime(need, cursor, cursor + dur)) ok = false;
                         if (ok && need.type === 'special' && need._assignedSpecial &&
                             getCrossGradeConflicts('special', cursor, cursor + dur, grade, need._assignedSpecial) > 0) ok = false;
                         if (ok && need.type === 'rotation_event' && need._rotationEventId &&
@@ -3390,7 +3421,7 @@
                                 let candOk = true;
                                 if (cand.type === 'swim' && !canUsePoolAtTime(grade, proposedStart, proposedStart + candDur)) candOk = false;
                                 if (cand.type === 'special' && cand._assignedSpecial &&
-                                    !canUseSpecialAtTime(cand._assignedSpecial, grade, proposedStart, proposedStart + candDur)) candOk = false;
+                                    !trySpecialAtTime(cand, proposedStart, proposedStart + candDur)) candOk = false;
                                 if (cand.type === 'rotation_event' && cand._rotationEventId &&
                                     !canUseRotationSlotAtTime(cand._rotationEventId, cand._rotationEventConcurrency, grade, proposedStart, proposedStart + candDur)) candOk = false;
                                 if (candOk) {
@@ -3439,7 +3470,7 @@
                         let ok = true;
                         if (next.type === 'swim' && !canUsePoolAtTime(grade, cursor, cursor + dur)) ok = false;
                         if (next.type === 'special' && next._assignedSpecial &&
-                            !canUseSpecialAtTime(next._assignedSpecial, grade, cursor, cursor + dur)) ok = false;
+                            !trySpecialAtTime(next, cursor, cursor + dur)) ok = false;
                         if (next.type === 'rotation_event' && next._rotationEventId &&
                             !canUseRotationSlotAtTime(next._rotationEventId, next._rotationEventConcurrency, grade, cursor, cursor + dur)) ok = false;
 
