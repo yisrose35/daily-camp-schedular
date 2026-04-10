@@ -3157,21 +3157,13 @@
                         var effectiveStart = Math.max(gapItem.cursor, T);
                         var remaining = gapItem.end - effectiveStart;
                         if (remaining <= 0) continue;
+                        if (remaining < m.fillMinDur) continue; // too small, Step 5 absorbs
 
-                        // Cap duration — NEVER exceed sportCeiling
-                        var dur = Math.min(remaining, m.sportCeiling);
-                        if (dur < m.fillMinDur) continue;
-                        // Check if remainder would be dead
-                        var leftover = remaining - dur;
-                        if (leftover > 0 && leftover < m.fillMinDur) {
-                            dur = Math.floor(remaining / 2);
-                            if (dur < m.fillMinDur) dur = remaining;
-                        }
-                        // HARD CAP — never exceed ceiling regardless of dead-gap logic
-                        if (dur > m.sportCeiling) dur = m.sportCeiling;
-                        var endMin = effectiveStart + dur;
+                        // Fill the ENTIRE remaining gap at once — addSportBlocks splits into
+                        // properly-sized blocks. No partial fills, no dead remainders.
+                        var endMin = gapItem.end;
 
-                        var result = findSportField(gapItem.bunk, gapItem.grade, effectiveStart, endMin, m);
+                        var result = findSportField(gapItem.bunk, gapItem.grade, effectiveStart, Math.min(effectiveStart + m.sportCeiling, endMin), m);
                         if (result) {
                             claimField(result.field, effectiveStart, endMin, gapItem.bunk, gapItem.grade, result.name);
                             usedSports[gapItem.bunk].add(result.name);
