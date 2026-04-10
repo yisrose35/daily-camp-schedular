@@ -2844,12 +2844,14 @@
                             _customField: cl.customField || null, _customBunks: cl.customBunks || null, _source: 'need' });
                     });
 
-                    // Sort needs: fixed-duration first, then tightest window
+                    // Sort needs: tightest window first (ratio of window to duration)
+                    // This ensures snack (20min window) is placed before swim (90min window)
+                    // before specials (full-day window). Tight windows MUST go first or they
+                    // get blocked by earlier placements.
                     needs.sort(function(a, b) {
-                        var aFixed = a.dMin === a.dMax ? 0 : 1;
-                        var bFixed = b.dMin === b.dMax ? 0 : 1;
-                        if (aFixed !== bFixed) return aFixed - bFixed;
-                        return ((a.windowEnd - a.windowStart) / Math.max(1, a.dMin)) - ((b.windowEnd - b.windowStart) / Math.max(1, b.dMin));
+                        var aWindow = (a.windowEnd - a.windowStart) / Math.max(1, a.dMin);
+                        var bWindow = (b.windowEnd - b.windowStart) / Math.max(1, b.dMin);
+                        return aWindow - bWindow; // smallest ratio = tightest fit = first
                     });
 
                     // ── 2: Place each need into the best-fitting gap ──
@@ -2913,58 +2915,7 @@
                                 _rotationEventColor: need._rotationEventColor || null, _final: true
                             }));
                         } else {
-                            // ★ v8.0: Required layers get a second chance with relaxed window
-                            var isRequired = ['swim', 'snacks', 'snack', 'special', 'custom'].includes((need.type || '').toLowerCase());
-                            if (isRequired) {
-                                // Retry with full grade window (ignore layer window constraints)
-                                var retryGaps = findGaps(template, gradeStart, gradeEnd);
-                                var retryPlaced = false;
-                                for (var rg = 0; rg < retryGaps.length; rg++) {
-                                    var retryGap = retryGaps[rg];
-                                    if (retryGap.end - retryGap.start < need.dMin) continue;
-                                    var retryDur = Math.min(need.dMax, retryGap.end - retryGap.start);
-                                    var retryStart = retryGap.start;
-                                    // For swim, still check pool
-                                    if (need.type === 'swim') {
-                                        var poolOk = false;
-                                        for (var rpt = retryStart; rpt + need.dMin <= retryGap.end; rpt += 5) {
-                                            var rpEnd = Math.min(rpt + retryDur, retryGap.end);
-                                            if (rpEnd - rpt < need.dMin) continue;
-                                            if (canUsePoolAtTime(grade, rpt, rpEnd)) { retryStart = rpt; retryDur = rpEnd - rpt; poolOk = true; break; }
-                                        }
-                                        if (!poolOk) continue;
-                                    }
-                                    // Place it
-                                    var retryEnd = retryStart + retryDur;
-                                    if (need.type === 'swim') { registerCrossGrade(grade, 'swim', retryStart, retryEnd, need.event); registerPoolUsage(grade, retryStart, retryEnd); }
-                                    if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, retryStart, retryEnd, need.event); }
-                                    if (need.type === 'custom') { registerCrossGrade(grade, 'custom', retryStart, retryEnd, need._customActivity || need.event); }
-                                    if (need.type === 'special' && need._assignedSpecial) {
-                                        registerCrossGrade(grade, 'special', retryStart, retryEnd, need.event);
-                                        registerSpecialUsage(need._assignedSpecial, grade, retryStart, retryEnd);
-                                        placedSpecialNames.add(need._assignedSpecial);
-                                    }
-                                    template.push(makeBlock({
-                                        startMin: retryStart, endMin: retryEnd, type: need.type, event: need.event,
-                                        layer: need.layer, dMin: need.dMin, dMax: need.dMax,
-                                        _source: 'need', _activityLocked: need._activityLocked || false,
-                                        _assignedSpecial: need._assignedSpecial || null,
-                                        _specialLocation: need._specialLocation || null, _specialDuration: need._specialDuration || null,
-                                        _customActivity: need._customActivity || null, _customField: need._customField || null,
-                                        _customBunks: need._customBunks || null,
-                                        _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                        _rotationEventColor: need._rotationEventColor || null, _final: true
-                                    }));
-                                    retryPlaced = true;
-                                    log('[Phase3] Retry placed ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' at ' + retryStart + '-' + retryEnd + ' (outside configured window)');
-                                    break;
-                                }
-                                if (!retryPlaced) {
-                                    log('[Phase3] ERROR: required layer ' + need.type + '/' + need.event + ' could not be placed for bunk ' + bunk + ' even with relaxed window');
-                                }
-                            } else {
-                                log('[Phase3] WARN: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk);
-                            }
+                            log('[Phase3] ERROR: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' — no gap fits within window ' + need.windowStart + '-' + need.windowEnd);
                         }
                     }
 
@@ -3779,6 +3730,30 @@
                         const sStart = special.claimedTime.startMin;
                         const sEnd = special.claimedTime.endMin;
                         const fieldName = special.claimedField || special.location;
+
+                        // ★ v8.0: Verify special doesn't consume a required layer's entire window
+                        // If snack window is 2:30-3:00 and special is placed at 2:30-3:00,
+                        // snack would have nowhere to go. Skip pre-placement in that case.
+                        const gradeLayers = layersByGrade[grade] || [];
+                        let blocksRequired = false;
+                        for (const ll of gradeLayers) {
+                            const lt = (ll.type || '').toLowerCase();
+                            if (!['swim', 'snack', 'snacks'].includes(lt)) continue;
+                            if (ll.startMin == null || ll.endMin == null) continue;
+                            // Check if special fully consumes this layer's window
+                            const windowSize = ll.endMin - ll.startMin;
+                            const overlapStart = Math.max(sStart, ll.startMin);
+                            const overlapEnd = Math.min(sEnd, ll.endMin);
+                            const overlapSize = Math.max(0, overlapEnd - overlapStart);
+                            const lc = resolveConstraints(ll, lt);
+                            const remainingWindow = windowSize - overlapSize;
+                            if (remainingWindow < (lc.dMin || 15)) {
+                                blocksRequired = true;
+                                log('[Phase2.5] Skipping special "' + special.name + '" pre-placement for bunk ' + bunk + ' — would block ' + lt + ' window');
+                                break;
+                            }
+                        }
+                        if (blocksRequired) return;
 
                         // Add as immovable wall in bunkTimelines
                         bunkTimelines[bunk].push({
