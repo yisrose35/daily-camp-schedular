@@ -2762,44 +2762,9 @@
                 }
             }
 
-           // Draft specials — full window, rotation band applied at scoring
-            // ★ v4.3: If draft didn't assign enough specials, pick from priority list
-            // ★ FIX: Cap draft specials to required count — prevent over-assignment
-            const requiredSpecials = shoppingList.specials?.required || 0;
-            if (draftResult.specials && draftResult.specials.length > requiredSpecials && requiredSpecials > 0) {
-                draftResult.specials.length = requiredSpecials;
-            }
-            const draftSpecialCount = (draftResult.specials || []).length;
-            if (draftSpecialCount < requiredSpecials) {
-                const usedNames = new Set((draftResult.specials || []).map(s => s.name));
-                const priorityList = shoppingList.specials?.priorityList || [];
-                for (const special of priorityList) {
-                    if (draftResult.specials.length >= requiredSpecials) break;
-                    if (usedNames.has(special.name)) continue;
-                    draftResult.specials.push({
-                        ...special,
-                        claimedTime: null,
-                        claimedField: special.location || null
-                    });
-                    usedNames.add(special.name);
-                }
-            }
-            // ★ v6.0: Get the specials layer for this grade (used as fallback for duration constraints)
-            const gradeSpecialLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'special');
-            (draftResult.specials || []).forEach(special => {
-                const hasFixedDur = special.duration && special.duration > 0;
-                const effectiveLayer = special.layer || gradeSpecialLayer || null;
-                const sDMin = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMin;
-                const sDMax = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMax;
-                needs.push({
-                    type: 'special', event: special.name, layer: special.layer,
-                    dMin: sDMin, dMax: sDMax,
-                    windowStart: gradeStart, windowEnd: gradeEnd,
-                    _activityLocked: true, _assignedSpecial: special.name,
-                    _specialLocation: special.location, _specialDuration: special.duration,
-                    _source: 'draft'
-                });
-            });
+           // Draft specials — SKIP: Phase 3A already placed specials as walls in bunkTimelines.
+            // They appear in Step 1 (walls) and don't need to be added as needs.
+            // This prevents the packer from double-placing or dropping specials.
 
             // Custom windowed layers
             (layersByGrade[grade] || []).filter(l =>
@@ -4349,6 +4314,137 @@
                 }
             });
 
+            // ═══════════════════════════════════════════════════════
+            // PHASE 3A: GLOBAL SPECIAL PRE-PLACEMENT
+            // Place all drafted specials into bunkTimelines BEFORE
+            // any per-bunk packing runs. This prevents grade 1's
+            // packer from claiming special locations that grade 2 needs.
+            // ═══════════════════════════════════════════════════════
+            {
+                var _phase3aCount = 0;
+                // Round-robin: interleave grades for fairness
+                var _3aGradeQueues = {};
+                staggeredGrades.forEach(function(grade) {
+                    var bunks = getBunksForGrade(grade, divisions).map(String);
+                    _3aGradeQueues[grade] = _iterSeed > 0 ? seedShuffle(bunks.slice(), _iterSeed) : bunks.slice();
+                });
+
+                var _3aAnyLeft = true;
+                while (_3aAnyLeft) {
+                    _3aAnyLeft = false;
+                    for (var _3gi = 0; _3gi < staggeredGrades.length; _3gi++) {
+                        var _3grade = staggeredGrades[_3gi];
+                        var _3queue = _3aGradeQueues[_3grade];
+                        if (!_3queue || _3queue.length === 0) continue;
+
+                        var _3bunk = _3queue.shift();
+                        var _3dr = draftResults[_3bunk];
+                        var _3sl = shoppingLists[_3bunk];
+                        if (!_3dr || !_3sl || !_3dr.specials || _3dr.specials.length === 0) continue;
+
+                        // Place each drafted special (usually just 1)
+                        for (var _3si = 0; _3si < _3dr.specials.length; _3si++) {
+                            var _3sp = _3dr.specials[_3si];
+                            if (!_3sp || !_3sp.name) continue;
+
+                            var _3gradeStart = parseTimeToMinutes(divisions[_3grade]?.startTime) || 540;
+                            var _3gradeEnd = parseTimeToMinutes(divisions[_3grade]?.endTime) || 960;
+
+                            // Get special duration
+                            var _3gradeSpecialLayer = (layersByGrade[_3grade] || []).find(function(l) { return (l.type || '').toLowerCase() === 'special'; });
+                            var _3hasFixedDur = _3sp.duration && _3sp.duration > 0;
+                            var _3sDMin = _3hasFixedDur ? _3sp.duration : resolveConstraints(_3sp.layer || _3gradeSpecialLayer || null, 'special', _3sp).dMin;
+                            var _3sDMax = _3hasFixedDur ? _3sp.duration : resolveConstraints(_3sp.layer || _3gradeSpecialLayer || null, 'special', _3sp).dMax;
+                            var _3dur = _3sDMin;
+
+                            // Find valid time: try drafted time first, then scan
+                            var _3time = null;
+
+                            // Try drafted time
+                            if (_3sp.claimedTime && _3sp.claimedTime.startMin != null) {
+                                var _3ct = _3sp.claimedTime;
+                                if (canUseSpecialAtTime(_3sp.name, _3grade, _3ct.startMin, _3ct.endMin)) {
+                                    if (!_3sp.location || isFieldAvailable(_3sp.location, _3ct.startMin, _3ct.endMin, _3bunk, _3grade)) {
+                                        _3time = { startMin: _3ct.startMin, endMin: _3ct.endMin };
+                                    }
+                                }
+                            }
+
+                            // Fallback: scan free windows
+                            if (!_3time) {
+                                var _3timeline = (bunkTimelines[_3bunk] || []).sort(function(a, b) { return a.startMin - b.startMin; });
+                                var _3freeWins = [];
+                                var _3cursor = _3gradeStart;
+                                for (var _3ti = 0; _3ti < _3timeline.length; _3ti++) {
+                                    if (_3timeline[_3ti].startMin > _3cursor) {
+                                        _3freeWins.push({ start: _3cursor, end: _3timeline[_3ti].startMin });
+                                    }
+                                    _3cursor = Math.max(_3cursor, _3timeline[_3ti].endMin);
+                                }
+                                if (_3cursor < _3gradeEnd) _3freeWins.push({ start: _3cursor, end: _3gradeEnd });
+
+                                // Prefer stagger band
+                                var _3band = staggerPlan[_3grade] && staggerPlan[_3grade].typeBands ? staggerPlan[_3grade].typeBands.special : null;
+                                if (_3band) {
+                                    for (var _3wi = 0; _3wi < _3freeWins.length && !_3time; _3wi++) {
+                                        var _3w = _3freeWins[_3wi];
+                                        var _3es = Math.max(_3w.start, _3band.start);
+                                        var _3ee = Math.min(_3w.end, _3band.end);
+                                        if (_3ee - _3es < _3dur) continue;
+                                        for (var _3t = _3es; _3t + _3dur <= _3ee; _3t += 5) {
+                                            if (!canUseSpecialAtTime(_3sp.name, _3grade, _3t, _3t + _3dur)) continue;
+                                            if (_3sp.location && !isFieldAvailable(_3sp.location, _3t, _3t + _3dur, _3bunk, _3grade)) continue;
+                                            _3time = { startMin: _3t, endMin: _3t + _3dur };
+                                            break;
+                                        }
+                                    }
+                                }
+                                // Any free window
+                                if (!_3time) {
+                                    for (var _3wi2 = 0; _3wi2 < _3freeWins.length && !_3time; _3wi2++) {
+                                        var _3w2 = _3freeWins[_3wi2];
+                                        if (_3w2.end - _3w2.start < _3dur) continue;
+                                        for (var _3t2 = _3w2.start; _3t2 + _3dur <= _3w2.end; _3t2 += 5) {
+                                            if (!canUseSpecialAtTime(_3sp.name, _3grade, _3t2, _3t2 + _3dur)) continue;
+                                            if (_3sp.location && !isFieldAvailable(_3sp.location, _3t2, _3t2 + _3dur, _3bunk, _3grade)) continue;
+                                            _3time = { startMin: _3t2, endMin: _3t2 + _3dur };
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (!_3time) continue;
+
+                            // Place special in bunkTimelines as committed block
+                            bunkTimelines[_3bunk].push({
+                                startMin: _3time.startMin, endMin: _3time.endMin,
+                                type: 'special', event: _3sp.name,
+                                _classification: 'windowed', _committed: true,
+                                _assignedSpecial: _3sp.name,
+                                _specialLocation: _3sp.location,
+                                _source: 'phase3a_global',
+                                _activityLocked: true,
+                                _noBacktrack: true,
+                                field: _3sp.location || null,
+                                layer: _3sp._layer || _3gradeSpecialLayer || null
+                            });
+                            bunkTimelines[_3bunk].sort(function(a, b) { return a.startMin - b.startMin; });
+
+                            // Register in RT and field ledger
+                            registerSpecialUsage(_3sp.name, _3grade, _3time.startMin, _3time.endMin);
+                            if (_3sp.location) {
+                                claimField(_3sp.location, _3time.startMin, _3time.endMin, _3bunk, _3grade, _3sp.name);
+                            }
+                            _phase3aCount++;
+                        }
+                        _3aAnyLeft = true;
+                    }
+                }
+                log('[Phase 3A] Pre-placed ' + _phase3aCount + ' specials globally');
+            }
+
+            // Phase 3B: Greedy pack per bunk (specials already placed as walls)
             staggeredGrades.forEach(grade => {
                 getBunksForGrade(grade, divisions).forEach(bunk => {
                     const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
