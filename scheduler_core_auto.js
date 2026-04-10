@@ -3750,7 +3750,12 @@
                             for (let j = i; j >= 0; j--) {
                                 const blk = template[j];
                                 if (['sport', 'slot'].includes((blk.type || '').toLowerCase()) && blk._source !== 'phase0') {
-                                    // Shift everything between blk and the gap
+                                    // ★ v7.1: Check if any intermediate block is phase0 — if so, skip this chain
+                                    let hasWallBetween = false;
+                                    for (let k = j + 1; k <= i; k++) {
+                                        if (template[k]._source === 'phase0') { hasWallBetween = true; break; }
+                                    }
+                                    if (hasWallBetween) continue; // don't shift through a pinned wall
                                     blk.endMin += gs;
                                     for (let k = j + 1; k <= i; k++) {
                                         template[k].startMin += gs;
@@ -3765,6 +3770,12 @@
                             for (let j = i + 1; j < template.length; j++) {
                                 const blk = template[j];
                                 if (['sport', 'slot'].includes((blk.type || '').toLowerCase()) && blk._source !== 'phase0') {
+                                    // ★ v7.1: Check if any intermediate block is phase0 — if so, skip this chain
+                                    let hasWallBetween = false;
+                                    for (let k = i + 1; k < j; k++) {
+                                        if (template[k]._source === 'phase0') { hasWallBetween = true; break; }
+                                    }
+                                    if (hasWallBetween) continue; // don't shift through a pinned wall
                                     blk.startMin -= gs;
                                     for (let k = i + 1; k < j; k++) {
                                         template[k].startMin -= gs;
