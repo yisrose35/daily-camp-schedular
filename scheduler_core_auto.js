@@ -2702,6 +2702,34 @@
                 };
             }
 
+            // ── Helper: add sport/slot blocks, auto-splitting if over dMax ──
+            // This is the ONLY way sport/slot blocks should be created.
+            // Guarantees no block exceeds ceiling and no split is below fillMin.
+            function addSportBlocks(targetArray, startMin, endMin, opts, ceiling, fillMin) {
+                var totalDur = endMin - startMin;
+                if (totalDur <= ceiling) {
+                    // Fits in one block
+                    opts.startMin = startMin;
+                    opts.endMin = endMin;
+                    targetArray.push(makeBlock(opts));
+                    return;
+                }
+                // Split into evenly-sized blocks
+                var numBlocks = Math.ceil(totalDur / ceiling);
+                while (numBlocks > 1 && Math.floor(totalDur / numBlocks) < fillMin) numBlocks--;
+                var blockDur = Math.floor(totalDur / numBlocks);
+                var cursor = startMin;
+                for (var i = 0; i < numBlocks; i++) {
+                    var dur = (i === numBlocks - 1) ? (endMin - cursor) : blockDur;
+                    var blockOpts = {};
+                    for (var k in opts) blockOpts[k] = opts[k];
+                    blockOpts.startMin = cursor;
+                    blockOpts.endMin = cursor + dur;
+                    targetArray.push(makeBlock(blockOpts));
+                    cursor += dur;
+                }
+            }
+
             // ── Helper: find gaps between sorted blocks ──
             function findGaps(blocks, gStart, gEnd) {
                 var sorted = blocks.slice().sort(function(a, b) { return a.startMin - b.startMin; });
@@ -3116,52 +3144,32 @@
                         var remaining = gapItem.end - effectiveStart;
                         if (remaining <= 0) continue;
 
-                        // Calculate sport duration: size it so NO remainder is < fillMinDur.
-                        // A 70-min gap with ceiling 60 and fillMin 30 → take 35 (leaves 35), not 60 (leaves 10).
-                        var dur;
-                        if (remaining <= m.sportCeiling) {
-                            dur = remaining; // fits in one block
-                        } else {
-                            // How many blocks needed to fill this gap with no dead remainders?
-                            var numBlocks = Math.ceil(remaining / m.sportCeiling);
-                            dur = Math.floor(remaining / numBlocks);
-                            // Ensure dur is at least fillMinDur
-                            if (dur < m.fillMinDur) dur = Math.min(remaining, m.sportCeiling);
-                            // Check if remainder after this block would be dead
-                            var leftover = remaining - dur;
-                            if (leftover > 0 && leftover < m.fillMinDur) {
-                                // Split more evenly: take less so leftover is fillable
-                                dur = Math.floor(remaining / 2);
-                                if (dur < m.fillMinDur) dur = remaining; // can't split, take all
-                            }
-                        }
+                        // Cap duration at sportCeiling — addSportBlocks handles splitting
+                        var dur = Math.min(remaining, m.sportCeiling);
                         if (dur < m.fillMinDur) continue; // too small, handle in Step 5
-
+                        // Check if remainder would be dead
+                        var leftover = remaining - dur;
+                        if (leftover > 0 && leftover < m.fillMinDur) {
+                            dur = Math.floor(remaining / 2);
+                            if (dur < m.fillMinDur) dur = remaining;
+                        }
                         var endMin = effectiveStart + dur;
 
                         var result = findSportField(gapItem.bunk, gapItem.grade, effectiveStart, endMin, m);
                         if (result) {
                             claimField(result.field, effectiveStart, endMin, gapItem.bunk, gapItem.grade, result.name);
                             usedSports[gapItem.bunk].add(result.name);
-                            m.template.push(makeBlock({
-                                startMin: effectiveStart, endMin: endMin,
-                                type: 'sport', event: result.name,
-                                layer: m.sportLayer, field: result.field,
-                                dMin: m.sportC.dMin, dMax: m.sportCeiling,
-                                _source: 'sport-fill', _assignedSport: result.name,
-                                _sportFallbacks: m.priorityList.map(function(s) { return s.name; }), _final: true
-                            }));
-                        } else {
-                            // No field — create slot for downstream solver
-                            m.template.push(makeBlock({
-                                startMin: effectiveStart, endMin: endMin,
-                                type: 'slot', event: 'General Activity Slot',
-                                layer: m.sportLayer, field: null,
-                                dMin: m.sportC.dMin, dMax: m.sportCeiling,
-                                _source: 'sport-fill',
-                                _sportFallbacks: m.priorityList.map(function(s) { return s.name; }), _final: true
-                            }));
                         }
+                        addSportBlocks(m.template, effectiveStart, endMin, {
+                            type: result ? 'sport' : 'slot',
+                            event: result ? result.name : 'General Activity Slot',
+                            layer: m.sportLayer, field: result ? result.field : null,
+                            dMin: m.sportC.dMin, dMax: m.sportCeiling,
+                            _source: 'sport-fill',
+                            _assignedSport: result ? result.name : null,
+                            _sportFallbacks: m.priorityList.map(function(s) { return s.name; }),
+                            _final: true
+                        }, m.sportCeiling, m.fillMinDur);
                         gapItem.cursor = endMin;
                         if (gapItem.cursor >= gapItem.end) gapItem.filled = true;
                     }
@@ -3184,35 +3192,22 @@
                     if (gapSize <= 0) continue;
 
                     if (gapSize >= fMeta.fillMinDur) {
-                        // Split gap into blocks where each is >= fillMinDur and <= ceiling
-                        var numBlocks = Math.max(1, Math.ceil(gapSize / fMeta.sportCeiling));
-                        // Ensure no block ends up below fillMinDur
-                        while (numBlocks > 1 && Math.floor(gapSize / numBlocks) < fMeta.fillMinDur) numBlocks--;
-                        var blockDur = Math.floor(gapSize / numBlocks);
-                        var cursor = rgap.start;
-                        for (var nb = 0; nb < numBlocks; nb++) {
-                            var bDur = (nb === numBlocks - 1) ? (rgap.end - cursor) : blockDur;
-                            if (bDur < fMeta.fillMinDur && nb > 0) {
-                                // Too small — extend previous block
-                                var prev = tmpl[tmpl.length - 1];
-                                if (prev && !prev._fixed) prev.endMin = rgap.end;
-                                break;
-                            }
-                            var rResult = findSportField(fBunk, fMeta.grade, cursor, cursor + bDur, fMeta);
-                            if (rResult) {
-                                claimField(rResult.field, cursor, cursor + bDur, fBunk, fMeta.grade, rResult.name);
-                                usedSports[fBunk].add(rResult.name);
-                            }
-                            tmpl.push(makeBlock({
-                                startMin: cursor, endMin: cursor + bDur,
-                                type: rResult ? 'sport' : 'slot', event: rResult ? rResult.name : 'General Activity Slot',
-                                layer: fMeta.sportLayer, field: rResult ? rResult.field : null,
-                                dMin: fMeta.sportC.dMin, dMax: fMeta.sportCeiling,
-                                _source: 'filler', _assignedSport: rResult ? rResult.name : null,
-                                _sportFallbacks: fMeta.priorityList.map(function(s) { return s.name; }), _final: true
-                            }));
-                            cursor += bDur;
+                        // Use addSportBlocks — it auto-splits if gap exceeds ceiling
+                        var rResult = findSportField(fBunk, fMeta.grade, rgap.start, rgap.end, fMeta);
+                        if (rResult) {
+                            claimField(rResult.field, rgap.start, rgap.end, fBunk, fMeta.grade, rResult.name);
+                            usedSports[fBunk].add(rResult.name);
                         }
+                        addSportBlocks(tmpl, rgap.start, rgap.end, {
+                            type: rResult ? 'sport' : 'slot',
+                            event: rResult ? rResult.name : 'General Activity Slot',
+                            layer: fMeta.sportLayer, field: rResult ? rResult.field : null,
+                            dMin: fMeta.sportC.dMin, dMax: fMeta.sportCeiling,
+                            _source: 'filler',
+                            _assignedSport: rResult ? rResult.name : null,
+                            _sportFallbacks: fMeta.priorityList.map(function(s) { return s.name; }),
+                            _final: true
+                        }, fMeta.sportCeiling, fMeta.fillMinDur);
                     } else {
                         // Too small for a sport — absorb into adjacent non-fixed block
                         tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
@@ -3255,36 +3250,7 @@
                 var vTmpl = vMeta.template;
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
-                // ★ v8.2: Split any sport/slot block that exceeds sportCeiling (dMax)
-                for (var si = vTmpl.length - 1; si >= 0; si--) {
-                    var blk = vTmpl[si];
-                    if (blk._fixed) continue;
-                    var bt = (blk.type || '').toLowerCase();
-                    if (!['sport', 'slot'].includes(bt)) continue;
-                    var bDur = blk.endMin - blk.startMin;
-                    if (bDur <= vMeta.sportCeiling) continue;
-                    // Split this block
-                    var splitCount = Math.ceil(bDur / vMeta.sportCeiling);
-                    while (splitCount > 1 && Math.floor(bDur / splitCount) < vMeta.fillMinDur) splitCount--;
-                    var splitDur = Math.floor(bDur / splitCount);
-                    var splitStart = blk.startMin;
-                    // Remove original
-                    vTmpl.splice(si, 1);
-                    // Add splits
-                    for (var sp = 0; sp < splitCount; sp++) {
-                        var spDur = (sp === splitCount - 1) ? (blk.endMin - splitStart) : splitDur;
-                        vTmpl.push(makeBlock({
-                            startMin: splitStart, endMin: splitStart + spDur,
-                            type: blk.type, event: blk.event,
-                            layer: blk.layer, field: blk.field,
-                            dMin: vMeta.fillMinDur, dMax: vMeta.sportCeiling,
-                            _source: blk._source, _assignedSport: blk._assignedSport,
-                            _sportFallbacks: blk._sportFallbacks, _final: true
-                        }));
-                        splitStart += spDur;
-                    }
-                }
-                vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                // No post-hoc dMax splitting needed — addSportBlocks prevents over-ceiling blocks at creation
 
                 var vGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
                 if (vGaps.length > 0) {
