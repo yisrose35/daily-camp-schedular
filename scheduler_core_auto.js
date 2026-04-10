@@ -2926,12 +2926,14 @@
 
                                 // Resource checks
                                 var ok = true;
-                                var aPos = pos, aDur = dur;
                                 if (need.type === 'swim') {
                                     ok = canUsePoolAtTime(grade, pos, pos + dur);
                                 }
                                 if (need.type === 'special' && need._assignedSpecial) {
                                     ok = canUseSpecialAtTime(need._assignedSpecial, grade, pos, pos + dur);
+                                }
+                                if (need.type === 'rotation_event' && need._rotationEventId) {
+                                    ok = canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency || 1, grade, pos, pos + dur);
                                 }
                                 if (!ok) continue;
 
@@ -2949,6 +2951,7 @@
                                 var ok2 = true;
                                 if (need.type === 'swim') ok2 = canUsePoolAtTime(grade, endAligned, endAligned + dur);
                                 if (need.type === 'special' && need._assignedSpecial) ok2 = canUseSpecialAtTime(need._assignedSpecial, grade, endAligned, endAligned + dur);
+                                if (need.type === 'rotation_event' && need._rotationEventId) ok2 = canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency || 1, grade, endAligned, endAligned + dur);
                                 if (ok2) {
                                     var rG = gap.end - (endAligned + dur);
                                     positions.push({ start: endAligned, dur: dur, deadGaps: rG > 0 && rG < fMin ? 1 : 0, lGap: endAligned - gap.start, rGap: rG });
@@ -3099,6 +3102,7 @@
                             }
                             if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, sol.start, placeEnd, need.event); }
                             if (need.type === 'custom') { registerCrossGrade(grade, 'custom', sol.start, placeEnd, need._customActivity || need.event); }
+                            if (need.type === 'rotation_event' && need._rotationEventId) { registerRotationEventUsage(need._rotationEventId, grade, sol.start, placeEnd); registerCrossGrade(grade, 'rotation_event', sol.start, placeEnd, need.event); }
 
                             var blk = makeBlock({
                                 startMin: sol.start, endMin: placeEnd, type: need.type, event: need.event,
@@ -3129,6 +3133,7 @@
                                 }
                                 if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, pos.start, placeEnd, need.event); }
                                 if (need.type === 'custom') { registerCrossGrade(grade, 'custom', pos.start, placeEnd, need._customActivity || need.event); }
+                                if (need.type === 'rotation_event' && need._rotationEventId) { registerRotationEventUsage(need._rotationEventId, grade, pos.start, placeEnd); registerCrossGrade(grade, 'rotation_event', pos.start, placeEnd, need.event); }
                                 var blk = makeBlock({
                                     startMin: pos.start, endMin: placeEnd, type: need.type, event: need.event,
                                     layer: need.layer, dMin: need.dMin, dMax: need.dMax,
