@@ -3750,9 +3750,10 @@
                             for (let j = i; j >= 0; j--) {
                                 const blk = template[j];
                                 if (['sport', 'slot'].includes((blk.type || '').toLowerCase()) && blk._source !== 'phase0') {
-                                    // Shift everything between blk and the gap
+                                    // ★ v7.1: Only shift non-phase0 blocks — never move pinned walls
                                     blk.endMin += gs;
                                     for (let k = j + 1; k <= i; k++) {
+                                        if (template[k]._source === 'phase0') continue; // skip pinned
                                         template[k].startMin += gs;
                                         template[k].endMin += gs;
                                     }
@@ -3767,6 +3768,7 @@
                                 if (['sport', 'slot'].includes((blk.type || '').toLowerCase()) && blk._source !== 'phase0') {
                                     blk.startMin -= gs;
                                     for (let k = i + 1; k < j; k++) {
+                                        if (template[k]._source === 'phase0') continue; // skip pinned
                                         template[k].startMin -= gs;
                                         template[k].endMin -= gs;
                                     }
@@ -3774,10 +3776,11 @@
                                 }
                             }
                         }
-                        // Absolute last resort: extend a wall (even past dMax if necessary)
+                        // ★ v7.1: Last resort — extend a NON-phase0 neighbor, never a wall
                         if (!absorbed) {
-                            if (prev._source === 'phase0') prev.endMin += gs;
-                            else next.startMin -= gs;
+                            if (prev._source !== 'phase0') prev.endMin += gs;
+                            else if (next._source !== 'phase0') next.startMin -= gs;
+                            // If both are phase0, leave the tiny gap (scorer handles it)
                         }
                     }
                     fixed = true; break;
@@ -3824,6 +3827,27 @@
                 const maxDur = ['sport', 'slot'].includes(t) ? (sportC.dMax || 60) : (blk.dMax || dur);
                 if (dur > maxDur) {
                     blk.endMin = blk.startMin + maxDur;
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════
+            // ★ v7.1 WINDOW ENFORCEMENT — ensure pinned blocks stay within
+            // their layer's time window. The gap eliminator may have shifted
+            // blocks; this clamps them back.
+            // ═══════════════════════════════════════════════════════════
+            template.sort((a, b) => a.startMin - b.startMin);
+            for (const blk of template) {
+                if (blk._source !== 'phase0' && blk._source !== 'pre-placed') continue;
+                const layer = blk.layer;
+                if (!layer) continue;
+                const winStart = layer.startMin;
+                const winEnd = layer.endMin;
+                if (winStart != null && blk.startMin < winStart) blk.startMin = winStart;
+                if (winEnd != null && blk.endMin > winEnd) blk.endMin = winEnd;
+                // Ensure block didn't collapse
+                if (blk.endMin <= blk.startMin) {
+                    blk.startMin = winStart || blk.startMin;
+                    blk.endMin = Math.max(blk.startMin + 5, winEnd || blk.startMin + 20);
                 }
             }
 
