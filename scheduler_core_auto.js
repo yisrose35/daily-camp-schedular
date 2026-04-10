@@ -3148,35 +3148,20 @@
             }
 
             // ══════════════════════════════════════════════════════════
-            // STEP 3: Compute sport gaps for all bunks
+            // ★ v9.2: INTELLIGENT SPORT ENGINE
+            // Plans the entire sport layout for all bunks simultaneously.
+            // For each bunk: analyzes all gaps, computes optimal splits,
+            // assigns sport+field with variety awareness and field sharing.
             // ══════════════════════════════════════════════════════════
-            var sportGaps = [];
+
             var allBunkIds = Object.keys(bunkMeta);
-            for (var k = 0; k < allBunkIds.length; k++) {
-                var bId = allBunkIds[k];
-                var meta = bunkMeta[bId];
-                var gaps = findGaps(meta.template, meta.gradeStart, meta.gradeEnd);
-                for (var gk = 0; gk < gaps.length; gk++) {
-                    sportGaps.push({ bunk: bId, grade: meta.grade, start: gaps[gk].start, end: gaps[gk].end, cursor: gaps[gk].start, filled: false });
-                }
-            }
-            log('[Phase3] ' + sportGaps.length + ' sport gaps across ' + allBunkIds.length + ' bunks');
-
-            // ══════════════════════════════════════════════════════════
-            // STEP 4: Time-sweep sport assignment (THE CORE)
-            // ══════════════════════════════════════════════════════════
-
-            // Track used sports per bunk
             var usedSports = {};
-            for (var ui = 0; ui < allBunkIds.length; ui++) {
-                usedSports[allBunkIds[ui]] = new Set();
-            }
+            for (var ui = 0; ui < allBunkIds.length; ui++) usedSports[allBunkIds[ui]] = new Set();
 
-            // Find sport + field for a bunk at a given time window
-            function findSportField(bunk, grade, startMin, endMin, meta) {
+            // Find best sport + field, considering variety and field sharing
+            function findBestSport(bunk, grade, startMin, endMin, meta, used) {
                 var pList = meta.priorityList;
-                var used = usedSports[bunk];
-                // Pass 1: drafted sports not yet used
+                // Pass 1: drafted sports not yet used (highest priority — rotation variety)
                 for (var d = 0; d < (meta.draftSports || []).length; d++) {
                     var ds = meta.draftSports[d];
                     if (used.has(ds.name)) continue;
@@ -3205,71 +3190,70 @@
                 return null;
             }
 
-            // Collect time boundaries and sweep
-            var boundarySet = {};
-            for (var sg = 0; sg < sportGaps.length; sg++) {
-                boundarySet[sportGaps[sg].start] = true;
-                boundarySet[sportGaps[sg].end] = true;
+            // Compute optimal split plan for a gap — returns array of {start, end}
+            function planGapSplit(gapStart, gapEnd, ceiling, fillMin) {
+                var gapSize = gapEnd - gapStart;
+                if (gapSize < fillMin) return []; // too small
+                if (gapSize <= ceiling) return [{ start: gapStart, end: gapEnd }]; // one block
+
+                // Compute ideal number of blocks where each is in [fillMin, ceiling]
+                var numBlocks = Math.ceil(gapSize / ceiling);
+                // Ensure each block >= fillMin
+                while (numBlocks > 1 && Math.floor(gapSize / numBlocks) < fillMin) numBlocks--;
+                var blockDur = Math.floor(gapSize / numBlocks);
+
+                var plan = [];
+                var cursor = gapStart;
+                for (var i = 0; i < numBlocks; i++) {
+                    var dur = (i === numBlocks - 1) ? (gapEnd - cursor) : blockDur;
+                    plan.push({ start: cursor, end: cursor + dur });
+                    cursor += dur;
+                }
+                return plan;
             }
-            var boundaries = Object.keys(boundarySet).map(Number).sort(function(a, b) { return a - b; });
 
-            for (var ti = 0; ti < boundaries.length; ti++) {
-                var T = boundaries[ti];
+            // Process ALL bunks — plan gaps, then fill with sports
+            log('[Phase3] Intelligent Sport Engine: planning ' + allBunkIds.length + ' bunks');
 
-                // Find gaps whose cursor is at or before T and end is past T
-                var activeGaps = [];
-                for (var ag = 0; ag < sportGaps.length; ag++) {
-                    var sgap = sportGaps[ag];
-                    if (sgap.filled) continue;
-                    if (sgap.cursor <= T && sgap.end > T) activeGaps.push(sgap);
-                }
-                if (activeGaps.length === 0) continue;
+            // Sort bunks by most constrained first (fewest gaps = hardest to fill)
+            var bunksByConstraint = allBunkIds.slice().sort(function(a, b) {
+                var gapsA = findGaps(bunkMeta[a].template, bunkMeta[a].gradeStart, bunkMeta[a].gradeEnd);
+                var gapsB = findGaps(bunkMeta[b].template, bunkMeta[b].gradeStart, bunkMeta[b].gradeEnd);
+                // Fewer total gap time = more constrained = first
+                var totalA = 0, totalB = 0;
+                for (var i = 0; i < gapsA.length; i++) totalA += gapsA[i].end - gapsA[i].start;
+                for (var j = 0; j < gapsB.length; j++) totalB += gapsB[j].end - gapsB[j].start;
+                return totalA - totalB;
+            });
 
-                // Group by grade for coordinated field sharing
-                var gradeGroups = {};
-                for (var gg = 0; gg < activeGaps.length; gg++) {
-                    var gr = activeGaps[gg].grade;
-                    if (!gradeGroups[gr]) gradeGroups[gr] = [];
-                    gradeGroups[gr].push(activeGaps[gg]);
-                }
+            for (var si = 0; si < bunksByConstraint.length; si++) {
+                var sBunk = bunksByConstraint[si];
+                var sMeta = bunkMeta[sBunk];
+                var sGaps = findGaps(sMeta.template, sMeta.gradeStart, sMeta.gradeEnd);
 
-                var gradeKeys = Object.keys(gradeGroups);
-                for (var ggi = 0; ggi < gradeKeys.length; ggi++) {
-                    var group = gradeGroups[gradeKeys[ggi]];
-                    // Sort by urgency: smallest remaining gap = highest priority
-                    group.sort(function(a, b) { return (a.end - a.cursor) - (b.end - b.cursor); });
+                for (var sg = 0; sg < sGaps.length; sg++) {
+                    var gap = sGaps[sg];
+                    var plan = planGapSplit(gap.start, gap.end, sMeta.sportCeiling, sMeta.fillMinDur);
 
-                    for (var bi2 = 0; bi2 < group.length; bi2++) {
-                        var gapItem = group[bi2];
-                        var m = bunkMeta[gapItem.bunk];
-                        if (!m) continue;
-
-                        var effectiveStart = Math.max(gapItem.cursor, T);
-                        var remaining = gapItem.end - effectiveStart;
-                        if (remaining <= 0) continue;
-                        if (remaining < m.fillMinDur) continue; // too small, Step 5 absorbs
-
-                        // Fill the ENTIRE remaining gap at once — addSportBlocks splits into
-                        // properly-sized blocks. No partial fills, no dead remainders.
-                        var endMin = gapItem.end;
-
-                        var result = findSportField(gapItem.bunk, gapItem.grade, effectiveStart, Math.min(effectiveStart + m.sportCeiling, endMin), m);
+                    for (var pb = 0; pb < plan.length; pb++) {
+                        var block = plan[pb];
+                        var result = findBestSport(sBunk, sMeta.grade, block.start, block.end, sMeta, usedSports[sBunk]);
                         if (result) {
-                            claimField(result.field, effectiveStart, endMin, gapItem.bunk, gapItem.grade, result.name);
-                            usedSports[gapItem.bunk].add(result.name);
+                            claimField(result.field, block.start, block.end, sBunk, sMeta.grade, result.name);
+                            usedSports[sBunk].add(result.name);
                         }
-                        addSportBlocks(m.template, effectiveStart, endMin, {
+                        var blk = makeBlock({
+                            startMin: block.start, endMin: block.end,
                             type: result ? 'sport' : 'slot',
                             event: result ? result.name : 'General Activity Slot',
-                            layer: m.sportLayer, field: result ? result.field : null,
-                            dMin: m.sportC.dMin, dMax: m.sportCeiling,
+                            layer: sMeta.sportLayer, field: result ? result.field : null,
+                            dMin: sMeta.sportC.dMin, dMax: sMeta.sportCeiling,
                             _source: 'sport-fill',
                             _assignedSport: result ? result.name : null,
-                            _sportFallbacks: m.priorityList.map(function(s) { return s.name; }),
+                            _sportFallbacks: sMeta.priorityList.map(function(s) { return s.name; }),
                             _final: true
-                        }, m.sportCeiling, m.fillMinDur);
-                        gapItem.cursor = endMin;
-                        if (gapItem.cursor >= gapItem.end) gapItem.filled = true;
+                        });
+                        if (blk) sMeta.template.push(blk);
                     }
                 }
             }
