@@ -3234,22 +3234,107 @@
                 return plan;
             }
 
-            // Process ALL bunks — plan gaps, then fill with sports
-            log('[Phase3] Intelligent Sport Engine: planning ' + allBunkIds.length + ' bunks');
+            // ★ v9.5: SHARING-AWARE SPORT ENGINE
+            // Phase A: Group same-grade bunks with matching gap times → assign shared fields
+            // Phase B: Fill remaining gaps individually
+            log('[Phase3] Sharing-Aware Sport Engine: planning ' + allBunkIds.length + ' bunks');
 
-            // Sort bunks by most constrained first (fewest gaps = hardest to fill)
-            var bunksByConstraint = allBunkIds.slice().sort(function(a, b) {
-                var gapsA = findGaps(bunkMeta[a].template, bunkMeta[a].gradeStart, bunkMeta[a].gradeEnd);
-                var gapsB = findGaps(bunkMeta[b].template, bunkMeta[b].gradeStart, bunkMeta[b].gradeEnd);
-                // Fewer total gap time = more constrained = first
-                var totalA = 0, totalB = 0;
-                for (var i = 0; i < gapsA.length; i++) totalA += gapsA[i].end - gapsA[i].start;
-                for (var j = 0; j < gapsB.length; j++) totalB += gapsB[j].end - gapsB[j].start;
-                return totalA - totalB;
+            // Phase A: Coordinated sharing — same-grade bunks with matching gaps share fields
+            var gradeGroupedBunks = {};
+            for (var gi2 = 0; gi2 < allBunkIds.length; gi2++) {
+                var gb = allBunkIds[gi2];
+                var gm = bunkMeta[gb];
+                if (!gradeGroupedBunks[gm.grade]) gradeGroupedBunks[gm.grade] = [];
+                gradeGroupedBunks[gm.grade].push(gb);
+            }
+
+            Object.keys(gradeGroupedBunks).forEach(function(gradeKey) {
+                var gradeBunks = gradeGroupedBunks[gradeKey];
+                if (gradeBunks.length <= 1) return; // no sharing possible with 1 bunk
+
+                // Collect all gap blocks across bunks in this grade
+                var allGapBlocks = []; // { bunk, start, end }
+                for (var gb2 = 0; gb2 < gradeBunks.length; gb2++) {
+                    var gbMeta = bunkMeta[gradeBunks[gb2]];
+                    var gbGaps = findGaps(gbMeta.template, gbMeta.gradeStart, gbMeta.gradeEnd);
+                    for (var gg2 = 0; gg2 < gbGaps.length; gg2++) {
+                        var gPlan = planGapSplit(gbGaps[gg2].start, gbGaps[gg2].end, gbMeta.sportCeiling, gbMeta.fillMinDur);
+                        for (var gp = 0; gp < gPlan.length; gp++) {
+                            allGapBlocks.push({ bunk: gradeBunks[gb2], start: gPlan[gp].start, end: gPlan[gp].end, filled: false });
+                        }
+                    }
+                }
+
+                // Group by exact time match (same start AND end)
+                var timeGroups = {};
+                for (var tg = 0; tg < allGapBlocks.length; tg++) {
+                    var key = allGapBlocks[tg].start + '-' + allGapBlocks[tg].end;
+                    if (!timeGroups[key]) timeGroups[key] = [];
+                    timeGroups[key].push(allGapBlocks[tg]);
+                }
+
+                // For groups with 2+ bunks at same time: assign SHARED fields
+                Object.keys(timeGroups).forEach(function(timeKey) {
+                    var group = timeGroups[timeKey];
+                    if (group.length < 2) return; // no sharing needed
+                    var startMin = group[0].start, endMin = group[0].end;
+                    var gMeta = bunkMeta[group[0].bunk];
+
+                    // Find a sport+field that can host multiple bunks (capacity > 1)
+                    var pList = gMeta.priorityList;
+                    for (var sp = 0; sp < pList.length; sp++) {
+                        var sport = pList[sp];
+                        for (var sf = 0; sf < (sport.fields || []).length; sf++) {
+                            var fieldName = sport.fields[sf];
+                            var ledger = fieldLedger[fieldName];
+                            if (!ledger || ledger.capacity < 2) continue;
+
+                            // Check how many bunks can share this field
+                            var shareable = [];
+                            for (var sb = 0; sb < group.length; sb++) {
+                                if (group[sb].filled) continue;
+                                if (isFieldAvailable(fieldName, startMin, endMin, group[sb].bunk, gradeKey, sport.name)) {
+                                    shareable.push(group[sb]);
+                                    if (shareable.length >= ledger.capacity) break;
+                                }
+                            }
+
+                            if (shareable.length >= 2) {
+                                // Assign ALL shareable bunks to this field at the same time
+                                for (var sh = 0; sh < shareable.length; sh++) {
+                                    claimField(fieldName, startMin, endMin, shareable[sh].bunk, gradeKey, sport.name);
+                                    usedSports[shareable[sh].bunk].add(sport.name);
+                                    var shMeta = bunkMeta[shareable[sh].bunk];
+                                    var shBlk = makeBlock({
+                                        startMin: startMin, endMin: endMin,
+                                        type: 'sport', event: sport.name,
+                                        layer: shMeta.sportLayer, field: fieldName,
+                                        dMin: shMeta.sportC.dMin, dMax: shMeta.sportCeiling,
+                                        _source: 'sport-fill', _assignedSport: sport.name,
+                                        _sportFallbacks: shMeta.priorityList.map(function(s) { return s.name; }),
+                                        _final: true
+                                    });
+                                    if (shBlk) shMeta.template.push(shBlk);
+                                    shareable[sh].filled = true;
+                                }
+                                break; // done with this time group for this sport
+                            }
+                        }
+                        if (group.every(function(g) { return g.filled; })) break;
+                    }
+                });
+
+                // Mark filled blocks so Phase B skips them
+                for (var mf = 0; mf < allGapBlocks.length; mf++) {
+                    if (allGapBlocks[mf].filled) {
+                        // Already handled by sharing
+                    }
+                }
             });
 
-            for (var si = 0; si < bunksByConstraint.length; si++) {
-                var sBunk = bunksByConstraint[si];
+            // Phase B: Fill remaining gaps individually (non-shared or single bunks)
+            for (var si = 0; si < allBunkIds.length; si++) {
+                var sBunk = allBunkIds[si];
                 var sMeta = bunkMeta[sBunk];
                 var sGaps = findGaps(sMeta.template, sMeta.gradeStart, sMeta.gradeEnd);
 
