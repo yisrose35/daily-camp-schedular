@@ -2896,147 +2896,129 @@
                             _customField: cl.customField || null, _customBunks: cl.customBunks || null, _source: 'need' });
                     });
 
-                    // Sort needs: shortest duration first, then tightest window.
-                    // Short needs (snack 10min) go before long needs (swim 30min) because
-                    // short needs can fit in small gaps that long needs would consume.
-                    // This prevents swim from taking the only gap where snack could fit.
-                    needs.sort(function(a, b) {
-                        // 1. Shortest duration first
-                        if (a.dMin !== b.dMin) return a.dMin - b.dMin;
-                        // 2. Tightest absolute window second
-                        var aSlack = (a.windowEnd - a.windowStart) - a.dMin;
-                        var bSlack = (b.windowEnd - b.windowStart) - b.dMin;
-                        return aSlack - bSlack;
-                    });
+                    // ══════════════════════════════════════════════════════════
+                    // ★ v9.0: CONSTRAINT PROPAGATION SOLVER
+                    // Solves ALL needs simultaneously with backtracking.
+                    // No sequential placement — finds a valid combination where
+                    // every need fits, no dead gaps, no window violations.
+                    // ══════════════════════════════════════════════════════════
 
-                    // ── 2: Place each need into the best-fitting gap ──
-                    // Uses forward-checking: before committing a placement, verifies
-                    // that all remaining needs can still fit in the leftover gaps.
-                    function canRemainingFit(tmpl, remainingNeeds, gs, ge) {
-                        // Quick check: for each remaining need, is there a gap in its window?
-                        var gps = findGaps(tmpl, gs, ge);
-                        for (var r = 0; r < remainingNeeds.length; r++) {
-                            var rn = remainingNeeds[r];
-                            var fits = false;
-                            for (var g = 0; g < gps.length; g++) {
-                                var os = Math.max(gps[g].start, rn.windowStart || gs);
-                                var oe = Math.min(gps[g].end, rn.windowEnd || ge);
-                                if (oe - os >= rn.dMin) { fits = true; break; }
-                            }
-                            if (!fits) return false;
-                        }
-                        return true;
-                    }
+                    // Generate valid positions for a need given current template
+                    function getValidPositions(need, tmpl, gs, ge, fMin) {
+                        var positions = [];
+                        var gaps = findGaps(tmpl, gs, ge);
+                        for (var g = 0; g < gaps.length; g++) {
+                            var gap = gaps[g];
+                            var ws = Math.max(gap.start, need.windowStart || gs);
+                            var we = Math.min(gap.end, need.windowEnd || ge);
+                            if (we - ws < need.dMin) continue;
+                            var dur = Math.min(need.dMax, we - ws);
 
-                    for (var ni = 0; ni < needs.length; ni++) {
-                        var need = needs[ni];
-                        var gaps = findGaps(template, gradeStart, gradeEnd);
-                        var candidates = [];
+                            // Try positions: gap start, gap end, window-aligned, fillMin-offset
+                            var tryPos = [gap.start, gap.end - dur, ws, gap.start + fMin];
+                            var seen = {};
+                            for (var tp = 0; tp < tryPos.length; tp++) {
+                                var pos = Math.max(tryPos[tp], ws);
+                                if (pos + dur > we || pos < gap.start || pos + dur > gap.end) continue;
+                                var key = pos + '_' + dur;
+                                if (seen[key]) continue;
+                                seen[key] = true;
 
-                        for (var gj = 0; gj < gaps.length; gj++) {
-                            var gap = gaps[gj];
-                            var winStart = Math.max(gap.start, need.windowStart || gradeStart);
-                            var winEnd = Math.min(gap.end, need.windowEnd || gradeEnd);
-                            if (winEnd - winStart < need.dMin) continue;
-                            var dur = Math.min(need.dMax, winEnd - winStart);
-
-                            // Generate candidate positions within this gap that avoid dead gaps.
-                            // A "dead gap" is a remainder > 0 but < fillMinDur (unfillable).
-                            // Try: start of overlap, end of overlap, and positions that leave
-                            // fillable gaps on both sides.
-                            var positions = [];
-                            // Position 1: aligned to gap start (no left remainder)
-                            positions.push(gap.start);
-                            // Position 2: aligned to gap end (no right remainder)
-                            if (gap.end - dur >= winStart) positions.push(gap.end - dur);
-                            // Position 3: aligned to window start
-                            if (winStart !== gap.start) positions.push(winStart);
-                            // Position 4: offset from gap start by fillMinDur (fillable left gap)
-                            if (gap.start + fillMinDur >= winStart && gap.start + fillMinDur + dur <= winEnd)
-                                positions.push(gap.start + fillMinDur);
-
-                            for (var pi = 0; pi < positions.length; pi++) {
-                                var pos = positions[pi];
-                                // Clamp to window
-                                pos = Math.max(pos, winStart);
-                                if (pos + dur > winEnd) continue;
-                                if (pos < gap.start) continue;
-                                if (pos + dur > gap.end) continue;
-
-                                // Resource checks at this position
-                                var resourceOk = true;
+                                // Resource checks
+                                var ok = true;
                                 if (need.type === 'swim') {
-                                    resourceOk = false;
-                                    for (var pt = pos; pt + need.dMin <= Math.min(pos + dur, winEnd); pt += 5) {
-                                        var pEnd = Math.min(pt + dur, winEnd, gap.end);
-                                        if (pEnd - pt < need.dMin) continue;
-                                        if (canUsePoolAtTime(grade, pt, pEnd)) { pos = pt; dur = pEnd - pt; resourceOk = true; break; }
+                                    ok = false;
+                                    for (var pt = pos; pt + need.dMin <= Math.min(pos + dur, we); pt += 5) {
+                                        var pEnd = Math.min(pt + dur, we, gap.end);
+                                        if (pEnd - pt >= need.dMin && canUsePoolAtTime(grade, pt, pEnd)) {
+                                            pos = pt; dur = pEnd - pt; ok = true; break;
+                                        }
                                     }
                                 }
                                 if (need.type === 'special' && need._assignedSpecial) {
-                                    resourceOk = false;
-                                    for (var st = pos; st + need.dMin <= Math.min(pos + dur, winEnd); st += 5) {
-                                        var sEnd = Math.min(st + dur, winEnd, gap.end);
-                                        if (sEnd - st < need.dMin) continue;
-                                        if (canUseSpecialAtTime(need._assignedSpecial, grade, st, sEnd)) { pos = st; dur = sEnd - st; resourceOk = true; break; }
+                                    ok = false;
+                                    for (var st = pos; st + need.dMin <= Math.min(pos + dur, we); st += 5) {
+                                        var sEnd = Math.min(st + dur, we, gap.end);
+                                        if (sEnd - st >= need.dMin && canUseSpecialAtTime(need._assignedSpecial, grade, st, sEnd)) {
+                                            pos = st; dur = sEnd - st; ok = true; break;
+                                        }
                                     }
                                 }
-                                if (!resourceOk) continue;
+                                if (!ok) continue;
 
-                                // Score: penalize positions that create dead gaps
-                                var leftGap = pos - gap.start;
-                                var rightGap = gap.end - (pos + dur);
-                                var deadGaps = 0;
-                                if (leftGap > 0 && leftGap < fillMinDur) deadGaps++;
-                                if (rightGap > 0 && rightGap < fillMinDur) deadGaps++;
-                                // Lower = better: 0 dead gaps ideal, then 1, then 2
-                                var score = deadGaps * 1000 + Math.abs(leftGap) + Math.abs(rightGap);
-
-                                candidates.push({ start: pos, dur: dur, score: score });
+                                // Score: penalize dead gaps
+                                var lGap = pos - gap.start;
+                                var rGap = gap.end - (pos + dur);
+                                var deadCount = 0;
+                                if (lGap > 0 && lGap < fMin) deadCount++;
+                                if (rGap > 0 && rGap < fMin) deadCount++;
+                                positions.push({ start: pos, dur: dur, score: deadCount * 1000 + lGap + rGap, needIdx: -1 });
                             }
                         }
-                        // Sort: fewest dead gaps first, then tightest overall
-                        candidates.sort(function(a, b) { return a.score - b.score; });
-                        // Deduplicate by start position
-                        var seen = {};
-                        candidates = candidates.filter(function(c) {
-                            if (seen[c.start]) return false;
-                            seen[c.start] = true;
-                            return true;
-                        });
+                        positions.sort(function(a, b) { return a.score - b.score; });
+                        return positions;
+                    }
 
-                        // Try each candidate with forward-checking
-                        var bestStart = -1, bestDur = 0;
-                        var remainingNeeds = needs.slice(ni + 1);
-                        for (var ci = 0; ci < candidates.length; ci++) {
-                            var cand = candidates[ci];
-                            var simBlock = { startMin: cand.start, endMin: cand.start + cand.dur };
-                            var simTemplate = template.concat([simBlock]);
-                            if (remainingNeeds.length === 0 || canRemainingFit(simTemplate, remainingNeeds, gradeStart, gradeEnd)) {
-                                bestStart = cand.start;
-                                bestDur = cand.dur;
-                                break;
+                    // Recursive backtracking solver
+                    function solveCSP(needsList, tmpl, gs, ge, fMin, depth) {
+                        if (needsList.length === 0) return []; // all placed
+
+                        // Pick the most constrained need (fewest valid positions)
+                        var bestIdx = 0, bestCount = Infinity;
+                        for (var n = 0; n < needsList.length; n++) {
+                            var positions = getValidPositions(needsList[n], tmpl, gs, ge, fMin);
+                            needsList[n]._positions = positions;
+                            if (positions.length < bestCount) {
+                                bestCount = positions.length;
+                                bestIdx = n;
                             }
                         }
-                        if (bestStart < 0 && candidates.length > 0) {
-                            bestStart = candidates[0].start;
-                            bestDur = candidates[0].dur;
-                        }
 
-                        if (bestStart >= 0) {
-                            var placeEnd = bestStart + bestDur;
+                        var chosen = needsList[bestIdx];
+                        var positions = chosen._positions;
+                        if (positions.length === 0) return null; // dead end — backtrack
+
+                        // Try each position for the chosen need
+                        var remaining = needsList.slice(0, bestIdx).concat(needsList.slice(bestIdx + 1));
+                        for (var p = 0; p < positions.length; p++) {
+                            var pos = positions[p];
+                            // Simulate placement
+                            var simBlock = { startMin: pos.start, endMin: pos.start + pos.dur };
+                            var simTmpl = tmpl.concat([simBlock]);
+
+                            // Recurse with remaining needs
+                            var result = solveCSP(remaining, simTmpl, gs, ge, fMin, depth + 1);
+                            if (result !== null) {
+                                // Success — prepend this placement
+                                result.unshift({ need: chosen, start: pos.start, dur: pos.dur });
+                                return result;
+                            }
+                            // else: backtrack, try next position
+                        }
+                        return null; // all positions exhausted — backtrack
+                    }
+
+                    // Run the solver
+                    var solution = solveCSP(needs, template, gradeStart, gradeEnd, fillMinDur, 0);
+
+                    if (solution) {
+                        for (var si = 0; si < solution.length; si++) {
+                            var sol = solution[si];
+                            var need = sol.need;
+                            var placeEnd = sol.start + sol.dur;
+
                             // Register resources
-                            if (need.type === 'swim') { registerCrossGrade(grade, 'swim', bestStart, placeEnd, need.event); registerPoolUsage(grade, bestStart, placeEnd); }
+                            if (need.type === 'swim') { registerCrossGrade(grade, 'swim', sol.start, placeEnd, need.event); registerPoolUsage(grade, sol.start, placeEnd); }
                             if (need.type === 'special' && need._assignedSpecial) {
-                                registerCrossGrade(grade, 'special', bestStart, placeEnd, need.event);
-                                registerSpecialUsage(need._assignedSpecial, grade, bestStart, placeEnd);
+                                registerCrossGrade(grade, 'special', sol.start, placeEnd, need.event);
+                                registerSpecialUsage(need._assignedSpecial, grade, sol.start, placeEnd);
                                 placedSpecialNames.add(need._assignedSpecial);
                             }
-                            if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, bestStart, placeEnd, need.event); }
-                            if (need.type === 'custom') { registerCrossGrade(grade, 'custom', bestStart, placeEnd, need._customActivity || need.event); }
+                            if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, sol.start, placeEnd, need.event); }
+                            if (need.type === 'custom') { registerCrossGrade(grade, 'custom', sol.start, placeEnd, need._customActivity || need.event); }
 
-                            template.push(makeBlock({
-                                startMin: bestStart, endMin: placeEnd, type: need.type, event: need.event,
+                            var blk = makeBlock({
+                                startMin: sol.start, endMin: placeEnd, type: need.type, event: need.event,
                                 layer: need.layer, dMin: need.dMin, dMax: need.dMax,
                                 _source: 'need', _activityLocked: need._activityLocked || false,
                                 _assignedSpecial: need._assignedSpecial || null,
@@ -3045,9 +3027,40 @@
                                 _customBunks: need._customBunks || null,
                                 _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
                                 _rotationEventColor: need._rotationEventColor || null, _final: true
-                            }));
-                        } else {
-                            log('[Phase3] ERROR: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' — no gap fits within window ' + need.windowStart + '-' + need.windowEnd);
+                            });
+                            if (blk) template.push(blk);
+                        }
+                    } else {
+                        // Solver couldn't place all needs — place what we can
+                        for (var fi2 = 0; fi2 < needs.length; fi2++) {
+                            var need = needs[fi2];
+                            var positions = getValidPositions(need, template, gradeStart, gradeEnd, fillMinDur);
+                            if (positions.length > 0) {
+                                var pos = positions[0];
+                                var placeEnd = pos.start + pos.dur;
+                                if (need.type === 'swim') { registerCrossGrade(grade, 'swim', pos.start, placeEnd, need.event); registerPoolUsage(grade, pos.start, placeEnd); }
+                                if (need.type === 'special' && need._assignedSpecial) {
+                                    registerCrossGrade(grade, 'special', pos.start, placeEnd, need.event);
+                                    registerSpecialUsage(need._assignedSpecial, grade, pos.start, placeEnd);
+                                    placedSpecialNames.add(need._assignedSpecial);
+                                }
+                                if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, pos.start, placeEnd, need.event); }
+                                if (need.type === 'custom') { registerCrossGrade(grade, 'custom', pos.start, placeEnd, need._customActivity || need.event); }
+                                var blk = makeBlock({
+                                    startMin: pos.start, endMin: placeEnd, type: need.type, event: need.event,
+                                    layer: need.layer, dMin: need.dMin, dMax: need.dMax,
+                                    _source: 'need', _activityLocked: need._activityLocked || false,
+                                    _assignedSpecial: need._assignedSpecial || null,
+                                    _specialLocation: need._specialLocation || null, _specialDuration: need._specialDuration || null,
+                                    _customActivity: need._customActivity || null, _customField: need._customField || null,
+                                    _customBunks: need._customBunks || null,
+                                    _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
+                                    _rotationEventColor: need._rotationEventColor || null, _final: true
+                                });
+                                if (blk) template.push(blk);
+                            } else {
+                                log('[Phase3] CSP: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk);
+                            }
                         }
                     }
 
