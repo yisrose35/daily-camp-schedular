@@ -2988,7 +2988,6 @@
             (draftResult.specials || []).forEach(s => { if (s.name) placedSpecialNames.add(s.name); });
 
             function findSportWithField(startMin, endMin) {
-                // Try draft sports first
                 for (const ds of (draftResult.sports || [])) {
                     if (usedSportsForBunk.has(ds.name)) continue;
                     const sportInfo = priorityList.find(s => s.name === ds.name);
@@ -2998,40 +2997,15 @@
                         }
                     }
                 }
-                // Try unused priority list sports
                 for (const sport of priorityList) {
                     if (usedSportsForBunk.has(sport.name)) continue;
                     for (const fn of (sport.fields || [])) {
                         if (isFieldAvailable(fn, startMin, endMin, bunk, grade, sport.name)) return { name: sport.name, field: fn };
                     }
                 }
-                // Try any sport (even repeats)
                 for (const sport of priorityList) {
                     for (const fn of (sport.fields || [])) {
                         if (isFieldAvailable(fn, startMin, endMin, bunk, grade, sport.name)) return { name: sport.name, field: fn };
-                    }
-                }
-                // ★ v7.0: If no field available for full duration, try shorter sub-windows.
-                // League locks may only block part of the gap — find a sub-window that works.
-                const dur = endMin - startMin;
-                if (dur > fillMinDur) {
-                    // Try from the start of the gap with shorter durations
-                    for (let tryDur = Math.min(dur - 5, sportCeiling); tryDur >= fillMinDur; tryDur -= 5) {
-                        for (const sport of priorityList) {
-                            for (const fn of (sport.fields || [])) {
-                                if (isFieldAvailable(fn, startMin, startMin + tryDur, bunk, grade, sport.name))
-                                    return { name: sport.name, field: fn, endOverride: startMin + tryDur };
-                            }
-                        }
-                    }
-                    // Try from the end of the gap working backward
-                    for (let tryDur = Math.min(dur - 5, sportCeiling); tryDur >= fillMinDur; tryDur -= 5) {
-                        for (const sport of priorityList) {
-                            for (const fn of (sport.fields || [])) {
-                                if (isFieldAvailable(fn, endMin - tryDur, endMin, bunk, grade, sport.name))
-                                    return { name: sport.name, field: fn, startOverride: endMin - tryDur };
-                            }
-                        }
                     }
                 }
                 return null;
@@ -3202,13 +3176,9 @@
                         // ★ HARD GUARD: No single sport block may exceed 60min
                         if (dur > 60 || isNaN(dur)) dur = Math.min(60, leftover);
                         const sp = findSportWithField(cur, cur + dur);
-                        // ★ v7.0: Handle sub-window results
-                        const spStart = sp && sp.startOverride ? sp.startOverride : cur;
-                        const spEnd = sp && sp.endOverride ? sp.endOverride : cur + dur;
-                        const spDur = spEnd - spStart;
-                        if (sp) { claimField(sp.field, spStart, spEnd, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
+                        if (sp) { claimField(sp.field, cur, cur + dur, bunk, grade, sp.name); usedSportsForBunk.add(sp.name); }
                         template.push({
-                            startMin: spStart, endMin: spEnd,
+                            startMin: cur, endMin: cur + dur,
                             type: sp ? 'sport' : 'slot',
                             event: sp ? sp.name : 'General Activity Slot',
                             layer: shoppingList.sports?.layer, dMin: sportC.dMin, dMax: sportC.dMax,
@@ -3217,8 +3187,8 @@
                             _source: sp ? 'capacity_checked' : 'filler',
                             _sportFallbacks: priorityList.map(s => s.name), _final: true
                         });
-                        leftover -= spDur;
-                        cur = spEnd;
+                        leftover -= dur;
+                        cur += dur;
                     }
                     // ★ v5.1: If there's STILL leftover (shouldn't happen, but safety)
                     if (leftover >= fillMinDur) {
@@ -3713,10 +3683,8 @@
                     const gs = template[0].startMin - gradeStart;
                     if (gs >= fillMinDur) {
                         const sp = findSportWithField(gradeStart, template[0].startMin);
-                        const actualStart = sp && sp.startOverride ? sp.startOverride : gradeStart;
-                        const actualEnd = sp && sp.endOverride ? sp.endOverride : template[0].startMin;
-                        if (sp) claimField(sp.field, actualStart, actualEnd, bunk, grade, sp.name);
-                        template.push({ startMin: actualStart, endMin: actualEnd,
+                        if (sp) claimField(sp.field, gradeStart, template[0].startMin, bunk, grade, sp.name);
+                        template.push({ startMin: gradeStart, endMin: template[0].startMin,
                             type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
                             layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
                             _activityLocked: false, _assignedSport: sp ? sp.name : null,
@@ -3742,11 +3710,8 @@
                     if (gs >= fillMinDur) {
                         const gS = template[i].endMin, gE = template[i + 1].startMin;
                         const sp = findSportWithField(gS, gE);
-                        // ★ v7.0: Handle sub-window results (sport found for partial gap)
-                        const actualStart = sp && sp.startOverride ? sp.startOverride : gS;
-                        const actualEnd = sp && sp.endOverride ? sp.endOverride : gE;
-                        if (sp) claimField(sp.field, actualStart, actualEnd, bunk, grade, sp.name);
-                        template.push({ startMin: actualStart, endMin: actualEnd,
+                        if (sp) claimField(sp.field, gS, gE, bunk, grade, sp.name);
+                        template.push({ startMin: gS, endMin: gE,
                             type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
                             layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
                             _activityLocked: false, _assignedSport: sp ? sp.name : null,
@@ -3826,10 +3791,8 @@
                     if (gs >= fillMinDur) {
                         const gS = template[template.length - 1].endMin;
                         const sp = findSportWithField(gS, gradeEnd);
-                        const actualStart = sp && sp.startOverride ? sp.startOverride : gS;
-                        const actualEnd = sp && sp.endOverride ? sp.endOverride : gradeEnd;
-                        if (sp) claimField(sp.field, actualStart, actualEnd, bunk, grade, sp.name);
-                        template.push({ startMin: actualStart, endMin: actualEnd,
+                        if (sp) claimField(sp.field, gS, gradeEnd, bunk, grade, sp.name);
+                        template.push({ startMin: gS, endMin: gradeEnd,
                             type: sp ? 'sport' : 'slot', event: sp ? sp.name : 'General Activity Slot',
                             layer: shoppingList.sports?.layer, dMin: fillMinDur, dMax: sportC.dMax,
                             _activityLocked: false, _assignedSport: sp ? sp.name : null,
