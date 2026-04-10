@@ -2681,10 +2681,9 @@
             const sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
             const minFill = getMinFillable(grade);
             const ABSORB_MAX = 10;
-            // ★ v6.0: fillMinDur — absolute minimum for gap filling (25min).
-            // The layer's sportC.dMin is the *preferred* minimum, but gaps >= 25min
-            // MUST be filled. A 25-30min sport is always better than an empty gap.
-            const fillMinDur = TYPE_FLOORS.sport || 25;
+            // ★ v7.1: fillMinDur — use the layer's configured dMin, not a hardcoded floor.
+            // This ensures no sport block is created shorter than the layer allows.
+            const fillMinDur = Math.max(sportC.dMin || 25, TYPE_FLOORS.sport || 25);
             // ★ v4.0: Rotation matrix — preferred time bands per activity type
             const rotation = staggerPlan[grade] || {};
             const typeBands = rotation.typeBands || {};
