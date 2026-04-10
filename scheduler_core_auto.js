@@ -2763,20 +2763,26 @@
             }
 
            // Draft specials — add as highest-priority needs
-            // Cap to required count, then convert to needs for the constraint solver
-            const requiredSpecials = shoppingList.specials?.required || 0;
-            if (draftResult.specials && draftResult.specials.length > requiredSpecials && requiredSpecials > 0) {
-                draftResult.specials.length = requiredSpecials;
-            }
-            if ((draftResult.specials || []).length < requiredSpecials) {
-                const usedNames = new Set((draftResult.specials || []).map(s => s.name));
-                const priorityList = shoppingList.specials?.priorityList || [];
-                for (const special of priorityList) {
-                    if (draftResult.specials.length >= requiredSpecials) break;
-                    if (usedNames.has(special.name)) continue;
-                    draftResult.specials.push({ ...special, claimedTime: null, claimedField: special.location || null });
-                    usedNames.add(special.name);
+            // ★ v7.0: If specials are already pre-placed as walls, skip adding needs
+            const specialsAlreadyWalls = walls.some(w => w._source === 'pre-placed' && w.type === 'special');
+            const requiredSpecials = specialsAlreadyWalls ? 0 : (shoppingList.specials?.required || 0);
+            if (!specialsAlreadyWalls) {
+                if (draftResult.specials && draftResult.specials.length > requiredSpecials && requiredSpecials > 0) {
+                    draftResult.specials.length = requiredSpecials;
                 }
+                if ((draftResult.specials || []).length < requiredSpecials) {
+                    const usedNames = new Set((draftResult.specials || []).map(s => s.name));
+                    const priorityList = shoppingList.specials?.priorityList || [];
+                    for (const special of priorityList) {
+                        if (draftResult.specials.length >= requiredSpecials) break;
+                        if (usedNames.has(special.name)) continue;
+                        draftResult.specials.push({ ...special, claimedTime: null, claimedField: special.location || null });
+                        usedNames.add(special.name);
+                    }
+                }
+            } else {
+                // Specials are walls — clear draft specials so packer doesn't double-add
+                draftResult.specials = [];
             }
             const gradeSpecialLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'special');
             // Build full fallback list for specials (so packer can try alternatives)
@@ -2972,13 +2978,12 @@
             const placedSpecialNames = new Set();
             // ★ v5.1.1: Hard ceiling for sport duration — layer dMax may be too wide or NaN
             const sportCeiling = Math.min(sportC.dMax || 60, TYPE_CEILINGS.sport || 60, 60);
-            // ★ v5.1: Track how many specials this bunk has placed (draft + fill)
-            let specialsPlacedCount = (draftResult.specials || []).length;
-            const maxSpecialsForBunk = Math.max(
-                shoppingList.specials?.required || 1,
-                (draftResult.specials || []).length + 2  // allow up to 2 extra from fillRegion
-            );
-            // Mark draft specials as already placed
+            // ★ v7.0: Track how many specials this bunk has placed (walls + draft + fill)
+            const wallSpecialCount = walls.filter(w => w.type === 'special').length;
+            let specialsPlacedCount = wallSpecialCount + (draftResult.specials || []).length;
+            const maxSpecialsForBunk = shoppingList.specials?.required || 1;
+            // Mark wall specials + draft specials as already placed
+            walls.filter(w => w.type === 'special').forEach(w => { if (w.event) placedSpecialNames.add(w.event); });
             (draftResult.specials || []).forEach(s => { if (s.name) placedSpecialNames.add(s.name); });
 
             function findSportWithField(startMin, endMin) {
@@ -4351,17 +4356,20 @@
             // Phase 2: Draft
             const draftResults = runGlobalPlanner(shoppingLists);
 
-            // ★ v4.0: Clear ONLY DRAFT field claims — keep pinned/phase0 claims
-            // The draft used temporary times. The packer will re-claim at actual times.
+            // ★ v7.0: Clear ALL draft field claims — keep only Phase 0 walls
             Object.values(fieldLedger).forEach(ledger => {
                 ledger.claims = ledger.claims.filter(c => {
-                    // Keep claims from Phase 0 blocks (walls)
                     const bunkTl = bunkTimelines[c.bunk] || [];
                     return bunkTl.some(b => b._fixed && overlaps(b.startMin, b.endMin, c.startMin, c.endMin));
                 });
             });
 
-            // Phase 3: Greedy pack in stagger order
+            // ═══════════════════════════════════════════════════════════
+            // ★ v7.0: SIMULTANEOUS ALL-BUNK SOLVER
+            // All 38 bunks processed together — specials pre-placed for
+            // ALL bunks BEFORE any sport filling begins.
+            // ═══════════════════════════════════════════════════════════
+
             const allTemplates = {};
             const staggeredGrades = [...allGrades].sort((a, b) => ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0));
 
@@ -4373,20 +4381,88 @@
                 }
             });
 
-            // Phase 3: Greedy pack per bunk
-            // Specials are handled as needs inside the packer's constraint solver.
-            // With 'all' sharing type, cross-grade blocking is eliminated.
-            // The packer's look-ahead and gap-avoidance logic finds optimal placement.
-            staggeredGrades.forEach(grade => {
-                getBunksForGrade(grade, divisions).forEach(bunk => {
-                    const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
-                    allTemplates[bunk] = greedyPackBunk(
-                        bunk, grade,
-                        draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() },
-                        shoppingLists[bunk], (staggerPlan[grade] || { offset: 0 }).offset, swimsToday
-                    );
+            // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
+            // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
+            // By converting these to immovable walls BEFORE the packer runs,
+            // no bunk can steal specials from other bunks during gap-fill.
+            {
+                let preplacedCount = 0;
+                let preplacedByGrade = {};
+                allGrades.forEach(grade => {
+                    preplacedByGrade[grade] = 0;
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const draft = draftResults[bunk];
+                        if (!draft || !draft.specials || !draft.specials.length) return;
+                        // Only take 1 special per bunk (the first one from the fair draft)
+                        const special = draft.specials[0];
+                        if (!special || !special.claimedTime) return;
+                        const sStart = special.claimedTime.startMin;
+                        const sEnd = special.claimedTime.endMin;
+                        const fieldName = special.claimedField || special.location;
+
+                        // Add as immovable wall in bunkTimelines
+                        bunkTimelines[bunk].push({
+                            startMin: sStart, endMin: sEnd,
+                            type: 'special', event: special.name,
+                            layer: special._layer || null,
+                            _classification: 'pinned', _committed: true, _fixed: true,
+                            _gradeWide: false, _activityLocked: true, _noBacktrack: false,
+                            _assignedSpecial: special.name,
+                            _specialLocation: fieldName,
+                            _specialDuration: special.duration || (sEnd - sStart),
+                            _isSpecialLocation: true, _source: 'pre-placed'
+                        });
+
+                        // Register in resource tracker
+                        registerSpecialUsage(special.name, grade, sStart, sEnd);
+                        registerCrossGrade(grade, 'special', sStart, sEnd, special.name);
+
+                        // Claim field
+                        if (fieldName && fieldLedger[fieldName]) {
+                            fieldLedger[fieldName].claims.push({
+                                bunk: bunk, grade: grade, activity: special.name,
+                                startMin: sStart, endMin: sEnd
+                            });
+                        }
+
+                        preplacedCount++;
+                        preplacedByGrade[grade]++;
+                    });
                 });
-            });
+                log('[Phase2.5] ★ PRE-PLACED ' + preplacedCount + ' specials as walls across ALL bunks');
+                allGrades.forEach(grade => {
+                    log('[Phase2.5]   Grade ' + grade + ': ' + preplacedByGrade[grade] + '/' + getBunksForGrade(grade, divisions).length + ' bunks got specials');
+                });
+            }
+
+            // ── Phase 3: Fill sports/swim/snack for ALL bunks (round-robin) ──
+            // Specials are already walls. The packer only fills gaps with sports.
+            {
+                const gradeQueues = {};
+                staggeredGrades.forEach(grade => {
+                    gradeQueues[grade] = [...getBunksForGrade(grade, divisions)];
+                });
+
+                let anyLeft = true;
+                while (anyLeft) {
+                    anyLeft = false;
+                    for (const grade of staggeredGrades) {
+                        if (gradeQueues[grade].length === 0) continue;
+                        anyLeft = true;
+                        const bunk = gradeQueues[grade].shift();
+                        const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
+                        // Pass empty specials — they're already walls, packer shouldn't add more
+                        const draftForPacker = draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() };
+                        draftForPacker.specials = []; // ★ specials already pre-placed as walls
+                        allTemplates[bunk] = greedyPackBunk(
+                            bunk, grade,
+                            draftForPacker,
+                            shoppingLists[bunk], (staggerPlan[grade] || { offset: 0 }).offset, swimsToday
+                        );
+                    }
+                }
+                log('[Phase3] ★ SIMULTANEOUS v7.0: Round-robin sport fill complete — ' + Object.keys(allTemplates).length + ' bunks');
+            }
 
             // Phase 4: Execute
             executeTemplates(allTemplates);
