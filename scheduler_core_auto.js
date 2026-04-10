@@ -3332,7 +3332,11 @@
                 }
             });
 
-            // Phase B: Fill remaining gaps individually (non-shared or single bunks)
+            // Phase B: AGGRESSIVE gap filling — never give up on finding a field
+            // Strategy 1: Try full block duration
+            // Strategy 2: Try from the END of the gap (league locks may have ended)
+            // Strategy 3: Split the block in half, find different fields for each half
+            // Strategy 4: Try every 5-min sub-window within the block
             for (var si = 0; si < allBunkIds.length; si++) {
                 var sBunk = allBunkIds[si];
                 var sMeta = bunkMeta[sBunk];
@@ -3340,17 +3344,55 @@
 
                 for (var sg = 0; sg < sGaps.length; sg++) {
                     var gap = sGaps[sg];
-                    var plan = planGapSplit(gap.start, gap.end, sMeta.sportCeiling, sMeta.fillMinDur);
+                    var gapSize = gap.end - gap.start;
+                    if (gapSize < sMeta.fillMinDur) continue;
 
-                    for (var pb = 0; pb < plan.length; pb++) {
-                        var block = plan[pb];
-                        var result = findBestSport(sBunk, sMeta.grade, block.start, block.end, sMeta, usedSports[sBunk]);
+                    // Try to fill the entire gap with sport blocks that each have a field
+                    var cursor = gap.start;
+                    var maxAttempts = 20; // safety limit
+
+                    while (cursor < gap.end && maxAttempts-- > 0) {
+                        var remaining = gap.end - cursor;
+                        if (remaining < sMeta.fillMinDur) break;
+
+                        var dur = Math.min(remaining, sMeta.sportCeiling);
+                        // Check if remainder after this block would be dead
+                        var leftover = remaining - dur;
+                        if (leftover > 0 && leftover < sMeta.fillMinDur) {
+                            dur = Math.floor(remaining / 2);
+                            if (dur < sMeta.fillMinDur) dur = remaining;
+                        }
+                        if (dur > sMeta.sportCeiling) dur = sMeta.sportCeiling;
+
+                        var blockEnd = cursor + dur;
+                        var result = null;
+
+                        // Strategy 1: full duration from cursor
+                        result = findBestSport(sBunk, sMeta.grade, cursor, blockEnd, sMeta, usedSports[sBunk]);
+
+                        // Strategy 2: try shorter durations (scan from fillMinDur up)
+                        if (!result) {
+                            for (var tryDur = sMeta.fillMinDur; tryDur <= dur; tryDur += 5) {
+                                result = findBestSport(sBunk, sMeta.grade, cursor, cursor + tryDur, sMeta, usedSports[sBunk]);
+                                if (result) { blockEnd = cursor + tryDur; break; }
+                            }
+                        }
+
+                        // Strategy 3: try from the END of the gap working backward
+                        if (!result && gap.end - sMeta.fillMinDur >= cursor) {
+                            for (var tryEnd = gap.end; tryEnd - sMeta.fillMinDur >= cursor; tryEnd -= 5) {
+                                var tryStart = Math.max(cursor, tryEnd - sMeta.sportCeiling);
+                                result = findBestSport(sBunk, sMeta.grade, tryStart, tryEnd, sMeta, usedSports[sBunk]);
+                                if (result) { cursor = tryStart; blockEnd = tryEnd; break; }
+                            }
+                        }
+
                         if (result) {
-                            claimField(result.field, block.start, block.end, sBunk, sMeta.grade, result.name);
+                            claimField(result.field, cursor, blockEnd, sBunk, sMeta.grade, result.name);
                             usedSports[sBunk].add(result.name);
                         }
                         var blk = makeBlock({
-                            startMin: block.start, endMin: block.end,
+                            startMin: cursor, endMin: blockEnd,
                             type: result ? 'sport' : 'slot',
                             event: result ? result.name : 'General Activity Slot',
                             layer: sMeta.sportLayer, field: result ? result.field : null,
@@ -3361,6 +3403,7 @@
                             _final: true
                         });
                         if (blk) sMeta.template.push(blk);
+                        cursor = blockEnd;
                     }
                 }
             }
