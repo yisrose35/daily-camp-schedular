@@ -3889,6 +3889,25 @@
                         }
                         if (specialCausesConflict) return;
 
+                        // ★ v8.2: Reject placement if it creates dead gaps (unfillable remainders).
+                        // If special at 11:00-11:20 with league at 11:30 → 10-min dead gap.
+                        // The system can't place a 20-min activity there. Skip pre-placement
+                        // and let Phase 3's smart positioning find a better spot.
+                        var sportFillMin = Math.max((shoppingLists[bunk]?.sports?.constraints?.dMin || 25), TYPE_FLOORS.sport || 25);
+                        var afterGaps = computeGaps(withSpecial, gradeStart, gradeEnd);
+                        var hasDeadGap = false;
+                        for (var dg = 0; dg < afterGaps.length; dg++) {
+                            var dgSize = afterGaps[dg].e - afterGaps[dg].s;
+                            if (dgSize > 0 && dgSize < sportFillMin) {
+                                hasDeadGap = true;
+                                break;
+                            }
+                        }
+                        if (hasDeadGap) {
+                            log('[Phase2.5] Skipping special "' + special.name + '" for bunk ' + bunk + ' — creates dead gap < ' + sportFillMin + 'min');
+                            return;
+                        }
+
                         // Add as immovable wall in bunkTimelines
                         bunkTimelines[bunk].push({
                             startMin: sStart, endMin: sEnd,
