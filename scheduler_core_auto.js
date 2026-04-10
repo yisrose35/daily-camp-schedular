@@ -3116,11 +3116,27 @@
                         var remaining = gapItem.end - effectiveStart;
                         if (remaining <= 0) continue;
 
-                        // Calculate sport duration: fill up to ceiling, split if needed
-                        var dur = Math.min(remaining, m.sportCeiling);
+                        // Calculate sport duration: size it so NO remainder is < fillMinDur.
+                        // A 70-min gap with ceiling 60 and fillMin 30 → take 35 (leaves 35), not 60 (leaves 10).
+                        var dur;
+                        if (remaining <= m.sportCeiling) {
+                            dur = remaining; // fits in one block
+                        } else {
+                            // How many blocks needed to fill this gap with no dead remainders?
+                            var numBlocks = Math.ceil(remaining / m.sportCeiling);
+                            dur = Math.floor(remaining / numBlocks);
+                            // Ensure dur is at least fillMinDur
+                            if (dur < m.fillMinDur) dur = Math.min(remaining, m.sportCeiling);
+                            // Check if remainder after this block would be dead
+                            var leftover = remaining - dur;
+                            if (leftover > 0 && leftover < m.fillMinDur) {
+                                // Split more evenly: take less so leftover is fillable
+                                dur = Math.floor(remaining / 2);
+                                if (dur < m.fillMinDur) dur = remaining; // can't split, take all
+                            }
+                        }
                         if (dur < m.fillMinDur) continue; // too small, handle in Step 5
 
-                        // If remaining > ceiling, only take one ceiling-worth
                         var endMin = effectiveStart + dur;
 
                         var result = findSportField(gapItem.bunk, gapItem.grade, effectiveStart, endMin, m);
@@ -3168,8 +3184,10 @@
                     if (gapSize <= 0) continue;
 
                     if (gapSize >= fMeta.fillMinDur) {
-                        // Big enough for a sport
+                        // Split gap into blocks where each is >= fillMinDur and <= ceiling
                         var numBlocks = Math.max(1, Math.ceil(gapSize / fMeta.sportCeiling));
+                        // Ensure no block ends up below fillMinDur
+                        while (numBlocks > 1 && Math.floor(gapSize / numBlocks) < fMeta.fillMinDur) numBlocks--;
                         var blockDur = Math.floor(gapSize / numBlocks);
                         var cursor = rgap.start;
                         for (var nb = 0; nb < numBlocks; nb++) {
