@@ -4147,7 +4147,22 @@
                 return true;
             });
             leagueLayers.sort((a, b) => ((staggerPlan[a.grade || a.division] || {}).offset || 0) - ((staggerPlan[b.grade || b.division] || {}).offset || 0));
-            leagueLayers.forEach(layer => placeLeagueForGrade(layer.grade || layer.division, layer));
+            // ★ v9.6: Respect league qty/quantity — place multiple league blocks if configured
+            leagueLayers.forEach(layer => {
+                var leagueCount = parseInt(layer.qty) || parseInt(layer.quantity) || parseInt(layer.count) || 1;
+                for (var lc = 0; lc < leagueCount; lc++) {
+                    // Clear shared time cache so second league finds a NEW time
+                    var leagueName = (() => {
+                        var lg = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {}))
+                            .find(function(l) { return (l.divisions || []).includes(layer.grade || layer.division); });
+                        return lg ? lg.name : null;
+                    })();
+                    if (lc > 0 && leagueName && sharedLeagueTime[leagueName] != null) {
+                        delete sharedLeagueTime[leagueName]; // force new time search
+                    }
+                    placeLeagueForGrade(layer.grade || layer.division, layer);
+                }
+            });
 
             // Full-grade non-pinned
             nonPinnedLayers.forEach(layer => {
