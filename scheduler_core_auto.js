@@ -3496,6 +3496,42 @@
 
             iterWarnings.forEach(w => { if (w.type === 'placement_failure') score += 500; if (w.type === 'overlap') score += 1000; });
 
+            // ★ v9.3 LEVEL 3: SCHEDULE QUALITY SCORING
+            Object.entries(timelines).forEach(([bunk, timeline]) => {
+                const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
+                const sportNames = [];
+                for (let i = 0; i < sorted.length; i++) {
+                    const t = (sorted[i].type || '').toLowerCase();
+                    if (t === 'sport' && sorted[i]._assignedSport) sportNames.push(sorted[i]._assignedSport);
+
+                    // Back-to-back same activity penalty
+                    if (i > 0) {
+                        const prevName = sorted[i-1]._assignedSport || sorted[i-1].event;
+                        const curName = sorted[i]._assignedSport || sorted[i].event;
+                        if (prevName && curName && prevName === curName && t === 'sport') {
+                            score += 2000; // same sport back-to-back is bad
+                        }
+                    }
+                }
+                // Sport variety: penalize if too few unique sports
+                const uniqueSports = new Set(sportNames);
+                if (sportNames.length >= 3 && uniqueSports.size < Math.min(3, sportNames.length)) {
+                    score += (sportNames.length - uniqueSports.size) * 1000; // low variety penalty
+                }
+
+                // Missing required layers penalty
+                const types = new Set(sorted.map(b => (b.type || '').toLowerCase()));
+                const gradeKey = _bunkGradeCache[String(bunk)] || '';
+                const gradeLayers = layersByGrade[gradeKey] || [];
+                for (const ll of gradeLayers) {
+                    const lt = (ll.type || '').toLowerCase();
+                    if (['swim', 'snack', 'snacks', 'special'].includes(lt)) {
+                        const hasIt = sorted.some(b => (b.type || '').toLowerCase() === lt || (lt === 'snacks' && (b.type || '').toLowerCase() === 'snack'));
+                        if (!hasIt) score += 20000; // missing required layer is very bad
+                    }
+                }
+            });
+
             // ── Per-grade field saturation scoring ──
             // For each time slice, count how many bunks per grade need a field
             // vs how many field slots that grade can actually use.
@@ -5226,6 +5262,71 @@
         log('\n═══════════════════════════════════════════════════════════');
         log('COMPLETE in ' + elapsed + 's | Warnings: ' + warnings.length);
         warnings.forEach((w, i) => log('  ' + (i + 1) + '. [' + w.type + '] ' + (w.message || JSON.stringify(w))));
+
+        // ★ v9.3 LEVEL 4: CONFLICT DIAGNOSIS — explains WHY issues exist and suggests fixes
+        {
+            const _bgc = {};
+            allGrades.forEach(g => getBunksForGrade(g, divisions).forEach(b => { _bgc[String(b)] = g; }));
+            const diagnoses = [];
+
+            // Check each bunk for missing required layers
+            Object.entries(bunkTimelines).forEach(([bunk, tl]) => {
+                const grade = _bgc[String(bunk)];
+                if (!grade) return;
+                const types = tl.map(b => (b.type || '').toLowerCase());
+                const gradeLayers = layersByGrade[grade] || [];
+
+                for (const ll of gradeLayers) {
+                    const lt = (ll.type || '').toLowerCase();
+                    if (!['swim', 'snack', 'snacks', 'special'].includes(lt)) continue;
+                    const hasIt = types.includes(lt) || (lt === 'snacks' && types.includes('snack'));
+                    if (hasIt) continue;
+
+                    // Diagnose WHY it's missing
+                    const winStart = ll.startMin, winEnd = ll.endMin;
+                    if (winStart == null || winEnd == null) continue;
+                    const lc = resolveConstraints(ll, lt);
+                    const wallsInWindow = tl.filter(b => b.startMin < winEnd && b.endMin > winStart);
+                    const wallNames = wallsInWindow.map(b => b.event || b.type).join(', ');
+                    const totalWallTime = wallsInWindow.reduce((s, b) => s + Math.min(b.endMin, winEnd) - Math.max(b.startMin, winStart), 0);
+                    const windowSize = winEnd - winStart;
+                    const freeInWindow = windowSize - totalWallTime;
+
+                    var diagnosis = 'Bunk ' + bunk + ' missing ' + lt.toUpperCase();
+                    if (freeInWindow < lc.dMin) {
+                        diagnosis += ': window ' + winStart + '-' + winEnd + ' (' + windowSize + 'min) has only ' + freeInWindow + 'min free (need ' + lc.dMin + 'min). Blocked by: ' + wallNames;
+                        diagnosis += '. FIX: widen ' + lt + ' window or move conflicting activities.';
+                    } else {
+                        diagnosis += ': window has ' + freeInWindow + 'min free but placement failed. May be a resource conflict (pool/capacity).';
+                    }
+                    diagnoses.push(diagnosis);
+                }
+
+                // Check for dead gaps
+                const sorted = [...tl].sort((a, b) => a.startMin - b.startMin);
+                for (let i = 0; i < sorted.length - 1; i++) {
+                    const gapSize = sorted[i + 1].startMin - sorted[i].endMin;
+                    if (gapSize > 0 && gapSize < 25) {
+                        diagnoses.push('Bunk ' + bunk + ' dead gap ' + gapSize + 'min between ' + (sorted[i].event || sorted[i].type) + ' and ' + (sorted[i+1].event || sorted[i+1].type) + '. FIX: adjust adjacent activity durations or layer windows.');
+                    }
+                }
+
+                // Check for back-to-back same sport
+                for (let i = 0; i < sorted.length - 1; i++) {
+                    if (sorted[i]._assignedSport && sorted[i]._assignedSport === sorted[i+1]._assignedSport) {
+                        diagnoses.push('Bunk ' + bunk + ' has ' + sorted[i]._assignedSport + ' back-to-back. FIX: add more sport variety to the rotation.');
+                    }
+                }
+            });
+
+            if (diagnoses.length > 0) {
+                log('\n🧠 INTELLIGENT DIAGNOSIS (' + diagnoses.length + ' issues):');
+                diagnoses.forEach(function(d, i) { log('  ' + (i + 1) + '. ' + d); });
+            } else {
+                log('\n🧠 INTELLIGENT DIAGNOSIS: No issues detected — schedule is clean.');
+            }
+        }
+
         log('═══════════════════════════════════════════════════════════');
 
         // ★ v7.0: Mark local generation time — prevents cloud sync from overwriting fresh results
