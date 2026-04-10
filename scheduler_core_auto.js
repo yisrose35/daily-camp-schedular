@@ -2830,16 +2830,26 @@
                         });
                     }
 
-                    // Custom windowed layers
+                    // Custom windowed layers — skip if already a wall or outside grade window
                     (layersByGrade[grade] || []).filter(function(l) {
                         return (l.type || '').toLowerCase() === 'custom' && l._classification !== 'pinned';
                     }).forEach(function(cl) {
                         if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
+                        // Skip if already placed as a wall
+                        var alreadyWall = template.some(function(w) {
+                            return w._fixed && (w.type || '').toLowerCase() === 'custom' &&
+                                   w.event === (cl.customActivity || cl.event || 'Custom');
+                        });
+                        if (alreadyWall) return;
+                        // Skip if window is outside grade bounds
+                        var winStart = Math.max(cl.startMin || 0, gradeStart);
+                        var winEnd = Math.min(cl.endMin || 1440, gradeEnd);
+                        if (winEnd <= winStart) return;
                         var dur = cl.durationMin || cl.periodMin || 30;
+                        if (winEnd - winStart < dur) return; // window too small
                         needs.push({ type: 'custom', event: cl.customActivity || cl.event || 'Custom', layer: cl,
                             dMin: dur, dMax: cl.durationMax || dur,
-                            windowStart: Math.max(cl.startMin || 0, gradeStart),
-                            windowEnd: Math.min(cl.endMin || 1440, gradeEnd),
+                            windowStart: winStart, windowEnd: winEnd,
                             _activityLocked: true, _customActivity: cl.customActivity || null,
                             _customField: cl.customField || null, _customBunks: cl.customBunks || null, _source: 'need' });
                     });
@@ -3731,25 +3741,42 @@
                         const sEnd = special.claimedTime.endMin;
                         const fieldName = special.claimedField || special.location;
 
-                        // ★ v8.0: Verify special doesn't consume a required layer's entire window
-                        // If snack window is 2:30-3:00 and special is placed at 2:30-3:00,
-                        // snack would have nowhere to go. Skip pre-placement in that case.
+                        // ★ v8.1: Simulate whether ALL required layers still fit after placing this special.
+                        // Build the full wall list (Phase 0 + this special), then check if each
+                        // required layer (swim, snack, custom) can find a gap within its window.
+                        const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                        const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                        const simWalls = (bunkTimelines[bunk] || []).map(w => ({ s: w.startMin, e: w.endMin }));
+                        simWalls.push({ s: sStart, e: sEnd }); // add the proposed special
+                        simWalls.sort((a, b) => a.s - b.s);
+                        // Compute gaps after adding the special
+                        const simGaps = [];
+                        let simCur = gradeStart;
+                        for (const w of simWalls) {
+                            if (w.s > simCur) simGaps.push({ s: simCur, e: w.s });
+                            simCur = Math.max(simCur, w.e);
+                        }
+                        if (simCur < gradeEnd) simGaps.push({ s: simCur, e: gradeEnd });
+
                         const gradeLayers = layersByGrade[grade] || [];
                         let blocksRequired = false;
                         for (const ll of gradeLayers) {
                             const lt = (ll.type || '').toLowerCase();
-                            if (!['swim', 'snack', 'snacks'].includes(lt)) continue;
+                            if (!['swim', 'snack', 'snacks', 'custom'].includes(lt)) continue;
+                            if (lt === 'custom' && ll._classification === 'pinned') continue; // already a wall
                             if (ll.startMin == null || ll.endMin == null) continue;
-                            // Check if special fully consumes this layer's window
-                            const windowSize = ll.endMin - ll.startMin;
-                            const overlapStart = Math.max(sStart, ll.startMin);
-                            const overlapEnd = Math.min(sEnd, ll.endMin);
-                            const overlapSize = Math.max(0, overlapEnd - overlapStart);
                             const lc = resolveConstraints(ll, lt);
-                            const remainingWindow = windowSize - overlapSize;
-                            if (remainingWindow < (lc.dMin || 15)) {
+                            const needDMin = lc.dMin || 15;
+                            // Check if ANY gap overlaps the layer window with enough room
+                            let canFit = false;
+                            for (const gap of simGaps) {
+                                const overlapStart = Math.max(gap.s, ll.startMin);
+                                const overlapEnd = Math.min(gap.e, ll.endMin);
+                                if (overlapEnd - overlapStart >= needDMin) { canFit = true; break; }
+                            }
+                            if (!canFit) {
                                 blocksRequired = true;
-                                log('[Phase2.5] Skipping special "' + special.name + '" pre-placement for bunk ' + bunk + ' — would block ' + lt + ' window');
+                                log('[Phase2.5] Skipping special "' + special.name + '" for bunk ' + bunk + ' — would block ' + lt + ' (no gap >= ' + needDMin + 'min in window ' + ll.startMin + '-' + ll.endMin + ')');
                                 break;
                             }
                         }
