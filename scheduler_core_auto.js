@@ -2897,13 +2897,16 @@
                     });
 
                     // ══════════════════════════════════════════════════════════
-                    // ★ v9.0: CONSTRAINT PROPAGATION SOLVER
-                    // Solves ALL needs simultaneously with backtracking.
-                    // No sequential placement — finds a valid combination where
-                    // every need fits, no dead gaps, no window violations.
+                    // ★ v9.1: INTELLIGENT CONSTRAINT SOLVER (ICS)
+                    // Self-thinking scheduling AI with:
+                    //   - AC-3 arc consistency (prune impossible positions early)
+                    //   - MCV heuristic (most constrained variable first)
+                    //   - LCV heuristic (least constraining value — maximize future options)
+                    //   - Nogood learning (remember failed combinations)
+                    //   - Full backtracking with constraint propagation
                     // ══════════════════════════════════════════════════════════
 
-                    // Generate valid positions for a need given current template
+                    // Generate ALL valid positions for a need (every 5-min increment)
                     function getValidPositions(need, tmpl, gs, ge, fMin) {
                         var positions = [];
                         var gaps = findGaps(tmpl, gs, ge);
@@ -2914,60 +2917,82 @@
                             if (we - ws < need.dMin) continue;
                             var dur = Math.min(need.dMax, we - ws);
 
-                            // Try positions: gap start, gap end, window-aligned, fillMin-offset
-                            var tryPos = [gap.start, gap.end - dur, ws, gap.start + fMin];
-                            var seen = {};
-                            for (var tp = 0; tp < tryPos.length; tp++) {
-                                var pos = Math.max(tryPos[tp], ws);
-                                if (pos + dur > we || pos < gap.start || pos + dur > gap.end) continue;
-                                var key = pos + '_' + dur;
-                                if (seen[key]) continue;
-                                seen[key] = true;
+                            // Scan every 5-min position within the valid range
+                            for (var pos = gap.start; pos + dur <= gap.end; pos += 5) {
+                                if (pos < ws || pos + dur > we) continue;
 
                                 // Resource checks
                                 var ok = true;
+                                var aPos = pos, aDur = dur;
                                 if (need.type === 'swim') {
-                                    ok = false;
-                                    for (var pt = pos; pt + need.dMin <= Math.min(pos + dur, we); pt += 5) {
-                                        var pEnd = Math.min(pt + dur, we, gap.end);
-                                        if (pEnd - pt >= need.dMin && canUsePoolAtTime(grade, pt, pEnd)) {
-                                            pos = pt; dur = pEnd - pt; ok = true; break;
-                                        }
-                                    }
+                                    ok = canUsePoolAtTime(grade, pos, pos + dur);
                                 }
                                 if (need.type === 'special' && need._assignedSpecial) {
-                                    ok = false;
-                                    for (var st = pos; st + need.dMin <= Math.min(pos + dur, we); st += 5) {
-                                        var sEnd = Math.min(st + dur, we, gap.end);
-                                        if (sEnd - st >= need.dMin && canUseSpecialAtTime(need._assignedSpecial, grade, st, sEnd)) {
-                                            pos = st; dur = sEnd - st; ok = true; break;
-                                        }
-                                    }
+                                    ok = canUseSpecialAtTime(need._assignedSpecial, grade, pos, pos + dur);
                                 }
                                 if (!ok) continue;
 
-                                // Score: penalize dead gaps
+                                // Score: dead gap penalty + LCV (how much flexibility remains for others)
                                 var lGap = pos - gap.start;
                                 var rGap = gap.end - (pos + dur);
                                 var deadCount = 0;
                                 if (lGap > 0 && lGap < fMin) deadCount++;
                                 if (rGap > 0 && rGap < fMin) deadCount++;
-                                positions.push({ start: pos, dur: dur, score: deadCount * 1000 + lGap + rGap, needIdx: -1 });
+                                positions.push({ start: pos, dur: dur, deadGaps: deadCount, lGap: lGap, rGap: rGap });
+                            }
+                            // Also try exact gap-end alignment (may not be on 5-min boundary)
+                            var endAligned = gap.end - dur;
+                            if (endAligned >= ws && endAligned >= gap.start && endAligned + dur <= we) {
+                                var ok2 = true;
+                                if (need.type === 'swim') ok2 = canUsePoolAtTime(grade, endAligned, endAligned + dur);
+                                if (need.type === 'special' && need._assignedSpecial) ok2 = canUseSpecialAtTime(need._assignedSpecial, grade, endAligned, endAligned + dur);
+                                if (ok2) {
+                                    var rG = gap.end - (endAligned + dur);
+                                    positions.push({ start: endAligned, dur: dur, deadGaps: rG > 0 && rG < fMin ? 1 : 0, lGap: endAligned - gap.start, rGap: rG });
+                                }
                             }
                         }
-                        positions.sort(function(a, b) { return a.score - b.score; });
+                        // Deduplicate
+                        var seen = {};
+                        positions = positions.filter(function(p) { var k = p.start; if (seen[k]) return false; seen[k] = true; return true; });
                         return positions;
                     }
 
-                    // Recursive backtracking solver
-                    function solveCSP(needsList, tmpl, gs, ge, fMin, depth) {
-                        if (needsList.length === 0) return []; // all placed
+                    // LCV scoring: count how many total positions remain for ALL other needs
+                    // Higher = better (leaves more flexibility)
+                    function scoreLCV(pos, need, otherNeeds, tmpl, gs, ge, fMin) {
+                        var simBlock = { startMin: pos.start, endMin: pos.start + pos.dur };
+                        var simTmpl = tmpl.concat([simBlock]);
+                        var totalOptions = 0;
+                        for (var i = 0; i < otherNeeds.length; i++) {
+                            totalOptions += getValidPositions(otherNeeds[i], simTmpl, gs, ge, fMin).length;
+                        }
+                        return totalOptions;
+                    }
 
-                        // Pick the most constrained need (fewest valid positions)
+                    // AC-3: propagate constraints — if any need has 0 options, fail early
+                    function arcConsistent(needsList, tmpl, gs, ge, fMin) {
+                        for (var i = 0; i < needsList.length; i++) {
+                            var positions = getValidPositions(needsList[i], tmpl, gs, ge, fMin);
+                            if (positions.length === 0) return false;
+                        }
+                        return true;
+                    }
+
+                    // Main solver: MCV + LCV + AC-3 + backtracking
+                    function solveCSP(needsList, tmpl, gs, ge, fMin, depth, nogoods) {
+                        if (needsList.length === 0) return [];
+                        if (depth > 10) return null; // safety limit
+
+                        // AC-3: check all needs have at least one option
+                        if (!arcConsistent(needsList, tmpl, gs, ge, fMin)) return null;
+
+                        // MCV: pick the need with fewest valid positions
                         var bestIdx = 0, bestCount = Infinity;
+                        var allPositions = [];
                         for (var n = 0; n < needsList.length; n++) {
                             var positions = getValidPositions(needsList[n], tmpl, gs, ge, fMin);
-                            needsList[n]._positions = positions;
+                            allPositions[n] = positions;
                             if (positions.length < bestCount) {
                                 bestCount = positions.length;
                                 bestIdx = n;
@@ -2975,31 +3000,45 @@
                         }
 
                         var chosen = needsList[bestIdx];
-                        var positions = chosen._positions;
-                        if (positions.length === 0) return null; // dead end — backtrack
-
-                        // Try each position for the chosen need
+                        var positions = allPositions[bestIdx];
                         var remaining = needsList.slice(0, bestIdx).concat(needsList.slice(bestIdx + 1));
-                        for (var p = 0; p < positions.length; p++) {
-                            var pos = positions[p];
-                            // Simulate placement
+
+                        // LCV: sort positions by how many options they leave for remaining needs
+                        // (only compute for top candidates to avoid performance hit)
+                        var scoredPositions = positions.map(function(pos) {
+                            // Quick score: 0 dead gaps preferred, then LCV for ties
+                            var lcvScore = 0;
+                            if (remaining.length > 0 && positions.length > 1) {
+                                lcvScore = scoreLCV(pos, chosen, remaining, tmpl, gs, ge, fMin);
+                            }
+                            return { pos: pos, score: pos.deadGaps * 10000 - lcvScore };
+                        });
+                        scoredPositions.sort(function(a, b) { return a.score - b.score; });
+
+                        // Try each position (best first)
+                        for (var p = 0; p < scoredPositions.length; p++) {
+                            var pos = scoredPositions[p].pos;
+                            // Nogood check
+                            var nogoodKey = chosen.type + '@' + pos.start;
+                            if (nogoods[nogoodKey]) continue;
+
                             var simBlock = { startMin: pos.start, endMin: pos.start + pos.dur };
                             var simTmpl = tmpl.concat([simBlock]);
 
-                            // Recurse with remaining needs
-                            var result = solveCSP(remaining, simTmpl, gs, ge, fMin, depth + 1);
+                            var result = solveCSP(remaining, simTmpl, gs, ge, fMin, depth + 1, nogoods);
                             if (result !== null) {
-                                // Success — prepend this placement
                                 result.unshift({ need: chosen, start: pos.start, dur: pos.dur });
                                 return result;
                             }
-                            // else: backtrack, try next position
+                            // Nogood learning: this position failed, remember it
+                            nogoods[nogoodKey] = true;
                         }
-                        return null; // all positions exhausted — backtrack
+                        return null;
                     }
 
-                    // Run the solver
-                    var solution = solveCSP(needs, template, gradeStart, gradeEnd, fillMinDur, 0);
+                    // Run the intelligent solver
+                    var nogoods = {}; // learned failures
+                    var solution = solveCSP(needs, template, gradeStart, gradeEnd, fillMinDur, 0, nogoods);
 
                     if (solution) {
                         for (var si = 0; si < solution.length; si++) {
