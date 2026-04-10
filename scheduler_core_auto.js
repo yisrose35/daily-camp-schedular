@@ -2689,7 +2689,7 @@
                 if (['sport', 'slot'].includes(blockType) && !opts._fixed) {
                     var blockDur = opts.endMin - opts.startMin;
                     var maxDur = opts.dMax || 60;
-                    var minDur = opts.dMin || 0;
+                    var minDur = opts.dMin || (TYPE_FLOORS.sport || 25); // always use floor as fallback
 
                     // Enforce dMax
                     if (blockDur > maxDur) {
@@ -2855,13 +2855,18 @@
                             _activityLocked: true, _source: 'need' });
                     }
 
-                    // Rotation events
+                    // Rotation events — skip if already placed as a wall
                     if (window.RotationEvents && typeof window.RotationEvents.getNeedsForBunk === 'function') {
                         try {
                             var reNeeds = window.RotationEvents.getNeedsForBunk(String(bunk), currentDate);
                             if (reNeeds && reNeeds.length) {
                                 for (var ri = 0; ri < reNeeds.length; ri++) {
                                     var rn = reNeeds[ri];
+                                    // Skip if already a wall (placed by Phase 0)
+                                    var reAlreadyWall = template.some(function(w) {
+                                        return w._fixed && w.event === rn.event && w.type === rn.type;
+                                    });
+                                    if (reAlreadyWall) continue;
                                     rn.windowStart = Math.max(rn.windowStart, gradeStart);
                                     rn.windowEnd = Math.min(rn.windowEnd, gradeEnd);
                                     if (rn.windowEnd - rn.windowStart >= rn.dMin) needs.push(rn);
