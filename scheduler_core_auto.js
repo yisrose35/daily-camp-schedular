@@ -2865,10 +2865,29 @@
                     });
 
                     // ── 2: Place each need into the best-fitting gap ──
+                    // Uses forward-checking: before committing a placement, verifies
+                    // that all remaining needs can still fit in the leftover gaps.
+                    function canRemainingFit(tmpl, remainingNeeds, gs, ge) {
+                        // Quick check: for each remaining need, is there a gap in its window?
+                        var gps = findGaps(tmpl, gs, ge);
+                        for (var r = 0; r < remainingNeeds.length; r++) {
+                            var rn = remainingNeeds[r];
+                            var fits = false;
+                            for (var g = 0; g < gps.length; g++) {
+                                var os = Math.max(gps[g].start, rn.windowStart || gs);
+                                var oe = Math.min(gps[g].end, rn.windowEnd || ge);
+                                if (oe - os >= rn.dMin) { fits = true; break; }
+                            }
+                            if (!fits) return false;
+                        }
+                        return true;
+                    }
+
                     for (var ni = 0; ni < needs.length; ni++) {
                         var need = needs[ni];
                         var gaps = findGaps(template, gradeStart, gradeEnd);
-                        var bestStart = -1, bestDur = 0, bestScore = Infinity;
+                        // Collect candidate positions, sorted by tightest fit
+                        var candidates = [];
 
                         for (var gj = 0; gj < gaps.length; gj++) {
                             var gap = gaps[gj];
@@ -2897,8 +2916,30 @@
                                 if (!specFound) continue;
                             }
 
-                            var score = (ee - es) - dur; // tightest fit = lowest score
-                            if (score < bestScore) { bestScore = score; bestStart = es; bestDur = dur; }
+                            var score = (ee - es) - dur;
+                            candidates.push({ start: es, dur: dur, score: score });
+                        }
+                        // Sort candidates by tightest fit
+                        candidates.sort(function(a, b) { return a.score - b.score; });
+
+                        // Try each candidate, pick the first that doesn't block remaining needs
+                        var bestStart = -1, bestDur = 0;
+                        var remainingNeeds = needs.slice(ni + 1);
+                        for (var ci = 0; ci < candidates.length; ci++) {
+                            var cand = candidates[ci];
+                            // Simulate placing this need
+                            var simBlock = { startMin: cand.start, endMin: cand.start + cand.dur };
+                            var simTemplate = template.concat([simBlock]);
+                            if (remainingNeeds.length === 0 || canRemainingFit(simTemplate, remainingNeeds, gradeStart, gradeEnd)) {
+                                bestStart = cand.start;
+                                bestDur = cand.dur;
+                                break;
+                            }
+                        }
+                        // If forward-check blocked all candidates, take the first one anyway
+                        if (bestStart < 0 && candidates.length > 0) {
+                            bestStart = candidates[0].start;
+                            bestDur = candidates[0].dur;
                         }
 
                         if (bestStart >= 0) {
