@@ -2889,48 +2889,85 @@
                     for (var ni = 0; ni < needs.length; ni++) {
                         var need = needs[ni];
                         var gaps = findGaps(template, gradeStart, gradeEnd);
-                        // Collect candidate positions, sorted by tightest fit
                         var candidates = [];
 
                         for (var gj = 0; gj < gaps.length; gj++) {
                             var gap = gaps[gj];
-                            var es = Math.max(gap.start, need.windowStart || gradeStart);
-                            var ee = Math.min(gap.end, need.windowEnd || gradeEnd);
-                            if (ee - es < need.dMin) continue;
-                            var dur = Math.min(need.dMax, ee - es);
+                            var winStart = Math.max(gap.start, need.windowStart || gradeStart);
+                            var winEnd = Math.min(gap.end, need.windowEnd || gradeEnd);
+                            if (winEnd - winStart < need.dMin) continue;
+                            var dur = Math.min(need.dMax, winEnd - winStart);
 
-                            // Resource checks: scan 5-min increments for valid placement
-                            if (need.type === 'swim') {
-                                var poolFound = false;
-                                for (var pt = es; pt + need.dMin <= ee; pt += 5) {
-                                    var pEnd = Math.min(pt + dur, ee);
-                                    if (pEnd - pt < need.dMin) continue;
-                                    if (canUsePoolAtTime(grade, pt, pEnd)) { es = pt; dur = pEnd - pt; poolFound = true; break; }
-                                }
-                                if (!poolFound) continue;
-                            }
-                            if (need.type === 'special' && need._assignedSpecial) {
-                                var specFound = false;
-                                for (var st = es; st + need.dMin <= ee; st += 5) {
-                                    var sEnd = Math.min(st + dur, ee);
-                                    if (sEnd - st < need.dMin) continue;
-                                    if (canUseSpecialAtTime(need._assignedSpecial, grade, st, sEnd)) { es = st; dur = sEnd - st; specFound = true; break; }
-                                }
-                                if (!specFound) continue;
-                            }
+                            // Generate candidate positions within this gap that avoid dead gaps.
+                            // A "dead gap" is a remainder > 0 but < fillMinDur (unfillable).
+                            // Try: start of overlap, end of overlap, and positions that leave
+                            // fillable gaps on both sides.
+                            var positions = [];
+                            // Position 1: aligned to gap start (no left remainder)
+                            positions.push(gap.start);
+                            // Position 2: aligned to gap end (no right remainder)
+                            if (gap.end - dur >= winStart) positions.push(gap.end - dur);
+                            // Position 3: aligned to window start
+                            if (winStart !== gap.start) positions.push(winStart);
+                            // Position 4: offset from gap start by fillMinDur (fillable left gap)
+                            if (gap.start + fillMinDur >= winStart && gap.start + fillMinDur + dur <= winEnd)
+                                positions.push(gap.start + fillMinDur);
 
-                            var score = (ee - es) - dur;
-                            candidates.push({ start: es, dur: dur, score: score });
+                            for (var pi = 0; pi < positions.length; pi++) {
+                                var pos = positions[pi];
+                                // Clamp to window
+                                pos = Math.max(pos, winStart);
+                                if (pos + dur > winEnd) continue;
+                                if (pos < gap.start) continue;
+                                if (pos + dur > gap.end) continue;
+
+                                // Resource checks at this position
+                                var resourceOk = true;
+                                if (need.type === 'swim') {
+                                    resourceOk = false;
+                                    for (var pt = pos; pt + need.dMin <= Math.min(pos + dur, winEnd); pt += 5) {
+                                        var pEnd = Math.min(pt + dur, winEnd, gap.end);
+                                        if (pEnd - pt < need.dMin) continue;
+                                        if (canUsePoolAtTime(grade, pt, pEnd)) { pos = pt; dur = pEnd - pt; resourceOk = true; break; }
+                                    }
+                                }
+                                if (need.type === 'special' && need._assignedSpecial) {
+                                    resourceOk = false;
+                                    for (var st = pos; st + need.dMin <= Math.min(pos + dur, winEnd); st += 5) {
+                                        var sEnd = Math.min(st + dur, winEnd, gap.end);
+                                        if (sEnd - st < need.dMin) continue;
+                                        if (canUseSpecialAtTime(need._assignedSpecial, grade, st, sEnd)) { pos = st; dur = sEnd - st; resourceOk = true; break; }
+                                    }
+                                }
+                                if (!resourceOk) continue;
+
+                                // Score: penalize positions that create dead gaps
+                                var leftGap = pos - gap.start;
+                                var rightGap = gap.end - (pos + dur);
+                                var deadGaps = 0;
+                                if (leftGap > 0 && leftGap < fillMinDur) deadGaps++;
+                                if (rightGap > 0 && rightGap < fillMinDur) deadGaps++;
+                                // Lower = better: 0 dead gaps ideal, then 1, then 2
+                                var score = deadGaps * 1000 + Math.abs(leftGap) + Math.abs(rightGap);
+
+                                candidates.push({ start: pos, dur: dur, score: score });
+                            }
                         }
-                        // Sort candidates by tightest fit
+                        // Sort: fewest dead gaps first, then tightest overall
                         candidates.sort(function(a, b) { return a.score - b.score; });
+                        // Deduplicate by start position
+                        var seen = {};
+                        candidates = candidates.filter(function(c) {
+                            if (seen[c.start]) return false;
+                            seen[c.start] = true;
+                            return true;
+                        });
 
-                        // Try each candidate, pick the first that doesn't block remaining needs
+                        // Try each candidate with forward-checking
                         var bestStart = -1, bestDur = 0;
                         var remainingNeeds = needs.slice(ni + 1);
                         for (var ci = 0; ci < candidates.length; ci++) {
                             var cand = candidates[ci];
-                            // Simulate placing this need
                             var simBlock = { startMin: cand.start, endMin: cand.start + cand.dur };
                             var simTemplate = template.concat([simBlock]);
                             if (remainingNeeds.length === 0 || canRemainingFit(simTemplate, remainingNeeds, gradeStart, gradeEnd)) {
@@ -2939,7 +2976,6 @@
                                 break;
                             }
                         }
-                        // If forward-check blocked all candidates, take the first one anyway
                         if (bestStart < 0 && candidates.length > 0) {
                             bestStart = candidates[0].start;
                             bestDur = candidates[0].dur;
