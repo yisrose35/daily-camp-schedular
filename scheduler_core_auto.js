@@ -3549,6 +3549,72 @@
                 }
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
+                // ★ v9.7: OVERLAP RESOLUTION — remove overlapping blocks
+                for (var oi = vTmpl.length - 1; oi > 0; oi--) {
+                    if (vTmpl[oi].startMin < vTmpl[oi-1].endMin) {
+                        // Overlap! Keep the fixed/longer one, trim or remove the other
+                        if (vTmpl[oi]._fixed && !vTmpl[oi-1]._fixed) {
+                            // Trim prev to end before this block
+                            vTmpl[oi-1].endMin = vTmpl[oi].startMin;
+                            if (vTmpl[oi-1].endMin <= vTmpl[oi-1].startMin) vTmpl.splice(oi-1, 1);
+                        } else if (!vTmpl[oi]._fixed && vTmpl[oi-1]._fixed) {
+                            // Trim this block to start after prev
+                            vTmpl[oi].startMin = vTmpl[oi-1].endMin;
+                            if (vTmpl[oi].endMin <= vTmpl[oi].startMin) vTmpl.splice(oi, 1);
+                        } else {
+                            // Both same priority — keep longer, remove shorter
+                            var durPrev = vTmpl[oi-1].endMin - vTmpl[oi-1].startMin;
+                            var durCur = vTmpl[oi].endMin - vTmpl[oi].startMin;
+                            if (durPrev >= durCur) {
+                                vTmpl[oi].startMin = vTmpl[oi-1].endMin;
+                                if (vTmpl[oi].endMin <= vTmpl[oi].startMin) vTmpl.splice(oi, 1);
+                            } else {
+                                vTmpl[oi-1].endMin = vTmpl[oi].startMin;
+                                if (vTmpl[oi-1].endMin <= vTmpl[oi-1].startMin) vTmpl.splice(oi-1, 1);
+                            }
+                        }
+                    }
+                }
+                vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                // ★ v9.7: BELOW-dMIN SWEEP — extend or merge any sport/slot below minimum
+                for (var di = vTmpl.length - 1; di >= 0; di--) {
+                    var dBlk = vTmpl[di];
+                    if (dBlk._fixed) continue;
+                    var dType = (dBlk.type || '').toLowerCase();
+                    if (!['sport', 'slot'].includes(dType)) continue;
+                    var dDur = dBlk.endMin - dBlk.startMin;
+                    var dMinReq = vMeta.fillMinDur;
+                    if (dDur >= dMinReq) continue;
+
+                    // Try to extend into adjacent gap (not into another block)
+                    var nextStart = (di < vTmpl.length - 1) ? vTmpl[di+1].startMin : vMeta.gradeEnd;
+                    var availRight = nextStart - dBlk.endMin;
+                    if (dDur + availRight >= dMinReq) {
+                        dBlk.endMin = dBlk.startMin + dMinReq;
+                        dBlk.endMin = Math.round(dBlk.endMin / 5) * 5;
+                        continue;
+                    }
+                    var prevEnd = (di > 0) ? vTmpl[di-1].endMin : vMeta.gradeStart;
+                    var availLeft = dBlk.startMin - prevEnd;
+                    if (dDur + availLeft >= dMinReq) {
+                        dBlk.startMin = dBlk.endMin - dMinReq;
+                        dBlk.startMin = Math.round(dBlk.startMin / 5) * 5;
+                        continue;
+                    }
+                    // Can't fix — merge into neighbor or remove
+                    if (di > 0 && !vTmpl[di-1]._fixed && ['sport','slot'].includes((vTmpl[di-1].type||'').toLowerCase())) {
+                        vTmpl[di-1].endMin = dBlk.endMin;
+                        vTmpl.splice(di, 1);
+                    } else if (di < vTmpl.length - 1 && !vTmpl[di+1]._fixed && ['sport','slot'].includes((vTmpl[di+1].type||'').toLowerCase())) {
+                        vTmpl[di+1].startMin = dBlk.startMin;
+                        vTmpl.splice(di, 1);
+                    } else {
+                        vTmpl.splice(di, 1); // truly unfixable — remove
+                    }
+                }
+                vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
                 var vGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
                 if (vGaps.length > 0) {
                     log('[Phase3] WARN: bunk ' + vBunk + ' has ' + vGaps.length + ' unfilled gaps');
