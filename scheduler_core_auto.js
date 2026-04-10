@@ -3784,19 +3784,21 @@
                                 }
                             }
                         }
-                        // Absolute last resort: extend a flexible neighbor (never a pinned wall)
+                        // Absolute last resort: extend a flexible neighbor
                         if (!absorbed) {
-                            const prevIsPinned = prev._source === 'phase0' && prev.layer && prev.layer.endMin != null;
-                            const nextIsPinned = next._source === 'phase0' && next.layer && next.layer.startMin != null;
-                            if (!prevIsPinned) { prev.endMin += gs; }
-                            else if (!nextIsPinned) { next.startMin -= gs; }
+                            const prevT = (prev.type || '').toLowerCase();
+                            const nextT = (next.type || '').toLowerCase();
+                            const prevFlex = ['sport', 'slot'].includes(prevT) && prev._source !== 'phase0';
+                            const nextFlex = ['sport', 'slot'].includes(nextT) && next._source !== 'phase0';
+                            if (prevFlex) { prev.endMin += gs; }
+                            else if (nextFlex) { next.startMin -= gs; }
                             else {
-                                // Both neighbors are pinned walls — create a tiny filler rather than violating windows
-                                template.push({ startMin: prev.endMin, endMin: next.startMin,
-                                    type: 'slot', event: 'General Activity Slot',
-                                    layer: shoppingList.sports?.layer, dMin: gs, dMax: gs,
-                                    _activityLocked: false, _source: 'filler',
-                                    _sportFallbacks: priorityList.map(s => s.name), _final: true });
+                                // Both neighbors are rigid — extend the one with more room within its dMax
+                                const prevRoom = (prev.dMax || Infinity) - (prev.endMin - prev.startMin);
+                                const nextRoom = (next.dMax || Infinity) - (next.endMin - next.startMin);
+                                if (prevRoom >= gs) prev.endMin += gs;
+                                else if (nextRoom >= gs) next.startMin -= gs;
+                                else prev.endMin += gs; // absolute fallback
                             }
                         }
                     }
@@ -3851,12 +3853,25 @@
             // ★ v7.1 dMIN ENFORCEMENT — ensure NO block is shorter than its layer dMin.
             // If gap elimination compressed a block below dMin, extend it by
             // stealing time from an adjacent flexible (sport/slot) block.
+            // Also removes any block that is impossibly short (< 5min).
             // ═══════════════════════════════════════════════════════════
             template.sort((a, b) => a.startMin - b.startMin);
+            // First: remove impossibly short blocks (< 5min) that aren't phase0
+            for (let i = template.length - 1; i >= 0; i--) {
+                const blk = template[i];
+                if (blk._source === 'phase0') continue;
+                if (blk.endMin - blk.startMin < 5) {
+                    template.splice(i, 1);
+                }
+            }
+            template.sort((a, b) => a.startMin - b.startMin);
+            // Then: enforce dMin by stealing from flexible neighbors
             for (let i = 0; i < template.length; i++) {
                 const blk = template[i];
                 const dur = blk.endMin - blk.startMin;
-                const minDur = blk.dMin || 0;
+                // Use block's dMin, or layer's dMin, or fillMinDur for sports
+                const t = (blk.type || '').toLowerCase();
+                const minDur = blk.dMin || ((['sport','slot'].includes(t) && blk._source !== 'phase0') ? fillMinDur : 0);
                 if (minDur <= 0 || dur >= minDur) continue;
                 const deficit = minDur - dur;
 
