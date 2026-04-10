@@ -3246,13 +3246,44 @@
             }
 
             // ══════════════════════════════════════════════════════════
-            // STEP 6: Validate and return
+            // STEP 6: Validate, enforce dMax, and return
             // ══════════════════════════════════════════════════════════
             var totalWarnings = 0;
             for (var vi = 0; vi < allBunkIds.length; vi++) {
                 var vBunk = allBunkIds[vi];
                 var vMeta = bunkMeta[vBunk];
                 var vTmpl = vMeta.template;
+                vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                // ★ v8.2: Split any sport/slot block that exceeds sportCeiling (dMax)
+                for (var si = vTmpl.length - 1; si >= 0; si--) {
+                    var blk = vTmpl[si];
+                    if (blk._fixed) continue;
+                    var bt = (blk.type || '').toLowerCase();
+                    if (!['sport', 'slot'].includes(bt)) continue;
+                    var bDur = blk.endMin - blk.startMin;
+                    if (bDur <= vMeta.sportCeiling) continue;
+                    // Split this block
+                    var splitCount = Math.ceil(bDur / vMeta.sportCeiling);
+                    while (splitCount > 1 && Math.floor(bDur / splitCount) < vMeta.fillMinDur) splitCount--;
+                    var splitDur = Math.floor(bDur / splitCount);
+                    var splitStart = blk.startMin;
+                    // Remove original
+                    vTmpl.splice(si, 1);
+                    // Add splits
+                    for (var sp = 0; sp < splitCount; sp++) {
+                        var spDur = (sp === splitCount - 1) ? (blk.endMin - splitStart) : splitDur;
+                        vTmpl.push(makeBlock({
+                            startMin: splitStart, endMin: splitStart + spDur,
+                            type: blk.type, event: blk.event,
+                            layer: blk.layer, field: blk.field,
+                            dMin: vMeta.fillMinDur, dMax: vMeta.sportCeiling,
+                            _source: blk._source, _assignedSport: blk._assignedSport,
+                            _sportFallbacks: blk._sportFallbacks, _final: true
+                        }));
+                        splitStart += spDur;
+                    }
+                }
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
                 var vGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
