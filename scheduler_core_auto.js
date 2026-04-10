@@ -2677,7 +2677,16 @@
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
             // ── Helper: build a template block with all required fields ──
+            // ★ v8.3: Hard guard — sport/slot blocks NEVER exceed 60 min at creation
             function makeBlock(opts) {
+                var blockType = (opts.type || 'slot').toLowerCase();
+                if (['sport', 'slot'].includes(blockType) && !opts._fixed) {
+                    var blockDur = opts.endMin - opts.startMin;
+                    var maxDur = opts.dMax || 60;
+                    if (blockDur > maxDur) {
+                        opts.endMin = opts.startMin + maxDur;
+                    }
+                }
                 return {
                     startMin: opts.startMin, endMin: opts.endMin,
                     type: opts.type || 'slot', event: opts.event || '',
@@ -3144,15 +3153,17 @@
                         var remaining = gapItem.end - effectiveStart;
                         if (remaining <= 0) continue;
 
-                        // Cap duration at sportCeiling — addSportBlocks handles splitting
+                        // Cap duration — NEVER exceed sportCeiling
                         var dur = Math.min(remaining, m.sportCeiling);
-                        if (dur < m.fillMinDur) continue; // too small, handle in Step 5
+                        if (dur < m.fillMinDur) continue;
                         // Check if remainder would be dead
                         var leftover = remaining - dur;
                         if (leftover > 0 && leftover < m.fillMinDur) {
                             dur = Math.floor(remaining / 2);
                             if (dur < m.fillMinDur) dur = remaining;
                         }
+                        // HARD CAP — never exceed ceiling regardless of dead-gap logic
+                        if (dur > m.sportCeiling) dur = m.sportCeiling;
                         var endMin = effectiveStart + dur;
 
                         var result = findSportField(gapItem.bunk, gapItem.grade, effectiveStart, endMin, m);
