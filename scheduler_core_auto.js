@@ -3004,6 +3004,9 @@
                             score -= Math.floor(variance / 100); // less variance = better
                         }
 
+                        // 4. Iteration learning: bonus for positions that historically scored well
+                        score += iterationMemoryBank.getBonus(grade, need.type, pos.start) * 5;
+
                         return score;
                     }
 
@@ -3158,36 +3161,55 @@
             var usedSports = {};
             for (var ui = 0; ui < allBunkIds.length; ui++) usedSports[allBunkIds[ui]] = new Set();
 
-            // Find best sport + field, considering variety and field sharing
+            // ★ v9.3 LEVEL 1: GLOBAL FIELD DEMAND MAP
+            // Counts how many bunks need each field at each 30-min time slot.
+            // Fields with HIGH demand are scarce — save them for bunks with fewer alternatives.
+            var fieldDemand = {}; // { "fieldName:timeSlot" → demandCount }
+            for (var fd = 0; fd < allBunkIds.length; fd++) {
+                var fdMeta = bunkMeta[allBunkIds[fd]];
+                var fdGaps = findGaps(fdMeta.template, fdMeta.gradeStart, fdMeta.gradeEnd);
+                for (var fg = 0; fg < fdGaps.length; fg++) {
+                    var fgStart = fdGaps[fg].start, fgEnd = fdGaps[fg].end;
+                    // For each sport this bunk could play, mark its fields as demanded
+                    for (var fp = 0; fp < fdMeta.priorityList.length; fp++) {
+                        var fSport = fdMeta.priorityList[fp];
+                        for (var ff = 0; ff < (fSport.fields || []).length; ff++) {
+                            var slot = fSport.fields[ff] + ':' + Math.floor(fgStart / 30) * 30;
+                            fieldDemand[slot] = (fieldDemand[slot] || 0) + 1;
+                        }
+                    }
+                }
+            }
+
+            // Find best sport + field with CROSS-BUNK AWARENESS
+            // Prefers fields with LOW global demand (leaves scarce fields for others)
             function findBestSport(bunk, grade, startMin, endMin, meta, used) {
                 var pList = meta.priorityList;
-                // Pass 1: drafted sports not yet used (highest priority — rotation variety)
-                for (var d = 0; d < (meta.draftSports || []).length; d++) {
-                    var ds = meta.draftSports[d];
-                    if (used.has(ds.name)) continue;
-                    var sportInfo = pList.find(function(s) { return s.name === ds.name; });
-                    if (!sportInfo) continue;
-                    for (var f = 0; f < (sportInfo.fields || []).length; f++) {
-                        if (isFieldAvailable(sportInfo.fields[f], startMin, endMin, bunk, grade, ds.name))
-                            return { name: ds.name, field: sportInfo.fields[f] };
-                    }
-                }
-                // Pass 2: unused priority list sports
+                var timeSlot = Math.floor(startMin / 30) * 30;
+                var candidates = [];
+
+                // Collect ALL available sport+field combos
                 for (var p = 0; p < pList.length; p++) {
-                    if (used.has(pList[p].name)) continue;
-                    for (var f2 = 0; f2 < (pList[p].fields || []).length; f2++) {
-                        if (isFieldAvailable(pList[p].fields[f2], startMin, endMin, bunk, grade, pList[p].name))
-                            return { name: pList[p].name, field: pList[p].fields[f2] };
+                    var sport = pList[p];
+                    var isUsed = used.has(sport.name);
+                    var isDrafted = (meta.draftSports || []).some(function(ds) { return ds.name === sport.name; });
+                    for (var f = 0; f < (sport.fields || []).length; f++) {
+                        if (!isFieldAvailable(sport.fields[f], startMin, endMin, bunk, grade, sport.name)) continue;
+                        // Score: drafted unused > unused > reuse. Low demand > high demand.
+                        var demand = fieldDemand[sport.fields[f] + ':' + timeSlot] || 0;
+                        var score = 0;
+                        if (isDrafted && !isUsed) score += 1000;  // best: drafted, not used
+                        else if (!isUsed) score += 500;            // good: not used
+                        // else: reuse, score stays 0
+                        score -= demand * 10;                      // prefer LOW demand fields
+                        candidates.push({ name: sport.name, field: sport.fields[f], score: score });
                     }
                 }
-                // Pass 3: allow sport reuse
-                for (var p2 = 0; p2 < pList.length; p2++) {
-                    for (var f3 = 0; f3 < (pList[p2].fields || []).length; f3++) {
-                        if (isFieldAvailable(pList[p2].fields[f3], startMin, endMin, bunk, grade, pList[p2].name))
-                            return { name: pList[p2].name, field: pList[p2].fields[f3] };
-                    }
-                }
-                return null;
+
+                if (candidates.length === 0) return null;
+                // Pick the highest-scoring candidate
+                candidates.sort(function(a, b) { return b.score - a.score; });
+                return { name: candidates[0].name, field: candidates[0].field };
             }
 
             // Compute optimal split plan for a gap — returns array of {start, end}
@@ -3401,6 +3423,28 @@
         const STALE_STOP = 12;
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
+
+        // ★ v9.3: ITERATION LEARNING — remembers what works across iterations
+        // Tracks which time positions for each need type produced good scores.
+        // Later iterations bias toward positions that historically scored well.
+        var iterationMemoryBank = {
+            // { "grade:needType:timeSlot" → { totalScore, count, avgScore } }
+            patterns: {},
+            record: function(grade, needType, startMin, score) {
+                var key = grade + ':' + needType + ':' + Math.floor(startMin / 30) * 30; // 30-min buckets
+                if (!this.patterns[key]) this.patterns[key] = { totalScore: 0, count: 0 };
+                this.patterns[key].totalScore += score;
+                this.patterns[key].count++;
+            },
+            getBonus: function(grade, needType, startMin) {
+                var key = grade + ':' + needType + ':' + Math.floor(startMin / 30) * 30;
+                var p = this.patterns[key];
+                if (!p || p.count < 2) return 0;
+                // Lower avg score = better (scores are penalties). Invert for bonus.
+                var avgScore = p.totalScore / p.count;
+                return Math.max(0, 100 - Math.floor(avgScore / 1000));
+            }
+        };
 
         // Seeded jitter for iteration variation
         function seedJitter(seed, index) {
@@ -4181,6 +4225,16 @@
                 bestWarnings = [...warnings];
                 staleCount = 0;
             } else staleCount++;
+
+            // ★ v9.3: Record placement patterns from this iteration for learning
+            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => {
+                (bunkTimelines[bunk] || []).forEach(b => {
+                    var t = (b.type || '').toLowerCase();
+                    if (['swim', 'snacks', 'snack', 'special'].includes(t)) {
+                        iterationMemoryBank.record(grade, t, b.startMin, iterScore);
+                    }
+                });
+            }));
 
             if (improved || totalIters <= 3 || totalIters % 10 === 0) {
                log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate);            }
