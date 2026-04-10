@@ -2678,7 +2678,7 @@
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
             // ── Helper: build a template block with all required fields ──
-            // ★ v9.6: Hard guard — snap to 5min, enforce dMax, reject tiny blocks
+            // ★ v9.6: Hard guard — snap to 5min, enforce dMin/dMax, reject invalid blocks
             function makeBlock(opts) {
                 // Snap all blocks to 5-min boundaries
                 opts.startMin = Math.round(opts.startMin / 5) * 5;
@@ -2689,9 +2689,25 @@
                 if (['sport', 'slot'].includes(blockType) && !opts._fixed) {
                     var blockDur = opts.endMin - opts.startMin;
                     var maxDur = opts.dMax || 60;
+                    var minDur = opts.dMin || 0;
+
+                    // Enforce dMax
                     if (blockDur > maxDur) {
                         opts.endMin = opts.startMin + maxDur;
+                        blockDur = maxDur;
                     }
+                    // Enforce dMin — extend to meet minimum if possible
+                    if (minDur > 0 && blockDur < minDur) {
+                        var extended = opts.startMin + minDur;
+                        // Snap the extension to 5-min
+                        extended = Math.round(extended / 5) * 5;
+                        if (extended - opts.startMin <= maxDur) {
+                            opts.endMin = extended;
+                            blockDur = extended - opts.startMin;
+                        }
+                    }
+                    // Final snap check
+                    blockDur = opts.endMin - opts.startMin;
                     if (blockDur < 5) return null;
                 }
                 return {
