@@ -795,9 +795,10 @@
                     const campEnd = Math.max(...Object.values(divisions).map(d => parseTimeToMinutes(d.endTime) || 990));
                     timeRules.push({ startMin: campStart, endMin: campEnd, divisions: null });
                 }
-                const sharing = props.sharableWith || {};
-                const shareType = sharing.type || 'not_sharable';  // ★ v4.1: Default to NOT sharable
-                const capacity = parseInt(sharing.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
+                // ★ v9.6: Read sharing from BOTH activityProperties AND field config
+                const sharing = props.sharableWith || field.sharableWith || {};
+                const shareType = sharing.type || sharing.shareType || 'not_sharable';
+                const capacity = parseInt(sharing.capacity) || parseInt(field.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
 
                fieldLedger[field.name] = {
                     name: field.name, capacity, shareType,
