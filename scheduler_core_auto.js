@@ -3485,7 +3485,40 @@
                 var vTmpl = vMeta.template;
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
-                // No post-hoc dMax splitting needed — addSportBlocks prevents over-ceiling blocks at creation
+                // ★ v9.6: Merge any below-dMin sport/slot blocks into adjacent blocks
+                for (var mi = vTmpl.length - 1; mi >= 0; mi--) {
+                    var mBlk = vTmpl[mi];
+                    if (mBlk._fixed) continue;
+                    var mType = (mBlk.type || '').toLowerCase();
+                    if (!['sport', 'slot'].includes(mType)) continue;
+                    var mDur = mBlk.endMin - mBlk.startMin;
+                    if (mDur >= vMeta.fillMinDur) continue;
+                    // This block is too short — merge into neighbor
+                    var merged = false;
+                    // Try merging into previous block
+                    if (mi > 0 && !vTmpl[mi-1]._fixed) {
+                        var prevType = (vTmpl[mi-1].type || '').toLowerCase();
+                        if (['sport', 'slot'].includes(prevType) && (vTmpl[mi-1].endMin - vTmpl[mi-1].startMin) + mDur <= vMeta.sportCeiling) {
+                            vTmpl[mi-1].endMin = mBlk.endMin;
+                            vTmpl.splice(mi, 1);
+                            merged = true;
+                        }
+                    }
+                    // Try merging into next block
+                    if (!merged && mi < vTmpl.length - 1 && !vTmpl[mi+1]._fixed) {
+                        var nextType = (vTmpl[mi+1].type || '').toLowerCase();
+                        if (['sport', 'slot'].includes(nextType) && (vTmpl[mi+1].endMin - vTmpl[mi+1].startMin) + mDur <= vMeta.sportCeiling) {
+                            vTmpl[mi+1].startMin = mBlk.startMin;
+                            vTmpl.splice(mi, 1);
+                            merged = true;
+                        }
+                    }
+                    // If can't merge, remove it (leave as gap for scorer)
+                    if (!merged && mDur < 10) {
+                        vTmpl.splice(mi, 1);
+                    }
+                }
+                vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
                 var vGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
                 if (vGaps.length > 0) {
