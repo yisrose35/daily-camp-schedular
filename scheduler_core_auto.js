@@ -2677,20 +2677,20 @@
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
             // ── Helper: build a template block with all required fields ──
-            // ★ v8.3: Hard guard — sport/slot blocks NEVER exceed dMax or go below dMin
+            // ★ v8.3: Hard guard — sport/slot blocks NEVER exceed dMax
+            // dMin is NOT enforced here — split blocks may be shorter than the
+            // layer's preferred dMin but still valid (35min from a 70min split).
+            // The absolute floor (TYPE_FLOORS.sport = 25) is the real minimum.
             function makeBlock(opts) {
                 var blockType = (opts.type || 'slot').toLowerCase();
                 if (['sport', 'slot'].includes(blockType) && !opts._fixed) {
                     var blockDur = opts.endMin - opts.startMin;
                     var maxDur = opts.dMax || 60;
-                    var minDur = opts.dMin || 0;
                     if (blockDur > maxDur) {
                         opts.endMin = opts.startMin + maxDur;
                     }
-                    if (minDur > 0 && blockDur < minDur) {
-                        // Block too short — reject it entirely (return null)
-                        return null;
-                    }
+                    // Reject only truly impossible blocks (< 5 min)
+                    if (blockDur < 5) return null;
                 }
                 return {
                     startMin: opts.startMin, endMin: opts.endMin,
