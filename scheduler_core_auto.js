@@ -2981,7 +2981,8 @@
             // ★ v7.0: Track how many specials this bunk has placed (walls + draft + fill)
             const wallSpecialCount = walls.filter(w => w.type === 'special').length;
             let specialsPlacedCount = wallSpecialCount + (draftResult.specials || []).length;
-            const maxSpecialsForBunk = shoppingList.specials?.required || 1;
+            // ★ v7.0: Hard cap at 1 special per bunk — pre-placed wall counts toward this
+            const maxSpecialsForBunk = 1;
             // Mark wall specials + draft specials as already placed
             walls.filter(w => w.type === 'special').forEach(w => { if (w.event) placedSpecialNames.add(w.event); });
             (draftResult.specials || []).forEach(s => { if (s.name) placedSpecialNames.add(s.name); });
