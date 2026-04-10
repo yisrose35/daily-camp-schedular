@@ -3367,6 +3367,87 @@
                 allTemplates[vBunk] = vTmpl;
             }
 
+            // ══════════════════════════════════════════════════════════
+            // ★ v9.4: SELF-HEALING — fix missing required layers BEFORE scoring
+            // After sports fill all gaps, check if any required layer is missing.
+            // If so, sacrifice a sport block and replace it with the layer.
+            // ══════════════════════════════════════════════════════════
+            var healCount = 0;
+            for (var hi = 0; hi < allBunkIds.length; hi++) {
+                var hBunk = allBunkIds[hi];
+                var hMeta = bunkMeta[hBunk];
+                var hTmpl = hMeta.template;
+                hTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                var hGrade = hMeta.grade;
+                var hLayers = layersByGrade[hGrade] || [];
+
+                for (var hl = 0; hl < hLayers.length; hl++) {
+                    var hll = hLayers[hl];
+                    var hlt = (hll.type || '').toLowerCase();
+                    if (!['swim', 'snack', 'snacks', 'special'].includes(hlt)) continue;
+                    // Check if already placed
+                    var hHasIt = hTmpl.some(function(b) {
+                        var bt = (b.type || '').toLowerCase();
+                        return bt === hlt || (hlt === 'snacks' && bt === 'snack');
+                    });
+                    if (hHasIt) continue;
+
+                    // Missing! Find a sport/slot block to sacrifice
+                    var hlc = resolveConstraints(hll, hlt);
+                    var hNeedDMin = hlc.dMin || 15;
+                    var hWinStart = hll.startMin || hMeta.gradeStart;
+                    var hWinEnd = hll.endMin || hMeta.gradeEnd;
+
+                    var hBestIdx = -1, hBestFit = Infinity;
+                    for (var hsi = 0; hsi < hTmpl.length; hsi++) {
+                        var hblk = hTmpl[hsi];
+                        if (hblk._fixed) continue;
+                        var hbt = (hblk.type || '').toLowerCase();
+                        if (!['sport', 'slot'].includes(hbt)) continue;
+                        if (hblk.startMin < hWinStart || hblk.endMin > hWinEnd) continue;
+                        var hblkDur = hblk.endMin - hblk.startMin;
+                        if (hblkDur < hNeedDMin) continue;
+                        var hfit = Math.abs(hblkDur - hNeedDMin);
+                        if (hfit < hBestFit) { hBestFit = hfit; hBestIdx = hsi; }
+                    }
+
+                    if (hBestIdx >= 0) {
+                        var hVictim = hTmpl[hBestIdx];
+                        var hNewEnd = Math.min(hVictim.startMin + (hlc.dMax || hNeedDMin), hVictim.endMin);
+                        var hRemainStart = hNewEnd;
+                        var hRemainEnd = hVictim.endMin;
+
+                        // Replace with the required layer
+                        hTmpl[hBestIdx] = makeBlock({
+                            startMin: hVictim.startMin, endMin: hNewEnd,
+                            type: hlt === 'snacks' ? 'snacks' : hlt,
+                            event: hlt === 'special' ? (hll.event || 'Special Activity') : (hll.event || hlt),
+                            layer: hll, dMin: hNeedDMin, dMax: hlc.dMax || hNeedDMin,
+                            _source: 'self-heal', _activityLocked: true, _final: true,
+                            _assignedSpecial: hlt === 'special' ? (hll.event || 'Special Activity') : null
+                        }) || hTmpl[hBestIdx]; // fallback if makeBlock returns null
+
+                        // Fill remainder if big enough
+                        if (hRemainEnd - hRemainStart >= hMeta.fillMinDur) {
+                            addSportBlocks(hTmpl, hRemainStart, hRemainEnd, {
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: hMeta.sportLayer, field: null,
+                                dMin: hMeta.sportC.dMin, dMax: hMeta.sportCeiling,
+                                _source: 'self-heal',
+                                _sportFallbacks: hMeta.priorityList.map(function(s) { return s.name; }),
+                                _final: true
+                            }, hMeta.sportCeiling, hMeta.fillMinDur);
+                        } else if (hRemainEnd - hRemainStart > 0) {
+                            // Extend the layer to fill (avoid dead gap)
+                            hTmpl[hBestIdx].endMin = hRemainEnd;
+                        }
+                        healCount++;
+                    }
+                }
+                hTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+            }
+            if (healCount > 0) log('[Phase3] 🔧 Self-healed ' + healCount + ' missing layers');
+
             log('[Phase3] ★ timeSweepFillAll complete: ' + Object.keys(allTemplates).length + ' bunks, ' + totalWarnings + ' warnings');
             return allTemplates;
         }
