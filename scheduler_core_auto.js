@@ -1403,25 +1403,495 @@
 
 
         // =====================================================================
-        // PHASE 2: DRAFT-STYLE ASSIGNMENT
+        // PHASE 2B: GLOBAL TIME-SWEEP PLANNER v2.0
+        // =====================================================================
+        //
+        // Replaces grade-by-grade processing with global fair allocation:
+        //   Phase A: Scarce-first special allocation (round-robin across grades)
+        //   Phase B: Chronological sport fill (urgency-first across all bunks)
+        //   Phase C: Elective cleanup
+        //
+        // Key improvement: ALL bunks across ALL grades are visible simultaneously.
+        // No grade can hog resources before another grade runs.
         // =====================================================================
 
-        function runDraft(shoppingLists) {
-            // ★ v4.0: DO NOT re-init field ledger — keep claims from Phase 0
+        function runGlobalPlanner(shoppingLists) {
+            const GP = '[GlobalPlanner]';
+            log(GP + ' Starting time-sweep planner...');
+
+            // ═══════════════════════════════════════════════════════
+            // INIT
+            // ═══════════════════════════════════════════════════════
             const draftResults = {};
             const allBunkList = Object.values(shoppingLists);
-            allBunkList.sort((a, b) => {
-                const ac = a.sports.required + a.specials.required * 2 + (a.bunkSize < 12 ? 3 : 0) - a.sports.priorityList.length * 0.1;
-                const bc = b.sports.required + b.specials.required * 2 + (b.bunkSize < 12 ? 3 : 0) - b.sports.priorityList.length * 0.1;
-                return bc - ac;
-            });
-
             allBunkList.forEach(list => {
-                draftResults[list.bunk] = { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set(), grade: list.grade };
+                draftResults[list.bunk] = {
+                    sports: [], specials: [], elective: [], generic: [],
+                    usedActivities: new Set(), grade: list.grade
+                };
             });
 
-   
-  
+            const globalSpecialUsage = {};
+            const globalFieldClaims = [];
+
+            function canAssignSpecialToGrade(specialName, grade, startMin, endMin) {
+                var info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
+                var existing = globalSpecialUsage[specialName] || [];
+                for (var i = 0; i < existing.length; i++) {
+                    var e = existing[i];
+                    if (e.endMin <= startMin || e.startMin >= endMin) continue;
+                    if (e.grade === grade) {
+                        var sameGradeCount = existing.filter(function(x) {
+                            return x.grade === grade && x.startMin < endMin && x.endMin > startMin;
+                        }).length;
+                        if (sameGradeCount >= info.capacity) return false;
+                    } else {
+                        if (info.shareType === 'not_sharable') return false;
+                        if (info.shareType === 'same_division') return false;
+                        if (info.shareType === 'custom') {
+                            var allowed = info.allowedDivisions || [];
+                            if (allowed.length > 0 && !allowed.includes(grade)) return false;
+                            if (allowed.length > 0 && !allowed.includes(e.grade)) return false;
+                            if (allowed.length === 0) return false;
+                        }
+                        var totalCount = existing.filter(function(x) {
+                            return x.startMin < endMin && x.endMin > startMin;
+                        }).length;
+                        if (totalCount >= info.capacity) return false;
+                    }
+                }
+                return true;
+            }
+
+            function registerSpecialAssignment(specialName, grade, startMin, endMin) {
+                if (!globalSpecialUsage[specialName]) globalSpecialUsage[specialName] = [];
+                globalSpecialUsage[specialName].push({ grade: grade, startMin: startMin, endMin: endMin });
+            }
+
+            function isFieldStillAvailableGP(fieldName, startMin, endMin, bunk, grade) {
+                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade)) return false;
+                var ledger = fieldLedger[fieldName];
+                if (!ledger) return false;
+                var plannerOverlap = globalFieldClaims.filter(function(c) {
+                    return c.field === fieldName && c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk;
+                });
+                var ledgerOverlap = ledger.claims.filter(function(c) {
+                    return c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk;
+                });
+                return (ledgerOverlap.length + plannerOverlap.length) < ledger.capacity;
+            }
+
+            function claimFieldGlobal(fieldName, startMin, endMin, bunk, grade, activity) {
+                claimField(fieldName, startMin, endMin, bunk, grade, activity);
+                globalFieldClaims.push({ field: fieldName, startMin: startMin, endMin: endMin, bunk: bunk, grade: grade, activity: activity });
+            }
+
+            function getUpdatedFreeWindowsForBunk(bunk, sl, result) {
+                var claimed = [].concat(result.sports || [], result.specials || [], result.elective || [], result.generic || [])
+                    .map(function(c) { return c.claimedTime; }).filter(Boolean)
+                    .sort(function(a, b) { return a.startMin - b.startMin; });
+                var original = sl && sl.freeWindows ? sl.freeWindows : [];
+                var updated = [];
+                for (var i = 0; i < original.length; i++) {
+                    var win = original[i];
+                    var cur = win.start;
+                    var ol = claimed.filter(function(c) { return c.startMin < win.end && c.endMin > win.start; })
+                        .sort(function(a, b) { return a.startMin - b.startMin; });
+                    for (var j = 0; j < ol.length; j++) {
+                        if (ol[j].startMin > cur) updated.push({ start: cur, end: ol[j].startMin, duration: ol[j].startMin - cur });
+                        cur = Math.max(cur, ol[j].endMin);
+                    }
+                    if (cur < win.end) updated.push({ start: cur, end: win.end, duration: win.end - cur });
+                }
+                return updated.filter(function(w) { return w.duration > 0; });
+            }
+
+            // Find time within a specific range (for stagger band preference)
+            function findTimeInRange(fieldName, bunk, grade, dur, freeWindows, rangeStart, rangeEnd, specialName) {
+                for (var i = 0; i < freeWindows.length; i++) {
+                    var win = freeWindows[i];
+                    var effStart = Math.max(win.start, rangeStart);
+                    var effEnd = Math.min(win.end, rangeEnd);
+                    if (effEnd - effStart < dur) continue;
+                    for (var t = effStart; t + dur <= effEnd; t += 5) {
+                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade)) continue;
+                        if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
+                        return { startMin: t, endMin: t + dur };
+                    }
+                }
+                return null;
+            }
+
+            // Find time anywhere in free windows
+            function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName) {
+                for (var i = 0; i < freeWindows.length; i++) {
+                    var win = freeWindows[i];
+                    if (win.duration < dur) continue;
+                    for (var t = win.start; t + dur <= win.end; t += 5) {
+                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade)) continue;
+                        if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
+                        return { startMin: t, endMin: t + dur };
+                    }
+                }
+                return null;
+            }
+
+            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows) {
+                for (var i = 0; i < freeWindows.length; i++) {
+                    var win = freeWindows[i];
+                    if (win.duration < duration) continue;
+                    for (var t = win.start; t + duration <= win.end; t += 5) {
+                        if (isFieldStillAvailableGP(fieldName, t, t + duration, bunk, grade))
+                            return { startMin: t, endMin: t + duration };
+                    }
+                }
+                return null;
+            }
+
+            function findAnyWindowGP(freeWindows, duration) {
+                for (var i = 0; i < freeWindows.length; i++) {
+                    if (freeWindows[i].duration >= duration)
+                        return { startMin: freeWindows[i].start, endMin: freeWindows[i].start + duration };
+                }
+                return null;
+            }
+
+            // ═══════════════════════════════════════════════════════
+            // PHASE A: GAME PLAN — Scarce-First Special Allocation
+            // ═══════════════════════════════════════════════════════
+
+            // A1: Compute scarcity for each special
+            var specialDemand = {};
+            allBunkList.forEach(function(list) {
+                var priorityList = list.specials && list.specials.priorityList ? list.specials.priorityList : [];
+                priorityList.forEach(function(special, idx) {
+                    if (!specialDemand[special.name]) {
+                        specialDemand[special.name] = {
+                            name: special.name,
+                            bunks: [],
+                            capacity: special.capacity || 1,
+                            location: special.location,
+                            duration: special.totalDuration || special.dMin || 30,
+                            isScarce: special.isScarce,
+                            specialItem: special
+                        };
+                    }
+                    specialDemand[special.name].bunks.push({
+                        bunk: list.bunk, grade: list.grade,
+                        rotationScore: special.rotationScore
+                    });
+                });
+            });
+
+            // A2: Sort specials by scarcity (most contended first)
+            var sortedSpecials = Object.values(specialDemand).sort(function(a, b) {
+                if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1;
+                var ratioA = a.bunks.length / Math.max(1, a.capacity);
+                var ratioB = b.bunks.length / Math.max(1, b.capacity);
+                if (ratioB !== ratioA) return ratioB - ratioA;
+                return a.capacity - b.capacity;
+            });
+
+            log(GP + ' Phase A: ' + sortedSpecials.length + ' specials to distribute (scarce-first)');
+
+            // A3: For each special, assign round-robin across grades
+            for (var si = 0; si < sortedSpecials.length; si++) {
+                var specialInfo = sortedSpecials[si];
+
+                // Group requesting bunks by grade
+                var gradeGroups = {};
+                specialInfo.bunks.forEach(function(b) {
+                    if (!gradeGroups[b.grade]) gradeGroups[b.grade] = [];
+                    gradeGroups[b.grade].push(b);
+                });
+
+                // Sort within each grade by rotation score (most needed first)
+                Object.values(gradeGroups).forEach(function(group) {
+                    group.sort(function(a, b) { return a.rotationScore - b.rotationScore; });
+                });
+
+                // Shuffle grade order for iteration variety
+                var gradeOrder = _iterSeed > 0
+                    ? seedShuffle(Object.keys(gradeGroups), _iterSeed + si)
+                    : Object.keys(gradeGroups);
+                var gradeQueues = {};
+                gradeOrder.forEach(function(g) { gradeQueues[g] = gradeGroups[g].slice(); });
+
+                // Round-robin: one bunk per grade per round
+                var anyLeft = true;
+                while (anyLeft) {
+                    anyLeft = false;
+                    for (var gi = 0; gi < gradeOrder.length; gi++) {
+                        var grade = gradeOrder[gi];
+                        var queue = gradeQueues[grade];
+                        if (!queue || queue.length === 0) continue;
+
+                        while (queue.length > 0) {
+                            var candidate = queue[0];
+                            var bunk = candidate.bunk;
+                            var sl = shoppingLists[bunk];
+                            var result = draftResults[bunk];
+
+                            if (result.specials.length >= (sl.specials && sl.specials.required ? sl.specials.required : 0)) {
+                                queue.shift(); continue;
+                            }
+                            if (result.usedActivities.has(specialInfo.name)) {
+                                queue.shift(); continue;
+                            }
+
+                            var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                            var dur = specialInfo.duration;
+                            var time = null;
+
+                            // Prefer stagger band
+                            var specialBand = staggerPlan[grade] && staggerPlan[grade].typeBands
+                                ? staggerPlan[grade].typeBands.special : null;
+                            if (specialBand) {
+                                time = findTimeInRange(specialInfo.location, bunk, grade, dur, fw,
+                                    specialBand.start, specialBand.end, specialInfo.name);
+                            }
+                            // Fallback: anywhere
+                            if (!time) {
+                                time = findTimeAnywhere(specialInfo.location, bunk, grade, dur, fw, specialInfo.name);
+                            }
+
+                            queue.shift();
+                            if (!time) continue;
+
+                            // Assign
+                            if (specialInfo.location) {
+                                claimFieldGlobal(specialInfo.location, time.startMin, time.endMin, bunk, grade, specialInfo.name);
+                            }
+                            registerSpecialAssignment(specialInfo.name, grade, time.startMin, time.endMin);
+
+                            var fullItem = (sl.specials && sl.specials.priorityList || [])
+                                .find(function(s) { return s.name === specialInfo.name; }) || specialInfo.specialItem;
+                            result.specials.push({
+                                name: fullItem.name, type: fullItem.type || 'special',
+                                rotationScore: fullItem.rotationScore, duration: fullItem.duration,
+                                dMin: fullItem.dMin, dMax: fullItem.dMax, dIdeal: fullItem.dIdeal,
+                                isFlexDuration: fullItem.isFlexDuration, capacity: fullItem.capacity,
+                                location: fullItem.location, isScarce: fullItem.isScarce,
+                                isIndoor: fullItem.isIndoor, prepDuration: fullItem.prepDuration,
+                                totalDuration: fullItem.totalDuration, timeWindow: fullItem.timeWindow,
+                                _linkedPair: fullItem._linkedPair, _layer: fullItem._layer,
+                                claimedTime: time, claimedField: specialInfo.location
+                            });
+                            result.usedActivities.add(specialInfo.name);
+                            anyLeft = true;
+                            break; // next grade (round-robin)
+                        }
+                    }
+                }
+            }
+
+            // A4: Fallback — bunks still missing specials
+            allBunkList.forEach(function(list) {
+                var bunk = list.bunk, grade = list.grade;
+                var result = draftResults[bunk];
+                var sl = shoppingLists[bunk];
+                var required = sl.specials && sl.specials.required ? sl.specials.required : 0;
+                if (result.specials.length >= required) return;
+
+                var priorityList = sl.specials && sl.specials.priorityList ? sl.specials.priorityList : [];
+                for (var i = 0; i < priorityList.length; i++) {
+                    if (result.specials.length >= required) break;
+                    var special = priorityList[i];
+                    if (result.usedActivities.has(special.name)) continue;
+
+                    var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                    var dur = special.totalDuration || special.dMin || 30;
+                    var time = findTimeAnywhere(special.location, bunk, grade, dur, fw, special.name);
+                    if (!time) continue;
+
+                    if (special.location) claimFieldGlobal(special.location, time.startMin, time.endMin, bunk, grade, special.name);
+                    registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
+                    result.specials.push({
+                        name: special.name, type: special.type || 'special',
+                        rotationScore: special.rotationScore, duration: special.duration,
+                        dMin: special.dMin, dMax: special.dMax, dIdeal: special.dIdeal,
+                        isFlexDuration: special.isFlexDuration, capacity: special.capacity,
+                        location: special.location, isScarce: special.isScarce,
+                        isIndoor: special.isIndoor, prepDuration: special.prepDuration,
+                        totalDuration: special.totalDuration, timeWindow: special.timeWindow,
+                        _linkedPair: special._linkedPair, _layer: special._layer,
+                        claimedTime: time, claimedField: special.location
+                    });
+                    result.usedActivities.add(special.name);
+                }
+            });
+
+            // Log Phase A results
+            var phaseASpecials = 0;
+            var phaseAByGrade = {};
+            Object.entries(draftResults).forEach(function(entry) {
+                var bunk = entry[0], r = entry[1];
+                if (!phaseAByGrade[r.grade]) phaseAByGrade[r.grade] = { got: 0, total: 0 };
+                phaseAByGrade[r.grade].total++;
+                if (r.specials.length > 0) { phaseAByGrade[r.grade].got++; phaseASpecials++; }
+            });
+            log(GP + ' Phase A complete: ' + phaseASpecials + ' bunks got specials');
+            Object.keys(phaseAByGrade).sort().forEach(function(g) {
+                log(GP + '   Grade ' + g + ': ' + phaseAByGrade[g].got + '/' + phaseAByGrade[g].total);
+            });
+
+            // ═══════════════════════════════════════════════════════
+            // PHASE B: TIME SWEEP — Chronological Sport Assignment
+            // ═══════════════════════════════════════════════════════
+
+            // B1: Collect all time boundaries
+            var allBoundaries = new Set();
+            allBunkList.forEach(function(list) {
+                var fw = getUpdatedFreeWindowsForBunk(list.bunk, shoppingLists[list.bunk], draftResults[list.bunk]);
+                fw.forEach(function(w) { allBoundaries.add(w.start); allBoundaries.add(w.end); });
+            });
+            var sortedTimes = Array.from(allBoundaries).sort(function(a, b) { return a - b; });
+
+            // B2: Build time slots and walk forward
+            var sportMinDurDefault = 25;
+            for (var ti = 0; ti < sortedTimes.length - 1; ti++) {
+                var slotStart = sortedTimes[ti];
+                var slotEnd = sortedTimes[ti + 1];
+                if (slotEnd - slotStart < sportMinDurDefault) continue;
+
+                // Find bunks free during this slot that still need sports
+                var freeBunks = [];
+                for (var bi = 0; bi < allBunkList.length; bi++) {
+                    var list = allBunkList[bi];
+                    var result = draftResults[list.bunk];
+                    var sl = shoppingLists[list.bunk];
+                    var sportsRequired = sl.sports && sl.sports.required ? sl.sports.required : 0;
+                    if (result.sports.length >= sportsRequired) continue;
+                    var fw = getUpdatedFreeWindowsForBunk(list.bunk, sl, result);
+                    var fits = fw.some(function(w) { return w.start <= slotStart && w.end >= slotEnd; });
+                    if (!fits) continue;
+
+                    // Count future opportunities for urgency ranking
+                    var sportMin = sl.sports && sl.sports.constraints ? sl.sports.constraints.dMin : sportMinDurDefault;
+                    var futureOps = fw.filter(function(w) { return w.start >= slotEnd && w.duration >= sportMin; }).length;
+                    freeBunks.push({ bunk: list.bunk, grade: list.grade, futureOps: futureOps, sl: sl });
+                }
+
+                if (freeBunks.length === 0) continue;
+
+                // Sort: fewest future opportunities first (most urgent)
+                freeBunks.sort(function(a, b) { return a.futureOps - b.futureOps; });
+
+                // Assign sports
+                for (var fi = 0; fi < freeBunks.length; fi++) {
+                    var bunkInfo = freeBunks[fi];
+                    var bunk = bunkInfo.bunk, grade = bunkInfo.grade;
+                    var result = draftResults[bunk];
+                    var sl = shoppingLists[bunk];
+                    if (result.sports.length >= (sl.sports && sl.sports.required ? sl.sports.required : 0)) continue;
+
+                    var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
+                    for (var spi = 0; spi < sportList.length; spi++) {
+                        var sport = sportList[spi];
+                        if (result.usedActivities.has(sport.name)) continue;
+
+                        var assigned = false;
+                        var fields = sport.fields || [];
+                        for (var fli = 0; fli < fields.length; fli++) {
+                            if (!isFieldStillAvailableGP(fields[fli], slotStart, slotEnd, bunk, grade)) continue;
+                            claimFieldGlobal(fields[fli], slotStart, slotEnd, bunk, grade, sport.name);
+                            result.sports.push({
+                                name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
+                                dMin: sport.dMin, dMax: sport.dMax, dIdeal: sport.dIdeal,
+                                fields: sport.fields, needsPairing: sport.needsPairing,
+                                playerReqs: sport.playerReqs, bunkSize: sport.bunkSize,
+                                isIndoor: sport.isIndoor, _layer: sport._layer,
+                                claimedTime: { startMin: slotStart, endMin: slotEnd },
+                                claimedField: fields[fli]
+                            });
+                            result.usedActivities.add(sport.name);
+                            assigned = true;
+                            break;
+                        }
+                        if (assigned) break;
+                    }
+                }
+            }
+
+            // B3: Fallback — bunks still needing sports
+            allBunkList.forEach(function(list) {
+                var bunk = list.bunk, grade = list.grade;
+                var result = draftResults[bunk];
+                var sl = shoppingLists[bunk];
+                var required = sl.sports && sl.sports.required ? sl.sports.required : 0;
+                if (result.sports.length >= required) return;
+
+                var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
+                for (var i = 0; i < sportList.length; i++) {
+                    if (result.sports.length >= required) break;
+                    var sport = sportList[i];
+                    if (result.usedActivities.has(sport.name)) continue;
+                    var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                    var fields = sport.fields || [];
+                    for (var j = 0; j < fields.length; j++) {
+                        var time = findTimeForFieldGP(fields[j], bunk, grade, sport.dIdeal, fw);
+                        if (time) {
+                            claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name);
+                            result.sports.push({
+                                name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
+                                dMin: sport.dMin, dMax: sport.dMax, dIdeal: sport.dIdeal,
+                                fields: sport.fields, needsPairing: sport.needsPairing,
+                                playerReqs: sport.playerReqs, bunkSize: sport.bunkSize,
+                                isIndoor: sport.isIndoor, _layer: sport._layer,
+                                claimedTime: time, claimedField: fields[j]
+                            });
+                            result.usedActivities.add(sport.name);
+                            break;
+                        }
+                    }
+                }
+            });
+
+            // ═══════════════════════════════════════════════════════
+            // PHASE C: CLEANUP — Electives
+            // ═══════════════════════════════════════════════════════
+            allBunkList.forEach(function(list) {
+                var sl = shoppingLists[list.bunk];
+                if (!sl || !sl.elective) return;
+                var result = draftResults[list.bunk];
+                var fw = getUpdatedFreeWindowsForBunk(list.bunk, sl, result);
+                for (var i = 0; i < (sl.elective.count || 0); i++) {
+                    var time = findAnyWindowGP(fw, sl.elective.dIdeal);
+                    if (time) result.elective.push({
+                        type: 'elective', duration: sl.elective.dIdeal,
+                        claimedTime: time, layer: sl.elective.layer
+                    });
+                }
+            });
+
+            // Log final summary
+            var totalSports = 0, totalSpecials = 0;
+            Object.values(draftResults).forEach(function(r) {
+                totalSports += r.sports.length;
+                totalSpecials += r.specials.length;
+            });
+            log(GP + ' Phase B complete: ' + totalSports + ' sports assigned');
+            log(GP + ' TOTAL: ' + totalSports + ' sports + ' + totalSpecials + ' specials across ' + Object.keys(draftResults).length + ' bunks');
+
+            return draftResults;
+        }
+
+        // ★ LEGACY: old runDraft removed (was dead code, replaced by runGlobalPlanner)
+
+        // ★ LEGACY: old simpleDraftForBunk removed (handled by global algorithm)
+
+        // ★ LEGACY: old assignSportsToWindow / assignSpecialsToWindow removed
+
+        // NOTE: The following line is needed so the iteration loop at line ~3854
+        // can still call runGlobalPlanner. The old runDraft function was already
+        // dead code (line 3854 calls runGlobalPlanner directly).
+
+        // KEEP THESE — referenced by other code paths:
+        // (none needed — all helpers are now inside runGlobalPlanner)
+
+        // ─── OLD CODE REMOVED: runDraft + old runGlobalPlanner ───
+        // Replaced by the time-sweep planner above.
+        if (false) { // dead code guard — keeps JS parser happy
             function findTimeForField(fieldName, bunk, grade, duration, freeWindows) {
                 for (const win of freeWindows) {
                     if (win.duration < duration) continue;
@@ -2193,7 +2663,7 @@
                 }
                 return null;
             }
-        }
+        } // end dead code guard
 
         // =====================================================================
         // PHASE 3: GREEDY CONSTRAINT PACKER (per-bunk)
