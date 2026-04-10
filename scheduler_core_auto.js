@@ -2678,11 +2678,13 @@
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
             // ── Helper: build a template block with all required fields ──
-            // ★ v8.3: Hard guard — sport/slot blocks NEVER exceed dMax
-            // dMin is NOT enforced here — split blocks may be shorter than the
-            // layer's preferred dMin but still valid (35min from a 70min split).
-            // The absolute floor (TYPE_FLOORS.sport = 25) is the real minimum.
+            // ★ v9.6: Hard guard — snap to 5min, enforce dMax, reject tiny blocks
             function makeBlock(opts) {
+                // Snap all blocks to 5-min boundaries
+                opts.startMin = Math.round(opts.startMin / 5) * 5;
+                opts.endMin = Math.round(opts.endMin / 5) * 5;
+                if (opts.endMin <= opts.startMin) opts.endMin = opts.startMin + 5;
+
                 var blockType = (opts.type || 'slot').toLowerCase();
                 if (['sport', 'slot'].includes(blockType) && !opts._fixed) {
                     var blockDur = opts.endMin - opts.startMin;
@@ -2690,7 +2692,6 @@
                     if (blockDur > maxDur) {
                         opts.endMin = opts.startMin + maxDur;
                     }
-                    // Reject only truly impossible blocks (< 5 min)
                     if (blockDur < 5) return null;
                 }
                 return {
@@ -2732,7 +2733,8 @@
                 // Split into evenly-sized blocks
                 var numBlocks = Math.ceil(totalDur / ceiling);
                 while (numBlocks > 1 && Math.floor(totalDur / numBlocks) < fillMin) numBlocks--;
-                var blockDur = Math.floor(totalDur / numBlocks);
+                var blockDur = Math.round(totalDur / numBlocks / 5) * 5; // snap to 5
+                if (blockDur < fillMin) blockDur = Math.floor(totalDur / numBlocks);
                 var cursor = startMin;
                 for (var i = 0; i < numBlocks; i++) {
                     var dur = (i === numBlocks - 1) ? (endMin - cursor) : blockDur;
@@ -3223,7 +3225,8 @@
                 var numBlocks = Math.ceil(gapSize / ceiling);
                 // Ensure each block >= fillMin
                 while (numBlocks > 1 && Math.floor(gapSize / numBlocks) < fillMin) numBlocks--;
-                var blockDur = Math.floor(gapSize / numBlocks);
+                var blockDur = Math.round(gapSize / numBlocks / 5) * 5; // snap to 5
+                if (blockDur < fillMin) blockDur = Math.floor(gapSize / numBlocks);
 
                 var plan = [];
                 var cursor = gapStart;
