@@ -2958,16 +2958,53 @@
                         return positions;
                     }
 
-                    // LCV scoring: count how many total positions remain for ALL other needs
-                    // Higher = better (leaves more flexibility)
-                    function scoreLCV(pos, need, otherNeeds, tmpl, gs, ge, fMin) {
+                    // ── INTELLIGENT SCORING ENGINE ──
+                    // Simulates the ENTIRE remaining day to evaluate each position.
+                    // Like a chess engine: plays out the game, scores the result.
+                    function scorePlacement(pos, need, otherNeeds, tmpl, gs, ge, fMin, sCeiling) {
                         var simBlock = { startMin: pos.start, endMin: pos.start + pos.dur };
                         var simTmpl = tmpl.concat([simBlock]);
+                        var score = 0;
+
+                        // 1. LCV: count remaining options for other needs (flexibility)
                         var totalOptions = 0;
                         for (var i = 0; i < otherNeeds.length; i++) {
-                            totalOptions += getValidPositions(otherNeeds[i], simTmpl, gs, ge, fMin).length;
+                            var opts = getValidPositions(otherNeeds[i], simTmpl, gs, ge, fMin).length;
+                            if (opts === 0) return -99999; // would kill another need — worst possible
+                            totalOptions += opts;
                         }
-                        return totalOptions;
+                        score += totalOptions * 10; // more options = better
+
+                        // 2. Gap quality: simulate how well sports would fill the remaining gaps
+                        var gaps = findGaps(simTmpl, gs, ge);
+                        var perfectGaps = 0, deadGaps = 0, totalGapTime = 0;
+                        for (var g = 0; g < gaps.length; g++) {
+                            var gSize = gaps[g].end - gaps[g].start;
+                            totalGapTime += gSize;
+                            if (gSize < fMin) {
+                                deadGaps++; // unfillable — bad
+                            } else if (gSize <= sCeiling) {
+                                perfectGaps++; // one sport fills it perfectly
+                            } else if (gSize % sCeiling === 0 || (gSize / Math.ceil(gSize / sCeiling)) >= fMin) {
+                                perfectGaps++; // evenly splittable — good
+                            }
+                        }
+                        score += perfectGaps * 50;   // reward fillable gaps
+                        score -= deadGaps * 500;     // heavily penalize dead gaps
+                        score -= pos.deadGaps * 200;  // penalize dead gaps from this placement
+
+                        // 3. Balance: prefer positions that create evenly-sized gaps
+                        if (gaps.length >= 2) {
+                            var sizes = gaps.map(function(g) { return g.end - g.start; });
+                            var avg = totalGapTime / gaps.length;
+                            var variance = 0;
+                            for (var v = 0; v < sizes.length; v++) {
+                                variance += (sizes[v] - avg) * (sizes[v] - avg);
+                            }
+                            score -= Math.floor(variance / 100); // less variance = better
+                        }
+
+                        return score;
                     }
 
                     // AC-3: propagate constraints — if any need has 0 options, fail early
@@ -3003,15 +3040,16 @@
                         var positions = allPositions[bestIdx];
                         var remaining = needsList.slice(0, bestIdx).concat(needsList.slice(bestIdx + 1));
 
-                        // LCV: sort positions by how many options they leave for remaining needs
-                        // (only compute for top candidates to avoid performance hit)
-                        var scoredPositions = positions.map(function(pos) {
-                            // Quick score: 0 dead gaps preferred, then LCV for ties
-                            var lcvScore = 0;
-                            if (remaining.length > 0 && positions.length > 1) {
-                                lcvScore = scoreLCV(pos, chosen, remaining, tmpl, gs, ge, fMin);
-                            }
-                            return { pos: pos, score: pos.deadGaps * 10000 - lcvScore };
+                        // Intelligent scoring: simulate future consequences of each position
+                        // Limit to top 8 candidates to keep performance reasonable
+                        var candidateLimit = Math.min(positions.length, 8);
+                        // Pre-sort by dead gaps to get best candidates first
+                        positions.sort(function(a, b) { return a.deadGaps - b.deadGaps; });
+                        var topPositions = positions.slice(0, candidateLimit);
+
+                        var scoredPositions = topPositions.map(function(pos) {
+                            var iq = scorePlacement(pos, chosen, remaining, tmpl, gs, ge, fMin, sportCeiling);
+                            return { pos: pos, score: -iq }; // negate so lower = better for sort
                         });
                         scoredPositions.sort(function(a, b) { return a.score - b.score; });
 
