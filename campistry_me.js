@@ -1903,7 +1903,8 @@ function renderBilling(){
     var rate=totalCharged>0?Math.round(totalCollected/totalCharged*100):0;
     var famWithBalance=famList.filter(function(l){return l.balance>0}).length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' family account'+(famList.length!==1?'s':'')+' · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Add Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Issue Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Record Payment</button></div></div>';
+    var cardsOnFile=famList.filter(function(l){return families[l.famKey]?.cardOnFile}).length;
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Payment</button>'+(cardsOnFile>0?'<button class="me-btn me-btn--pri" style="background:var(--purple)" onclick="CampistryMe.batchCharge()">⚡ Batch Charge</button>':'')+'</div></div>';
 
     // Stats
     h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:18px">';
@@ -1996,8 +1997,12 @@ function renderBilling(){
             }
 
             // Quick actions
-            h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100)">';
+            var hasCard=families[l.famKey]?.cardOnFile;
+            h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100);flex-wrap:wrap">';
             h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
+            if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
+            if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
+            else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
             h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
             h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
             h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
@@ -2161,12 +2166,242 @@ function printStatement(famKey){
 function removePayment(idx){
     if(!confirm('Remove this payment?'))return;
     var p=finPayments[idx];
-    // Reverse family balance
     if(p){
         var f=Object.values(families).find(function(f){return f.name===p.family});
         if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-p.amount);f.balance=(f.balance||0)+p.amount}
     }
     finPayments.splice(idx,1);save();renderBilling();toast('Payment removed');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STRIPE INTEGRATION — Save cards, charge stored cards
+// ═══════════════════════════════════════════════════════════════
+function getSupabaseUrl(){return window.__CAMPISTRY_SUPABASE__?.url||''}
+function getSupabaseKey(){return window.__CAMPISTRY_SUPABASE__?.anonKey||''}
+function getStripePublishableKey(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    return(s.campistryMe&&s.campistryMe.stripePublishableKey)||'';
+}
+function getCampId(){return localStorage.getItem('campistry_camp_id')||''}
+
+async function callEdgeFunction(fnName,body){
+    var url=getSupabaseUrl()+'/functions/v1/'+fnName;
+    var resp=await fetch(url,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+getSupabaseKey(),'apikey':getSupabaseKey()},
+        body:JSON.stringify(body)
+    });
+    var data=await resp.json();
+    if(!resp.ok||data.error) throw new Error(data.error||'Edge function error');
+    return data;
+}
+
+// Request a family to save their card
+async function requestCardSetup(famKey){
+    var f=families[famKey];if(!f)return;
+    var email='';
+    (f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
+    if(!email){toast('No parent email on file — add email in Families first','error');return}
+
+    toast('Setting up card collection for '+f.name+'...');
+    try{
+        var result=await callEdgeFunction('stripe-setup',{
+            familyName:f.name,
+            email:email,
+            campId:getCampId(),
+            existingCustomerId:f.stripeCustomerId||null
+        });
+        // Store Stripe customer ID on family
+        f.stripeCustomerId=result.customerId;
+        f.stripeSetupSecret=result.clientSecret;
+        save();
+
+        // Open card collection UI
+        openCardCollectionModal(famKey,result.clientSecret);
+    }catch(err){
+        console.error('[Me] Stripe setup error:',err);
+        toast('Stripe error: '+err.message,'error');
+    }
+}
+
+function openCardCollectionModal(famKey,clientSecret){
+    var f=families[famKey];
+    var pk=getStripePublishableKey();
+    if(!pk){
+        toast('Set your Stripe publishable key in Settings first','error');
+        return;
+    }
+
+    var h='<div id="stripeCardSetup" style="min-height:200px">';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:16px">Enter card details for <strong>'+esc(f.name)+'</strong>. The card will be saved securely with Stripe for future payments.</p>';
+    h+='<div id="stripe-card-element" style="padding:12px;border:1px solid var(--s300);border-radius:var(--r);background:#fff;min-height:44px"></div>';
+    h+='<div id="stripe-card-errors" style="color:var(--err);font-size:.8rem;margin-top:8px"></div>';
+    h+='<div style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">';
+    h+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button>';
+    h+='<button class="me-btn me-btn--pri" id="stripeSubmitBtn" disabled>Save Card</button>';
+    h+='</div></div>';
+
+    showModal('Save Payment Method',h);
+
+    // Load Stripe.js if not already loaded
+    if(!window.Stripe){
+        var script=document.createElement('script');
+        script.src='https://js.stripe.com/v3/';
+        script.onload=function(){initStripeElements(pk,clientSecret,famKey)};
+        document.head.appendChild(script);
+    }else{
+        setTimeout(function(){initStripeElements(pk,clientSecret,famKey)},100);
+    }
+}
+
+function initStripeElements(pk,clientSecret,famKey){
+    var stripe=window.Stripe(pk);
+    var elements=stripe.elements();
+    var cardElement=elements.create('card',{
+        style:{base:{fontSize:'16px',fontFamily:'DM Sans, sans-serif',color:'#1e293b','::placeholder':{color:'#94a3b8'}}}
+    });
+    var mountEl=document.getElementById('stripe-card-element');
+    if(!mountEl)return;
+    cardElement.mount('#stripe-card-element');
+
+    var submitBtn=document.getElementById('stripeSubmitBtn');
+    var errEl=document.getElementById('stripe-card-errors');
+
+    cardElement.on('change',function(ev){
+        if(ev.error) errEl.textContent=ev.error.message;
+        else errEl.textContent='';
+        submitBtn.disabled=!ev.complete;
+    });
+
+    submitBtn.onclick=async function(){
+        submitBtn.disabled=true;
+        submitBtn.textContent='Saving...';
+        var result=await stripe.confirmCardSetup(clientSecret,{payment_method:{card:cardElement}});
+        if(result.error){
+            errEl.textContent=result.error.message;
+            submitBtn.disabled=false;
+            submitBtn.textContent='Save Card';
+        }else{
+            // Card saved successfully
+            var f=families[famKey];
+            if(f){
+                f.stripePaymentMethodId=result.setupIntent.payment_method;
+                f.cardOnFile=true;
+                f.cardSavedDate=new Date().toISOString();
+            }
+            save();
+            closeModal('dynModal');
+            renderBilling();
+            toast('Card saved for '+f.name+'!');
+        }
+    };
+}
+
+// Charge a family's stored card
+async function chargeStoredCard(famKey,amount,description){
+    var f=families[famKey];
+    if(!f||!f.stripeCustomerId){toast('No card on file — save a card first','error');return}
+
+    if(!amount){
+        // Ask for amount
+        var ledgers=buildFamilyLedgers();
+        var balance=ledgers[famKey]?.balance||0;
+        var h='<div class="me-modal-form">';
+        h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:12px">Charge the card on file for <strong>'+esc(f.name)+'</strong></p>';
+        h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance due: <strong style="color:var(--err)">'+fm(balance)+'</strong>'+(f.cardOnFile?' · Card on file ✓':'')+'</div>';
+        h+='<div class="me-field"><label>Amount to Charge ($)</label><input type="number" id="chargeAmt" class="me-input" value="'+balance.toFixed(2)+'" step="0.01" min="0.50"></div>';
+        h+='<div class="me-field"><label>Description</label><input type="text" id="chargeDesc" class="me-input" value="Campistry payment — '+esc(f.name)+'" placeholder="Payment description"></div>';
+        h+='</div>';
+        showModal('Charge Card',h,function(){
+            var amt=parseFloat(document.getElementById('chargeAmt').value)||0;
+            var desc=document.getElementById('chargeDesc').value.trim();
+            if(amt<0.50){alert('Minimum charge is $0.50');return}
+            closeModal('dynModal');
+            chargeStoredCard(famKey,amt,desc);
+        });
+        return;
+    }
+
+    toast('Charging '+fm(amount)+' to '+f.name+'...');
+    try{
+        var result=await callEdgeFunction('stripe-charge',{
+            customerId:f.stripeCustomerId,
+            paymentMethodId:f.stripePaymentMethodId||null,
+            amount:amount,
+            currency:'usd',
+            description:description||'Campistry payment',
+            metadata:{campId:getCampId(),familyName:f.name,familyKey:famKey}
+        });
+
+        if(result.status==='requires_action'){
+            toast('Card requires authentication — parent must approve','error');
+            return;
+        }
+
+        if(result.status==='succeeded'){
+            // Record payment locally
+            finPayments.push({
+                id:'pay_'+Date.now(),
+                family:f.name,
+                familyKey:famKey,
+                amount:amount,
+                date:new Date().toISOString().split('T')[0],
+                method:'Stripe (auto)',
+                reference:result.paymentIntentId,
+                notes:'Auto-charged via Stripe',
+                stripePaymentIntentId:result.paymentIntentId,
+                timestamp:Date.now()
+            });
+            f.totalPaid=(f.totalPaid||0)+amount;
+            f.balance=Math.max(0,(f.balance||0)-amount);
+            save();renderBilling();
+            toast('Charged '+fm(amount)+' to '+f.name+' — payment succeeded!');
+        }else{
+            toast('Payment status: '+result.status,'error');
+        }
+    }catch(err){
+        console.error('[Me] Stripe charge error:',err);
+        toast('Charge failed: '+err.message,'error');
+    }
+}
+
+// Batch charge all families with outstanding balance
+async function batchCharge(){
+    var ledgers=buildFamilyLedgers();
+    var eligible=Object.entries(ledgers).filter(function([fk,l]){
+        return l.balance>0&&families[fk]?.stripeCustomerId&&families[fk]?.cardOnFile;
+    });
+    if(!eligible.length){toast('No families with card on file and outstanding balance','error');return}
+
+    var total=eligible.reduce(function(s,[,l]){return s+l.balance},0);
+    var h='<div>';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">This will charge <strong>'+eligible.length+' families</strong> for a total of <strong>'+fm(total)+'</strong> using their saved cards.</p>';
+    h+='<div style="max-height:250px;overflow-y:auto;border:1px solid var(--s200);border-radius:var(--r);margin-bottom:14px">';
+    eligible.forEach(function([fk,l]){
+        h+='<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--s100);font-size:.8rem"><span class="bold">'+esc(l.family.name)+'</span><span style="font-weight:700;color:var(--err)">'+fm(l.balance)+'</span></div>';
+    });
+    h+='</div>';
+    h+='<p style="font-size:.75rem;color:var(--warn);font-weight:600">⚠ This action will charge real credit cards. Proceed with caution.</p>';
+    h+='</div>';
+
+    showModal('Batch Charge — '+eligible.length+' Families',h,async function(){
+        closeModal('dynModal');
+        toast('Processing batch charges...');
+        var success=0,failed=0;
+        for(var[fk,l]of eligible){
+            try{
+                await chargeStoredCard(fk,l.balance,'Batch payment — '+families[fk].name);
+                success++;
+            }catch(e){
+                console.error('[Me] Batch charge failed for',fk,e);
+                failed++;
+            }
+            // Small delay between charges to avoid rate limits
+            await new Promise(function(r){setTimeout(r,500)});
+        }
+        toast('Batch complete: '+success+' charged, '+failed+' failed');
+        renderBilling();
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2428,6 +2663,14 @@ function renderSettings(){
     h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveSettings()">Save Settings</button></div>';
     h+='</div>';
 
+    // Stripe settings
+    var stripeKey=(s.campistryMe&&s.campistryMe.stripePublishableKey)||'';
+    h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:4px">💳 Payment Processing (Stripe)</h3><p style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments.</p>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem">Stripe Publishable Key</label><input type="text" id="settStripeKey" class="me-input" value="'+esc(stripeKey)+'" placeholder="pk_live_... or pk_test_..."></div>';
+    h+='<p style="font-size:.7rem;color:var(--s400);margin-top:4px">Your <strong>secret key</strong> (sk_...) must be set as a Supabase Edge Function secret — never put it in the browser. <a href="https://dashboard.stripe.com/apikeys" target="_blank" style="color:var(--me)">Get your keys from Stripe →</a></p>';
+    h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveStripeKey()">Save Stripe Key</button></div>';
+    h+='</div>';
+
     // Data management
     h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px">Data Management</h3>';
     h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
@@ -2443,6 +2686,13 @@ function saveSettings(){
     s.campName=s.camp_name;
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
     save();toast('Settings saved');
+}
+function saveStripeKey(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.stripePublishableKey=(document.getElementById('settStripeKey').value||'').trim();
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    save();toast('Stripe key saved');
 }
 function exportAllData(){
     var s=localStorage.getItem('campGlobalSettings_v1')||'{}';
@@ -2823,6 +3073,7 @@ window.CampistryMe={
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,
     issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
     setBillFilter:setBillFilter,printStatement:printStatement,
+    requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,
     // Broadcasts
     openBroadcastModal:openBroadcastModal,viewBroadcast:viewBroadcast,removeBroadcast:removeBroadcast,
     // Forms & Docs
@@ -2832,6 +3083,6 @@ window.CampistryMe={
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
     // Settings
-    saveSettings:saveSettings,exportAllData:exportAllData,importAllData:importAllData,clearAllData:clearAllData,
+    saveSettings:saveSettings,saveStripeKey:saveStripeKey,exportAllData:exportAllData,importAllData:importAllData,clearAllData:clearAllData,
 };
 })();
