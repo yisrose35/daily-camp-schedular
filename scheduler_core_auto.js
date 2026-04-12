@@ -3805,7 +3805,8 @@
             for (var hi = 0; hi < allBunkIds.length; hi++) {
                 var hBunk = allBunkIds[hi];
                 var hMeta = bunkMeta[hBunk];
-                var hTmpl = hMeta.template;
+                // ★ v10.3: Use live bunkTimelines, not potentially stale template reference
+                var hTmpl = bunkTimelines[hBunk] || hMeta.template;
                 hTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
                 var hGrade = hMeta.grade;
                 var hLayers = layersByGrade[hGrade] || [];
@@ -3871,20 +3872,20 @@
                             _assignedSpecial: hlt === 'special' ? (hll.event || 'Special Activity') : null
                         }) || hTmpl[hBestIdx]; // fallback if makeBlock returns null
 
-                        // Fill remainder if big enough
-                        if (hRemainEnd - hRemainStart >= hMeta.fillMinDur) {
+                        // ★ v10.3: Fill remainder with sport — NEVER extend layer past dMax
+                        var hRemainDur = hRemainEnd - hRemainStart;
+                        if (hRemainDur >= 10) {
                             addSportBlocks(hTmpl, hRemainStart, hRemainEnd, {
                                 type: 'slot', event: 'General Activity Slot',
                                 layer: hMeta.sportLayer, field: null,
-                                dMin: hMeta.sportC.dMin, dMax: hMeta.sportCeiling,
+                                dMin: Math.min(hRemainDur, hMeta.fillMinDur),
+                                dMax: hMeta.sportCeiling,
                                 _source: 'self-heal',
                                 _sportFallbacks: hMeta.priorityList.map(function(s) { return s.name; }),
                                 _final: true
-                            }, hMeta.sportCeiling, hMeta.fillMinDur);
-                        } else if (hRemainEnd - hRemainStart > 0) {
-                            // Extend the layer to fill (avoid dead gap)
-                            hTmpl[hBestIdx].endMin = hRemainEnd;
+                            }, hMeta.sportCeiling, Math.min(hRemainDur, hMeta.fillMinDur));
                         }
+                        // If remainder < 10min, leave it — small gap is better than layer above dMax
                         healCount++;
                     }
                 }
@@ -3975,15 +3976,13 @@
             }
             if (rotHealCount > 0) log('[Phase3] 🔧 Self-healed ' + rotHealCount + ' missing rotation events');
 
-            // ★ v10.2: SWIM/SNACK GUARANTEE — absolute last resort forced placement
-            // After all self-healing, verify EVERY bunk has swim and snacks.
-            // If still missing, force-place by taking the LARGEST sport/slot block.
+            // ★ v10.3: SWIM/SNACK GUARANTEE — absolute last resort forced placement
+            // Uses bunkTimelines[bunk] directly (not stale gMeta.template references).
             var guaranteeCount = 0;
             for (var gbi = 0; gbi < allBunkIds.length; gbi++) {
                 var gBunk = allBunkIds[gbi];
                 var gMeta = bunkMeta[gBunk];
                 if (!gMeta) continue;
-                var gTmpl = gMeta.template;
                 var gGrade = gMeta.grade;
                 var gLayers = layersByGrade[gGrade] || [];
 
@@ -3992,15 +3991,18 @@
                     var glt = (gll.type || '').toLowerCase();
                     if (glt !== 'swim' && glt !== 'snack' && glt !== 'snacks') continue;
 
+                    // ★ BUG FIX: Read LIVE timeline, not stale template reference
+                    var gTmpl = bunkTimelines[gBunk] || [];
+
                     var gHasIt = gTmpl.some(function(b) {
                         var bt = (b.type || '').toLowerCase();
                         return bt === glt || (glt === 'snacks' && bt === 'snack') || (glt === 'snack' && bt === 'snacks');
                     });
                     if (gHasIt) continue;
 
-                    // STILL missing! Force-place by taking the largest sport/slot block
                     var glc = resolveConstraints(gll, glt);
                     var gNeedDMin = glc.dMin || (glt === 'swim' ? 30 : 15);
+                    var gNeedDMax = glc.dMax || gNeedDMin;
 
                     // Find the largest non-fixed sport/slot block anywhere in the day
                     var gBestIdx = -1, gBestDur = 0;
@@ -4018,40 +4020,39 @@
 
                     if (gBestIdx >= 0) {
                         var gVictim = gTmpl[gBestIdx];
-                        var gNewEnd = Math.min(gVictim.startMin + (glc.dMax || gNeedDMin), gVictim.endMin);
-                        var gRemainStart = gNewEnd;
+                        // ★ BUG FIX: Never exceed dMax — clamp to dMax, not victim end
+                        var gLayerEnd = Math.min(gVictim.startMin + gNeedDMax, gVictim.endMin);
+                        var gRemainStart = gLayerEnd;
                         var gRemainEnd = gVictim.endMin;
 
-                        // Replace with the required layer
                         gTmpl[gBestIdx] = makeBlock({
-                            startMin: gVictim.startMin, endMin: gNewEnd,
+                            startMin: gVictim.startMin, endMin: gLayerEnd,
                             type: glt === 'snacks' ? 'snacks' : glt,
                             event: gll.event || glt,
-                            layer: gll, dMin: gNeedDMin, dMax: glc.dMax || gNeedDMin,
+                            layer: gll, dMin: gNeedDMin, dMax: gNeedDMax,
                             _source: 'guarantee', _activityLocked: true, _final: true, _fixed: true
                         }) || gTmpl[gBestIdx];
 
-                        // Fill remainder with sport if big enough
-                        if (gRemainEnd - gRemainStart >= 15) {
+                        // Fill remainder with sport — NEVER extend the layer past dMax
+                        var gRemainDur = gRemainEnd - gRemainStart;
+                        if (gRemainDur >= 10) {
                             addSportBlocks(gTmpl, gRemainStart, gRemainEnd, {
                                 type: 'slot', event: 'General Activity Slot',
                                 layer: gMeta.sportLayer, field: null,
-                                dMin: Math.min(gRemainEnd - gRemainStart, gMeta.fillMinDur),
-                                dMax: gMeta.sportCeiling,
+                                dMin: Math.min(gRemainDur, gMeta.fillMinDur || 20),
+                                dMax: gMeta.sportCeiling || 60,
                                 _source: 'guarantee-remainder', _final: true
-                            }, gMeta.sportCeiling, Math.min(gRemainEnd - gRemainStart, gMeta.fillMinDur));
-                        } else if (gRemainEnd - gRemainStart > 0) {
-                            gTmpl[gBestIdx].endMin = gRemainEnd;
+                            }, gMeta.sportCeiling || 60, Math.min(gRemainDur, gMeta.fillMinDur || 20));
                         }
+                        // If remainder is < 10 min, just leave it — small gap is better than layer above dMax
 
                         gTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
                         bunkTimelines[gBunk] = gTmpl;
                         ensureTimelineIntegrity(gBunk);
-                        gTmpl = bunkTimelines[gBunk];
                         guaranteeCount++;
-                        log('[Phase3] ⚡ GUARANTEED ' + glt + ' for bunk ' + gBunk + ' (took largest sport block)');
+                        log('[Phase3] ⚡ GUARANTEED ' + glt + ' for bunk ' + gBunk + ' (' + gNeedDMin + '-' + gNeedDMax + 'min, took ' + gBestDur + 'min sport block)');
                     } else {
-                        warn('[Phase3] ❌ Cannot guarantee ' + glt + ' for bunk ' + gBunk + ' — no sport blocks to sacrifice');
+                        warn('[Phase3] ❌ Cannot guarantee ' + glt + ' for bunk ' + gBunk + ' — no sport blocks >= ' + gNeedDMin + 'min to sacrifice');
                     }
                 }
             }
@@ -6109,6 +6110,41 @@
                         };
                         perfFixedCount++;
                         return;
+                    }
+
+                    // Strategy 3: Search further for ANY sport slot to extend
+                    for (var si = idx - 2; si >= 0; si--) {
+                        if (perfCanExtend(slots[si])) {
+                            // Mark all slots between si and idx as continuation of that sport
+                            for (var fi = si + 1; fi <= idx; fi++) {
+                                if (!slots[fi] || slots[fi].field === 'Free' || slots[fi].continuation) {
+                                    slots[fi] = {
+                                        field: slots[si].field, sport: slots[si].sport,
+                                        _activity: slots[si]._activity || slots[si].sport,
+                                        _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                                        continuation: true
+                                    };
+                                } else break; // don't overwrite non-Free slots
+                            }
+                            perfFixedCount++;
+                            return;
+                        }
+                    }
+                    for (var si2 = idx + 2; si2 < slots.length; si2++) {
+                        if (perfCanExtend(slots[si2])) {
+                            for (var fi2 = si2 - 1; fi2 >= idx; fi2--) {
+                                if (!slots[fi2] || slots[fi2].field === 'Free' || slots[fi2].continuation) {
+                                    slots[fi2] = {
+                                        field: slots[si2].field, sport: slots[si2].sport,
+                                        _activity: slots[si2]._activity || slots[si2].sport,
+                                        _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                                        continuation: true
+                                    };
+                                } else break;
+                            }
+                            perfFixedCount++;
+                            return;
+                        }
                     }
                 });
             });
