@@ -4642,8 +4642,9 @@
                     }
                 }
 
-                // Step 4: For each segment, fill remaining space with sport blocks
-                var sportPool = sportBlocks.slice(); // pool of available sport blocks
+                // Step 4: For each segment, compute how many sport blocks are needed
+                // and size them to fill the space EXACTLY. No guessing with dMin pools.
+                var sportPool = sportBlocks.slice();
                 var sportPoolIdx = 0;
                 var repairedBlocks = [];
 
@@ -4653,47 +4654,41 @@
                     var needsTotal = 0;
                     for (var at = 0; at < assigned.length; at++) needsTotal += assigned[at].dMin;
 
-                    var remaining = seg.size - needsTotal;
+                    var sportSpace = seg.size - needsTotal;
+                    if (sportSpace < 0) sportSpace = 0;
 
-                    // Add sport blocks from pool to fill remaining space
-                    while (remaining >= 5 && sportPoolIdx < sportPool.length) {
-                        var sp = sportPool[sportPoolIdx];
-                        var spc = resolveConstraints(sp.layer, (sp.type || '').toLowerCase(), sp);
-                        var spDur = Math.min(remaining, spc.dMax || wdMeta.sportCeiling || 60);
-                        if (spDur >= spc.dMin) {
-                            assigned.push({
-                                block: sp, dMin: spc.dMin, dMax: spc.dMax,
-                                type: (sp.type || '').toLowerCase(), isSport: true, dur: 0
-                            });
-                            remaining -= spc.dMin;
-                            sportPoolIdx++;
-                        } else if (remaining >= 5) {
-                            // Block's dMin > remaining space, use it anyway with clamped dMin
-                            assigned.push({
-                                block: sp, dMin: Math.min(spc.dMin, remaining), dMax: Math.min(spc.dMax, remaining),
-                                type: (sp.type || '').toLowerCase(), isSport: true, dur: 0
-                            });
-                            remaining = 0;
-                            sportPoolIdx++;
-                        } else {
-                            break;
-                        }
+                    // Compute exactly how many sport blocks fit: ceil(sportSpace / ceiling)
+                    var ceiling = wdMeta.sportCeiling || 60;
+                    var floor = wdMeta.fillMinDur || 20;
+                    var numSportBlocks = sportSpace > 0 ? Math.ceil(sportSpace / ceiling) : 0;
+                    // Make sure each block gets at least floor
+                    while (numSportBlocks > 1 && Math.floor(sportSpace / numSportBlocks) < floor) {
+                        numSportBlocks--;
                     }
+                    // If only a tiny remnant, one block takes it all
+                    if (sportSpace > 0 && numSportBlocks === 0) numSportBlocks = 1;
 
-                    // If still remaining space and no sport blocks left, create filler slots
-                    while (remaining >= 5) {
-                        var fillerDur = Math.min(remaining, wdMeta.sportCeiling || 60);
-                        var fillerMin = Math.min(fillerDur, wdMeta.fillMinDur || 20);
-                        assigned.push({
-                            block: {
+                    // Compute even sport duration (will be adjusted in partition solve)
+                    var sportBlockDur = numSportBlocks > 0 ? Math.round(sportSpace / numSportBlocks / 5) * 5 : 0;
+
+                    for (var sbi = 0; sbi < numSportBlocks; sbi++) {
+                        var spBlock;
+                        if (sportPoolIdx < sportPool.length) {
+                            spBlock = sportPool[sportPoolIdx++];
+                        } else {
+                            spBlock = {
                                 type: 'slot', event: 'General Activity Slot',
                                 layer: wdMeta.sportLayer, field: null,
                                 _source: 'partition-fill', _final: true,
                                 _sportFallbacks: wdMeta.priorityList ? wdMeta.priorityList.map(function(s) { return s.name; }) : []
-                            },
-                            dMin: fillerMin, dMax: fillerDur, type: 'slot', isSport: true, dur: 0
+                            };
+                        }
+                        var spMin = Math.min(floor, sportSpace);
+                        var spMax = Math.min(ceiling, sportSpace);
+                        assigned.push({
+                            block: spBlock, dMin: spMin, dMax: spMax,
+                            type: (spBlock.type || 'slot').toLowerCase(), isSport: true, dur: 0
                         });
-                        remaining -= fillerMin;
                     }
 
                     // Step 5: SOLVE PARTITION — compute durations summing to exactly seg.size
@@ -4734,27 +4729,27 @@
                             }
                         }
                     } else if (excess > 0) {
-                        // Distribute excess: non-sport first (snack/special get proper duration),
-                        // then sport/slot (most flexible, absorb remainder)
-                        // Pass 1: grow non-sport blocks up to dMax
+                        // Distribute excess WITHOUT rounding — rounding happens at placement.
+                        // This guarantees zero leftover.
+                        // Pass 1: grow non-sport blocks (snack/special) up to dMax
                         for (var ex1 = 0; ex1 < assigned.length && excess > 0; ex1++) {
                             if (assigned[ex1].isSport) continue;
                             var grow1 = Math.min(assigned[ex1].dMax - assigned[ex1].dur, excess);
-                            grow1 = Math.round(grow1 / 5) * 5;
                             if (grow1 > 0) { assigned[ex1].dur += grow1; excess -= grow1; }
                         }
                         // Pass 2: grow sport blocks up to dMax
                         for (var ex2 = 0; ex2 < assigned.length && excess > 0; ex2++) {
                             if (!assigned[ex2].isSport) continue;
                             var grow2 = Math.min(assigned[ex2].dMax - assigned[ex2].dur, excess);
-                            grow2 = Math.round(grow2 / 5) * 5;
                             if (grow2 > 0) { assigned[ex2].dur += grow2; excess -= grow2; }
                         }
-                        // Pass 3: if still excess, extend sport blocks beyond dMax (better than gaps)
-                        for (var ex3 = assigned.length - 1; ex3 >= 0 && excess > 0; ex3--) {
-                            if (assigned[ex3].isSport) { assigned[ex3].dur += excess; excess = 0; }
+                        // Pass 3: sport blocks absorb ALL remaining excess (better than gaps)
+                        if (excess > 0) {
+                            for (var ex3 = assigned.length - 1; ex3 >= 0; ex3--) {
+                                if (assigned[ex3].isSport) { assigned[ex3].dur += excess; excess = 0; break; }
+                            }
                         }
-                        // Last resort: give to last block
+                        // Absolute last resort
                         if (excess > 0) { assigned[assigned.length - 1].dur += excess; }
                     }
 
