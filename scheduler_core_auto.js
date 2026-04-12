@@ -1246,9 +1246,10 @@
                 }
             }
             if (uniqueCandidates.length === 0) { warn('[P0] No free league gap for ' + grade); return null; }
-            // Select candidate based on _iterSeed — different iteration = different position
-            var candidateIdx = _iterSeed % uniqueCandidates.length;
-            var bestStart = uniqueCandidates[candidateIdx].start;
+            // ★ v12.2: Always pick the BEST league position. League position
+            // is too critical to vary by iteration — bad positions create
+            // tiny unusable gaps. Iteration variation comes from other sources.
+            var bestStart = uniqueCandidates[0].start;
 
             const expandedDur = expandLeagueDur(bestStart, bunks);
             bunks.forEach(bunk => {
@@ -4583,6 +4584,62 @@
                             needBlocks.push(b); // snack, special, swim, custom, rotation_event
                         }
                     }
+                }
+
+                // Step 1b: CHECK FOR MISSING REQUIRED NEEDS — inject if absent
+                // This is the key intelligence: if snack/swim/special is required
+                // but no block exists, CREATE one so the partition can place it.
+                var wdGrade = wdMeta.grade;
+                var wdLayers = layersByGrade[wdGrade] || [];
+                var hasType = {};
+                for (var ht = 0; ht < needBlocks.length; ht++) {
+                    var htt = (needBlocks[ht].type || '').toLowerCase();
+                    if (htt === 'snack') htt = 'snacks';
+                    hasType[htt] = true;
+                }
+                // Also check walls for swim/snack (they might be pinned)
+                for (var hw = 0; hw < walls.length; hw++) {
+                    var hwt = (walls[hw].type || '').toLowerCase();
+                    if (hwt === 'snack') hwt = 'snacks';
+                    hasType[hwt] = true;
+                }
+
+                for (var mni = 0; mni < wdLayers.length; mni++) {
+                    var mnl = wdLayers[mni];
+                    var mnt = (mnl.type || '').toLowerCase();
+                    if (mnt === 'snack') mnt = 'snacks';
+                    // Only inject snack/swim/special if missing
+                    if (['snacks', 'swim', 'special'].indexOf(mnt) < 0) continue;
+                    if (hasType[mnt]) continue;
+                    // Swim: check if this bunk swims today
+                    if (mnt === 'swim') {
+                        var swimsToday2 = todaysSwimmers[wdGrade] ? todaysSwimmers[wdGrade].has(String(wdBunk)) : false;
+                        if (!swimsToday2) continue;
+                    }
+                    // Create placeholder block for the missing need
+                    var mnc = resolveConstraints(mnl, mnt);
+                    var mnEvent = mnl.event || mnt;
+                    if (mnt === 'special') {
+                        // Try to get the drafted special name
+                        var mnDraft = draftResults[wdBunk];
+                        if (mnDraft && mnDraft.specials && mnDraft.specials.length > 0) {
+                            mnEvent = mnDraft.specials[0].name;
+                        } else {
+                            continue; // no special assigned to this bunk
+                        }
+                    }
+                    needBlocks.push({
+                        type: mnt === 'snacks' ? 'snacks' : mnt,
+                        event: mnEvent, layer: mnl,
+                        startMin: mnl.startMin || wdMeta.gradeStart,
+                        endMin: (mnl.startMin || wdMeta.gradeStart) + mnc.dMin,
+                        dMin: mnc.dMin, dMax: mnc.dMax,
+                        _source: 'partition-inject', _activityLocked: true, _final: true,
+                        _assignedSpecial: mnt === 'special' ? mnEvent : null
+                    });
+                    hasType[mnt] = true;
+                    log('[PARTITION] Injected missing ' + mnt + ' for bunk ' + wdBunk);
+                    repairStats.gapsFilled++;
                 }
 
                 // Step 2: Compute segments between walls
