@@ -3815,6 +3815,8 @@
                     var hll = hLayers[hl];
                     var hlt = (hll.type || '').toLowerCase();
                     if (!['swim', 'snack', 'snacks', 'special'].includes(hlt)) continue;
+                    // ★ v10.3: Skip specials with no actual activity name — don't create phantom blocks
+                    if (hlt === 'special' && !hll.event) continue;
                     // Check if already placed
                     var hHasIt = hTmpl.some(function(b) {
                         var bt = (b.type || '').toLowerCase();
@@ -6313,6 +6315,8 @@
                         var ll = gradeLayers[li];
                         var lt = (ll.type || '').toLowerCase();
                         if (!['swim', 'snack', 'snacks', 'special'].includes(lt)) continue;
+                        // ★ v10.3: Skip specials with no actual activity name
+                        if (lt === 'special' && !ll.event) continue;
                         var hasIt = sorted.some(function(b) {
                             var bt = (b.type || '').toLowerCase();
                             return bt === lt || (lt === 'snacks' && bt === 'snack');
