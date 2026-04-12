@@ -573,6 +573,68 @@
         return result;
     }
 
+    // =========================================================================
+    // TRAFFIC-AWARE ETAs
+    // Uses Mapbox Directions API with depart_at for traffic-predicted
+    // leg durations. Falls back to OSRM matrix → haversine.
+    // =========================================================================
+
+    async function fetchTrafficLegs(orderedStops, campLat, campLng, departureTimeMin, isArrival) {
+        const token = getMapboxToken();
+        if (!token || !orderedStops.length) return null;
+
+        // Build waypoint string: camp → stops (dismissal) or stops → camp (arrival)
+        const coords = [];
+        if (!isArrival) coords.push(campLng + ',' + campLat);
+        orderedStops.forEach(s => { if (s.lat && s.lng) coords.push(s.lng + ',' + s.lat); });
+        if (isArrival) coords.push(campLng + ',' + campLat);
+
+        if (coords.length < 2 || coords.length > 25) return null; // Mapbox limit
+
+        // Convert departure minutes to ISO 8601 for today
+        const now = new Date();
+        const depHours = Math.floor(departureTimeMin / 60);
+        const depMins = Math.round(departureTimeMin % 60);
+        const depDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), depHours, depMins);
+        // If the time has already passed today, use tomorrow
+        if (depDate < now) depDate.setDate(depDate.getDate() + 1);
+        const isoTime = depDate.toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+        try {
+            const url = 'https://api.mapbox.com/directions/v5/mapbox/driving/' +
+                coords.join(';') +
+                '?annotations=duration&overview=false' +
+                '&depart_at=' + isoTime +
+                '&access_token=' + token;
+
+            const resp = await fetch(url);
+            if (!resp.ok) {
+                if (resp.status === 422) {
+                    // depart_at may not be supported on free tier — try without
+                    console.warn('[Go] Traffic: depart_at not supported, trying static');
+                    const fallbackUrl = 'https://api.mapbox.com/directions/v5/mapbox/driving/' +
+                        coords.join(';') + '?annotations=duration&overview=false&access_token=' + token;
+                    const fb = await fetch(fallbackUrl);
+                    if (!fb.ok) return null;
+                    const fbData = await fb.json();
+                    return extractLegDurations(fbData);
+                }
+                return null;
+            }
+            const data = await resp.json();
+            return extractLegDurations(data);
+        } catch (e) {
+            console.warn('[Go] Traffic legs error:', e.message);
+            return null;
+        }
+    }
+
+    function extractLegDurations(data) {
+        if (!data.routes?.[0]?.legs) return null;
+        // Each leg = segment between consecutive waypoints, duration in seconds
+        return data.routes[0].legs.map(leg => leg.duration); // seconds
+    }
+
     function decodePolyline(encoded) {
         const points = []; let i = 0, lat = 0, lng = 0;
         while (i < encoded.length) {
@@ -2953,10 +3015,31 @@
             const shiftNeedsReturn = hasShifts && !isLastShift;
             const timeMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
 
+            // Fetch traffic-aware leg durations for all routes in this shift
+            // trafficCache[busId] = [leg0_sec, leg1_sec, ...] or null
+            const trafficCache = {};
+            if (getMapboxToken()) {
+                const trafficPromises = routes.filter(r => r.stops.length > 0).map(async r => {
+                    const validStops = r.stops.filter(s => s.lat && s.lng);
+                    if (validStops.length > 0) {
+                        trafficCache[r.busId] = await fetchTrafficLegs(validStops, campLat, campLng, timeMin, isArrival);
+                        if (trafficCache[r.busId]) r._trafficSource = true;
+                    }
+                });
+                await Promise.all(trafficPromises);
+                const trafficCount = Object.values(trafficCache).filter(Boolean).length;
+                if (trafficCount > 0) console.log('[Go] Traffic-aware ETAs for ' + trafficCount + '/' + routes.length + ' routes');
+            }
+
             for (const r of routes) {
                 if (!r.stops.length) continue;
                 const mx = r._osrmMatrix;
+                const tLegs = trafficCache[r.busId]; // traffic leg durations in seconds, or null
 
+                // Traffic-aware drive time: uses Mapbox traffic legs when available
+                // Leg indexing: leg[0] = camp→stop1 (dismissal) or stop1→stop2 (arrival)
+                // For dismissal: leg[i] = stop[i-1] → stop[i], leg[0] = camp → stop[0]
+                // For arrival: leg[i] = stop[i] → stop[i+1], last leg = lastStop → camp
                 function driveMin(stopA, stopB) {
                     if (mx && stopA._matrixIdx != null && stopB._matrixIdx != null) {
                         const val = mx[stopA._matrixIdx]?.[stopB._matrixIdx];
@@ -2982,18 +3065,27 @@
                     return 15;
                 }
 
+                // Use traffic legs when available, override static calculations
+                function trafficLegMin(legIdx) {
+                    if (tLegs && tLegs[legIdx] != null) return tLegs[legIdx] / 60; // seconds → minutes
+                    return null;
+                }
+
                 if (isArrival) {
                     let totalDur = 0;
                     for (let i = 0; i < r.stops.length; i++) {
-                        if (i === 0) totalDur += campToStop(r.stops[0]);
-                        else totalDur += driveMin(r.stops[i - 1], r.stops[i]);
+                        const tLeg = trafficLegMin(i);
+                        if (i === 0) totalDur += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                        else totalDur += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
                         totalDur += avgStopMin;
                     }
-                    totalDur += stopToCamp(r.stops[r.stops.length - 1]);
+                    const returnLeg = trafficLegMin(r.stops.length);
+                    totalDur += (returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
                     let cum = timeMin - totalDur;
                     for (let i = 0; i < r.stops.length; i++) {
-                        if (i === 0) cum += campToStop(r.stops[0]);
-                        else cum += driveMin(r.stops[i - 1], r.stops[i]);
+                        const tLeg = trafficLegMin(i);
+                        if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                        else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
                         cum += avgStopMin;
                         r.stops[i].estimatedTime = formatTime(cum);
                         r.stops[i].estimatedMin = cum;
@@ -3002,15 +3094,18 @@
                 } else {
                     let cum = timeMin;
                     for (let i = 0; i < r.stops.length; i++) {
-                        if (i === 0) cum += campToStop(r.stops[0]);
-                        else cum += driveMin(r.stops[i - 1], r.stops[i]);
+                        // Dismissal: leg[0] = camp→stop[0], leg[i] = stop[i-1]→stop[i]
+                        const tLeg = trafficLegMin(i);
+                        if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                        else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
                         cum += avgStopMin;
                         r.stops[i].estimatedTime = formatTime(cum);
                         r.stops[i].estimatedMin = cum;
                     }
                     r.totalDuration = Math.round(cum - timeMin);
                     if (shiftNeedsReturn && r.stops.length > 0) {
-                        r.returnTocamp = Math.round(stopToCamp(r.stops[r.stops.length - 1]));
+                        const returnLeg = trafficLegMin(r.stops.length);
+                        r.returnTocamp = Math.round(returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
                         r.totalDuration += r.returnTocamp;
                     }
                 }
