@@ -1690,14 +1690,9 @@
         const useZones = zones && zones.length > 0;
 
         if (useZones) {
-            // ── Dry-run preview: show zones and wait for confirmation ──
-            showProgress('Zone preview...', 15);
-            const confirmed = await showZonePreviewModal(zones);
-            if (!confirmed) {
-                hideProgress();
-                toast('Route generation cancelled');
-                return;
-            }
+            // Zone preview logged to console — proceed directly to route generation
+            console.log('[Go] Zone preview: ' + zones.length + ' zones ready, proceeding to route generation');
+            toast(zones.length + ' bus zones created — generating routes...');
         }
 
         // Fall back to old region-based assignments if zones failed
