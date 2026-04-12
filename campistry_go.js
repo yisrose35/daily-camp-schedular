@@ -464,6 +464,35 @@
         return q;
     }
 
+    // ── Geocode validation — reject results that don't make sense ──
+    function validateGeocode(lat, lng, address, camperName) {
+        // 1. Null or zero coordinates
+        if (!lat || !lng || lat === 0 || lng === 0) {
+            console.warn('[Go] Geocode rejected for ' + camperName + ': null coordinates');
+            return false;
+        }
+        // 2. Outside continental US bounds (rough)
+        if (lat < 24 || lat > 50 || lng < -125 || lng > -66) {
+            console.warn('[Go] Geocode rejected for ' + camperName + ': outside continental US (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')');
+            return false;
+        }
+        // 3. If camp location is known, reject if >100 miles away
+        if (_campCoordsCache) {
+            const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, lat, lng);
+            if (dist > 100) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 100) — likely wrong location');
+                return false;
+            }
+        }
+        // 4. Coordinates that land in the ocean (rough Atlantic/Pacific checks near common camp areas)
+        // Atlantic: east of -71 lng AND south of 41 lat (ocean off Long Island / NJ)
+        if (lng > -71 && lat < 40.4 && lng < -60) {
+            console.warn('[Go] Geocode rejected for ' + camperName + ': appears to be in the ocean');
+            return false;
+        }
+        return true;
+    }
+
     function censusGeocode(address) {
         return new Promise((resolve) => {
             const cbName = '_cg_' + Math.random().toString(36).slice(2, 8);
@@ -993,6 +1022,7 @@
                 bunk: c.bunk || a._bunk || '',
                 street: a.street || '', city: a.city || '', state: a.state || '', zip: a.zip || '',
                 geocoded: !!a.geocoded, zipMismatch: !!a._zipMismatch,
+                geocodeWarning: a._geocodeWarning || '',
                 hasAddr: !!a.street
             };
         });
@@ -1043,7 +1073,7 @@
 
         tbody.innerHTML = rows.map(r => {
             const full = r.hasAddr ? [r.street, r.city, r.state, r.zip].filter(Boolean).join(', ') : '';
-            const badge = r.hasAddr ? (r.geocoded ? (r.zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
+            const badge = r.hasAddr ? (r.geocodeWarning ? '<span class="badge badge-danger" title="' + esc(r.geocodeWarning) + '">⚠ Rejected</span>' : r.geocoded ? (r.zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
             return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (r.id ? '#' + String(r.id).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(r.last) + '</td><td>' + esc(r.first) + '</td><td>' + (esc(r.division) || '—') + '</td><td>' + (esc(r.grade) || '—') + '</td><td>' + (esc(r.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')">' + (r.hasAddr ? 'Edit' : 'Add') + '</button>' + (r.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + '</div></td></tr>';
         }).join('');
     }
@@ -1074,11 +1104,11 @@
     async function geocodeOne(name) {
         const a = D.addresses[name]; if (!a?.street) return false;
         const censusQ = normalizeCensusAddress(a.street, a.city, a.state, a.zip);
-        try { const d = await censusGeocode(censusQ); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; a.lat = best.coordinates.y; a.lng = best.coordinates.x; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; return true; } } catch (e) { console.warn('[Go] Census error for', name, e.message); }
+        try { const d = await censusGeocode(censusQ); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; const clat = best.coordinates.y, clng = best.coordinates.x; if (validateGeocode(clat, clng, q, name)) { a.lat = clat; a.lng = clng; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; return true; } } } catch (e) { console.warn('[Go] Census error for', name, e.message); }
         const key = getApiKey(); if (!key) return false;
         const params = { text: q, size: '5', 'boundary.country': 'US' };
         if (_campCoordsCache) { params['focus.point.lat'] = _campCoordsCache.lat; params['focus.point.lon'] = _campCoordsCache.lng; }
-        try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return false; const d = await r.json(); if (!d.features?.length) return false; let best = null; if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip); if (!best) best = d.features[0]; const co = best.geometry.coordinates; a.lng = co[0]; a.lat = co[1]; a.geocoded = true; a._geocodeSource = 'ors'; a._zipMismatch = !!(a.zip && best.properties?.postalcode && best.properties.postalcode !== a.zip); return true; } catch (e) { return false; }
+        try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return false; const d = await r.json(); if (!d.features?.length) return false; let best = null; if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip); if (!best) best = d.features[0]; const co = best.geometry.coordinates; if (!validateGeocode(co[1], co[0], q, name)) return false; a.lng = co[0]; a.lat = co[1]; a.geocoded = true; a._geocodeSource = 'ors'; a._zipMismatch = !!(a.zip && best.properties?.postalcode && best.properties.postalcode !== a.zip); return true; } catch (e) { return false; }
     }
 
     async function geocodeAll(force) {
@@ -1090,7 +1120,7 @@
         for (let i = 0; i < todo.length; i++) {
             const name = todo[i]; const a = D.addresses[name]; if (!a?.street) { censusFail.push(name); continue; }
             const censusQ = normalizeCensusAddress(a.street, a.city, a.state, a.zip);
-            try { const d = await censusGeocode(censusQ); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; a.lat = best.coordinates.y; a.lng = best.coordinates.x; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; censusOk++; } else censusFail.push(name); } catch (e) { censusFail.push(name); }
+            try { const d = await censusGeocode(censusQ); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; const clat = best.coordinates.y, clng = best.coordinates.x; if (validateGeocode(clat, clng, censusQ, name)) { a.lat = clat; a.lng = clng; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; censusOk++; } else { censusFail.push(name); a._geocodeWarning = 'Location rejected — too far or invalid'; } } else censusFail.push(name); } catch (e) { censusFail.push(name); }
             if ((i + 1) % 10 === 0 || i === todo.length - 1) { renderAddresses(); updateStats(); toast('Census: ' + censusOk + ' ✓  ' + censusFail.length + ' remaining  (' + (i + 1) + '/' + todo.length + ')'); }
             if (i < todo.length - 1) await new Promise(r => setTimeout(r, 300));
         }
@@ -1101,7 +1131,7 @@
                 const name = censusFail[i]; const a = D.addresses[name]; if (!a?.street || a.geocoded) continue;
                 const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
                 const params = { text: q, size: '5', 'boundary.country': 'US' }; if (_campCoordsCache) { params['focus.point.lat'] = _campCoordsCache.lat; params['focus.point.lon'] = _campCoordsCache.lng; }
-                try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), { headers: { 'Authorization': getApiKey(), 'Accept': 'application/json' } }); if (r.ok) { const d = await r.json(); if (d.features?.length) { let best = null; if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip); if (!best) best = d.features[0]; const co = best.geometry.coordinates; a.lng = co[0]; a.lat = co[1]; a.geocoded = true; a._geocodeSource = 'ors'; a._zipMismatch = !!(a.zip && best.properties?.postalcode && best.properties.postalcode !== a.zip); orsOk++; } else orsFail++; } else { orsFail++; if (r.status === 429 || r.status === 403) { orsFail += censusFail.length - i - 1; break; } } } catch (e) { orsFail++; }
+                try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), { headers: { 'Authorization': getApiKey(), 'Accept': 'application/json' } }); if (r.ok) { const d = await r.json(); if (d.features?.length) { let best = null; if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip); if (!best) best = d.features[0]; const co = best.geometry.coordinates; if (validateGeocode(co[1], co[0], q, name)) { a.lng = co[0]; a.lat = co[1]; a.geocoded = true; a._geocodeSource = 'ors'; a._zipMismatch = !!(a.zip && best.properties?.postalcode && best.properties.postalcode !== a.zip); orsOk++; } else { orsFail++; a._geocodeWarning = 'Location rejected — too far or invalid'; } } else orsFail++; } else { orsFail++; if (r.status === 429 || r.status === 403) { orsFail += censusFail.length - i - 1; break; } } } catch (e) { orsFail++; }
                 if ((i + 1) % 5 === 0 || i === censusFail.length - 1) { renderAddresses(); updateStats(); toast('ORS: ' + orsOk + ' ✓  ' + orsFail + ' ✗  (' + (i + 1) + '/' + censusFail.length + ')'); }
                 if (i < censusFail.length - 1) await new Promise(r => setTimeout(r, 1500));
             }
