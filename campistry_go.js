@@ -520,18 +520,38 @@
     // =========================================================================
     // ROSTER (from Campistry Me — auto-synced)
     // =========================================================================
+    // Go's own standalone roster — used when Me has no campers
+    let _goStandaloneRoster = {};
+
     function getRoster() {
+        // 1. Try Campistry Me roster first
         const g = readCampistrySettings();
-        const roster = g?.app1?.camperRoster || {};
-        let needsSave = false, maxId = 0;
-        Object.values(roster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
-        let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
-        if (maxId >= nextId) nextId = maxId + 1;
-        Object.entries(roster).forEach(([n, c]) => { if (!c.camperId) { c.camperId = nextId; nextId++; needsSave = true; } });
-        if (needsSave) {
-            try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = roster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextCamperId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
+        const meRoster = g?.app1?.camperRoster || {};
+        if (Object.keys(meRoster).length > 0) {
+            let needsSave = false, maxId = 0;
+            Object.values(meRoster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
+            let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
+            if (maxId >= nextId) nextId = maxId + 1;
+            Object.entries(meRoster).forEach(([n, c]) => { if (!c.camperId) { c.camperId = nextId; nextId++; needsSave = true; } });
+            if (needsSave) {
+                try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = meRoster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextCamperId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
+            }
+            return meRoster;
         }
-        return roster;
+        // 2. Fall back to Go's standalone roster (from CSV import)
+        if (Object.keys(_goStandaloneRoster).length > 0) return _goStandaloneRoster;
+        // 3. Build roster from Go's own address data (campers added directly in Go)
+        const addrRoster = {};
+        Object.keys(D.addresses).forEach(name => {
+            const a = D.addresses[name];
+            addrRoster[name] = {
+                camperId: a._camperId || 0,
+                division: a._division || '',
+                bunk: a._bunk || '',
+                grade: ''
+            };
+        });
+        return addrRoster;
     }
     function getStructure() { const g = readCampistrySettings(); return g?.campStructure || {}; }
     function getDivisionNames() { return Object.keys(getStructure()).sort(); }
@@ -849,8 +869,19 @@
     // =========================================================================
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
-        let csv = '\uFEFFID,Name,Division,Bunk,Street Address,City,State,ZIP,Transport,Ride With\n';
-        names.forEach(n => { const c = roster[n], a = D.addresses[n] || {}; csv += [c.camperId ? String(c.camperId).padStart(4, '0') : '', n, c.division || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || '', a.transport || 'bus', a.rideWith || ''].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n'; });
+        let csv = '\uFEFFCamper ID,Last Name,First Name,Division,Grade,Bunk,Street Address,City,State,ZIP\n';
+        if (names.length) {
+            names.forEach(n => {
+                const c = roster[n], a = D.addresses[n] || {};
+                const parts = n.split(/\s+/);
+                const first = parts[0] || '';
+                const last = parts.slice(1).join(' ') || '';
+                csv += [c.camperId ? String(c.camperId).padStart(4, '0') : '', last, first, c.division || '', c.grade || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || ''].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n';
+            });
+        } else {
+            csv += '"0001","Smith","Sarah","Juniors","1st Grade","1A","123 Main Street","Anytown","NY","11559"\n';
+            csv += '"0002","Goldberg","Moshe","Seniors","4th Grade","4B","456 Oak Avenue","Woodmere","NY","11598"\n';
+        }
         const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
     function importAddressCsv() { const inp = document.getElementById('csvFileInput'); inp.onchange = function () { if (!inp.files[0]) return; const r = new FileReader(); r.onload = e => { parseCsv(e.target.result); inp.value = ''; }; r.readAsText(inp.files[0]); }; inp.click(); }
@@ -858,25 +889,104 @@
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         const lines = text.split(/\r?\n/).filter(l => l.trim()); if (lines.length < 2) { toast('Empty CSV', 'error'); return; }
         const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim());
-        const ni = hdr.findIndex(h => h === 'name' || h === 'camper name' || h === 'camper'), si = hdr.findIndex(h => h.includes('street') || h === 'address'), ci = hdr.findIndex(h => h === 'city'), sti = hdr.findIndex(h => h === 'state'), zi = hdr.findIndex(h => h === 'zip' || h.includes('zip')), tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h.includes('pickup') || h.includes('carpool')), rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));
-        if (ni < 0 || si < 0) { toast('Need Name + Street columns', 'error'); return; }
+
+        // Detect column indices — support multiple naming conventions
+        const idi = hdr.findIndex(h => h === 'camper id' || h === 'id' || h === 'camperid' || h === '#');
+        const lni = hdr.findIndex(h => h === 'last name' || h === 'last' || h === 'lastname' || h === 'family name');
+        const fni = hdr.findIndex(h => h === 'first name' || h === 'first' || h === 'firstname' || h === 'given name');
+        const ni = hdr.findIndex(h => h === 'name' || h === 'camper name' || h === 'camper' || h === 'full name');
+        const divi = hdr.findIndex(h => h === 'division' || h === 'div');
+        const gri = hdr.findIndex(h => h === 'grade');
+        const bki = hdr.findIndex(h => h === 'bunk' || h === 'cabin');
+        const si = hdr.findIndex(h => h === 'address' || h.includes('street') || h === 'street address');
+        const ci = hdr.findIndex(h => h === 'city' || h === 'city/town' || h === 'town');
+        const sti = hdr.findIndex(h => h === 'state');
+        const zi = hdr.findIndex(h => h === 'zip' || h === 'zip code' || h === 'zipcode' || h.includes('zip'));
+        const tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h.includes('pickup') || h.includes('carpool'));
+        const rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));
+
+        // Must have either (first+last) or (full name), plus an address
+        const hasFirstLast = fni >= 0 && lni >= 0;
+        const hasFullName = ni >= 0;
+        if (!hasFirstLast && !hasFullName) { toast('CSV needs either "First Name" + "Last Name" columns, or a "Name" column', 'error'); return; }
+        if (si < 0) { toast('CSV needs an "Address" or "Street Address" column', 'error'); return; }
+
         D.addresses = {};
-        const roster = getRoster(); let up = 0;
+        _goStandaloneRoster = {};
+        let up = 0;
+
         for (let i = 1; i < lines.length; i++) {
-            const cols = parseLine(lines[i]); const name = (cols[ni] || '').trim(); if (!name) continue;
-            const rn = Object.keys(roster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
-            const street = (cols[si] || '').trim(); if (!street) continue;
+            const cols = parseLine(lines[i]);
+
+            // Build full name
+            let name = '';
+            if (hasFirstLast) {
+                const first = (cols[fni] || '').trim();
+                const last = (cols[lni] || '').trim();
+                if (!first && !last) continue;
+                name = first + (last ? ' ' + last : '');
+            } else {
+                name = (cols[ni] || '').trim();
+                if (!name) continue;
+            }
+
+            // Try to match existing roster name (case-insensitive)
+            const meRoster = readCampistrySettings()?.app1?.camperRoster || {};
+            const rn = Object.keys(meRoster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
+
+            const street = (cols[si] || '').trim();
+            if (!street) continue;
+
+            const camperId = idi >= 0 ? (cols[idi] || '').trim() : '';
+            const division = divi >= 0 ? (cols[divi] || '').trim() : '';
+            const grade = gri >= 0 ? (cols[gri] || '').trim() : '';
+            const bunk = bki >= 0 ? (cols[bki] || '').trim() : '';
             const transport = tri >= 0 ? (cols[tri] || '').trim().toLowerCase() : 'bus';
             const rideWith = rwi >= 0 ? (cols[rwi] || '').trim() : '';
-            D.addresses[rn] = { street, city: ci >= 0 ? (cols[ci] || '').trim() : '', state: sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY', zip: zi >= 0 ? (cols[zi] || '').trim() : '', lat: null, lng: null, geocoded: false, transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus', rideWith: rideWith }; up++;
+
+            D.addresses[rn] = {
+                street,
+                city: ci >= 0 ? (cols[ci] || '').trim() : '',
+                state: sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY',
+                zip: zi >= 0 ? (cols[zi] || '').trim() : '',
+                lat: null, lng: null, geocoded: false,
+                transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus',
+                rideWith: rideWith,
+                _camperId: camperId ? parseInt(camperId) : 0,
+                _division: division,
+                _grade: grade,
+                _bunk: bunk
+            };
+
+            // Build standalone roster entry (for when Me has no data)
+            _goStandaloneRoster[rn] = {
+                camperId: camperId ? parseInt(camperId) : i,
+                division: division, grade: grade, bunk: bunk
+            };
+
+            up++;
         }
-        save(); renderAddresses(); updateStats(); toast(up + ' addresses imported');
+        save(); renderAddresses(); updateStats();
+        const meCount = Object.keys(readCampistrySettings()?.app1?.camperRoster || {}).length;
+        if (meCount === 0 && up > 0) {
+            console.log('[Go] Standalone mode: ' + up + ' campers imported directly into Go');
+            toast(up + ' campers imported (standalone mode)');
+        } else {
+            toast(up + ' addresses imported');
+        }
     }
     function parseLine(line) { const r = []; let cur = '', inQ = false; for (let i = 0; i < line.length; i++) { const ch = line[i]; if (inQ) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; } else cur += ch; } else { if (ch === '"') inQ = true; else if (ch === ',' || ch === '\t') { r.push(cur); cur = ''; } else cur += ch; } } r.push(cur); return r; }
     function updateStats() {
-        const roster = getRoster(); const c = Object.keys(roster).length; let wA = 0; Object.keys(roster).forEach(n => { if (D.addresses[n]?.street) wA++; });
-        document.getElementById('statBuses').textContent = D.buses.length; document.getElementById('statCampers').textContent = c;
-        document.getElementById('statShifts').textContent = D.shifts.length; document.getElementById('statAddresses').textContent = wA + '/' + c;
+        const roster = getRoster();
+        const addrCount = Object.keys(D.addresses).length;
+        const rosterCount = Object.keys(roster).length;
+        // Use whichever is larger — roster from Me or addresses in Go
+        const c = Math.max(rosterCount, addrCount);
+        let wA = 0; Object.keys(D.addresses).forEach(n => { if (D.addresses[n]?.street) wA++; });
+        document.getElementById('statBuses').textContent = D.buses.length;
+        document.getElementById('statCampers').textContent = c;
+        document.getElementById('statShifts').textContent = D.shifts.length;
+        document.getElementById('statAddresses').textContent = wA + '/' + c;
     }
 
     // =========================================================================
