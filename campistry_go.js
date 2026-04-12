@@ -70,7 +70,7 @@
         setup: {
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
-            avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
+            avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
             campLat: null, campLng: null
         },
         activeMode: 'dismissal',
@@ -537,6 +537,73 @@
 
     // Assign campers to isochrone bands — returns array of band groups
     // Each group = { id, name, minutes, camperNames, centroidLat, centroidLng }
+    // =========================================================================
+    // SWEEP ALGORITHM — Angular partitioning from camp
+    // Used by BusBoss, Transfinder, and academic SBRP solvers.
+    // Creates pie-slice zones by sorting campers by bearing from camp,
+    // then sweeping a radial arm until each slice fills a bus.
+    // Produces naturally compact, non-overlapping zones.
+    // =========================================================================
+    function sweepPartition(campers, busCapacities, campLat, campLng) {
+        if (!campers.length || !busCapacities.length) return null;
+
+        // Compute bearing (angle) from camp to each camper
+        const withAngle = campers.map(c => {
+            const dLat = c.lat - campLat;
+            const dLng = c.lng - campLng;
+            // atan2 gives angle in radians; convert to degrees [0, 360)
+            let angle = Math.atan2(dLng, dLat) * (180 / Math.PI);
+            if (angle < 0) angle += 360;
+            return { ...c, _angle: angle, _dist: haversineMi(campLat, campLng, c.lat, c.lng) };
+        });
+
+        // Sort by angle (radial sweep)
+        withAngle.sort((a, b) => a._angle - b._angle);
+
+        // Sort bus capacities descending — fill largest buses first
+        const caps = [...busCapacities].sort((a, b) => b - a);
+        const totalCap = caps.reduce((s, c) => s + c, 0);
+        const nBuses = caps.length;
+
+        // Sweep: fill each bus in angular order
+        const slices = [];
+        let idx = 0;
+        for (let b = 0; b < nBuses; b++) {
+            const slice = [];
+            const targetFill = Math.ceil(withAngle.length * (caps[b] / totalCap));
+            while (slice.length < targetFill && idx < withAngle.length) {
+                slice.push(withAngle[idx]);
+                idx++;
+            }
+            if (slice.length > 0) slices.push(slice);
+        }
+        // Any remaining campers go to last slice
+        while (idx < withAngle.length) {
+            slices[slices.length - 1].push(withAngle[idx]);
+            idx++;
+        }
+
+        // Build zone objects
+        const zones = slices.map((slice, i) => {
+            const cLat = slice.reduce((s, c) => s + c.lat, 0) / slice.length;
+            const cLng = slice.reduce((s, c) => s + c.lng, 0) / slice.length;
+            const minAngle = Math.round(slice[0]._angle);
+            const maxAngle = Math.round(slice[slice.length - 1]._angle);
+            return {
+                id: 'sweep_' + i,
+                name: minAngle + '°–' + maxAngle + '° zone',
+                camperNames: slice.map(c => c.name),
+                centroidLat: cLat,
+                centroidLng: cLng,
+                color: REGION_COLORS[i % REGION_COLORS.length]
+            };
+        });
+
+        console.log('[Go] Sweep: ' + zones.length + ' zones from angular partition');
+        zones.forEach(z => console.log('[Go]   ' + z.name + ': ' + z.camperNames.length + ' campers'));
+        return zones;
+    }
+
     function assignCampersToIsochroneBands(campers, bands, campLat, campLng) {
         // Bands are ordered innermost to outermost
         const bandGroups = bands.map((band, i) => ({
@@ -3020,6 +3087,29 @@
                 console.warn('[Go] Isochrone zone creation failed, falling back to ZIP:', e.message);
             }
         }
+        // Try sweep algorithm if isochrones failed — produces compact pie-slice zones
+        if (!zones && campCoords) {
+            try {
+                showProgress('Building sweep-based zones...', 10);
+                const roster = getRoster();
+                const sweepCampers = [];
+                Object.keys(roster).forEach(name => {
+                    const a = D.addresses[name];
+                    if (!a?.geocoded || !a.lat || !a.lng) return;
+                    if (a.transport === 'pickup') return;
+                    sweepCampers.push({ name, lat: a.lat, lng: a.lng });
+                });
+                const busCaps = vehicles.map(v => v.capacity);
+                const sweepZones = sweepPartition(sweepCampers, busCaps, campLat, campLng);
+                if (sweepZones && sweepZones.length > 0) {
+                    zones = await sliceRegionsIntoZones(sweepZones, D.buses, reserveSeats);
+                    if (zones) console.log('[Go] Using sweep-based zones (' + zones.length + ' zones)');
+                }
+            } catch (e) {
+                console.warn('[Go] Sweep zone creation failed:', e.message);
+            }
+        }
+        // Final fallback: ZIP-based zones
         if (!zones) {
             showProgress('Building ZIP-based zones...', 10);
             zones = await sliceRegionsIntoZones(_detectedRegions, D.buses, reserveSeats);
@@ -3172,6 +3262,40 @@
                     }
                 }
                 r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
+
+                // ── Max ride time audit ──
+                // No child should ride longer than maxRideTime minutes.
+                // For dismissal: child at stop N rides from camp departure to stop N ETA.
+                // For arrival: child at stop N rides from stop N pickup to camp arrival.
+                const maxRideMin = D.setup.maxRideTime || 45;
+                if (r.stops.length > 0 && r.totalDuration > 0) {
+                    r.stops.forEach(st => {
+                        if (!st.estimatedMin) return;
+                        let rideMin;
+                        if (isArrival) {
+                            // Arrival: kid boards at this stop, rides until camp arrival
+                            const campArrivalMin = timeMin; // camp arrival = departure time for arrival mode
+                            rideMin = campArrivalMin - st.estimatedMin;
+                        } else {
+                            // Dismissal: kid boards at camp, rides until this stop
+                            rideMin = st.estimatedMin - timeMin;
+                        }
+                        st._rideTimeMin = Math.round(Math.abs(rideMin));
+                        if (st._rideTimeMin > maxRideMin) {
+                            st._rideTimeWarning = true;
+                            st.campers.forEach(c => {
+                                console.warn('[Go] Ride time: ' + c.name + ' on ' + r.busName + ' stop ' + st.stopNum + ' = ' + st._rideTimeMin + 'min (max ' + maxRideMin + ')');
+                            });
+                        }
+                    });
+                    // Count violations
+                    const violations = r.stops.filter(s => s._rideTimeWarning).length;
+                    if (violations > 0) {
+                        r._rideTimeViolations = violations;
+                        console.warn('[Go] ' + r.busName + ': ' + violations + ' stop(s) exceed ' + maxRideMin + 'min max ride time');
+                    }
+                }
+
                 r.stops.forEach(s => { delete s._matrixIdx; });
                 delete r._osrmMatrix;
             }
@@ -3492,6 +3616,18 @@
                         });
 
                         // ── Step 4: Build VROOM vehicles with full constraints ──
+                        // Pre-compute farthest stop per zone for arrival start positioning
+                        const zoneFarthestStop = {};
+                        zoneAssignments.forEach((za, vi) => {
+                            let fDist = 0, fStop = null;
+                            allStops.forEach((s, si) => {
+                                if (stopZoneIdx[si] !== vi) return;
+                                const d = haversineMi(campLat, campLng, s.lat, s.lng);
+                                if (d > fDist) { fDist = d; fStop = s; }
+                            });
+                            zoneFarthestStop[vi] = fStop;
+                        });
+
                         const vroomVehicles = zoneAssignments.map((za, vi) => {
                             const v = za.vehicle;
                             const veh = {
@@ -3499,23 +3635,22 @@
                                 profile: 'driving-car',
                                 description: v.name,
                                 capacity: [v.capacity],
-                                // Time window: shift working hours
                                 time_window: [shiftStartSec, shiftEndSec],
-                                // Max travel time: caps how long any bus is on the road
                                 max_travel_time: maxRouteDurationSec,
-                                // Max tasks: cap stops per bus to keep routes manageable
                                 max_tasks: Math.max(8, Math.ceil(allStops.length / zoneAssignments.length) + 3),
-                                // Speed factor: 1.0 = normal, could be per-bus if needed
                                 speed_factor: 1.0
                             };
 
-                            // Start/end positioning — use zone centroid for geographic hint
-                            const zCentLng = za.zone.centroidLng || campLng;
-                            const zCentLat = za.zone.centroidLat || campLat;
                             if (isArrival) {
-                                veh.start = [zCentLng, zCentLat];
+                                // Arrival: start at FARTHEST stop from camp (pick up farthest first)
+                                // End at camp. VROOM will route inward: far → near → camp.
+                                const far = zoneFarthestStop[vi];
+                                veh.start = far ? [far.lng, far.lat] : [campLng, campLat];
                                 veh.end = [campLng, campLat];
                             } else {
+                                // Dismissal: start at camp, VROOM routes outward: camp → near → far.
+                                // No end = open-ended route (bus doesn't return after last stop,
+                                // unless multi-shift needs return)
                                 veh.start = [campLng, campLat];
                                 if (needsReturn) veh.end = [campLng, campLat];
                             }
@@ -5274,7 +5409,8 @@
                 html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
                 r.stops.forEach(st => {
                     const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) : st.isCounselor ? '👤 ' + esc(st.counselorName) : st.campers.map(c => '<span style="display:inline-flex;align-items:center;gap:2px;">' + esc(c.name) + ' <button onclick="CampistryGo.openMoveModal(\'' + esc(c.name.replace(/'/g, "\\'")) + '\',\'' + r.busId + '\',' + si + ')" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);font-size:10px;" title="Move">↔</button></span>').join(', ');
-                    html += '<li class="route-stop' + (st.isMonitor ? ' monitor-stop' : st.isCounselor ? ' counselor-stop' : '') + '"><div class="route-stop-num" style="background:' + esc(r.busColor) + '">' + st.stopNum + '</div><div class="route-stop-info"><div class="route-stop-names">' + names + '</div><div class="route-stop-addr">' + esc(st.address) + '</div></div><div class="route-stop-time">' + (st.estimatedTime || '—') + '</div></li>';
+                    const rideTag = st._rideTimeMin ? '<div style="font-size:.6rem;color:' + (st._rideTimeWarning ? '#ef4444' : 'var(--text-muted)') + ';">' + st._rideTimeMin + ' min ride' + (st._rideTimeWarning ? ' ⚠' : '') + '</div>' : '';
+                    html += '<li class="route-stop' + (st.isMonitor ? ' monitor-stop' : st.isCounselor ? ' counselor-stop' : '') + '"><div class="route-stop-num" style="background:' + esc(r.busColor) + '">' + st.stopNum + '</div><div class="route-stop-info"><div class="route-stop-names">' + names + '</div><div class="route-stop-addr">' + esc(st.address) + '</div></div><div class="route-stop-time">' + (st.estimatedTime || '—') + rideTag + '</div></li>';
                 });
                 html += '</ul><div class="route-card-footer"><span>' + (r.monitor ? '🛡️ ' + esc(r.monitor.name) : '') + '</span><span>' + (r.counselors.length ? r.counselors.length + ' counselor(s)' : '') + '</span><button class="btn btn-ghost btn-sm" onclick="CampistryGo.reOptimizeBus(\'' + r.busId + '\',' + si + ')" title="Re-run TSP optimizer on this bus" style="margin-left:auto;font-size:.7rem;color:var(--text-muted);">⟳ Re-optimize</button></div></div>';
             });
