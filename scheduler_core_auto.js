@@ -3705,10 +3705,15 @@
                         vTmpl[di+1].startMin = dBlk.startMin;
                         vTmpl.splice(di, 1);
                     } else {
-                        // ★ v10.1: Between two fixed walls — keep the block instead of deleting.
+                        // ★ v10.2: Between two fixed walls — keep sport/slot blocks instead of deleting.
                         // A short activity is better than an empty gap that can never be filled.
-                        // Mark it so the solver knows it's undersized but intentional.
-                        dBlk._belowDMin = true;
+                        if (['sport', 'slot'].includes(dType)) {
+                            dBlk._belowDMin = true;
+                        } else {
+                            // For swim/snack/special: removing is correct — they should be re-placed
+                            // by self-healing with proper duration. Keeping them undersized is worse.
+                            vTmpl.splice(di, 1);
+                        }
                     }
                 }
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
@@ -3726,10 +3731,16 @@
                         if (vGapDur <= 0) continue;
                         var filled = false;
 
-                        // Strategy 1: Extend previous non-fixed block to cover the gap
+                        // ★ v10.2: Only extend sport/slot blocks — never swim/snack/special/league
+                        var EXTENDABLE_TYPES = { sport: 1, slot: 1, sports: 1 };
+
+                        // Strategy 1: Extend previous sport/slot block to cover the gap
                         var prevBlock = null;
                         for (var pb = vTmpl.length - 1; pb >= 0; pb--) {
-                            if (vTmpl[pb].endMin <= vGap.start && !vTmpl[pb]._fixed) { prevBlock = vTmpl[pb]; break; }
+                            if (vTmpl[pb].endMin <= vGap.start && !vTmpl[pb]._fixed
+                                && EXTENDABLE_TYPES[(vTmpl[pb].type || '').toLowerCase()]) {
+                                prevBlock = vTmpl[pb]; break;
+                            }
                         }
                         if (prevBlock && prevBlock.endMin === vGap.start) {
                             var maxExt = vMeta.sportCeiling || 60;
@@ -3740,11 +3751,14 @@
                             }
                         }
 
-                        // Strategy 2: Pull next non-fixed block backward to cover the gap
+                        // Strategy 2: Pull next sport/slot block backward to cover the gap
                         if (!filled) {
                             var nextBlock = null;
                             for (var nb = 0; nb < vTmpl.length; nb++) {
-                                if (vTmpl[nb].startMin >= vGap.end && !vTmpl[nb]._fixed) { nextBlock = vTmpl[nb]; break; }
+                                if (vTmpl[nb].startMin >= vGap.end && !vTmpl[nb]._fixed
+                                    && EXTENDABLE_TYPES[(vTmpl[nb].type || '').toLowerCase()]) {
+                                    nextBlock = vTmpl[nb]; break;
+                                }
                             }
                             if (nextBlock && nextBlock.startMin === vGap.end) {
                                 var newDur2 = nextBlock.endMin - vGap.start;
@@ -5936,15 +5950,28 @@
             log('[4.5] ✅ No violations');
         }
 
-        // ★ v10.1: STEP 4.9 — FINAL PERFECTION PASS
-        // Eliminate ALL remaining Frees by extending adjacent activities.
-        // A Free block means dead time — a slightly longer sport is always better.
+        // ★ v10.2: STEP 4.9 — FINAL PERFECTION PASS
+        // Eliminate remaining Frees by extending adjacent SPORT activities only.
+        // NEVER extend swim/snack/special/league/lunch/dismissal/trip — they have strict duration bounds.
         // =====================================================================
         {
             var perfFreeCount = 0, perfFixedCount = 0;
             var perfSA = window.scheduleAssignments || {};
             var perfDT = window.divisionTimes || {};
             var perfDivisions = window.divisions || {};
+
+            // Activities that must NOT be extended (they have strict dMin/dMax)
+            var PERF_NO_EXTEND = ['swim', 'snack', 'snacks', 'lunch', 'dismissal', 'trip', 'league',
+                'specialty_league', 'custom', 'rotation_event'];
+            function perfCanExtend(slotEntry) {
+                if (!slotEntry || slotEntry.field === 'Free') return false;
+                if (slotEntry._fixed || slotEntry._pinned || slotEntry._league || slotEntry._autoSpecial || slotEntry._isRotationEvent) return false;
+                var act = (slotEntry._activity || slotEntry.sport || slotEntry.field || '').toLowerCase();
+                for (var i = 0; i < PERF_NO_EXTEND.length; i++) {
+                    if (act.indexOf(PERF_NO_EXTEND[i]) !== -1) return false;
+                }
+                return true;
+            }
 
             Object.entries(perfSA).forEach(function(entry) {
                 var bunk = entry[0], slots = entry[1];
@@ -5961,25 +5988,21 @@
                     var slot = pbs[idx];
                     if (!slot) return;
 
-                    // Strategy 1: Extend previous slot to absorb this Free
-                    if (idx > 0 && slots[idx - 1] && slots[idx - 1].field && slots[idx - 1].field !== 'Free') {
-                        var prevSlot = pbs[idx - 1];
-                        if (prevSlot) {
-                            // Extend previous activity to cover this slot's time
-                            slots[idx] = {
-                                field: slots[idx - 1].field,
-                                sport: slots[idx - 1].sport,
-                                _activity: slots[idx - 1]._activity || slots[idx - 1].sport,
-                                _autoMode: true, _autoSolved: true, _perfectionExtend: true,
-                                continuation: true
-                            };
-                            perfFixedCount++;
-                            return;
-                        }
+                    // Strategy 1: Extend previous SPORT slot to absorb this Free
+                    if (idx > 0 && perfCanExtend(slots[idx - 1])) {
+                        slots[idx] = {
+                            field: slots[idx - 1].field,
+                            sport: slots[idx - 1].sport,
+                            _activity: slots[idx - 1]._activity || slots[idx - 1].sport,
+                            _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                            continuation: true
+                        };
+                        perfFixedCount++;
+                        return;
                     }
 
-                    // Strategy 2: Pull next slot backward to absorb this Free
-                    if (idx < slots.length - 1 && slots[idx + 1] && slots[idx + 1].field && slots[idx + 1].field !== 'Free') {
+                    // Strategy 2: Pull next SPORT slot backward to absorb this Free
+                    if (idx < slots.length - 1 && perfCanExtend(slots[idx + 1])) {
                         slots[idx] = {
                             field: slots[idx + 1].field,
                             sport: slots[idx + 1].sport,
@@ -5994,7 +6017,7 @@
             });
 
             if (perfFreeCount > 0) {
-                log('\n[STEP 4.9] Perfection pass: ' + perfFreeCount + ' Frees found, ' + perfFixedCount + ' fixed by extending neighbors');
+                log('\n[STEP 4.9] Perfection pass: ' + perfFreeCount + ' Frees found, ' + perfFixedCount + ' fixed by extending sport neighbors');
             }
         }
 
