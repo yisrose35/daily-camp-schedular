@@ -4483,7 +4483,7 @@
                             type: glt === 'snacks' ? 'snacks' : glt,
                             event: gll.event || glt,
                             layer: gll, dMin: gNeedDMin, dMax: gNeedDMax,
-                            _source: 'guarantee', _activityLocked: true, _final: true, _fixed: true
+                            _source: 'guarantee', _activityLocked: true, _final: true, _fixed: false
                         }) || gTmpl[gBestIdx];
 
                         // ★ v11.1: Fill pre-gap from clamping
@@ -4598,13 +4598,23 @@
             }
 
             // ══════════════════════════════════════════════════════════
-            // ★ v11.5: DURATION REBALANCER
-            // Scans adjacent block pairs. If one block is below its dMin
-            // and its neighbor is above its dMin, steal time from the neighbor.
-            // Directly fixes: "45-min special + 5-min snack" → "40-min + 10-min"
-            // Also fixes: "55-min sport + 5-min snack" → "50-min + 10-min"
-            // Runs multiple passes until no more rebalancing is possible.
+            // ★ v11.5b: DURATION REBALANCER (rewritten)
+            // Core insight: _fixed means "user-pinned, don't move". But system-
+            // generated blocks (guarantee, self-heal, pre-placed) are NOT user-
+            // pinned — they just happen to be _fixed to prevent Phase 3 from
+            // reshuffling them. The rebalancer runs AFTER Phase 3, so it's safe
+            // to shrink ANY block that has surplus above its dMin.
+            //
+            // Rule: ANY block can DONATE time if it has surplus above dMin.
+            //       ANY block can RECEIVE time if it's below dMin.
+            //       Only truly user-pinned blocks (Phase 0 pinned layers with
+            //       _classification === 'pinned' AND _source === 'phase0') are
+            //       exempt from donating.
             // ══════════════════════════════════════════════════════════
+            function isUserPinned(blk) {
+                return blk._fixed && blk._classification === 'pinned' && blk._source === 'phase0';
+            }
+
             var rebalanceTotal = 0;
             for (var rbi = 0; rbi < allBunkIds.length; rbi++) {
                 var rbBunk = allBunkIds[rbi];
@@ -4612,13 +4622,12 @@
                 rbTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
                 var rbChanged = true, rbPasses = 0;
-                while (rbChanged && rbPasses < 5) {
+                while (rbChanged && rbPasses < 8) {
                     rbChanged = false;
                     rbPasses++;
 
                     for (var rbj = 0; rbj < rbTmpl.length; rbj++) {
                         var rbBlk = rbTmpl[rbj];
-                        if (rbBlk._fixed) continue;
                         var rbType = (rbBlk.type || '').toLowerCase();
                         var rbDur = rbBlk.endMin - rbBlk.startMin;
                         var rbC = resolveConstraints(rbBlk.layer, rbType, rbBlk);
@@ -4626,13 +4635,17 @@
                         // Is this block below its dMin?
                         if (rbDur >= rbC.dMin) continue;
                         var rbDeficit = rbC.dMin - rbDur;
+                        // Snap deficit to 5-min
+                        rbDeficit = Math.ceil(rbDeficit / 5) * 5;
+                        if (rbDeficit < 5) continue;
 
-                        // Try stealing from the PREVIOUS block
-                        if (rbj > 0 && !rbTmpl[rbj-1]._fixed) {
+                        // Try stealing from the PREVIOUS block (even if _fixed, unless user-pinned)
+                        if (rbj > 0 && !isUserPinned(rbTmpl[rbj-1])) {
                             var donor = rbTmpl[rbj-1];
                             var donorDur = donor.endMin - donor.startMin;
                             var donorC = resolveConstraints(donor.layer, (donor.type || '').toLowerCase(), donor);
                             var donorSurplus = donorDur - donorC.dMin;
+                            donorSurplus = Math.floor(donorSurplus / 5) * 5;
 
                             if (donorSurplus >= 5) {
                                 var steal = Math.min(rbDeficit, donorSurplus);
@@ -4642,17 +4655,19 @@
                                     rbBlk.startMin -= steal;
                                     rbChanged = true;
                                     rebalanceTotal++;
+                                    log('[REBAL] ' + rbType + ' bunk=' + rbBunk + ' +' + steal + 'min from prev ' + (donor.type || '') + ' (' + (donorDur) + '→' + (donor.endMin - donor.startMin) + ')');
                                     continue;
                                 }
                             }
                         }
 
                         // Try stealing from the NEXT block
-                        if (rbj < rbTmpl.length - 1 && !rbTmpl[rbj+1]._fixed) {
+                        if (rbj < rbTmpl.length - 1 && !isUserPinned(rbTmpl[rbj+1])) {
                             var donor2 = rbTmpl[rbj+1];
                             var donor2Dur = donor2.endMin - donor2.startMin;
                             var donor2C = resolveConstraints(donor2.layer, (donor2.type || '').toLowerCase(), donor2);
                             var donor2Surplus = donor2Dur - donor2C.dMin;
+                            donor2Surplus = Math.floor(donor2Surplus / 5) * 5;
 
                             if (donor2Surplus >= 5) {
                                 var steal2 = Math.min(rbDeficit, donor2Surplus);
@@ -4662,7 +4677,61 @@
                                     rbBlk.endMin += steal2;
                                     rbChanged = true;
                                     rebalanceTotal++;
+                                    log('[REBAL] ' + rbType + ' bunk=' + rbBunk + ' +' + steal2 + 'min from next ' + (donor2.type || '') + ' (' + (donor2Dur) + '→' + (donor2.endMin - donor2.startMin) + ')');
                                     continue;
+                                }
+                            }
+                        }
+
+                        // Try stealing from non-adjacent blocks (search outward)
+                        for (var rbk = 1; rbk <= 3 && rbDeficit > 0; rbk++) {
+                            // Look left
+                            var li = rbj - rbk;
+                            if (li >= 0 && !isUserPinned(rbTmpl[li])) {
+                                var ld = rbTmpl[li];
+                                var ldDur = ld.endMin - ld.startMin;
+                                var ldC = resolveConstraints(ld.layer, (ld.type || '').toLowerCase(), ld);
+                                var ldSurplus = Math.floor((ldDur - ldC.dMin) / 5) * 5;
+                                if (ldSurplus >= 5) {
+                                    var lsteal = Math.min(rbDeficit, ldSurplus);
+                                    lsteal = Math.round(lsteal / 5) * 5;
+                                    if (lsteal >= 5) {
+                                        // Shrink the donor and shift everything between donor and victim
+                                        ld.endMin -= lsteal;
+                                        for (var lshift = li + 1; lshift <= rbj; lshift++) {
+                                            rbTmpl[lshift].startMin -= lsteal;
+                                            rbTmpl[lshift].endMin -= lsteal;
+                                        }
+                                        rbBlk.endMin += lsteal; // give back to victim at the end
+                                        rbDeficit -= lsteal;
+                                        rbChanged = true;
+                                        rebalanceTotal++;
+                                        log('[REBAL] ' + rbType + ' bunk=' + rbBunk + ' +' + lsteal + 'min from ' + rbk + '-away ' + (ld.type || ''));
+                                    }
+                                }
+                            }
+                            // Look right
+                            var ri = rbj + rbk;
+                            if (ri < rbTmpl.length && !isUserPinned(rbTmpl[ri]) && rbDeficit > 0) {
+                                var rd = rbTmpl[ri];
+                                var rdDur = rd.endMin - rd.startMin;
+                                var rdC = resolveConstraints(rd.layer, (rd.type || '').toLowerCase(), rd);
+                                var rdSurplus = Math.floor((rdDur - rdC.dMin) / 5) * 5;
+                                if (rdSurplus >= 5) {
+                                    var rsteal = Math.min(rbDeficit, rdSurplus);
+                                    rsteal = Math.round(rsteal / 5) * 5;
+                                    if (rsteal >= 5) {
+                                        rd.startMin += rsteal;
+                                        for (var rshift = ri - 1; rshift >= rbj; rshift--) {
+                                            rbTmpl[rshift].endMin += rsteal;
+                                            rbTmpl[rshift].startMin += rsteal;
+                                        }
+                                        rbBlk.startMin -= rsteal;
+                                        rbDeficit -= rsteal;
+                                        rbChanged = true;
+                                        rebalanceTotal++;
+                                        log('[REBAL] ' + rbType + ' bunk=' + rbBunk + ' +' + rsteal + 'min from ' + rbk + '-away ' + (rd.type || ''));
+                                    }
                                 }
                             }
                         }
@@ -4670,7 +4739,7 @@
                 }
                 bunkTimelines[rbBunk] = rbTmpl;
             }
-            if (rebalanceTotal > 0) log('[Phase3] ★ REBALANCE: redistributed duration across ' + rebalanceTotal + ' block pairs');
+            if (rebalanceTotal > 0) log('[Phase3] ★ REBALANCE: fixed ' + rebalanceTotal + ' duration imbalances');
 
             // ★ v10.5: FINAL CONSTRAINT ENFORCEMENT SWEEP
             // Last-pass safety net: clamp every block to its dMin/dMax.
