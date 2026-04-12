@@ -409,6 +409,170 @@
         return null;
     }
 
+    // =========================================================================
+    // ISOCHRONE-BASED ZONE CREATION
+    // Uses Mapbox Isochrone API to build drive-time bands from camp.
+    // These replace ZIP codes as the primary zone grouping — zones now
+    // follow actual road networks, not arbitrary postal boundaries.
+    // =========================================================================
+
+    let _isochroneCache = null; // cached isochrone polygons
+    let _isoCacheCampKey = null; // cache key = camp coords
+
+    async function fetchIsochrones(campLat, campLng) {
+        const token = getMapboxToken();
+        if (!token) return null;
+
+        // Check cache — camp rarely moves
+        const cacheKey = campLat.toFixed(5) + ',' + campLng.toFixed(5);
+        if (_isochroneCache && _isoCacheCampKey === cacheKey) {
+            console.log('[Go] Isochrone: using cached bands');
+            return _isochroneCache;
+        }
+
+        // Also check localStorage for persistence across sessions
+        try {
+            const stored = localStorage.getItem('CAMPISTRY_ISO_' + cacheKey);
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                if (parsed.ts && Date.now() - parsed.ts < 7 * 86400000) { // 7-day TTL
+                    _isochroneCache = parsed.data;
+                    _isoCacheCampKey = cacheKey;
+                    console.log('[Go] Isochrone: loaded from localStorage cache');
+                    return _isochroneCache;
+                }
+            }
+        } catch (_) {}
+
+        // Fetch from Mapbox Isochrone API
+        // contours_minutes: drive-time bands in minutes from camp
+        const intervals = [8, 15, 22, 30, 40, 55];
+        try {
+            const url = 'https://api.mapbox.com/isochrone/v1/mapbox/driving/' +
+                campLng + ',' + campLat +
+                '?contours_minutes=' + intervals.join(',') +
+                '&polygons=true&generalize=200' +
+                '&access_token=' + token;
+            console.log('[Go] Isochrone: fetching ' + intervals.length + ' bands...');
+            const resp = await fetch(url);
+            if (!resp.ok) {
+                console.warn('[Go] Isochrone: HTTP ' + resp.status);
+                return null;
+            }
+            const data = await resp.json();
+            if (!data.features?.length) return null;
+
+            // Mapbox returns features ordered outermost to innermost — reverse so band 0 = closest
+            const bands = data.features.reverse().map((feat, i) => ({
+                minutes: intervals[i],
+                polygon: feat.geometry.coordinates[0], // outer ring of polygon
+                properties: feat.properties
+            }));
+
+            _isochroneCache = bands;
+            _isoCacheCampKey = cacheKey;
+
+            // Persist to localStorage
+            try {
+                localStorage.setItem('CAMPISTRY_ISO_' + cacheKey, JSON.stringify({ ts: Date.now(), data: bands }));
+            } catch (_) {}
+
+            console.log('[Go] Isochrone: ' + bands.length + ' bands fetched (' + intervals.join(', ') + ' min)');
+            return bands;
+        } catch (e) {
+            console.warn('[Go] Isochrone: fetch error:', e.message);
+            return null;
+        }
+    }
+
+    // Ray-casting point-in-polygon test
+    function pointInPolygon(lat, lng, polygon) {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            const xi = polygon[i][1], yi = polygon[i][0]; // GeoJSON = [lng, lat]
+            const xj = polygon[j][1], yj = polygon[j][0];
+            if (((yi > lng) !== (yj > lng)) && (lat < (xj - xi) * (lng - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    // Assign campers to isochrone bands — returns array of band groups
+    // Each group = { id, name, minutes, camperNames, centroidLat, centroidLng }
+    function assignCampersToIsochroneBands(campers, bands, campLat, campLng) {
+        // Bands are ordered innermost to outermost
+        const bandGroups = bands.map((band, i) => ({
+            id: 'iso_' + band.minutes + 'min',
+            name: band.minutes + '-min zone',
+            minutes: band.minutes,
+            camperNames: [],
+            lats: [], lngs: [],
+            polygon: band.polygon
+        }));
+        // Add a catch-all for campers beyond the outermost isochrone
+        bandGroups.push({
+            id: 'iso_far',
+            name: 'Far zone',
+            minutes: 999,
+            camperNames: [],
+            lats: [], lngs: [],
+            polygon: null
+        });
+
+        campers.forEach(c => {
+            // Find the innermost (smallest) band that contains this camper
+            let assigned = false;
+            for (let i = 0; i < bands.length; i++) {
+                if (pointInPolygon(c.lat, c.lng, bands[i].polygon)) {
+                    // This camper is inside band i, but we want the tightest band
+                    // Bands are inner→outer, so check if camper is in band i but NOT in band i-1
+                    if (i === 0 || !pointInPolygon(c.lat, c.lng, bands[i - 1].polygon)) {
+                        bandGroups[i].camperNames.push(c.name);
+                        bandGroups[i].lats.push(c.lat);
+                        bandGroups[i].lngs.push(c.lng);
+                        assigned = true;
+                        break;
+                    }
+                }
+            }
+            // If inside all bands (closest to camp), assign to band 0
+            if (!assigned) {
+                // Check if inside outermost
+                if (bands.length && pointInPolygon(c.lat, c.lng, bands[bands.length - 1].polygon)) {
+                    bandGroups[0].camperNames.push(c.name);
+                    bandGroups[0].lats.push(c.lat);
+                    bandGroups[0].lngs.push(c.lng);
+                } else {
+                    // Beyond all isochrones
+                    const farGroup = bandGroups[bandGroups.length - 1];
+                    farGroup.camperNames.push(c.name);
+                    farGroup.lats.push(c.lat);
+                    farGroup.lngs.push(c.lng);
+                }
+            }
+        });
+
+        // Compute centroids and filter empty bands
+        const nonEmpty = bandGroups.filter(g => g.camperNames.length > 0);
+        const result = nonEmpty.map((g, idx) => {
+            const cLat = g.lats.reduce((s, v) => s + v, 0) / g.lats.length;
+            const cLng = g.lngs.reduce((s, v) => s + v, 0) / g.lngs.length;
+            return {
+                id: g.id,
+                name: g.name,
+                camperNames: g.camperNames,
+                centroidLat: cLat,
+                centroidLng: cLng,
+                color: REGION_COLORS[idx % REGION_COLORS.length]
+            };
+        });
+
+        console.log('[Go] Isochrone bands: ' + result.length + ' non-empty bands');
+        result.forEach(b => console.log('[Go]   ' + b.name + ': ' + b.camperNames.length + ' campers'));
+        return result;
+    }
+
     function decodePolyline(encoded) {
         const points = []; let i = 0, lat = 0, lng = 0;
         while (i < encoded.length) {
@@ -2280,7 +2444,7 @@
                 }
 
                 zones.push({
-                    id: 'zone_' + reg.zip + '_' + ci,
+                    id: 'zone_' + (reg.zip || reg.id) + '_' + ci,
                     name: zoneName,
                     camperNames: pocketCampers.map(c => c.name),
                     centroidLat: cLat,
@@ -2296,7 +2460,7 @@
         // Whole ZIPs become zones unchanged
         wholeZips.forEach(reg => {
             zones.push({
-                id: 'zone_' + reg.zip,
+                id: 'zone_' + (reg.zip || reg.id),
                 name: reg.name,
                 camperNames: [...reg.camperNames],
                 centroidLat: reg.centroidLat,
@@ -2441,7 +2605,7 @@
             const regCampers = allCampers.filter(c => smallReg.camperNames.includes(c.name));
             if (!regCampers.length) continue;
             zones.push({
-                id: 'zone_' + smallReg.zip,
+                id: 'zone_' + (smallReg.zip || smallReg.id),
                 name: smallReg.name,
                 camperNames: [...smallReg.camperNames],
                 centroidLat: smallReg.centroidLat,
@@ -2704,8 +2868,38 @@
         const campLng = campCoords?.lng || _detectedRegions[0].centroidLng;
 
         // ── Zone Reconfiguration Step ──
+        // Try isochrone-based zones first (road-network-aware), fall back to ZIP-based
         showProgress('Building bus zones...', 10);
-        const zones = await sliceRegionsIntoZones(_detectedRegions, D.buses, reserveSeats);
+        let zones = null;
+        const mbToken = getMapboxToken();
+        if (mbToken && campCoords) {
+            try {
+                showProgress('Fetching drive-time isochrones...', 8);
+                const bands = await fetchIsochrones(campLat, campLng);
+                if (bands && bands.length > 0) {
+                    const roster = getRoster();
+                    const isoCampers = [];
+                    Object.keys(roster).forEach(name => {
+                        const a = D.addresses[name];
+                        if (!a?.geocoded || !a.lat || !a.lng) return;
+                        if (a.transport === 'pickup') return;
+                        isoCampers.push({ name, lat: a.lat, lng: a.lng });
+                    });
+                    const isoBands = assignCampersToIsochroneBands(isoCampers, bands, campLat, campLng);
+                    if (isoBands && isoBands.length > 0) {
+                        showProgress('Slicing isochrone zones...', 10);
+                        zones = await sliceRegionsIntoZones(isoBands, D.buses, reserveSeats);
+                        if (zones) console.log('[Go] Using isochrone-based zones (' + zones.length + ' zones)');
+                    }
+                }
+            } catch (e) {
+                console.warn('[Go] Isochrone zone creation failed, falling back to ZIP:', e.message);
+            }
+        }
+        if (!zones) {
+            showProgress('Building ZIP-based zones...', 10);
+            zones = await sliceRegionsIntoZones(_detectedRegions, D.buses, reserveSeats);
+        }
         const useZones = zones && zones.length > 0;
 
         if (useZones) {
