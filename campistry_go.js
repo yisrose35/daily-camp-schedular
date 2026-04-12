@@ -924,22 +924,58 @@
     // =========================================================================
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
+        // Always download a clean template with 2 example rows
         let csv = '\uFEFFCamper ID,Last Name,First Name,Division,Grade,Bunk,Street Address,City,State,ZIP\n';
-        if (names.length) {
-            names.forEach(n => {
-                const c = roster[n], a = D.addresses[n] || {};
-                const parts = n.split(/\s+/);
-                const first = parts[0] || '';
-                const last = parts.slice(1).join(' ') || '';
-                csv += [c.camperId ? String(c.camperId).padStart(4, '0') : '', last, first, c.division || '', c.grade || '', c.bunk || '', a.street || '', a.city || '', a.state || 'NY', a.zip || ''].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n';
-            });
-        } else {
-            csv += '"0001","Smith","Sarah","Juniors","1st Grade","1A","123 Main Street","Anytown","NY","11559"\n';
-            csv += '"0002","Goldberg","Moshe","Seniors","4th Grade","4B","456 Oak Avenue","Woodmere","NY","11598"\n';
-        }
+        csv += '"0001","Smith","Sarah","Juniors","1st Grade","1A","123 Main Street","Anytown","NY","11559"\n';
+        csv += '"0002","Goldberg","Moshe","Seniors","4th Grade","4B","456 Oak Avenue","Woodmere","NY","11598"\n';
         const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
-    function importAddressCsv() { const inp = document.getElementById('csvFileInput'); inp.onchange = function () { if (!inp.files[0]) return; const r = new FileReader(); r.onload = e => { parseCsv(e.target.result); inp.value = ''; }; r.readAsText(inp.files[0]); }; inp.click(); }
+    function importAddressCsv() {
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = '.csv,.tsv,.txt,.xlsx,.xls';
+        inp.onchange = function () {
+            if (!inp.files[0]) return;
+            const file = inp.files[0];
+            const ext = file.name.split('.').pop().toLowerCase();
+            if (ext === 'xlsx' || ext === 'xls') {
+                // Excel file — read as array buffer and parse
+                const r = new FileReader();
+                r.onload = e => { parseExcel(e.target.result); };
+                r.readAsArrayBuffer(file);
+            } else {
+                // CSV/TSV/TXT — read as text
+                const r = new FileReader();
+                r.onload = e => { parseCsv(e.target.result); };
+                r.readAsText(file);
+            }
+        };
+        inp.click();
+    }
+
+    // Parse Excel (.xlsx) using SheetJS loaded on demand
+    async function parseExcel(buffer) {
+        // Load SheetJS if not already loaded
+        if (!window.XLSX) {
+            toast('Loading Excel reader...');
+            await new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+                script.onload = resolve;
+                script.onerror = () => { toast('Failed to load Excel reader', 'error'); reject(); };
+                document.head.appendChild(script);
+            });
+        }
+        try {
+            const wb = XLSX.read(buffer, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const csvText = XLSX.utils.sheet_to_csv(ws);
+            parseCsv(csvText);
+        } catch (e) {
+            console.error('[Go] Excel parse error:', e);
+            toast('Could not read Excel file: ' + e.message, 'error');
+        }
+    }
     function parseCsv(text) {
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         const lines = text.split(/\r?\n/).filter(l => l.trim()); if (lines.length < 2) { toast('Empty CSV', 'error'); return; }
@@ -4218,7 +4254,7 @@
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             btn.classList.add('active');
             const t = btn.dataset.tab; document.getElementById('tab-' + t)?.classList.add('active');
-            if (t === 'fleet') renderFleet(); else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'preflight') runPreflight(); else if (t === 'routes') {
+            if (t === 'fleet') { renderFleet(); renderShifts(); } else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'preflight') runPreflight(); else if (t === 'routes') {
                 runPreflight(); renderDailyOverrides(); renderCarpool();
                 if (_pendingMapInit) { setTimeout(function() { initMap(_pendingMapInit); _pendingMapInit = null; }, 150); }
                 else { setTimeout(function() { if (_map) _map.invalidateSize(); }, 150); }
