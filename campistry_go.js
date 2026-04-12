@@ -1,6 +1,12 @@
 // =============================================================================
-// campistry_go.js — Campistry Go v3.1
-// VROOM-powered bus routing with ZIP-based region clustering
+// campistry_go.js — Campistry Go v4.0
+// VROOM-powered bus routing with zone-based clustering
+//
+// v4.0 Changes:
+//   ZONE: sliceRegionsIntoZones() — driving-time k-medoids zone builder
+//         Replaces old merge logic, geoBisect, FIX 16, and FIX 18
+//         Decides bus territories up-front using real driving time
+//   ZONE: Dry-run preview — shows proposed zones on map before routing
 //
 // v3.1 Changes:
 //   FIX 1: Distance matrix: Mapbox Matrix API (primary) → OSRM (fallback)
@@ -44,7 +50,7 @@
 // =============================================================================
 (function () {
     'use strict';
-    console.log('[Go] Campistry Go v3.1 loading...');
+    console.log('[Go] Campistry Go v4.0 loading...');
 
     // =========================================================================
     // PLATFORM API KEYS — loaded from config.js via window globals
@@ -823,7 +829,7 @@
     async function systemCheck() {
         let pass = 0, fail = 0, warn = 0;
         function P(msg) { pass++; console.log('✅ ' + msg); } function F(msg) { fail++; console.log('❌ ' + msg); } function Wr(msg) { warn++; console.log('⚠️  ' + msg); }
-        console.log('\n╔══════════════════════════════════════╗\n║   CAMPISTRY GO v3.1 — SYSTEM CHECK   ║\n╚══════════════════════════════════════╝\n');
+        console.log('\n╔══════════════════════════════════════╗\n║   CAMPISTRY GO v4.0 — SYSTEM CHECK   ║\n╚══════════════════════════════════════╝\n');
         const roster = getRoster(); const cc = Object.keys(roster).length;
         cc > 0 ? P('Roster: ' + cc + ' campers') : F('Roster: EMPTY');
         const ac = Object.keys(D.addresses).length, gc = Object.values(D.addresses).filter(a => a.geocoded).length;
@@ -955,6 +961,693 @@
     }
 
     // =========================================================================
+    // ZONE RECONFIGURATION — sliceRegionsIntoZones()
+    //
+    // Runs after detectRegions(), before stop creation.
+    // Takes raw ZIP regions and produces bus-ready zones using driving-time
+    // k-medoids clustering. Replaces the old merge logic, geoBisect,
+    // FIX 16 pre-VROOM rebalance, and FIX 18 boundary-swap pass.
+    // =========================================================================
+    let _slicedZones = null; // result of sliceRegionsIntoZones()
+    let _zonePreviewLayers = []; // Leaflet layers for zone preview
+
+    async function sliceRegionsIntoZones(regions, buses, reserveSeats) {
+        const roster = getRoster();
+        const allCampers = [];
+
+        // Gather all geocoded, bus-riding campers
+        Object.keys(roster).forEach(name => {
+            const a = D.addresses[name];
+            if (!a?.geocoded || !a.lat || !a.lng) return;
+            if (a.transport === 'pickup') return;
+            allCampers.push({
+                name, lat: a.lat, lng: a.lng,
+                address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '),
+                zip: (a.zip || '').trim(),
+                division: roster[name].division || '',
+                bunk: roster[name].bunk || ''
+            });
+        });
+
+        if (!allCampers.length) {
+            console.error('[Go] Zone: no geocoded campers');
+            return null;
+        }
+
+        // ── A. Compute capacity budget ──
+        const effectiveCaps = buses.map(b => {
+            const mon = D.monitors.find(m => m.assignedBus === b.id);
+            const couns = D.counselors.filter(c => c.assignedBus === b.id);
+            return Math.max(0, (b.capacity || 0) - 1 - (mon ? 1 : 0) - couns.length - (reserveSeats || 0));
+        });
+        const totalCapacity = effectiveCaps.reduce((s, c) => s + c, 0);
+        let targetFillPct = 0.90;
+        if (allCampers.length > totalCapacity * targetFillPct) {
+            // Slide toward 100% until all kids fit
+            targetFillPct = Math.min(1.0, allCampers.length / totalCapacity);
+        }
+        if (allCampers.length > totalCapacity) {
+            const shortfall = allCampers.length - totalCapacity;
+            console.error('[Go] Zone: ABORT — ' + allCampers.length + ' campers but only ' + totalCapacity + ' total capacity (' + shortfall + ' short)');
+            toast('Cannot generate zones: ' + shortfall + ' more campers than bus seats', 'error');
+            return null;
+        }
+
+        const avgEffCap = totalCapacity / buses.length;
+        const targetFill = Math.floor(avgEffCap * targetFillPct);
+        console.log('[Go] Zone: target fill = ' + targetFill + ' per bus (' + Math.round(targetFillPct * 100) + '% of ' + Math.round(avgEffCap) + ' avg capacity)');
+
+        // ── Detect siblings for indivisible atoms ──
+        const sibMap = detectSiblings(allCampers);
+
+        // Build atom groups: siblings + same-house kids move together
+        function buildAtoms(campers) {
+            const atoms = [];
+            const assigned = new Set();
+            // Group by sibling ID first
+            const sibGroups = {};
+            campers.forEach(c => {
+                const sid = sibMap[c.name];
+                if (sid) {
+                    if (!sibGroups[sid]) sibGroups[sid] = [];
+                    sibGroups[sid].push(c);
+                }
+            });
+            Object.values(sibGroups).forEach(group => {
+                group.forEach(c => assigned.add(c.name));
+                atoms.push({ campers: group, size: group.length,
+                    lat: group.reduce((s, c) => s + c.lat, 0) / group.length,
+                    lng: group.reduce((s, c) => s + c.lng, 0) / group.length
+                });
+            });
+            // Same-house grouping (same lat/lng to 5 decimals)
+            const houseGroups = {};
+            campers.forEach(c => {
+                if (assigned.has(c.name)) return;
+                const key = Math.round(c.lat * 100000) + ',' + Math.round(c.lng * 100000);
+                if (!houseGroups[key]) houseGroups[key] = [];
+                houseGroups[key].push(c);
+            });
+            Object.values(houseGroups).forEach(group => {
+                group.forEach(c => assigned.add(c.name));
+                atoms.push({ campers: group, size: group.length,
+                    lat: group.reduce((s, c) => s + c.lat, 0) / group.length,
+                    lng: group.reduce((s, c) => s + c.lng, 0) / group.length
+                });
+            });
+            return atoms;
+        }
+
+        // ── B. Categorize each ZIP region ──
+        const wholeZips = [];  // fit in one bus
+        const bigZips = [];    // need 2+ buses → slice
+        const smallZips = [];  // < 60% of target → absorb
+
+        regions.forEach(reg => {
+            const count = reg.camperNames.length;
+            if (count === 0) return;
+            if (count <= targetFill) {
+                if (count < targetFill * 0.60) {
+                    smallZips.push(reg);
+                    console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → small ZIP, will absorb');
+                } else {
+                    wholeZips.push(reg);
+                    console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → whole ZIP, one zone');
+                }
+            } else {
+                bigZips.push(reg);
+                const k = Math.ceil(count / targetFill);
+                console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → big ZIP, slicing into ' + k);
+            }
+        });
+
+        // ── C. Slice big ZIPs using driving-time clustering ──
+        const zones = []; // final output: [{name, camperNames, centroidLat, centroidLng, busIdx, regionIds}]
+
+        // Helper: stitch multiple matrix calls for >25 coords into one NxN matrix
+        async function fetchLargeMatrix(coords) {
+            const n = coords.length;
+            if (n <= 25) {
+                return await fetchDistanceMatrix(coords);
+            }
+            // Chunk into groups under 25, run multiple calls, stitch
+            console.log('[Go] Zone: stitching matrix for ' + n + ' points (>' + 25 + ')');
+            const matrix = Array.from({ length: n }, () => new Array(n).fill(null));
+            const CHUNK = 24; // leave room for overhead
+            for (let i = 0; i < n; i += CHUNK) {
+                for (let j = 0; j < n; j += CHUNK) {
+                    const rowEnd = Math.min(i + CHUNK, n);
+                    const colEnd = Math.min(j + CHUNK, n);
+                    // Build unique index set for this sub-matrix
+                    const indices = new Set();
+                    for (let r = i; r < rowEnd; r++) indices.add(r);
+                    for (let c = j; c < colEnd; c++) indices.add(c);
+                    const idxArr = [...indices];
+                    if (idxArr.length > 25) {
+                        // Too many unique indices — fallback to haversine for this chunk
+                        for (let r = i; r < rowEnd; r++) {
+                            for (let c = j; c < colEnd; c++) {
+                                if (matrix[r][c] === null) {
+                                    matrix[r][c] = haversineMi(coords[r].lat, coords[r].lng, coords[c].lat, coords[c].lng) * 3600 / 25;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    const subCoords = idxArr.map(idx => coords[idx]);
+                    const subMatrix = await fetchDistanceMatrix(subCoords);
+                    if (!subMatrix) {
+                        // Fallback for this chunk
+                        for (let r = i; r < rowEnd; r++) {
+                            for (let c = j; c < colEnd; c++) {
+                                if (matrix[r][c] === null) {
+                                    matrix[r][c] = haversineMi(coords[r].lat, coords[r].lng, coords[c].lat, coords[c].lng) * 3600 / 25;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    // Map sub-matrix back to full matrix
+                    const idxMap = {};
+                    idxArr.forEach((globalIdx, localIdx) => { idxMap[globalIdx] = localIdx; });
+                    for (let r = i; r < rowEnd; r++) {
+                        for (let c = j; c < colEnd; c++) {
+                            const lr = idxMap[r], lc = idxMap[c];
+                            if (lr !== undefined && lc !== undefined && subMatrix[lr]?.[lc] != null) {
+                                matrix[r][c] = subMatrix[lr][lc];
+                            }
+                        }
+                    }
+                }
+                // Stagger to avoid rate limiting
+                if (i + CHUNK < n) await new Promise(r => setTimeout(r, 200));
+            }
+            // Fill any remaining nulls with haversine fallback
+            for (let r = 0; r < n; r++) {
+                for (let c = 0; c < n; c++) {
+                    if (matrix[r][c] === null) {
+                        matrix[r][c] = haversineMi(coords[r].lat, coords[r].lng, coords[c].lat, coords[c].lng) * 3600 / 25;
+                    }
+                }
+            }
+            return matrix;
+        }
+
+        // k-medoids with driving-time matrix
+        function kMedoids(atoms, durMatrix, k, useDriveTime) {
+            const n = atoms.length;
+            if (n <= k) return atoms.map((_, i) => [i]);
+
+            // dist helper
+            function dist(i, j) {
+                if (useDriveTime && durMatrix?.[i]?.[j] != null && durMatrix[i][j] >= 0) return durMatrix[i][j];
+                return haversineMi(atoms[i].lat, atoms[i].lng, atoms[j].lat, atoms[j].lng) * 3600 / 25;
+            }
+
+            // Seed selection: first two = max pairwise drive time
+            const seeds = [];
+            let maxD = 0, s1 = 0, s2 = 1;
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    const d = dist(i, j);
+                    if (d > maxD) { maxD = d; s1 = i; s2 = j; }
+                }
+            }
+            seeds.push(s1, s2);
+            // Greedy add remaining seeds
+            while (seeds.length < k) {
+                let bestIdx = -1, bestMinDist = -1;
+                for (let i = 0; i < n; i++) {
+                    if (seeds.includes(i)) continue;
+                    let minDist = Infinity;
+                    seeds.forEach(s => { const d = dist(i, s); if (d < minDist) minDist = d; });
+                    if (minDist > bestMinDist) { bestMinDist = minDist; bestIdx = i; }
+                }
+                if (bestIdx >= 0) seeds.push(bestIdx);
+                else break;
+            }
+
+            // Assign atoms to nearest medoid
+            let assignments = new Array(n).fill(0);
+            function assignAll() {
+                atoms.forEach((_, i) => {
+                    let bestM = 0, bestD = Infinity;
+                    seeds.forEach((s, mi) => {
+                        const d = dist(i, s);
+                        if (d < bestD) { bestD = d; bestM = mi; }
+                    });
+                    assignments[i] = bestM;
+                });
+            }
+            assignAll();
+
+            // Iterate: recompute medoids, reassign
+            for (let iter = 0; iter < 20; iter++) {
+                let changed = false;
+                // Recompute each medoid
+                for (let mi = 0; mi < k; mi++) {
+                    const members = [];
+                    assignments.forEach((a, i) => { if (a === mi) members.push(i); });
+                    if (!members.length) continue;
+                    // Find member that minimizes total drive time to all others
+                    let bestMed = seeds[mi], bestTotal = Infinity;
+                    members.forEach(cand => {
+                        let total = 0;
+                        members.forEach(m => { if (m !== cand) total += dist(cand, m); });
+                        if (total < bestTotal) { bestTotal = total; bestMed = cand; }
+                    });
+                    if (bestMed !== seeds[mi]) { seeds[mi] = bestMed; changed = true; }
+                }
+                if (!changed) break;
+                // Reassign
+                const oldAssign = [...assignments];
+                assignAll();
+                if (oldAssign.every((a, i) => a === assignments[i])) break;
+            }
+
+            // Build clusters
+            const clusters = Array.from({ length: k }, () => []);
+            assignments.forEach((a, i) => clusters[a].push(i));
+            return clusters;
+        }
+
+        // Process big ZIPs
+        for (const reg of bigZips) {
+            const regCampers = allCampers.filter(c => reg.camperNames.includes(c.name));
+            const atoms = buildAtoms(regCampers);
+            const k = Math.ceil(regCampers.length / targetFill);
+
+            // Build coords for matrix call
+            const coords = atoms.map(a => ({ lat: a.lat, lng: a.lng }));
+
+            let durMatrix = null;
+            let useDriveTime = true;
+            showProgress('Building zone matrix for ' + reg.name + '...', 12);
+
+            try {
+                durMatrix = await fetchLargeMatrix(coords);
+            } catch (e) {
+                console.warn('[Go] Zone: matrix failed for ' + reg.name + ':', e.message);
+            }
+
+            if (!durMatrix) {
+                useDriveTime = false;
+                toast('Zone optimization for ' + reg.name + ': road data unavailable, using approximate distances', 'error');
+                console.warn('[Go] Zone: falling back to haversine for ' + reg.name);
+            }
+
+            const clusters = kMedoids(atoms, durMatrix, k, useDriveTime);
+
+            clusters.forEach((cluster, ci) => {
+                const pocketCampers = [];
+                cluster.forEach(ai => atoms[ai].campers.forEach(c => pocketCampers.push(c)));
+                if (!pocketCampers.length) return;
+
+                const cLat = pocketCampers.reduce((s, c) => s + c.lat, 0) / pocketCampers.length;
+                const cLng = pocketCampers.reduce((s, c) => s + c.lng, 0) / pocketCampers.length;
+
+                // ── F. Naming: most common street or geographic descriptor ──
+                const streetCounts = {};
+                pocketCampers.forEach(c => {
+                    const p = parseAddress(c.address);
+                    if (p.street) {
+                        const ns = normalizeStreet(p.street);
+                        streetCounts[ns] = (streetCounts[ns] || { count: 0, raw: p.street });
+                        streetCounts[ns].count++;
+                    }
+                });
+                const sortedStreets = Object.values(streetCounts).sort((a, b) => b.count - a.count);
+                const regCity = reg.name.split(' (')[0];
+                let zoneName;
+                if (sortedStreets.length && sortedStreets[0].count >= pocketCampers.length * 0.25) {
+                    zoneName = regCity + ' (' + sortedStreets[0].raw + ' area)';
+                } else {
+                    // Geographic descriptor based on medoid position relative to ZIP centroid
+                    const dLat = cLat - reg.centroidLat;
+                    const dLng = cLng - reg.centroidLng;
+                    let dir = '';
+                    if (Math.abs(dLat) > Math.abs(dLng)) dir = dLat > 0 ? 'North' : 'South';
+                    else dir = dLng > 0 ? 'East' : 'West';
+                    zoneName = dir + ' ' + regCity;
+                }
+
+                zones.push({
+                    id: 'zone_' + reg.zip + '_' + ci,
+                    name: zoneName,
+                    camperNames: pocketCampers.map(c => c.name),
+                    centroidLat: cLat,
+                    centroidLng: cLng,
+                    regionIds: [reg.id],
+                    sourceType: 'sliced',
+                    color: REGION_COLORS[zones.length % REGION_COLORS.length]
+                });
+                console.log('[Go] Zone: sliced ' + reg.name + ' pocket ' + ci + ' → "' + zoneName + '" (' + pocketCampers.length + ' kids)');
+            });
+        }
+
+        // Whole ZIPs become zones unchanged
+        wholeZips.forEach(reg => {
+            zones.push({
+                id: 'zone_' + reg.zip,
+                name: reg.name,
+                camperNames: [...reg.camperNames],
+                centroidLat: reg.centroidLat,
+                centroidLng: reg.centroidLng,
+                regionIds: [reg.id],
+                sourceType: 'whole',
+                color: REGION_COLORS[zones.length % REGION_COLORS.length]
+            });
+        });
+
+        // ── D. Border rebalance for over-capacity pockets ──
+        for (let pass = 0; pass < 30; pass++) {
+            let anyOver = false;
+            for (const zone of zones) {
+                if (zone.camperNames.length <= targetFill) continue;
+                anyOver = true;
+
+                // Rank campers by distance to zone centroid, farthest first
+                const campersWithDist = zone.camperNames.map(name => {
+                    const c = allCampers.find(x => x.name === name);
+                    if (!c) return { name, dist: 0 };
+                    return { name, dist: haversineMi(c.lat, c.lng, zone.centroidLat, zone.centroidLng) };
+                }).sort((a, b) => b.dist - a.dist);
+
+                // Median distance — interior threshold
+                const dists = campersWithDist.map(c => c.dist).sort((a, b) => a - b);
+                const medianDist = dists[Math.floor(dists.length / 2)];
+
+                // Try to move border kids (above median distance)
+                let moved = false;
+                for (const candidate of campersWithDist) {
+                    if (candidate.dist <= medianDist) break; // interior kid
+                    if (zone.camperNames.length <= targetFill) break;
+
+                    // Check if this is part of a sibling atom
+                    const atomNames = [candidate.name];
+                    const sid = sibMap[candidate.name];
+                    if (sid) {
+                        zone.camperNames.forEach(n => {
+                            if (n !== candidate.name && sibMap[n] === sid) atomNames.push(n);
+                        });
+                    }
+                    // Also check same-house
+                    const candCamper = allCampers.find(x => x.name === candidate.name);
+                    if (candCamper) {
+                        const houseKey = Math.round(candCamper.lat * 100000) + ',' + Math.round(candCamper.lng * 100000);
+                        zone.camperNames.forEach(n => {
+                            if (atomNames.includes(n)) return;
+                            const nc = allCampers.find(x => x.name === n);
+                            if (nc && Math.round(nc.lat * 100000) + ',' + Math.round(nc.lng * 100000) === houseKey) atomNames.push(n);
+                        });
+                    }
+
+                    // Find nearest under-capacity zone
+                    let bestZone = null, bestDist = Infinity;
+                    for (const tz of zones) {
+                        if (tz === zone) continue;
+                        if (tz.camperNames.length + atomNames.length > targetFill) continue;
+                        const d = candCamper ? haversineMi(candCamper.lat, candCamper.lng, tz.centroidLat, tz.centroidLng) : Infinity;
+                        if (d < bestDist) { bestDist = d; bestZone = tz; }
+                    }
+
+                    if (bestZone) {
+                        atomNames.forEach(n => {
+                            zone.camperNames = zone.camperNames.filter(x => x !== n);
+                            bestZone.camperNames.push(n);
+                        });
+                        const familyLabel = atomNames.length > 1 ? atomNames[0].split(/\s+/).pop() + ' family + ' + (atomNames.length - 1) : atomNames[0];
+                        console.log('[Go] Zone: Moved ' + atomNames.length + ' border kid(s) (' + familyLabel + ') from ' + zone.name + ' to ' + bestZone.name + ' — ' + zone.name + ' was ' + (zone.camperNames.length + atomNames.length) + '/' + targetFill + ', ' + bestZone.name + ' had room at ' + (bestZone.camperNames.length - atomNames.length) + '/' + targetFill + ', drive time ' + bestDist.toFixed(2) + 'mi');
+                        moved = true;
+                        break;
+                    }
+                }
+                if (!moved) break;
+            }
+            if (!anyOver) break;
+        }
+
+        // ── E. Absorb small ZIPs ──
+        for (const smallReg of smallZips) {
+            const regCampers = allCampers.filter(c => smallReg.camperNames.includes(c.name));
+            if (!regCampers.length) continue;
+
+            const centLat = regCampers.reduce((s, c) => s + c.lat, 0) / regCampers.length;
+            const centLng = regCampers.reduce((s, c) => s + c.lng, 0) / regCampers.length;
+
+            // Try at 90%, 95%, 100% fill
+            let absorbed = false;
+            for (const tryPct of [targetFillPct, 0.95, 1.0]) {
+                const tryFill = Math.floor(avgEffCap * tryPct);
+                // Find closest pocket with room
+                let bestZone = null, bestDist = Infinity;
+                for (const z of zones) {
+                    if (z.camperNames.length + smallReg.camperNames.length > tryFill) continue;
+                    const d = haversineMi(centLat, centLng, z.centroidLat, z.centroidLng);
+                    if (d < bestDist) { bestDist = d; bestZone = z; }
+                }
+                if (bestZone) {
+                    const oldName = bestZone.name;
+                    bestZone.camperNames.push(...smallReg.camperNames);
+                    bestZone.regionIds.push(smallReg.id);
+                    // Recalculate centroid
+                    const allInZone = allCampers.filter(c => bestZone.camperNames.includes(c.name));
+                    if (allInZone.length) {
+                        bestZone.centroidLat = allInZone.reduce((s, c) => s + c.lat, 0) / allInZone.length;
+                        bestZone.centroidLng = allInZone.reduce((s, c) => s + c.lng, 0) / allInZone.length;
+                    }
+                    // Rename: two-component max
+                    const parts = oldName.split(' + ');
+                    const smallCity = smallReg.name.split(' (')[0];
+                    if (parts.length >= 2) {
+                        bestZone.name = parts[0] + ' + ' + parts[1].split(' +')[0] + ' + others';
+                    } else {
+                        bestZone.name = oldName.split(' (')[0] + ' + ' + smallCity;
+                    }
+                    console.log('[Go] Zone: Absorbed ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids) into ' + oldName + ' → "' + bestZone.name + '" (' + bestZone.camperNames.length + ' kids, ' + bestDist.toFixed(2) + 'mi away)');
+                    // List all parts
+                    console.log('[Go] Zone:   Parts: ' + bestZone.regionIds.map(id => regions.find(r => r.id === id)?.name || id).join(', '));
+                    absorbed = true;
+                    break;
+                }
+            }
+            if (!absorbed) {
+                console.error('[Go] Zone: ABORT — could not absorb ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids), no zone has room');
+                toast('Cannot absorb ' + smallReg.name + ': no zone has room', 'error');
+                return null;
+            }
+        }
+
+        // ── H. Invariant check ──
+        const allZonedNames = new Set();
+        let invariantFail = false;
+        zones.forEach(z => {
+            z.camperNames.forEach(n => {
+                if (allZonedNames.has(n)) {
+                    console.error('[Go] Zone INVARIANT FAIL: ' + n + ' appears in multiple zones!');
+                    invariantFail = true;
+                }
+                allZonedNames.add(n);
+            });
+        });
+        // Check every input camper is in exactly one zone
+        allCampers.forEach(c => {
+            if (!allZonedNames.has(c.name)) {
+                console.error('[Go] Zone INVARIANT FAIL: ' + c.name + ' missing from all zones!');
+                invariantFail = true;
+            }
+        });
+        // Check capacity
+        zones.forEach(z => {
+            // Find which bus cap to check against — use max single bus effective cap
+            const maxBusCap = Math.max(...effectiveCaps);
+            if (z.camperNames.length > maxBusCap) {
+                console.error('[Go] Zone INVARIANT FAIL: ' + z.name + ' has ' + z.camperNames.length + ' kids but max bus cap is ' + maxBusCap);
+                invariantFail = true;
+            }
+        });
+
+        if (invariantFail) {
+            console.error('[Go] Zone: invariant check FAILED — falling back to raw ZIP regions');
+            toast('Zone optimization failed invariant check — using raw regions', 'error');
+            return null;
+        }
+
+        console.log('[Go] Zone: ' + zones.length + ' zones created from ' + regions.length + ' regions, ' + allCampers.length + ' campers');
+        zones.forEach(z => console.log('[Go] Zone:   ' + z.name + ': ' + z.camperNames.length + ' kids'));
+
+        _slicedZones = zones;
+        return zones;
+    }
+
+    // ── Dry-run preview: show zones on map before routing ──
+    function clearZonePreview() {
+        if (_map) {
+            _zonePreviewLayers.forEach(l => _map.removeLayer(l));
+        }
+        _zonePreviewLayers = [];
+        const banner = document.getElementById('zonePreviewBanner');
+        if (banner) banner.remove();
+    }
+
+    function renderZonePreview(zones) {
+        if (!_map || !zones?.length) return;
+        clearZonePreview();
+
+        const allLatLngs = [];
+        zones.forEach((zone, zi) => {
+            const roster = getRoster();
+            const camperCoords = zone.camperNames.map(n => {
+                const a = D.addresses[n];
+                return a?.lat ? [a.lat, a.lng] : null;
+            }).filter(Boolean);
+
+            if (!camperCoords.length) return;
+            allLatLngs.push(...camperCoords);
+
+            // Draw convex hull polygon
+            const hull = convexHull(camperCoords);
+            if (hull.length >= 3) {
+                const polygon = L.polygon(hull, {
+                    color: zone.color || REGION_COLORS[zi % REGION_COLORS.length],
+                    weight: 2,
+                    fillOpacity: 0.15,
+                    dashArray: '5, 5'
+                }).addTo(_map);
+                polygon.bindPopup('<strong>' + esc(zone.name) + '</strong><br>' + zone.camperNames.length + ' campers');
+                _zonePreviewLayers.push(polygon);
+            }
+
+            // Label at centroid
+            const labelIcon = L.divIcon({
+                html: '<div style="background:' + esc(zone.color || REGION_COLORS[zi % REGION_COLORS.length]) + ';color:#fff;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3);font-family:DM Sans,sans-serif;">' + esc(zone.name) + ' (' + zone.camperNames.length + ')</div>',
+                className: '',
+                iconAnchor: [60, 12]
+            });
+            const label = L.marker([zone.centroidLat, zone.centroidLng], { icon: labelIcon, interactive: false }).addTo(_map);
+            _zonePreviewLayers.push(label);
+
+            // Camper dots
+            camperCoords.forEach(([lat, lng]) => {
+                const dotIcon = L.divIcon({
+                    html: '<div style="width:6px;height:6px;background:' + esc(zone.color || REGION_COLORS[zi % REGION_COLORS.length]) + ';border:1px solid #fff;border-radius:50%;"></div>',
+                    className: '',
+                    iconSize: [6, 6],
+                    iconAnchor: [3, 3]
+                });
+                const dot = L.marker([lat, lng], { icon: dotIcon, interactive: false }).addTo(_map);
+                _zonePreviewLayers.push(dot);
+            });
+        });
+
+        if (allLatLngs.length) {
+            _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
+        }
+    }
+
+    // Simple convex hull (Graham scan)
+    function convexHull(points) {
+        if (points.length < 3) return points;
+        const pts = points.map(p => ({ x: p[1], y: p[0] })); // lng, lat
+        // Find bottom-most (then leftmost)
+        let start = 0;
+        for (let i = 1; i < pts.length; i++) {
+            if (pts[i].y < pts[start].y || (pts[i].y === pts[start].y && pts[i].x < pts[start].x)) start = i;
+        }
+        [pts[0], pts[start]] = [pts[start], pts[0]];
+        const p0 = pts[0];
+        pts.sort((a, b) => {
+            if (a === p0) return -1;
+            if (b === p0) return 1;
+            const cross = (a.x - p0.x) * (b.y - p0.y) - (a.y - p0.y) * (b.x - p0.x);
+            if (Math.abs(cross) < 1e-12) {
+                const dA = (a.x - p0.x) ** 2 + (a.y - p0.y) ** 2;
+                const dB = (b.x - p0.x) ** 2 + (b.y - p0.y) ** 2;
+                return dA - dB;
+            }
+            return -cross;
+        });
+        const stack = [pts[0], pts[1]];
+        for (let i = 2; i < pts.length; i++) {
+            while (stack.length > 1) {
+                const top = stack[stack.length - 1], sec = stack[stack.length - 2];
+                const cross = (top.x - sec.x) * (pts[i].y - sec.y) - (top.y - sec.y) * (pts[i].x - sec.x);
+                if (cross <= 0) stack.pop();
+                else break;
+            }
+            stack.push(pts[i]);
+        }
+        return stack.map(p => [p.y, p.x]); // back to [lat, lng]
+    }
+
+    // Show zone preview and wait for user confirmation
+    function showZonePreviewModal(zones) {
+        return new Promise((resolve) => {
+            // Ensure map is visible
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector('.tab-btn[data-tab="routes"]')?.classList.add('active');
+            document.getElementById('tab-routes')?.classList.add('active');
+
+            // Initialize map if needed
+            if (!_map) {
+                const container = document.getElementById('routeMap');
+                if (container) {
+                    _map = L.map(container, { scrollWheelZoom: true, zoomControl: true });
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 19 }).addTo(_map);
+                }
+            }
+            if (_map) {
+                setTimeout(() => _map.invalidateSize(), 100);
+            }
+
+            // Add camp marker
+            if (_map && _campCoordsCache) {
+                const campIcon = L.divIcon({ html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>', className: '', iconSize: [32, 32], iconAnchor: [16, 16] });
+                const campMarker = L.marker([_campCoordsCache.lat, _campCoordsCache.lng], { icon: campIcon, zIndexOffset: 1000 }).addTo(_map);
+                campMarker.bindPopup('<strong>' + esc(D.setup.campName || 'Camp') + '</strong>');
+                _zonePreviewLayers.push(campMarker);
+            }
+
+            // Render zones on map
+            setTimeout(() => renderZonePreview(zones), 200);
+
+            // Build zone summary
+            const zoneList = zones.map((z, i) => {
+                const color = z.color || REGION_COLORS[i % REGION_COLORS.length];
+                return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;">'
+                    + '<span style="width:12px;height:12px;border-radius:50%;background:' + esc(color) + ';flex-shrink:0;"></span>'
+                    + '<strong>' + esc(z.name) + '</strong>'
+                    + '<span style="margin-left:auto;font-weight:600;">' + z.camperNames.length + ' kids</span></div>';
+            }).join('');
+
+            // Create banner
+            const banner = document.createElement('div');
+            banner.id = 'zonePreviewBanner';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:10000;background:var(--bg-primary,#fff);border-bottom:3px solid var(--blue-500,#3b82f6);box-shadow:0 4px 20px rgba(0,0,0,.15);padding:1rem 1.5rem;display:flex;align-items:flex-start;gap:1.5rem;';
+            banner.innerHTML = '<div style="flex:1;max-height:60vh;overflow-y:auto;">'
+                + '<h3 style="margin:0 0 .5rem;font-size:1.1rem;">Zone Preview — ' + zones.length + ' zones, ' + zones.reduce((s, z) => s + z.camperNames.length, 0) + ' campers</h3>'
+                + '<p style="margin:0 0 .75rem;font-size:.8125rem;color:var(--text-muted);">Review the proposed bus zones on the map. Each zone will be served by one bus.</p>'
+                + '<div style="max-height:300px;overflow-y:auto;">' + zoneList + '</div>'
+                + '</div>'
+                + '<div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0;">'
+                + '<button id="zonePreviewConfirm" style="padding:10px 24px;border-radius:8px;border:none;background:var(--blue-600,#2563eb);color:#fff;cursor:pointer;font-size:.9rem;font-weight:700;">Looks good — generate routes</button>'
+                + '<button id="zonePreviewCancel" style="padding:10px 24px;border-radius:8px;border:1px solid var(--border-primary,#d1d5db);background:var(--bg-primary,#fff);cursor:pointer;font-size:.9rem;">Cancel</button>'
+                + '</div>';
+            document.body.appendChild(banner);
+
+            document.getElementById('zonePreviewConfirm').addEventListener('click', () => {
+                clearZonePreview();
+                resolve(true);
+            });
+            document.getElementById('zonePreviewCancel').addEventListener('click', () => {
+                clearZonePreview();
+                resolve(false);
+            });
+        });
+    }
+
+    // =========================================================================
     // ROUTING ENGINE v10.1 — VROOM-powered
     //
     // v10.1 changes: OSRM retry, aggressive rebalancing, Manhattan walk distance
@@ -991,8 +1684,28 @@
         const campLat = campCoords?.lat || _detectedRegions[0].centroidLat;
         const campLng = campCoords?.lng || _detectedRegions[0].centroidLng;
 
-        showProgress('Assigning buses to regions...', 10);
-        const assignments = assignBusesToRegions(vehicles, _detectedRegions, D.shifts);
+        // ── Zone Reconfiguration Step ──
+        showProgress('Building bus zones...', 10);
+        const zones = await sliceRegionsIntoZones(_detectedRegions, D.buses, reserveSeats);
+        const useZones = zones && zones.length > 0;
+
+        if (useZones) {
+            // ── Dry-run preview: show zones and wait for confirmation ──
+            showProgress('Zone preview...', 15);
+            const confirmed = await showZonePreviewModal(zones);
+            if (!confirmed) {
+                hideProgress();
+                toast('Route generation cancelled');
+                return;
+            }
+        }
+
+        // Fall back to old region-based assignments if zones failed
+        if (!useZones) {
+            console.warn('[Go] Zone optimization failed — using raw ZIP regions');
+        }
+
+        const assignments = useZones ? null : assignBusesToRegions(vehicles, _detectedRegions, D.shifts);
 
         const allShiftResults = [];
         const shifts = D.shifts.length ? D.shifts : [{ id: '__all__', label: 'All Campers', divisions: [], departureTime: D.activeMode === 'arrival' ? '07:00' : '16:00', _isVirtual: true }];
@@ -1017,7 +1730,7 @@
 
             let routes = [];
             if (allCampers.length && shiftVehicles.length) {
-                routes = await solveWithVROOM(allCampers, shiftVehicles, campLat, campLng, mode, key, shift, si, shifts.length);
+                routes = await solveWithVROOM(allCampers, shiftVehicles, campLat, campLng, mode, key, shift, si, shifts.length, useZones ? zones : null);
             }
 
             // Add monitor stops (counselors handled post-generation)
@@ -1112,7 +1825,7 @@
     // =========================================================================
     // VROOM SOLVER — the core engine
     // =========================================================================
-    async function solveWithVROOM(campers, vehicles, campLat, campLng, mode, apiKey, shift, shiftIdx, totalShifts) {
+    async function solveWithVROOM(campers, vehicles, campLat, campLng, mode, apiKey, shift, shiftIdx, totalShifts, zones) {
         const isArrival = D.activeMode === 'arrival';
         const hasShifts = totalShifts > 1;
         const isLastShift = shiftIdx === totalShifts - 1;
@@ -1255,467 +1968,77 @@
 
 
         // ══════════════════════════════════════════════════════════════
-        // VROOM SOLVER WITH SKILLS-BASED REGION LOCKING
+        // ZONE-BASED or LEGACY REGION-BASED BUS ASSIGNMENT
         //
-        // Uses VROOM's native "skills" feature to keep buses in their
-        // geographic zones while still getting optimal stop ordering.
-        //
-        // Pipeline:
-        //   1. Map each stop to its ZIP region
-        //   2. Merge smallest regions until every group has enough
-        //      bus seats for its kids
-        //   3. Allocate buses to groups (capacity-aware)
-        //   4. Tag jobs with skills=[groupId], vehicles with skills=[groupId]
-        //   5. ONE VROOM call — handles assignment AND ordering
-        //   6. Orient + same-street merge + capacity enforcement
+        // Zone path (v4.0): zones are pre-decided, one bus per zone,
+        //   VROOM only orders stops within each zone.
+        // Legacy path: old region merge + geoBisect (fallback only).
         // ══════════════════════════════════════════════════════════════
 
-        showProgress('Building region groups...', 25);
-
-        // ── Step 1: Map stops to regions ──
-        const stopRegions = []; // parallel array: stopRegions[i] = regionId for stops[i]
-        if (_detectedRegions?.length) {
-            stops.forEach(stop => {
-                let bestReg = _detectedRegions[0].id;
-                _detectedRegions.forEach(reg => {
-                    if (stop.campers.some(c => reg.camperNames.includes(c.name))) bestReg = reg.id;
-                });
-                stopRegions.push(bestReg);
-            });
-        } else {
-            stops.forEach(() => stopRegions.push('all'));
-        }
-
-        // ── Step 2: Build groups & merge until every group has enough bus seats ──
-        // Count kids per region
-        const regionKids = {};
-        stops.forEach((stop, i) => {
-            const regId = stopRegions[i];
-            regionKids[regId] = (regionKids[regId] || 0) + stop.campers.length;
-        });
-
-        // Sort regions by size descending
-        let groups = Object.entries(regionKids)
-            .filter(([_, kids]) => kids > 0)
-            .sort((a, b) => b[1] - a[1])
-            .map(([regId, kids]) => ({
-                id: regId,
-                kids,
-                name: _detectedRegions?.find(r => r.id === regId)?.name || regId,
-                centroidLat: _detectedRegions?.find(r => r.id === regId)?.centroidLat || campLat,
-                centroidLng: _detectedRegions?.find(r => r.id === regId)?.centroidLng || campLng,
-                regionIds: [regId] // track merged regions
-            }));
-
-        // Total capacity
-        const totalCap = vehicles.reduce((s, v) => s + v.capacity, 0);
-        const perBusCap = vehicles.length ? Math.floor(totalCap / vehicles.length) : 47;
-
-        // Merge: while more groups than buses can serve, merge smallest into nearest
-        while (groups.length > vehicles.length) {
-            groups.sort((a, b) => a.kids - b.kids);
-            const smallest = groups[0];
-            let nearestIdx = 1, nearestDist = Infinity;
-            for (let i = 1; i < groups.length; i++) {
-                const d = haversineMi(smallest.centroidLat, smallest.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
-                if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
-            }
-            const target = groups[nearestIdx];
-            console.log('[Go]   Merging ' + smallest.name + ' (' + smallest.kids + ') → ' + target.name + ' (' + target.kids + ')');
-            target.kids += smallest.kids;
-            target.regionIds.push(...smallest.regionIds);
-            target.name = target.name.split(' + ')[0] + ' + ' + smallest.name.split(' (')[0];
-            // Recalculate centroid
-            const allStopsInGroup = [];
-            stops.forEach((s, i) => { if (target.regionIds.includes(stopRegions[i]) || smallest.regionIds.includes(stopRegions[i])) allStopsInGroup.push(s); });
-            if (allStopsInGroup.length) {
-                target.centroidLat = allStopsInGroup.reduce((s, st) => s + st.lat, 0) / allStopsInGroup.length;
-                target.centroidLng = allStopsInGroup.reduce((s, st) => s + st.lng, 0) / allStopsInGroup.length;
-            }
-            // Update stopRegions for merged region
-            stops.forEach((_, i) => { if (smallest.regionIds.includes(stopRegions[i])) stopRegions[i] = target.id; });
-            groups.splice(groups.indexOf(smallest), 1);
-        }
-
-        // Targeted merge: only merge groups that will be over capacity.
-        // After initial proportional allocation, groups with more kids than
-        // seats must merge with their nearest geographic neighbor.
-        // This avoids the old problem of merging everything into 1 mega-group.
-        //
-        // Example: L(90)→2  W(79)→2  C(78)→2  I(62)→1⚠  H(61)→1⚠
-        //   → merge I+C(140)→3, H+W(140)→3, L(90)→2 = 8 buses, 0 overflow
-        {
-            // Do a trial allocation to find which groups are over capacity
-            function trialAllocate(grps, vehs) {
-                const ga = {}; grps.forEach(g => { ga[g.id] = []; });
-                const pool = vehs.map((_, i) => i);
-                // Phase 1: one per group
-                grps.forEach(g => { if (pool.length) ga[g.id].push(pool.shift()); });
-                // Phase 2: deficit-driven
-                let ch = true;
-                while (ch && pool.length) {
-                    ch = false;
-                    let worst = null, worstDef = 0;
-                    grps.forEach(g => {
-                        const cap = ga[g.id].reduce((s, vi) => s + vehs[vi].capacity, 0);
-                        const def = g.kids - cap;
-                        if (def > worstDef) { worstDef = def; worst = g; }
-                    });
-                    if (worst && worstDef > 0) { ga[worst.id].push(pool.shift()); ch = true; }
-                }
-                // Phase 3: ratio
-                while (pool.length) {
-                    let worst = grps[0], wr = 0;
-                    grps.forEach(g => {
-                        const cap = ga[g.id].reduce((s, vi) => s + vehs[vi].capacity, 0);
-                        const r = g.kids / Math.max(1, cap);
-                        if (r > wr) { wr = r; worst = g; }
-                    });
-                    ga[worst.id].push(pool.shift());
-                }
-                return ga;
-            }
-
-            let needsMerge = true;
-            while (needsMerge && groups.length > 1) {
-                needsMerge = false;
-                const trial = trialAllocate(groups, vehicles);
-
-                // Find the most over-capacity group
-                let worstGroup = null, worstOver = 0;
-                groups.forEach(g => {
-                    const cap = trial[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
-                    const over = g.kids - cap;
-                    if (over > worstOver) { worstOver = over; worstGroup = g; }
-                });
-
-                if (!worstGroup) break; // all groups fit
-
-                // Safety: if overflow is small (≤ 1 stop), let capacity enforcement handle it
-                if (worstOver <= 8) break; // small overflow — let cap enforcement handle it
-
-                // Merge it with its nearest geographic neighbor
-                let nearestIdx = -1, nearestDist = Infinity;
-                for (let i = 0; i < groups.length; i++) {
-                    if (groups[i] === worstGroup) continue;
-                    const d = haversineMi(worstGroup.centroidLat, worstGroup.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
-                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
-                }
-                if (nearestIdx < 0) break;
-
-                const target = groups[nearestIdx];
-                console.log('[Go]   Targeted merge: ' + worstGroup.name + '(' + worstGroup.kids + ', ' + worstOver + ' over) → ' + target.name + '(' + target.kids + ')');
-                target.kids += worstGroup.kids;
-                target.regionIds.push(...worstGroup.regionIds);
-                target.name = target.name.split(' +')[0] + ' + ' + worstGroup.name.split(' (')[0];
-                // Recalculate centroid
-                const mergedStops = [];
-                stops.forEach((s, i) => { if (target.regionIds.includes(stopRegions[i]) || worstGroup.regionIds.includes(stopRegions[i])) mergedStops.push(s); });
-                if (mergedStops.length) {
-                    target.centroidLat = mergedStops.reduce((s, st) => s + st.lat, 0) / mergedStops.length;
-                    target.centroidLng = mergedStops.reduce((s, st) => s + st.lng, 0) / mergedStops.length;
-                }
-                stops.forEach((_, i) => { if (worstGroup.regionIds.includes(stopRegions[i])) stopRegions[i] = target.id; });
-                groups.splice(groups.indexOf(worstGroup), 1);
-                needsMerge = true; // check again — the merge may have created new over-capacity
-            }
-        }
-
-        console.log('[Go] ' + groups.length + ' groups, ' + vehicles.length + ' buses — allocating');
-
-        // ── Step 3: Allocate buses to groups (capacity-aware) ──
-        groups.sort((a, b) => b.kids - a.kids);
-        const groupBuses = {}; // groupId → [vehicle indices]
-        groups.forEach(g => { groupBuses[g.id] = []; });
-
-        // Phase 1: one bus per group
-        let busPool = vehicles.map((v, i) => i);
-        groups.forEach(g => {
-            if (busPool.length) { groupBuses[g.id].push(busPool.shift()); }
-        });
-
-        // Phase 2: give extra buses to groups that lack capacity
-        let changed = true;
-        while (changed && busPool.length) {
-            changed = false;
-            let worstGroup = null, worstDeficit = 0;
-            groups.forEach(g => {
-                const cap = groupBuses[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
-                const deficit = g.kids - cap;
-                if (deficit > worstDeficit) { worstDeficit = deficit; worstGroup = g; }
-            });
-            if (worstGroup && worstDeficit > 0) {
-                groupBuses[worstGroup.id].push(busPool.shift());
-                changed = true;
-            }
-        }
-
-        // Phase 3: remaining buses to highest demand/capacity ratio
-        while (busPool.length) {
-            let worstGroup = groups[0], worstRatio = 0;
-            groups.forEach(g => {
-                const cap = groupBuses[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
-                const ratio = g.kids / Math.max(1, cap);
-                if (ratio > worstRatio) { worstRatio = ratio; worstGroup = g; }
-            });
-            groupBuses[worstGroup.id].push(busPool.shift());
-        }
-
-        // Log allocation
-        groups.forEach(g => {
-            const busIndices = groupBuses[g.id];
-            const cap = busIndices.reduce((s, vi) => s + vehicles[vi].capacity, 0);
-            const busNames = busIndices.map(vi => vehicles[vi].name).join(', ');
-            console.log('[Go]   ' + g.name + ': ' + g.kids + ' kids → ' + busIndices.length + ' bus(es) [' + busNames + '] (' + cap + ' seats)' + (g.kids > cap ? ' ⚠ OVER' : ''));
-        });
-
-        // ── Step 4: Geographic pre-clustering + per-bus VROOM ordering ──
-        //
-        // For each group with multiple buses, use k-means to split stops
-        // into k tight geographic sub-clusters (one per bus). Then VROOM
-        // optimizes stop ORDER within each compact zone.
-        //
-        // This guarantees each bus serves a contiguous area — no interleaving.
-        showProgress('Optimizing routes (VROOM)...', 35);
-
-        // Recursive geographic bisection: split stops along the longest axis
-        // Produces contiguous zones (no interleaving) because each cut is
-        // a geographic line through the data.
-        function geoBisect(indices, points, k) {
-            if (k <= 1 || indices.length <= 1) return [indices];
-            if (indices.length <= k) return indices.map(i => [i]);
-
-            // Find longest axis (lat or lng spread)
-            let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-            indices.forEach(i => {
-                if (points[i].lat < minLat) minLat = points[i].lat;
-                if (points[i].lat > maxLat) maxLat = points[i].lat;
-                if (points[i].lng < minLng) minLng = points[i].lng;
-                if (points[i].lng > maxLng) maxLng = points[i].lng;
-            });
-            // Adjust for latitude: lng degrees are ~cos(lat) shorter than lat degrees
-            const latSpan = maxLat - minLat;
-            const lngSpan = (maxLng - minLng) * Math.cos((minLat + maxLat) / 2 * Math.PI / 180);
-            const useLatAxis = latSpan > lngSpan;
-
-            // Sort along longest axis
-            const sorted = [...indices].sort((a, b) =>
-                useLatAxis ? points[a].lat - points[b].lat : points[a].lng - points[b].lng
-            );
-
-            // Find split point that divides kid count for k1 vs k2 buses
-            const totalKids = sorted.reduce((s, i) => s + points[i].campers.length, 0);
-            const k1 = Math.floor(k / 2);
-            const k2 = k - k1;
-            const targetLeft = totalKids * (k1 / k);
-
-            // Find split point that minimizes imbalance
-            let cumKids = 0, splitAt = Math.floor(sorted.length / 2);
-            let bestImbalance = Infinity;
-            for (let i = 0; i < sorted.length - 1; i++) {
-                cumKids += points[sorted[i]].campers.length;
-                const imbalance = Math.abs(cumKids - targetLeft);
-                if (imbalance < bestImbalance) {
-                    bestImbalance = imbalance;
-                    splitAt = i + 1;
-                }
-            }
-            // Ensure at least 1 on each side
-            splitAt = Math.max(1, Math.min(sorted.length - 1, splitAt));
-
-            const left = sorted.slice(0, splitAt);
-            const right = sorted.slice(splitAt);
-
-            // Recurse
-            const leftClusters = geoBisect(left, points, k1);
-            const rightClusters = geoBisect(right, points, k2);
-            return [...leftClusters, ...rightClusters];
-        }
+        showProgress('Assigning buses to zones...', 25);
 
         let allRoutes = [];
-        const groupPromises = groups.map(async (group) => {
-            const groupStops = [];
-            stops.forEach((stop, i) => {
-                if (group.regionIds.includes(stopRegions[i])) groupStops.push(stop);
+
+        if (zones && zones.length > 0) {
+            // ══════════════════════════════════════════════════════════════
+            // ZONE PATH — v4.0 zone-based routing
+            //
+            // Each zone gets one bus. VROOM only orders stops, no
+            // assignment decisions needed.
+            // ══════════════════════════════════════════════════════════════
+            showProgress('Optimizing routes (VROOM)...', 35);
+
+            // Filter zones to this shift's campers
+            const shiftCamperNames = new Set(campers.map(c => c.name));
+            const shiftZones = zones.map(z => ({
+                ...z,
+                camperNames: z.camperNames.filter(n => shiftCamperNames.has(n))
+            })).filter(z => z.camperNames.length > 0);
+
+            // Sort zones by size (biggest first), assign biggest bus to biggest zone
+            shiftZones.sort((a, b) => b.camperNames.length - a.camperNames.length);
+            const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
+
+            // Assign one bus per zone
+            const zoneAssignments = [];
+            for (let i = 0; i < shiftZones.length && i < sortedVehicles.length; i++) {
+                zoneAssignments.push({ zone: shiftZones[i], vehicle: sortedVehicles[i] });
+            }
+            // Any extra zones go to the bus with most remaining capacity
+            for (let i = sortedVehicles.length; i < shiftZones.length; i++) {
+                // Merge into nearest zone that has a bus
+                const z = shiftZones[i];
+                let bestIdx = 0, bestDist = Infinity;
+                for (let j = 0; j < zoneAssignments.length; j++) {
+                    const d = haversineMi(z.centroidLat, z.centroidLng, zoneAssignments[j].zone.centroidLat, zoneAssignments[j].zone.centroidLng);
+                    if (d < bestDist) { bestDist = d; bestIdx = j; }
+                }
+                zoneAssignments[bestIdx].zone.camperNames.push(...z.camperNames);
+                console.log('[Go] Zone overflow: merged ' + z.name + ' into ' + zoneAssignments[bestIdx].zone.name);
+            }
+
+            // Log zone→bus assignment
+            zoneAssignments.forEach(za => {
+                console.log('[Go]   Zone "' + za.zone.name + '": ' + za.zone.camperNames.length + ' kids → ' + za.vehicle.name + ' (cap ' + za.vehicle.capacity + ')');
             });
-            if (!groupStops.length) return [];
 
-            const busIndices = groupBuses[group.id] || [];
-            if (!busIndices.length) return [];
-            const numBusesInGroup = busIndices.length;
-            const groupName = group.name;
+            // Create stops PER ZONE, then VROOM order each
+            const zonePromises = zoneAssignments.map(async (za) => {
+                const zoneCampers = za.zone.camperNames.map(n => campers.find(c => c.name === n)).filter(Boolean);
+                if (!zoneCampers.length) return null;
 
-            // ── Geographic pre-clustering: split stops into sub-zones ──
-            let subClusters;
-            if (numBusesInGroup === 1) {
-                subClusters = [groupStops.map((_, i) => i)];
-            } else {
-                subClusters = geoBisect(groupStops.map((_, i) => i), groupStops, numBusesInGroup);
+                // Create stops for this zone
+                let zoneStops;
+                if (mode === 'optimized-stops') zoneStops = createOptimizedStops(zoneCampers);
+                else if (mode === 'corner-stops') zoneStops = await createCornerStops(zoneCampers);
+                else zoneStops = createHouseStops(zoneCampers);
 
-                // ── Outlier swap: fix stops that ended up in wrong zone ──
-                // geoBisect cuts along lat/lng axes which can put a stop
-                // geographically "in" one neighborhood into the wrong zone.
-                // Move any stop that is significantly closer to another zone's centroid.
-                // Respects capacity: won't push a zone over bus seat limit.
-                // FIX 21: More aggressive outlier swap — 10 passes, 0.85 threshold
-                // The old 0.7 threshold (must be 30% closer) missed stops that were
-                // clearly in the wrong zone but only ~20% closer to the right one.
-                // Also recalculate centroids each pass so swaps cascade correctly.
-                const perBusCapForSwap = vehicles.length ? Math.floor(vehicles.reduce((s, v) => s + v.capacity, 0) / vehicles.length) : 47;
-                for (let pass = 0; pass < 10; pass++) {
-                    let swapped = false;
-                    // Recalculate centroids every pass (swaps change them)
-                    const centroids = subClusters.map(sc => {
-                        if (!sc.length) return { lat: 0, lng: 0 };
-                        return {
-                            lat: sc.reduce((s, i) => s + groupStops[i].lat, 0) / sc.length,
-                            lng: sc.reduce((s, i) => s + groupStops[i].lng, 0) / sc.length
-                        };
-                    });
-                    const scKids = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
-                    for (let ci = 0; ci < subClusters.length; ci++) {
-                        for (let si = subClusters[ci].length - 1; si >= 0; si--) {
-                            const idx = subClusters[ci][si];
-                            const st = groupStops[idx];
-                            const myDist = haversineMi(st.lat, st.lng, centroids[ci].lat, centroids[ci].lng);
-                            for (let ti = 0; ti < subClusters.length; ti++) {
-                                if (ti === ci || !subClusters[ti].length) continue;
-                                // Don't push target zone over capacity
-                                if (scKids[ti] + st.campers.length > perBusCapForSwap) continue;
-                                const tDist = haversineMi(st.lat, st.lng, centroids[ti].lat, centroids[ti].lng);
-                                if (tDist < myDist * 0.85) {
-                                    subClusters[ci].splice(si, 1);
-                                    subClusters[ti].push(idx);
-                                    scKids[ci] -= st.campers.length;
-                                    scKids[ti] += st.campers.length;
-                                    swapped = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if (!swapped) break;
-                }
+                if (!zoneStops.length) return null;
 
-                // FIX 21b: Compactness enforcement — if any stop is an outlier
-                // (> 2x the cluster's avg radius from centroid), move it to the
-                // nearest cluster with room. This catches geoBisect artifacts
-                // where a far-flung stop ends up in the wrong zone.
-                for (let compPass = 0; compPass < 5; compPass++) {
-                    let moved = false;
-                    for (let ci = 0; ci < subClusters.length; ci++) {
-                        if (subClusters[ci].length < 3) continue;
-                        const cent = {
-                            lat: subClusters[ci].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ci].length,
-                            lng: subClusters[ci].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ci].length
-                        };
-                        const dists = subClusters[ci].map(i => haversineMi(groupStops[i].lat, groupStops[i].lng, cent.lat, cent.lng));
-                        const avgDist = dists.reduce((s, d) => s + d, 0) / dists.length;
-                        // Find worst outlier
-                        let worstSi = -1, worstDist = 0;
-                        for (let si = 0; si < subClusters[ci].length; si++) {
-                            if (dists[si] > worstDist) { worstDist = dists[si]; worstSi = si; }
-                        }
-                        if (worstSi < 0 || worstDist <= avgDist * 2.0) continue;
+                console.log('[Go]   Zone "' + za.zone.name + '": ' + zoneStops.length + ' stops from ' + zoneCampers.length + ' campers');
 
-                        const st = groupStops[subClusters[ci][worstSi]];
-                        const kids = subClusters[ci].reduce((s, i) => s + groupStops[i].campers.length, 0);
-                        // Find nearest other cluster with room
-                        let bestTi = -1, bestTDist = Infinity;
-                        for (let ti = 0; ti < subClusters.length; ti++) {
-                            if (ti === ci || !subClusters[ti].length) continue;
-                            const tKids = subClusters[ti].reduce((s, i) => s + groupStops[i].campers.length, 0);
-                            if (tKids + st.campers.length > perBusCapForSwap) continue;
-                            const tCent = {
-                                lat: subClusters[ti].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ti].length,
-                                lng: subClusters[ti].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ti].length
-                            };
-                            const d = haversineMi(st.lat, st.lng, tCent.lat, tCent.lng);
-                            if (d < bestTDist) { bestTDist = d; bestTi = ti; }
-                        }
-                        if (bestTi >= 0 && bestTDist < worstDist) {
-                            const movedIdx = subClusters[ci][worstSi];
-                            console.log('[Go]   Compactness fix: moved ' + st.campers.length + ' kids (' + st.address + ') from zone ' + ci + ' → ' + bestTi + ' (was ' + worstDist.toFixed(2) + 'mi from centroid, avg ' + avgDist.toFixed(2) + 'mi)');
-                            subClusters[ci].splice(worstSi, 1);
-                            subClusters[bestTi].push(movedIdx);
-                            moved = true;
-                            break;
-                        }
-                    }
-                    if (!moved) break;
-                }
-
-                // Log sub-cluster sizes
-                const sizes = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
-                console.log('[Go] Pre-cluster ' + groupName + ': ' + numBusesInGroup + ' zones → [' + sizes.join(', ') + '] kids');
-            }
-
-            // ── Assign buses to sub-clusters (biggest cluster → biggest bus) ──
-            let clusterKids = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
-            let sortedClusterIdx = clusterKids.map((k, i) => ({ k, i })).sort((a, b) => b.k - a.k).map(x => x.i);
-            const sortedBusIdx = [...busIndices].sort((a, b) => vehicles[b].capacity - vehicles[a].capacity);
-
-            // ── FIX 16+22: Pre-VROOM capacity check — rebalance clusters before routing ──
-            // If a sub-cluster has more kids than its assigned bus, move the stop
-            // that best fits the receiving cluster (closest to target centroid AND
-            // won't become an outlier there). Old version picked the farthest stop
-            // from source centroid, which could dump a far-away stop into a
-            // geographically unrelated cluster.
-            for (let capCheck = 0; capCheck < 20; capCheck++) {
-                let anyOver = false;
-                for (let rank = 0; rank < sortedClusterIdx.length; rank++) {
-                    const ci = sortedClusterIdx[rank];
-                    const busCap = vehicles[sortedBusIdx[rank]].capacity;
-                    const kids = subClusters[ci].reduce((s, i) => s + groupStops[i].campers.length, 0);
-                    if (kids <= busCap) continue;
-                    anyOver = true;
-
-                    // For each stop in the over-capacity cluster, score how well it
-                    // would fit in each under-capacity cluster. Pick the best (stop, target) pair.
-                    let bestSi = -1, bestTarget = -1, bestScore = -Infinity;
-                    for (let si = 0; si < subClusters[ci].length; si++) {
-                        const st = groupStops[subClusters[ci][si]];
-                        for (let ti = 0; ti < subClusters.length; ti++) {
-                            if (ti === ci || !subClusters[ti].length) continue;
-                            const tRank = sortedClusterIdx.indexOf(ti);
-                            const tCap = vehicles[sortedBusIdx[tRank >= 0 ? tRank : 0]].capacity;
-                            const tKids = subClusters[ti].reduce((s, i) => s + groupStops[i].campers.length, 0);
-                            if (tKids + st.campers.length > tCap) continue;
-                            // Target centroid and avg radius
-                            const tCentLat = subClusters[ti].reduce((s, i) => s + groupStops[i].lat, 0) / subClusters[ti].length;
-                            const tCentLng = subClusters[ti].reduce((s, i) => s + groupStops[i].lng, 0) / subClusters[ti].length;
-                            const distToTarget = haversineMi(st.lat, st.lng, tCentLat, tCentLng);
-                            // Reject if stop would be >2x target's avg radius (would be outlier)
-                            const tAvgRadius = subClusters[ti].reduce((s, i) => s + haversineMi(groupStops[i].lat, groupStops[i].lng, tCentLat, tCentLng), 0) / subClusters[ti].length;
-                            if (tAvgRadius > 0 && distToTarget > tAvgRadius * 2.5) continue;
-                            // Score: closer to target = better (negative distance = higher score)
-                            const score = -distToTarget;
-                            if (score > bestScore) { bestScore = score; bestSi = si; bestTarget = ti; }
-                        }
-                    }
-                    if (bestSi >= 0 && bestTarget >= 0) {
-                        const stopToMove = groupStops[subClusters[ci][bestSi]];
-                        const movedIdx = subClusters[ci].splice(bestSi, 1)[0];
-                        subClusters[bestTarget].push(movedIdx);
-                        console.log('[Go]   Pre-VROOM rebalance: moved ' + stopToMove.campers.length + ' kids (' + stopToMove.address + ') from zone ' + ci + ' → ' + bestTarget);
-                    } else break;
-                }
-                if (!anyOver) break;
-                // Refresh sorted order
-                clusterKids = subClusters.map(sc => sc.reduce((s, i) => s + groupStops[i].campers.length, 0));
-                sortedClusterIdx = clusterKids.map((k, i) => ({ k, i })).sort((a, b) => b.k - a.k).map(x => x.i);
-            }
-
-            // ── Per-bus VROOM calls (1 vehicle each = just ordering) ──
-            const busPromises = sortedClusterIdx.map(async (ci, rank) => {
-                const clusterStopIndices = subClusters[ci];
-                const vi = sortedBusIdx[rank];
-                const v = vehicles[vi];
-                const busStops = clusterStopIndices.map(i => groupStops[i]);
-
-                if (!busStops.length) return null;
-
-                const jobs = busStops.map((stop, i) => ({
+                // VROOM call: one bus, just ordering
+                const jobs = zoneStops.map((stop, i) => ({
                     id: i + 1,
                     location: [stop.lng, stop.lat],
                     service: serviceTime,
@@ -1723,24 +2046,24 @@
                     description: stop.address
                 }));
 
+                const v = za.vehicle;
                 const veh = { id: 1, profile: 'driving-car', capacity: [v.capacity], description: v.name };
                 if (isArrival) {
-                    // Start at farthest stop from camp → sweep toward camp
-                    // Works with geoBisect's contiguous strips (farthest = strip end)
                     let fIdx = 0, fDist = 0;
-                    busStops.forEach((s, i) => {
+                    zoneStops.forEach((s, i) => {
                         const d = haversineMi(campLat, campLng, s.lat, s.lng);
                         if (d > fDist) { fDist = d; fIdx = i; }
                     });
-                    veh.start = [busStops[fIdx].lng, busStops[fIdx].lat];
+                    veh.start = [zoneStops[fIdx].lng, zoneStops[fIdx].lat];
                     veh.end = [campLng, campLat];
                 } else {
                     veh.start = [campLng, campLat];
                     if (needsReturn) veh.end = [campLng, campLat];
                 }
 
-                console.log('[Go] VROOM → ' + v.name + ' (' + groupName + '): ' + jobs.length + ' stops, ' + clusterKids[ci] + ' kids');
+                console.log('[Go] VROOM → ' + v.name + ' (' + za.zone.name + '): ' + jobs.length + ' stops, ' + zoneCampers.length + ' kids');
 
+                let orderedStops = zoneStops;
                 try {
                     const resp = await fetch('https://api.openrouteservice.org/optimization', {
                         method: 'POST',
@@ -1748,147 +2071,260 @@
                         body: JSON.stringify({ jobs, vehicles: [veh] })
                     });
 
-                    if (!resp.ok) {
-                        console.error('[Go] VROOM error for ' + v.name + ': HTTP ' + resp.status);
-                        directionalSort(busStops, campLat, campLng);
-                        return { busStops, v, duration: 0 };
-                    }
-
-                    const result = await resp.json();
-                    const vroomRoute = result.routes?.[0];
-                    if (vroomRoute) {
-                        const orderedStops = [];
-                        vroomRoute.steps.forEach(step => {
-                            if (step.type !== 'job') return;
-                            const stop = busStops[step.id - 1]; if (!stop) return;
-                            orderedStops.push(stop);
-                        });
-                        // Add any unassigned
-                        if (result.unassigned?.length) {
-                            result.unassigned.forEach(ua => {
-                                const stop = busStops[ua.id - 1]; if (!stop) return;
-                                cheapestInsert(orderedStops, stop);
+                    if (resp.ok) {
+                        const result = await resp.json();
+                        const vroomRoute = result.routes?.[0];
+                        if (vroomRoute) {
+                            const ordered = [];
+                            vroomRoute.steps.forEach(step => {
+                                if (step.type !== 'job') return;
+                                const stop = zoneStops[step.id - 1];
+                                if (stop) ordered.push(stop);
                             });
-                        }
-                        // 2-opt improvement: fix local backtracking (e.g. 7→9→8)
-                        // VROOM optimizes road distance but can create small visual loops.
-                        // 2-opt reverses segments where it reduces total distance.
-                        if (orderedStops.length >= 3) {
-                            let improved = true;
-                            for (let pass = 0; pass < 5 && improved; pass++) {
-                                improved = false;
-                                for (let i = 0; i < orderedStops.length - 2; i++) {
-                                    for (let j = i + 2; j < orderedStops.length; j++) {
-                                        const a = orderedStops[i], b = orderedStops[i + 1];
-                                        const c = orderedStops[j], d = orderedStops[j + 1] || (isArrival ? { lat: campLat, lng: campLng } : null);
-                                        if (!a?.lat || !b?.lat || !c?.lat) continue;
-                                        const curDist = haversineMi(a.lat, a.lng, b.lat, b.lng) + (d ? haversineMi(c.lat, c.lng, d.lat, d.lng) : 0);
-                                        const newDist = haversineMi(a.lat, a.lng, c.lat, c.lng) + (d ? haversineMi(b.lat, b.lng, d.lat, d.lng) : 0);
-                                        if (newDist < curDist * 0.95) { // 5% threshold to avoid trivial swaps
-                                            // Reverse segment [i+1 ... j]
-                                            const seg = orderedStops.splice(i + 1, j - i);
-                                            seg.reverse();
-                                            orderedStops.splice(i + 1, 0, ...seg);
-                                            improved = true;
-                                        }
-                                    }
-                                }
+                            if (result.unassigned?.length) {
+                                result.unassigned.forEach(ua => {
+                                    const stop = zoneStops[ua.id - 1];
+                                    if (stop) cheapestInsert(ordered, stop);
+                                });
                             }
+                            orderedStops = ordered;
                         }
-                        // FIX 15: Or-opt — relocate individual stops to better positions
-                        // Catches cases 2-opt misses (e.g., one stop slightly out of place)
-                        if (orderedStops.length >= 4) {
-                            for (let pass = 0; pass < 3; pass++) {
-                                let relocated = false;
-                                for (let i = 0; i < orderedStops.length; i++) {
-                                    const s = orderedStops[i];
-                                    if (!s?.lat) continue;
-                                    const prev = i > 0 ? orderedStops[i - 1] : null;
-                                    const next = i < orderedStops.length - 1 ? orderedStops[i + 1] : null;
-                                    // Cost of removing stop i
-                                    let removeCost = 0;
-                                    if (prev?.lat && next?.lat) removeCost = haversineMi(prev.lat, prev.lng, next.lat, next.lng);
-                                    let currentCost = 0;
-                                    if (prev?.lat) currentCost += haversineMi(prev.lat, prev.lng, s.lat, s.lng);
-                                    if (next?.lat) currentCost += haversineMi(s.lat, s.lng, next.lat, next.lng);
-                                    const savings = currentCost - removeCost;
-
-                                    // Try inserting at every other position
-                                    let bestJ = -1, bestInsertCost = Infinity;
-                                    for (let j = 0; j <= orderedStops.length - 1; j++) {
-                                        if (j === i || j === i + 1) continue;
-                                        const pj = j > 0 ? orderedStops[j === i + 1 ? j + 1 : (j > i ? j : j - 1)] : null;
-                                        // Simpler: just compute insertion cost at position j (after removing i)
-                                        const tempStops = [...orderedStops];
-                                        tempStops.splice(i, 1);
-                                        const insertAt = j > i ? j - 1 : j;
-                                        const pBefore = insertAt > 0 ? tempStops[insertAt - 1] : null;
-                                        const pAfter = insertAt < tempStops.length ? tempStops[insertAt] : null;
-                                        let ic = 0;
-                                        if (pBefore?.lat) ic += haversineMi(pBefore.lat, pBefore.lng, s.lat, s.lng);
-                                        if (pAfter?.lat) ic += haversineMi(s.lat, s.lng, pAfter.lat, pAfter.lng);
-                                        if (pBefore?.lat && pAfter?.lat) ic -= haversineMi(pBefore.lat, pBefore.lng, pAfter.lat, pAfter.lng);
-                                        if (ic < bestInsertCost) { bestInsertCost = ic; bestJ = j; }
-                                    }
-
-                                    if (bestJ >= 0 && bestInsertCost < savings * 0.9) {
-                                        // Relocate: remove from i, insert at bestJ
-                                        orderedStops.splice(i, 1);
-                                        const insertAt = bestJ > i ? bestJ - 1 : bestJ;
-                                        orderedStops.splice(insertAt, 0, s);
-                                        relocated = true;
-                                        break; // restart pass
-                                    }
-                                }
-                                if (!relocated) break;
-                            }
-                        }
-
-                        return { busStops: orderedStops, v, duration: Math.round((vroomRoute.duration || 0) / 60) };
+                    } else {
+                        console.warn('[Go] VROOM error for ' + v.name + ': HTTP ' + resp.status);
+                        directionalSort(zoneStops, campLat, campLng);
                     }
-                    return { busStops, v, duration: 0 };
                 } catch (e) {
                     console.warn('[Go] VROOM failed for ' + v.name + ':', e.message);
-                    directionalSort(busStops, campLat, campLng);
-                    return { busStops, v, duration: 0 };
+                    directionalSort(zoneStops, campLat, campLng);
+                }
+
+                // 2-opt improvement
+                if (orderedStops.length >= 3) {
+                    let improved = true;
+                    for (let pass = 0; pass < 5 && improved; pass++) {
+                        improved = false;
+                        for (let i = 0; i < orderedStops.length - 2; i++) {
+                            for (let j = i + 2; j < orderedStops.length; j++) {
+                                const a = orderedStops[i], b = orderedStops[i + 1];
+                                const c = orderedStops[j], d = orderedStops[j + 1] || (isArrival ? { lat: campLat, lng: campLng } : null);
+                                if (!a?.lat || !b?.lat || !c?.lat) continue;
+                                const curDist = haversineMi(a.lat, a.lng, b.lat, b.lng) + (d ? haversineMi(c.lat, c.lng, d.lat, d.lng) : 0);
+                                const newDist = haversineMi(a.lat, a.lng, c.lat, c.lng) + (d ? haversineMi(b.lat, b.lng, d.lat, d.lng) : 0);
+                                if (newDist < curDist * 0.95) {
+                                    const seg = orderedStops.splice(i + 1, j - i);
+                                    seg.reverse();
+                                    orderedStops.splice(i + 1, 0, ...seg);
+                                    improved = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Or-opt
+                if (orderedStops.length >= 4) {
+                    for (let pass = 0; pass < 3; pass++) {
+                        let relocated = false;
+                        for (let i = 0; i < orderedStops.length; i++) {
+                            const s = orderedStops[i];
+                            if (!s?.lat) continue;
+                            const prev = i > 0 ? orderedStops[i - 1] : null;
+                            const next = i < orderedStops.length - 1 ? orderedStops[i + 1] : null;
+                            let removeCost = 0;
+                            if (prev?.lat && next?.lat) removeCost = haversineMi(prev.lat, prev.lng, next.lat, next.lng);
+                            let currentCost = 0;
+                            if (prev?.lat) currentCost += haversineMi(prev.lat, prev.lng, s.lat, s.lng);
+                            if (next?.lat) currentCost += haversineMi(s.lat, s.lng, next.lat, next.lng);
+                            const savings = currentCost - removeCost;
+                            let bestJ = -1, bestInsertCost = Infinity;
+                            for (let j = 0; j <= orderedStops.length - 1; j++) {
+                                if (j === i || j === i + 1) continue;
+                                const tempStops = [...orderedStops];
+                                tempStops.splice(i, 1);
+                                const insertAt = j > i ? j - 1 : j;
+                                const pBefore = insertAt > 0 ? tempStops[insertAt - 1] : null;
+                                const pAfter = insertAt < tempStops.length ? tempStops[insertAt] : null;
+                                let ic = 0;
+                                if (pBefore?.lat) ic += haversineMi(pBefore.lat, pBefore.lng, s.lat, s.lng);
+                                if (pAfter?.lat) ic += haversineMi(s.lat, s.lng, pAfter.lat, pAfter.lng);
+                                if (pBefore?.lat && pAfter?.lat) ic -= haversineMi(pBefore.lat, pBefore.lng, pAfter.lat, pAfter.lng);
+                                if (ic < bestInsertCost) { bestInsertCost = ic; bestJ = j; }
+                            }
+                            if (bestJ >= 0 && bestInsertCost < savings * 0.9) {
+                                orderedStops.splice(i, 1);
+                                const insertAt = bestJ > i ? bestJ - 1 : bestJ;
+                                orderedStops.splice(insertAt, 0, s);
+                                relocated = true;
+                                break;
+                            }
+                        }
+                        if (!relocated) break;
+                    }
+                }
+
+                const routeStops = orderedStops.map((stop, i) => ({
+                    stopNum: i + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng
+                }));
+
+                return {
+                    busId: v.busId, busName: v.name, busColor: v.color,
+                    monitor: v.monitor, counselors: v.counselors || [],
+                    stops: routeStops,
+                    camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
+                    _cap: v.capacity,
+                    totalDuration: 0
+                };
+            });
+
+            const zoneResults = await Promise.all(zonePromises);
+            zoneResults.forEach(r => { if (r) allRoutes.push(r); });
+
+            // Ensure all buses have route entries
+            vehicles.forEach(v => {
+                if (!allRoutes.find(r => r.busId === v.busId)) {
+                    allRoutes.push({
+                        busId: v.busId, busName: v.name, busColor: v.color,
+                        monitor: v.monitor, counselors: v.counselors || [],
+                        stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0
+                    });
                 }
             });
 
-            const busResults = await Promise.all(busPromises);
-            const routes = [];
-            busResults.forEach(br => {
-                if (!br || !br.busStops.length) return;
-                const routeStops = br.busStops.map((stop, i) => ({
-                    stopNum: i + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng
-                }));
-                routes.push({
-                    busId: br.v.busId, busName: br.v.name, busColor: br.v.color,
-                    monitor: br.v.monitor, counselors: br.v.counselors || [],
-                    stops: routeStops,
-                    camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
-                    _cap: br.v.capacity,
-                    totalDuration: br.duration
-                });
-            });
-            return routes;
-        });
+        } else {
+            // ══════════════════════════════════════════════════════════════
+            // LEGACY PATH — old region merge + geographic bisection (fallback)
+            // ══════════════════════════════════════════════════════════════
+            showProgress('Building region groups (legacy)...', 25);
 
-        const groupResults = await Promise.all(groupPromises);
-        groupResults.forEach(routes => allRoutes.push(...routes));
-        console.log('[Go] All groups complete: ' + allRoutes.length + ' bus routes');
-
-        // Ensure all buses have route entries
-        vehicles.forEach(v => {
-            if (!allRoutes.find(r => r.busId === v.busId)) {
-                allRoutes.push({
-                    busId: v.busId, busName: v.name, busColor: v.color,
-                    monitor: v.monitor, counselors: v.counselors || [],
-                    stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0
+            // Map stops to regions
+            const stopRegions = [];
+            if (_detectedRegions?.length) {
+                stops.forEach(stop => {
+                    let bestReg = _detectedRegions[0].id;
+                    _detectedRegions.forEach(reg => {
+                        if (stop.campers.some(c => reg.camperNames.includes(c.name))) bestReg = reg.id;
+                    });
+                    stopRegions.push(bestReg);
                 });
+            } else {
+                stops.forEach(() => stopRegions.push('all'));
             }
-        });
 
-        // (Orient moved to after capacity enforcement)
+            // Count kids per region
+            const regionKids = {};
+            stops.forEach((stop, i) => {
+                const regId = stopRegions[i];
+                regionKids[regId] = (regionKids[regId] || 0) + stop.campers.length;
+            });
+
+            let groups = Object.entries(regionKids)
+                .filter(([_, kids]) => kids > 0)
+                .sort((a, b) => b[1] - a[1])
+                .map(([regId, kids]) => ({
+                    id: regId, kids,
+                    name: _detectedRegions?.find(r => r.id === regId)?.name || regId,
+                    centroidLat: _detectedRegions?.find(r => r.id === regId)?.centroidLat || campLat,
+                    centroidLng: _detectedRegions?.find(r => r.id === regId)?.centroidLng || campLng,
+                    regionIds: [regId]
+                }));
+
+            // Merge: while more groups than buses
+            while (groups.length > vehicles.length) {
+                groups.sort((a, b) => a.kids - b.kids);
+                const smallest = groups[0];
+                let nearestIdx = 1, nearestDist = Infinity;
+                for (let i = 1; i < groups.length; i++) {
+                    const d = haversineMi(smallest.centroidLat, smallest.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
+                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+                }
+                const target = groups[nearestIdx];
+                target.kids += smallest.kids;
+                target.regionIds.push(...smallest.regionIds);
+                target.name = target.name.split(' + ')[0] + ' + ' + smallest.name.split(' (')[0];
+                stops.forEach((_, i) => { if (smallest.regionIds.includes(stopRegions[i])) stopRegions[i] = target.id; });
+                groups.splice(groups.indexOf(smallest), 1);
+            }
+
+            console.log('[Go] Legacy: ' + groups.length + ' groups, ' + vehicles.length + ' buses');
+
+            // Allocate buses to groups
+            groups.sort((a, b) => b.kids - a.kids);
+            const groupBuses = {};
+            groups.forEach(g => { groupBuses[g.id] = []; });
+            let busPool = vehicles.map((v, i) => i);
+            groups.forEach(g => { if (busPool.length) groupBuses[g.id].push(busPool.shift()); });
+            let changed = true;
+            while (changed && busPool.length) {
+                changed = false;
+                let worstGroup = null, worstDeficit = 0;
+                groups.forEach(g => {
+                    const cap = groupBuses[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
+                    const deficit = g.kids - cap;
+                    if (deficit > worstDeficit) { worstDeficit = deficit; worstGroup = g; }
+                });
+                if (worstGroup && worstDeficit > 0) { groupBuses[worstGroup.id].push(busPool.shift()); changed = true; }
+            }
+            while (busPool.length) {
+                let worstGroup = groups[0], worstRatio = 0;
+                groups.forEach(g => {
+                    const cap = groupBuses[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
+                    const ratio = g.kids / Math.max(1, cap);
+                    if (ratio > worstRatio) { worstRatio = ratio; worstGroup = g; }
+                });
+                groupBuses[worstGroup.id].push(busPool.shift());
+            }
+
+            showProgress('Optimizing routes (VROOM legacy)...', 35);
+
+            // Legacy per-bus VROOM calls with directional sort
+            const groupPromises = groups.map(async (group) => {
+                const groupStops = [];
+                stops.forEach((stop, i) => {
+                    if (group.regionIds.includes(stopRegions[i])) groupStops.push(stop);
+                });
+                if (!groupStops.length) return [];
+                const busIndices = groupBuses[group.id] || [];
+                if (!busIndices.length) return [];
+
+                // Simple: one bus per group in legacy mode
+                const routes = [];
+                for (let rank = 0; rank < busIndices.length; rank++) {
+                    const vi = busIndices[rank];
+                    const v = vehicles[vi];
+                    // Split stops evenly
+                    const perBus = Math.ceil(groupStops.length / busIndices.length);
+                    const busStops = groupStops.slice(rank * perBus, (rank + 1) * perBus);
+                    if (!busStops.length) continue;
+                    directionalSort(busStops, campLat, campLng);
+                    const routeStops = busStops.map((stop, i) => ({
+                        stopNum: i + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng
+                    }));
+                    routes.push({
+                        busId: v.busId, busName: v.name, busColor: v.color,
+                        monitor: v.monitor, counselors: v.counselors || [],
+                        stops: routeStops,
+                        camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
+                        _cap: v.capacity, totalDuration: 0
+                    });
+                }
+                return routes;
+            });
+
+            const groupResults = await Promise.all(groupPromises);
+            groupResults.forEach(routes => allRoutes.push(...routes));
+
+            vehicles.forEach(v => {
+                if (!allRoutes.find(r => r.busId === v.busId)) {
+                    allRoutes.push({
+                        busId: v.busId, busName: v.name, busColor: v.color,
+                        monitor: v.monitor, counselors: v.counselors || [],
+                        stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0
+                    });
+                }
+            });
+        }
+
+        console.log('[Go] All routes complete: ' + allRoutes.length + ' bus routes');
 
         // ══════════════════════════════════════════════════════════════
         // POST-ROUTING: Merge consecutive same-street stops
@@ -1929,91 +2365,6 @@
             }
         });
         if (totalMerged) console.log('[Go] Post-route merge: ' + totalMerged + ' stop(s) consolidated');
-
-        // ══════════════════════════════════════════════════════════════
-        // FIX 18: BOUNDARY-SWAP — inter-bus optimization
-        //
-        // For each bus, check its first and last stops (boundary stops).
-        // If moving a boundary stop to an adjacent bus reduces total
-        // driving distance for both buses, swap it.
-        // ══════════════════════════════════════════════════════════════
-        let boundarySwaps = 0;
-        const routeDist = (r) => {
-            let d = 0;
-            for (let i = 0; i < r.stops.length - 1; i++) {
-                const a = r.stops[i], b = r.stops[i + 1];
-                if (a.lat && b.lat) d += haversineMi(a.lat, a.lng, b.lat, b.lng);
-            }
-            return d;
-        };
-        for (let swapPass = 0; swapPass < 5; swapPass++) {
-            let didSwap = false;
-            for (const srcRoute of allRoutes) {
-                if (srcRoute.stops.length < 2) continue;
-                // Check first and last stops as boundary candidates
-                for (const boundaryIdx of [0, srcRoute.stops.length - 1]) {
-                    const stop = srcRoute.stops[boundaryIdx];
-                    if (!stop?.lat) continue;
-                    const srcDistBefore = routeDist(srcRoute);
-
-                    for (const tgtRoute of allRoutes) {
-                        if (tgtRoute === srcRoute) continue;
-                        // Capacity check: target must have room
-                        if (tgtRoute.camperCount + stop.campers.length > tgtRoute._cap) continue;
-                        // Proximity check: stop must be near target route
-                        const tgtCentLat = tgtRoute.stops.length ? tgtRoute.stops.reduce((s, x) => s + x.lat, 0) / tgtRoute.stops.length : 0;
-                        const tgtCentLng = tgtRoute.stops.length ? tgtRoute.stops.reduce((s, x) => s + x.lng, 0) / tgtRoute.stops.length : 0;
-                        if (!tgtCentLat || haversineMi(stop.lat, stop.lng, tgtCentLat, tgtCentLng) > 1.5) continue;
-
-                        const tgtDistBefore = routeDist(tgtRoute);
-
-                        // Simulate removal from source
-                        const srcStopsAfter = srcRoute.stops.filter((_, i) => i !== boundaryIdx);
-                        const srcDistAfter = (() => {
-                            let d = 0;
-                            for (let i = 0; i < srcStopsAfter.length - 1; i++) {
-                                const a = srcStopsAfter[i], b = srcStopsAfter[i + 1];
-                                if (a.lat && b.lat) d += haversineMi(a.lat, a.lng, b.lat, b.lng);
-                            }
-                            return d;
-                        })();
-
-                        // Simulate cheapest insertion into target
-                        let bestPos = tgtRoute.stops.length, bestAddedDist = Infinity;
-                        for (let j = 0; j <= tgtRoute.stops.length; j++) {
-                            const prev = j > 0 ? tgtRoute.stops[j - 1] : null;
-                            const next = j < tgtRoute.stops.length ? tgtRoute.stops[j] : null;
-                            let cost = 0;
-                            if (prev?.lat) cost += haversineMi(prev.lat, prev.lng, stop.lat, stop.lng);
-                            if (next?.lat) cost += haversineMi(stop.lat, stop.lng, next.lat, next.lng);
-                            if (prev?.lat && next?.lat) cost -= haversineMi(prev.lat, prev.lng, next.lat, next.lng);
-                            if (cost < bestAddedDist) { bestAddedDist = cost; bestPos = j; }
-                        }
-                        const tgtDistAfter = tgtDistBefore + bestAddedDist;
-
-                        // Accept if total distance improves by at least 5%
-                        const totalBefore = srcDistBefore + tgtDistBefore;
-                        const totalAfter = srcDistAfter + tgtDistAfter;
-                        if (totalAfter < totalBefore * 0.95) {
-                            srcRoute.stops.splice(boundaryIdx, 1);
-                            srcRoute.camperCount -= stop.campers.length;
-                            srcRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                            tgtRoute.stops.splice(bestPos, 0, stop);
-                            tgtRoute.camperCount += stop.campers.length;
-                            tgtRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                            boundarySwaps++;
-                            didSwap = true;
-                            console.log('[Go]   Boundary swap: ' + stop.address + ' (' + stop.campers.length + ' kids) ' + srcRoute.busName + ' → ' + tgtRoute.busName + ' (saved ' + ((1 - totalAfter / totalBefore) * 100).toFixed(0) + '%)');
-                            break;
-                        }
-                    }
-                    if (didSwap) break;
-                }
-                if (didSwap) break;
-            }
-            if (!didSwap) break;
-        }
-        if (boundarySwaps) console.log('[Go] Boundary swaps: ' + boundarySwaps + ' stop(s) moved between buses');
 
         // ══════════════════════════════════════════════════════════════
         // CAPACITY ENFORCEMENT
@@ -3649,7 +4000,7 @@
     let _addrSearchTimer;
 
     function init() {
-        console.log('[Go] Initializing v3.1 (VROOM + Manhattan walk)...');
+        console.log('[Go] Initializing v4.0 (zone-based + VROOM + Manhattan walk)...');
         load();
         if (D[D.activeMode]) loadModeData(D.activeMode);
         document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === D.activeMode));
