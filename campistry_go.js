@@ -558,7 +558,7 @@
         if (!_generatedRoutes) return [];
         const applied = applyOverrides(_generatedRoutes);
         const warnings = [];
-        applied.forEach(sr => { sr.routes.forEach(r => { const bus = D.buses.find(b => b.id === r.busId); if (!bus) return; const rs = D.setup.reserveSeats || 0; const mon = D.monitors.find(m => m.assignedBus === bus.id); const couns = D.counselors.filter(c => c.assignedBus === bus.id); const maxCampers = Math.max(0, (bus.capacity || 0) - 1 - (mon ? 1 : 0) - couns.length - rs); if (r.camperCount > maxCampers) warnings.push({ busName: r.busName, busColor: r.busColor, shift: sr.shift.label || 'Shift', actual: r.camperCount, max: maxCampers, over: r.camperCount - maxCampers }); }); });
+        applied.forEach(sr => { sr.routes.forEach(r => { const bus = D.buses.find(b => b.id === r.busId); if (!bus) return; const brs = getBusReserve(bus); const mon = D.monitors.find(m => m.assignedBus === bus.id); const couns = D.counselors.filter(c => c.assignedBus === bus.id); const maxCampers = Math.max(0, (bus.capacity || 0) - (mon ? 1 : 0) - couns.length - brs); if (r.camperCount > maxCampers) warnings.push({ busName: r.busName, busColor: r.busColor, shift: sr.shift.label || 'Shift', actual: r.camperCount, max: maxCampers, over: r.camperCount - maxCampers }); }); });
         return warnings;
     }
 
@@ -651,18 +651,25 @@
     // =========================================================================
     // BUS FLEET
     // =========================================================================
+    // Helper: get effective reserve seats for a bus (per-bus override or default)
+    function getBusReserve(bus) {
+        if (bus.reserveMode === 'custom' && bus.reserveSeats != null) return bus.reserveSeats;
+        return D.setup.reserveSeats || 0;
+    }
+
     function renderFleet() {
         const c = document.getElementById('fleetContainer'), e = document.getElementById('fleetEmptyState');
         document.getElementById('fleetCount').textContent = D.buses.length + ' bus' + (D.buses.length !== 1 ? 'es' : '');
         if (!D.buses.length) { c.innerHTML = ''; c.style.display = 'none'; e.style.display = ''; return; }
         e.style.display = 'none'; c.style.display = '';
-        const rs = D.setup.reserveSeats || 0;
         c.innerHTML = '<div class="fleet-grid">' + D.buses.map(b => {
             const mon = D.monitors.find(m => m.assignedBus === b.id);
             const couns = D.counselors.filter(x => x.assignedBus === b.id);
             const staff = (mon ? 1 : 0) + couns.length;
-            const avail = Math.max(0, (b.capacity || 0) - 1 - staff - rs);
-            return '<div class="bus-card"><div class="bus-card-stripe" style="background:' + esc(b.color) + '"></div><div class="bus-card-header"><div><div class="bus-card-name">' + esc(b.name) + '</div>' + (b.notes ? '<div class="bus-card-number">' + esc(b.notes) + '</div>' : '') + '</div><div class="bus-card-actions"><button onclick="CampistryGo.editBus(\'' + b.id + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="delete" onclick="CampistryGo.deleteBus(\'' + b.id + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div></div><div class="bus-card-stats"><div class="bus-stat"><div class="bus-stat-value">' + b.capacity + '</div><div class="bus-stat-label">Total</div></div><div class="bus-stat"><div class="bus-stat-value">' + avail + '</div><div class="bus-stat-label">For Kids</div></div><div class="bus-stat"><div class="bus-stat-value">' + staff + '</div><div class="bus-stat-label">Staff</div></div><div class="bus-stat"><div class="bus-stat-value">' + rs + '</div><div class="bus-stat-label">Reserved</div></div></div>' + (mon ? '<div style="margin-top:.75rem;font-size:.75rem;color:var(--text-muted)">Monitor: <strong style="color:var(--text-secondary)">' + esc(mon.name) + '</strong></div>' : '') + '</div>';
+            const rs = getBusReserve(b);
+            const avail = Math.max(0, (b.capacity || 0) - staff - rs);
+            const rsLabel = b.reserveMode === 'custom' ? rs + ' (custom)' : rs;
+            return '<div class="bus-card"><div class="bus-card-stripe" style="background:' + esc(b.color) + '"></div><div class="bus-card-header"><div><div class="bus-card-name">' + esc(b.name) + '</div>' + (b.notes ? '<div class="bus-card-number">' + esc(b.notes) + '</div>' : '') + '</div><div class="bus-card-actions"><button onclick="CampistryGo.editBus(\'' + b.id + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="delete" onclick="CampistryGo.deleteBus(\'' + b.id + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div></div><div class="bus-card-stats"><div class="bus-stat"><div class="bus-stat-value">' + b.capacity + '</div><div class="bus-stat-label">Seats</div></div><div class="bus-stat"><div class="bus-stat-value">' + avail + '</div><div class="bus-stat-label">For Kids</div></div><div class="bus-stat"><div class="bus-stat-value">' + staff + '</div><div class="bus-stat-label">Staff</div></div><div class="bus-stat"><div class="bus-stat-value">' + rsLabel + '</div><div class="bus-stat-label">Reserved</div></div></div>' + (mon ? '<div style="margin-top:.75rem;font-size:.75rem;color:var(--text-muted)">Monitor: <strong style="color:var(--text-secondary)">' + esc(mon.name) + '</strong></div>' : '') + '</div>';
         }).join('') + '</div>';
     }
     function openBusModal(editId) {
@@ -674,6 +681,11 @@
         document.getElementById('busName').value = ex?.name || '';
         document.getElementById('busCapacity').value = ex?.capacity || '';
         document.getElementById('busNotes').value = ex?.notes || '';
+        // Per-bus reserve seats
+        const mode = ex?.reserveMode || 'default';
+        document.getElementById('busReserveMode').value = mode;
+        document.getElementById('busReserveCustom').value = ex?.reserveSeats ?? '';
+        document.getElementById('busReserveCustom').style.display = mode === 'custom' ? '' : 'none';
         openModal('busModal'); document.getElementById('busName').focus();
     }
     function _pickColor(el) { el.parentElement.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected')); el.classList.add('selected'); }
@@ -681,10 +693,109 @@
         const name = document.getElementById('busName')?.value.trim(), cap = parseInt(document.getElementById('busCapacity')?.value);
         const color = document.querySelector('#busColorPicker .color-swatch.selected')?.dataset.color || BUS_COLORS[0];
         const notes = document.getElementById('busNotes')?.value.trim();
+        const reserveMode = document.getElementById('busReserveMode')?.value || 'default';
+        const reserveSeats = reserveMode === 'custom' ? (parseInt(document.getElementById('busReserveCustom')?.value) || 0) : null;
         if (!name) { toast('Enter name', 'error'); return; } if (!cap || cap < 1) { toast('Enter capacity', 'error'); return; }
-        if (_editBusId) { const b = D.buses.find(x => x.id === _editBusId); if (b) { b.name = name; b.capacity = cap; b.color = color; b.notes = notes; } }
-        else D.buses.push({ id: uid(), name, capacity: cap, color, notes });
+        if (_editBusId) { const b = D.buses.find(x => x.id === _editBusId); if (b) { b.name = name; b.capacity = cap; b.color = color; b.notes = notes; b.reserveMode = reserveMode; b.reserveSeats = reserveSeats; } }
+        else D.buses.push({ id: uid(), name, capacity: cap, color, notes, reserveMode, reserveSeats });
         save(); closeModal('busModal'); renderFleet(); updateStats(); updateBusSelects(); toast(_editBusId ? 'Updated' : 'Bus added');
+    }
+
+    // ── Quick Create: smart batch bus creation ──
+    const COLOR_NAME_MAP = {
+        'red': '#ef4444', 'blue': '#3b82f6', 'green': '#22c55e', 'yellow': '#f59e0b',
+        'purple': '#a855f7', 'pink': '#ec4899', 'orange': '#f97316', 'teal': '#06b6d4',
+        'black': '#1e293b', 'white': '#94a3b8', 'gold': '#f59e0b', 'silver': '#94a3b8',
+        'navy': '#1e3a5f', 'maroon': '#991b1b', 'lime': '#84cc16', 'cyan': '#06b6d4'
+    };
+    const COLOR_SEQUENCE = ['Blue', 'Red', 'Green', 'Yellow', 'Purple', 'Pink', 'Orange', 'Teal', 'Navy', 'Maroon', 'Lime', 'Cyan', 'Gold', 'Silver', 'Black', 'White'];
+
+    function quickCreateBuses() {
+        const h = '<div style="margin-bottom:14px;font-size:.85rem;color:var(--text-secondary)">Create multiple buses at once. Smart naming auto-generates the rest.</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
+            '<div class="form-group"><label class="form-label">Number of Buses</label><input type="number" class="form-input" id="qcCount" value="8" min="1" max="30"></div>' +
+            '<div class="form-group"><label class="form-label">Seats Per Bus</label><input type="number" class="form-input" id="qcSeats" value="46" min="1" max="100"></div>' +
+            '</div>' +
+            '<div class="form-group"><label class="form-label">First Bus Name</label><input type="text" class="form-input" id="qcName" placeholder="e.g. Bus 1, Blue Bus, Van A" value="Bus 1"><span class="form-hint">System will auto-name the rest: Bus 1 → Bus 2, Bus 3... or Blue → Red, Green...</span></div>' +
+            '<div id="qcPreview" style="margin-top:12px;max-height:200px;overflow-y:auto;font-size:.8rem;border:1px solid var(--border-light,#e2e8f0);border-radius:8px;padding:8px"></div>';
+
+        // Use the existing modal infrastructure
+        const existing = document.getElementById('quickCreateModal');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'quickCreateModal';
+        overlay.className = 'modal-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
+        overlay.innerHTML = '<div class="modal" style="max-width:480px"><div class="modal-header"><h3>Quick Create Buses</h3><button class="modal-close" onclick="document.getElementById(\'quickCreateModal\').remove()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">' + h + '</div><div class="modal-footer"><button class="btn btn-secondary" onclick="document.getElementById(\'quickCreateModal\').remove()">Cancel</button><button class="btn btn-primary" id="qcCreate">Create Buses</button></div></div>';
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+        function updatePreview() {
+            const count = parseInt(document.getElementById('qcCount').value) || 1;
+            const seats = parseInt(document.getElementById('qcSeats').value) || 46;
+            const firstName = (document.getElementById('qcName').value || '').trim() || 'Bus 1';
+            const names = generateBusNames(firstName, count);
+            document.getElementById('qcPreview').innerHTML = '<div style="font-weight:600;margin-bottom:6px">Preview:</div>' +
+                names.map((n, i) => '<div style="display:flex;align-items:center;gap:8px;padding:3px 0"><span style="width:12px;height:12px;border-radius:50%;background:' + n.color + ';flex-shrink:0"></span><span style="font-weight:500">' + esc(n.name) + '</span><span style="color:var(--text-muted);font-size:.75rem">' + seats + ' seats</span></div>').join('');
+        }
+        updatePreview();
+        document.getElementById('qcCount').oninput = updatePreview;
+        document.getElementById('qcName').oninput = updatePreview;
+
+        document.getElementById('qcCreate').onclick = function () {
+            const count = parseInt(document.getElementById('qcCount').value) || 1;
+            const seats = parseInt(document.getElementById('qcSeats').value) || 46;
+            const firstName = (document.getElementById('qcName').value || '').trim() || 'Bus 1';
+            const names = generateBusNames(firstName, count);
+            names.forEach(n => {
+                D.buses.push({ id: uid(), name: n.name, capacity: seats, color: n.color, notes: '', reserveMode: 'default', reserveSeats: null });
+            });
+            save(); overlay.remove(); renderFleet(); updateStats(); updateBusSelects();
+            toast(count + ' bus' + (count !== 1 ? 'es' : '') + ' created');
+        };
+    }
+
+    function generateBusNames(firstName, count) {
+        const results = [];
+        // Detect naming pattern
+        const numMatch = firstName.match(/^(.+?)(\d+)\s*$/);
+        const colorMatch = firstName.match(/^(.+?\s+)?(blue|red|green|yellow|purple|pink|orange|teal|black|white|gold|silver|navy|maroon|lime|cyan)\s*(.*?)$/i);
+
+        if (colorMatch) {
+            // Color-based naming: "Blue Bus" → Red Bus, Green Bus...
+            const prefix = (colorMatch[1] || '').trim();
+            const startColor = colorMatch[2];
+            const suffix = (colorMatch[3] || '').trim();
+            const startIdx = COLOR_SEQUENCE.findIndex(c => c.toLowerCase() === startColor.toLowerCase());
+            for (let i = 0; i < count; i++) {
+                const colorName = COLOR_SEQUENCE[(startIdx >= 0 ? startIdx : 0) + i] || COLOR_SEQUENCE[i % COLOR_SEQUENCE.length];
+                const hexColor = COLOR_NAME_MAP[colorName.toLowerCase()] || BUS_COLORS[i % BUS_COLORS.length];
+                const name = (prefix ? prefix + ' ' : '') + colorName + (suffix ? ' ' + suffix : '');
+                results.push({ name, color: hexColor });
+            }
+        } else if (numMatch) {
+            // Numbered: "Bus 1" → Bus 2, Bus 3...
+            const prefix = numMatch[1];
+            const startNum = parseInt(numMatch[2]);
+            for (let i = 0; i < count; i++) {
+                results.push({ name: prefix + (startNum + i), color: BUS_COLORS[(D.buses.length + i) % BUS_COLORS.length] });
+            }
+        } else {
+            // Letter-based: "Van A" → Van B, Van C... or just numbered fallback
+            const letterMatch = firstName.match(/^(.+?)([A-Z])\s*$/);
+            if (letterMatch) {
+                const prefix = letterMatch[1];
+                const startChar = letterMatch[2].charCodeAt(0);
+                for (let i = 0; i < count; i++) {
+                    results.push({ name: prefix + String.fromCharCode(startChar + i), color: BUS_COLORS[(D.buses.length + i) % BUS_COLORS.length] });
+                }
+            } else {
+                for (let i = 0; i < count; i++) {
+                    results.push({ name: firstName + (i > 0 ? ' ' + (i + 1) : ''), color: BUS_COLORS[(D.buses.length + i) % BUS_COLORS.length] });
+                }
+            }
+        }
+        return results;
     }
     function editBus(id) { openBusModal(id); }
     function deleteBus(id) { const b = D.buses.find(x => x.id === id); if (!b || !confirm('Delete "' + b.name + '"?')) return; D.buses = D.buses.filter(x => x.id !== id); D.monitors.forEach(m => { if (m.assignedBus === id) m.assignedBus = ''; }); D.counselors.forEach(c => { if (c.assignedBus === id) c.assignedBus = ''; }); save(); renderFleet(); renderStaff(); updateStats(); updateBusSelects(); toast('Deleted'); }
@@ -1088,7 +1199,7 @@
         const roster = getRoster(); const camperCount = Object.keys(roster).length;
         let geocoded = 0; Object.keys(roster).forEach(n => { if (D.addresses[n]?.geocoded) geocoded++; });
         const rs = parseInt(document.getElementById('routeReserveSeats')?.value) || D.setup.reserveSeats || 0;
-        let totalSeats = 0; D.buses.forEach(b => { const m = D.monitors.find(x => x.assignedBus === b.id); const co = D.counselors.filter(x => x.assignedBus === b.id); totalSeats += Math.max(0, (b.capacity || 0) - 1 - (m ? 1 : 0) - co.length - rs); });
+        let totalSeats = 0; D.buses.forEach(b => { const m = D.monitors.find(x => x.assignedBus === b.id); const co = D.counselors.filter(x => x.assignedBus === b.id); const brs = getBusReserve(b); totalSeats += Math.max(0, (b.capacity || 0) - (m ? 1 : 0) - co.length - brs); });
         let inShifts = 0; Object.entries(roster).forEach(([n, c]) => { if (D.shifts.some(sh => camperMatchesShift(c, sh))) inShifts++; });
         const largestShift = D.shifts.length ? Math.max(...D.shifts.map(s => countCampersForShift(s))) : 0;
         let pickupCount = 0; Object.keys(roster).forEach(n => { if (D.addresses[n]?.transport === 'pickup') pickupCount++; });
@@ -1129,7 +1240,7 @@
         const body = document.getElementById('regionPreviewBody');
         if (!_detectedRegions?.length) { body.innerHTML = '<div style="text-align:center;padding:1.5rem;color:var(--text-muted);">No regions detected yet</div>'; return; }
         const roster = getRoster(); const rs = parseInt(document.getElementById('routeReserveSeats')?.value) || D.setup.reserveSeats || 0;
-        let perBusCap = 0; if (D.buses.length) { let tc = 0; D.buses.forEach(b => { const m = D.monitors.find(x => x.assignedBus === b.id); const co = D.counselors.filter(x => x.assignedBus === b.id); tc += Math.max(0, (b.capacity || 0) - 1 - (m ? 1 : 0) - co.length - rs); }); perBusCap = Math.floor(tc / D.buses.length); }
+        let perBusCap = 0; if (D.buses.length) { let tc = 0; D.buses.forEach(b => { const m = D.monitors.find(x => x.assignedBus === b.id); const co = D.counselors.filter(x => x.assignedBus === b.id); const brs = getBusReserve(b); tc += Math.max(0, (b.capacity || 0) - (m ? 1 : 0) - co.length - brs); }); perBusCap = Math.floor(tc / D.buses.length); }
         let html = '';
         _detectedRegions.forEach(reg => {
             const shiftBadges = D.shifts.map(sh => { let count = 0; reg.camperNames.forEach(n => { const c = roster[n]; if (c && camperMatchesShift(c, sh)) count++; }); const busesNeeded = perBusCap > 0 ? Math.ceil(count / perBusCap) : '?'; return '<span class="region-shift-badge">' + esc(sh.label || 'Shift') + ': <strong>' + count + '</strong> → ' + busesNeeded + ' bus(es)</span>'; }).join('');
@@ -1200,7 +1311,8 @@
         const effectiveCaps = buses.map(b => {
             const mon = D.monitors.find(m => m.assignedBus === b.id);
             const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            return Math.max(0, (b.capacity || 0) - 1 - (mon ? 1 : 0) - couns.length - (reserveSeats || 0));
+            const brs = b.reserveMode === 'custom' && b.reserveSeats != null ? b.reserveSeats : (reserveSeats || 0);
+            return Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs);
         });
         const totalCapacity = effectiveCaps.reduce((s, c) => s + c, 0);
         let targetFillPct = 0.90;
@@ -1874,7 +1986,8 @@
         const vehicles = D.buses.map(b => {
             const mon = D.monitors.find(m => m.assignedBus === b.id);
             const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            return { busId: b.id, name: b.name, color: b.color || '#10b981', capacity: Math.max(0, (b.capacity || 0) - 1 - (mon ? 1 : 0) - couns.length - reserveSeats), monitor: mon, counselors: couns };
+            const brs = getBusReserve(b);
+            return { busId: b.id, name: b.name, color: b.color || '#10b981', capacity: Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs), monitor: mon, counselors: couns };
         });
 
         let campCoords = null;
@@ -4352,7 +4465,7 @@
     // =========================================================================
     window.CampistryGo = {
         saveSetup, testApiKey,
-        openBusModal, saveBus, editBus, deleteBus, _pickColor,
+        openBusModal, saveBus, editBus, deleteBus, _pickColor, quickCreateBuses,
         addShift, deleteShift, toggleShiftDiv, updateShiftTime, renameShift,
         toggleShiftGrade, setShiftGradeMode, toggleShiftBus, setAllShiftBuses,
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
