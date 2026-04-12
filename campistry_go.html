@@ -73,7 +73,6 @@
             <button class="tab-btn" data-tab="addresses">Addresses</button>
             <button class="tab-btn" data-tab="fleet">Bus Fleet</button>
             <button class="tab-btn" data-tab="staff">Staff</button>
-            <button class="tab-btn" data-tab="preflight">Preflight</button>
             <button class="tab-btn" data-tab="routes">Routes & Map</button>
         </div>
 
@@ -250,19 +249,13 @@
         </div>
 
         <!-- PREFLIGHT -->
-        <div id="tab-preflight" class="tab-content">
-            <div class="card" style="margin-bottom:1.5rem">
+        <!-- ROUTES & MAP -->
+        <div id="tab-routes" class="tab-content">
+            <!-- Preflight checklist (inline) -->
+            <div class="card" style="margin-bottom:1rem">
                 <div class="card-header"><h2>Pre-Flight Checklist</h2><span class="badge badge-neutral" id="preflightStatus">—</span></div>
                 <div class="card-body" id="preflightBody"></div>
             </div>
-            <div class="card">
-                <div class="card-header"><h2>Detected Regions</h2><button class="btn btn-secondary btn-sm" onclick="CampistryGo.detectRegions()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg> Detect Regions</button></div>
-                <div class="card-body" id="regionPreviewBody"><div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.875rem;">Click "Detect Regions" to analyze camper addresses</div></div>
-            </div>
-        </div>
-
-        <!-- ROUTES & MAP -->
-        <div id="tab-routes" class="tab-content">
             <!-- Action bar -->
             <div class="action-bar" style="margin-bottom:1rem;">
                 <button class="btn btn-primary" id="generateRoutesBtn" onclick="CampistryGo.generateRoutes()" disabled>
