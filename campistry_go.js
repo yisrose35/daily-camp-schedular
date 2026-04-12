@@ -3421,7 +3421,135 @@
                 console.log('[Go]   Zone "' + za.zone.name + '": ' + za.zone.camperNames.length + ' kids → ' + za.vehicle.name + ' (cap ' + za.vehicle.capacity + ')');
             });
 
-            // Create stops PER ZONE, then VROOM order each
+            // ── Global Multi-Bus VROOM: single API call with all buses + all stops ──
+            // VROOM is a VRP solver — it handles assignment + ordering simultaneously.
+            // Uses zone centroids as vehicle start hints for geographic locality.
+            // Falls back to per-zone VROOM if global call fails.
+            let globalVROOMSucceeded = false;
+            if (apiKey && zoneAssignments.length >= 2) {
+                try {
+                    // Create all stops across all zones
+                    const allStops = [];
+                    const allStopZoneMap = []; // which zone each stop belongs to
+                    for (const za of zoneAssignments) {
+                        const zoneCampers = za.zone.camperNames.map(n => campers.find(c => c.name === n)).filter(Boolean);
+                        if (!zoneCampers.length) continue;
+                        let zoneStops;
+                        if (mode === 'optimized-stops') zoneStops = createOptimizedStops(zoneCampers);
+                        else if (mode === 'corner-stops') zoneStops = await createCornerStops(zoneCampers);
+                        else zoneStops = createHouseStops(zoneCampers);
+                        zoneStops.forEach(s => {
+                            allStops.push(s);
+                            allStopZoneMap.push(za);
+                        });
+                    }
+
+                    if (allStops.length > 0 && allStops.length <= 100) {
+                        // Build VROOM jobs
+                        const jobs = allStops.map((stop, i) => ({
+                            id: i + 1,
+                            location: [stop.lng, stop.lat],
+                            service: serviceTime,
+                            amount: [stop.campers.length],
+                            description: stop.address
+                        }));
+
+                        // Build VROOM vehicles — one per assigned zone, start at zone centroid
+                        const vroomVehicles = zoneAssignments.map((za, vi) => {
+                            const v = za.vehicle;
+                            const veh = {
+                                id: vi + 1,
+                                profile: 'driving-car',
+                                capacity: [v.capacity],
+                                description: v.name
+                            };
+                            if (isArrival) {
+                                // Start at zone centroid (farthest point), end at camp
+                                veh.start = [za.zone.centroidLng || campLng, za.zone.centroidLat || campLat];
+                                veh.end = [campLng, campLat];
+                            } else {
+                                veh.start = [campLng, campLat];
+                                if (needsReturn) veh.end = [campLng, campLat];
+                            }
+                            return veh;
+                        });
+
+                        console.log('[Go] Global VROOM: ' + jobs.length + ' stops, ' + vroomVehicles.length + ' vehicles');
+                        const resp = await fetch('https://api.openrouteservice.org/optimization', {
+                            method: 'POST',
+                            headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ jobs, vehicles: vroomVehicles })
+                        });
+
+                        if (resp.ok) {
+                            const result = await resp.json();
+                            if (result.routes?.length) {
+                                // Build routes from VROOM's global assignment
+                                result.routes.forEach(vr => {
+                                    const za = zoneAssignments[vr.vehicle - 1];
+                                    if (!za) return;
+                                    const orderedStops = [];
+                                    vr.steps.forEach(step => {
+                                        if (step.type !== 'job') return;
+                                        const stop = allStops[step.id - 1];
+                                        if (stop) orderedStops.push(stop);
+                                    });
+                                    if (!orderedStops.length) return;
+
+                                    // Orientation check
+                                    if (orderedStops.length >= 2) {
+                                        const firstDist = haversineMi(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
+                                        const lastDist = haversineMi(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
+                                        if (isArrival && firstDist < lastDist) orderedStops.reverse();
+                                        if (!isArrival && firstDist > lastDist) orderedStops.reverse();
+                                    }
+
+                                    orderedStops.forEach((s, i) => { s.stopNum = i + 1; });
+                                    allRoutes.push({
+                                        busId: za.vehicle.busId, busName: za.vehicle.name,
+                                        busColor: za.vehicle.color, monitor: za.vehicle.monitor,
+                                        counselors: za.vehicle.counselors || [],
+                                        stops: orderedStops.map((s, i) => ({
+                                            stopNum: i + 1, campers: s.campers, address: s.address,
+                                            lat: s.lat, lng: s.lng
+                                        })),
+                                        camperCount: orderedStops.reduce((sum, s) => sum + s.campers.length, 0),
+                                        _cap: za.vehicle.capacity
+                                    });
+                                });
+
+                                // Handle unassigned stops
+                                if (result.unassigned?.length) {
+                                    console.warn('[Go] Global VROOM: ' + result.unassigned.length + ' unassigned stops — inserting via cheapest-insert');
+                                    result.unassigned.forEach(ua => {
+                                        const stop = allStops[ua.id - 1];
+                                        if (!stop) return;
+                                        // Find route with most remaining capacity
+                                        let bestRoute = allRoutes[0];
+                                        allRoutes.forEach(r => {
+                                            if ((r._cap - r.camperCount) > (bestRoute._cap - bestRoute.camperCount)) bestRoute = r;
+                                        });
+                                        if (bestRoute) cheapestInsert(bestRoute.stops, { ...stop, stopNum: bestRoute.stops.length + 1 });
+                                    });
+                                }
+
+                                globalVROOMSucceeded = allRoutes.length > 0;
+                                if (globalVROOMSucceeded) {
+                                    console.log('[Go] Global VROOM succeeded: ' + allRoutes.length + ' routes, ' +
+                                        allRoutes.reduce((s, r) => s + r.stops.length, 0) + ' stops');
+                                }
+                            }
+                        } else {
+                            console.warn('[Go] Global VROOM failed: HTTP ' + resp.status + ', falling back to per-zone');
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[Go] Global VROOM error:', e.message, '— falling back to per-zone');
+                }
+            }
+
+            // ── Per-zone VROOM fallback (if global failed or not attempted) ──
+            if (!globalVROOMSucceeded) {
             const zonePromises = zoneAssignments.map(async (za) => {
                 const zoneCampers = za.zone.camperNames.map(n => campers.find(c => c.name === n)).filter(Boolean);
                 if (!zoneCampers.length) return null;
@@ -3593,6 +3721,7 @@
 
             const zoneResults = await Promise.all(zonePromises);
             zoneResults.forEach(r => { if (r) allRoutes.push(r); });
+            } // end if (!globalVROOMSucceeded)
 
             // Ensure all buses have route entries
             vehicles.forEach(v => {
