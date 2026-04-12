@@ -3564,7 +3564,7 @@
             uniqueBuses.map(b => '<button class="bus-tab' + (_activeMapBuses.has(b.busId) ? ' active' : '') + '" onclick="CampistryGo.toggleMapBus(\'' + b.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(b.busColor) + '"></span>' + esc(b.busName) + '</button>').join('') +
             '<span style="margin-left:auto;display:flex;gap:4px;align-items:center;">' +
             '<button class="bus-tab' + (!_hideRoutes ? ' active' : '') + '" onclick="CampistryGo.toggleHideRoutes()" style="' + (!_hideRoutes ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '" title="Show/hide route lines">Routes</button>' +
-            (_slicedZones ? '<button class="bus-tab' + (_showZones ? ' active' : '') + '" onclick="CampistryGo.toggleZones()" style="' + (_showZones ? 'background:var(--green-50,#f0fdf4);border-color:var(--green-300,#86efac);' : '') + '" title="Show/hide zone regions">Zones</button>' : '') +
+            '<button class="bus-tab' + (_showZones ? ' active' : '') + '" onclick="CampistryGo.toggleZones()" style="' + (_showZones ? 'background:var(--green-50,#f0fdf4);border-color:var(--green-300,#86efac);' : '') + '" title="Show/hide bus zone regions">Zones</button>' +
             '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'both' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'both\')" style="' + (_showAddressPins && _addressPinMode === 'both' ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">All Pins</button>' +
             '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'campers' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'campers\')" style="' + (_showAddressPins && _addressPinMode === 'campers' ? 'background:var(--blue-50);border-color:var(--blue-300);' : '') + '">Campers</button>' +
             '<button class="bus-tab' + (_showAddressPins && _addressPinMode === 'staff' ? ' active' : '') + '" onclick="CampistryGo.setAddressPinMode(\'staff\')" style="' + (_showAddressPins && _addressPinMode === 'staff' ? 'background:var(--amber-50);border-color:var(--amber-300);' : '') + '">Staff</button>' +
@@ -3698,35 +3698,59 @@
         _zoneLayers = [];
     }
     function renderZoneLayers() {
-        if (!_map || !_slicedZones?.length) return;
+        if (!_map || !_generatedRoutes) return;
         clearZoneLayers();
-        _slicedZones.forEach((zone, zi) => {
-            const camperCoords = zone.camperNames.map(n => {
-                const a = D.addresses[n];
-                return a?.lat ? [a.lat, a.lng] : null;
-            }).filter(Boolean);
-            if (!camperCoords.length) return;
-            const color = zone.color || REGION_COLORS[zi % REGION_COLORS.length];
 
-            // Convex hull polygon
-            const hull = convexHull(camperCoords);
-            if (hull.length >= 3) {
-                const polygon = L.polygon(hull, {
-                    color: color, weight: 2, fillOpacity: 0.12, dashArray: '6, 4'
-                }).addTo(_map);
-                polygon.bindPopup('<strong>' + esc(zone.name) + '</strong><br>' + zone.camperNames.length + ' campers');
-                _zoneLayers.push(polygon);
-            }
+        // Build zones from actual route data — one polygon per bus,
+        // using all camper home addresses on that bus as the boundary.
+        // This naturally combines multiple source zones into one shape
+        // when a bus covers more than one zone.
+        const shiftIndices = [..._activeShifts].sort();
+        const busZones = {}; // busId → {color, name, coords[]}
 
-            // Label at centroid
+        shiftIndices.forEach(si => {
+            const sr = _generatedRoutes[si];
+            if (!sr) return;
+            sr.routes.forEach(r => {
+                if (!r.stops.length) return;
+                if (!isBusVisible(r.busId)) return;
+                if (!busZones[r.busId]) busZones[r.busId] = { color: r.busColor, name: r.busName, coords: [], kidCount: 0 };
+                r.stops.forEach(st => {
+                    if (st.isMonitor || st.isCounselor) return;
+                    // Use camper home addresses for a tighter hull
+                    st.campers.forEach(c => {
+                        const a = D.addresses[c.name];
+                        if (a?.lat && a.lng) busZones[r.busId].coords.push([a.lat, a.lng]);
+                    });
+                    busZones[r.busId].kidCount += st.campers.length;
+                });
+            });
+        });
+
+        Object.values(busZones).forEach(bz => {
+            if (bz.coords.length < 3) return;
+
+            const hull = convexHull(bz.coords);
+            if (hull.length < 3) return;
+
+            const polygon = L.polygon(hull, {
+                color: bz.color, weight: 2.5, fillOpacity: 0.12, dashArray: '6, 4'
+            }).addTo(_map);
+            polygon.bindPopup('<strong>' + esc(bz.name) + '</strong><br>' + bz.kidCount + ' campers');
+            _zoneLayers.push(polygon);
+
+            // Label at centroid of hull
+            const cLat = hull.reduce((s, p) => s + p[0], 0) / hull.length;
+            const cLng = hull.reduce((s, p) => s + p[1], 0) / hull.length;
             const labelIcon = L.divIcon({
-                html: '<div style="background:' + esc(color) + ';color:#fff;padding:3px 7px;border-radius:5px;font-size:10px;font-weight:700;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3);font-family:DM Sans,sans-serif;opacity:.9;">' + esc(zone.name) + ' (' + zone.camperNames.length + ')</div>',
+                html: '<div style="background:' + esc(bz.color) + ';color:#fff;padding:3px 7px;border-radius:5px;font-size:10px;font-weight:700;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3);font-family:DM Sans,sans-serif;opacity:.9;">' + esc(bz.name) + ' (' + bz.kidCount + ')</div>',
                 className: '', iconAnchor: [50, 10]
             });
-            const label = L.marker([zone.centroidLat, zone.centroidLng], { icon: labelIcon, interactive: false }).addTo(_map);
+            const label = L.marker([cLat, cLng], { icon: labelIcon, interactive: false }).addTo(_map);
             _zoneLayers.push(label);
         });
-        console.log('[Go] Zone overlay: ' + _slicedZones.length + ' zones displayed');
+
+        console.log('[Go] Zone overlay: ' + Object.keys(busZones).length + ' bus zones displayed');
     }
     function toggleAddressPins() { setAddressPinMode(_addressPinMode); }
     function toggleMapShift(idx) { if (_activeShifts.has(idx)) { if (_activeShifts.size > 1) _activeShifts.delete(idx); } else _activeShifts.add(idx); renderMap(true); renderFilteredMasterList(); }
