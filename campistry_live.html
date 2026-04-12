@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en" data-product="live">
+<head>
+    <meta charset="UTF-8" />
+    <title>Campistry Live | Mission Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <style>html:not(.css-ready) body{opacity:0}html.css-ready body{transition:opacity .15s ease}</style>
+    <link rel="stylesheet" href="campistry-unified.css">
+    <link rel="stylesheet" href="campistry_live.css">
+    <noscript><style>html body{opacity:1!important}</style></noscript>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header class="app-header">
+    <div class="header-left">
+        <a href="dashboard.html" style="color:#2563EB;text-decoration:none;font-weight:500;margin-right:16px">&larr; Dashboard</a>
+        <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle Navigation"><span></span><span></span><span></span></button>
+        <div class="app-title">
+            <img src="Live_clean.png" alt="Campistry Live" class="app-logo-full" style="height:43px;max-height:45px;width:auto;position:relative;top:2px;">
+        </div>
+        <a href="campistry_me.html" class="header-app-switch" title="Campistry Me">
+            <img src="Me_clean.png" alt="Me" class="app-logo-full" style="height:40px;max-height:42px;width:auto;position:relative;top:4px;">
+        </a>
+        <a href="flow.html" class="header-app-switch" title="Campistry Flow">
+            <img src="Flow_clean.png" alt="Flow" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+        <a href="campistry_go.html" class="header-app-switch" title="Campistry Go">
+            <img src="Go_clean.png" alt="Go" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+        <a href="campistry_health.html" class="header-app-switch" title="Campistry Health">
+            <img src="Health_clean.png" alt="Health" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+        <a href="campistry_snacks.html" class="header-app-switch" title="Campistry Snacks">
+            <img src="Snacks_clean.png" alt="Snacks" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+        <a href="campistry_link_admin.html" class="header-app-switch" title="Campistry Link">
+            <img src="Link_clean.png" alt="Link" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+    </div>
+    <div class="header-right">
+        <div class="live-clock" id="liveClock">--:-- --</div>
+        <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
+        <span class="nav-user" id="navUserEmail">Office</span>
+    </div>
+</header>
+
+<!-- ═══ SIDEBAR ═══ -->
+<div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+<aside id="sidebar" class="sidebar">
+    <div class="sidebar-label">Mission Control</div>
+    <button class="sidebar-item active" data-page="dashboard"><span class="sidebar-dot"></span> Dashboard</button>
+    <button class="sidebar-item" data-page="activity-board"><span class="sidebar-dot"></span> Activity Board</button>
+    <button class="sidebar-item" data-page="bunk-tracker"><span class="sidebar-dot"></span> Bunk Tracker</button>
+    <div class="sidebar-label">Attendance</div>
+    <button class="sidebar-item" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
+    <button class="sidebar-item" data-page="absences"><span class="sidebar-dot"></span> Absences &amp; Exceptions</button>
+    <button class="sidebar-item" data-page="early-pickup"><span class="sidebar-dot"></span> Early Pickups</button>
+    <div class="sidebar-label">Reports</div>
+    <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Attendance Reports</button>
+</aside>
+
+<!-- ═══ MAIN CONTENT ═══ -->
+<div class="app-content">
+
+<!-- ── DASHBOARD ── -->
+<div id="page-dashboard" class="live-page active">
+    <div class="page-header">
+        <div><div class="page-title">Camp Mission Control</div><div class="page-subtitle" id="dashDateLine">Loading...</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="CampistryLive.refresh()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+            <button class="btn btn-primary" onclick="CampistryLive.openAbsenceModal()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/></svg> Mark Absent</button>
+        </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="stats-grid">
+        <div class="stat-card"><div class="stat-icon blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg></div><div><div class="stat-value" id="statTotalCampers">—</div><div class="stat-label">Total Campers</div></div></div>
+        <div class="stat-card"><div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div><div><div class="stat-value" id="statPresent">—</div><div class="stat-label">Present Today</div></div></div>
+        <div class="stat-card"><div class="stat-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div><div><div class="stat-value" id="statAbsent">—</div><div class="stat-label">Absent</div></div></div>
+        <div class="stat-card"><div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div><div><div class="stat-value" id="statCurrentPeriod">—</div><div class="stat-label">Current Period</div></div></div>
+    </div>
+
+    <!-- Live activity grid -->
+    <div class="card">
+        <div class="card-header"><h2>Right Now — Activity Overview</h2><span class="period-label" id="currentPeriodLabel"></span></div>
+        <div class="card-body" id="activityOverviewBody"><div class="empty-state">Loading schedule data...</div></div>
+    </div>
+
+    <!-- Division summary -->
+    <div class="card">
+        <div class="card-header"><h2>Division Summary</h2></div>
+        <div class="card-body" id="divisionSummaryBody"><div class="empty-state">Loading...</div></div>
+    </div>
+</div>
+
+<!-- ── ACTIVITY BOARD ── -->
+<div id="page-activity-board" class="live-page">
+    <div class="page-header">
+        <div><div class="page-title">Activity Board</div><div class="page-subtitle">Every activity happening right now — who's where</div></div>
+    </div>
+    <div id="activityBoardBody"><div class="empty-state">Loading...</div></div>
+</div>
+
+<!-- ── BUNK TRACKER ── -->
+<div id="page-bunk-tracker" class="live-page">
+    <div class="page-header">
+        <div><div class="page-title">Bunk Tracker</div><div class="page-subtitle">Track every bunk through the day</div></div>
+        <div class="page-actions">
+            <div class="search-bar" style="width:280px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="bunkSearch" placeholder="Search bunk or camper..." oninput="CampistryLive.filterBunks(this.value)"></div>
+        </div>
+    </div>
+    <div id="bunkTrackerBody"><div class="empty-state">Loading...</div></div>
+</div>
+
+<!-- ── ROLL CALL ── -->
+<div id="page-roll-call" class="live-page">
+    <div class="page-header">
+        <div><div class="page-title">Morning Roll Call</div><div class="page-subtitle">Mark attendance by division — who's here today?</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="CampistryLive.markAllPresent()">Mark All Present</button>
+        </div>
+    </div>
+    <div id="rollCallBody"><div class="empty-state">Loading roster...</div></div>
+</div>
+
+<!-- ── ABSENCES & EXCEPTIONS ── -->
+<div id="page-absences" class="live-page">
+    <div class="page-header">
+        <div><div class="page-title">Absences &amp; Exceptions</div><div class="page-subtitle">Today's absent campers, late arrivals, early departures</div></div>
+        <div class="page-actions">
+            <button class="btn btn-primary" onclick="CampistryLive.openAbsenceModal()">+ Add Exception</button>
+        </div>
+    </div>
+    <div id="absencesBody"><div class="empty-state">No absences recorded today</div></div>
+</div>
+
+<!-- ── EARLY PICKUPS ── -->
+<div id="page-early-pickup" class="live-page">
+    <div class="page-header">
+        <div><div class="page-title">Early Pickups</div><div class="page-subtitle">Campers leaving before dismissal</div></div>
+        <div class="page-actions">
+            <button class="btn btn-primary" onclick="CampistryLive.openPickupModal()">+ Early Pickup</button>
+        </div>
+    </div>
+    <div id="earlyPickupBody"><div class="empty-state">No early pickups today</div></div>
+</div>
+
+<!-- ── REPORTS ── -->
+<div id="page-reports" class="live-page">
+    <div class="page-header">
+        <div><div class="page-title">Attendance Reports</div><div class="page-subtitle">Daily and weekly attendance summaries</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="CampistryLive.exportAttendanceCsv()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export CSV</button>
+        </div>
+    </div>
+    <div id="reportsBody"><div class="empty-state">Generate a report to view attendance data</div></div>
+</div>
+
+</div><!-- end app-content -->
+
+<!-- ═══ ABSENCE MODAL ═══ -->
+<div class="modal-overlay" id="absenceModal">
+    <div class="modal" style="max-width:480px;">
+        <div class="modal-header"><h3 id="absenceModalTitle">Mark Absent</h3><button class="modal-close" onclick="CampistryLive.closeModal('absenceModal')">&times;</button></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Search Camper</label><input type="text" class="form-input" id="absenceSearch" placeholder="Start typing name..." oninput="CampistryLive.filterAbsenceSearch(this.value)"></div>
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-input" id="absenceCamper"><option value="">— Select —</option></select></div>
+            <div class="form-group"><label class="form-label">Reason</label><select class="form-input" id="absenceReason"><option value="absent">Absent (not coming today)</option><option value="sick">Sick</option><option value="late">Late Arrival</option><option value="appointment">Doctor/Appointment</option><option value="family">Family Event</option><option value="other">Other</option></select></div>
+            <div class="form-group"><label class="form-label">Notes (optional)</label><input type="text" class="form-input" id="absenceNotes" placeholder="Any additional details..."></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryLive.closeModal('absenceModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryLive.saveAbsence()">Save</button></div>
+    </div>
+</div>
+
+<!-- ═══ EARLY PICKUP MODAL ═══ -->
+<div class="modal-overlay" id="pickupModal">
+    <div class="modal" style="max-width:480px;">
+        <div class="modal-header"><h3>Early Pickup</h3><button class="modal-close" onclick="CampistryLive.closeModal('pickupModal')">&times;</button></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Search Camper</label><input type="text" class="form-input" id="pickupSearch" placeholder="Start typing name..." oninput="CampistryLive.filterPickupSearch(this.value)"></div>
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-input" id="pickupCamper"><option value="">— Select —</option></select></div>
+            <div class="form-group"><label class="form-label">Pickup Time</label><input type="time" class="form-input" id="pickupTime"></div>
+            <div class="form-group"><label class="form-label">Picked Up By</label><input type="text" class="form-input" id="pickupBy" placeholder="Parent/guardian name"></div>
+            <div class="form-group"><label class="form-label">Reason</label><input type="text" class="form-input" id="pickupReason" placeholder="Optional"></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryLive.closeModal('pickupModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryLive.savePickup()">Confirm Pickup</button></div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toastEl"></div>
+
+<!-- ═══ SCRIPTS ═══ -->
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
+<script src="integration_hooks.js"></script>
+<script src="campistry_live.js"></script>
+<script>
+// Sidebar toggle
+(function(){
+    var h=document.getElementById('hamburgerBtn'),sb=document.getElementById('sidebar'),bd=document.getElementById('sidebarBackdrop'),sy=0;
+    function open(){sy=window.scrollY;document.body.style.top=-sy+'px';document.body.classList.add('sidebar-open')}
+    function close(){document.body.classList.remove('sidebar-open');document.body.style.top='';window.scrollTo(0,sy)}
+    h.addEventListener('click',function(){document.body.classList.contains('sidebar-open')?close():open()});
+    bd.addEventListener('click',close);
+    sb.querySelectorAll('.sidebar-item').forEach(function(b){
+        b.addEventListener('click',function(){
+            var p=b.dataset.page;
+            sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active')});
+            b.classList.add('active');
+            document.querySelectorAll('.live-page').forEach(function(x){x.classList.remove('active')});
+            var t=document.getElementById('page-'+p); if(t) t.classList.add('active');
+            close();
+        });
+    });
+})();
+</script>
+</body>
+</html>

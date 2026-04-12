@@ -85,10 +85,10 @@
     <img src="Health_clean.png" alt="Health" class="dash-ql-logo">
     <span>Health</span>
 </a>
-            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--live-color);">
+            <a href="campistry_live.html" class="dash-ql-tile" style="--ql-color: var(--live-color);">
                 <img src="Live_clean.png" alt="Live" class="dash-ql-logo">
                 <span>Live</span>
-            </div>
+            </a>
             <a href="campistry_snacks.html" class="dash-ql-tile" style="--ql-color: var(--snacks-color);">
                 <img src="Snacks_clean.png" alt="Snacks" class="dash-ql-logo">
                 <span>Snacks</span>
@@ -528,7 +528,7 @@ if (window.location.protocol === 'file:') {
             if (role === 'viewer') {
                 items.push({ type: 'info', icon: 'eye', text: 'You have view-only access. Contact your camp owner to request editing permissions.', time: 'Note' });
             }
-            items.push({ type: 'coming', icon: 'sparkle', text: 'Campistry Live, Snacks &amp; more features are coming soon — stay tuned for updates!', time: 'New' });
+            items.push({ type: 'coming', icon: 'sparkle', text: 'Campistry Live is here! Track attendance and see your whole camp in real time.', time: 'New' });
 
             var html = '';
             items.forEach(function(item) {
