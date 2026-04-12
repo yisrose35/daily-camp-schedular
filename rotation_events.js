@@ -1,12 +1,12 @@
 // =================================================================
-// rotation_events.js  (v2.0 — Scheduled Rounds)
+// rotation_events.js  (v2.0 — Scheduled Activities)
 // =================================================================
 // Camp-wide activities that every bunk must pass through once,
 // staggered across a date range within a daily time window.
 // Examples: lice checking, health screenings, photo day, fittings.
 //
 // Data stored in: globalSettings.rotationEvents[]
-// UI lives in: Daily Adjustments → "Scheduled Rounds" subtab
+// UI lives in: Daily Adjustments → "Scheduled Activities" subtab
 // Scheduler integration: window.RotationEvents.getAssignmentsForDate()
 // =================================================================
 (function () {
@@ -381,11 +381,11 @@ function renderRotationEventsPane(containerEl) {
         <div style="padding:16px;">
             <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
                 <div>
-                    <h3 style="margin:0; font-size:15px; font-weight:600; color:#0f172a;">Scheduled Rounds</h3>
+                    <h3 style="margin:0; font-size:15px; font-weight:600; color:#0f172a;">Scheduled Activities</h3>
                     <p style="margin:4px 0 0; font-size:12px; color:#64748b;">Activities every bunk passes through over multiple days</p>
                 </div>
                 <button id="re-add-event-btn" class="da-btn da-btn-primary" style="font-size:12px; padding:8px 14px;">
-                    + New Round
+                    + New Activity
                 </button>
             </div>
 
@@ -402,7 +402,7 @@ function renderRotationEventsPane(containerEl) {
                 </div>
             ` : `
                 <div style="padding:24px; text-align:center; background:#f8fafc; border-radius:10px; border:1px dashed #e2e8f0; margin-bottom:20px;">
-                    <div style="font-size:13px; color:#64748b;">No scheduled rounds active for today</div>
+                    <div style="font-size:13px; color:#64748b;">No scheduled activities active for today</div>
                 </div>
             `}
 
@@ -783,7 +783,7 @@ function injectSubtab() {
     const tab = document.createElement('button');
     tab.className = 'da-subtab';
     tab.dataset.tab = 'rotation-events';
-    tab.textContent = 'Scheduled Rounds';
+    tab.textContent = 'Scheduled Activities';
 
     // Insert before the last tab
     const tabs = subtabsBar.querySelectorAll('.da-subtab');
@@ -1100,6 +1100,6 @@ if (document.readyState === 'loading') {
     setTimeout(init, 600);
 }
 
-console.log('[ROTATION_EVENTS] Module v2.0 loaded (Scheduled Rounds)');
+console.log('[ROTATION_EVENTS] Module v2.0 loaded (Scheduled Activities)');
 
 })();
