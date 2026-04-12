@@ -1,12 +1,12 @@
 // =================================================================
-// rotation_events.js  (v1.0 — Camp-Wide Rotation Events)
+// rotation_events.js  (v2.0 — Scheduled Rounds)
 // =================================================================
 // Camp-wide activities that every bunk must pass through once,
 // staggered across a date range within a daily time window.
 // Examples: lice checking, health screenings, photo day, fittings.
 //
 // Data stored in: globalSettings.rotationEvents[]
-// UI lives in: Daily Adjustments → "Rotation Events" subtab
+// UI lives in: Daily Adjustments → "Scheduled Rounds" subtab
 // Scheduler integration: window.RotationEvents.getAssignmentsForDate()
 // =================================================================
 (function () {
@@ -78,6 +78,26 @@ function minutesToTime(min) {
     let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
     h = h % 12 || 12;
     return h + ':' + m.toString().padStart(2, '0') + ap;
+}
+
+// Format YYYY-MM-DD → DD/MM/YYYY for display
+function formatDate(dateKey) {
+    if (!dateKey || typeof dateKey !== 'string') return dateKey || '';
+    const parts = dateKey.split('-');
+    if (parts.length !== 3) return dateKey;
+    return parts[2] + '/' + parts[1] + '/' + parts[0];
+}
+
+// Parse DD/MM/YYYY or YYYY-MM-DD input → YYYY-MM-DD (internal format)
+function parseDateInput(str) {
+    if (!str || typeof str !== 'string') return null;
+    str = str.trim();
+    // Try DD/MM/YYYY
+    const dmy = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+    if (dmy) return dmy[3] + '-' + dmy[2].padStart(2, '0') + '-' + dmy[1].padStart(2, '0');
+    // Try YYYY-MM-DD (already internal format)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+    return null;
 }
 
 function parseTimeToMinutes(str) {
@@ -359,14 +379,18 @@ function renderRotationEventsPane(containerEl) {
 
     containerEl.innerHTML = `
         <div style="padding:16px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
                 <div>
-                    <h3 style="margin:0; font-size:15px; font-weight:600; color:#0f172a;">Rotation Events</h3>
-                    <p style="margin:4px 0 0; font-size:12px; color:#64748b;">Camp-wide activities every bunk passes through</p>
+                    <h3 style="margin:0; font-size:15px; font-weight:600; color:#0f172a;">Scheduled Rounds</h3>
+                    <p style="margin:4px 0 0; font-size:12px; color:#64748b;">Activities every bunk passes through over multiple days</p>
                 </div>
                 <button id="re-add-event-btn" class="da-btn da-btn-primary" style="font-size:12px; padding:8px 14px;">
-                    + New Event
+                    + New Round
                 </button>
+            </div>
+
+            <div style="padding:10px 14px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; margin-bottom:16px; font-size:12px; color:#1e40af; line-height:1.5;">
+                Use this to schedule camp-wide activities where every bunk needs a turn — like lice checks, photo day, or health screenings. Set a date range and time window, and the system will automatically spread bunks across the available days when you build the schedule.
             </div>
 
             ${activeEvents.length > 0 ? `
@@ -378,8 +402,7 @@ function renderRotationEventsPane(containerEl) {
                 </div>
             ` : `
                 <div style="padding:24px; text-align:center; background:#f8fafc; border-radius:10px; border:1px dashed #e2e8f0; margin-bottom:20px;">
-                    <div style="font-size:24px; margin-bottom:8px;">📋</div>
-                    <div style="font-size:13px; color:#64748b;">No rotation events active for today</div>
+                    <div style="font-size:13px; color:#64748b;">No scheduled rounds active for today</div>
                 </div>
             `}
 
@@ -395,7 +418,7 @@ function renderRotationEventsPane(containerEl) {
             ${pastEvents.length > 0 ? `
                 <details style="margin-bottom:12px;">
                     <summary style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8; cursor:pointer; margin-bottom:8px;">
-                        Past Events (${pastEvents.length})
+                        Past (${pastEvents.length})
                     </summary>
                     <div id="re-past-events"></div>
                 </details>
@@ -427,7 +450,8 @@ function renderEventCard(evt, dateKey, isActive) {
     const excluded = new Set(evt.excludedBunks || []);
     const totalBunks = allBunks.filter(b => !excluded.has(b.bunk)).length;
     const completed = getCompletedBunks(evt);
-    const completedCount = [...completed].filter(b => !excluded.has(b)).length;
+    const completedArr = [...completed].filter(b => !excluded.has(b));
+    const completedCount = completedArr.length;
     const remaining = getRemainingBunks(evt);
     const progressPct = totalBunks > 0 ? Math.round((completedCount / totalBunks) * 100) : 0;
     const dates = getDatesBetween(evt.dateRange.start, evt.dateRange.end);
@@ -442,13 +466,13 @@ function renderEventCard(evt, dateKey, isActive) {
                 <div style="font-size:11px; color:#64748b; margin-top:2px;">
                     ${minutesToTime(evt.dailyWindow.startMin)} – ${minutesToTime(evt.dailyWindow.endMin)}
                     · ${evt.durationPerBunk}min/bunk · ${evt.concurrency} at a time
-                    ${evt.location ? ' · 📍 ' + escapeHtml(evt.location) : ''}
+                    ${evt.location ? ' · ' + escapeHtml(evt.location) : ''}
                 </div>
             </div>
             <div style="display:flex; gap:4px;">
-                ${isActive ? `<button class="re-autofill-btn da-btn da-btn-ghost" data-id="${evt.id}" style="font-size:11px; padding:4px 8px;" title="Auto-fill today's batch">⚡ Auto-fill</button>` : ''}
-                <button class="re-edit-btn da-btn da-btn-ghost" data-id="${evt.id}" style="font-size:11px; padding:4px 8px;">✏️</button>
-                <button class="re-delete-btn da-btn da-btn-ghost" data-id="${evt.id}" style="font-size:11px; padding:4px 8px; color:#ef4444;">🗑</button>
+                <button class="re-edit-btn da-btn da-btn-ghost" data-id="${evt.id}" style="font-size:11px; padding:4px 8px;">Edit</button>
+                ${completedCount > 0 ? `<button class="re-restart-btn da-btn da-btn-ghost" data-id="${evt.id}" style="font-size:11px; padding:4px 8px; color:#f59e0b;" title="Clear all completions and start over">Restart</button>` : ''}
+                <button class="re-delete-btn da-btn da-btn-ghost" data-id="${evt.id}" style="font-size:11px; padding:4px 8px; color:#ef4444;">Delete</button>
             </div>
         </div>
 
@@ -456,7 +480,7 @@ function renderEventCard(evt, dateKey, isActive) {
         <div style="margin-bottom:10px;">
             <div style="display:flex; justify-content:space-between; font-size:11px; color:#64748b; margin-bottom:4px;">
                 <span>${completedCount}/${totalBunks} bunks done</span>
-                <span>${isActive ? 'Day ' + dayNum + '/' + totalDays : evt.dateRange.start + ' → ' + evt.dateRange.end}</span>
+                <span>${isActive ? 'Day ' + dayNum + '/' + totalDays : formatDate(evt.dateRange.start) + ' - ' + formatDate(evt.dateRange.end)}</span>
             </div>
             <div style="height:6px; background:#f1f5f9; border-radius:3px; overflow:hidden;">
                 <div style="height:100%; width:${progressPct}%; background:${evt.color || '#F59E0B'}; border-radius:3px; transition:width 0.3s;"></div>
@@ -465,16 +489,30 @@ function renderEventCard(evt, dateKey, isActive) {
 
         ${completedCount >= totalBunks ? `
             <div style="padding:8px 12px; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:6px; font-size:12px; color:#065f46; text-align:center;">
-                ✅ All bunks completed!
+                All bunks completed!
             </div>
-        ` : isActive ? `
-            <!-- Remaining bunks (checkboxes for semi-auto) -->
-            <details>
-                <summary style="font-size:12px; font-weight:500; color:#334155; cursor:pointer; margin-bottom:6px;">
-                    Remaining bunks (${remaining.length}) — click to select for today
+        ` : ''}
+
+        ${completedCount > 0 ? `
+            <!-- Completed bunks (editable — uncheck to remove completion) -->
+            <details style="${completedCount >= totalBunks ? 'margin-top:10px;' : ''}">
+                <summary style="font-size:12px; font-weight:500; color:#059669; cursor:pointer; margin-bottom:6px;">
+                    Completed bunks (${completedCount}) — uncheck to undo
                 </summary>
-                <div class="re-bunk-checklist" data-id="${evt.id}" style="max-height:200px; overflow-y:auto; padding:8px; background:#f8fafc; border-radius:6px; border:1px solid #e2e8f0; margin-top:6px;">
-                    ${renderBunkChecklist(remaining, evt, dateKey)}
+                <div class="re-completed-checklist" data-id="${evt.id}" style="max-height:200px; overflow-y:auto; padding:8px; background:#f0fdf4; border-radius:6px; border:1px solid #bbf7d0; margin-top:6px;">
+                    ${renderCompletedChecklist(completedArr, evt)}
+                </div>
+            </details>
+        ` : ''}
+
+        ${completedCount < totalBunks && isActive ? `
+            <!-- Remaining bunks -->
+            <details style="${completedCount > 0 ? 'margin-top:8px;' : ''}">
+                <summary style="font-size:12px; font-weight:500; color:#334155; cursor:pointer; margin-bottom:6px;">
+                    Remaining bunks (${remaining.length})
+                </summary>
+                <div style="max-height:200px; overflow-y:auto; padding:8px; background:#f8fafc; border-radius:6px; border:1px solid #e2e8f0; margin-top:6px; font-size:12px; color:#475569;">
+                    ${renderRemainingList(remaining)}
                 </div>
             </details>
         ` : ''}
@@ -483,7 +521,7 @@ function renderEventCard(evt, dateKey, isActive) {
     // Bind events
     card.querySelector('.re-delete-btn')?.addEventListener('click', async () => {
         if (typeof window.daShowConfirm === 'function') {
-            const ok = await window.daShowConfirm('Delete rotation event "' + evt.name + '"? This cannot be undone.', { danger: true, confirmText: 'Delete' });
+            const ok = await window.daShowConfirm('Delete "' + evt.name + '"? This cannot be undone.', { danger: true, confirmText: 'Delete' });
             if (ok) { deleteEvent(evt.id); renderRotationEventsPane(card.closest('#da-rotation-events-container')); }
         } else {
             if (confirm('Delete "' + evt.name + '"?')) { deleteEvent(evt.id); renderRotationEventsPane(card.closest('#da-rotation-events-container')); }
@@ -494,90 +532,90 @@ function renderEventCard(evt, dateKey, isActive) {
         showEditEventModal(evt, card.closest('#da-rotation-events-container'));
     });
 
-    card.querySelector('.re-autofill-btn')?.addEventListener('click', () => {
-        autoFillToday(evt, dateKey, card.closest('#da-rotation-events-container'));
+    card.querySelector('.re-restart-btn')?.addEventListener('click', async () => {
+        const confirmFn = typeof window.daShowConfirm === 'function' ? window.daShowConfirm : (msg) => Promise.resolve(confirm(msg));
+        const ok = await confirmFn('Restart "' + evt.name + '"? This will clear all completion records and start from scratch.', { danger: true, confirmText: 'Restart' });
+        if (ok) {
+            updateEvent(evt.id, { completedBunks: {} });
+            renderRotationEventsPane(card.closest('#da-rotation-events-container'));
+        }
     });
+
+    // Bind completed bunk checkboxes (uncheck to remove completion)
+    setTimeout(() => {
+        card.querySelectorAll('.re-completed-cb[data-evt="' + evt.id + '"]').forEach(cb => {
+            cb.onchange = () => {
+                if (!cb.checked) {
+                    removeCompletion(evt.id, cb.dataset.bunk);
+                    renderRotationEventsPane(card.closest('#da-rotation-events-container'));
+                }
+            };
+        });
+    }, 50);
 
     return card;
 }
 
-function renderBunkChecklist(remaining, evt, dateKey) {
+function renderCompletedChecklist(completedArr, evt) {
     // Group by grade
     const byGrade = {};
-    remaining.forEach(b => {
-        if (!byGrade[b.grade]) byGrade[b.grade] = [];
-        byGrade[b.grade].push(b.bunk);
+    completedArr.forEach(bunkName => {
+        const grade = getBunkGrade(bunkName) || 'Unknown';
+        if (!byGrade[grade]) byGrade[grade] = [];
+        byGrade[grade].push(bunkName);
     });
-
-    // Load today's manual picks (if any)
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const manualPicks = dailyData.rotationEventPicks || {};
-    const todayPicks = new Set(manualPicks[evt.id] || []);
 
     let html = '';
     Object.keys(byGrade).sort().forEach(grade => {
-        html += `<div style="font-size:10px; font-weight:600; text-transform:uppercase; color:#94a3b8; margin:6px 0 4px; letter-spacing:0.05em;">${escapeHtml(grade)}</div>`;
-        html += '<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(100px, 1fr)); gap:4px;">';
+        html += `<div style="font-size:10px; font-weight:600; text-transform:uppercase; color:#6ee7b7; margin:6px 0 4px; letter-spacing:0.05em;">${escapeHtml(grade)}</div>`;
+        html += '<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:4px;">';
         byGrade[grade].sort().forEach(bunk => {
-            const checked = todayPicks.has(bunk) ? 'checked' : '';
             html += `
-                <label style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:#fff; border-radius:4px; cursor:pointer; font-size:12px; border:1px solid #e2e8f0;">
-                    <input type="checkbox" class="re-bunk-cb" data-bunk="${escapeHtml(bunk)}" data-evt="${evt.id}" ${checked}>
+                <label style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:#fff; border-radius:4px; cursor:pointer; font-size:12px; border:1px solid #bbf7d0;">
+                    <input type="checkbox" class="re-completed-cb" data-bunk="${escapeHtml(bunk)}" data-evt="${evt.id}" checked>
                     <span>${escapeHtml(bunk)}</span>
                 </label>
             `;
         });
         html += '</div>';
     });
-
-    // Bind checkbox events (deferred)
-    setTimeout(() => {
-        document.querySelectorAll('.re-bunk-cb[data-evt="' + evt.id + '"]').forEach(cb => {
-            cb.onchange = () => {
-                const picks = [];
-                document.querySelectorAll('.re-bunk-cb[data-evt="' + evt.id + '"]:checked').forEach(c => {
-                    picks.push(c.dataset.bunk);
-                });
-                // Save picks to daily data
-                const dd = window.loadCurrentDailyData?.() || {};
-                if (!dd.rotationEventPicks) dd.rotationEventPicks = {};
-                dd.rotationEventPicks[evt.id] = picks;
-                window.saveCurrentDailyData?.('rotationEventPicks', dd.rotationEventPicks);
-            };
-        });
-    }, 100);
-
     return html;
 }
 
-function autoFillToday(evt, dateKey, containerEl) {
-    const remaining = getRemainingBunks(evt);
-    if (remaining.length === 0) return;
-
-    // Compute how many can fit in today's window
-    const windowMinutes = evt.dailyWindow.endMin - evt.dailyWindow.startMin;
-    const slotsPerRound = evt.concurrency || 1;
-    const totalRounds = Math.floor(windowMinutes / evt.durationPerBunk);
-    const maxBunks = totalRounds * slotsPerRound;
-
-    // Select up to maxBunks, grade-grouped
-    const sorted = [...remaining].sort((a, b) => {
-        if (a.grade !== b.grade) return a.grade.localeCompare(b.grade);
-        return a.bunk.localeCompare(b.bunk);
+function renderRemainingList(remaining) {
+    const byGrade = {};
+    remaining.forEach(b => {
+        if (!byGrade[b.grade]) byGrade[b.grade] = [];
+        byGrade[b.grade].push(b.bunk);
     });
-    const todayBatch = sorted.slice(0, maxBunks).map(b => b.bunk);
+    let html = '';
+    Object.keys(byGrade).sort().forEach(grade => {
+        html += `<div style="font-size:10px; font-weight:600; text-transform:uppercase; color:#94a3b8; margin:6px 0 4px; letter-spacing:0.05em;">${escapeHtml(grade)}</div>`;
+        html += '<div style="display:flex; flex-wrap:wrap; gap:4px;">';
+        byGrade[grade].sort().forEach(bunk => {
+            html += `<span style="padding:3px 8px; background:#fff; border-radius:4px; font-size:12px; border:1px solid #e2e8f0;">${escapeHtml(bunk)}</span>`;
+        });
+        html += '</div>';
+    });
+    return html;
+}
 
-    // Save as manual picks
-    const dd = window.loadCurrentDailyData?.() || {};
-    if (!dd.rotationEventPicks) dd.rotationEventPicks = {};
-    dd.rotationEventPicks[evt.id] = todayBatch;
-    window.saveCurrentDailyData?.('rotationEventPicks', dd.rotationEventPicks);
-
-    // Re-render
-    renderRotationEventsPane(containerEl);
-
-    const alertFn = typeof window.daShowAlert === 'function' ? window.daShowAlert : alert;
-    alertFn('⚡ Auto-filled ' + todayBatch.length + ' bunks for today (' + remaining.length + ' remaining total).');
+/**
+ * Remove a single bunk from completion records (across all dates).
+ */
+function removeCompletion(eventId, bunkName) {
+    const events = loadRotationEvents();
+    const evt = events.find(e => e.id === eventId);
+    if (!evt || !evt.completedBunks) return;
+    let changed = false;
+    Object.keys(evt.completedBunks).forEach(dateKey => {
+        const arr = evt.completedBunks[dateKey];
+        if (Array.isArray(arr)) {
+            const idx = arr.indexOf(bunkName);
+            if (idx >= 0) { arr.splice(idx, 1); changed = true; }
+        }
+    });
+    if (changed) saveRotationEvents(events);
 }
 
 // =================================================================
@@ -593,28 +631,29 @@ async function showCreateEventModal(containerEl) {
     if (!showModal) { alert('Modal system not available'); return; }
 
     const result = await showModal({
-        title: 'New Rotation Event',
-        description: 'A camp-wide activity that every bunk passes through once over a date range.',
+        title: 'New Scheduled Round',
+        description: 'A camp-wide activity that every bunk passes through once over a date range (e.g., lice checks, photo day).',
         wide: true,
         fields: [
-            { name: 'name', label: 'Event Name', type: 'text', placeholder: 'e.g., Lice Checking, Photo Day' },
-            { name: 'startDate', label: 'Start Date', type: 'text', placeholder: 'YYYY-MM-DD', default: window.currentScheduleDate || '' },
-            { name: 'endDate', label: 'End Date', type: 'text', placeholder: 'YYYY-MM-DD' },
+            { name: 'name', label: 'Name', type: 'text', placeholder: 'e.g., Lice Checking, Photo Day' },
+            { name: 'startDate', label: 'Start Date (DD/MM/YYYY)', type: 'text', placeholder: 'DD/MM/YYYY', default: formatDate(window.currentScheduleDate || '') },
+            { name: 'endDate', label: 'End Date (DD/MM/YYYY)', type: 'text', placeholder: 'DD/MM/YYYY' },
             { name: 'windowStart', label: 'Daily Window Start', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', placeholder: 'e.g., 1:00pm' },
             { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', placeholder: 'e.g., 10' },
             { name: 'concurrency', label: 'Bunks at a Time', type: 'text', placeholder: 'e.g., 2', default: '2' },
             { name: 'location', label: 'Location (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] }
         ],
-        confirmText: 'Create Event'
+        confirmText: 'Create'
     });
 
     if (!result || !result.name || !result.startDate || !result.endDate || !result.windowStart || !result.windowEnd || !result.duration) return;
 
+    const alertFn = typeof window.daShowAlert === 'function' ? window.daShowAlert : alert;
+
     const windowStartMin = parseTimeToMinutes(result.windowStart);
     const windowEndMin = parseTimeToMinutes(result.windowEnd);
     if (windowStartMin == null || windowEndMin == null || windowEndMin <= windowStartMin) {
-        const alertFn = typeof window.daShowAlert === 'function' ? window.daShowAlert : alert;
         alertFn('Invalid time window. End must be after start.');
         return;
     }
@@ -622,19 +661,18 @@ async function showCreateEventModal(containerEl) {
     const duration = parseInt(result.duration);
     const concurrency = Math.max(1, parseInt(result.concurrency) || 2);
     if (isNaN(duration) || duration < 1) {
-        const alertFn = typeof window.daShowAlert === 'function' ? window.daShowAlert : alert;
         alertFn('Duration must be a positive number.');
         return;
     }
 
-    // Validate dates
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(result.startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(result.endDate)) {
-        const alertFn = typeof window.daShowAlert === 'function' ? window.daShowAlert : alert;
-        alertFn('Dates must be in YYYY-MM-DD format.');
+    // Parse dates (accepts DD/MM/YYYY or YYYY-MM-DD)
+    const startDate = parseDateInput(result.startDate);
+    const endDate = parseDateInput(result.endDate);
+    if (!startDate || !endDate) {
+        alertFn('Invalid date format. Please use DD/MM/YYYY.');
         return;
     }
-    if (result.endDate < result.startDate) {
-        const alertFn = typeof window.daShowAlert === 'function' ? window.daShowAlert : alert;
+    if (endDate < startDate) {
         alertFn('End date must be on or after start date.');
         return;
     }
@@ -642,7 +680,7 @@ async function showCreateEventModal(containerEl) {
     const newEvent = {
         id: generateId(),
         name: result.name.trim(),
-        dateRange: { start: result.startDate, end: result.endDate },
+        dateRange: { start: startDate, end: endDate },
         dailyWindow: { startMin: windowStartMin, endMin: windowEndMin },
         durationPerBunk: duration,
         concurrency,
@@ -664,14 +702,13 @@ async function showCreateEventModal(containerEl) {
     const windowMinutes = windowEndMin - windowStartMin;
     const slotsPerDay = Math.floor(windowMinutes / duration) * concurrency;
     const daysNeeded = Math.ceil(totalBunks / slotsPerDay);
-    const actualDays = getDatesBetween(result.startDate, result.endDate).length;
+    const actualDays = getDatesBetween(startDate, endDate).length;
 
-    const alertFn = typeof window.daShowAlert === 'function' ? window.daShowAlert : alert;
     alertFn(
-        '✅ Created "' + result.name + '"<br><br>' +
-        '📊 <strong>' + totalBunks + ' bunks</strong>, ~' + slotsPerDay + '/day capacity<br>' +
-        '📅 ' + actualDays + ' day' + (actualDays > 1 ? 's' : '') + ' available' +
-        (daysNeeded > actualDays ? '<br><br>⚠️ May need ' + daysNeeded + ' days to finish all bunks — consider extending the date range.' : '')
+        'Created "' + result.name + '"<br><br>' +
+        '<strong>' + totalBunks + ' bunks</strong>, ~' + slotsPerDay + '/day capacity<br>' +
+        formatDate(startDate) + ' - ' + formatDate(endDate) + ' (' + actualDays + ' day' + (actualDays > 1 ? 's' : '') + ')' +
+        (daysNeeded > actualDays ? '<br><br>Warning: May need ' + daysNeeded + ' days to finish all bunks — consider extending the date range.' : '')
     );
 }
 
@@ -686,9 +723,9 @@ async function showEditEventModal(evt, containerEl) {
         title: 'Edit: ' + evt.name,
         wide: true,
         fields: [
-            { name: 'name', label: 'Event Name', type: 'text', default: evt.name },
-            { name: 'startDate', label: 'Start Date', type: 'text', default: evt.dateRange.start },
-            { name: 'endDate', label: 'End Date', type: 'text', default: evt.dateRange.end },
+            { name: 'name', label: 'Name', type: 'text', default: evt.name },
+            { name: 'startDate', label: 'Start Date (DD/MM/YYYY)', type: 'text', default: formatDate(evt.dateRange.start) },
+            { name: 'endDate', label: 'End Date (DD/MM/YYYY)', type: 'text', default: formatDate(evt.dateRange.end) },
             { name: 'windowStart', label: 'Daily Window Start', type: 'text', default: minutesToTime(evt.dailyWindow.startMin) },
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', default: minutesToTime(evt.dailyWindow.endMin) },
             { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', default: String(evt.durationPerBunk) },
@@ -700,16 +737,21 @@ async function showEditEventModal(evt, containerEl) {
 
     if (!result) return;
 
+    const alertFn = typeof window.daShowAlert === 'function' ? window.daShowAlert : alert;
+
     const windowStartMin = parseTimeToMinutes(result.windowStart);
     const windowEndMin = parseTimeToMinutes(result.windowEnd);
     if (windowStartMin == null || windowEndMin == null || windowEndMin <= windowStartMin) {
-        (typeof window.daShowAlert === 'function' ? window.daShowAlert : alert)('Invalid time window.');
+        alertFn('Invalid time window.');
         return;
     }
 
+    const startDate = parseDateInput(result.startDate) || evt.dateRange.start;
+    const endDate = parseDateInput(result.endDate) || evt.dateRange.end;
+
     updateEvent(evt.id, {
         name: (result.name || evt.name).trim(),
-        dateRange: { start: result.startDate || evt.dateRange.start, end: result.endDate || evt.dateRange.end },
+        dateRange: { start: startDate, end: endDate },
         dailyWindow: { startMin: windowStartMin, endMin: windowEndMin },
         durationPerBunk: parseInt(result.duration) || evt.durationPerBunk,
         concurrency: Math.max(1, parseInt(result.concurrency) || evt.concurrency),
@@ -741,7 +783,7 @@ function injectSubtab() {
     const tab = document.createElement('button');
     tab.className = 'da-subtab';
     tab.dataset.tab = 'rotation-events';
-    tab.textContent = 'Rotation Events';
+    tab.textContent = 'Scheduled Rounds';
 
     // Insert before the last tab
     const tabs = subtabsBar.querySelectorAll('.da-subtab');
@@ -1058,6 +1100,6 @@ if (document.readyState === 'loading') {
     setTimeout(init, 600);
 }
 
-console.log('[ROTATION_EVENTS] Module v1.0 loaded');
+console.log('[ROTATION_EVENTS] Module v2.0 loaded (Scheduled Rounds)');
 
 })();
