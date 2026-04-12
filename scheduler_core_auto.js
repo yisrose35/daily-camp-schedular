@@ -458,11 +458,13 @@
             const typeCeiling = TYPE_CEILINGS[t] || GAP_MAX_DUR;
             if (!layer) return { dMin: typeFloor, dMax: typeCeiling, dIdeal: snapTo5(Math.round((typeFloor + typeCeiling) / 2)) };
 
+            // ★ v10.5: Fix rawMax — durationMax must NOT fall back to periodMin (that's a minimum).
+            // Fallback chain: explicit max → explicit duration (locks both) → type ceiling.
             const rawMin = layer.durationMin || layer.periodMin || layer.duration || 0;
-            const rawMax = layer.durationMax || layer.periodMin || layer.duration || 0;
+            const rawMax = layer.durationMax || layer.duration || 0;
             const ABSOLUTE_FLOOR = 5;
             let dMin = rawMin > 0 ? Math.max(ABSOLUTE_FLOOR, rawMin) : typeFloor;
-            let dMax = Math.max(dMin, rawMax > 0 ? Math.max(ABSOLUTE_FLOOR, rawMax) : typeCeiling);
+            let dMax = rawMax > 0 ? Math.max(dMin, Math.max(ABSOLUTE_FLOOR, rawMax)) : Math.max(dMin, typeCeiling);
 
             // Special override: configured duration locks dMin=dMax
             if (t === 'special') {
@@ -478,6 +480,9 @@
                 }
                 if (specDur && specDur > 0) { dMin = specDur; dMax = specDur; }
             }
+
+            // ★ v10.5: Invariant — dMax must never be less than dMin
+            if (dMax < dMin) dMax = dMin;
 
             return { dMin, dMax, dIdeal: snapTo5(Math.round((dMin + dMax) / 2)) };
         }
@@ -1054,7 +1059,8 @@
                 durations[i] += give;
                 excess -= give;
             }
-            if (excess > 0) { for (let i = 0; i < n && excess > 0; i++) { durations[i]++; excess--; } }
+            // ★ v10.5: Only distribute excess if still within dMax (don't exceed ceiling)
+            if (excess > 0) { for (let i = 0; i < n && excess > 0; i++) { if (durations[i] < blockDescs[i].dMax) { durations[i]++; excess--; } } }
             // Snap to 5
             let total = 0;
             for (let i = 0; i < n - 1; i++) {
@@ -2739,8 +2745,10 @@
                 var blockType = (opts.type || 'slot').toLowerCase();
                 if (['sport', 'slot'].includes(blockType) && !opts._fixed) {
                     var blockDur = opts.endMin - opts.startMin;
-                    var maxDur = opts.dMax || 60;
-                    var minDur = opts.dMin || (TYPE_FLOORS.sport || 25); // always use floor as fallback
+                    // ★ v10.5: Use resolved constraints — never guess with fallback constants.
+                    // opts.dMax/dMin should always be set by the caller from resolveConstraints.
+                    var maxDur = opts.dMax || (TYPE_CEILINGS[blockType] || 60);
+                    var minDur = opts.dMin || (TYPE_FLOORS[blockType] || 25);
 
                     // Enforce dMax
                     if (blockDur > maxDur) {
@@ -2853,13 +2861,16 @@
                     if (!shoppingList || !draftResult) continue;
 
                     var sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
-                    var fillMinDur = Math.max(sportC.dMin || 25, TYPE_FLOORS.sport || 25);
-                    // ★ v10.0: Adaptive fillMinDur — allow shorter sports for constrained bunks
+                    // ★ v10.5: fillMinDur must respect user's dMin — never override with type floor
+                    var userDMin = sportC.dMin || TYPE_FLOORS.sport || 25;
+                    var fillMinDur = Math.max(userDMin, TYPE_FLOORS.sport || 25);
+                    // ★ v10.5: Adaptive fillMinDur — but NEVER below the user's configured dMin
                     var bunkFeasibility = feasibilityMap ? feasibilityMap[bunk] : null;
                     if (bunkFeasibility && bunkFeasibility.slack < 30) {
-                        fillMinDur = Math.max(20, fillMinDur - 5);
+                        fillMinDur = Math.max(userDMin, fillMinDur - 5);
                     }
-                    var sportCeiling = Math.min(sportC.dMax || 60, TYPE_CEILINGS.sport || 60, 60);
+                    // ★ v10.5: sportCeiling respects user's dMax — removed hard 60 cap
+                    var sportCeiling = Math.min(sportC.dMax || 60, TYPE_CEILINGS.sport || 60);
                     var priorityList = shoppingList.sports?.priorityList || [];
                     var swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : false;
                     var template = [];
@@ -3562,17 +3573,18 @@
                         // Too small for a sport — absorb into adjacent non-fixed block
                         tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
                         var absorbed = false;
+                        // ★ v10.5: Use block's own dMax for absorb limit, not sportCeiling
                         for (var m2 = 0; m2 < tmpl.length; m2++) {
                             // Find block ending at gap start
                             if (tmpl[m2].endMin === rgap.start && !tmpl[m2]._fixed) {
                                 var m2Dur = tmpl[m2].endMin - tmpl[m2].startMin;
-                                var m2Max = ['sport', 'slot'].includes((tmpl[m2].type || '').toLowerCase()) ? fMeta.sportCeiling : (tmpl[m2].dMax || Infinity);
+                                var m2Max = tmpl[m2].dMax || fMeta.sportCeiling;
                                 if (m2Dur + gapSize <= m2Max) { tmpl[m2].endMin += gapSize; absorbed = true; break; }
                             }
                             // Find block starting at gap end
                             if (tmpl[m2].startMin === rgap.end && !tmpl[m2]._fixed) {
                                 var m2Dur2 = tmpl[m2].endMin - tmpl[m2].startMin;
-                                var m2Max2 = ['sport', 'slot'].includes((tmpl[m2].type || '').toLowerCase()) ? fMeta.sportCeiling : (tmpl[m2].dMax || Infinity);
+                                var m2Max2 = tmpl[m2].dMax || fMeta.sportCeiling;
                                 if (m2Dur2 + gapSize <= m2Max2) { tmpl[m2].startMin -= gapSize; absorbed = true; break; }
                             }
                         }
@@ -3602,7 +3614,8 @@
                 var vTmpl = vMeta.template;
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
-                // ★ v9.6: Merge any below-dMin sport/slot blocks into adjacent blocks
+                // ★ v10.5: Merge any below-dMin sport/slot blocks into adjacent blocks
+                // Uses block's own dMax (not sportCeiling) to prevent exceeding configured max
                 for (var mi = vTmpl.length - 1; mi >= 0; mi--) {
                     var mBlk = vTmpl[mi];
                     if (mBlk._fixed) continue;
@@ -3615,7 +3628,8 @@
                     // Try merging into previous block
                     if (mi > 0 && !vTmpl[mi-1]._fixed) {
                         var prevType = (vTmpl[mi-1].type || '').toLowerCase();
-                        if (['sport', 'slot'].includes(prevType) && (vTmpl[mi-1].endMin - vTmpl[mi-1].startMin) + mDur <= vMeta.sportCeiling) {
+                        var prevMaxDur = vTmpl[mi-1].dMax || vMeta.sportCeiling;
+                        if (['sport', 'slot'].includes(prevType) && (vTmpl[mi-1].endMin - vTmpl[mi-1].startMin) + mDur <= prevMaxDur) {
                             vTmpl[mi-1].endMin = mBlk.endMin;
                             vTmpl.splice(mi, 1);
                             merged = true;
@@ -3624,7 +3638,8 @@
                     // Try merging into next block
                     if (!merged && mi < vTmpl.length - 1 && !vTmpl[mi+1]._fixed) {
                         var nextType = (vTmpl[mi+1].type || '').toLowerCase();
-                        if (['sport', 'slot'].includes(nextType) && (vTmpl[mi+1].endMin - vTmpl[mi+1].startMin) + mDur <= vMeta.sportCeiling) {
+                        var nextMaxDur = vTmpl[mi+1].dMax || vMeta.sportCeiling;
+                        if (['sport', 'slot'].includes(nextType) && (vTmpl[mi+1].endMin - vTmpl[mi+1].startMin) + mDur <= nextMaxDur) {
                             vTmpl[mi+1].startMin = mBlk.startMin;
                             vTmpl.splice(mi, 1);
                             merged = true;
@@ -3665,40 +3680,50 @@
                 }
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
-                // ★ v9.7: BELOW-dMIN SWEEP — extend or merge any sport/slot below minimum
+                // ★ v10.5: BELOW-dMIN SWEEP — use block's own dMin, not just fillMinDur
                 for (var di = vTmpl.length - 1; di >= 0; di--) {
                     var dBlk = vTmpl[di];
                     if (dBlk._fixed) continue;
                     var dType = (dBlk.type || '').toLowerCase();
                     if (!['sport', 'slot'].includes(dType)) continue;
                     var dDur = dBlk.endMin - dBlk.startMin;
-                    var dMinReq = vMeta.fillMinDur;
+                    // Use the block's own dMin if available, fall back to fillMinDur
+                    var dMinReq = Math.max(dBlk.dMin || 0, vMeta.fillMinDur);
+                    var dMaxLimit = dBlk.dMax || vMeta.sportCeiling;
                     if (dDur >= dMinReq) continue;
 
                     // Try to extend into adjacent gap (not into another block)
                     var nextStart = (di < vTmpl.length - 1) ? vTmpl[di+1].startMin : vMeta.gradeEnd;
                     var availRight = nextStart - dBlk.endMin;
                     if (dDur + availRight >= dMinReq) {
-                        dBlk.endMin = dBlk.startMin + dMinReq;
+                        var extTarget = Math.min(dMinReq, dMaxLimit);
+                        dBlk.endMin = dBlk.startMin + extTarget;
                         dBlk.endMin = Math.round(dBlk.endMin / 5) * 5;
                         continue;
                     }
                     var prevEnd = (di > 0) ? vTmpl[di-1].endMin : vMeta.gradeStart;
                     var availLeft = dBlk.startMin - prevEnd;
                     if (dDur + availLeft >= dMinReq) {
-                        dBlk.startMin = dBlk.endMin - dMinReq;
+                        var extTarget2 = Math.min(dMinReq, dMaxLimit);
+                        dBlk.startMin = dBlk.endMin - extTarget2;
                         dBlk.startMin = Math.round(dBlk.startMin / 5) * 5;
                         continue;
                     }
-                    // Can't fix — merge into neighbor. NEVER delete (leaves unfillable gaps).
+                    // Can't fix — merge into neighbor, respecting neighbor's dMax
                     if (di > 0 && !vTmpl[di-1]._fixed && ['sport','slot'].includes((vTmpl[di-1].type||'').toLowerCase())) {
-                        vTmpl[di-1].endMin = dBlk.endMin;
-                        vTmpl.splice(di, 1);
+                        var neighborMax = vTmpl[di-1].dMax || vMeta.sportCeiling;
+                        if ((vTmpl[di-1].endMin - vTmpl[di-1].startMin) + dDur <= neighborMax) {
+                            vTmpl[di-1].endMin = dBlk.endMin;
+                            vTmpl.splice(di, 1);
+                        }
                     } else if (di < vTmpl.length - 1 && !vTmpl[di+1]._fixed && ['sport','slot'].includes((vTmpl[di+1].type||'').toLowerCase())) {
-                        vTmpl[di+1].startMin = dBlk.startMin;
-                        vTmpl.splice(di, 1);
+                        var neighborMax2 = vTmpl[di+1].dMax || vMeta.sportCeiling;
+                        if ((vTmpl[di+1].endMin - vTmpl[di+1].startMin) + dDur <= neighborMax2) {
+                            vTmpl[di+1].startMin = dBlk.startMin;
+                            vTmpl.splice(di, 1);
+                        }
                     } else if (di > 0 && !vTmpl[di-1]._fixed) {
-                        // ★ v10.1: Absorb into ANY non-fixed neighbor (not just sport/slot)
+                        // ★ v10.5: Absorb into ANY non-fixed neighbor (not just sport/slot)
                         vTmpl[di-1].endMin = dBlk.endMin;
                         vTmpl.splice(di, 1);
                     } else if (di < vTmpl.length - 1 && !vTmpl[di+1]._fixed) {
@@ -3742,8 +3767,9 @@
                                 prevBlock = vTmpl[pb]; break;
                             }
                         }
+                        // ★ v10.5: Use block's own dMax for extension limit
                         if (prevBlock && prevBlock.endMin === vGap.start) {
-                            var maxExt = vMeta.sportCeiling || 60;
+                            var maxExt = prevBlock.dMax || vMeta.sportCeiling || 60;
                             var newDur = (vGap.end) - prevBlock.startMin;
                             if (newDur <= maxExt) {
                                 prevBlock.endMin = vGap.end;
@@ -3762,7 +3788,7 @@
                             }
                             if (nextBlock && nextBlock.startMin === vGap.end) {
                                 var newDur2 = nextBlock.endMin - vGap.start;
-                                var maxExt2 = vMeta.sportCeiling || 60;
+                                var maxExt2 = nextBlock.dMax || vMeta.sportCeiling || 60;
                                 if (newDur2 <= maxExt2) {
                                     nextBlock.startMin = vGap.start;
                                     filled = true;
@@ -4077,6 +4103,81 @@
             }
             if (guaranteeCount > 0) log('[Phase3] ⚡ Forced ' + guaranteeCount + ' missing swim/snack placements');
 
+            // ══════════════════════════════════════════════════════════
+            // ★ v10.5: FINAL CONSTRAINT ENFORCEMENT SWEEP
+            // Last-pass safety net: clamp every block to its dMin/dMax.
+            // Catches any violations introduced by merge/absorb/extend passes.
+            // ══════════════════════════════════════════════════════════
+            var enforceFixCount = 0;
+            for (var ei = 0; ei < allBunkIds.length; ei++) {
+                var eBunk = allBunkIds[ei];
+                var eMeta = bunkMeta[eBunk];
+                var eTmpl = bunkTimelines[eBunk] || allTemplates[eBunk] || [];
+                eTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                for (var ej = 0; ej < eTmpl.length; ej++) {
+                    var eBlk = eTmpl[ej];
+                    if (eBlk._fixed) continue;
+                    var eType = (eBlk.type || '').toLowerCase();
+                    var eDur = eBlk.endMin - eBlk.startMin;
+
+                    // Resolve the authoritative constraints for this block
+                    var eConstraints = resolveConstraints(eBlk.layer, eType, eBlk);
+                    var eDMin = eConstraints.dMin;
+                    var eDMax = eConstraints.dMax;
+
+                    // Also update the block's stored dMin/dMax to match resolved values
+                    eBlk.dMin = eDMin;
+                    eBlk.dMax = eDMax;
+
+                    // Fix dMax violations: shrink to dMax, create remainder block
+                    if (eDur > eDMax && ['sport', 'slot'].includes(eType)) {
+                        var eOrigEnd = eBlk.endMin;
+                        eBlk.endMin = eBlk.startMin + eDMax;
+                        eBlk.endMin = Math.round(eBlk.endMin / 5) * 5;
+                        var eRemain = eOrigEnd - eBlk.endMin;
+                        if (eRemain >= eMeta.fillMinDur) {
+                            var eRemBlk = makeBlock({
+                                startMin: eBlk.endMin, endMin: eOrigEnd,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: eMeta.sportLayer, field: null,
+                                dMin: eMeta.sportC.dMin, dMax: eMeta.sportCeiling,
+                                _source: 'enforce-split', _final: true
+                            });
+                            if (eRemBlk) { eTmpl.splice(ej + 1, 0, eRemBlk); }
+                        }
+                        enforceFixCount++;
+                        log('[Phase3] ENFORCE: shrunk ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + eDMax + 'min (dMax)');
+                    }
+
+                    // Fix dMin violations: try to extend into adjacent free space
+                    if (eDur < eDMin && ['sport', 'slot'].includes(eType)) {
+                        var eNextStart = (ej < eTmpl.length - 1) ? eTmpl[ej+1].startMin : (eMeta.gradeEnd || 960);
+                        var eAvailR = eNextStart - eBlk.endMin;
+                        if (eDur + eAvailR >= eDMin) {
+                            eBlk.endMin = eBlk.startMin + Math.min(eDMin, eDMax);
+                            eBlk.endMin = Math.round(eBlk.endMin / 5) * 5;
+                            enforceFixCount++;
+                            log('[Phase3] ENFORCE: extended ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + (eBlk.endMin - eBlk.startMin) + 'min (dMin)');
+                        } else {
+                            var ePrevEnd = (ej > 0) ? eTmpl[ej-1].endMin : (eMeta.gradeStart || 540);
+                            var eAvailL = eBlk.startMin - ePrevEnd;
+                            if (eDur + eAvailL >= eDMin) {
+                                eBlk.startMin = eBlk.endMin - Math.min(eDMin, eDMax);
+                                eBlk.startMin = Math.round(eBlk.startMin / 5) * 5;
+                                enforceFixCount++;
+                                log('[Phase3] ENFORCE: extended-left ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + (eBlk.endMin - eBlk.startMin) + 'min (dMin)');
+                            }
+                        }
+                    }
+                }
+
+                eTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                bunkTimelines[eBunk] = eTmpl;
+                allTemplates[eBunk] = eTmpl;
+            }
+            if (enforceFixCount > 0) log('[Phase3] ★ ENFORCE: fixed ' + enforceFixCount + ' constraint violations in final sweep');
+
             log('[Phase3] ★ timeSweepFillAll complete: ' + Object.keys(allTemplates).length + ' bunks, ' + totalWarnings + ' warnings');
             return allTemplates;
         }
@@ -4228,13 +4329,14 @@
                 for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; score += scoreGap(gap); }
                 if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) score += scoreGap(dayEnd - sorted[sorted.length - 1].endMin);
 
-                // Duration violations — ★ v6.0: Much heavier penalty than Free blocks.
+                // Duration violations — ★ v10.5: Penalize BOTH dMin and dMax violations.
                 // A duration violation is NEVER acceptable. Prefer a Free over a short sport.
                 timeline.forEach(block => {
                     if (block._fromGapDetection && !block.layer) return;
-                    const { dMin } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
+                    const { dMin, dMax } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                     const dur = block.endMin - block.startMin;
                     if (dur < dMin) score += (dMin - dur) * 10000 + 100000;
+                    if (dur > dMax) score += (dur - dMax) * 8000 + 80000;
                 });
 
                 // Out of bounds
