@@ -1059,29 +1059,58 @@ function printApplication(id){
     setTimeout(function(){w.print()},300);
 }
 
-function addSession(){
-    var name=prompt('Session name (e.g., "Summer 2026 — Full Season"):');
-    if(!name||!name.trim())return;
-    var dates=prompt('Date range (e.g., "June 22 – August 14"):','');
-    var cap=prompt('Capacity (leave blank for unlimited):','');
-    var tuition=prompt('Tuition amount ($):','');
-    var earlyBird=prompt('Early bird price ($ — leave blank for none):','');
-    var earlyBirdDeadline='';
-    if(earlyBird)earlyBirdDeadline=prompt('Early bird deadline (YYYY-MM-DD):','');
-    sessions.push({name:name.trim(),dates:(dates||'').trim(),capacity:cap?parseInt(cap):0,tuition:tuition?parseFloat(tuition):0,earlyBird:earlyBird?parseFloat(earlyBird):0,earlyBirdDeadline:(earlyBirdDeadline||'').trim(),registrationOpen:true});
-    save();renderEnrollment();toast('Session created');
-}
+function addSession(){openSessionModal(null)}
+function editSession(idx){openSessionModal(idx)}
 
-function editSession(idx){
-    var s=sessions[idx];if(!s)return;
-    var name=prompt('Session name:',s.name);if(!name)return;
-    var dates=prompt('Date range:',s.dates||'');
-    var cap=prompt('Capacity:',s.capacity||'');
-    var tuition=prompt('Tuition ($):',s.tuition||'');
-    var earlyBird=prompt('Early bird price ($):',s.earlyBird||'');
-    var earlyBirdDeadline=prompt('Early bird deadline (YYYY-MM-DD):',s.earlyBirdDeadline||'');
-    sessions[idx]={name:name.trim(),dates:(dates||'').trim(),capacity:cap?parseInt(cap):0,tuition:tuition?parseFloat(tuition):0,earlyBird:earlyBird?parseFloat(earlyBird):0,earlyBirdDeadline:(earlyBirdDeadline||'').trim(),registrationOpen:s.registrationOpen!==false};
-    save();renderEnrollment();toast('Session updated');
+function openSessionModal(idx){
+    var s=idx!==null?sessions[idx]:{};
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Session Name</label><input type="text" id="sesName" class="me-input" value="'+esc(s.name||'')+'" placeholder="e.g., Summer 2026 — Full Season"></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Start Date</label><input type="date" id="sesStart" class="me-input" value="'+(s.startDate||'')+'"></div>';
+    h+='<div class="me-field"><label>End Date</label><input type="date" id="sesEnd" class="me-input" value="'+(s.endDate||'')+'"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>Date Range Label (optional)</label><input type="text" id="sesDates" class="me-input" value="'+esc(s.dates||'')+'" placeholder="e.g., June 22 – August 14"></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Capacity</label><input type="number" id="sesCap" class="me-input" value="'+(s.capacity||'')+'" placeholder="Leave blank for unlimited" min="0"></div>';
+    h+='<div class="me-field"><label>Tuition ($)</label><input type="number" id="sesTuition" class="me-input" value="'+(s.tuition||'')+'" placeholder="0.00" step="0.01" min="0"></div>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Early Bird Price ($)</label><input type="number" id="sesEarly" class="me-input" value="'+(s.earlyBird||'')+'" placeholder="Optional" step="0.01" min="0"></div>';
+    h+='<div class="me-field"><label>Early Bird Deadline</label><input type="date" id="sesEarlyDate" class="me-input" value="'+(s.earlyBirdDeadline||'')+'"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>Sibling Discount (%)</label><input type="number" id="sesSibDisc" class="me-input" value="'+(s.siblingDiscount||'')+'" placeholder="e.g., 10 for 10% off siblings" min="0" max="100"></div>';
+    h+='<div class="me-field"><label>Payment Plan</label><select id="sesPayPlan" class="me-input"><option value="full"'+(s.paymentPlan==='full'?' selected':'')+'  >Full payment required</option><option value="2"'+(s.paymentPlan==='2'?' selected':'')+'>2 installments (50/50)</option><option value="3"'+(s.paymentPlan==='3'?' selected':'')+'>3 installments (34/33/33)</option><option value="4"'+(s.paymentPlan==='4'?' selected':'')+'>4 installments (25 each)</option><option value="deposit"'+(s.paymentPlan==='deposit'?' selected':'')+'>Deposit + balance</option></select></div>';
+    h+='<div id="sesDepositWrap" style="display:'+(s.paymentPlan==='deposit'?'block':'none')+'"><div class="me-field"><label>Deposit Amount ($)</label><input type="number" id="sesDeposit" class="me-input" value="'+(s.depositAmount||'')+'" step="0.01" min="0"></div></div>';
+    h+='<div class="me-field"><label>Description / Notes</label><textarea id="sesNotes" class="me-input" rows="2" style="resize:vertical" placeholder="Optional session description for parents">'+(s.notes||'')+'</textarea></div>';
+    h+='</div>';
+    h+='<script>document.getElementById("sesPayPlan").onchange=function(){document.getElementById("sesDepositWrap").style.display=this.value==="deposit"?"block":"none"}<\/script>';
+
+    showModal(idx!==null?'Edit Session':'Create Session',h,function(){
+        var obj={
+            name:(document.getElementById('sesName').value||'').trim(),
+            startDate:document.getElementById('sesStart').value||'',
+            endDate:document.getElementById('sesEnd').value||'',
+            dates:(document.getElementById('sesDates').value||'').trim(),
+            capacity:parseInt(document.getElementById('sesCap').value)||0,
+            tuition:parseFloat(document.getElementById('sesTuition').value)||0,
+            earlyBird:parseFloat(document.getElementById('sesEarly').value)||0,
+            earlyBirdDeadline:document.getElementById('sesEarlyDate').value||'',
+            siblingDiscount:parseInt(document.getElementById('sesSibDisc').value)||0,
+            paymentPlan:document.getElementById('sesPayPlan').value||'full',
+            depositAmount:parseFloat(document.getElementById('sesDeposit').value)||0,
+            notes:(document.getElementById('sesNotes').value||'').trim(),
+            registrationOpen:idx!==null?(sessions[idx].registrationOpen!==false):true
+        };
+        if(!obj.name){alert('Enter a session name');return}
+        // Auto-generate date range label from dates if not manually set
+        if(!obj.dates&&obj.startDate&&obj.endDate){
+            obj.dates=new Date(obj.startDate+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric'})+' – '+new Date(obj.endDate+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+        }
+        if(idx!==null) sessions[idx]=obj;
+        else sessions.push(obj);
+        save();closeModal('dynModal');renderEnrollment();toast(idx!==null?'Session updated':'Session created');
+    });
 }
 
 function toggleSessionReg(idx){
@@ -1105,40 +1134,98 @@ function deleteSession(idx){
 }
 
 function addApplication(){
-    // Gather basic info
-    var camperName=prompt('Camper full name:');if(!camperName||!camperName.trim())return;
-    var parentName=prompt('Parent/Guardian name:','');
-    var parentEmail=prompt('Parent email:','');
-    var parentPhone=prompt('Parent phone:','');
-    var session='';
-    if(sessions.length){
-        var opts=sessions.map(function(s,i){return(i+1)+'. '+s.name}).join('\n');
-        var pick=prompt('Select session:\n'+opts+'\n\nEnter number:','1');
-        var idx=parseInt(pick)-1;
-        if(idx>=0&&idx<sessions.length)session=sessions[idx].name;
-    }
-    var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
-    enrollments[id]={
-        camperName:camperName.trim(),
-        parentName:(parentName||'').trim(),
-        parentEmail:(parentEmail||'').trim(),
-        parentPhone:(parentPhone||'').trim(),
-        session:session,
-        status:'applied',
-        appliedDate:new Date().toISOString().split('T')[0],
-        formsRequired:3,
-        formsCompleted:0,
-        paymentStatus:'pending',
-        paymentAmount:0,
-        notes:''
-    };
-    save();renderEnrollment();toast('Application received');
+    var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
+    var h='<div class="me-modal-form">';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Camper First Name</label><input type="text" id="appFirst" class="me-input" placeholder="First"></div><div class="me-field"><label>Last Name</label><input type="text" id="appLast" class="me-input" placeholder="Last"></div></div>';
+    h+='<div class="me-field"><label>Session</label><select id="appSession" class="me-input"><option value="">— Select —</option>'+sesOpts+'</select></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Date of Birth</label><input type="date" id="appDob" class="me-input"></div><div class="me-field"><label>Gender</label><select id="appGender" class="me-input"><option value="">—</option><option>Male</option><option>Female</option></select></div></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>School</label><input type="text" id="appSchool" class="me-input"></div><div class="me-field"><label>School Grade</label><input type="text" id="appSchoolGrade" class="me-input"></div></div>';
+    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Parent / Guardian</div></div>';
+    h+='<div class="me-field"><label>Parent Name</label><input type="text" id="appParent" class="me-input" placeholder="Full name"></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Phone</label><input type="tel" id="appPhone" class="me-input"></div><div class="me-field"><label>Email</label><input type="email" id="appEmail" class="me-input"></div></div>';
+    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Address</div></div>';
+    h+='<div class="me-field"><label>Street</label><input type="text" id="appStreet" class="me-input"></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px"><div class="me-field"><label>City</label><input type="text" id="appCity" class="me-input"></div><div class="me-field"><label>State</label><input type="text" id="appState" class="me-input" value="NY" maxlength="2"></div><div class="me-field"><label>ZIP</label><input type="text" id="appZip" class="me-input" maxlength="10"></div></div>';
+    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Medical (optional)</div></div>';
+    h+='<div class="me-field"><label>Allergies</label><input type="text" id="appAllergies" class="me-input" placeholder="None or list allergies"></div>';
+    h+='<div class="me-field"><label>Medications</label><input type="text" id="appMeds" class="me-input" placeholder="None or list medications"></div>';
+    h+='<div class="me-field"><label>Notes</label><textarea id="appNotes" class="me-input" rows="2" style="resize:vertical" placeholder="Special requests, bunkmate preferences, etc."></textarea></div>';
+    h+='</div>';
+
+    showModal('New Application',h,function(){
+        var first=(document.getElementById('appFirst').value||'').trim();
+        var last=(document.getElementById('appLast').value||'').trim();
+        if(!first||!last){alert('Enter camper name');return}
+        var camperName=first+' '+last;
+        var session=document.getElementById('appSession').value||'';
+        var sesObj=sessions.find(function(s){return s.name===session});
+        // Check capacity
+        if(sesObj&&sesObj.capacity>0){
+            var enrolled=Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length;
+            if(enrolled>=sesObj.capacity){
+                if(!confirm(session+' is at capacity ('+enrolled+'/'+sesObj.capacity+'). Add to waitlist?'))return;
+            }
+        }
+        var tuition=sesObj?sesObj.tuition:0;
+        var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
+        enrollments[id]={
+            camperName:camperName,camperLast:last,
+            parentName:(document.getElementById('appParent').value||'').trim(),
+            parentEmail:(document.getElementById('appEmail').value||'').trim(),
+            parentPhone:(document.getElementById('appPhone').value||'').trim(),
+            dob:document.getElementById('appDob').value||'',
+            gender:document.getElementById('appGender').value||'',
+            school:(document.getElementById('appSchool').value||'').trim(),
+            schoolGrade:(document.getElementById('appSchoolGrade').value||'').trim(),
+            street:(document.getElementById('appStreet').value||'').trim(),
+            city:(document.getElementById('appCity').value||'').trim(),
+            state:(document.getElementById('appState').value||'').trim(),
+            zip:(document.getElementById('appZip').value||'').trim(),
+            allergies:(document.getElementById('appAllergies').value||'').trim(),
+            medications:(document.getElementById('appMeds').value||'').trim(),
+            session:session,
+            sessionTuition:tuition,
+            status:sesObj&&sesObj.capacity>0&&Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length>=sesObj.capacity?'waitlisted':'applied',
+            appliedDate:new Date().toISOString().split('T')[0],
+            formsRequired:3,formsCompleted:0,
+            paymentStatus:'pending',paymentAmount:0,
+            notes:(document.getElementById('appNotes').value||'').trim()
+        };
+        save();closeModal('dynModal');renderEnrollment();
+        toast(enrollments[id].status==='waitlisted'?camperName+' added to waitlist':camperName+' application received');
+    });
 }
 
 function updateEnrollStatus(id,status){
     if(!enrollments[id])return;
+    var prev=enrollments[id].status;
     enrollments[id].status=status;
+    enrollments[id].statusHistory=enrollments[id].statusHistory||[];
+    enrollments[id].statusHistory.push({from:prev,to:status,date:new Date().toISOString(),by:'office'});
+
+    // If declining/withdrawing someone from a full session, auto-promote next waitlisted
+    if((status==='declined'||status==='withdrawn')&&prev!=='waitlisted'){
+        var session=enrollments[id].session;
+        if(session) autoPromoteWaitlist(session);
+    }
     save();renderEnrollment();toast('Status updated to '+status);
+}
+
+function autoPromoteWaitlist(sessionName){
+    var sesObj=sessions.find(function(s){return s.name===sessionName});
+    if(!sesObj||!sesObj.capacity)return; // no cap = no waitlist needed
+    var enrolled=Object.values(enrollments).filter(function(e){return e.session===sessionName&&(e.status==='enrolled'||e.status==='accepted')}).length;
+    if(enrolled>=sesObj.capacity)return; // still full
+    // Find oldest waitlisted application for this session
+    var waitlisted=Object.entries(enrollments).filter(function([,e]){return e.session===sessionName&&e.status==='waitlisted'}).sort(function(a,b){return(a[1].appliedDate||'').localeCompare(b[1].appliedDate||'')});
+    if(waitlisted.length){
+        var[wid,we]=waitlisted[0];
+        we.status='accepted';
+        we.statusHistory=we.statusHistory||[];
+        we.statusHistory.push({from:'waitlisted',to:'accepted',date:new Date().toISOString(),by:'auto-promote'});
+        toast('Auto-promoted '+we.camperName+' from waitlist!');
+        console.log('[Me] Waitlist auto-promote: '+we.camperName+' for '+sessionName);
+    }
 }
 
 function enrollCamper(id){
@@ -1180,6 +1267,17 @@ function enrollCamper(id){
     var lastName=e.camperName.split(' ').pop();
     var famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
     var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
+    var sesObj=sessions.find(function(s){return s.name===e.session});
+    var tuition=e.sessionTuition||sesObj?.tuition||0;
+
+    // Apply sibling discount if applicable
+    if(sesObj&&sesObj.siblingDiscount>0&&families[famKey]&&families[famKey].camperIds.length>0){
+        var discAmt=Math.round(tuition*sesObj.siblingDiscount/100);
+        tuition-=discAmt;
+        e.discount={pct:sesObj.siblingDiscount,amt:discAmt};
+        console.log('[Me] Sibling discount applied: '+sesObj.siblingDiscount+'% (-'+fm(discAmt)+') for '+e.camperName);
+    }
+
     if(!families[famKey]&&e.parentName){
         var parents=[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'}];
         if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',relation:'Parent'});
@@ -1187,11 +1285,37 @@ function enrollCamper(id){
             name:lastName+' Family',
             households:[{label:'Primary',parents:parents,address:addr,billingContact:true}],
             camperIds:[e.camperName],
-            balance:e.sessionTuition||0,totalPaid:0,notes:'Enrolled via registration — '+e.session
+            balance:tuition,totalPaid:0,
+            notes:'Enrolled via registration — '+e.session
         };
-    }else if(families[famKey]&&families[famKey].camperIds.indexOf(e.camperName)<0){
-        families[famKey].camperIds.push(e.camperName);
+    }else if(families[famKey]){
+        if(families[famKey].camperIds.indexOf(e.camperName)<0) families[famKey].camperIds.push(e.camperName);
+        families[famKey].balance=(families[famKey].balance||0)+tuition;
     }
+
+    // Generate payment plan / installment schedule
+    if(sesObj&&sesObj.paymentPlan&&sesObj.paymentPlan!=='full'){
+        var plan=sesObj.paymentPlan;
+        e.installments=[];
+        var today=new Date();
+        if(plan==='deposit'){
+            var dep=sesObj.depositAmount||Math.round(tuition*0.25);
+            e.installments.push({label:'Deposit',amount:dep,dueDate:today.toISOString().split('T')[0],status:'pending'});
+            e.installments.push({label:'Balance',amount:tuition-dep,dueDate:sesObj.startDate||'',status:'pending'});
+        }else{
+            var numPayments=parseInt(plan)||2;
+            var perPayment=Math.floor(tuition/numPayments);
+            var remainder=tuition-(perPayment*numPayments);
+            for(var pi=0;pi<numPayments;pi++){
+                var due=new Date(today);due.setDate(due.getDate()+30*(pi));
+                var amt=perPayment+(pi===0?remainder:0);
+                e.installments.push({label:'Payment '+(pi+1)+' of '+numPayments,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending'});
+            }
+        }
+        console.log('[Me] Payment plan: '+e.installments.length+' installments for '+e.camperName);
+    }
+
+    e.enrolledDate=new Date().toISOString().split('T')[0];
     save();renderEnrollment();
 }
 
@@ -2397,7 +2521,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
-    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,
+    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
