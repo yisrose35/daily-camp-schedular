@@ -1116,103 +1116,125 @@
     // =========================================================================
     // ADDRESS VALIDATION — USPS standardization with Census fallback
     // =========================================================================
+    // ── Nominatim (OpenStreetMap) address validation ──
+    // Free, no registration, returns standardized address + coordinates
+    async function nominatimValidate(street, city, state, zip) {
+        const q = [street, city, state, zip].filter(Boolean).join(', ');
+        try {
+            const params = new URLSearchParams({
+                q: q, format: 'json', addressdetails: '1',
+                countrycodes: 'us', limit: '1'
+            });
+            const resp = await fetch('https://nominatim.openstreetmap.org/search?' + params.toString(), {
+                headers: { 'User-Agent': 'CampistryGo/1.0' }
+            });
+            if (!resp.ok) return null;
+            const results = await resp.json();
+            if (!results.length) return null;
+            const r = results[0];
+            const ad = r.address || {};
+            // Build standardized street from components
+            let stdStreet = '';
+            if (ad.house_number && ad.road) stdStreet = ad.house_number + ' ' + ad.road;
+            else if (ad.road) stdStreet = ad.road;
+            else stdStreet = street; // keep original if Nominatim didn't parse
+            return {
+                street: stdStreet,
+                city: ad.city || ad.town || ad.village || ad.hamlet || city,
+                state: ad.state || state,
+                zip: ad.postcode || zip,
+                lat: parseFloat(r.lat),
+                lng: parseFloat(r.lon),
+                displayName: r.display_name || '',
+                confidence: parseFloat(r.importance || 0)
+            };
+        } catch (e) {
+            console.warn('[Go] Nominatim error:', e.message);
+            return null;
+        }
+    }
+
     async function validateAllAddresses() {
         const names = Object.keys(D.addresses).filter(n => D.addresses[n]?.street);
         if (!names.length) { toast('No addresses to validate', 'error'); return; }
 
-        toast('Validating ' + names.length + ' addresses...');
-        let uspsOk = 0, censusOk = 0, failed = 0, updated = 0;
-        const supUrl = window.__CAMPISTRY_SUPABASE__?.url;
-        const supKey = window.__CAMPISTRY_SUPABASE__?.anonKey;
-        const hasUSPS = !!(supUrl && supKey);
+        toast('Validating ' + names.length + ' addresses against OpenStreetMap...');
+        let validated = 0, corrected = 0, geocoded = 0, failed = 0;
 
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
             const a = D.addresses[name];
             if (!a.street) continue;
 
-            let standardized = null;
+            // Query Nominatim
+            const result = await nominatimValidate(a.street, a.city, a.state, a.zip);
 
-            // Try USPS Edge Function first
-            if (hasUSPS) {
-                try {
-                    const resp = await fetch(supUrl + '/functions/v1/validate-address', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + supKey, 'apikey': supKey },
-                        body: JSON.stringify({ street: a.street, city: a.city, state: a.state, zip: a.zip })
-                    });
-                    const result = await resp.json();
-                    if (result.valid && result.standardized) {
-                        standardized = result.standardized;
-                        uspsOk++;
+            if (result && result.lat && result.lng) {
+                // Validate the result makes sense
+                if (!validateGeocode(result.lat, result.lng, a.street, name)) {
+                    a._validated = false;
+                    a._geocodeWarning = 'Location invalid — check address';
+                    failed++;
+                } else {
+                    // Check if address was corrected
+                    const newStreet = result.street || a.street;
+                    const newCity = result.city || a.city;
+                    const newState = result.state || a.state;
+                    const newZip = result.zip || a.zip;
+
+                    // Normalize for comparison
+                    const origNorm = (a.street + a.city + a.state + a.zip).toLowerCase().replace(/[^a-z0-9]/g, '');
+                    const newNorm = (newStreet + newCity + newState + newZip).toLowerCase().replace(/[^a-z0-9]/g, '');
+                    const changed = origNorm !== newNorm;
+
+                    if (changed) {
+                        a._originalStreet = a.street;
+                        a._originalCity = a.city;
+                        a._originalState = a.state;
+                        a._originalZip = a.zip;
+                        a.street = newStreet;
+                        a.city = newCity;
+                        if (newState.length === 2) a.state = newState.toUpperCase();
+                        // Only update ZIP if Nominatim returned a 5-digit one
+                        if (newZip && /^\d{5}/.test(newZip)) a.zip = newZip.substring(0, 5);
+                        corrected++;
+                        console.log('[Go] Address corrected: ' + name + ' → ' + [newStreet, newCity, a.state, a.zip].join(', '));
                     }
-                } catch (_) {}
-            }
 
-            // Fallback: Census geocoder returns standardized address
-            if (!standardized) {
-                const censusQ = normalizeCensusAddress(a.street, a.city, a.state, a.zip);
-                try {
-                    const d = await censusGeocode(censusQ);
-                    if (d?.result?.addressMatches?.length) {
-                        const match = d.result.addressMatches[0];
-                        const ma = match.addressComponents;
-                        if (ma) {
-                            standardized = {
-                                street: match.matchedAddress ? match.matchedAddress.split(',')[0].trim() : a.street,
-                                city: ma.city || a.city,
-                                state: ma.state || a.state,
-                                zip: ma.zip || a.zip
-                            };
-                            censusOk++;
-                        }
-                    }
-                } catch (_) {}
-            }
-
-            // Apply standardized address if different
-            if (standardized) {
-                const newStreet = standardized.street || a.street;
-                const newCity = standardized.city || a.city;
-                const newState = standardized.state || a.state;
-                const newZip = standardized.zip || a.zip;
-                const changed = newStreet !== a.street || newCity !== a.city || newState !== a.state || newZip !== a.zip;
-                if (changed) {
-                    a._originalStreet = a.street;
-                    a._originalCity = a.city;
-                    a._originalState = a.state;
-                    a._originalZip = a.zip;
-                    a.street = newStreet;
-                    a.city = newCity;
-                    a.state = newState.toUpperCase();
-                    a.zip = newZip;
-                    // Reset geocode since address changed
-                    a.geocoded = false; a.lat = null; a.lng = null;
-                    updated++;
-                    console.log('[Go] Address standardized: ' + name + ' → ' + [newStreet, newCity, newState, newZip].join(', '));
+                    // Also geocode while we're at it (save a separate pass)
+                    a.lat = result.lat;
+                    a.lng = result.lng;
+                    a.geocoded = true;
+                    a._geocodeSource = 'nominatim';
+                    a._validated = true;
+                    a._zipMismatch = !!(a.zip && result.zip && a.zip !== result.zip.substring(0, 5));
+                    delete a._geocodeWarning;
+                    validated++;
+                    geocoded++;
                 }
-                a._validated = true;
-                delete a._geocodeWarning;
             } else {
+                // Nominatim couldn't find it — flag it
                 a._validated = false;
-                a._geocodeWarning = 'Could not validate — check address';
+                a._geocodeWarning = 'Address not found — may not exist';
                 failed++;
+                console.warn('[Go] Address not found: ' + name + ' (' + [a.street, a.city, a.state, a.zip].join(', ') + ')');
             }
 
             if ((i + 1) % 10 === 0 || i === names.length - 1) {
                 renderAddresses();
-                toast('Validating: ' + (i + 1) + '/' + names.length + ' (' + updated + ' corrected)');
+                toast('Validating: ' + (i + 1) + '/' + names.length + ' (' + validated + ' verified, ' + corrected + ' corrected)');
             }
-            if (i < names.length - 1) await new Promise(r => setTimeout(r, 350));
+            // Nominatim rate limit: 1 request per second
+            if (i < names.length - 1) await new Promise(r => setTimeout(r, 1100));
         }
 
         save(); renderAddresses(); updateStats();
-        const method = uspsOk > 0 ? 'USPS' : 'Census';
-        toast('Validated: ' + (uspsOk + censusOk) + ' confirmed, ' + updated + ' corrected, ' + failed + ' unverified (' + method + ')');
+        toast('Done: ' + validated + ' verified, ' + corrected + ' corrected, ' + geocoded + ' geocoded, ' + failed + ' unverified');
 
-        // Auto-geocode corrected addresses
-        if (updated > 0) {
-            toast('Re-geocoding ' + updated + ' corrected addresses...');
+        // For any that Nominatim couldn't find, try Census + ORS as backup
+        const stillUngeocoded = names.filter(n => !D.addresses[n]?.geocoded);
+        if (stillUngeocoded.length) {
+            toast('Trying Census/ORS for ' + stillUngeocoded.length + ' remaining...');
             await geocodeAll(false);
         }
     }
