@@ -476,19 +476,49 @@
             console.warn('[Go] Geocode rejected for ' + camperName + ': outside continental US (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')');
             return false;
         }
-        // 3. If camp location is known, reject if >100 miles away
+        // 3. If camp location is known, reject if too far
         if (_campCoordsCache) {
             const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, lat, lng);
-            if (dist > 100) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 100) — likely wrong location');
+            // Hard limit: 50 miles (covers most day camp service areas)
+            if (dist > 50) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 50) — likely wrong location');
                 return false;
             }
+            // Soft limit: if we have other geocoded addresses, check if this is an outlier
+            // Compare against the cluster of already-geocoded addresses
+            const geocodedAddrs = Object.values(D.addresses).filter(a => a.geocoded && a.lat && a.lng);
+            if (geocodedAddrs.length >= 5) {
+                const avgLat = geocodedAddrs.reduce((s, a) => s + a.lat, 0) / geocodedAddrs.length;
+                const avgLng = geocodedAddrs.reduce((s, a) => s + a.lng, 0) / geocodedAddrs.length;
+                const maxExistingDist = Math.max(...geocodedAddrs.map(a => haversineMi(avgLat, avgLng, a.lat, a.lng)));
+                const thisDist = haversineMi(avgLat, avgLng, lat, lng);
+                // If this address is >3x farther than the farthest existing address, flag it
+                if (maxExistingDist > 0 && thisDist > maxExistingDist * 3 && thisDist > 5) {
+                    console.warn('[Go] Geocode rejected for ' + camperName + ': ' + thisDist.toFixed(1) + 'mi from cluster center (max existing: ' + maxExistingDist.toFixed(1) + 'mi) — likely geocoded to wrong location');
+                    return false;
+                }
+            }
         }
-        // 4. Coordinates that land in the ocean (rough Atlantic/Pacific checks near common camp areas)
-        // Atlantic: east of -71 lng AND south of 41 lat (ocean off Long Island / NJ)
+        // 4. Coordinates that land in the ocean
         if (lng > -71 && lat < 40.4 && lng < -60) {
             console.warn('[Go] Geocode rejected for ' + camperName + ': appears to be in the ocean');
             return false;
+        }
+        // 5. ZIP code cross-check — if camper has a ZIP, verify geocoded location is near that ZIP
+        const addrData = D.addresses[camperName];
+        if (addrData?.zip && _campCoordsCache) {
+            // Check other addresses with same ZIP — are they near this geocoded point?
+            const sameZipAddrs = Object.values(D.addresses).filter(a => a.zip === addrData.zip && a.geocoded && a.lat && a !== addrData);
+            if (sameZipAddrs.length >= 2) {
+                const zipCentLat = sameZipAddrs.reduce((s, a) => s + a.lat, 0) / sameZipAddrs.length;
+                const zipCentLng = sameZipAddrs.reduce((s, a) => s + a.lng, 0) / sameZipAddrs.length;
+                const distFromZip = haversineMi(zipCentLat, zipCentLng, lat, lng);
+                // If geocoded location is >5mi from the centroid of other addresses in the same ZIP, it's wrong
+                if (distFromZip > 5) {
+                    console.warn('[Go] Geocode rejected for ' + camperName + ': ' + distFromZip.toFixed(1) + 'mi from ZIP ' + addrData.zip + ' cluster — likely geocoded to wrong city/state');
+                    return false;
+                }
+            }
         }
         return true;
     }
