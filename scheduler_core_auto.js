@@ -4680,18 +4680,36 @@
                             bestSeg = si2;
                         }
                     }
-                    // Fallback: any segment with enough room
+                    // Fallback 1: any segment overlapping window at all
                     if (bestSeg < 0) {
                         for (var si3 = 0; si3 < segments.length; si3++) {
-                            if (segments[si3].size >= nc.dMin) { bestSeg = si3; break; }
+                            var oS = Math.max(segments[si3].start, nWinStart);
+                            var oE = Math.min(segments[si3].end, nWinEnd);
+                            if (oE > oS) { bestSeg = si3; break; }
                         }
+                    }
+                    // Fallback 2: any segment with enough room (ignoring window)
+                    if (bestSeg < 0) {
+                        for (var si3b = 0; si3b < segments.length; si3b++) {
+                            if (segments[si3b].size >= nc.dMin) { bestSeg = si3b; break; }
+                        }
+                    }
+                    // Fallback 3: LARGEST segment — NEVER drop a need
+                    if (bestSeg < 0 && segments.length > 0) {
+                        var largestIdx = 0;
+                        for (var si3c = 1; si3c < segments.length; si3c++) {
+                            if (segments[si3c].size > segments[largestIdx].size) largestIdx = si3c;
+                        }
+                        bestSeg = largestIdx;
+                        // Clamp dMin to fit the segment
+                        nc.dMin = Math.min(nc.dMin, segments[bestSeg].size);
+                        nc.dMax = Math.min(nc.dMax, segments[bestSeg].size);
                     }
                     if (bestSeg >= 0) {
                         segAssignments[bestSeg].push({
                             block: nb, dMin: nc.dMin, dMax: nc.dMax,
                             type: nbt, isSport: false, dur: 0
                         });
-                        // Track if snack moved to a different segment than where it was
                         var origMid = (nb.startMin + nb.endMin) / 2;
                         if (origMid < segments[bestSeg].start || origMid >= segments[bestSeg].end) {
                             repairStats.snacksMoved++;
