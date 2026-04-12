@@ -607,7 +607,39 @@
         });
         return addrRoster;
     }
-    function getStructure() { const g = readCampistrySettings(); return g?.campStructure || {}; }
+    function getStructure() {
+        // Try Me's camp structure first
+        const g = readCampistrySettings();
+        const meStruct = g?.campStructure || {};
+        if (Object.keys(meStruct).length) return meStruct;
+
+        // Build structure from Go's standalone data (CSV import or addresses)
+        const roster = getRoster();
+        const struct = {};
+        Object.values(roster).forEach(c => {
+            const div = c.division || '';
+            if (!div) return;
+            if (!struct[div]) struct[div] = { color: BUS_COLORS[Object.keys(struct).length % BUS_COLORS.length], grades: {} };
+            const grade = c.grade || 'Default';
+            if (!struct[div].grades[grade]) struct[div].grades[grade] = { bunks: [] };
+            const bunk = c.bunk || '';
+            if (bunk && struct[div].grades[grade].bunks.indexOf(bunk) < 0) struct[div].grades[grade].bunks.push(bunk);
+        });
+
+        // Also scan addresses for division/grade/bunk from CSV import
+        if (!Object.keys(struct).length) {
+            Object.values(D.addresses).forEach(a => {
+                const div = a._division || '';
+                if (!div) return;
+                if (!struct[div]) struct[div] = { color: BUS_COLORS[Object.keys(struct).length % BUS_COLORS.length], grades: {} };
+                const grade = a._grade || 'Default';
+                if (!struct[div].grades[grade]) struct[div].grades[grade] = { bunks: [] };
+                if (a._bunk && struct[div].grades[grade].bunks.indexOf(a._bunk) < 0) struct[div].grades[grade].bunks.push(a._bunk);
+            });
+        }
+
+        return struct;
+    }
     function getDivisionNames() { return Object.keys(getStructure()).sort(); }
 
     // =========================================================================
@@ -805,8 +837,16 @@
     // =========================================================================
     function renderShifts() {
         const container = document.getElementById('shiftsContainer'), empty = document.getElementById('shiftsEmptyState');
+        if (!D.shifts.length) {
+            // No shifts = single shift with all campers (default behavior)
+            document.getElementById('shiftCount').textContent = '1 shift (default)';
+            empty.style.display = 'none';
+            const isArrival = D.activeMode === 'arrival';
+            const camperCount = Object.keys(getRoster()).length || Object.keys(D.addresses).length;
+            container.innerHTML = '<div style="padding:1rem;background:var(--blue-50,#eff6ff);border:1px solid var(--blue-100,#dbeafe);border-radius:8px;font-size:.8125rem;color:var(--text-secondary)"><strong style="color:var(--blue-600)">Default: Single Shift</strong> — All ' + camperCount + ' campers in one run. ' + (isArrival ? 'Arrive by 8:00 AM.' : 'Depart at 4:00 PM.') + ' <strong>Add a shift only if your buses do multiple runs</strong> (e.g., Freshies first, then Juniors).</div>';
+            return;
+        }
         document.getElementById('shiftCount').textContent = D.shifts.length + ' shift' + (D.shifts.length !== 1 ? 's' : '');
-        if (!D.shifts.length) { container.innerHTML = ''; empty.style.display = ''; return; }
         empty.style.display = 'none';
         const divNames = getDivisionNames();
         const struct = getStructure();
@@ -1199,12 +1239,17 @@
         let geocoded = 0; Object.keys(roster).forEach(n => { if (D.addresses[n]?.geocoded) geocoded++; });
         const rs = parseInt(document.getElementById('routeReserveSeats')?.value) || D.setup.reserveSeats || 0;
         let totalSeats = 0; D.buses.forEach(b => { const m = D.monitors.find(x => x.assignedBus === b.id); const co = D.counselors.filter(x => x.assignedBus === b.id); const brs = getBusReserve(b); totalSeats += Math.max(0, (b.capacity || 0) - (m ? 1 : 0) - co.length - brs); });
-        let inShifts = 0; Object.entries(roster).forEach(([n, c]) => { if (D.shifts.some(sh => camperMatchesShift(c, sh))) inShifts++; });
-        const largestShift = D.shifts.length ? Math.max(...D.shifts.map(s => countCampersForShift(s))) : 0;
+        let inShifts = 0;
+        if (D.shifts.length) {
+            Object.entries(roster).forEach(([n, c]) => { if (D.shifts.some(sh => camperMatchesShift(c, sh))) inShifts++; });
+        } else {
+            inShifts = camperCount; // default single shift = all campers
+        }
+        const largestShift = D.shifts.length ? Math.max(...D.shifts.map(s => countCampersForShift(s))) : camperCount;
         let pickupCount = 0; Object.keys(roster).forEach(n => { if (D.addresses[n]?.transport === 'pickup') pickupCount++; });
         const checks = [
             { label: D.buses.length + ' bus(es)', status: D.buses.length > 0 ? 'ok' : 'fail' },
-            { label: D.shifts.length + ' shift(s)', status: D.shifts.length > 0 ? 'ok' : 'warn', detail: D.shifts.length === 0 ? 'No shifts — all campers in one group' : '' },
+            { label: D.shifts.length ? D.shifts.length + ' shift(s)' : '1 shift (default — all campers)', status: 'ok' },
             { label: inShifts + '/' + camperCount + ' campers in shifts', status: inShifts === camperCount && camperCount > 0 ? 'ok' : inShifts > 0 ? 'warn' : 'fail' },
             { label: geocoded + '/' + camperCount + ' geocoded', status: geocoded === camperCount && camperCount > 0 ? 'ok' : geocoded > 0 ? 'warn' : 'fail' },
             { label: totalSeats + ' seats for ' + largestShift + ' in largest shift', status: 'ok' },
