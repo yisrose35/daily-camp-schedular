@@ -410,6 +410,59 @@
         return points;
     }
 
+    // ── Address normalization for Census geocoder ──
+    // Census is very strict about formatting. This cleans addresses
+    // to maximize match rate before sending.
+    function normalizeCensusAddress(street, city, state, zip) {
+        let s = (street || '').trim();
+
+        // Remove apartment/unit/suite/floor — Census can't match these
+        s = s.replace(/\s*[,#]\s*(apt|suite|ste|unit|fl|floor|rm|room|bldg|building|lot|spc|space|trlr|trailer|dept)\.?\s*\S*/gi, '');
+        s = s.replace(/\s*[,#]\s*\d+[a-z]?\s*$/i, ''); // trailing "#2B" or ", 3"
+        s = s.replace(/\s*apartment\s+\S+/gi, '');
+
+        // Standardize directionals — Census prefers abbreviated
+        const dirs = { 'north': 'N', 'south': 'S', 'east': 'E', 'west': 'W',
+                       'northeast': 'NE', 'northwest': 'NW', 'southeast': 'SE', 'southwest': 'SW' };
+        Object.entries(dirs).forEach(([full, abbr]) => {
+            s = s.replace(new RegExp('\\b' + full + '\\b', 'gi'), abbr);
+        });
+
+        // Standardize street suffixes — Census prefers standard USPS abbreviations
+        const suffixes = {
+            'street': 'St', 'avenue': 'Ave', 'boulevard': 'Blvd', 'drive': 'Dr',
+            'road': 'Rd', 'court': 'Ct', 'lane': 'Ln', 'place': 'Pl',
+            'circle': 'Cir', 'terrace': 'Ter', 'parkway': 'Pkwy', 'highway': 'Hwy',
+            'way': 'Way', 'trail': 'Trl', 'turnpike': 'Tpke', 'pike': 'Pike',
+            'crescent': 'Cres', 'square': 'Sq', 'crossing': 'Xing'
+        };
+        Object.entries(suffixes).forEach(([full, abbr]) => {
+            s = s.replace(new RegExp('\\b' + full + '\\b', 'gi'), abbr);
+        });
+
+        // Remove extra whitespace
+        s = s.replace(/\s+/g, ' ').trim();
+
+        // Normalize state — Census wants 2-letter abbreviation
+        let st = (state || '').trim().toUpperCase();
+        const stateMap = {
+            'NEW YORK': 'NY', 'NEW JERSEY': 'NJ', 'CONNECTICUT': 'CT', 'PENNSYLVANIA': 'PA',
+            'CALIFORNIA': 'CA', 'FLORIDA': 'FL', 'TEXAS': 'TX', 'MASSACHUSETTS': 'MA',
+            'MARYLAND': 'MD', 'VIRGINIA': 'VA', 'OHIO': 'OH', 'ILLINOIS': 'IL',
+            'GEORGIA': 'GA', 'MICHIGAN': 'MI', 'NORTH CAROLINA': 'NC', 'COLORADO': 'CO'
+        };
+        if (stateMap[st]) st = stateMap[st];
+
+        // Build the query — Census works best with: "street, city, state zip"
+        const parts = [s];
+        if (city) parts.push((city || '').trim());
+        if (st) parts.push(st);
+        let q = parts.join(', ');
+        if (zip) q += ' ' + (zip || '').trim().replace(/\s+/g, '').substring(0, 5); // 5-digit zip only
+
+        return q;
+    }
+
     function censusGeocode(address) {
         return new Promise((resolve) => {
             const cbName = '_cg_' + Math.random().toString(36).slice(2, 8);
@@ -794,8 +847,8 @@
     // =========================================================================
     async function geocodeOne(name) {
         const a = D.addresses[name]; if (!a?.street) return false;
-        const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
-        try { const d = await censusGeocode(q); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; a.lat = best.coordinates.y; a.lng = best.coordinates.x; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; return true; } } catch (e) { console.warn('[Go] Census error for', name, e.message); }
+        const censusQ = normalizeCensusAddress(a.street, a.city, a.state, a.zip);
+        try { const d = await censusGeocode(censusQ); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; a.lat = best.coordinates.y; a.lng = best.coordinates.x; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; return true; } } catch (e) { console.warn('[Go] Census error for', name, e.message); }
         const key = getApiKey(); if (!key) return false;
         const params = { text: q, size: '5', 'boundary.country': 'US' };
         if (_campCoordsCache) { params['focus.point.lat'] = _campCoordsCache.lat; params['focus.point.lon'] = _campCoordsCache.lng; }
@@ -810,8 +863,8 @@
         let censusOk = 0, censusFail = [];
         for (let i = 0; i < todo.length; i++) {
             const name = todo[i]; const a = D.addresses[name]; if (!a?.street) { censusFail.push(name); continue; }
-            const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
-            try { const d = await censusGeocode(q); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; a.lat = best.coordinates.y; a.lng = best.coordinates.x; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; censusOk++; } else censusFail.push(name); } catch (e) { censusFail.push(name); }
+            const censusQ = normalizeCensusAddress(a.street, a.city, a.state, a.zip);
+            try { const d = await censusGeocode(censusQ); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; a.lat = best.coordinates.y; a.lng = best.coordinates.x; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; censusOk++; } else censusFail.push(name); } catch (e) { censusFail.push(name); }
             if ((i + 1) % 10 === 0 || i === todo.length - 1) { renderAddresses(); updateStats(); toast('Census: ' + censusOk + ' ✓  ' + censusFail.length + ' remaining  (' + (i + 1) + '/' + todo.length + ')'); }
             if (i < todo.length - 1) await new Promise(r => setTimeout(r, 300));
         }
@@ -838,7 +891,9 @@
     }
 
     async function geocodeSingle(addr) {
-        try { const d = await censusGeocode(addr); if (d?.result?.addressMatches?.length) { const m = d.result.addressMatches[0]; return { lat: m.coordinates.y, lng: m.coordinates.x }; } } catch (_) {}
+        // For single address string, do basic cleanup before Census
+        const cleanAddr = (addr || '').replace(/\s*[,#]\s*(apt|suite|ste|unit|fl|floor|rm|room)\.?\s*\S*/gi, '').replace(/\s+/g, ' ').trim();
+        try { const d = await censusGeocode(cleanAddr); if (d?.result?.addressMatches?.length) { const m = d.result.addressMatches[0]; return { lat: m.coordinates.y, lng: m.coordinates.x }; } } catch (_) {}
         const key = getApiKey(); if (!key) return null;
         try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: addr, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return null; const d = await r.json(); if (d.features?.length) { const co = d.features[0].geometry.coordinates; return { lat: co[1], lng: co[0] }; } } catch (_) {} return null;
     }
