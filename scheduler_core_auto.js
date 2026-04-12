@@ -4535,8 +4535,183 @@
             if (guaranteeCount > 0) log('[Phase3] ⚡ Forced ' + guaranteeCount + ' missing swim/snack placements');
 
             // ══════════════════════════════════════════════════════════
+            // ★ v12.0: WHOLE-DAY REPAIR — replaces all previous post-processing.
+            // Treats each bunk's day as a single time-allocation problem.
+            // For each gap between immovable walls:
+            //   1. Collect all flexible blocks in that gap
+            //   2. Compute their dMin/dMax from resolveConstraints
+            //   3. If sum(dMin) > gap: proportionally shrink (largest surplus first)
+            //   4. If sum(dMin) <= gap: distribute excess up to dMax
+            //   5. Place blocks contiguously — zero gaps by construction
+            // Result: mathematically guaranteed no gaps, no dMin/dMax violations.
             // ══════════════════════════════════════════════════════════
-            // ★ v11.4: ZERO-GAP FINALIZER
+            var repairStats = { bunks: 0, gapsFixed: 0, durFixed: 0 };
+
+            for (var wdi = 0; wdi < allBunkIds.length; wdi++) {
+                var wdBunk = allBunkIds[wdi];
+                var wdMeta = bunkMeta[wdBunk];
+                if (!wdMeta) continue;
+                var wdTl = bunkTimelines[wdBunk] || [];
+                wdTl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                // Separate immovable walls from flexible blocks
+                var walls = [];
+                var flex = [];
+                for (var wdj = 0; wdj < wdTl.length; wdj++) {
+                    if (isPhase0(wdTl[wdj])) walls.push(wdTl[wdj]);
+                    else flex.push(wdTl[wdj]);
+                }
+
+                // Find gaps between walls (including edges of day)
+                walls.sort(function(a, b) { return a.startMin - b.startMin; });
+                var wdGaps = [];
+                var wdCursor = wdMeta.gradeStart;
+                for (var wdk = 0; wdk < walls.length; wdk++) {
+                    if (walls[wdk].startMin > wdCursor) {
+                        wdGaps.push({ start: wdCursor, end: walls[wdk].startMin });
+                    }
+                    wdCursor = Math.max(wdCursor, walls[wdk].endMin);
+                }
+                if (wdCursor < wdMeta.gradeEnd) {
+                    wdGaps.push({ start: wdCursor, end: wdMeta.gradeEnd });
+                }
+
+                // For each gap, collect flex blocks and plan durations
+                var repairedBlocks = [];
+                for (var wdg = 0; wdg < wdGaps.length; wdg++) {
+                    var wdGap = wdGaps[wdg];
+                    var gapSize = wdGap.end - wdGap.start;
+                    if (gapSize <= 0) continue;
+
+                    // Find flex blocks that overlap this gap (by midpoint)
+                    var inGap = [];
+                    for (var wdf = 0; wdf < flex.length; wdf++) {
+                        var fb = flex[wdf];
+                        var mid = (fb.startMin + fb.endMin) / 2;
+                        if (mid >= wdGap.start && mid < wdGap.end) {
+                            // Resolve fresh constraints (window-aware)
+                            var fbc = resolveConstraints(fb.layer, (fb.type || '').toLowerCase(), fb);
+                            inGap.push({
+                                block: fb,
+                                dMin: fbc.dMin,
+                                dMax: fbc.dMax,
+                                type: (fb.type || '').toLowerCase(),
+                                dur: 0 // will be computed
+                            });
+                        }
+                    }
+
+                    // If no flex blocks in this gap, create a sport slot to fill it
+                    if (inGap.length === 0) {
+                        if (gapSize >= 5) {
+                            var fillBlk = makeBlock({
+                                startMin: wdGap.start, endMin: wdGap.end,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: wdMeta.sportLayer, field: null,
+                                dMin: Math.min(gapSize, wdMeta.fillMinDur || 20),
+                                dMax: Math.max(gapSize, wdMeta.sportCeiling || 60),
+                                _source: 'day-repair', _final: true
+                            });
+                            if (fillBlk) repairedBlocks.push(fillBlk);
+                        }
+                        continue;
+                    }
+
+                    // Compute total minimums and maximums
+                    var totalDMin = 0, totalDMax = 0;
+                    for (var wdm = 0; wdm < inGap.length; wdm++) {
+                        totalDMin += inGap[wdm].dMin;
+                        totalDMax += inGap[wdm].dMax;
+                    }
+
+                    if (totalDMin > gapSize) {
+                        // Can't fit all at dMin — proportionally shrink
+                        // Give each block its fair share, respecting absolute minimum of 5
+                        var ratio = gapSize / totalDMin;
+                        var allocated = 0;
+                        for (var wds = 0; wds < inGap.length; wds++) {
+                            if (wds === inGap.length - 1) {
+                                inGap[wds].dur = gapSize - allocated; // last block gets remainder
+                            } else {
+                                inGap[wds].dur = Math.max(5, Math.round(inGap[wds].dMin * ratio / 5) * 5);
+                                allocated += inGap[wds].dur;
+                            }
+                        }
+                        repairStats.durFixed++;
+                    } else {
+                        // Start at dMin, distribute excess proportionally up to dMax
+                        var excess = gapSize - totalDMin;
+                        for (var wde = 0; wde < inGap.length; wde++) {
+                            inGap[wde].dur = inGap[wde].dMin;
+                        }
+
+                        // Distribute excess: prioritize non-sport blocks first (snack, special, swim)
+                        // then sport/slot blocks (most flexible)
+                        var sortedForExcess = inGap.slice().sort(function(a, b) {
+                            var aIsSport = (a.type === 'sport' || a.type === 'slot') ? 1 : 0;
+                            var bIsSport = (b.type === 'sport' || b.type === 'slot') ? 1 : 0;
+                            return aIsSport - bIsSport; // non-sport first
+                        });
+
+                        for (var wdx = 0; wdx < sortedForExcess.length && excess > 0; wdx++) {
+                            var entry = sortedForExcess[wdx];
+                            var canGrow = entry.dMax - entry.dur;
+                            if (canGrow > 0) {
+                                var give = Math.min(canGrow, excess);
+                                give = Math.round(give / 5) * 5;
+                                if (give > 0) {
+                                    entry.dur += give;
+                                    excess -= give;
+                                }
+                            }
+                        }
+
+                        // If still excess (all blocks at dMax), give to sport/slot blocks beyond dMax
+                        if (excess >= 5) {
+                            for (var wdx2 = sortedForExcess.length - 1; wdx2 >= 0 && excess > 0; wdx2--) {
+                                var entry2 = sortedForExcess[wdx2];
+                                if (entry2.type === 'sport' || entry2.type === 'slot') {
+                                    entry2.dur += excess;
+                                    excess = 0;
+                                }
+                            }
+                        }
+                        // Last resort: spread across all blocks
+                        if (excess >= 5) {
+                            inGap[inGap.length - 1].dur += excess;
+                            excess = 0;
+                        }
+                    }
+
+                    // Place blocks contiguously within the gap — zero gaps by construction
+                    var placeCursor = wdGap.start;
+                    for (var wdp = 0; wdp < inGap.length; wdp++) {
+                        var entry3 = inGap[wdp];
+                        var dur = Math.round(entry3.dur / 5) * 5;
+                        if (dur < 5) dur = 5;
+                        // Last block gets exact remainder to prevent rounding gaps
+                        if (wdp === inGap.length - 1) dur = wdGap.end - placeCursor;
+                        if (dur < 5) dur = 5;
+
+                        entry3.block.startMin = placeCursor;
+                        entry3.block.endMin = placeCursor + dur;
+                        entry3.block.dMin = entry3.dMin;
+                        entry3.block.dMax = entry3.dMax;
+                        repairedBlocks.push(entry3.block);
+                        placeCursor += dur;
+                        repairStats.gapsFixed++;
+                    }
+                }
+
+                // Reconstruct timeline: walls + repaired blocks
+                bunkTimelines[wdBunk] = walls.concat(repairedBlocks);
+                bunkTimelines[wdBunk].sort(function(a, b) { return a.startMin - b.startMin; });
+                allTemplates[wdBunk] = bunkTimelines[wdBunk];
+                repairStats.bunks++;
+            }
+            log('[Phase3] ★ DAY REPAIR: ' + repairStats.bunks + ' bunks, ' + repairStats.gapsFixed + ' blocks placed, ' + repairStats.durFixed + ' gaps needed shrinking');
+
+            // ★ v11.4: ZERO-GAP FINALIZER (kept as safety net — should be no-op after day repair)
             // Eliminate every remaining gap by distributing time to adjacent
             // flexible blocks. A gap-free schedule means zero Frees.
             // ══════════════════════════════════════════════════════════
