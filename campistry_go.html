@@ -251,11 +251,11 @@
         <!-- PREFLIGHT -->
         <!-- ROUTES & MAP -->
         <div id="tab-routes" class="tab-content">
-            <!-- Preflight checklist (inline) -->
-            <div class="card" style="margin-bottom:1rem">
-                <div class="card-header"><h2>Pre-Flight Checklist</h2><span class="badge badge-neutral" id="preflightStatus">—</span></div>
+            <!-- Preflight checklist (collapsible) -->
+            <details class="card" style="margin-bottom:1rem">
+                <summary class="card-header" style="cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;justify-content:space-between"><h2 style="display:flex;align-items:center;gap:8px">Pre-Flight Checklist <span style="font-size:.7rem;color:var(--text-muted);font-weight:400">▼</span></h2><span class="badge badge-neutral" id="preflightStatus">—</span></summary>
                 <div class="card-body" id="preflightBody"></div>
-            </div>
+            </details>
             <!-- Action bar -->
             <div class="action-bar" style="margin-bottom:1rem;">
                 <button class="btn btn-primary" id="generateRoutesBtn" onclick="CampistryGo.generateRoutes()" disabled>
