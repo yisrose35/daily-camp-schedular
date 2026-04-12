@@ -4611,8 +4611,17 @@
             //       _classification === 'pinned' AND _source === 'phase0') are
             //       exempt from donating.
             // ══════════════════════════════════════════════════════════
-            function isUserPinned(blk) {
-                return blk._fixed && blk._classification === 'pinned' && blk._source === 'phase0';
+            // ★ v11.5c: Phase 0 blocks are IMMOVABLE — cannot be moved, shrunk, or shifted.
+            // This includes pinned layers, leagues, trips, and bunk overrides.
+            function isPhase0(blk) {
+                if (blk._classification === 'pinned') return true;
+                if (blk._source === 'phase0') return true;
+                var bt = (blk.type || '').toLowerCase();
+                if (bt === 'league' || bt === 'specialty_league') return true;
+                if (bt === 'lunch' || bt === 'dismissal') return true;
+                if (blk._isTrip) return true;
+                if (blk._bunkOverride && blk._source === 'capacity_checked') return true;
+                return false;
             }
 
             var rebalanceTotal = 0;
@@ -4640,7 +4649,7 @@
                         if (rbDeficit < 5) continue;
 
                         // Try stealing from the PREVIOUS block (even if _fixed, unless user-pinned)
-                        if (rbj > 0 && !isUserPinned(rbTmpl[rbj-1])) {
+                        if (rbj > 0 && !isPhase0(rbTmpl[rbj-1])) {
                             var donor = rbTmpl[rbj-1];
                             var donorDur = donor.endMin - donor.startMin;
                             var donorC = resolveConstraints(donor.layer, (donor.type || '').toLowerCase(), donor);
@@ -4662,7 +4671,7 @@
                         }
 
                         // Try stealing from the NEXT block
-                        if (rbj < rbTmpl.length - 1 && !isUserPinned(rbTmpl[rbj+1])) {
+                        if (rbj < rbTmpl.length - 1 && !isPhase0(rbTmpl[rbj+1])) {
                             var donor2 = rbTmpl[rbj+1];
                             var donor2Dur = donor2.endMin - donor2.startMin;
                             var donor2C = resolveConstraints(donor2.layer, (donor2.type || '').toLowerCase(), donor2);
@@ -4687,12 +4696,18 @@
                         for (var rbk = 1; rbk <= 3 && rbDeficit > 0; rbk++) {
                             // Look left
                             var li = rbj - rbk;
-                            if (li >= 0 && !isUserPinned(rbTmpl[li])) {
+                            if (li >= 0 && !isPhase0(rbTmpl[li])) {
                                 var ld = rbTmpl[li];
                                 var ldDur = ld.endMin - ld.startMin;
                                 var ldC = resolveConstraints(ld.layer, (ld.type || '').toLowerCase(), ld);
                                 var ldSurplus = Math.floor((ldDur - ldC.dMin) / 5) * 5;
                                 if (ldSurplus >= 5) {
+                                    // Check that no intermediate block is Phase 0 (immovable)
+                                    var lBlocked = false;
+                                    for (var lchk = li + 1; lchk < rbj; lchk++) {
+                                        if (isPhase0(rbTmpl[lchk])) { lBlocked = true; break; }
+                                    }
+                                    if (lBlocked) continue;
                                     var lsteal = Math.min(rbDeficit, ldSurplus);
                                     lsteal = Math.round(lsteal / 5) * 5;
                                     if (lsteal >= 5) {
@@ -4712,12 +4727,18 @@
                             }
                             // Look right
                             var ri = rbj + rbk;
-                            if (ri < rbTmpl.length && !isUserPinned(rbTmpl[ri]) && rbDeficit > 0) {
+                            if (ri < rbTmpl.length && !isPhase0(rbTmpl[ri]) && rbDeficit > 0) {
                                 var rd = rbTmpl[ri];
                                 var rdDur = rd.endMin - rd.startMin;
                                 var rdC = resolveConstraints(rd.layer, (rd.type || '').toLowerCase(), rd);
                                 var rdSurplus = Math.floor((rdDur - rdC.dMin) / 5) * 5;
                                 if (rdSurplus >= 5) {
+                                    // Check that no intermediate block is Phase 0 (immovable)
+                                    var rBlocked = false;
+                                    for (var rchk = rbj + 1; rchk < ri; rchk++) {
+                                        if (isPhase0(rbTmpl[rchk])) { rBlocked = true; break; }
+                                    }
+                                    if (rBlocked) continue;
                                     var rsteal = Math.min(rbDeficit, rdSurplus);
                                     rsteal = Math.round(rsteal / 5) * 5;
                                     if (rsteal >= 5) {
