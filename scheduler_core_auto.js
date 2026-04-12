@@ -3827,6 +3827,8 @@
                     var hWinStart = hll.startMin || hMeta.gradeStart;
                     var hWinEnd = hll.endMin || hMeta.gradeEnd;
 
+                    // ★ v10.2: Two-pass search — first inside the window, then ANYWHERE
+                    // Missing swim is unacceptable. Better at a non-ideal time than not at all.
                     var hBestIdx = -1, hBestFit = Infinity;
                     for (var hsi = 0; hsi < hTmpl.length; hsi++) {
                         var hblk = hTmpl[hsi];
@@ -3838,6 +3840,19 @@
                         if (hblkDur < hNeedDMin) continue;
                         var hfit = Math.abs(hblkDur - hNeedDMin);
                         if (hfit < hBestFit) { hBestFit = hfit; hBestIdx = hsi; }
+                    }
+                    // Pass 2: If nothing found in window, search the ENTIRE day
+                    if (hBestIdx < 0) {
+                        for (var hsi2 = 0; hsi2 < hTmpl.length; hsi2++) {
+                            var hblk2 = hTmpl[hsi2];
+                            if (hblk2._fixed) continue;
+                            var hbt2 = (hblk2.type || '').toLowerCase();
+                            if (!['sport', 'slot'].includes(hbt2)) continue;
+                            var hblkDur2 = hblk2.endMin - hblk2.startMin;
+                            if (hblkDur2 < hNeedDMin) continue;
+                            var hfit2 = Math.abs(hblkDur2 - hNeedDMin);
+                            if (hfit2 < hBestFit) { hBestFit = hfit2; hBestIdx = hsi2; }
+                        }
                     }
 
                     if (hBestIdx >= 0) {
@@ -3959,6 +3974,88 @@
                 }
             }
             if (rotHealCount > 0) log('[Phase3] 🔧 Self-healed ' + rotHealCount + ' missing rotation events');
+
+            // ★ v10.2: SWIM/SNACK GUARANTEE — absolute last resort forced placement
+            // After all self-healing, verify EVERY bunk has swim and snacks.
+            // If still missing, force-place by taking the LARGEST sport/slot block.
+            var guaranteeCount = 0;
+            for (var gbi = 0; gbi < allBunkIds.length; gbi++) {
+                var gBunk = allBunkIds[gbi];
+                var gMeta = bunkMeta[gBunk];
+                if (!gMeta) continue;
+                var gTmpl = gMeta.template;
+                var gGrade = gMeta.grade;
+                var gLayers = layersByGrade[gGrade] || [];
+
+                for (var gli = 0; gli < gLayers.length; gli++) {
+                    var gll = gLayers[gli];
+                    var glt = (gll.type || '').toLowerCase();
+                    if (glt !== 'swim' && glt !== 'snack' && glt !== 'snacks') continue;
+
+                    var gHasIt = gTmpl.some(function(b) {
+                        var bt = (b.type || '').toLowerCase();
+                        return bt === glt || (glt === 'snacks' && bt === 'snack') || (glt === 'snack' && bt === 'snacks');
+                    });
+                    if (gHasIt) continue;
+
+                    // STILL missing! Force-place by taking the largest sport/slot block
+                    var glc = resolveConstraints(gll, glt);
+                    var gNeedDMin = glc.dMin || (glt === 'swim' ? 30 : 15);
+
+                    // Find the largest non-fixed sport/slot block anywhere in the day
+                    var gBestIdx = -1, gBestDur = 0;
+                    for (var gsi = 0; gsi < gTmpl.length; gsi++) {
+                        var gblk = gTmpl[gsi];
+                        if (gblk._fixed) continue;
+                        var gbt = (gblk.type || '').toLowerCase();
+                        if (gbt !== 'sport' && gbt !== 'slot') continue;
+                        var gblkDur = gblk.endMin - gblk.startMin;
+                        if (gblkDur >= gNeedDMin && gblkDur > gBestDur) {
+                            gBestDur = gblkDur;
+                            gBestIdx = gsi;
+                        }
+                    }
+
+                    if (gBestIdx >= 0) {
+                        var gVictim = gTmpl[gBestIdx];
+                        var gNewEnd = Math.min(gVictim.startMin + (glc.dMax || gNeedDMin), gVictim.endMin);
+                        var gRemainStart = gNewEnd;
+                        var gRemainEnd = gVictim.endMin;
+
+                        // Replace with the required layer
+                        gTmpl[gBestIdx] = makeBlock({
+                            startMin: gVictim.startMin, endMin: gNewEnd,
+                            type: glt === 'snacks' ? 'snacks' : glt,
+                            event: gll.event || glt,
+                            layer: gll, dMin: gNeedDMin, dMax: glc.dMax || gNeedDMin,
+                            _source: 'guarantee', _activityLocked: true, _final: true, _fixed: true
+                        }) || gTmpl[gBestIdx];
+
+                        // Fill remainder with sport if big enough
+                        if (gRemainEnd - gRemainStart >= 15) {
+                            addSportBlocks(gTmpl, gRemainStart, gRemainEnd, {
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: gMeta.sportLayer, field: null,
+                                dMin: Math.min(gRemainEnd - gRemainStart, gMeta.fillMinDur),
+                                dMax: gMeta.sportCeiling,
+                                _source: 'guarantee-remainder', _final: true
+                            }, gMeta.sportCeiling, Math.min(gRemainEnd - gRemainStart, gMeta.fillMinDur));
+                        } else if (gRemainEnd - gRemainStart > 0) {
+                            gTmpl[gBestIdx].endMin = gRemainEnd;
+                        }
+
+                        gTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                        bunkTimelines[gBunk] = gTmpl;
+                        ensureTimelineIntegrity(gBunk);
+                        gTmpl = bunkTimelines[gBunk];
+                        guaranteeCount++;
+                        log('[Phase3] ⚡ GUARANTEED ' + glt + ' for bunk ' + gBunk + ' (took largest sport block)');
+                    } else {
+                        warn('[Phase3] ❌ Cannot guarantee ' + glt + ' for bunk ' + gBunk + ' — no sport blocks to sacrifice');
+                    }
+                }
+            }
+            if (guaranteeCount > 0) log('[Phase3] ⚡ Forced ' + guaranteeCount + ' missing swim/snack placements');
 
             log('[Phase3] ★ timeSweepFillAll complete: ' + Object.keys(allTemplates).length + ' bunks, ' + totalWarnings + ' warnings');
             return allTemplates;
