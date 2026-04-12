@@ -3815,18 +3815,32 @@
                     var hll = hLayers[hl];
                     var hlt = (hll.type || '').toLowerCase();
                     if (!['swim', 'snack', 'snacks', 'special'].includes(hlt)) continue;
-                    // ★ v10.3: Skip specials with no actual activity name — don't create phantom blocks
-                    if (hlt === 'special' && !hll.event) continue;
+
+                    // ★ v10.4: For specials, resolve the actual name from draft results
+                    var hSpecialName = null, hSpecialLocation = null, hSpecialDuration = null;
+                    if (hlt === 'special') {
+                        var hDraft = draftResults[hBunk];
+                        if (hDraft && hDraft.specials && hDraft.specials.length > 0) {
+                            var hDraftSpecial = hDraft.specials[0];
+                            hSpecialName = hDraftSpecial.name;
+                            hSpecialLocation = hDraftSpecial.location || hDraftSpecial.claimedField;
+                            hSpecialDuration = hDraftSpecial.duration;
+                        }
+                        // If no draft special exists for this bunk, skip — nothing real to place
+                        if (!hSpecialName) continue;
+                    }
+
                     // Check if already placed
                     var hHasIt = hTmpl.some(function(b) {
                         var bt = (b.type || '').toLowerCase();
+                        if (hlt === 'special') return bt === 'special';
                         return bt === hlt || (hlt === 'snacks' && bt === 'snack');
                     });
                     if (hHasIt) continue;
 
                     // Missing! Find a sport/slot block to sacrifice
                     var hlc = resolveConstraints(hll, hlt);
-                    var hNeedDMin = hlc.dMin || 15;
+                    var hNeedDMin = (hlt === 'special' && hSpecialDuration) ? hSpecialDuration : (hlc.dMin || 15);
                     var hWinStart = hll.startMin || hMeta.gradeStart;
                     var hWinEnd = hll.endMin || hMeta.gradeEnd;
 
@@ -3865,13 +3879,16 @@
                         var hRemainEnd = hVictim.endMin;
 
                         // Replace with the required layer
+                        var hEventName = hlt === 'special' ? hSpecialName : (hll.event || hlt);
                         hTmpl[hBestIdx] = makeBlock({
                             startMin: hVictim.startMin, endMin: hNewEnd,
                             type: hlt === 'snacks' ? 'snacks' : hlt,
-                            event: hlt === 'special' ? (hll.event || 'Special Activity') : (hll.event || hlt),
+                            event: hEventName,
                             layer: hll, dMin: hNeedDMin, dMax: hlc.dMax || hNeedDMin,
                             _source: 'self-heal', _activityLocked: true, _final: true,
-                            _assignedSpecial: hlt === 'special' ? (hll.event || 'Special Activity') : null
+                            _assignedSpecial: hlt === 'special' ? hSpecialName : null,
+                            _specialLocation: hlt === 'special' ? hSpecialLocation : null,
+                            _isSpecialLocation: hlt === 'special'
                         }) || hTmpl[hBestIdx]; // fallback if makeBlock returns null
 
                         // ★ v10.3: Fill remainder with sport — NEVER extend layer past dMax
@@ -4713,6 +4730,8 @@
 
             // Phase 2: Draft
             const draftResults = runGlobalPlanner(shoppingLists);
+            // ★ v10.4: Expose draft results for post-build healing to look up special names
+            window._autoBuildDraftResults = draftResults;
 
             // ★ v7.0: Clear ALL draft field claims — keep only Phase 0 walls
             Object.values(fieldLedger).forEach(ledger => {
@@ -6315,10 +6334,21 @@
                         var ll = gradeLayers[li];
                         var lt = (ll.type || '').toLowerCase();
                         if (!['swim', 'snack', 'snacks', 'special'].includes(lt)) continue;
-                        // ★ v10.3: Skip specials with no actual activity name
-                        if (lt === 'special' && !ll.event) continue;
+
+                        // ★ v10.4: For specials, resolve actual name from draft
+                        var phSpecialName = null, phSpecialLoc = null;
+                        if (lt === 'special') {
+                            var phDraft = window._autoBuildDraftResults ? window._autoBuildDraftResults[bunk] : null;
+                            if (phDraft && phDraft.specials && phDraft.specials.length > 0) {
+                                phSpecialName = phDraft.specials[0].name;
+                                phSpecialLoc = phDraft.specials[0].location || phDraft.specials[0].claimedField;
+                            }
+                            if (!phSpecialName) continue; // no real special to place
+                        }
+
                         var hasIt = sorted.some(function(b) {
                             var bt = (b.type || '').toLowerCase();
+                            if (lt === 'special') return bt === 'special';
                             return bt === lt || (lt === 'snacks' && bt === 'snack');
                         });
                         if (hasIt) continue;
@@ -6351,14 +6381,17 @@
                             var remainderEnd = victim.endMin;
 
                             // Replace the sport block with the required layer
+                            var phEventName = lt === 'special' ? phSpecialName : (ll.event || lt);
                             sorted[bestIdx] = {
                                 startMin: newStart, endMin: newEnd,
                                 type: lt === 'snacks' ? 'snacks' : lt,
-                                event: lt === 'special' ? (ll.event || 'Special Activity') : (ll.event || lt),
+                                event: phEventName,
                                 layer: ll,
                                 _classification: 'windowed', _committed: true, _autoGenerated: true,
                                 _activityLocked: true, _fixed: false, _source: 'self-heal',
-                                _assignedSpecial: lt === 'special' ? (ll.event || 'Special Activity') : null,
+                                _assignedSpecial: lt === 'special' ? phSpecialName : null,
+                                _specialLocation: lt === 'special' ? phSpecialLoc : null,
+                                _isSpecialLocation: lt === 'special',
                                 _bunkOverride: true
                             };
 
