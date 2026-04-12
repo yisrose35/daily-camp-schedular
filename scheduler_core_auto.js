@@ -3743,6 +3743,85 @@
             }
             if (healCount > 0) log('[Phase3] 🔧 Self-healed ' + healCount + ' missing layers');
 
+            // ★ Self-healing for rotation events — sacrifice sport block if missing
+            var rotHealCount = 0;
+            if (rotationQuotas && window.RotationEvents && typeof window.RotationEvents.getNeedsForBunk === 'function') {
+                for (var rhi = 0; rhi < allBunkIds.length; rhi++) {
+                    var rhBunk = allBunkIds[rhi];
+                    var rhMeta = bunkMeta[rhBunk];
+                    var rhTmpl = rhMeta.template;
+                    // Check if bunk has a rotation event block already
+                    var rhHasRot = rhTmpl.some(function(b) { return b._source === 'rotation_event' && b._rotationEventId; });
+                    if (rhHasRot) continue;
+                    // Get rotation needs for this bunk
+                    try {
+                        var rhNeeds = window.RotationEvents.getNeedsForBunk(String(rhBunk), currentDate);
+                        if (!rhNeeds || !rhNeeds.length) continue;
+                        for (var rni = 0; rni < rhNeeds.length; rni++) {
+                            var rhNeed = rhNeeds[rni];
+                            // Check quota — only self-heal if under target or last day
+                            if (rotationQuotas[rhNeed._rotationEventId]) {
+                                var rhQ = rotationQuotas[rhNeed._rotationEventId];
+                                if (!rhQ.isLastDay && rhQ.placed >= rhQ.dailyTarget) continue;
+                            }
+                            var rhDur = rhNeed.dMin || 15;
+                            var rhWinStart = Math.max(rhNeed.windowStart || 0, rhMeta.gradeStart);
+                            var rhWinEnd = Math.min(rhNeed.windowEnd || 1440, rhMeta.gradeEnd);
+                            // Find a sport/slot block to sacrifice within the window
+                            var rhBestIdx = -1, rhBestFit = Infinity;
+                            for (var rhsi = 0; rhsi < rhTmpl.length; rhsi++) {
+                                var rhblk = rhTmpl[rhsi];
+                                if (rhblk._fixed) continue;
+                                var rhbt = (rhblk.type || '').toLowerCase();
+                                if (!['sport', 'slot'].includes(rhbt)) continue;
+                                if (rhblk.startMin < rhWinStart || rhblk.endMin > rhWinEnd) continue;
+                                var rhblkDur = rhblk.endMin - rhblk.startMin;
+                                if (rhblkDur < rhDur) continue;
+                                var rhfit = Math.abs(rhblkDur - rhDur);
+                                if (rhfit < rhBestFit) { rhBestFit = rhfit; rhBestIdx = rhsi; }
+                            }
+                            if (rhBestIdx >= 0) {
+                                var rhVictim = rhTmpl[rhBestIdx];
+                                var rhNewEnd = Math.min(rhVictim.startMin + (rhNeed.dMax || rhDur), rhVictim.endMin);
+                                var rhRemainStart = rhNewEnd;
+                                var rhRemainEnd = rhVictim.endMin;
+                                // Replace with rotation event block
+                                rhTmpl[rhBestIdx] = makeBlock({
+                                    startMin: rhVictim.startMin, endMin: rhNewEnd,
+                                    type: 'rotation_event', event: rhNeed.event,
+                                    layer: rhNeed.layer, dMin: rhDur, dMax: rhNeed.dMax || rhDur,
+                                    _source: 'rotation_event', _activityLocked: true, _final: true,
+                                    _rotationEventId: rhNeed._rotationEventId,
+                                    _rotationEventLocation: rhNeed._rotationEventLocation,
+                                    _rotationEventColor: rhNeed._rotationEventColor
+                                }) || rhTmpl[rhBestIdx];
+                                // Fill remainder with sport slot
+                                if (rhRemainEnd - rhRemainStart >= rhMeta.fillMinDur) {
+                                    addSportBlocks(rhTmpl, rhRemainStart, rhRemainEnd, {
+                                        type: 'slot', event: 'General Activity Slot',
+                                        layer: rhMeta.sportLayer, field: null,
+                                        dMin: rhMeta.sportC.dMin, dMax: rhMeta.sportCeiling,
+                                        _source: 'self-heal',
+                                        _sportFallbacks: rhMeta.priorityList.map(function(s) { return s.name; }),
+                                        _final: true
+                                    }, rhMeta.sportCeiling, rhMeta.fillMinDur);
+                                } else if (rhRemainEnd - rhRemainStart > 0) {
+                                    rhTmpl[rhBestIdx].endMin = rhRemainEnd;
+                                }
+                                // Increment quota counter
+                                if (rotationQuotas[rhNeed._rotationEventId]) {
+                                    rotationQuotas[rhNeed._rotationEventId].placed++;
+                                }
+                                rotHealCount++;
+                                break; // one rotation event per bunk
+                            }
+                        }
+                    } catch (e) { /* skip */ }
+                    rhTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                }
+            }
+            if (rotHealCount > 0) log('[Phase3] 🔧 Self-healed ' + rotHealCount + ' missing rotation events');
+
             log('[Phase3] ★ timeSweepFillAll complete: ' + Object.keys(allTemplates).length + ' bunks, ' + totalWarnings + ' warnings');
             return allTemplates;
         }
@@ -3799,6 +3878,12 @@
         const STALE_STOP = 12;
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
+
+        // ★ Rotation quotas — computed once for scoring; timeSweepFillAll computes its own with placed counters
+        var rotationQuotasForScoring = null;
+        if (window.RotationEvents && typeof window.RotationEvents.getRotationQuotas === 'function') {
+            try { rotationQuotasForScoring = window.RotationEvents.getRotationQuotas(currentDate); } catch (e) {}
+        }
 
         // ★ v9.3: ITERATION LEARNING — remembers what works across iterations
         // Tracks which time positions for each need type produced good scores.
@@ -3904,6 +3989,19 @@
                     if (['swim', 'snack', 'snacks', 'special'].includes(lt)) {
                         const hasIt = sorted.some(b => (b.type || '').toLowerCase() === lt || (lt === 'snacks' && (b.type || '').toLowerCase() === 'snack'));
                         if (!hasIt) score += 20000; // missing required layer is very bad
+                    }
+                }
+
+                // ★ Missing rotation event penalty — check if bunk was supposed to get one
+                if (rotationQuotasForScoring) {
+                    const hasRot = sorted.some(b => b._source === 'rotation_event' && b._rotationEventId);
+                    if (!hasRot) {
+                        // Check if this bunk was eligible (remaining + not over quota)
+                        Object.values(rotationQuotasForScoring).forEach(q => {
+                            if (q.remainingBunks && q.remainingBunks.has(String(bunk))) {
+                                score += q.isLastDay ? 50000 : 15000; // heavier on last day
+                            }
+                        });
                     }
                 }
             });
