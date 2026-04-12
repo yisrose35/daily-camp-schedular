@@ -3147,8 +3147,30 @@
                     //   - Full backtracking with constraint propagation
                     // ══════════════════════════════════════════════════════════
 
+                    // ★ v11.4: DURATION NEGOTIATION — compute how much time this need
+                    // SHOULD take, considering what other needs still require.
+                    // Prevents greedy dMax from starving neighbors.
+                    function negotiateDuration(need, otherNeeds, gapSize, fMin) {
+                        // Total minimum time other needs require
+                        var otherMinTotal = 0;
+                        for (var on = 0; on < otherNeeds.length; on++) {
+                            otherMinTotal += otherNeeds[on].dMin || 0;
+                        }
+                        // Sport slots need at least fMin each — estimate sport blocks needed
+                        var sportSlotsNeeded = Math.max(0, Math.floor((gapSize - otherMinTotal - (need.dMin || 0)) / fMin));
+                        var sportMinTotal = sportSlotsNeeded * fMin;
+
+                        // Available time for THIS need = gapSize - what others minimally need - sport minimums
+                        var availForNeed = gapSize - otherMinTotal - sportMinTotal;
+                        // Clamp between dMin and dMax
+                        var idealDur = Math.max(need.dMin || 0, Math.min(need.dMax || 60, availForNeed));
+                        // Snap to 5
+                        idealDur = Math.round(idealDur / 5) * 5;
+                        return Math.max(need.dMin || 0, idealDur);
+                    }
+
                     // Generate ALL valid positions for a need (every 5-min increment)
-                    function getValidPositions(need, tmpl, gs, ge, fMin) {
+                    function getValidPositions(need, tmpl, gs, ge, fMin, otherNeeds) {
                         var positions = [];
                         var gaps = findGaps(tmpl, gs, ge);
                         for (var g = 0; g < gaps.length; g++) {
@@ -3156,7 +3178,15 @@
                             var ws = Math.max(gap.start, need.windowStart || gs);
                             var we = Math.min(gap.end, need.windowEnd || ge);
                             if (we - ws < need.dMin) continue;
-                            var dur = Math.min(need.dMax, we - ws);
+                            // ★ v11.4: Negotiate duration instead of greedily taking dMax
+                            var gapSize = gap.end - gap.start;
+                            var dur;
+                            if (otherNeeds && otherNeeds.length > 0) {
+                                dur = negotiateDuration(need, otherNeeds, gapSize, fMin);
+                                dur = Math.min(dur, we - ws); // can't exceed available window
+                            } else {
+                                dur = Math.min(need.dMax, we - ws);
+                            }
 
                             // Scan every 5-min position within the valid range
                             for (var pos = gap.start; pos + dur <= gap.end; pos += 5) {
@@ -3237,6 +3267,14 @@
                         score -= deadGaps * 500;     // heavily penalize dead gaps
                         score -= pos.deadGaps * 200;  // penalize dead gaps from this placement
 
+                        // 2b. ★ v11.4: Neighbor starvation check — would remaining needs
+                        // still fit at their dMin in the leftover gaps?
+                        var otherMinTotal = 0;
+                        for (var om = 0; om < otherNeeds.length; om++) otherMinTotal += otherNeeds[om].dMin || 0;
+                        if (totalGapTime < otherMinTotal) {
+                            score -= (otherMinTotal - totalGapTime) * 300; // starvation penalty
+                        }
+
                         // 3. Balance: prefer positions that create evenly-sized gaps
                         if (gaps.length >= 2) {
                             var sizes = gaps.map(function(g) { return g.end - g.start; });
@@ -3280,10 +3318,12 @@
                         if (!arcConsistent(needsList, tmpl, gs, ge, fMin)) return null;
 
                         // MCV: pick the need with fewest valid positions
+                        // ★ v11.4: Pass other needs for duration negotiation
                         var bestIdx = 0, bestCount = Infinity;
                         var allPositions = [];
                         for (var n = 0; n < needsList.length; n++) {
-                            var positions = getValidPositions(needsList[n], tmpl, gs, ge, fMin);
+                            var _others = needsList.slice(0, n).concat(needsList.slice(n + 1));
+                            var positions = getValidPositions(needsList[n], tmpl, gs, ge, fMin, _others);
                             allPositions[n] = positions;
                             if (positions.length < bestCount) {
                                 bestCount = positions.length;
@@ -4481,6 +4521,82 @@
             if (guaranteeCount > 0) log('[Phase3] ⚡ Forced ' + guaranteeCount + ' missing swim/snack placements');
 
             // ══════════════════════════════════════════════════════════
+            // ══════════════════════════════════════════════════════════
+            // ★ v11.4: ZERO-GAP FINALIZER
+            // Eliminate every remaining gap by distributing time to adjacent
+            // flexible blocks. A gap-free schedule means zero Frees.
+            // ══════════════════════════════════════════════════════════
+            for (var zgi = 0; zgi < allBunkIds.length; zgi++) {
+                var zgBunk = allBunkIds[zgi];
+                var zgMeta = bunkMeta[zgBunk];
+                if (!zgMeta) continue;
+                var zgTmpl = bunkTimelines[zgBunk] || [];
+                zgTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                var zgGaps = findGaps(zgTmpl, zgMeta.gradeStart, zgMeta.gradeEnd);
+                for (var zg = 0; zg < zgGaps.length; zg++) {
+                    var zgGap = zgGaps[zg];
+                    var zgDur = zgGap.end - zgGap.start;
+                    if (zgDur <= 0) continue;
+
+                    // Strategy 1: Extend previous non-fixed block to cover gap
+                    var zgPrev = null;
+                    for (var zp = zgTmpl.length - 1; zp >= 0; zp--) {
+                        if (zgTmpl[zp].endMin === zgGap.start && !zgTmpl[zp]._fixed) { zgPrev = zgTmpl[zp]; break; }
+                    }
+                    if (zgPrev) {
+                        var zgPrevDur = zgPrev.endMin - zgPrev.startMin;
+                        var zgPrevMax = zgPrev.dMax || (TYPE_CEILINGS[(zgPrev.type || '').toLowerCase()] || 60);
+                        // Only extend if within dMax — respect constraints
+                        if (zgPrevDur + zgDur <= zgPrevMax) {
+                            zgPrev.endMin = zgGap.end;
+                            continue;
+                        }
+                        // Partial extend: take as much as dMax allows
+                        var zgCanTake = zgPrevMax - zgPrevDur;
+                        if (zgCanTake >= 5) {
+                            zgPrev.endMin += zgCanTake;
+                            zgGap.start = zgPrev.endMin;
+                            zgDur = zgGap.end - zgGap.start;
+                            if (zgDur <= 0) continue;
+                        }
+                    }
+
+                    // Strategy 2: Pull next non-fixed block backward
+                    var zgNext = null;
+                    for (var zn = 0; zn < zgTmpl.length; zn++) {
+                        if (zgTmpl[zn].startMin === zgGap.end && !zgTmpl[zn]._fixed) { zgNext = zgTmpl[zn]; break; }
+                    }
+                    if (zgNext) {
+                        var zgNextDur = zgNext.endMin - zgNext.startMin;
+                        var zgNextMax = zgNext.dMax || (TYPE_CEILINGS[(zgNext.type || '').toLowerCase()] || 60);
+                        if (zgNextDur + zgDur <= zgNextMax) {
+                            zgNext.startMin = zgGap.start;
+                            continue;
+                        }
+                        var zgCanTake2 = zgNextMax - zgNextDur;
+                        if (zgCanTake2 >= 5) {
+                            zgNext.startMin -= zgCanTake2;
+                            continue;
+                        }
+                    }
+
+                    // Strategy 3: Create a minimal sport/slot block for the remaining gap
+                    if (zgDur >= 5) {
+                        var zgBlk = makeBlock({
+                            startMin: zgGap.start, endMin: zgGap.end,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: zgMeta.sportLayer, field: null,
+                            dMin: Math.min(zgDur, zgMeta.fillMinDur || 20), dMax: zgMeta.sportCeiling || 60,
+                            _source: 'zero-gap', _final: true
+                        });
+                        if (zgBlk) zgTmpl.push(zgBlk);
+                    }
+                }
+                zgTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                bunkTimelines[zgBunk] = zgTmpl;
+            }
+
             // ★ v10.5: FINAL CONSTRAINT ENFORCEMENT SWEEP
             // Last-pass safety net: clamp every block to its dMin/dMax.
             // Catches any violations introduced by merge/absorb/extend passes.
