@@ -1096,7 +1096,10 @@
                 geocoded: !!a.geocoded, zipMismatch: !!a._zipMismatch,
                 geocodeWarning: a._geocodeWarning || '',
                 validated: !!a._validated,
-                hasAddr: !!a.street
+                hasAddr: !!a.street,
+                confidence: a._geocodeConfidence || 0,
+                source: a._geocodeSource || '',
+                crossValidated: !!a._crossValidated
             };
         });
 
@@ -1147,7 +1150,10 @@
         tbody.innerHTML = rows.map(r => {
             const full = r.hasAddr ? [r.street, r.city, r.state, r.zip].filter(Boolean).join(', ') : '';
             const validated = r.validated;
-            const badge = r.hasAddr ? (r.geocodeWarning ? '<span class="badge badge-danger" title="' + esc(r.geocodeWarning) + '">⚠ ' + esc(r.geocodeWarning.substring(0,20)) + '</span>' : r.geocoded ? (r.zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch">⚠ Check</span>' : validated ? '<span class="badge badge-success">✓ Verified</span>' : '<span class="badge badge-success">Geocoded</span>') : validated ? '<span class="badge badge-warning">Verified, not geocoded</span>' : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
+            const confPct = r.confidence ? Math.round(r.confidence * 100) + '%' : '';
+            const srcLabel = r.source ? ' via ' + r.source : '';
+            const confTitle = (confPct ? confPct + ' confidence' + srcLabel : '') + (r.crossValidated ? ' [cross-validated]' : '');
+            const badge = r.hasAddr ? (r.geocodeWarning ? '<span class="badge badge-danger" title="' + esc(r.geocodeWarning) + '">⚠ ' + esc(r.geocodeWarning.substring(0,30)) + '</span>' : r.geocoded ? (r.zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch' + (confTitle ? ' — ' + confTitle : '') + '">⚠ Check ZIP</span>' : r.confidence >= 0.8 ? '<span class="badge badge-success" title="' + esc(confTitle) + '">✓ ' + confPct + (r.crossValidated ? ' ✓✓' : '') + '</span>' : r.confidence >= 0.5 ? '<span class="badge badge-warning" title="' + esc(confTitle) + '">' + confPct + srcLabel + '</span>' : '<span class="badge badge-danger" title="' + esc(confTitle) + '">⚠ ' + confPct + '</span>') : validated ? '<span class="badge badge-warning">Verified, not geocoded</span>' : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
             return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (r.id ? '#' + String(r.id).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(r.last) + '</td><td>' + esc(r.first) + '</td><td>' + (esc(r.division) || '—') + '</td><td>' + (esc(r.grade) || '—') + '</td><td>' + (esc(r.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')">' + (r.hasAddr ? 'Edit' : 'Add') + '</button>' + (r.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + '</div></td></tr>';
         }).join('');
     }
@@ -1173,16 +1179,219 @@
     }
 
     // =========================================================================
-    // GEOCODING
+    // GEOCODING — Multi-provider confidence-ranked pipeline
+    // Priority: Mapbox v6 (best accuracy) → Census (free/unlimited) → ORS
+    // Each provider returns { lat, lng, confidence, source, zipMatch, precision }
+    // The highest-confidence valid result wins.
     // =========================================================================
-    async function geocodeOne(name) {
-        const a = D.addresses[name]; if (!a?.street) return false;
-        const censusQ = normalizeCensusAddress(a.street, a.city, a.state, a.zip);
-        try { const d = await censusGeocode(censusQ); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; const clat = best.coordinates.y, clng = best.coordinates.x; if (validateGeocode(clat, clng, q, name)) { a.lat = clat; a.lng = clng; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; return true; } } } catch (e) { console.warn('[Go] Census error for', name, e.message); }
-        const key = getApiKey(); if (!key) return false;
+
+    function getMapboxToken() { return D.setup.mapboxToken || _PLATFORM_KEYS.mapbox; }
+
+    // ── Mapbox v6 Geocoding (primary) ──
+    // Structured input for precision; returns rooftop/interpolated/approximate
+    async function mapboxGeocode(street, city, state, zip) {
+        const token = getMapboxToken();
+        if (!token) return null;
+        try {
+            const params = new URLSearchParams({
+                access_token: token,
+                country: 'us',
+                limit: '3',
+                types: 'address'
+            });
+            if (street) params.set('address_line1', street);
+            if (city) params.set('place', city);
+            if (state) params.set('region', state);
+            if (zip) params.set('postcode', zip);
+            // Use proximity bias toward camp if known
+            if (_campCoordsCache) params.set('proximity', _campCoordsCache.lng + ',' + _campCoordsCache.lat);
+
+            const resp = await fetch('https://api.mapbox.com/search/geocode/v6/forward?' + params.toString(), {
+                headers: { 'Accept': 'application/json' }
+            });
+            if (!resp.ok) {
+                if (resp.status === 429) console.warn('[Go] Mapbox rate limit hit');
+                return null;
+            }
+            const data = await resp.json();
+            if (!data.features?.length) return null;
+
+            // Score each result and pick the best
+            let bestResult = null, bestScore = -1;
+            for (const feat of data.features) {
+                const coords = feat.geometry?.coordinates;
+                if (!coords) continue;
+                const props = feat.properties || {};
+                const ctx = props.context || {};
+
+                // Base confidence from Mapbox relevance
+                let score = (props.match_code?.confidence || 'low') === 'exact' ? 0.95
+                    : (props.match_code?.confidence || 'low') === 'high' ? 0.85
+                    : (props.match_code?.confidence || 'low') === 'medium' ? 0.65
+                    : 0.4;
+
+                // Precision bonus: rooftop > parcel > interpolated > approximate
+                const precision = props.match_code?.address_number || 'inferred';
+                if (precision === 'matched') score += 0.05;
+                else if (precision === 'inferred') score -= 0.05;
+                else if (precision === 'plausible') score -= 0.1;
+
+                // ZIP match bonus
+                const resultZip = ctx.postcode?.name || '';
+                const zipMatch = !!(zip && resultZip && resultZip.substring(0, 5) === zip.substring(0, 5));
+                if (zip && zipMatch) score += 0.05;
+                else if (zip && resultZip && !zipMatch) score -= 0.2;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestResult = {
+                        lat: coords[1], lng: coords[0],
+                        confidence: Math.min(score, 1),
+                        source: 'mapbox',
+                        zipMatch: zipMatch,
+                        precision: precision,
+                        street: props.name_preferred || props.name || street,
+                        city: ctx.place?.name || city,
+                        state: ctx.region?.region_code || state,
+                        zip: resultZip ? resultZip.substring(0, 5) : zip
+                    };
+                }
+            }
+            return bestResult;
+        } catch (e) {
+            console.warn('[Go] Mapbox geocode error:', e.message);
+            return null;
+        }
+    }
+
+    // ── Census geocoder (secondary — free & unlimited) ──
+    async function censusGeocodeScored(street, city, state, zip) {
+        const censusQ = normalizeCensusAddress(street, city, state, zip);
+        try {
+            const d = await censusGeocode(censusQ);
+            if (!d?.result?.addressMatches?.length) return null;
+            const best = d.result.addressMatches[0];
+            const lat = best.coordinates.y, lng = best.coordinates.x;
+            // Census returns a matchedAddress — score based on how well it matches
+            const matchedAddr = (best.matchedAddress || '').toUpperCase();
+            const inputAddr = censusQ.toUpperCase().replace(/[^A-Z0-9 ]/g, '');
+            let score = 0.75; // Census baseline — always exact street-level
+            // If matched address contains our ZIP, that's a strong signal
+            if (zip && matchedAddr.includes(zip.substring(0, 5))) score += 0.1;
+            // Slight penalty — Census doesn't do rooftop, only interpolated range
+            score -= 0.05;
+            return {
+                lat, lng, confidence: Math.min(score, 1), source: 'census',
+                zipMatch: !!(zip && matchedAddr.includes(zip.substring(0, 5))),
+                precision: 'interpolated'
+            };
+        } catch (e) {
+            console.warn('[Go] Census scored error:', e.message);
+            return null;
+        }
+    }
+
+    // ── ORS geocoder (tertiary fallback) ──
+    async function orsGeocodeScored(street, city, state, zip) {
+        const key = getApiKey();
+        if (!key) return null;
+        const q = [street, city, state, zip].filter(Boolean).join(', ');
         const params = { text: q, size: '5', 'boundary.country': 'US' };
         if (_campCoordsCache) { params['focus.point.lat'] = _campCoordsCache.lat; params['focus.point.lon'] = _campCoordsCache.lng; }
-        try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return false; const d = await r.json(); if (!d.features?.length) return false; let best = null; if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip); if (!best) best = d.features[0]; const co = best.geometry.coordinates; if (!validateGeocode(co[1], co[0], q, name)) return false; a.lng = co[0]; a.lat = co[1]; a.geocoded = true; a._geocodeSource = 'ors'; a._zipMismatch = !!(a.zip && best.properties?.postalcode && best.properties.postalcode !== a.zip); return true; } catch (e) { return false; }
+        try {
+            const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), { headers: { 'Authorization': key, 'Accept': 'application/json' } });
+            if (!r.ok) return null;
+            const d = await r.json();
+            if (!d.features?.length) return null;
+            // Prefer ZIP-matching result
+            let best = null;
+            if (zip) best = d.features.find(f => (f.properties?.postalcode || '') === zip);
+            if (!best) best = d.features[0];
+            const co = best.geometry.coordinates;
+            const props = best.properties || {};
+            let score = Math.min((props.confidence || 0.5), 1) * 0.7; // ORS confidence scaled down — it's less precise
+            const zipMatch = !!(zip && props.postalcode && props.postalcode === zip);
+            if (zipMatch) score += 0.1;
+            else if (zip && props.postalcode && props.postalcode !== zip) score -= 0.15;
+            return {
+                lat: co[1], lng: co[0], confidence: Math.min(score, 1), source: 'ors',
+                zipMatch, precision: 'approximate'
+            };
+        } catch (e) { return null; }
+    }
+
+    // ── Unified geocode: query all providers, pick best valid result ──
+    async function geocodeOne(name) {
+        const a = D.addresses[name];
+        if (!a?.street) return false;
+
+        // Run providers in priority order, stop early if we get a high-confidence hit
+        const results = [];
+
+        // 1. Mapbox v6 (best accuracy, structured input)
+        const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
+        if (mb && validateGeocode(mb.lat, mb.lng, a.street, name)) {
+            results.push(mb);
+            // If Mapbox returns high confidence with ZIP match, use it immediately
+            if (mb.confidence >= 0.85 && mb.zipMatch !== false) {
+                applyBestGeocode(a, mb, name);
+                return true;
+            }
+        }
+
+        // 2. Census (free, good for US residential)
+        const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
+        if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
+            results.push(cen);
+        }
+
+        // 3. ORS (fallback)
+        if (results.length === 0 || results.every(r => r.confidence < 0.6)) {
+            const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
+            if (ors && validateGeocode(ors.lat, ors.lng, a.street, name)) {
+                results.push(ors);
+            }
+        }
+
+        if (results.length === 0) return false;
+
+        // Cross-validation bonus: if 2+ providers agree within 0.15mi, boost confidence
+        if (results.length >= 2) {
+            for (let i = 0; i < results.length; i++) {
+                for (let j = i + 1; j < results.length; j++) {
+                    const dist = haversineMi(results[i].lat, results[i].lng, results[j].lat, results[j].lng);
+                    if (dist < 0.15) {
+                        results[i].confidence = Math.min(results[i].confidence + 0.1, 1);
+                        results[j].confidence = Math.min(results[j].confidence + 0.1, 1);
+                        results[i]._crossValidated = true;
+                        results[j]._crossValidated = true;
+                    }
+                }
+            }
+        }
+
+        // Pick highest confidence
+        results.sort((a, b) => b.confidence - a.confidence);
+        const best = results[0];
+        applyBestGeocode(a, best, name);
+        return true;
+    }
+
+    function applyBestGeocode(a, result, name) {
+        a.lat = result.lat;
+        a.lng = result.lng;
+        a.geocoded = true;
+        a._geocodeSource = result.source;
+        a._geocodeConfidence = result.confidence;
+        a._geocodePrecision = result.precision || 'unknown';
+        a._crossValidated = result._crossValidated || false;
+        a._zipMismatch = (result.zipMatch === false);
+        if (result.confidence < 0.5) {
+            a._geocodeWarning = 'Low confidence (' + Math.round(result.confidence * 100) + '%) — verify address';
+        } else {
+            delete a._geocodeWarning;
+        }
+        console.log('[Go] Geocoded ' + name + ': ' + result.source + ' (' + Math.round(result.confidence * 100) + '% confidence, ' + (result.precision || '?') + ')' + (result._crossValidated ? ' [cross-validated]' : ''));
     }
 
     // =========================================================================
@@ -1230,7 +1439,9 @@
         const names = Object.keys(D.addresses).filter(n => D.addresses[n]?.street);
         if (!names.length) { toast('No addresses to validate', 'error'); return; }
 
-        toast('Validating ' + names.length + ' addresses against OpenStreetMap...');
+        const hasMapbox = !!getMapboxToken();
+        const provider = hasMapbox ? 'Mapbox' : 'OpenStreetMap';
+        toast('Validating ' + names.length + ' addresses via ' + provider + '...');
         let validated = 0, corrected = 0, geocoded = 0, failed = 0;
 
         for (let i = 0; i < names.length; i++) {
@@ -1238,23 +1449,29 @@
             const a = D.addresses[name];
             if (!a.street) continue;
 
-            // Query Nominatim
-            const result = await nominatimValidate(a.street, a.city, a.state, a.zip);
+            // Try Mapbox first (returns standardized address components), fall back to Nominatim
+            let result = null;
+            if (hasMapbox) {
+                const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
+                if (mb) result = { street: mb.street, city: mb.city, state: mb.state, zip: mb.zip, lat: mb.lat, lng: mb.lng, confidence: mb.confidence, source: 'mapbox' };
+            }
+            if (!result) {
+                const nom = await nominatimValidate(a.street, a.city, a.state, a.zip);
+                if (nom && nom.lat && nom.lng) result = { street: nom.street, city: nom.city, state: nom.state, zip: nom.zip, lat: nom.lat, lng: nom.lng, confidence: nom.confidence || 0.6, source: 'nominatim' };
+            }
 
             if (result && result.lat && result.lng) {
-                // Validate the result makes sense
                 if (!validateGeocode(result.lat, result.lng, a.street, name)) {
                     a._validated = false;
                     a._geocodeWarning = 'Location invalid — check address';
                     failed++;
                 } else {
-                    // Check if address was corrected
+                    // Check if address was corrected by the provider
                     const newStreet = result.street || a.street;
                     const newCity = result.city || a.city;
                     const newState = result.state || a.state;
                     const newZip = result.zip || a.zip;
 
-                    // Normalize for comparison
                     const origNorm = (a.street + a.city + a.state + a.zip).toLowerCase().replace(/[^a-z0-9]/g, '');
                     const newNorm = (newStreet + newCity + newState + newZip).toLowerCase().replace(/[^a-z0-9]/g, '');
                     const changed = origNorm !== newNorm;
@@ -1267,17 +1484,16 @@
                         a.street = newStreet;
                         a.city = newCity;
                         if (newState.length === 2) a.state = newState.toUpperCase();
-                        // Only update ZIP if Nominatim returned a 5-digit one
                         if (newZip && /^\d{5}/.test(newZip)) a.zip = newZip.substring(0, 5);
                         corrected++;
                         console.log('[Go] Address corrected: ' + name + ' → ' + [newStreet, newCity, a.state, a.zip].join(', '));
                     }
 
-                    // Also geocode while we're at it (save a separate pass)
                     a.lat = result.lat;
                     a.lng = result.lng;
                     a.geocoded = true;
-                    a._geocodeSource = 'nominatim';
+                    a._geocodeSource = result.source;
+                    a._geocodeConfidence = result.confidence;
                     a._validated = true;
                     a._zipMismatch = !!(a.zip && result.zip && a.zip !== result.zip.substring(0, 5));
                     delete a._geocodeWarning;
@@ -1285,7 +1501,6 @@
                     geocoded++;
                 }
             } else {
-                // Nominatim couldn't find it — flag it
                 a._validated = false;
                 a._geocodeWarning = 'Address not found — may not exist';
                 failed++;
@@ -1296,60 +1511,135 @@
                 renderAddresses();
                 toast('Validating: ' + (i + 1) + '/' + names.length + ' (' + validated + ' verified, ' + corrected + ' corrected)');
             }
-            // Nominatim rate limit: 1 request per second
-            if (i < names.length - 1) await new Promise(r => setTimeout(r, 1100));
+            // Mapbox: ~120ms spacing; Nominatim: 1100ms rate limit
+            if (i < names.length - 1) await new Promise(r => setTimeout(r, hasMapbox ? 120 : 1100));
         }
 
         save(); renderAddresses(); updateStats();
         toast('Done: ' + validated + ' verified, ' + corrected + ' corrected, ' + geocoded + ' geocoded, ' + failed + ' unverified');
 
-        // For any that Nominatim couldn't find, try Census + ORS as backup
+        // For any that couldn't be found, try the full pipeline as backup
         const stillUngeocoded = names.filter(n => !D.addresses[n]?.geocoded);
         if (stillUngeocoded.length) {
-            toast('Trying Census/ORS for ' + stillUngeocoded.length + ' remaining...');
+            toast('Trying full pipeline for ' + stillUngeocoded.length + ' remaining...');
             await geocodeAll(false);
         }
     }
 
     async function geocodeAll(force) {
         if (!_campCoordsCache && D.setup.campAddress) { toast('Geocoding camp address first...'); const cc = await geocodeSingle(D.setup.campAddress); if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; save(); } }
-        const todo = Object.keys(D.addresses).filter(n => { const a = D.addresses[n]; if (!a?.street) return false; if (force) { a.geocoded = false; a.lat = null; a.lng = null; a._zipMismatch = false; return true; } return !a.geocoded; });
+        const todo = Object.keys(D.addresses).filter(n => { const a = D.addresses[n]; if (!a?.street) return false; if (force) { a.geocoded = false; a.lat = null; a.lng = null; a._zipMismatch = false; a._geocodeConfidence = null; a._geocodePrecision = null; a._crossValidated = false; return true; } return !a.geocoded; });
         if (!todo.length) { toast('All addresses already geocoded!'); return; }
-        toast('Pass 1: Census — ' + todo.length + ' addresses...');
-        let censusOk = 0, censusFail = [];
-        for (let i = 0; i < todo.length; i++) {
-            const name = todo[i]; const a = D.addresses[name]; if (!a?.street) { censusFail.push(name); continue; }
-            const censusQ = normalizeCensusAddress(a.street, a.city, a.state, a.zip);
-            try { const d = await censusGeocode(censusQ); if (d?.result?.addressMatches?.length) { const best = d.result.addressMatches[0]; const clat = best.coordinates.y, clng = best.coordinates.x; if (validateGeocode(clat, clng, censusQ, name)) { a.lat = clat; a.lng = clng; a.geocoded = true; a._zipMismatch = false; a._geocodeSource = 'census'; censusOk++; } else { censusFail.push(name); a._geocodeWarning = 'Location rejected — too far or invalid'; } } else censusFail.push(name); } catch (e) { censusFail.push(name); }
-            if ((i + 1) % 10 === 0 || i === todo.length - 1) { renderAddresses(); updateStats(); toast('Census: ' + censusOk + ' ✓  ' + censusFail.length + ' remaining  (' + (i + 1) + '/' + todo.length + ')'); }
-            if (i < todo.length - 1) await new Promise(r => setTimeout(r, 300));
-        }
-        save();
-        if (censusFail.length > 0 && getApiKey()) {
-            toast('Pass 2: ORS — ' + censusFail.length + ' addresses...'); let orsOk = 0, orsFail = 0;
-            for (let i = 0; i < censusFail.length; i++) {
-                const name = censusFail[i]; const a = D.addresses[name]; if (!a?.street || a.geocoded) continue;
-                const q = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ');
-                const params = { text: q, size: '5', 'boundary.country': 'US' }; if (_campCoordsCache) { params['focus.point.lat'] = _campCoordsCache.lat; params['focus.point.lon'] = _campCoordsCache.lng; }
-                try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), { headers: { 'Authorization': getApiKey(), 'Accept': 'application/json' } }); if (r.ok) { const d = await r.json(); if (d.features?.length) { let best = null; if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip); if (!best) best = d.features[0]; const co = best.geometry.coordinates; if (validateGeocode(co[1], co[0], q, name)) { a.lng = co[0]; a.lat = co[1]; a.geocoded = true; a._geocodeSource = 'ors'; a._zipMismatch = !!(a.zip && best.properties?.postalcode && best.properties.postalcode !== a.zip); orsOk++; } else { orsFail++; a._geocodeWarning = 'Location rejected — too far or invalid'; } } else orsFail++; } else { orsFail++; if (r.status === 429 || r.status === 403) { orsFail += censusFail.length - i - 1; break; } } } catch (e) { orsFail++; }
-                if ((i + 1) % 5 === 0 || i === censusFail.length - 1) { renderAddresses(); updateStats(); toast('ORS: ' + orsOk + ' ✓  ' + orsFail + ' ✗  (' + (i + 1) + '/' + censusFail.length + ')'); }
-                if (i < censusFail.length - 1) await new Promise(r => setTimeout(r, 1500));
+
+        const hasMapbox = !!getMapboxToken();
+        let totalOk = 0, totalFail = 0;
+
+        // ── Pass 1: Mapbox v6 (best accuracy, ~600 free req/min) ──
+        if (hasMapbox) {
+            toast('Pass 1: Mapbox — ' + todo.length + ' addresses...');
+            let mbOk = 0;
+            for (let i = 0; i < todo.length; i++) {
+                const name = todo[i]; const a = D.addresses[name];
+                if (!a?.street || a.geocoded) continue;
+                const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
+                if (mb && validateGeocode(mb.lat, mb.lng, a.street, name)) {
+                    applyBestGeocode(a, mb, name);
+                    mbOk++;
+                }
+                if ((i + 1) % 10 === 0 || i === todo.length - 1) {
+                    renderAddresses(); updateStats();
+                    toast('Mapbox: ' + mbOk + ' geocoded (' + (i + 1) + '/' + todo.length + ')');
+                }
+                // Mapbox allows ~600/min on free tier — ~100ms spacing is safe
+                if (i < todo.length - 1) await new Promise(r => setTimeout(r, 120));
             }
-            save(); renderAddresses(); updateStats();
-            const totalOk = censusOk + orsOk, totalFail = censusFail.length - orsOk;
-            if (totalFail > 0) toast(totalOk + ' geocoded, ' + totalFail + ' failed', 'error');
-            else toast('All ' + totalOk + ' geocoded!');
-        } else {
-            renderAddresses(); updateStats();
-            if (censusFail.length > 0) toast(censusOk + ' geocoded, ' + censusFail.length + ' failed', 'error');
-            else toast('All ' + censusOk + ' geocoded via Census!');
+            totalOk += mbOk;
+            save();
         }
+
+        // ── Pass 2: Census for any Mapbox missed (free, unlimited) ──
+        const stillNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
+        if (stillNeeded.length > 0) {
+            toast('Pass 2: Census — ' + stillNeeded.length + ' remaining...');
+            let cenOk = 0;
+            for (let i = 0; i < stillNeeded.length; i++) {
+                const name = stillNeeded[i]; const a = D.addresses[name];
+                if (!a?.street || a.geocoded) continue;
+                const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
+                if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
+                    applyBestGeocode(a, cen, name);
+                    cenOk++;
+                }
+                if ((i + 1) % 10 === 0 || i === stillNeeded.length - 1) {
+                    renderAddresses(); updateStats();
+                    toast('Census: ' + cenOk + ' geocoded (' + (i + 1) + '/' + stillNeeded.length + ')');
+                }
+                if (i < stillNeeded.length - 1) await new Promise(r => setTimeout(r, 300));
+            }
+            totalOk += cenOk;
+            save();
+        }
+
+        // ── Pass 3: ORS for any still remaining ──
+        const finalNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
+        if (finalNeeded.length > 0 && getApiKey()) {
+            toast('Pass 3: ORS — ' + finalNeeded.length + ' remaining...');
+            let orsOk = 0;
+            for (let i = 0; i < finalNeeded.length; i++) {
+                const name = finalNeeded[i]; const a = D.addresses[name];
+                if (!a?.street || a.geocoded) continue;
+                const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
+                if (ors && validateGeocode(ors.lat, ors.lng, a.street, name)) {
+                    applyBestGeocode(a, ors, name);
+                    orsOk++;
+                } else {
+                    a._geocodeWarning = 'All providers failed — verify address';
+                    totalFail++;
+                }
+                if ((i + 1) % 5 === 0 || i === finalNeeded.length - 1) {
+                    renderAddresses(); updateStats();
+                    toast('ORS: ' + orsOk + ' geocoded (' + (i + 1) + '/' + finalNeeded.length + ')');
+                }
+                if (i < finalNeeded.length - 1) await new Promise(r => setTimeout(r, 1500));
+            }
+            totalOk += orsOk;
+            save();
+        } else if (finalNeeded.length > 0) {
+            // No ORS key — mark remaining as failed
+            finalNeeded.forEach(n => {
+                if (!D.addresses[n]?.geocoded) {
+                    D.addresses[n]._geocodeWarning = 'Census failed — verify address';
+                    totalFail++;
+                }
+            });
+        }
+
+        renderAddresses(); updateStats();
+        const highConf = todo.filter(n => (D.addresses[n]?._geocodeConfidence || 0) >= 0.8).length;
+        const lowConf = todo.filter(n => D.addresses[n]?.geocoded && (D.addresses[n]._geocodeConfidence || 0) < 0.5).length;
+        let summary = totalOk + ' geocoded';
+        if (highConf) summary += ' (' + highConf + ' high confidence)';
+        if (lowConf) summary += ', ' + lowConf + ' low confidence';
+        if (totalFail > 0) summary += ', ' + totalFail + ' failed';
+        toast(totalFail > 0 ? summary : summary + ' — all done!', totalFail > 0 ? 'error' : undefined);
     }
 
     async function geocodeSingle(addr) {
-        // For single address string, do basic cleanup before Census
+        // For single address string (e.g. camp address), try Mapbox → Census → ORS
         const cleanAddr = (addr || '').replace(/\s*[,#]\s*(apt|suite|ste|unit|fl|floor|rm|room)\.?\s*\S*/gi, '').replace(/\s+/g, ' ').trim();
+        // Parse into components for structured geocoding
+        const parts = cleanAddr.split(',').map(s => s.trim());
+        const street = parts[0] || '';
+        const city = parts[1] || '';
+        const stateZip = (parts[2] || '').trim().split(/\s+/);
+        const state = stateZip[0] || '';
+        const zip = stateZip[1] || (parts[3] || '').trim();
+        // 1. Mapbox v6
+        const mb = await mapboxGeocode(street, city, state, zip);
+        if (mb && mb.confidence >= 0.5) return { lat: mb.lat, lng: mb.lng };
+        // 2. Census
         try { const d = await censusGeocode(cleanAddr); if (d?.result?.addressMatches?.length) { const m = d.result.addressMatches[0]; return { lat: m.coordinates.y, lng: m.coordinates.x }; } } catch (_) {}
+        // 3. ORS
         const key = getApiKey(); if (!key) return null;
         try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: addr, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return null; const d = await r.json(); if (d.features?.length) { const co = d.features[0].geometry.coordinates; return { lat: co[1], lng: co[0] }; } } catch (_) {} return null;
     }
@@ -1365,6 +1655,23 @@
         cc > 0 ? P('Roster: ' + cc + ' campers') : F('Roster: EMPTY');
         const ac = Object.keys(D.addresses).length, gc = Object.values(D.addresses).filter(a => a.geocoded).length;
         ac > 0 ? P('Addresses: ' + ac) : F('Addresses: NONE'); gc > 0 ? P('Geocoded: ' + gc + '/' + ac) : F('Geocoded: 0');
+        // Confidence breakdown
+        if (gc > 0) {
+            const highConf = Object.values(D.addresses).filter(a => a.geocoded && (a._geocodeConfidence || 0) >= 0.8).length;
+            const medConf = Object.values(D.addresses).filter(a => a.geocoded && (a._geocodeConfidence || 0) >= 0.5 && (a._geocodeConfidence || 0) < 0.8).length;
+            const lowConf = Object.values(D.addresses).filter(a => a.geocoded && (a._geocodeConfidence || 0) > 0 && (a._geocodeConfidence || 0) < 0.5).length;
+            const crossVal = Object.values(D.addresses).filter(a => a._crossValidated).length;
+            if (highConf) P('High confidence: ' + highConf + '/' + gc);
+            if (medConf) Wr('Medium confidence: ' + medConf + '/' + gc + ' — consider re-validating');
+            if (lowConf) F('Low confidence: ' + lowConf + '/' + gc + ' — verify these addresses');
+            if (crossVal) P('Cross-validated (2+ providers agree): ' + crossVal);
+            // Source breakdown
+            const sources = {};
+            Object.values(D.addresses).filter(a => a.geocoded).forEach(a => { sources[a._geocodeSource || 'unknown'] = (sources[a._geocodeSource || 'unknown'] || 0) + 1; });
+            P('Sources: ' + Object.entries(sources).map(([k, v]) => k + ': ' + v).join(', '));
+        }
+        const mbToken = getMapboxToken();
+        mbToken ? P('Mapbox token: set (primary geocoder)') : Wr('Mapbox token: not set — using Census as primary (lower accuracy)');
         P('Mode: ' + D.activeMode); D.buses.length > 0 ? P('Buses: ' + D.buses.length) : F('Buses: NONE');
         D.setup.campAddress ? P('Camp: ' + D.setup.campAddress) : F('Camp address: NOT SET');
         const key = getApiKey(); key ? P('ORS key: set') : Wr('ORS key: not set — VROOM optimization will not work');
