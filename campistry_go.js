@@ -565,7 +565,7 @@
         document.getElementById('campName').value = s.campName || '';
         document.getElementById('avgSpeed').value = s.avgSpeed ?? 25;
         document.getElementById('reserveSeats').value = s.reserveSeats ?? 2;
-        document.getElementById('dropoffMode').value = s.dropoffMode || 'door-to-door';
+        if (document.getElementById('dropoffMode')) document.getElementById('dropoffMode').value = s.dropoffMode || 'door-to-door';
         document.getElementById('avgStopTime').value = s.avgStopTime ?? 2;
         document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 375;
         document.getElementById('orsApiKey').value = s.orsApiKey || '';
