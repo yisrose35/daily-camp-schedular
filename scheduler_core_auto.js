@@ -2993,8 +2993,11 @@
                             var effectiveLayer = special.layer || gradeSpecialLayer || null;
                             var sDMin = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMin;
                             var sDMax = hasFixedDur ? special.duration : resolveConstraints(effectiveLayer, 'special', special).dMax;
+                            // ★ v11.1: Use layer window, not grade bounds, for special placement
+                            var _spWinStart = Math.max((effectiveLayer && effectiveLayer.startMin) || gradeStart, gradeStart);
+                            var _spWinEnd = Math.min((effectiveLayer && effectiveLayer.endMin) || gradeEnd, gradeEnd);
                             needs.push({ type: 'special', event: special.name, layer: special.layer,
-                                dMin: sDMin, dMax: sDMax, windowStart: gradeStart, windowEnd: gradeEnd,
+                                dMin: sDMin, dMax: sDMax, windowStart: _spWinStart, windowEnd: _spWinEnd,
                                 _activityLocked: true, _assignedSpecial: special.name,
                                 _specialLocation: special.location, _specialDuration: special.duration,
                                 _specialFallbacks: _specialFallbackList, _source: 'need' });
@@ -4117,14 +4120,18 @@
 
                     if (hBestIdx >= 0) {
                         var hVictim = hTmpl[hBestIdx];
-                        var hNewEnd = Math.min(hVictim.startMin + (hlc.dMax || hNeedDMin), hVictim.endMin);
+                        // ★ v11.1: Clamp placement to layer window
+                        var hPlaceStart = Math.max(hVictim.startMin, hWinStart);
+                        var hNewEnd = Math.min(hPlaceStart + (hlc.dMax || hNeedDMin), hVictim.endMin, hWinEnd);
                         var hRemainStart = hNewEnd;
                         var hRemainEnd = hVictim.endMin;
+                        // Also fill the gap before the clamped start
+                        var hPreGap = hPlaceStart - hVictim.startMin;
 
                         // Replace with the required layer
                         var hEventName = hlt === 'special' ? hSpecialName : (hll.event || hlt);
                         hTmpl[hBestIdx] = makeBlock({
-                            startMin: hVictim.startMin, endMin: hNewEnd,
+                            startMin: hPlaceStart, endMin: hNewEnd,
                             type: hlt === 'snacks' ? 'snacks' : hlt,
                             event: hEventName,
                             layer: hll, dMin: hNeedDMin, dMax: hlc.dMax || hNeedDMin,
@@ -4133,6 +4140,16 @@
                             _specialLocation: hlt === 'special' ? hSpecialLocation : null,
                             _isSpecialLocation: hlt === 'special'
                         }) || hTmpl[hBestIdx]; // fallback if makeBlock returns null
+
+                        // ★ v11.1: Fill the pre-gap (victim start to clamped start) with sport
+                        if (hPreGap >= 10) {
+                            addSportBlocks(hTmpl, hVictim.startMin, hPlaceStart, {
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: hMeta.sportLayer, field: null,
+                                dMin: Math.min(hPreGap, hMeta.fillMinDur || 20), dMax: hMeta.sportCeiling,
+                                _source: 'self-heal-pregap', _final: true
+                            }, hMeta.sportCeiling, Math.min(hPreGap, hMeta.fillMinDur || 20));
+                        }
 
                         // ★ v10.3: Fill remainder with sport — NEVER extend layer past dMax
                         var hRemainDur = hRemainEnd - hRemainStart;
@@ -4282,19 +4299,32 @@
 
                     if (gBestIdx >= 0) {
                         var gVictim = gTmpl[gBestIdx];
-                        // ★ BUG FIX: Never exceed dMax — clamp to dMax, not victim end
-                        var gLayerEnd = Math.min(gVictim.startMin + gNeedDMax, gVictim.endMin);
+                        // ★ v11.1: Clamp to layer window AND dMax
+                        var gLayerWinStart = gll.startMin || gMeta.gradeStart;
+                        var gLayerWinEnd = gll.endMin || gMeta.gradeEnd;
+                        var gPlaceStart = Math.max(gVictim.startMin, gLayerWinStart);
+                        var gLayerEnd = Math.min(gPlaceStart + gNeedDMax, gVictim.endMin, gLayerWinEnd);
                         var gRemainStart = gLayerEnd;
                         var gRemainEnd = gVictim.endMin;
+                        var gPreGap = gPlaceStart - gVictim.startMin;
 
                         gTmpl[gBestIdx] = makeBlock({
-                            startMin: gVictim.startMin, endMin: gLayerEnd,
+                            startMin: gPlaceStart, endMin: gLayerEnd,
                             type: glt === 'snacks' ? 'snacks' : glt,
                             event: gll.event || glt,
                             layer: gll, dMin: gNeedDMin, dMax: gNeedDMax,
                             _source: 'guarantee', _activityLocked: true, _final: true, _fixed: true
                         }) || gTmpl[gBestIdx];
 
+                        // ★ v11.1: Fill pre-gap from clamping
+                        if (gPreGap >= 10) {
+                            addSportBlocks(gTmpl, gVictim.startMin, gPlaceStart, {
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: gMeta.sportLayer, field: null,
+                                dMin: Math.min(gPreGap, gMeta.fillMinDur || 20), dMax: gMeta.sportCeiling || 60,
+                                _source: 'guarantee-pregap', _final: true
+                            }, gMeta.sportCeiling || 60, Math.min(gPreGap, gMeta.fillMinDur || 20));
+                        }
                         // Fill remainder with sport — NEVER extend the layer past dMax
                         var gRemainDur = gRemainEnd - gRemainStart;
                         if (gRemainDur >= 10) {
@@ -4365,6 +4395,25 @@
                         }
                         enforceFixCount++;
                         log('[Phase3] ENFORCE: shrunk ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + eDMax + 'min (dMax)');
+                    }
+
+                    // ★ v11.1: WINDOW ENFORCEMENT — clamp blocks to their layer's time window
+                    if (eBlk.layer && !['sport', 'slot'].includes(eType)) {
+                        var eLayerStart = eBlk.layer.startMin;
+                        var eLayerEnd = eBlk.layer.endMin;
+                        if (eLayerStart != null && eBlk.startMin < eLayerStart) {
+                            log('[Phase3] ENFORCE: clamped ' + eType + '/' + (eBlk.event || '') + ' for bunk ' + eBunk + ' start from ' + eBlk.startMin + ' to ' + eLayerStart + ' (window)');
+                            eBlk.startMin = eLayerStart;
+                            enforceFixCount++;
+                        }
+                        if (eLayerEnd != null && eBlk.endMin > eLayerEnd) {
+                            log('[Phase3] ENFORCE: clamped ' + eType + '/' + (eBlk.event || '') + ' for bunk ' + eBunk + ' end from ' + eBlk.endMin + ' to ' + eLayerEnd + ' (window)');
+                            eBlk.endMin = eLayerEnd;
+                            enforceFixCount++;
+                        }
+                        // Recalc duration after clamping
+                        eDur = eBlk.endMin - eBlk.startMin;
+                        if (eDur <= 0) { eTmpl.splice(ej, 1); ej--; continue; }
                     }
 
                     // Fix dMin violations: try to extend into adjacent free space
@@ -4575,6 +4624,14 @@
                 // Relaxation penalty — ★ v11.0: mild penalty for relaxed blocks
                 timeline.forEach(block => {
                     if (block._relaxed) { score += 500; bd.missingLayers += 500; }
+                });
+
+                // ★ v11.1: Window violation penalty — activities outside their layer window
+                timeline.forEach(block => {
+                    if (!block.layer) return;
+                    var layerStart = block.layer.startMin, layerEnd = block.layer.endMin;
+                    if (layerStart != null && block.startMin < layerStart) { var _wvp = (layerStart - block.startMin) * 5000 + 50000; score += _wvp; bd.durationViolations += _wvp; }
+                    if (layerEnd != null && block.endMin > layerEnd) { var _wvp2 = (block.endMin - layerEnd) * 5000 + 50000; score += _wvp2; bd.durationViolations += _wvp2; }
                 });
 
                 // Out of bounds
