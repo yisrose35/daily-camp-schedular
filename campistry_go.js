@@ -968,10 +968,16 @@
     // =========================================================================
     function renderAddresses() {
         const roster = getRoster();
-        const names = Object.keys(roster).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        // Also include any address-only campers not in roster
+        const allNames = new Set(Object.keys(roster));
+        Object.keys(D.addresses).forEach(n => allNames.add(n));
+        const names = [...allNames].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
         const filter = (document.getElementById('addressSearch')?.value || '').toLowerCase().trim();
         let filtered = names;
-        if (filter) filtered = names.filter(n => { const c = roster[n]; const a = D.addresses[n]; return n.toLowerCase().includes(filter) || (c.division || '').toLowerCase().includes(filter) || (a?.street || '').toLowerCase().includes(filter) || (a?.city || '').toLowerCase().includes(filter); });
+        if (filter) filtered = names.filter(n => {
+            const c = roster[n] || {}; const a = D.addresses[n] || {};
+            return n.toLowerCase().includes(filter) || (c.division || a._division || '').toLowerCase().includes(filter) || (c.grade || a._grade || '').toLowerCase().includes(filter) || (c.bunk || a._bunk || '').toLowerCase().includes(filter) || (a.street || '').toLowerCase().includes(filter) || (a.city || '').toLowerCase().includes(filter);
+        });
         const tbody = document.getElementById('addressTableBody'), empty = document.getElementById('addressEmptyState');
         const tw = tbody?.closest('.table-wrapper');
         document.getElementById('addressCount').textContent = filter ? filtered.length + ' of ' + names.length : names.length;
@@ -980,18 +986,25 @@
         let withAddr = 0; names.forEach(n => { if (D.addresses[n]?.street) withAddr++; });
         updateAddrProgress(withAddr, names.length);
         tbody.innerHTML = filtered.map(n => {
-            const c = roster[n], a = D.addresses[n];
-            const hasA = a?.street;
+            const c = roster[n] || {}; const a = D.addresses[n] || {};
+            const camperId = c.camperId || a._camperId || 0;
+            const division = c.division || a._division || '';
+            const grade = c.grade || a._grade || '';
+            const bunk = c.bunk || a._bunk || '';
+            const hasA = a.street;
             const full = hasA ? [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') : '';
             const badge = hasA ? (a.geocoded ? (a._zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
-            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (c.camperId ? '#' + String(c.camperId).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(c.division) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button>' + (a?.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + esc(n.replace(/'/g, "\\'")) + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + '</div></td></tr>';
+            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (camperId ? '#' + String(camperId).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(n) + '</td><td>' + (esc(division) || '—') + '</td><td>' + (esc(grade) || '—') + '</td><td>' + (esc(bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(n.replace(/'/g, "\\'")) + '\')">' + (hasA ? 'Edit' : 'Add') + '</button>' + (a.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + esc(n.replace(/'/g, "\\'")) + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + '</div></td></tr>';
         }).join('');
     }
     function updateAddrProgress(n, t) { const p = t > 0 ? Math.round(n / t * 100) : 0; document.getElementById('addressProgressBar').style.width = p + '%'; document.getElementById('addressProgressText').textContent = n + ' of ' + t + ' (' + p + '%)'; }
     function editAddress(name) {
         _editCamper = name; const roster = getRoster(), c = roster[name] || {}, a = D.addresses[name] || {};
         document.getElementById('addressCamperName').textContent = name;
-        document.getElementById('addressCamperBunk').textContent = [c.division, c.bunk].filter(Boolean).join(' / ');
+        const div = c.division || a._division || '';
+        const grade = c.grade || a._grade || '';
+        const bunk = c.bunk || a._bunk || '';
+        document.getElementById('addressCamperBunk').textContent = [div, grade, bunk].filter(Boolean).join(' / ');
         document.getElementById('addrStreet').value = a.street || ''; document.getElementById('addrCity').value = a.city || '';
         document.getElementById('addrState').value = a.state || 'NY'; document.getElementById('addrZip').value = a.zip || '';
         openModal('addressModal'); document.getElementById('addrStreet').focus();
