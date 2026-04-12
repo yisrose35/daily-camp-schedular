@@ -2626,6 +2626,22 @@
                     }
                 }
 
+                // ── Orientation check: ensure correct direction ──
+                // Arrival: first stop should be FARTHEST from camp, last stop NEAREST
+                // Dismissal: first stop should be NEAREST to camp, last stop FARTHEST
+                if (orderedStops.length >= 2) {
+                    const firstDist = haversineMi(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
+                    const lastDist = haversineMi(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
+                    if (isArrival && firstDist < lastDist) {
+                        orderedStops.reverse();
+                        console.log('[Go] Orient flip (arrival): reversed — first stop was closer than last');
+                    }
+                    if (!isArrival && firstDist > lastDist) {
+                        orderedStops.reverse();
+                        console.log('[Go] Orient flip (dismissal): reversed — first stop was farther than last');
+                    }
+                }
+
                 const routeStops = orderedStops.map((stop, i) => ({
                     stopNum: i + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng
                 }));
