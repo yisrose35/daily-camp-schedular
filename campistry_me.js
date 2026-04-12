@@ -207,10 +207,179 @@ function render(p){
 }
 
 // ── FAMILIES ─────────────────────────────────────────────────────
+// ── Family auto-detect: same last name + same/similar address → suggestion ──
+function detectFamilySuggestions(){
+    // Build set of campers already assigned to a family
+    var assignedCampers=new Set();
+    Object.values(families).forEach(function(f){(f.camperIds||[]).forEach(function(n){assignedCampers.add(n)})});
+
+    // Group unassigned campers by last name
+    var byLastName={};
+    Object.entries(roster).forEach(function([name,c]){
+        if(assignedCampers.has(name)) return;
+        var parts=name.trim().split(/\s+/);
+        var lastName=parts.length>1?parts[parts.length-1].toLowerCase():'';
+        if(!lastName) return;
+        if(!byLastName[lastName]) byLastName[lastName]=[];
+        byLastName[lastName].push({name:name,camper:c,lastName:parts[parts.length-1]});
+    });
+
+    var suggestions=[];
+    Object.entries(byLastName).forEach(function([lnKey,group]){
+        if(group.length<2) return; // need at least 2 campers to suggest a family
+
+        // Sub-group by address similarity
+        var addressGroups={};
+        group.forEach(function(g){
+            var addr=normalizeAddr(g.camper);
+            if(!addressGroups[addr]) addressGroups[addr]=[];
+            addressGroups[addr].push(g);
+        });
+
+        Object.values(addressGroups).forEach(function(addrGroup){
+            if(addrGroup.length<2) return;
+            // Check if they also share a parent name
+            var sharedParent=null;
+            var p1=addrGroup[0].camper.parent1Name;
+            if(p1){
+                var allMatch=addrGroup.every(function(g){return g.camper.parent1Name===p1});
+                if(allMatch) sharedParent=p1;
+            }
+            suggestions.push({
+                lastName:addrGroup[0].lastName,
+                campers:addrGroup.map(function(g){return g.name}),
+                address:[addrGroup[0].camper.street,addrGroup[0].camper.city,addrGroup[0].camper.state,addrGroup[0].camper.zip].filter(Boolean).join(', '),
+                parent:sharedParent||addrGroup[0].camper.parent1Name||'',
+                parentPhone:addrGroup[0].camper.parent1Phone||'',
+                parentEmail:addrGroup[0].camper.parent1Email||'',
+                confidence:sharedParent?'high':'medium'
+            });
+        });
+
+        // Also suggest groups with same last name but NO address (still likely family)
+        var noAddr=group.filter(function(g){return!g.camper.street});
+        if(noAddr.length>=2){
+            // Check if already covered by an address group
+            var coveredNames=new Set();
+            Object.values(addressGroups).forEach(function(ag){if(ag.length>=2) ag.forEach(function(g){coveredNames.add(g.name)})});
+            var uncovered=noAddr.filter(function(g){return!coveredNames.has(g.name)});
+            if(uncovered.length>=2){
+                suggestions.push({
+                    lastName:uncovered[0].lastName,
+                    campers:uncovered.map(function(g){return g.name}),
+                    address:'',
+                    parent:uncovered[0].camper.parent1Name||'',
+                    parentPhone:uncovered[0].camper.parent1Phone||'',
+                    parentEmail:uncovered[0].camper.parent1Email||'',
+                    confidence:'low'
+                });
+            }
+        }
+    });
+
+    // Also find single unassigned campers who match an EXISTING family by last name + address
+    var singleSuggestions=[];
+    Object.entries(roster).forEach(function([name,c]){
+        if(assignedCampers.has(name)) return;
+        var parts=name.trim().split(/\s+/);
+        var lastName=parts.length>1?parts[parts.length-1].toLowerCase():'';
+        if(!lastName) return;
+        // Check existing families
+        Object.entries(families).forEach(function([fk,f]){
+            if((f.camperIds||[]).indexOf(name)>=0) return; // already in this family
+            var famLast=(f.name||'').toLowerCase().replace(/\s*family$/,'').trim();
+            if(famLast!==lastName) return;
+            // Match — suggest adding to this family
+            singleSuggestions.push({familyKey:fk,familyName:f.name,camperName:name});
+        });
+    });
+
+    return{newFamilies:suggestions,addToExisting:singleSuggestions};
+}
+
+function normalizeAddr(c){
+    var street=(c.street||'').toLowerCase().replace(/[^a-z0-9]/g,'').trim();
+    var zip=(c.zip||'').trim();
+    if(!street&&!zip) return '__noaddr__'+Math.random(); // unique key so no-address campers don't accidentally group
+    return street+'|'+zip;
+}
+
+function acceptFamilySuggestion(idx){
+    var suggestions=detectFamilySuggestions().newFamilies;
+    var s=suggestions[idx];if(!s) return;
+    var famKey='fam_'+s.lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+Date.now();
+    var parents=[{name:s.parent||'',phone:s.parentPhone||'',email:s.parentEmail||'',relation:'Parent'}];
+    families[famKey]={
+        name:s.lastName+' Family',
+        households:[{label:'Primary',parents:parents,address:s.address||'',billingContact:true}],
+        camperIds:s.campers.slice(),
+        balance:0,totalPaid:0,notes:'Auto-detected family'
+    };
+    save();render('families');toast(s.lastName+' Family created with '+s.campers.length+' campers');
+}
+
+function dismissFamilySuggestion(idx){
+    // Store dismissed suggestions so they don't reappear
+    var suggestions=detectFamilySuggestions().newFamilies;
+    var s=suggestions[idx];if(!s) return;
+    var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
+    dismissed.push(s.campers.sort().join('|'));
+    localStorage.setItem('campistry_dismissed_fam_suggestions',JSON.stringify(dismissed));
+    render('families');toast('Suggestion dismissed');
+}
+
+function acceptAddToFamily(famKey,camperName){
+    if(!families[famKey]) return;
+    if(!families[famKey].camperIds) families[famKey].camperIds=[];
+    if(families[famKey].camperIds.indexOf(camperName)<0) families[famKey].camperIds.push(camperName);
+    save();render('families');toast(camperName+' added to '+families[famKey].name);
+}
+
 function renderFamilies(){
     var c=document.getElementById('page-families'),e=Object.entries(families);
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Families</h2><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
-    if(!e.length){h+='<div class="me-empty"><h3>No families yet</h3><p>Add a family to get started.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
+
+    // Detect family suggestions
+    var suggestions=detectFamilySuggestions();
+    var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
+    var newFams=suggestions.newFamilies.filter(function(s){return dismissed.indexOf(s.campers.sort().join('|'))<0});
+    var addToExisting=suggestions.addToExisting;
+    var totalSuggestions=newFams.length+addToExisting.length;
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Families</h2><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
+
+    // Show suggestions banner
+    if(newFams.length||addToExisting.length){
+        h+='<div style="background:linear-gradient(135deg,#FFFBEB,#FEF3C7);border:1px solid #FDE68A;border-radius:var(--r2);padding:16px;margin-bottom:18px">';
+        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:1.1rem">👨‍👩‍👧‍👦</span><span style="font-weight:700;font-size:.9rem;color:var(--s800)">Family Suggestions</span><span style="font-size:.75rem;color:var(--s500)">Campers with the same last name and address may belong together</span></div>';
+
+        // New family suggestions
+        newFams.forEach(function(s,i){
+            var confColor=s.confidence==='high'?'var(--ok)':s.confidence==='medium'?'var(--warn)':'var(--s400)';
+            var confLabel=s.confidence==='high'?'High confidence':s.confidence==='medium'?'Medium':'Low';
+            h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
+            h+='<div style="flex:1"><div style="font-weight:700;font-size:.875rem">'+esc(s.lastName)+' Family</div>';
+            h+='<div style="font-size:.75rem;color:var(--s500);margin-top:2px">'+s.campers.map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', ');
+            if(s.address) h+=' · '+esc(s.address);
+            if(s.parent) h+=' · Parent: '+esc(s.parent);
+            h+='</div></div>';
+            h+='<span style="font-size:.65rem;font-weight:600;color:'+confColor+';background:'+confColor+'15;padding:2px 8px;border-radius:4px">'+confLabel+'</span>';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptFamilySuggestion('+i+')">Accept</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissFamilySuggestion('+i+')">Dismiss</button>';
+            h+='</div>';
+        });
+
+        // Add-to-existing suggestions
+        addToExisting.forEach(function(s){
+            h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
+            h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.camperName)+'</strong> may belong to <strong>'+esc(s.familyName)+'</strong></div></div>';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptAddToFamily(\''+je(s.familyKey)+'\',\''+je(s.camperName)+'\')">Add</button>';
+            h+='</div>';
+        });
+
+        h+='</div>';
+    }
+
+    if(!e.length&&!totalSuggestions){h+='<div class="me-empty"><h3>No families yet</h3><p>Add a family to get started, or import campers and we\'ll detect families automatically.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
     else e.forEach(function([id,f]){
         var sb=f.balance>0?bdg(fm(f.balance)+' due','err'):f.totalPaid>0?bdg('Paid','ok'):bdg('Pending','warn');
         h+='<div class="fam-card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button></div></div>';
@@ -3053,6 +3222,7 @@ window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
+    acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
