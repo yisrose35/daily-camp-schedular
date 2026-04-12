@@ -1562,6 +1562,7 @@
 
     function renderRegionPreview() {
         const body = document.getElementById('regionPreviewBody');
+        if (!body) return; // Region preview card was removed — skip rendering
         if (!_detectedRegions?.length) { body.innerHTML = '<div style="text-align:center;padding:1.5rem;color:var(--text-muted);">No regions detected yet</div>'; return; }
         const roster = getRoster(); const rs = parseInt(document.getElementById('routeReserveSeats')?.value) || D.setup.reserveSeats || 0;
         let perBusCap = 0; if (D.buses.length) { let tc = 0; D.buses.forEach(b => { const m = D.monitors.find(x => x.assignedBus === b.id); const co = D.counselors.filter(x => x.assignedBus === b.id); const brs = getBusReserve(b); tc += Math.max(0, (b.capacity || 0) - (m ? 1 : 0) - co.length - brs); }); perBusCap = Math.floor(tc / D.buses.length); }
