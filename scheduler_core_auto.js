@@ -481,6 +481,20 @@
                 if (specDur && specDur > 0) { dMin = specDur; dMax = specDur; }
             }
 
+            // ★ v11.6: Window is the hard constraint — if the layer's time window
+            // is smaller than dMin, clamp dMin/dMax to fit the window.
+            // A 30-min activity in a 20-min window must become 20 min.
+            if (layer && layer.startMin != null && layer.endMin != null) {
+                const windowSize = layer.endMin - layer.startMin;
+                if (windowSize > 0 && windowSize < dMin) {
+                    dMin = Math.max(ABSOLUTE_FLOOR, windowSize);
+                    dMax = Math.max(dMin, Math.min(dMax, windowSize));
+                }
+                if (windowSize > 0 && dMax > windowSize) {
+                    dMax = windowSize;
+                }
+            }
+
             // ★ v10.5: Invariant — dMax must never be less than dMin
             if (dMax < dMin) dMax = dMin;
 
