@@ -182,6 +182,43 @@
     }
 
     const MAX_STOP_CAPACITY = 15; // cap per stop — keeps clusters compact
+
+    // ── Hungarian Algorithm (Kuhn-Munkres) for optimal assignment ──
+    // Finds minimum-cost 1-to-1 matching in an n×n cost matrix.
+    // Returns assignment[row] = col for each row. O(n³).
+    function hungarian(cost, n) {
+        const u = new Array(n + 1).fill(0);
+        const v = new Array(n + 1).fill(0);
+        const p = new Array(n + 1).fill(0);
+        const way = new Array(n + 1).fill(0);
+        for (let i = 1; i <= n; i++) {
+            p[0] = i;
+            let j0 = 0;
+            const minv = new Array(n + 1).fill(Infinity);
+            const used = new Array(n + 1).fill(false);
+            do {
+                used[j0] = true;
+                let i0 = p[j0], delta = Infinity, j1;
+                for (let j = 1; j <= n; j++) {
+                    if (used[j]) continue;
+                    const cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+                    if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+                    if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+                }
+                for (let j = 0; j <= n; j++) {
+                    if (used[j]) { u[p[j]] += delta; v[j] -= delta; }
+                    else { minv[j] -= delta; }
+                }
+                j0 = j1;
+            } while (p[j0] !== 0);
+            do { const j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0);
+        }
+        const result = new Array(n).fill(-1);
+        for (let j = 1; j <= n; j++) {
+            if (p[j] !== 0) result[p[j] - 1] = j - 1;
+        }
+        return result;
+    }
     let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
 
     /** Line segment intersection test (2D) */
@@ -3323,26 +3360,60 @@
                 camperNames: z.camperNames.filter(n => shiftCamperNames.has(n))
             })).filter(z => z.camperNames.length > 0);
 
-            // Sort zones by size (biggest first), assign biggest bus to biggest zone
-            shiftZones.sort((a, b) => b.camperNames.length - a.camperNames.length);
-            const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
-
-            // Assign one bus per zone
+            // ── Hungarian algorithm for optimal bus→zone assignment ──
+            // Cost = geographic distance + capacity mismatch penalty
+            // This replaces naive size-ordered pairing
+            const nZones = shiftZones.length;
+            const nBuses = vehicles.length;
             const zoneAssignments = [];
-            for (let i = 0; i < shiftZones.length && i < sortedVehicles.length; i++) {
-                zoneAssignments.push({ zone: shiftZones[i], vehicle: sortedVehicles[i] });
-            }
-            // Any extra zones go to the bus with most remaining capacity
-            for (let i = sortedVehicles.length; i < shiftZones.length; i++) {
-                // Merge into nearest zone that has a bus
-                const z = shiftZones[i];
-                let bestIdx = 0, bestDist = Infinity;
-                for (let j = 0; j < zoneAssignments.length; j++) {
-                    const d = haversineMi(z.centroidLat, z.centroidLng, zoneAssignments[j].zone.centroidLat, zoneAssignments[j].zone.centroidLng);
-                    if (d < bestDist) { bestDist = d; bestIdx = j; }
+
+            if (nZones > 0 && nBuses > 0) {
+                const n = Math.max(nZones, nBuses); // pad to square matrix
+                const cost = Array.from({ length: n }, () => new Array(n).fill(0));
+
+                // Build cost matrix: cost[bus][zone]
+                for (let b = 0; b < n; b++) {
+                    for (let z = 0; z < n; z++) {
+                        if (b >= nBuses || z >= nZones) {
+                            cost[b][z] = 0; // dummy row/col — zero cost
+                            continue;
+                        }
+                        const veh = vehicles[b];
+                        const zone = shiftZones[z];
+                        // Geographic cost: distance from camp through zone centroid
+                        const geoDist = _campCoordsCache ?
+                            haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, zone.centroidLat, zone.centroidLng) : 0;
+                        // Capacity mismatch: penalize assigning a bus that's too small
+                        const capMismatch = Math.max(0, zone.camperNames.length - veh.capacity) * 2;
+                        // Waste penalty: mildly penalize assigning a large bus to a small zone
+                        const waste = Math.max(0, veh.capacity - zone.camperNames.length) * 0.1;
+                        cost[b][z] = geoDist + capMismatch + waste;
+                    }
                 }
-                zoneAssignments[bestIdx].zone.camperNames.push(...z.camperNames);
-                console.log('[Go] Zone overflow: merged ' + z.name + ' into ' + zoneAssignments[bestIdx].zone.name);
+
+                // Hungarian algorithm (Kuhn-Munkres) — O(n³) assignment
+                const assignment = hungarian(cost, n);
+
+                // Build assignments from result
+                for (let b = 0; b < nBuses; b++) {
+                    const z = assignment[b];
+                    if (z < nZones) {
+                        zoneAssignments.push({ zone: shiftZones[z], vehicle: vehicles[b] });
+                    }
+                }
+
+                // Handle extra zones (more zones than buses) — merge into nearest assigned zone
+                const assignedZoneIds = new Set(zoneAssignments.map(za => za.zone.id));
+                shiftZones.forEach(z => {
+                    if (assignedZoneIds.has(z.id)) return;
+                    let bestIdx = 0, bestDist = Infinity;
+                    for (let j = 0; j < zoneAssignments.length; j++) {
+                        const d = haversineMi(z.centroidLat, z.centroidLng, zoneAssignments[j].zone.centroidLat, zoneAssignments[j].zone.centroidLng);
+                        if (d < bestDist) { bestDist = d; bestIdx = j; }
+                    }
+                    zoneAssignments[bestIdx].zone.camperNames.push(...z.camperNames);
+                    console.log('[Go] Zone overflow: merged ' + z.name + ' into ' + zoneAssignments[bestIdx].zone.name);
+                });
             }
 
             // Log zone→bus assignment
