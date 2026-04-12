@@ -701,7 +701,7 @@
             const rs = getBusReserve(b);
             const avail = Math.max(0, (b.capacity || 0) - staff - rs);
             const rsLabel = b.reserveMode === 'custom' ? rs + ' (custom)' : rs;
-            return '<div class="bus-card"><div class="bus-card-stripe" style="background:' + esc(b.color) + '"></div><div class="bus-card-header"><div><div class="bus-card-name">' + esc(b.name) + '</div>' + (b.notes ? '<div class="bus-card-number">' + esc(b.notes) + '</div>' : '') + '</div><div class="bus-card-actions"><button onclick="CampistryGo.editBus(\'' + b.id + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="delete" onclick="CampistryGo.deleteBus(\'' + b.id + '\')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div></div><div class="bus-card-stats"><div class="bus-stat"><div class="bus-stat-value">' + b.capacity + '</div><div class="bus-stat-label">Seats</div></div><div class="bus-stat"><div class="bus-stat-value">' + avail + '</div><div class="bus-stat-label">For Kids</div></div><div class="bus-stat"><div class="bus-stat-value">' + staff + '</div><div class="bus-stat-label">Staff</div></div><div class="bus-stat"><div class="bus-stat-value">' + rsLabel + '</div><div class="bus-stat-label">Reserved</div></div></div>' + (mon ? '<div style="margin-top:.75rem;font-size:.75rem;color:var(--text-muted)">Monitor: <strong style="color:var(--text-secondary)">' + esc(mon.name) + '</strong></div>' : '') + '</div>';
+            return '<div class="bus-card" style="cursor:pointer" onclick="CampistryGo.editBus(\'' + b.id + '\')"><div class="bus-card-stripe" style="background:' + esc(b.color) + '"></div><div class="bus-card-header"><div><div class="bus-card-name">' + esc(b.name) + '</div>' + (b.notes ? '<div class="bus-card-number">' + esc(b.notes) + '</div>' : '') + '</div></div><div class="bus-card-stats"><div class="bus-stat"><div class="bus-stat-value">' + b.capacity + '</div><div class="bus-stat-label">Seats</div></div><div class="bus-stat"><div class="bus-stat-value">' + avail + '</div><div class="bus-stat-label">For Kids</div></div><div class="bus-stat"><div class="bus-stat-value">' + staff + '</div><div class="bus-stat-label">Staff</div></div><div class="bus-stat"><div class="bus-stat-value">' + rsLabel + '</div><div class="bus-stat-label">Reserved</div></div></div>' + (mon ? '<div style="margin-top:.75rem;font-size:.75rem;color:var(--text-muted)">Monitor: <strong style="color:var(--text-secondary)">' + esc(mon.name) + '</strong></div>' : '') + '</div>';
         }).join('') + '</div>';
     }
     function openBusModal(editId) {
@@ -718,6 +718,9 @@
         document.getElementById('busReserveMode').value = mode;
         document.getElementById('busReserveCustom').value = ex?.reserveSeats ?? '';
         document.getElementById('busReserveCustom').style.display = mode === 'custom' ? '' : 'none';
+        // Show delete button only when editing existing bus
+        const delBtn = document.getElementById('busDeleteBtn');
+        if (delBtn) delBtn.style.display = editId ? '' : 'none';
         openModal('busModal'); document.getElementById('busName').focus();
     }
     function _pickColor(el) { el.parentElement.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected')); el.classList.add('selected'); }
@@ -829,6 +832,15 @@
         return results;
     }
     function editBus(id) { openBusModal(id); }
+    function deleteBusFromModal() {
+        if (!_editBusId) return;
+        const b = D.buses.find(x => x.id === _editBusId);
+        if (!b || !confirm('Delete "' + b.name + '"?')) return;
+        D.buses = D.buses.filter(x => x.id !== _editBusId);
+        D.monitors.forEach(m => { if (m.assignedBus === _editBusId) m.assignedBus = ''; });
+        D.counselors.forEach(c => { if (c.assignedBus === _editBusId) c.assignedBus = ''; });
+        save(); closeModal('busModal'); renderFleet(); renderStaff(); updateStats(); updateBusSelects(); toast('Deleted');
+    }
     function deleteBus(id) { const b = D.buses.find(x => x.id === id); if (!b || !confirm('Delete "' + b.name + '"?')) return; D.buses = D.buses.filter(x => x.id !== id); D.monitors.forEach(m => { if (m.assignedBus === id) m.assignedBus = ''; }); D.counselors.forEach(c => { if (c.assignedBus === id) c.assignedBus = ''; }); save(); renderFleet(); renderStaff(); updateStats(); updateBusSelects(); toast('Deleted'); }
     function updateBusSelects() { ['monitorBusAssign', 'counselorBusAssign'].forEach(sid => { const s = document.getElementById(sid); if (!s) return; const cur = s.value; s.innerHTML = '<option value="">— Later —</option>' + D.buses.map(b => '<option value="' + esc(b.id) + '"' + (b.id === cur ? ' selected' : '') + '>' + esc(b.name) + '</option>').join(''); }); }
 
@@ -1153,8 +1165,13 @@
         if (!hasFirstLast && !hasFullName) { toast('CSV needs either "First Name" + "Last Name" columns, or a "Name" column', 'error'); return; }
         if (si < 0) { toast('CSV needs an "Address" or "Street Address" column', 'error'); return; }
 
+        // Full overwrite — clear all existing data
         D.addresses = {};
         _goStandaloneRoster = {};
+        D.savedRoutes = null;
+        _generatedRoutes = null;
+        _detectedRegions = null;
+        _slicedZones = null;
         let up = 0;
 
         for (let i = 1; i < lines.length; i++) {
@@ -4509,7 +4526,7 @@
     // =========================================================================
     window.CampistryGo = {
         saveSetup, testApiKey,
-        openBusModal, saveBus, editBus, deleteBus, _pickColor, quickCreateBuses,
+        openBusModal, saveBus, editBus, deleteBus, deleteBusFromModal, _pickColor, quickCreateBuses,
         addShift, deleteShift, toggleShiftDiv, updateShiftTime, renameShift,
         toggleShiftGrade, setShiftGradeMode, toggleShiftBus, setAllShiftBuses,
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
