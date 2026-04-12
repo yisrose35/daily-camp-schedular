@@ -181,7 +181,7 @@
         stops.forEach((s, i) => { s.stopNum = i + 1; });
     }
 
-    const MAX_STOP_CAPACITY = Infinity; // no cap — walk distance is the only constraint
+    const MAX_STOP_CAPACITY = 15; // cap per stop — keeps clusters compact
     let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
 
     /** Line segment intersection test (2D) */
@@ -266,11 +266,23 @@
                         const nLat = trial.reduce((s, k) => s + k.lat, 0) / trial.length;
                         const nLng = trial.reduce((s, k) => s + k.lng, 0) / trial.length;
 
-                        // Use street-aware distance for every kid in the trial
+                        // Check 1: every kid within walkMi of the new centroid
                         const allFit = trial.every(k =>
                             smartClusterDist(nLat, nLng, '', k.lat, k.lng, k.address) <= walkMi
                         );
-                        if (allFit) {
+                        // Check 2: max diameter — farthest pair can't exceed 2× walkMi
+                        // This prevents long, stretched clusters where centroid is fine
+                        // but edge kids are far apart
+                        let maxDiam = 0;
+                        if (allFit && trial.length >= 3) {
+                            for (let p = 0; p < trial.length && maxDiam <= walkMi * 2; p++) {
+                                for (let q = p + 1; q < trial.length; q++) {
+                                    const dd = manhattanMi(trial[p].lat, trial[p].lng, trial[q].lat, trial[q].lng);
+                                    if (dd > maxDiam) maxDiam = dd;
+                                }
+                            }
+                        }
+                        if (allFit && maxDiam <= walkMi * 2) {
                             toAdd.forEach(k => { cluster.push(k); assigned.add(k.name); });
                             changed = true;
                         }
@@ -4075,11 +4087,11 @@
         nnDists.sort((a, b) => a - b);
         const median = nnDists[Math.floor(nnDists.length / 2)];
 
-        // Scale: cluster radius = 5× median NN distance
-        // This means a cluster can span roughly 5 "house gaps"
-        const FLOOR = 0.05;   // ~265ft — minimum even in Manhattan
-        const CEILING = 1.0;  // ~1 mile — maximum even in rural areas
-        const MULTIPLIER = 5;
+        // Scale: cluster radius = 3× median NN distance
+        // Tighter clusters = more compact routes; VROOM handles stop ordering
+        const FLOOR = 0.04;   // ~210ft — minimum even in Manhattan
+        const CEILING = 0.5;  // ~0.5 mile — keeps routes compact even in rural areas
+        const MULTIPLIER = 3;
 
         const radius = Math.max(FLOOR, Math.min(CEILING, median * MULTIPLIER));
 
@@ -4221,7 +4233,7 @@
                     osmIntersections.forEach(inter => {
                         // Quick reject: too far from any kid
                         const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                        if (d > walkMi * 4) return;
+                        if (d > walkMi * 2) return;
 
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
                         const mainMatch = interStreets.some(s => streetMatch(s, mainStreet));
@@ -4249,7 +4261,7 @@
                         let nearestDist = Infinity, nearestInter = null;
                         osmIntersections.forEach(inter => {
                             const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                            if (d < nearestDist && d <= walkMi * 4) { nearestDist = d; nearestInter = inter; }
+                            if (d < nearestDist && d <= walkMi * 2) { nearestDist = d; nearestInter = inter; }
                         });
                         if (nearestInter) {
                             stopLat = nearestInter.lat; stopLng = nearestInter.lng;
@@ -4269,7 +4281,7 @@
                     let bestInter = null, bestWalk = Infinity;
                     osmIntersections.forEach(inter => {
                         const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                        if (d > walkMi * 4) return;
+                        if (d > walkMi * 2) return;
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
                         if (!interStreets.some(s => streetMatch(s, mainStreet))) return;
                         const tw = totalWalkTo(inter.lat, inter.lng);
@@ -4282,7 +4294,7 @@
                         let nearestDist = Infinity;
                         osmIntersections.forEach(inter => {
                             const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                            if (d < nearestDist && d <= walkMi * 4) {
+                            if (d < nearestDist && d <= walkMi * 2) {
                                 nearestDist = d; bestInter = inter;
                             }
                         });
@@ -4305,14 +4317,19 @@
 
         // Merge tiny stops (<=2 kids) into nearest within walkMi
         // FIX 6: Use manhattanMi for merge distance check too
+        // Merge tiny stops (≤2 kids) only into nearby stops within half walk distance
+        // Using full walkMi was pulling distant stops together and stretching routes
+        const mergeRadius = walkMi * 0.5;
         let didMerge = true;
         while (didMerge) {
             didMerge = false;
             for (let i = stops.length - 1; i >= 0; i--) {
                 if (stops[i].campers.length > 2) continue;
-                let bestJ = -1, bestDist = walkMi;
+                let bestJ = -1, bestDist = mergeRadius;
                 for (let j = 0; j < stops.length; j++) {
                     if (j === i) continue;
+                    // Don't merge into a stop that would exceed capacity
+                    if (stops[j].campers.length + stops[i].campers.length > MAX_STOP_CAPACITY) continue;
                     const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
                     if (d < bestDist) { bestDist = d; bestJ = j; }
                 }
