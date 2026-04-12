@@ -2309,6 +2309,7 @@
 
         // ── D. Border rebalance for over-capacity pockets ──
         // Use hard bus cap (not targetFill) — we must fit in a single bus
+        const MAX_ABSORB_MI = 3.0; // max distance for absorbing/moving kids between zones
         const hardCap = Math.max(...effectiveCaps);
         for (let pass = 0; pass < 50; pass++) {
             let anyOver = false;
@@ -2382,8 +2383,6 @@
         // ── E. Absorb small ZIPs — with max distance cap ──
         // Without a distance cap, small ZIPs get absorbed into distant zones
         // just because they have room, creating stretched routes across ZIP codes.
-        // Max absorption distance: 3 miles (keeps zones geographically tight)
-        const MAX_ABSORB_MI = 3.0;
 
         // Sort small ZIPs by size descending — absorb larger ones first so they
         // get priority on nearby zones with room
