@@ -3734,7 +3734,7 @@
             if (hull.length < 3) return;
 
             const polygon = L.polygon(hull, {
-                color: bz.color, weight: 2.5, fillOpacity: 0.12, dashArray: '6, 4'
+                color: bz.color, weight: 4, fillOpacity: 0.25, fillColor: bz.color
             }).addTo(_map);
             polygon.bindPopup('<strong>' + esc(bz.name) + '</strong><br>' + bz.kidCount + ' campers');
             _zoneLayers.push(polygon);
@@ -3743,10 +3743,10 @@
             const cLat = hull.reduce((s, p) => s + p[0], 0) / hull.length;
             const cLng = hull.reduce((s, p) => s + p[1], 0) / hull.length;
             const labelIcon = L.divIcon({
-                html: '<div style="background:' + esc(bz.color) + ';color:#fff;padding:3px 7px;border-radius:5px;font-size:10px;font-weight:700;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3);font-family:DM Sans,sans-serif;opacity:.9;">' + esc(bz.name) + ' (' + bz.kidCount + ')</div>',
-                className: '', iconAnchor: [50, 10]
+                html: '<div style="background:' + esc(bz.color) + ';color:#fff;padding:6px 12px;border-radius:8px;font-size:13px;font-weight:800;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.4);font-family:DM Sans,sans-serif;letter-spacing:.3px;border:2px solid #fff;">' + esc(bz.name) + ' &mdash; ' + bz.kidCount + ' kids</div>',
+                className: '', iconAnchor: [70, 14]
             });
-            const label = L.marker([cLat, cLng], { icon: labelIcon, interactive: false }).addTo(_map);
+            const label = L.marker([cLat, cLng], { icon: labelIcon, interactive: false, zIndexOffset: 900 }).addTo(_map);
             _zoneLayers.push(label);
         });
 
