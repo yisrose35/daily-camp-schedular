@@ -653,7 +653,6 @@
             
             if (success) {
                 log('✅ Reconnection successful');
-                showSyncToast('🔄 Reconnected to sync');
                 
                 // Process any queued saves
                 await processOfflineQueue();
