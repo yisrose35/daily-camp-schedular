@@ -953,6 +953,40 @@ function getNeedsForBunk(bunkName, dateKey) {
 }
 
 /**
+ * Compute daily quotas for each active rotation event on this date.
+ * Returns { [eventId]: { eventId, eventName, remainingCount, remainingBunks (Set),
+ *           daysLeft, dailyTarget, isLastDay, placed (mutable counter) } }
+ * The scheduler increments `placed` as bunks are successfully scheduled.
+ */
+function getRotationQuotas(dateKey) {
+    if (!dateKey) return {};
+    const events = loadRotationEvents();
+    const quotas = {};
+    events.forEach(evt => {
+        if (!isDateInRange(dateKey, evt.dateRange.start, evt.dateRange.end)) return;
+        const remaining = getRemainingBunks(evt);
+        if (remaining.length === 0) return;
+        const allDates = getDatesBetween(evt.dateRange.start, evt.dateRange.end);
+        const todayIdx = allDates.indexOf(dateKey);
+        if (todayIdx < 0) return;
+        const daysLeft = allDates.length - todayIdx; // includes today
+        const isLastDay = daysLeft <= 1;
+        const dailyTarget = Math.ceil(remaining.length / daysLeft);
+        quotas[evt.id] = {
+            eventId: evt.id,
+            eventName: evt.name,
+            remainingCount: remaining.length,
+            remainingBunks: new Set(remaining.map(b => b.bunk)),
+            daysLeft: daysLeft,
+            dailyTarget: dailyTarget,
+            isLastDay: isLastDay,
+            placed: 0
+        };
+    });
+    return quotas;
+}
+
+/**
  * Walk a finalized scheduleAssignments object and mark every bunk that
  * received a rotation event block as completed for the given date.
  * Called from scheduler_core_auto.js after the build finishes.
@@ -1004,6 +1038,7 @@ const RotationEvents = {
     getRemainingBunks,
     getCompletedBunks,
     getNeedsForBunk,
+    getRotationQuotas,
     markCompletionsFromSchedule,
     renderRotationEventsPane,
     injectSubtab,

@@ -2677,6 +2677,21 @@
             var allTemplates = {};
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
+            // ★ Smart rotation: compute daily quotas (resets each iteration)
+            var rotationQuotas = null;
+            if (window.RotationEvents && typeof window.RotationEvents.getRotationQuotas === 'function') {
+                try {
+                    rotationQuotas = window.RotationEvents.getRotationQuotas(currentDate);
+                    var _rqKeys = Object.keys(rotationQuotas || {});
+                    if (_rqKeys.length > 0) {
+                        _rqKeys.forEach(function(eid) {
+                            var q = rotationQuotas[eid];
+                            log('[Phase3] Rotation "' + q.eventName + '": ' + q.remainingCount + ' remaining, ' + q.daysLeft + ' days left, target=' + q.dailyTarget + (q.isLastDay ? ' (LAST DAY)' : ''));
+                        });
+                    }
+                } catch (e) { console.warn('[Phase3] rotation quota computation failed:', e); }
+            }
+
             // ── Helper: build a template block with all required fields ──
             // ★ v9.6: Hard guard — snap to 5min, enforce dMin/dMax, reject invalid blocks
             function makeBlock(opts) {
@@ -2783,7 +2798,15 @@
 
             for (var gi = 0; gi < allGrades.length; gi++) {
                 var grade = allGrades[gi];
-                var bunks = getBunksForGrade(grade, divisions);
+                var bunks = getBunksForGrade(grade, divisions).slice(); // copy for shuffle
+                // ★ Smart rotation: shuffle bunk order per iteration for fairness
+                // Different iterations try different orderings → best-of-40 finds optimal assignment
+                var _shufSeed = _iterSeed * 31 + gi;
+                for (var si = bunks.length - 1; si > 0; si--) {
+                    _shufSeed = (_shufSeed * 1103515245 + 12345) & 0x7fffffff;
+                    var sj = _shufSeed % (si + 1);
+                    var _tmp = bunks[si]; bunks[si] = bunks[sj]; bunks[sj] = _tmp;
+                }
                 var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                 var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
 
@@ -2855,7 +2878,7 @@
                             _activityLocked: true, _source: 'need' });
                     }
 
-                    // Rotation events — skip if already placed as a wall
+                    // Rotation events — skip if already placed as a wall or quota met
                     if (window.RotationEvents && typeof window.RotationEvents.getNeedsForBunk === 'function') {
                         try {
                             var reNeeds = window.RotationEvents.getNeedsForBunk(String(bunk), currentDate);
@@ -2867,6 +2890,11 @@
                                         return w._fixed && w.event === rn.event && w.type === rn.type;
                                     });
                                     if (reAlreadyWall) continue;
+                                    // ★ Smart rotation: skip if daily quota already met (unless last day)
+                                    if (rotationQuotas && rn._rotationEventId) {
+                                        var _rq3 = rotationQuotas[rn._rotationEventId];
+                                        if (_rq3 && !_rq3.isLastDay && _rq3.placed >= _rq3.dailyTarget) continue;
+                                    }
                                     rn.windowStart = Math.max(rn.windowStart, gradeStart);
                                     rn.windowEnd = Math.min(rn.windowEnd, gradeEnd);
                                     if (rn.windowEnd - rn.windowStart >= rn.dMin) needs.push(rn);
@@ -3128,7 +3156,7 @@
                             var blk = makeBlock({
                                 startMin: sol.start, endMin: placeEnd, type: need.type, event: need.event,
                                 layer: need.layer, dMin: need.dMin, dMax: need.dMax,
-                                _source: 'need', _activityLocked: need._activityLocked || false,
+                                _source: need._source || 'need', _activityLocked: need._activityLocked || false,
                                 _assignedSpecial: need._assignedSpecial || null,
                                 _specialLocation: need._specialLocation || null, _specialDuration: need._specialDuration || null,
                                 _customActivity: need._customActivity || null, _customField: need._customField || null,
@@ -3137,6 +3165,11 @@
                                 _rotationEventColor: need._rotationEventColor || null, _final: true
                             });
                             if (blk) template.push(blk);
+                            // ★ Rotation quota: increment placed counter on successful CSP placement
+                            if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
+                                var _rq = rotationQuotas[need._rotationEventId];
+                                if (_rq) _rq.placed++;
+                            }
                         }
                     } else {
                         // Solver couldn't place all needs — place what we can
@@ -3158,7 +3191,7 @@
                                 var blk = makeBlock({
                                     startMin: pos.start, endMin: placeEnd, type: need.type, event: need.event,
                                     layer: need.layer, dMin: need.dMin, dMax: need.dMax,
-                                    _source: 'need', _activityLocked: need._activityLocked || false,
+                                    _source: need._source || 'need', _activityLocked: need._activityLocked || false,
                                     _assignedSpecial: need._assignedSpecial || null,
                                     _specialLocation: need._specialLocation || null, _specialDuration: need._specialDuration || null,
                                     _customActivity: need._customActivity || null, _customField: need._customField || null,
@@ -3166,6 +3199,11 @@
                                     _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
                                     _rotationEventColor: need._rotationEventColor || null, _final: true
                                 });
+                                // ★ Rotation quota: increment placed counter on fallback placement
+                                if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
+                                    var _rq2 = rotationQuotas[need._rotationEventId];
+                                    if (_rq2) _rq2.placed++;
+                                }
                                 if (blk) template.push(blk);
                             } else {
                                 log('[Phase3] CSP: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk);
