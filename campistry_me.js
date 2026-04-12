@@ -470,7 +470,7 @@ function renderCampers(filter){
     var c=document.getElementById('page-campers'),entries=Object.entries(roster),total=entries.length;
     if(filter){var q=filter.toLowerCase();entries=entries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)})}
     entries.sort(function(a,b){return a[0].localeCompare(b[0])});
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Download Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export All</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.detectDuplicates()" title="Find duplicate campers">🔍 Duplicates</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     if(!entries.length){h+='<div class="me-empty"><h3>No campers yet</h3><p>Add campers or import from CSV.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>'}
     else{
         h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:50px">ID</th><th>Name</th><th>Age</th><th>School</th><th>Grade</th><th>Teacher</th><th>Division</th><th>Bunk</th><th>Medical</th><th style="width:60px"></th></tr></thead><tbody>';
@@ -569,7 +569,37 @@ function viewCamper(n){
     if(d.medications)b+=cvR('Medications',d.medications,true);
     if(d.dietary)b+=cvR('Dietary',d.dietary);
     if(!d.allergies&&!d.medications&&!d.dietary)b+='<div style="font-size:.8rem;color:var(--ok);padding:2px 0">✓ No medical flags</div>';
-    b+='<div class="cv-health" onclick="toast(\'Campistry Health coming soon\',\'error\')">Open in Campistry Health →</div>';
+    b+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
+
+    // Documents
+    b+='<div class="cv-sec" style="display:flex;justify-content:space-between;align-items:center">Documents <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button></div>';
+    b+=renderDocuments(n);
+
+    // Scholarships / Financial Aid
+    var schols=d.scholarships||[];
+    b+='<div class="cv-sec" style="display:flex;justify-content:space-between;align-items:center">Financial Aid <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button></div>';
+    if(schols.length){schols.forEach(function(s){b+=cvR(s.type,fm(s.amount)+(s.source?' — '+s.source:'')+(s.date?' ('+s.date+')':''))})}
+    else b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic">No aid on file</div>';
+
+    // Custom Fields
+    loadCustomFields();
+    if(customFields.length){
+        b+='<div class="cv-sec">Custom Fields</div>';
+        customFields.forEach(function(cf){b+=cvR(cf.label,d['cf_'+cf.id]||'<span style="color:var(--s300)">—</span>')});
+    }
+
+    // Notes & Timeline
+    b+='<div class="cv-sec" style="display:flex;justify-content:space-between;align-items:center">Notes & Timeline <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button></div>';
+    b+=renderCamperTimeline(n);
+
+    // Quick Actions
+    b+='<div class="cv-sec">Quick Actions</div>';
+    b+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    b+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.reEnrollCamper(\''+je(n)+'\')">Re-Enroll</button>';
+    b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">Add Note</button>';
+    b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">Upload Doc</button>';
+    b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">Award Aid</button>';
+    b+='</div>';
 
     document.getElementById('cvBody').innerHTML=b;
     document.getElementById('cvEditBtn').onclick=function(){closeModal('camperViewModal');editCamper(n)};
@@ -2625,7 +2655,7 @@ async function batchCharge(){
 // ═══════════════════════════════════════════════════════════════
 function renderBroadcasts(){
     var c=document.getElementById('page-broadcasts');
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Broadcasts & Messaging</h2><p class="sec-desc">'+broadcasts.length+' message'+(broadcasts.length!==1?'s':'')+' sent</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.openBroadcastModal()">+ New Broadcast</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Broadcasts & Messaging</h2><p class="sec-desc">'+broadcasts.length+' message'+(broadcasts.length!==1?'s':'')+' sent</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPaymentReminders()">💰 Payment Reminders</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendFormReminders()">📋 Form Reminders</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openBroadcastModal()">+ New Broadcast</button></div></div>';
 
     // Quick stats
     var thisWeek=broadcasts.filter(function(b){return b.timestamp&&Date.now()-b.timestamp<7*86400000}).length;
@@ -2963,6 +2993,157 @@ function clearAllData(){
     if(!confirm('FINAL WARNING: All campers, families, enrollment, financial data will be erased.'))return;
     localStorage.removeItem('campGlobalSettings_v1');
     loadData();render(curPage);toast('All data cleared');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BROADCAST EMAIL/SMS DELIVERY
+// ═══════════════════════════════════════════════════════════════
+async function sendBroadcastNow(broadcast){
+    var recipients=[];
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(e){}
+    var target=(broadcast.to||'').toLowerCase();
+    if(target==='staff'||target==='staff only'){
+        finStaff.forEach(function(s){if(s.email)recipients.push({email:s.email,name:s.name,phone:''})});
+    }else{
+        Object.values(families).forEach(function(f){(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)recipients.push({email:p.email,name:p.name||'',phone:p.phone||''})})})});
+        var seen=new Set();recipients=recipients.filter(function(r){if(seen.has(r.email))return false;seen.add(r.email);return true});
+        if(target!=='all families'&&target!=='enrolled'&&target!=='all'&&target){
+            var divCampers=new Set();Object.entries(roster).forEach(function([n,c]){if(c.division===broadcast.to)divCampers.add(n)});
+            var divEmails=new Set();Object.values(families).forEach(function(f){if((f.camperIds||[]).some(function(n){return divCampers.has(n)}))(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)divEmails.add(p.email)})})});
+            recipients=recipients.filter(function(r){return divEmails.has(r.email)});
+        }
+    }
+    if(!recipients.length){toast('No recipients with email','error');return{sent:0,failed:0}}
+    try{return await callEdgeFunction('send-broadcast',{to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName})}
+    catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUTOMATED NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════════
+async function sendAutoNotification(type,enrollmentId){
+    var e=enrollments[enrollmentId];if(!e)return;
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
+    if(!e.parentEmail)return;
+    try{await callEdgeFunction('auto-notify',{recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)}
+}
+async function sendPaymentReminders(){
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
+    var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];var sent=0;
+    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';if(e.parentEmail){callEdgeFunction('auto-notify',{recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}}).catch(function(){});sent++}}})});
+    toast(sent+' payment reminder'+(sent!==1?'s':'')+' sent');
+}
+async function sendFormReminders(){
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
+    loadForms();var sent=0;
+    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;callEdgeFunction('auto-notify',{recipients:[{email:c.parent1Email,name:c.parent1Name||''}],type:'form_reminder',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}}).catch(function(){});sent++})});
+    toast(sent+' form reminder'+(sent!==1?'s':'')+' sent');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CAMPER NOTES & TIMELINE
+// ═══════════════════════════════════════════════════════════════
+function addCamperNote(camperName){
+    var h='<div class="me-modal-form"><div class="me-field"><label>Note Type</label><select id="noteType" class="me-input"><option>General</option><option>Parent Communication</option><option>Behavior</option><option>Medical</option><option>Bunk Change</option><option>Incident</option><option>Financial</option></select></div><div class="me-field"><label>Note</label><textarea id="noteBody" class="me-input" rows="4" style="resize:vertical" placeholder="What happened..."></textarea></div></div>';
+    showModal('Add Note — '+camperName,h,function(){
+        var body=document.getElementById('noteBody').value.trim();if(!body){alert('Enter a note');return}
+        if(!roster[camperName])return;if(!roster[camperName].notes)roster[camperName].notes=[];
+        roster[camperName].notes.push({type:document.getElementById('noteType').value,body:body,date:new Date().toISOString(),by:'office'});
+        save();closeModal('dynModal');viewCamper(camperName);toast('Note added');
+    });
+}
+function renderCamperTimeline(camperName){
+    var d=roster[camperName];if(!d)return'';var notes=d.notes||[];
+    if(!notes.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No notes yet</div>';
+    var colors={General:'var(--s500)','Parent Communication':'var(--me)',Behavior:'var(--warn)',Medical:'var(--purple)','Bunk Change':'var(--ok)',Incident:'var(--err)',Financial:'#2563EB'};
+    return notes.slice().reverse().map(function(n){var c=colors[n.type]||'var(--s500)';var dt=n.date?new Date(n.date).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';return'<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--s100)"><div style="width:3px;border-radius:2px;background:'+c+';flex-shrink:0"></div><div style="flex:1"><div style="display:flex;justify-content:space-between"><span style="font-size:.7rem;font-weight:600;color:'+c+'">'+esc(n.type)+'</span><span style="font-size:.65rem;color:var(--s400)">'+esc(dt)+'</span></div><div style="font-size:.8rem;color:var(--s700)">'+esc(n.body)+'</div></div></div>'}).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RE-ENROLLMENT / RETURNING FAMILIES
+// ═══════════════════════════════════════════════════════════════
+function reEnrollCamper(camperName){
+    var d=roster[camperName];if(!d)return;
+    var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
+    var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Re-enroll <strong>'+esc(camperName)+'</strong> for a new session. All info carried over.</p><div style="background:var(--s50);padding:12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem"><strong>'+esc(d.division||'')+'/'+esc(d.bunk||'')+'</strong> · Parent: '+esc(d.parent1Name||'')+'</div><div class="me-field"><label>Session</label><select id="reSession" class="me-input">'+sesOpts+'</select></div></div>';
+    showModal('Re-Enroll Camper',h,function(){
+        var session=document.getElementById('reSession').value;var sesObj=sessions.find(function(s){return s.name===session});
+        var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
+        enrollments[id]={camperName:camperName,camperLast:camperName.split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
+        save();closeModal('dynModal');renderEnrollment();toast(camperName+' re-enrolled (auto-accepted)');
+        if(d.parent1Email)sendAutoNotification('enrollment_confirmation',id);
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CUSTOM FIELDS
+// ═══════════════════════════════════════════════════════════════
+var customFields=[];
+function loadCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');customFields=(s.campistryMe&&s.campistryMe.customFields)||[]}
+function saveCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.customFields=customFields;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
+function manageCustomFields(){
+    loadCustomFields();
+    var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Define custom fields that appear on every camper profile.</p><div id="cfList">';
+    customFields.forEach(function(f,i){h+='<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--s100)"><span style="flex:1;font-size:.85rem;font-weight:600">'+esc(f.label)+'</span><span style="font-size:.7rem;color:var(--s400)">'+esc(f.type)+'</span><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe._removeCustomField('+i+')">x</button></div>'});
+    if(!customFields.length) h+='<div style="font-size:.8rem;color:var(--s400);text-align:center;padding:12px">No custom fields</div>';
+    h+='</div><div style="border-top:1px solid var(--s200);margin-top:14px;padding-top:14px"><div style="display:grid;grid-template-columns:2fr 1fr;gap:8px"><input type="text" id="cfNewLabel" class="me-input" placeholder="Field name"><select id="cfNewType" class="me-input"><option value="text">Text</option><option value="select">Dropdown</option><option value="number">Number</option><option value="checkbox">Yes/No</option></select></div><div id="cfOptWrap" style="display:none;margin-top:6px"><input type="text" id="cfOpts" class="me-input" placeholder="Options (comma separated)"></div><button class="me-btn me-btn--pri me-btn--sm" style="margin-top:8px" onclick="CampistryMe._addCustomField()">+ Add Field</button></div>';
+    showModal('Manage Custom Fields',h);
+    setTimeout(function(){var s=document.getElementById('cfNewType');if(s)s.onchange=function(){document.getElementById('cfOptWrap').style.display=s.value==='select'?'block':'none'}},100);
+}
+function _addCustomField(){var l=(document.getElementById('cfNewLabel').value||'').trim();if(!l){alert('Enter name');return}var t=document.getElementById('cfNewType').value||'text';var o=t==='select'?(document.getElementById('cfOpts').value||'').split(',').map(function(x){return x.trim()}).filter(Boolean):[];customFields.push({label:l,type:t,options:o,id:'cf_'+Date.now()});saveCustomFields();save();closeModal('dynModal');manageCustomFields();toast('Field added')}
+function _removeCustomField(i){customFields.splice(i,1);saveCustomFields();save();closeModal('dynModal');manageCustomFields();toast('Removed')}
+
+// ═══════════════════════════════════════════════════════════════
+// DOCUMENT ATTACHMENTS
+// ═══════════════════════════════════════════════════════════════
+function uploadDocument(camperName){
+    var inp=document.createElement('input');inp.type='file';inp.accept='.pdf,.jpg,.jpeg,.png,.doc,.docx';
+    inp.onchange=function(){if(!inp.files[0])return;var file=inp.files[0];if(file.size>5*1024*1024){toast('Max 5MB','error');return}
+    var reader=new FileReader();reader.onload=function(e){if(!roster[camperName])return;if(!roster[camperName].documents)roster[camperName].documents=[];roster[camperName].documents.push({name:file.name,type:file.type,size:file.size,data:e.target.result,uploadDate:new Date().toISOString()});save();viewCamper(camperName);toast('Uploaded: '+file.name)};reader.readAsDataURL(file)};inp.click();
+}
+function renderDocuments(camperName){
+    var docs=(roster[camperName]&&roster[camperName].documents)||[];if(!docs.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No documents</div>';
+    return docs.map(function(d,i){var icon=d.type&&d.type.includes('pdf')?'📄':'📎';return'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:.8rem"><span>'+icon+'</span><a href="'+esc(d.data)+'" download="'+esc(d.name)+'" style="color:var(--me);flex:1">'+esc(d.name)+'</a><span style="font-size:.65rem;color:var(--s400)">'+(d.size?Math.round(d.size/1024)+'KB':'')+'</span><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);font-size:.6rem" onclick="CampistryMe._removeDoc(\''+je(camperName)+'\','+i+')">x</button></div>'}).join('');
+}
+function _removeDoc(n,i){if(!roster[n]||!roster[n].documents)return;roster[n].documents.splice(i,1);save();viewCamper(n);toast('Removed')}
+
+// ═══════════════════════════════════════════════════════════════
+// SCHOLARSHIP / FINANCIAL AID
+// ═══════════════════════════════════════════════════════════════
+function addScholarship(camperName){
+    var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:12px">Award aid to <strong>'+esc(camperName)+'</strong></p><div class="me-field"><label>Type</label><select id="aidType" class="me-input"><option>Scholarship</option><option>Financial Aid</option><option>Campership</option><option>Staff Discount</option><option>Donor Sponsored</option></select></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Amount ($)</label><input type="number" id="aidAmt" class="me-input" step="0.01" min="0"></div><div class="me-field"><label>Source</label><input type="text" id="aidSrc" class="me-input" placeholder="Donor or fund name"></div></div><div class="me-field"><label>Notes</label><input type="text" id="aidNotes" class="me-input"></div></div>';
+    showModal('Award Financial Aid',h,function(){
+        var amt=parseFloat(document.getElementById('aidAmt').value)||0;if(!amt){alert('Enter amount');return}
+        if(!roster[camperName])return;if(!roster[camperName].scholarships)roster[camperName].scholarships=[];
+        roster[camperName].scholarships.push({type:document.getElementById('aidType').value,amount:amt,source:(document.getElementById('aidSrc').value||'').trim(),notes:(document.getElementById('aidNotes').value||'').trim(),date:new Date().toISOString().split('T')[0]});
+        var famKey=Object.keys(families).find(function(k){return(families[k].camperIds||[]).indexOf(camperName)>=0});
+        if(famKey){if(!families[famKey].credits)families[famKey].credits=[];families[famKey].credits.push({id:'sch_'+Date.now(),reason:document.getElementById('aidType').value+' for '+camperName,amount:amt,date:new Date().toISOString().split('T')[0]});families[famKey].balance=Math.max(0,(families[famKey].balance||0)-amt)}
+        save();closeModal('dynModal');viewCamper(camperName);toast(fm(amt)+' awarded to '+camperName);
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DUPLICATE DETECTION
+// ═══════════════════════════════════════════════════════════════
+function detectDuplicates(){
+    var names=Object.keys(roster);var dupes=[];
+    for(var i=0;i<names.length;i++)for(var j=i+1;j<names.length;j++){var sc=dupeScore(names[i],names[j],roster[names[i]],roster[names[j]]);if(sc>=3)dupes.push({a:names[i],b:names[j],score:sc})}
+    dupes.sort(function(a,b){return b.score-a.score});
+    if(!dupes.length){toast('No duplicates found');return}
+    var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">'+dupes.length+' potential duplicate'+(dupes.length!==1?'s':'')+'</p>';
+    dupes.forEach(function(d){var a=roster[d.a],b=roster[d.b];var conf=d.score>=5?'High':d.score>=4?'Medium':'Low';var cc=d.score>=5?'var(--ok)':d.score>=4?'var(--warn)':'var(--s400)';
+    h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--s50);border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)"><div style="flex:1"><div style="font-weight:700;font-size:.85rem">'+esc(d.a)+' ↔ '+esc(d.b)+'</div><div style="font-size:.7rem;color:var(--s500)">'+(a.dob&&b.dob&&a.dob===b.dob?'Same DOB · ':'')+(a.parent1Name&&b.parent1Name&&a.parent1Name===b.parent1Name?'Same parent · ':'')+(a.street&&b.street&&a.street===b.street?'Same address':'')+'</div></div><span style="font-size:.65rem;font-weight:600;color:'+cc+'">'+conf+'</span><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.mergeCampers(\''+je(d.a)+'\',\''+je(d.b)+'\')">Merge</button></div>'});
+    showModal('Duplicates — '+dupes.length+' found',h);
+}
+function dupeScore(nA,nB,a,b){var s=0;var pA=nA.toLowerCase().split(/\s+/),pB=nB.toLowerCase().split(/\s+/);if(pA[pA.length-1]===pB[pB.length-1])s+=2;if(pA[0]===pB[0])s+=1;if(a.dob&&b.dob&&a.dob===b.dob)s+=2;if(a.parent1Name&&b.parent1Name&&a.parent1Name.toLowerCase()===b.parent1Name.toLowerCase())s+=2;if(a.parent1Email&&b.parent1Email&&a.parent1Email.toLowerCase()===b.parent1Email.toLowerCase())s+=2;if(a.street&&b.street&&a.street.toLowerCase()===b.street.toLowerCase())s+=1;return s}
+function mergeCampers(nA,nB){
+    if(!confirm('Merge "'+nB+'" into "'+nA+'"? "'+nB+'" will be deleted.'))return;
+    var a=roster[nA],b=roster[nB];Object.keys(b).forEach(function(k){if(!a[k]&&b[k])a[k]=b[k]});
+    if(b.notes)a.notes=(a.notes||[]).concat(b.notes);if(b.documents)a.documents=(a.documents||[]).concat(b.documents);if(b.scholarships)a.scholarships=(a.scholarships||[]).concat(b.scholarships);
+    Object.values(families).forEach(function(f){var i=(f.camperIds||[]).indexOf(nB);if(i>=0){f.camperIds.splice(i,1);if(f.camperIds.indexOf(nA)<0)f.camperIds.push(nA)}});
+    Object.values(enrollments).forEach(function(e){if(e.camperName===nB)e.camperName=nA});
+    Object.entries(bunkAsgn).forEach(function([bk,kids]){var i=kids.indexOf(nB);if(i>=0){kids.splice(i,1);if(kids.indexOf(nA)<0)kids.push(nA)}});
+    delete roster[nB];save();closeModal('dynModal');render(curPage);toast('Merged into "'+nA+'"');
 }
 
 // ── CSV ──────────────────────────────────────────────────────────
@@ -3330,5 +3511,19 @@ window.CampistryMe={
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
     // Settings
     saveSettings:saveSettings,saveStripeKey:saveStripeKey,saveLocaleSettings:saveLocaleSettings,exportAllData:exportAllData,importAllData:importAllData,clearAllData:clearAllData,
+    // Broadcast delivery
+    sendBroadcastNow:sendBroadcastNow,sendPaymentReminders:sendPaymentReminders,sendFormReminders:sendFormReminders,
+    // Camper notes & timeline
+    addCamperNote:addCamperNote,
+    // Re-enrollment
+    reEnrollCamper:reEnrollCamper,
+    // Custom fields
+    manageCustomFields:manageCustomFields,_addCustomField:_addCustomField,_removeCustomField:_removeCustomField,
+    // Documents
+    uploadDocument:uploadDocument,_removeDoc:_removeDoc,
+    // Scholarships
+    addScholarship:addScholarship,
+    // Duplicate detection
+    detectDuplicates:detectDuplicates,mergeCampers:mergeCampers,
 };
 })();
