@@ -2110,8 +2110,23 @@
                 const gradeQueues = {};
                 allGrades.forEach(grade => {
                     const bunks = getBunksForGrade(grade, divisions).map(String);
-                    // Shuffle bunks for variety across iterations
-                    const shuffled = _iterSeed > 0 ? seedShuffle([...bunks], _iterSeed) : [...bunks];
+                    // ★ v10.0: Repair-driven — prioritize failed bunks in subsequent iterations
+                    var shuffled;
+                    if (totalIters > 1 && Object.keys(repairTargets.failedBunks).length > 0) {
+                        shuffled = [...bunks].sort(function(a, b) {
+                            var aFailed = repairTargets.failedBunks[a] ? 1 : 0;
+                            var bFailed = repairTargets.failedBunks[b] ? 1 : 0;
+                            if (aFailed !== bFailed) return bFailed - aFailed; // failed first
+                            return 0;
+                        });
+                        // Still shuffle within the groups for variety
+                        var failedGroup = shuffled.filter(function(b) { return repairTargets.failedBunks[b]; });
+                        var okGroup = shuffled.filter(function(b) { return !repairTargets.failedBunks[b]; });
+                        if (_iterSeed > 0) { seedShuffle(failedGroup, _iterSeed); seedShuffle(okGroup, _iterSeed); }
+                        shuffled = failedGroup.concat(okGroup);
+                    } else {
+                        shuffled = _iterSeed > 0 ? seedShuffle([...bunks], _iterSeed) : [...bunks];
+                    }
                     gradeQueues[grade] = shuffled;
                 });
 
@@ -2791,6 +2806,28 @@
                 return gaps;
             }
 
+            // ★ v10.0: TIMELINE INTEGRITY GUARD — sort + fix overlaps after every insertion
+            function ensureTimelineIntegrity(bunk) {
+                var tl = bunkTimelines[bunk];
+                if (!tl || tl.length < 2) return;
+                tl.sort(function(a, b) { return a.startMin - b.startMin; });
+                for (var i = 0; i < tl.length - 1; i++) {
+                    if (tl[i].endMin > tl[i+1].startMin) {
+                        // Trim the non-fixed block to resolve overlap
+                        if (!tl[i]._fixed && tl[i+1]._fixed) {
+                            tl[i].endMin = tl[i+1].startMin;
+                        } else if (!tl[i+1]._fixed) {
+                            tl[i+1].startMin = tl[i].endMin;
+                        } else {
+                            // Both fixed — trim later block as last resort
+                            tl[i+1].startMin = tl[i].endMin;
+                        }
+                    }
+                }
+                // Remove zero-duration or negative-duration blocks
+                bunkTimelines[bunk] = tl.filter(function(b) { return b.endMin > b.startMin; });
+            }
+
             // ══════════════════════════════════════════════════════════
             // STEP 1 & 2: Extract walls + place needs (swim/snack/custom/rotation)
             // ══════════════════════════════════════════════════════════
@@ -2818,6 +2855,11 @@
 
                     var sportC = shoppingList.sports?.constraints || resolveConstraints(null, 'sport');
                     var fillMinDur = Math.max(sportC.dMin || 25, TYPE_FLOORS.sport || 25);
+                    // ★ v10.0: Adaptive fillMinDur — allow shorter sports for constrained bunks
+                    var bunkFeasibility = feasibilityMap ? feasibilityMap[bunk] : null;
+                    if (bunkFeasibility && bunkFeasibility.slack < 30) {
+                        fillMinDur = Math.max(20, fillMinDur - 5);
+                    }
                     var sportCeiling = Math.min(sportC.dMax || 60, TYPE_CEILINGS.sport || 60, 60);
                     var priorityList = shoppingList.sports?.priorityList || [];
                     var swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : false;
@@ -3077,7 +3119,7 @@
                     // Main solver: MCV + LCV + AC-3 + backtracking
                     function solveCSP(needsList, tmpl, gs, ge, fMin, depth, nogoods) {
                         if (needsList.length === 0) return [];
-                        if (depth > 10) return null; // safety limit
+                        if (depth > 15) return null; // ★ v10.0: increased from 10 to handle complex bunks
 
                         // AC-3: check all needs have at least one option
                         if (!arcConsistent(needsList, tmpl, gs, ge, fMin)) return null;
@@ -3099,8 +3141,8 @@
                         var remaining = needsList.slice(0, bestIdx).concat(needsList.slice(bestIdx + 1));
 
                         // Intelligent scoring: simulate future consequences of each position
-                        // Limit to top 8 candidates to keep performance reasonable
-                        var candidateLimit = Math.min(positions.length, 8);
+                        // ★ v10.0: Adaptive candidate limit — explore more at top of tree, prune deeper
+                        var candidateLimit = Math.min(positions.length, depth < 4 ? 12 : (depth < 8 ? 8 : 5));
                         // Pre-sort by dead gaps to get best candidates first
                         positions.sort(function(a, b) { return a.deadGaps - b.deadGaps; });
                         var topPositions = positions.slice(0, candidateLimit);
@@ -3120,6 +3162,15 @@
 
                             var simBlock = { startMin: pos.start, endMin: pos.start + pos.dur };
                             var simTmpl = tmpl.concat([simBlock]);
+
+                            // ★ v10.0: Inline forward check — prune before recursing
+                            var wipeout = false;
+                            for (var fc = 0; fc < remaining.length; fc++) {
+                                if (getValidPositions(remaining[fc], simTmpl, gs, ge, fMin).length === 0) {
+                                    wipeout = true; break;
+                                }
+                            }
+                            if (wipeout) { nogoods[nogoodKey] = true; continue; }
 
                             var result = solveCSP(remaining, simTmpl, gs, ge, fMin, depth + 1, nogoods);
                             if (result !== null) {
@@ -3652,6 +3703,10 @@
                     }
                 }
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                // ★ v10.0: Integrity check after below-dMin sweep
+                bunkTimelines[vBunk] = vTmpl;
+                ensureTimelineIntegrity(vBunk);
+                vTmpl = bunkTimelines[vBunk];
 
                 var vGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
                 if (vGaps.length > 0) {
@@ -3740,6 +3795,10 @@
                     }
                 }
                 hTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                // ★ v10.0: Integrity check after self-healing
+                bunkTimelines[hBunk] = hTmpl;
+                ensureTimelineIntegrity(hBunk);
+                hTmpl = bunkTimelines[hBunk];
             }
             if (healCount > 0) log('[Phase3] 🔧 Self-healed ' + healCount + ' missing layers');
 
@@ -3874,8 +3933,8 @@
         // SCORING ENGINE
         // =====================================================================
 
-        const MAX_ITERATIONS = 40;
-        const STALE_STOP = 12;
+        const MAX_ITERATIONS = 20;  // ★ v10.0: reduced from 40 — repair-driven iteration converges faster
+        const STALE_STOP = 8;     // ★ v10.0: reduced from 12
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
 
@@ -3904,6 +3963,37 @@
                 // Lower avg score = better (scores are penalties). Invert for bonus.
                 var avgScore = p.totalScore / p.count;
                 return Math.max(0, 100 - Math.floor(avgScore / 1000));
+            }
+        };
+
+        // ★ v10.0: REPAIR-DRIVEN ITERATION — track what failed to bias next iteration
+        var repairTargets = {
+            failedBunks: {},
+            successfulBunks: {},
+            update: function(timelines) {
+                this.failedBunks = {};
+                this.successfulBunks = {};
+                var self = this;
+                Object.keys(timelines).forEach(function(bunk) {
+                    var tl = (timelines[bunk] || []).slice();
+                    var hasSpecial = tl.some(function(b) { return b.type === 'special'; });
+                    var hasSwim = tl.some(function(b) { return b.type === 'swim'; });
+                    var hasSnack = tl.some(function(b) { return b.type === 'snacks' || b.type === 'snack'; });
+                    var deadGaps = 0;
+                    tl.sort(function(a, b) { return a.startMin - b.startMin; });
+                    for (var i = 0; i < tl.length - 1; i++) {
+                        var gap = tl[i+1].startMin - tl[i].endMin;
+                        if (gap > 0 && gap < 25) deadGaps++;
+                    }
+                    if (!hasSpecial || !hasSwim || !hasSnack || deadGaps > 0) {
+                        self.failedBunks[bunk] = {
+                            missingSpecial: !hasSpecial, deadGaps: deadGaps,
+                            missingLayers: [!hasSwim && 'swim', !hasSnack && 'snack'].filter(Boolean)
+                        };
+                    } else {
+                        self.successfulBunks[bunk] = true;
+                    }
+                });
             }
         };
 
@@ -4311,7 +4401,7 @@
                     tripBlockCount++;
                 });
             });
-            if (tripBlockCount > 0) allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
+            if (tripBlockCount > 0) allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => ensureTimelineIntegrity(bunk)));
 
             // ★ v7.0: Inject bunk-specific overrides as pinned blocks
             // Re-load fresh from localStorage to catch recently added overrides
@@ -4387,7 +4477,7 @@
             });
             if (overrideBlockCount > 0) {
                 log('[P0] Injected ' + overrideBlockCount + ' bunk overrides');
-                allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
+                allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => ensureTimelineIntegrity(bunk)));
             }
 
             buildResourceCalendar(_iterSeed);
@@ -4463,6 +4553,28 @@
             const staggeredGrades = [...allGrades].sort((a, b) => ((staggerPlan[a] || {}).offset || 0) - ((staggerPlan[b] || {}).offset || 0));
 
             todaysSwimmers = {};
+
+            // ★ v10.0: FEASIBILITY PRE-COMPUTATION — know which bunks are tight before solving
+            var feasibilityMap = {};
+            allGrades.forEach(function(fGrade) {
+                var fgs = parseTimeToMinutes(divisions[fGrade]?.startTime) || 540;
+                var fge = parseTimeToMinutes(divisions[fGrade]?.endTime) || 960;
+                getBunksForGrade(fGrade, divisions).forEach(function(fBunk) {
+                    var pinnedDur = 0;
+                    (bunkTimelines[fBunk] || []).forEach(function(b) { pinnedDur += (b.endMin - b.startMin); });
+                    var availableMin = (fge - fgs) - pinnedDur;
+                    var sl = shoppingLists[fBunk] || {};
+                    var requiredMin = 0;
+                    if (sl.swim) requiredMin += (sl.swim?.constraints?.dMin || 30);
+                    if (sl.snack) requiredMin += (sl.snack?.constraints?.dMin || 15);
+                    if (sl.specials && sl.specials.length) requiredMin += 20;
+                    var sportMin = sl.sports?.constraints?.dMin || 25;
+                    var sportSlots = Math.max(1, Math.floor((availableMin - requiredMin) / sportMin));
+                    requiredMin += sportSlots * sportMin;
+                    var slack = availableMin - requiredMin;
+                    feasibilityMap[fBunk] = { availableMin: availableMin, requiredMin: requiredMin, slack: slack, grade: fGrade };
+                });
+            });
             staggeredGrades.forEach(grade => {
                 const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
                 if (swimLayer) {
@@ -4474,115 +4586,203 @@
             // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
             // By converting these to immovable walls BEFORE the packer runs,
             // no bunk can steal specials from other bunks during gap-fill.
+            // ★ v10.0: SMART SPECIAL PLACEMENT — multi-position search with full feasibility simulation
+            // Instead of trying ONE position and giving up, tries ALL valid positions and picks the best.
             {
                 let preplacedCount = 0;
                 let preplacedByGrade = {};
-                allGrades.forEach(grade => {
+
+                // Helper: compute gaps between walls
+                function spComputeGaps(walls, gs, ge) {
+                    var sorted = walls.slice().sort(function(a, b) { return a.s - b.s; });
+                    var gaps = [], cur = gs;
+                    for (var i = 0; i < sorted.length; i++) {
+                        if (sorted[i].s > cur) gaps.push({ s: cur, e: sorted[i].s });
+                        cur = Math.max(cur, sorted[i].e);
+                    }
+                    if (cur < ge) gaps.push({ s: cur, e: ge });
+                    return gaps;
+                }
+                // Helper: check if a required layer can fit in any gap
+                function spCanLayerFit(gaps, ll) {
+                    var lt = (ll.type || '').toLowerCase();
+                    var lc = resolveConstraints(ll, lt);
+                    var needDMin = lc.dMin || 15;
+                    for (var g = 0; g < gaps.length; g++) {
+                        var os = Math.max(gaps[g].s, ll.startMin);
+                        var oe = Math.min(gaps[g].e, ll.endMin);
+                        if (oe - os >= needDMin) return true;
+                    }
+                    return false;
+                }
+
+                // Process grades in most-constrained-first order
+                var gradesByConstraint = allGrades.slice().sort(function(a, b) {
+                    var aSlack = 0, bSlack = 0, aCount = 0, bCount = 0;
+                    getBunksForGrade(a, divisions).forEach(function(bk) {
+                        var f = feasibilityMap[bk]; if (f) { aSlack += f.slack; aCount++; }
+                    });
+                    getBunksForGrade(b, divisions).forEach(function(bk) {
+                        var f = feasibilityMap[bk]; if (f) { bSlack += f.slack; bCount++; }
+                    });
+                    return (aCount ? aSlack / aCount : 999) - (bCount ? bSlack / bCount : 999);
+                });
+
+                gradesByConstraint.forEach(grade => {
                     preplacedByGrade[grade] = 0;
-                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                    var gradeLayers = layersByGrade[grade] || [];
+                    var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+
+                    // Sort bunks: most constrained first
+                    var bunkOrder = getBunksForGrade(grade, divisions).slice();
+                    bunkOrder.sort(function(a, b) {
+                        var fa = feasibilityMap[a], fb = feasibilityMap[b];
+                        return (fa ? fa.slack : 999) - (fb ? fb.slack : 999);
+                    });
+
+                    bunkOrder.forEach(bunk => {
                         const draft = draftResults[bunk];
                         if (!draft || !draft.specials || !draft.specials.length) return;
-                        // Only take 1 special per bunk (the first one from the fair draft)
                         const special = draft.specials[0];
                         if (!special || !special.claimedTime) return;
-                        const sStart = special.claimedTime.startMin;
-                        const sEnd = special.claimedTime.endMin;
+                        const specialDur = special.duration || (special.claimedTime.endMin - special.claimedTime.startMin);
                         const fieldName = special.claimedField || special.location;
+                        const draftStart = special.claimedTime.startMin;
 
-                        // ★ v8.1: Only skip special if it CAUSES a required layer to become unplaceable.
-                        // Compare gaps BEFORE vs AFTER adding the special.
-                        const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                        const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-
-                        function computeGaps(walls, gs, ge) {
-                            var sorted = walls.slice().sort(function(a, b) { return a.s - b.s; });
-                            var gaps = [], cur = gs;
-                            for (var i = 0; i < sorted.length; i++) {
-                                if (sorted[i].s > cur) gaps.push({ s: cur, e: sorted[i].s });
-                                cur = Math.max(cur, sorted[i].e);
-                            }
-                            if (cur < ge) gaps.push({ s: cur, e: ge });
-                            return gaps;
-                        }
-                        function canLayerFit(gaps, ll) {
-                            var lt = (ll.type || '').toLowerCase();
-                            var lc = resolveConstraints(ll, lt);
-                            var needDMin = lc.dMin || 15;
-                            for (var g = 0; g < gaps.length; g++) {
-                                var os = Math.max(gaps[g].s, ll.startMin);
-                                var oe = Math.min(gaps[g].e, ll.endMin);
-                                if (oe - os >= needDMin) return true;
-                            }
-                            return false;
-                        }
-
-                        const existingWalls = (bunkTimelines[bunk] || []).map(w => ({ s: w.startMin, e: w.endMin }));
-                        const withSpecial = existingWalls.concat([{ s: sStart, e: sEnd }]);
-                        const gapsBefore = computeGaps(existingWalls, gradeStart, gradeEnd);
-                        const gapsAfter = computeGaps(withSpecial, gradeStart, gradeEnd);
-
-                        const gradeLayers = layersByGrade[grade] || [];
-                        let specialCausesConflict = false;
-                        for (const ll of gradeLayers) {
-                            const lt = (ll.type || '').toLowerCase();
-                            if (!['swim', 'snack', 'snacks', 'custom'].includes(lt)) continue;
-                            if (lt === 'custom' && ll._classification === 'pinned') continue;
-                            if (ll.startMin == null || ll.endMin == null) continue;
-                            const fittedBefore = canLayerFit(gapsBefore, ll);
-                            const fittedAfter = canLayerFit(gapsAfter, ll);
-                            // Only block if the layer COULD fit before but CAN'T after
-                            if (fittedBefore && !fittedAfter) {
-                                specialCausesConflict = true;
-                                log('[Phase2.5] Skipping special "' + special.name + '" for bunk ' + bunk + ' — would block ' + lt);
-                                break;
-                            }
-                        }
-                        if (specialCausesConflict) return;
-
-                        // ★ v8.2: Reject placement if it creates dead gaps (unfillable remainders).
-                        // If special at 11:00-11:20 with league at 11:30 → 10-min dead gap.
-                        // The system can't place a 20-min activity there. Skip pre-placement
-                        // and let Phase 3's smart positioning find a better spot.
                         var sportFillMin = Math.max((shoppingLists[bunk]?.sports?.constraints?.dMin || 25), TYPE_FLOORS.sport || 25);
-                        var afterGaps = computeGaps(withSpecial, gradeStart, gradeEnd);
-                        var hasDeadGap = false;
-                        for (var dg = 0; dg < afterGaps.length; dg++) {
-                            var dgSize = afterGaps[dg].e - afterGaps[dg].s;
-                            if (dgSize > 0 && dgSize < sportFillMin) {
-                                hasDeadGap = true;
-                                break;
+                        // ★ v10.0: Use adaptive fillMinDur for constrained bunks
+                        var bf = feasibilityMap[bunk];
+                        if (bf && bf.slack < 30) sportFillMin = Math.max(20, sportFillMin - 5);
+
+                        var existingWalls = (bunkTimelines[bunk] || []).map(w => ({ s: w.startMin, e: w.endMin }));
+                        var allGapsForBunk = spComputeGaps(existingWalls, gradeStart, gradeEnd);
+
+                        // ★ Try ALL valid positions for this special
+                        var candidatePositions = [];
+                        for (var gi = 0; gi < allGapsForBunk.length; gi++) {
+                            var gap = allGapsForBunk[gi];
+                            if (gap.e - gap.s < specialDur) continue;
+
+                            for (var pos = gap.s; pos + specialDur <= gap.e; pos += 5) {
+                                // Resource check: can this special run at this time?
+                                if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) continue;
+
+                                // Simulate adding special at this position
+                                var withSpecial = existingWalls.concat([{ s: pos, e: pos + specialDur }]);
+                                var gapsAfter = spComputeGaps(withSpecial, gradeStart, gradeEnd);
+
+                                // HARD CHECK: can all required layers still fit?
+                                var allLayersFit = true;
+                                for (var li = 0; li < gradeLayers.length; li++) {
+                                    var ll = gradeLayers[li];
+                                    var lt = (ll.type || '').toLowerCase();
+                                    if (!['swim', 'snack', 'snacks', 'custom'].includes(lt)) continue;
+                                    if (lt === 'custom' && ll._classification === 'pinned') continue;
+                                    if (ll.startMin == null || ll.endMin == null) continue;
+                                    if (!spCanLayerFit(gapsAfter, ll)) { allLayersFit = false; break; }
+                                }
+                                if (!allLayersFit) continue;
+
+                                // Score this position
+                                var score = 0;
+                                var deadGapCount = 0;
+                                var gapSizes = [];
+                                for (var ag = 0; ag < gapsAfter.length; ag++) {
+                                    var gSize = gapsAfter[ag].e - gapsAfter[ag].s;
+                                    if (gSize <= 0) continue;
+                                    gapSizes.push(gSize);
+                                    if (gSize < sportFillMin) { deadGapCount++; score -= 500; }
+                                    else { score += 50; } // fillable gap bonus
+                                }
+
+                                // Wall-aligned bonus (flush against existing blocks)
+                                var leftGap = pos - gap.s;
+                                var rightGap = gap.e - (pos + specialDur);
+                                if (leftGap === 0 || rightGap === 0) score += 100;
+                                if (leftGap === 0 && rightGap === 0) score += 50; // perfect fit
+
+                                // Balance: prefer even gap distribution
+                                if (gapSizes.length >= 2) {
+                                    var totalGap = 0;
+                                    for (var gs2 = 0; gs2 < gapSizes.length; gs2++) totalGap += gapSizes[gs2];
+                                    var avgGap = totalGap / gapSizes.length;
+                                    var variance = 0;
+                                    for (var vs = 0; vs < gapSizes.length; vs++) variance += (gapSizes[vs] - avgGap) * (gapSizes[vs] - avgGap);
+                                    score -= Math.floor(variance / 100);
+                                }
+
+                                // Draft position bonus (preserve GlobalPlanner's intent)
+                                if (pos === draftStart) score += 200;
+
+                                candidatePositions.push({ pos: pos, score: score, deadGapCount: deadGapCount });
+                            }
+
+                            // Also try end-aligned position (may not be on 5-min boundary)
+                            var endPos = gap.e - specialDur;
+                            if (endPos >= gap.s && endPos !== gap.s && endPos % 5 !== 0) {
+                                if (canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)) {
+                                    var withSpecialEnd = existingWalls.concat([{ s: endPos, e: endPos + specialDur }]);
+                                    var gapsAfterEnd = spComputeGaps(withSpecialEnd, gradeStart, gradeEnd);
+                                    var layersFitEnd = true;
+                                    for (var lei = 0; lei < gradeLayers.length; lei++) {
+                                        var lle = gradeLayers[lei]; var lte = (lle.type || '').toLowerCase();
+                                        if (!['swim', 'snack', 'snacks', 'custom'].includes(lte)) continue;
+                                        if (lte === 'custom' && lle._classification === 'pinned') continue;
+                                        if (lle.startMin == null || lle.endMin == null) continue;
+                                        if (!spCanLayerFit(gapsAfterEnd, lle)) { layersFitEnd = false; break; }
+                                    }
+                                    if (layersFitEnd) {
+                                        var endScore = 100; // wall-aligned
+                                        var endDeadGaps = 0;
+                                        for (var eg = 0; eg < gapsAfterEnd.length; eg++) {
+                                            var egSize = gapsAfterEnd[eg].e - gapsAfterEnd[eg].s;
+                                            if (egSize > 0 && egSize < sportFillMin) { endDeadGaps++; endScore -= 500; }
+                                            else if (egSize > 0) endScore += 50;
+                                        }
+                                        if (endPos === draftStart) endScore += 200;
+                                        candidatePositions.push({ pos: endPos, score: endScore, deadGapCount: endDeadGaps });
+                                    }
+                                }
                             }
                         }
-                        if (hasDeadGap) {
-                            log('[Phase2.5] Skipping special "' + special.name + '" for bunk ' + bunk + ' — creates dead gap < ' + sportFillMin + 'min');
-                            return;
-                        }
 
-                        // Add as immovable wall in bunkTimelines
+                        // Pick the best position
+                        if (candidatePositions.length === 0) return; // defer to CSP
+
+                        candidatePositions.sort(function(a, b) {
+                            if (a.deadGapCount !== b.deadGapCount) return a.deadGapCount - b.deadGapCount;
+                            return b.score - a.score;
+                        });
+                        var best = candidatePositions[0];
+
+                        // Place the special at the best position
+                        var bestStart = best.pos;
+                        var bestEnd = bestStart + specialDur;
+
                         bunkTimelines[bunk].push({
-                            startMin: sStart, endMin: sEnd,
+                            startMin: bestStart, endMin: bestEnd,
                             type: 'special', event: special.name,
                             layer: special._layer || null,
                             _classification: 'pinned', _committed: true, _fixed: true,
                             _gradeWide: false, _activityLocked: true, _noBacktrack: false,
                             _assignedSpecial: special.name,
                             _specialLocation: fieldName,
-                            _specialDuration: special.duration || (sEnd - sStart),
+                            _specialDuration: specialDur,
                             _isSpecialLocation: true, _source: 'pre-placed'
                         });
 
-                        // Register in resource tracker
-                        registerSpecialUsage(special.name, grade, sStart, sEnd);
-                        registerCrossGrade(grade, 'special', sStart, sEnd, special.name);
+                        registerSpecialUsage(special.name, grade, bestStart, bestEnd);
+                        registerCrossGrade(grade, 'special', bestStart, bestEnd, special.name);
 
-                        // Claim field
                         if (fieldName && fieldLedger[fieldName]) {
                             fieldLedger[fieldName].claims.push({
                                 bunk: bunk, grade: grade, activity: special.name,
-                                startMin: sStart, endMin: sEnd
+                                startMin: bestStart, endMin: bestEnd
                             });
                         }
 
+                        ensureTimelineIntegrity(bunk);
                         preplacedCount++;
                         preplacedByGrade[grade]++;
                     });
@@ -4763,6 +4963,9 @@
 
             if (improved || totalIters <= 3 || totalIters % 10 === 0) {
                log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate);            }
+
+            // ★ v10.0: Update repair targets for next iteration
+            repairTargets.update(bunkTimelines);
 
             if (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
 
