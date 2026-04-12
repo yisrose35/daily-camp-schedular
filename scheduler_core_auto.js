@@ -1119,8 +1119,9 @@
                 if (t === 'swim') registerPoolUsage(grade, layer.startMin, layer.endMin);
                 if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
+            // ★ v11.3: Validate all timelines after pinned layer placement
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk =>
-                bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
+                ensureTimelineIntegrity(bunk)));
             return count;
         }
 
@@ -1181,7 +1182,7 @@
                         layer, _classification: 'windowed', _committed: true,
                         _gradeWide: true, _activityLocked: true, _noBacktrack: true
                     });
-                    bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+                    ensureTimelineIntegrity(bunk);
                 });
                 return ss;
             }
@@ -1243,7 +1244,7 @@
                     layer, _classification: 'windowed', _committed: true,
                     _gradeWide: true, _activityLocked: true, _noBacktrack: true
                 });
-                bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+                ensureTimelineIntegrity(bunk);
             });
             if (leagueName) sharedLeagueTime[leagueName] = bestStart;
             registerCrossGrade(grade, 'league', bestStart, bestStart + expandedDur);
@@ -2716,19 +2717,94 @@
         // =====================================================================
         // ★ v10.0: TIMELINE INTEGRITY GUARD — sort + fix overlaps after every insertion
         // Defined at outer scope so Phase 0, Phase 2.5, and Phase 3 can all use it.
+        // ★ v11.3: COMPREHENSIVE TIMELINE VALIDATOR
+        // Single function that fixes overlaps, dMin/dMax, and window violations.
+        // Called after every major mutation. This is the system's safety net.
         function ensureTimelineIntegrity(bunk) {
             var tl = bunkTimelines[bunk];
-            if (!tl || tl.length < 2) return;
+            if (!tl || tl.length === 0) return;
+
+            // Pass 1: Sort and fix overlaps
             tl.sort(function(a, b) { return a.startMin - b.startMin; });
             for (var i = 0; i < tl.length - 1; i++) {
                 if (tl[i].endMin > tl[i+1].startMin) {
                     if (!tl[i]._fixed && tl[i+1]._fixed) {
                         tl[i].endMin = tl[i+1].startMin;
-                    } else if (!tl[i+1]._fixed) {
+                    } else if (!tl[i+1]._fixed && tl[i]._fixed) {
                         tl[i+1].startMin = tl[i].endMin;
+                    } else if (!tl[i]._fixed && !tl[i+1]._fixed) {
+                        // Both flexible — keep longer, trim shorter
+                        var dur1 = tl[i].endMin - tl[i].startMin;
+                        var dur2 = tl[i+1].endMin - tl[i+1].startMin;
+                        if (dur1 >= dur2) tl[i+1].startMin = tl[i].endMin;
+                        else tl[i].endMin = tl[i+1].startMin;
                     } else {
+                        // Both fixed — force trim the later one
                         tl[i+1].startMin = tl[i].endMin;
                     }
+                }
+            }
+
+            // Pass 2: Remove zero/negative duration blocks
+            tl = tl.filter(function(b) { return b.endMin > b.startMin; });
+
+            // Pass 3: Enforce dMin/dMax and window for non-fixed blocks
+            for (var j = 0; j < tl.length; j++) {
+                var blk = tl[j];
+                if (blk._fixed) continue;
+                var bt = (blk.type || '').toLowerCase();
+                var dur = blk.endMin - blk.startMin;
+
+                // Resolve constraints
+                var constraints = resolveConstraints(blk.layer, bt, blk);
+                var dMin = constraints.dMin;
+                var dMax = constraints.dMax;
+                blk.dMin = dMin;
+                blk.dMax = dMax;
+
+                // Enforce layer window
+                if (blk.layer && !['sport', 'slot'].includes(bt)) {
+                    if (blk.layer.startMin != null && blk.startMin < blk.layer.startMin) {
+                        blk.startMin = blk.layer.startMin;
+                    }
+                    if (blk.layer.endMin != null && blk.endMin > blk.layer.endMin) {
+                        blk.endMin = blk.layer.endMin;
+                    }
+                    dur = blk.endMin - blk.startMin;
+                    if (dur <= 0) { tl.splice(j, 1); j--; continue; }
+                }
+
+                // Enforce dMax
+                if (dur > dMax) {
+                    blk.endMin = blk.startMin + dMax;
+                    blk.endMin = Math.round(blk.endMin / 5) * 5;
+                    dur = blk.endMin - blk.startMin;
+                }
+
+                // Enforce dMin — try extending into adjacent gap
+                if (dur < dMin) {
+                    var nextS = (j < tl.length - 1) ? tl[j+1].startMin : 1440;
+                    var availR = nextS - blk.endMin;
+                    if (dur + availR >= dMin && blk.startMin + dMin <= nextS) {
+                        blk.endMin = blk.startMin + Math.min(dMin, dMax);
+                        blk.endMin = Math.round(blk.endMin / 5) * 5;
+                    } else {
+                        var prevE = (j > 0) ? tl[j-1].endMin : 0;
+                        var availL = blk.startMin - prevE;
+                        if (dur + availL >= dMin) {
+                            blk.startMin = blk.endMin - Math.min(dMin, dMax);
+                            blk.startMin = Math.round(blk.startMin / 5) * 5;
+                        }
+                    }
+                }
+            }
+
+            // Pass 4: Final overlap cleanup (extensions may have created new overlaps)
+            tl.sort(function(a, b) { return a.startMin - b.startMin; });
+            for (var k = 0; k < tl.length - 1; k++) {
+                if (tl[k].endMin > tl[k+1].startMin) {
+                    if (tl[k]._fixed) tl[k+1].startMin = tl[k].endMin;
+                    else tl[k].endMin = tl[k+1].startMin;
                 }
             }
             bunkTimelines[bunk] = tl.filter(function(b) { return b.endMin > b.startMin; });
@@ -2768,24 +2844,40 @@
                 if (opts.endMin <= opts.startMin) opts.endMin = opts.startMin + 5;
 
                 var blockType = (opts.type || 'slot').toLowerCase();
-                if (['sport', 'slot'].includes(blockType) && !opts._fixed) {
+
+                // ★ v11.3: Enforce dMin/dMax for ALL block types, not just sport/slot.
+                // Fixed blocks are still exempt (pinned by user), but everything else
+                // must respect its constraints.
+                if (!opts._fixed) {
                     var blockDur = opts.endMin - opts.startMin;
-                    // ★ v10.5: Use resolved constraints — never guess with fallback constants.
-                    // opts.dMax/dMin should always be set by the caller from resolveConstraints.
                     var maxDur = opts.dMax || (TYPE_CEILINGS[blockType] || 60);
-                    var minDur = opts.dMin || (TYPE_FLOORS[blockType] || 25);
+                    var minDur = opts.dMin || (TYPE_FLOORS[blockType] || 20);
+
+                    // Enforce layer window if available
+                    if (opts.layer) {
+                        if (opts.layer.startMin != null && opts.startMin < opts.layer.startMin) {
+                            opts.startMin = Math.round(opts.layer.startMin / 5) * 5;
+                        }
+                        if (opts.layer.endMin != null && opts.endMin > opts.layer.endMin) {
+                            opts.endMin = Math.round(opts.layer.endMin / 5) * 5;
+                        }
+                        blockDur = opts.endMin - opts.startMin;
+                        if (blockDur <= 0) return null;
+                    }
 
                     // Enforce dMax
                     if (blockDur > maxDur) {
                         opts.endMin = opts.startMin + maxDur;
-                        blockDur = maxDur;
+                        opts.endMin = Math.round(opts.endMin / 5) * 5;
+                        blockDur = opts.endMin - opts.startMin;
                     }
                     // Enforce dMin — extend to meet minimum if possible
                     if (minDur > 0 && blockDur < minDur) {
                         var extended = opts.startMin + minDur;
-                        // Snap the extension to 5-min
                         extended = Math.round(extended / 5) * 5;
-                        if (extended - opts.startMin <= maxDur) {
+                        // Respect layer window ceiling when extending
+                        var extCeiling = (opts.layer && opts.layer.endMin != null) ? opts.layer.endMin : Infinity;
+                        if (extended - opts.startMin <= maxDur && extended <= extCeiling) {
                             opts.endMin = extended;
                             blockDur = extended - opts.startMin;
                         }
@@ -4415,8 +4507,8 @@
                     eBlk.dMin = eDMin;
                     eBlk.dMax = eDMax;
 
-                    // Fix dMax violations: shrink to dMax, create remainder block
-                    if (eDur > eDMax && ['sport', 'slot'].includes(eType)) {
+                    // ★ v11.3: Fix dMax violations for ALL types, not just sport/slot
+                    if (eDur > eDMax) {
                         var eOrigEnd = eBlk.endMin;
                         eBlk.endMin = eBlk.startMin + eDMax;
                         eBlk.endMin = Math.round(eBlk.endMin / 5) * 5;
@@ -4454,8 +4546,8 @@
                         if (eDur <= 0) { eTmpl.splice(ej, 1); ej--; continue; }
                     }
 
-                    // Fix dMin violations: try to extend into adjacent free space
-                    if (eDur < eDMin && ['sport', 'slot'].includes(eType)) {
+                    // ★ v11.3: Fix dMin violations for ALL types
+                    if (eDur < eDMin) {
                         var eNextStart = (ej < eTmpl.length - 1) ? eTmpl[ej+1].startMin : (eMeta.gradeEnd || 960);
                         var eAvailR = eNextStart - eBlk.endMin;
                         if (eDur + eAvailR >= eDMin) {
@@ -4525,7 +4617,8 @@
                         _rotationEventColor: block._rotationEventColor || null
                     });
                 });
-                bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin);
+                // ★ v11.3: Validate after template execution
+                ensureTimelineIntegrity(bunk);
             });
         }
 
