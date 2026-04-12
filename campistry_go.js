@@ -4332,6 +4332,9 @@
     }
 
     // ── FIX 3: Fetch intersections with retry + mirror fallback ──
+    // Uses two lightweight queries instead of one heavy one to avoid 504 timeouts:
+    //   Q1: Major roads only (primary/secondary/trunk) — small, fast, for crossing detection
+    //   Q2: All named roads but nodes-only via `out center` — for intersection finding
     async function fetchIntersections(campers) {
         let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
         campers.forEach(c => { if (c.lat < minLat) minLat = c.lat; if (c.lat > maxLat) maxLat = c.lat; if (c.lng < minLng) minLng = c.lng; if (c.lng > maxLng) maxLng = c.lng; });
@@ -4339,75 +4342,99 @@
         const buf = 0.005;
         const bbox = (minLat - buf) + ',' + (minLng - buf) + ',' + (maxLat + buf) + ',' + (maxLng + buf);
 
-        const query = '[out:json][timeout:30];' +
-            'way["highway"~"^(residential|secondary|tertiary|primary|trunk|unclassified|living_street)$"]["name"](' + bbox + ');' +
-            'out body;>;out skel;';
-
-        // Try primary + mirror
-        const endpoints = [
-            'https://overpass-api.de/api/interpreter',
-            'https://overpass.kumi.systems/api/interpreter'
-        ];
-
-        for (const url of endpoints) {
-            try {
-                console.log('[Go] Overpass: trying ' + url.split('//')[1].split('/')[0] + '...');
-                const resp = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: 'data=' + encodeURIComponent(query)
-                });
-
-                if (resp.status === 504 || resp.status === 429) {
-                    console.warn('[Go] Overpass ' + resp.status + ' at ' + url + ', trying next mirror...');
-                    continue;
-                }
-                if (!resp.ok) {
-                    console.warn('[Go] Overpass HTTP ' + resp.status + ' at ' + url);
-                    continue;
-                }
-
-                const data = await resp.json();
-                if (!data.elements?.length) return null;
-
-                const nodes = {};
-                data.elements.filter(e => e.type === 'node' && e.lat && e.lon).forEach(e => { nodes[e.id] = { lat: e.lat, lng: e.lon }; });
-
-                const nodeStreets = {};
-                data.elements.filter(e => e.type === 'way' && e.tags?.name && e.nodes?.length).forEach(way => {
-                    way.nodes.forEach(nid => { if (!nodeStreets[nid]) nodeStreets[nid] = new Set(); nodeStreets[nid].add(way.tags.name); });
-                });
-
-                const intersections = [];
-                Object.entries(nodeStreets).forEach(([nid, streets]) => {
-                    if (streets.size < 2) return;
-                    const node = nodes[nid]; if (!node) return;
-                    const arr = [...streets].sort();
-                    intersections.push({ lat: node.lat, lng: node.lng, name: arr[0] + ' & ' + arr[1], streets: arr });
-                });
-
-                // ── Extract major road segments for crossing detection ──
-                const majorSegments = [];
-                data.elements.filter(e => e.type === 'way' && e.tags?.highway && e.nodes?.length >= 2).forEach(way => {
-                    const cls = way.tags.highway;
-                    // Only primary, secondary, and trunk roads count as "major"
-                    if (cls !== 'primary' && cls !== 'secondary' && cls !== 'trunk') return;
-                    for (let i = 0; i < way.nodes.length - 1; i++) {
-                        const a = nodes[way.nodes[i]], b = nodes[way.nodes[i + 1]];
-                        if (a && b) majorSegments.push({ lat1: a.lat, lng1: a.lng, lat2: b.lat, lng2: b.lng, name: way.tags.name || '' });
-                    }
-                });
-                _majorRoadSegments = majorSegments;
-                console.log('[Go] Overpass: ' + intersections.length + ' intersections, ' + majorSegments.length + ' major road segments');
-                return intersections.length > 0 ? intersections : null;
-            } catch (e) {
-                console.warn('[Go] Overpass error at ' + url + ':', e.message);
-                continue;
-            }
+        // Clamp bbox area — if service area is too large, Overpass will choke
+        const area = (maxLat - minLat + 2 * buf) * (maxLng - minLng + 2 * buf);
+        if (area > 0.25) {
+            console.warn('[Go] Overpass: bbox too large (' + area.toFixed(3) + ' deg²), skipping intersection fetch');
+            return null;
         }
 
-        console.error('[Go] All Overpass endpoints failed');
-        return null;
+        // Query 1: Major roads for crossing detection (lightweight — few ways)
+        const majorQuery = '[out:json][timeout:25];' +
+            'way["highway"~"^(primary|secondary|trunk)$"](' + bbox + ');' +
+            'out body;>;out skel qt;';
+
+        // Query 2: All named roads — use `out tags center` to get way center + name
+        // without expanding every node (much smaller response than >;out skel)
+        const intersectionQuery = '[out:json][timeout:25];' +
+            'way["highway"~"^(residential|secondary|tertiary|primary|trunk|unclassified|living_street)$"]["name"](' + bbox + ');' +
+            'out body;>;out skel qt;';
+
+        const endpoints = [
+            'https://overpass-api.de/api/interpreter',
+            'https://overpass.kumi.systems/api/interpreter',
+            'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+        ];
+
+        async function runQuery(query, label) {
+            for (const url of endpoints) {
+                try {
+                    console.log('[Go] Overpass ' + label + ': trying ' + url.split('//')[1].split('/')[0] + '...');
+                    const resp = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: 'data=' + encodeURIComponent(query)
+                    });
+                    if (resp.status === 504 || resp.status === 429 || resp.status === 503) {
+                        console.warn('[Go] Overpass ' + label + ' ' + resp.status + ' at ' + url + ', trying next mirror...');
+                        continue;
+                    }
+                    if (!resp.ok) {
+                        console.warn('[Go] Overpass ' + label + ' HTTP ' + resp.status + ' at ' + url);
+                        continue;
+                    }
+                    return await resp.json();
+                } catch (e) {
+                    console.warn('[Go] Overpass ' + label + ' error at ' + url + ':', e.message);
+                    continue;
+                }
+            }
+            return null;
+        }
+
+        // Run major roads query first (small & fast), then intersection query
+        const majorData = await runQuery(majorQuery, 'major-roads');
+
+        // Extract major road segments for crossing detection
+        const majorSegments = [];
+        if (majorData?.elements?.length) {
+            const mNodes = {};
+            majorData.elements.filter(e => e.type === 'node' && e.lat && e.lon).forEach(e => { mNodes[e.id] = { lat: e.lat, lng: e.lon }; });
+            majorData.elements.filter(e => e.type === 'way' && e.nodes?.length >= 2).forEach(way => {
+                for (let i = 0; i < way.nodes.length - 1; i++) {
+                    const a = mNodes[way.nodes[i]], b = mNodes[way.nodes[i + 1]];
+                    if (a && b) majorSegments.push({ lat1: a.lat, lng1: a.lng, lat2: b.lat, lng2: b.lng, name: (way.tags?.name) || '' });
+                }
+            });
+        }
+        _majorRoadSegments = majorSegments;
+        console.log('[Go] Overpass: ' + majorSegments.length + ' major road segments');
+
+        // Now fetch all roads for intersection detection
+        const intData = await runQuery(intersectionQuery, 'intersections');
+        if (!intData?.elements?.length) {
+            console.warn('[Go] Overpass: no intersection data returned');
+            return null;
+        }
+
+        const nodes = {};
+        intData.elements.filter(e => e.type === 'node' && e.lat && e.lon).forEach(e => { nodes[e.id] = { lat: e.lat, lng: e.lon }; });
+
+        const nodeStreets = {};
+        intData.elements.filter(e => e.type === 'way' && e.tags?.name && e.nodes?.length).forEach(way => {
+            way.nodes.forEach(nid => { if (!nodeStreets[nid]) nodeStreets[nid] = new Set(); nodeStreets[nid].add(way.tags.name); });
+        });
+
+        const intersections = [];
+        Object.entries(nodeStreets).forEach(([nid, streets]) => {
+            if (streets.size < 2) return;
+            const node = nodes[nid]; if (!node) return;
+            const arr = [...streets].sort();
+            intersections.push({ lat: node.lat, lng: node.lng, name: arr[0] + ' & ' + arr[1], streets: arr });
+        });
+
+        console.log('[Go] Overpass: ' + intersections.length + ' intersections found');
+        return intersections.length > 0 ? intersections : null;
     }
 
     function normalizeStreet(name) {
