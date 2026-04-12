@@ -4808,6 +4808,92 @@
     // =========================================================================
     // RENDER ROUTE RESULTS
     // =========================================================================
+    // =========================================================================
+    // ROUTE QUALITY SCORING
+    // Composite metric: compactness, balance, walk fairness, time efficiency
+    // Displayed as letter grade per route and overall per shift
+    // =========================================================================
+    function computeRouteQuality(routes, campLat, campLng, maxWalkFt) {
+        if (!routes.length) return { routes: [], overall: { score: 0, grade: 'F' } };
+
+        const activeRoutes = routes.filter(r => r.stops.length > 0 && r.camperCount > 0);
+        if (!activeRoutes.length) return { routes: [], overall: { score: 0, grade: 'F' } };
+
+        const maxWalkMi = (maxWalkFt || 500) * 0.000189394;
+        const routeScores = activeRoutes.map(r => {
+            const stops = r.stops.filter(s => s.lat && s.lng && !s.isMonitor && !s.isCounselor);
+            if (!stops.length) return { busId: r.busId, score: 50, grade: 'C', compactness: 50, walkFairness: 100, timeEfficiency: 50 };
+
+            // Compactness: how tight are stops relative to max spread?
+            let maxPairDist = 0;
+            for (let i = 0; i < stops.length; i++) {
+                for (let j = i + 1; j < stops.length; j++) {
+                    const d = haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    if (d > maxPairDist) maxPairDist = d;
+                }
+            }
+            const avgCampDist = stops.reduce((s, st) => s + haversineMi(campLat, campLng, st.lat, st.lng), 0) / stops.length;
+            // Ideal: maxPairDist should be small relative to avgCampDist
+            const compactness = avgCampDist > 0 ? Math.max(0, Math.min(100, 100 * (1 - maxPairDist / (avgCampDist * 2)))) : 50;
+
+            // Walk fairness: based on reported walk distances (from stop audit)
+            // Use distance from stop to each camper's home as proxy
+            let maxWalkActual = 0;
+            stops.forEach(st => {
+                st.campers.forEach(c => {
+                    const a = D.addresses[c.name];
+                    if (a?.lat && a?.lng) {
+                        const d = manhattanMi(st.lat, st.lng, a.lat, a.lng);
+                        if (d > maxWalkActual) maxWalkActual = d;
+                    }
+                });
+            });
+            const walkFairness = maxWalkMi > 0 ? Math.max(0, Math.min(100, 100 * (1 - maxWalkActual / maxWalkMi))) : 100;
+
+            // Time efficiency: ratio of direct camp→farthest vs actual total duration
+            const farthestDist = Math.max(...stops.map(s => haversineMi(campLat, campLng, s.lat, s.lng)));
+            const directMin = farthestDist > 0 ? (farthestDist / (D.setup.avgSpeed || 25)) * 60 : 5;
+            const actualMin = r.totalDuration || directMin;
+            const timeEfficiency = actualMin > 0 ? Math.max(0, Math.min(100, 100 * (directMin / actualMin))) : 50;
+
+            const score = Math.round(compactness * 0.30 + walkFairness * 0.30 + timeEfficiency * 0.40);
+            return {
+                busId: r.busId, score, grade: scoreToGrade(score),
+                compactness: Math.round(compactness),
+                walkFairness: Math.round(walkFairness),
+                timeEfficiency: Math.round(timeEfficiency)
+            };
+        });
+
+        // Balance: how evenly distributed are kids across buses?
+        const counts = activeRoutes.map(r => r.camperCount);
+        const mean = counts.reduce((s, c) => s + c, 0) / counts.length;
+        const stddev = Math.sqrt(counts.reduce((s, c) => s + (c - mean) ** 2, 0) / counts.length);
+        const balance = mean > 0 ? Math.max(0, Math.min(100, Math.round(100 * (1 - stddev / mean)))) : 100;
+
+        // Overall = weighted average of all per-route scores + balance
+        const avgRouteScore = routeScores.reduce((s, r) => s + r.score, 0) / routeScores.length;
+        const overall = Math.round(avgRouteScore * 0.75 + balance * 0.25);
+
+        return {
+            routes: routeScores,
+            balance,
+            overall: { score: overall, grade: scoreToGrade(overall) }
+        };
+    }
+
+    function scoreToGrade(score) {
+        if (score >= 90) return 'A';
+        if (score >= 80) return 'B';
+        if (score >= 70) return 'C';
+        if (score >= 55) return 'D';
+        return 'F';
+    }
+
+    function gradeColor(grade) {
+        return grade === 'A' ? '#10b981' : grade === 'B' ? '#3b82f6' : grade === 'C' ? '#f59e0b' : grade === 'D' ? '#f97316' : '#ef4444';
+    }
+
     function renderRouteResults(allShifts) {
         document.getElementById('routeResults').style.display = '';
         const btnLabel = document.getElementById('generateBtnLabel');
@@ -4835,10 +4921,14 @@
             const totalCampers = routes.reduce((s, r) => s + r.camperCount, 0);
             const totalStops = routes.reduce((s, r) => s + r.stops.filter(st => !st.isMonitor && !st.isCounselor).length, 0);
             const longest = routes.length ? Math.max(...routes.map(r => r.totalDuration), 0) : 0;
-            html += '<details class="collapsible-card" open><summary class="collapsible-header"><span style="display:flex;align-items:center;gap:.5rem;"><span class="shift-num">' + (si + 1) + '</span>' + esc(shift.label || 'Shift ' + (si + 1)) + '</span><span style="font-size:.75rem;font-weight:400;color:var(--text-muted);">' + totalCampers + ' campers · ' + totalStops + ' stops · ' + longest + ' min</span></summary>';
+            const quality = computeRouteQuality(routes, _campCoordsCache?.lat || 0, _campCoordsCache?.lng || 0, D.setup.maxWalkDistance || 375);
+            const overallBadge = quality.overall.score > 0 ? '<span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:.7rem;font-weight:700;color:#fff;background:' + gradeColor(quality.overall.grade) + ';" title="Route Quality: ' + quality.overall.score + '/100 (Balance: ' + (quality.balance || 0) + ')">' + quality.overall.grade + ' ' + quality.overall.score + '</span>' : '';
+            html += '<details class="collapsible-card" open><summary class="collapsible-header"><span style="display:flex;align-items:center;gap:.5rem;"><span class="shift-num">' + (si + 1) + '</span>' + esc(shift.label || 'Shift ' + (si + 1)) + overallBadge + '</span><span style="font-size:.75rem;font-weight:400;color:var(--text-muted);">' + totalCampers + ' campers · ' + totalStops + ' stops · ' + longest + ' min</span></summary>';
             html += '<div class="collapsible-body" style="padding:.75rem;"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;">';
             routes.filter(r => r.stops.length > 0).forEach(r => {
-                html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
+                const rq = quality.routes.find(q => q.busId === r.busId);
+                const busGradeBadge = rq ? '<span style="display:inline-flex;align-items:center;padding:1px 6px;border-radius:8px;font-size:.65rem;font-weight:700;color:#fff;background:' + gradeColor(rq.grade) + ';" title="Compact: ' + rq.compactness + ' Walk: ' + rq.walkFairness + ' Time: ' + rq.timeEfficiency + '">' + rq.grade + '</span>' : '';
+                html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + ' ' + busGradeBadge + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
                 r.stops.forEach(st => {
                     const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) : st.isCounselor ? '👤 ' + esc(st.counselorName) : st.campers.map(c => '<span style="display:inline-flex;align-items:center;gap:2px;">' + esc(c.name) + ' <button onclick="CampistryGo.openMoveModal(\'' + esc(c.name.replace(/'/g, "\\'")) + '\',\'' + r.busId + '\',' + si + ')" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);font-size:10px;" title="Move">↔</button></span>').join(', ');
                     html += '<li class="route-stop' + (st.isMonitor ? ' monitor-stop' : st.isCounselor ? ' counselor-stop' : '') + '"><div class="route-stop-num" style="background:' + esc(r.busColor) + '">' + st.stopNum + '</div><div class="route-stop-info"><div class="route-stop-names">' + names + '</div><div class="route-stop-addr">' + esc(st.address) + '</div></div><div class="route-stop-time">' + (st.estimatedTime || '—') + '</div></li>';
