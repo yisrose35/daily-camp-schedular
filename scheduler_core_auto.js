@@ -2683,6 +2683,27 @@
 
 
         // =====================================================================
+        // ★ v10.0: TIMELINE INTEGRITY GUARD — sort + fix overlaps after every insertion
+        // Defined at outer scope so Phase 0, Phase 2.5, and Phase 3 can all use it.
+        function ensureTimelineIntegrity(bunk) {
+            var tl = bunkTimelines[bunk];
+            if (!tl || tl.length < 2) return;
+            tl.sort(function(a, b) { return a.startMin - b.startMin; });
+            for (var i = 0; i < tl.length - 1; i++) {
+                if (tl[i].endMin > tl[i+1].startMin) {
+                    if (!tl[i]._fixed && tl[i+1]._fixed) {
+                        tl[i].endMin = tl[i+1].startMin;
+                    } else if (!tl[i+1]._fixed) {
+                        tl[i+1].startMin = tl[i].endMin;
+                    } else {
+                        tl[i+1].startMin = tl[i].endMin;
+                    }
+                }
+            }
+            bunkTimelines[bunk] = tl.filter(function(b) { return b.endMin > b.startMin; });
+        }
+
+        // =====================================================================
         // PHASE 3: TIME-SWEEP SPORT FILLER (v8.0)
         // Replaces the old greedyPackBunk. Processes ALL 38 bunks simultaneously.
         // Walls never move. Sports + fields assigned together. Sharing-aware.
@@ -2804,28 +2825,6 @@
                 }
                 if (cur < gEnd) gaps.push({ start: cur, end: gEnd });
                 return gaps;
-            }
-
-            // ★ v10.0: TIMELINE INTEGRITY GUARD — sort + fix overlaps after every insertion
-            function ensureTimelineIntegrity(bunk) {
-                var tl = bunkTimelines[bunk];
-                if (!tl || tl.length < 2) return;
-                tl.sort(function(a, b) { return a.startMin - b.startMin; });
-                for (var i = 0; i < tl.length - 1; i++) {
-                    if (tl[i].endMin > tl[i+1].startMin) {
-                        // Trim the non-fixed block to resolve overlap
-                        if (!tl[i]._fixed && tl[i+1]._fixed) {
-                            tl[i].endMin = tl[i+1].startMin;
-                        } else if (!tl[i+1]._fixed) {
-                            tl[i+1].startMin = tl[i].endMin;
-                        } else {
-                            // Both fixed — trim later block as last resort
-                            tl[i+1].startMin = tl[i].endMin;
-                        }
-                    }
-                }
-                // Remove zero-duration or negative-duration blocks
-                bunkTimelines[bunk] = tl.filter(function(b) { return b.endMin > b.startMin; });
             }
 
             // ══════════════════════════════════════════════════════════
