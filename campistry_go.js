@@ -2471,15 +2471,13 @@
         // ══════════════════════════════════════════════════════════════
         // FINAL ROUTE ORDERING — nearest-neighbor chain using road matrix
         //
-        // Builds each route as a nearest-neighbor chain from the starting
-        // point (farthest stop for arrival, camp for dismissal), using
-        // actual driving times from Mapbox/OSRM. This produces a natural
-        // path with no backtracking — the bus always goes to the closest
-        // unvisited stop from where it currently is.
+        // Only runs for LEGACY path. When zones are used, VROOM already
+        // ordered stops optimally within each zone — re-ordering with
+        // nearest-neighbor would override VROOM's better decisions.
         // ══════════════════════════════════════════════════════════════
         showProgress('Finalizing routes...', 95);
 
-        const orderPromises = allRoutes.map(async (r) => {
+        const orderPromises = zones ? [] : allRoutes.map(async (r) => {
             if (r.stops.length < 2) return;
             const validStops = r.stops.filter(s => s.lat && s.lng);
             if (validStops.length < 2) return;
@@ -2537,7 +2535,8 @@
             r.stops.forEach((s, i) => { s.stopNum = i + 1; delete s._mIdx; });
         });
         await Promise.all(orderPromises);
-        console.log('[Go] Route sort: nearest-neighbor chain using road driving times');
+        if (zones) console.log('[Go] Route sort: VROOM ordering preserved (zone path)');
+        else console.log('[Go] Route sort: nearest-neighbor chain using road driving times');
 
         // Route quality summary
         const totalKids = allRoutes.reduce((s, r) => s + r.camperCount, 0);
