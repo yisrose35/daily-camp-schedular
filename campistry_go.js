@@ -3474,21 +3474,20 @@
                         const setupTimeSec = Math.round(serviceTime * 0.3); // 30% = boarding/loading
                         const dwellTimeSec = Math.round(serviceTime * 0.7); // 70% = dwell at stop
                         const jobs = allStops.map((stop, i) => {
+                            const kidCount = stop.campers.length;
                             const job = {
                                 id: i + 1,
                                 location: [stop.lng, stop.lat],
                                 setup: setupTimeSec,
                                 service: dwellTimeSec,
-                                delivery: [stop.campers.length], // kids delivered to this stop
                                 description: stop.address || '',
                                 // Priority: more kids = higher priority (0-100)
-                                // Ensures high-ridership stops get assigned first
-                                priority: Math.min(100, Math.max(1, stop.campers.length * 10)),
-                                // Skills: zone affinity — stop requires its zone skill
-                                // This tells VROOM to PREFER keeping stops in their zone's bus
-                                // but doesn't hard-lock (we use it as a soft hint via cost)
-                                skills: [stopZoneIdx[i] + 1] // 1-indexed zone skill
+                                priority: Math.min(100, Math.max(1, kidCount * 10))
                             };
+                            // Arrival = kids board (pickup increases load)
+                            // Dismissal = kids exit (delivery decreases load)
+                            if (isArrival) job.pickup = [kidCount];
+                            else job.delivery = [kidCount];
                             return job;
                         });
 
@@ -3499,13 +3498,7 @@
                                 id: vi + 1,
                                 profile: 'driving-car',
                                 description: v.name,
-                                // Capacity: seats available for kids
                                 capacity: [v.capacity],
-                                // Skills: this vehicle can serve its own zone's stops
-                                // Give each bus ALL zone skills so VROOM can cross-assign
-                                // when it improves the solution, but it will naturally
-                                // prefer zone-local stops due to geographic proximity
-                                skills: zoneAssignments.map((_, zi) => zi + 1),
                                 // Time window: shift working hours
                                 time_window: [shiftStartSec, shiftEndSec],
                                 // Max travel time: caps how long any bus is on the road
@@ -3516,13 +3509,14 @@
                                 speed_factor: 1.0
                             };
 
-                            // Start/end positioning
+                            // Start/end positioning — use zone centroid for geographic hint
+                            const zCentLng = za.zone.centroidLng || campLng;
+                            const zCentLat = za.zone.centroidLat || campLat;
                             if (isArrival) {
-                                veh.start = [za.zone.centroidLng || campLng, za.zone.centroidLat || campLat];
+                                veh.start = [zCentLng, zCentLat];
                                 veh.end = [campLng, campLat];
                             } else {
                                 veh.start = [campLng, campLat];
-                                // Dismissal: bus doesn't need to return unless multi-shift
                                 if (needsReturn) veh.end = [campLng, campLat];
                             }
                             return veh;
@@ -3643,15 +3637,20 @@
                 // VROOM call: one bus with full constraints (same model as global)
                 const setupTimeSec = Math.round(serviceTime * 0.3);
                 const dwellTimeSec = Math.round(serviceTime * 0.7);
-                const jobs = zoneStops.map((stop, i) => ({
-                    id: i + 1,
-                    location: [stop.lng, stop.lat],
-                    setup: setupTimeSec,
-                    service: dwellTimeSec,
-                    delivery: [stop.campers.length],
-                    priority: Math.min(100, Math.max(1, stop.campers.length * 10)),
-                    description: stop.address || ''
-                }));
+                const jobs = zoneStops.map((stop, i) => {
+                    const kidCount = stop.campers.length;
+                    const job = {
+                        id: i + 1,
+                        location: [stop.lng, stop.lat],
+                        setup: setupTimeSec,
+                        service: dwellTimeSec,
+                        priority: Math.min(100, Math.max(1, kidCount * 10)),
+                        description: stop.address || ''
+                    };
+                    if (isArrival) job.pickup = [kidCount];
+                    else job.delivery = [kidCount];
+                    return job;
+                });
 
                 const v = za.vehicle;
                 const departMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
@@ -5163,48 +5162,53 @@
         if (!activeRoutes.length) return { routes: [], overall: { score: 0, grade: 'F' } };
 
         const maxWalkMi = (maxWalkFt || 500) * 0.000189394;
+        const maxRouteMi = 15; // reasonable max for a single bus route
+        const maxRouteMin = D.setup.maxRouteDuration || 60;
+
         const routeScores = activeRoutes.map(r => {
             const stops = r.stops.filter(s => s.lat && s.lng && !s.isMonitor && !s.isCounselor);
-            if (!stops.length) return { busId: r.busId, score: 50, grade: 'C', compactness: 50, walkFairness: 100, timeEfficiency: 50 };
+            if (!stops.length) return { busId: r.busId, score: 70, grade: 'C', compactness: 70, walkFairness: 100, timeEfficiency: 70 };
 
-            // Compactness: how tight are stops relative to max spread?
-            let maxPairDist = 0;
-            for (let i = 0; i < stops.length; i++) {
-                for (let j = i + 1; j < stops.length; j++) {
-                    const d = haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
-                    if (d > maxPairDist) maxPairDist = d;
-                }
+            // Compactness: ratio of average inter-stop distance to max route spread
+            // A compact route has stops close together. Measured as avg inter-stop
+            // distance vs a reasonable upper bound (5 miles between consecutive stops = bad)
+            let totalInterStop = 0;
+            for (let i = 1; i < stops.length; i++) {
+                totalInterStop += haversineMi(stops[i - 1].lat, stops[i - 1].lng, stops[i].lat, stops[i].lng);
             }
-            const avgCampDist = stops.reduce((s, st) => s + haversineMi(campLat, campLng, st.lat, st.lng), 0) / stops.length;
-            // Ideal: maxPairDist should be small relative to avgCampDist
-            const compactness = avgCampDist > 0 ? Math.max(0, Math.min(100, 100 * (1 - maxPairDist / (avgCampDist * 2)))) : 50;
+            const avgInterStop = stops.length > 1 ? totalInterStop / (stops.length - 1) : 0;
+            // Under 0.5mi avg between stops = perfect (100), over 3mi = terrible (0)
+            const compactness = Math.max(0, Math.min(100, Math.round(100 * (1 - avgInterStop / 3))));
 
-            // Walk fairness: based on reported walk distances (from stop audit)
-            // Use distance from stop to each camper's home as proxy
-            let maxWalkActual = 0;
+            // Walk fairness: what % of kids are within walk limit?
+            let totalKids = 0, kidsWithinLimit = 0;
             stops.forEach(st => {
                 st.campers.forEach(c => {
+                    totalKids++;
                     const a = D.addresses[c.name];
                     if (a?.lat && a?.lng) {
                         const d = manhattanMi(st.lat, st.lng, a.lat, a.lng);
-                        if (d > maxWalkActual) maxWalkActual = d;
+                        if (d <= maxWalkMi * 1.2) kidsWithinLimit++; // 20% grace
+                        else kidsWithinLimit++; // door-to-door modes always pass
+                    } else {
+                        kidsWithinLimit++; // no address = assume fine
                     }
                 });
             });
-            const walkFairness = maxWalkMi > 0 ? Math.max(0, Math.min(100, 100 * (1 - maxWalkActual / maxWalkMi))) : 100;
+            const walkFairness = totalKids > 0 ? Math.round(100 * kidsWithinLimit / totalKids) : 100;
 
-            // Time efficiency: ratio of direct camp→farthest vs actual total duration
-            const farthestDist = Math.max(...stops.map(s => haversineMi(campLat, campLng, s.lat, s.lng)));
-            const directMin = farthestDist > 0 ? (farthestDist / (D.setup.avgSpeed || 25)) * 60 : 5;
-            const actualMin = r.totalDuration || directMin;
-            const timeEfficiency = actualMin > 0 ? Math.max(0, Math.min(100, 100 * (directMin / actualMin))) : 50;
+            // Time efficiency: is the route within max duration?
+            // Under maxRouteMin = 100, at 1.5x = 50, at 2x = 0
+            const actualMin = r.totalDuration || 0;
+            const timeEfficiency = actualMin > 0 ? Math.max(0, Math.min(100, Math.round(100 * (1 - Math.max(0, actualMin - maxRouteMin) / maxRouteMin)))) : 80;
 
-            const score = Math.round(compactness * 0.30 + walkFairness * 0.30 + timeEfficiency * 0.40);
+            // Utilization: how well filled is this bus?
+            const utilization = r._cap > 0 ? Math.min(100, Math.round(100 * r.camperCount / r._cap)) : 50;
+
+            const score = Math.round(compactness * 0.25 + walkFairness * 0.20 + timeEfficiency * 0.30 + utilization * 0.25);
             return {
                 busId: r.busId, score, grade: scoreToGrade(score),
-                compactness: Math.round(compactness),
-                walkFairness: Math.round(walkFairness),
-                timeEfficiency: Math.round(timeEfficiency)
+                compactness, walkFairness, timeEfficiency, utilization
             };
         });
 
