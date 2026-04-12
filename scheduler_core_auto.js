@@ -2868,13 +2868,30 @@
             for (var gi = 0; gi < allGrades.length; gi++) {
                 var grade = allGrades[gi];
                 var bunks = getBunksForGrade(grade, divisions).slice(); // copy for shuffle
-                // ★ Smart rotation: shuffle bunk order per iteration for fairness
-                // Different iterations try different orderings → best-of-40 finds optimal assignment
+                // ★ v11.2: VIP bunk profiling — sort by constraint tightness FIRST,
+                // then shuffle within equal-tightness groups for fairness.
+                // Most constrained bunks (lowest slack) get scheduled first = more options.
+                if (feasibilityMap) {
+                    bunks.sort(function(a, b) {
+                        var fa = feasibilityMap[a], fb = feasibilityMap[b];
+                        var sa = fa ? fa.slack : 999, sb = fb ? fb.slack : 999;
+                        // Also check if bunk failed in previous iteration (repair target)
+                        var ra = repairTargets.failedBunks[a] ? -100 : 0;
+                        var rb = repairTargets.failedBunks[b] ? -100 : 0;
+                        return (sa + ra) - (sb + rb); // tightest + failed first
+                    });
+                }
+                // Then apply seeded shuffle within similar-slack bands (±20 min)
                 var _shufSeed = _iterSeed * 31 + gi;
                 for (var si = bunks.length - 1; si > 0; si--) {
                     _shufSeed = (_shufSeed * 1103515245 + 12345) & 0x7fffffff;
                     var sj = _shufSeed % (si + 1);
-                    var _tmp = bunks[si]; bunks[si] = bunks[sj]; bunks[sj] = _tmp;
+                    // Only swap if within same tightness band
+                    var sA = feasibilityMap ? (feasibilityMap[bunks[si]] || {}).slack || 999 : 999;
+                    var sB = feasibilityMap ? (feasibilityMap[bunks[sj]] || {}).slack || 999 : 999;
+                    if (Math.abs(sA - sB) <= 20) {
+                        var _tmp = bunks[si]; bunks[si] = bunks[sj]; bunks[sj] = _tmp;
+                    }
                 }
                 var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                 var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
@@ -3395,6 +3412,23 @@
                 }
             }
 
+            // ★ v11.2: PREDICTIVE FIELD PRESSURE — real-time utilization ratio per field per time slot
+            // Helps findBestSport steer bunks away from fields approaching capacity
+            function getFieldPressure(fieldName, startMin, endMin) {
+                var ledger = fieldLedger[fieldName];
+                if (!ledger) return 0;
+                var cap = ledger.capacity || 1;
+                var maxClaims = 0;
+                for (var t = startMin; t < endMin; t += 5) {
+                    var claims = 0;
+                    for (var ci = 0; ci < ledger.claims.length; ci++) {
+                        if (ledger.claims[ci].startMin < t + 5 && ledger.claims[ci].endMin > t) claims++;
+                    }
+                    if (claims > maxClaims) maxClaims = claims;
+                }
+                return maxClaims / cap; // 0 = empty, 1 = at capacity
+            }
+
             // Find best sport + field with CROSS-BUNK AWARENESS
             // Prefers fields with LOW global demand (leaves scarce fields for others)
             function findBestSport(bunk, grade, startMin, endMin, meta, used) {
@@ -3435,6 +3469,10 @@
                                 score -= 200; // I have alternatives, leave scarce fields for others
                             }
                         }
+                        // ★ v11.2: Predictive field pressure — avoid fields near capacity
+                        var _fp = getFieldPressure(sport.fields[f], startMin, endMin);
+                        if (_fp >= 0.8) score -= 150;       // field is nearly full
+                        else if (_fp <= 0.2) score += 100;  // field is mostly empty — good
                         candidates.push({ name: sport.name, field: sport.fields[f], score: score });
                     }
                 }
@@ -5485,6 +5523,77 @@
                 });
             });
 
+            // ══════════════════════════════════════════════════════════
+            // ★ v11.2: SWAP-BASED LOCAL SEARCH (Post-Placement Optimization)
+            // After the full schedule is built, try swapping sport assignments
+            // between bunks to improve field utilization and reduce Frees.
+            // ══════════════════════════════════════════════════════════
+            {
+                var swapCount = 0;
+                var swapGrades = Object.keys(gradeGroupedBunks || {});
+                if (!swapGrades.length) {
+                    // Build grade groups if not available from timeSweepFillAll closure
+                    var _sgb = {};
+                    allGrades.forEach(function(g) { _sgb[g] = getBunksForGrade(g, divisions); });
+                    swapGrades = Object.keys(_sgb);
+                }
+
+                allGrades.forEach(function(swapGrade) {
+                    var swapBunks = getBunksForGrade(swapGrade, divisions);
+                    if (swapBunks.length < 2) return;
+
+                    // Collect all sport blocks per bunk
+                    var bunkSportBlocks = {};
+                    swapBunks.forEach(function(sb) {
+                        bunkSportBlocks[sb] = (bunkTimelines[sb] || []).filter(function(b) {
+                            return (b.type || '').toLowerCase() === 'sport' && b._assignedSport && b.field && !b._fixed;
+                        });
+                    });
+
+                    // Try pairwise swaps within the same time window
+                    for (var si1 = 0; si1 < swapBunks.length; si1++) {
+                        for (var si2 = si1 + 1; si2 < swapBunks.length; si2++) {
+                            var b1 = swapBunks[si1], b2 = swapBunks[si2];
+                            var blocks1 = bunkSportBlocks[b1] || [];
+                            var blocks2 = bunkSportBlocks[b2] || [];
+
+                            for (var sb1 = 0; sb1 < blocks1.length; sb1++) {
+                                for (var sb2 = 0; sb2 < blocks2.length; sb2++) {
+                                    var blk1 = blocks1[sb1], blk2 = blocks2[sb2];
+                                    // Only swap if at the same time (exact match for sharing rules)
+                                    if (blk1.startMin !== blk2.startMin || blk1.endMin !== blk2.endMin) continue;
+                                    if (blk1._assignedSport === blk2._assignedSport) continue; // already same
+
+                                    // Check if swap is valid (each bunk can use the other's field)
+                                    var can1use2 = isFieldAvailable(blk2.field, blk1.startMin, blk1.endMin, b1, swapGrade, blk2._assignedSport);
+                                    var can2use1 = isFieldAvailable(blk1.field, blk2.startMin, blk2.endMin, b2, swapGrade, blk1._assignedSport);
+                                    if (!can1use2 || !can2use1) continue;
+
+                                    // Check if swap improves variety for both bunks
+                                    var b1Sports = new Set(blocks1.map(function(x) { return x._assignedSport; }));
+                                    var b2Sports = new Set(blocks2.map(function(x) { return x._assignedSport; }));
+                                    var b1Before = b1Sports.size, b2Before = b2Sports.size;
+
+                                    // Simulate swap
+                                    b1Sports.delete(blk1._assignedSport); b1Sports.add(blk2._assignedSport);
+                                    b2Sports.delete(blk2._assignedSport); b2Sports.add(blk1._assignedSport);
+                                    var b1After = b1Sports.size, b2After = b2Sports.size;
+
+                                    if (b1After + b2After > b1Before + b2Before) {
+                                        // Swap improves total variety — do it
+                                        var tmpSport = blk1._assignedSport, tmpField = blk1.field, tmpEvent = blk1.event;
+                                        blk1._assignedSport = blk2._assignedSport; blk1.field = blk2.field; blk1.event = blk2.event;
+                                        blk2._assignedSport = tmpSport; blk2.field = tmpField; blk2.event = tmpEvent;
+                                        swapCount++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+                if (swapCount > 0) log('[Phase3+] ★ Swap optimizer: ' + swapCount + ' beneficial swaps');
+            }
+
            // ── Quick-solve simulation: count slots that can't find any field ──
             // Mirrors auto_solver_engine logic exactly: sharing rules, capacity,
             // cross-division, exact time match, same-day repeat
@@ -5642,12 +5751,26 @@
             // ★ v11.0: Compute iteration bias from score breakdown
             computeIterationBias(iterationScoreBreakdown, iterScore);
 
-            if (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
+            // ★ v11.2: Quality-aware termination — detect structurally unfixable scores
+            // If the only remaining penalties are field saturation (supply < demand),
+            // no amount of re-ordering will help. Stop early and report why.
+            var _qat = false;
+            if (staleCount >= 3 && bestScore > 0) {
+                var _bd = iterationScoreBreakdown;
+                var _fixable = _bd.gaps + _bd.durationViolations + _bd.missingLayers + _bd.sportVariety;
+                var _structural = _bd.fieldSaturation + _bd.estimatedFrees;
+                if (_fixable === 0 && _structural > 0) {
+                    log('[ITER ' + totalIters + '] ★ Quality-aware stop: remaining score (' + bestScore + ') is structural (field saturation/frees) — further iteration cannot improve');
+                    _qat = true;
+                }
+            }
 
-        } while (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
+            if (!_qat && bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
+
+        } while (!_qat && bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
 
         log('══════════════════════════════════════════════════════════');
-        log('BEST: ' + bestScore + ' after ' + totalIters + ' iterations');
+        log('BEST: ' + bestScore + ' after ' + totalIters + ' iterations' + (_qat ? ' (structural limit reached)' : ''));
         log('══════════════════════════════════════════════════════════');
 
         // Restore best
