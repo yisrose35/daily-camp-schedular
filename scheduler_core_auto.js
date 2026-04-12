@@ -4597,6 +4597,81 @@
                 bunkTimelines[zgBunk] = zgTmpl;
             }
 
+            // ══════════════════════════════════════════════════════════
+            // ★ v11.5: DURATION REBALANCER
+            // Scans adjacent block pairs. If one block is below its dMin
+            // and its neighbor is above its dMin, steal time from the neighbor.
+            // Directly fixes: "45-min special + 5-min snack" → "40-min + 10-min"
+            // Also fixes: "55-min sport + 5-min snack" → "50-min + 10-min"
+            // Runs multiple passes until no more rebalancing is possible.
+            // ══════════════════════════════════════════════════════════
+            var rebalanceTotal = 0;
+            for (var rbi = 0; rbi < allBunkIds.length; rbi++) {
+                var rbBunk = allBunkIds[rbi];
+                var rbTmpl = bunkTimelines[rbBunk] || [];
+                rbTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                var rbChanged = true, rbPasses = 0;
+                while (rbChanged && rbPasses < 5) {
+                    rbChanged = false;
+                    rbPasses++;
+
+                    for (var rbj = 0; rbj < rbTmpl.length; rbj++) {
+                        var rbBlk = rbTmpl[rbj];
+                        if (rbBlk._fixed) continue;
+                        var rbType = (rbBlk.type || '').toLowerCase();
+                        var rbDur = rbBlk.endMin - rbBlk.startMin;
+                        var rbC = resolveConstraints(rbBlk.layer, rbType, rbBlk);
+
+                        // Is this block below its dMin?
+                        if (rbDur >= rbC.dMin) continue;
+                        var rbDeficit = rbC.dMin - rbDur;
+
+                        // Try stealing from the PREVIOUS block
+                        if (rbj > 0 && !rbTmpl[rbj-1]._fixed) {
+                            var donor = rbTmpl[rbj-1];
+                            var donorDur = donor.endMin - donor.startMin;
+                            var donorC = resolveConstraints(donor.layer, (donor.type || '').toLowerCase(), donor);
+                            var donorSurplus = donorDur - donorC.dMin;
+
+                            if (donorSurplus >= 5) {
+                                var steal = Math.min(rbDeficit, donorSurplus);
+                                steal = Math.round(steal / 5) * 5;
+                                if (steal >= 5) {
+                                    donor.endMin -= steal;
+                                    rbBlk.startMin -= steal;
+                                    rbChanged = true;
+                                    rebalanceTotal++;
+                                    continue;
+                                }
+                            }
+                        }
+
+                        // Try stealing from the NEXT block
+                        if (rbj < rbTmpl.length - 1 && !rbTmpl[rbj+1]._fixed) {
+                            var donor2 = rbTmpl[rbj+1];
+                            var donor2Dur = donor2.endMin - donor2.startMin;
+                            var donor2C = resolveConstraints(donor2.layer, (donor2.type || '').toLowerCase(), donor2);
+                            var donor2Surplus = donor2Dur - donor2C.dMin;
+
+                            if (donor2Surplus >= 5) {
+                                var steal2 = Math.min(rbDeficit, donor2Surplus);
+                                steal2 = Math.round(steal2 / 5) * 5;
+                                if (steal2 >= 5) {
+                                    donor2.startMin += steal2;
+                                    rbBlk.endMin += steal2;
+                                    rbChanged = true;
+                                    rebalanceTotal++;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+                bunkTimelines[rbBunk] = rbTmpl;
+            }
+            if (rebalanceTotal > 0) log('[Phase3] ★ REBALANCE: redistributed duration across ' + rebalanceTotal + ' block pairs');
+
             // ★ v10.5: FINAL CONSTRAINT ENFORCEMENT SWEEP
             // Last-pass safety net: clamp every block to its dMin/dMax.
             // Catches any violations introduced by merge/absorb/extend passes.
