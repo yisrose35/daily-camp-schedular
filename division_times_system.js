@@ -610,43 +610,54 @@ divisionTimes[divName] = slotsForDiv;
 
     function serializeDivisionTimes(divisionTimes) {
         if (!divisionTimes) return {};
-        
+
         const serialized = {};
-        
+
         for (const [divName, slots] of Object.entries(divisionTimes)) {
-            serialized[divName] = slots.map(slot => ({
-                slotIndex: slot.slotIndex,
-                startMin: slot.startMin,
-                endMin: slot.endMin,
-                duration: slot.duration,
-                event: slot.event,
-                type: slot.type,
-                label: slot.label,
-                start: slot.start instanceof Date ? slot.start.toISOString() : slot.start,
-                end: slot.end instanceof Date ? slot.end.toISOString() : slot.end,
-                _originalId: slot._originalId,
-                _subEvents: slot._subEvents,
-                _smartData: slot._smartData,
-                // ★★★ v1.2: Serialize split tile metadata ★★★
-                _splitHalf: slot._splitHalf,
-                _splitParentEvent: slot._splitParentEvent,
-                _splitAct1: slot._splitAct1,
-                _splitAct2: slot._splitAct2,
-                _originalStartMin: slot._originalStartMin,
-                _originalEndMin: slot._originalEndMin
-            }));
+            if (!Array.isArray(slots)) continue;
+            const entry = {
+                _slots: slots.map(slot => ({
+                    slotIndex: slot.slotIndex,
+                    startMin: slot.startMin,
+                    endMin: slot.endMin,
+                    duration: slot.duration,
+                    event: slot.event,
+                    type: slot.type,
+                    label: slot.label,
+                    start: slot.start instanceof Date ? slot.start.toISOString() : slot.start,
+                    end: slot.end instanceof Date ? slot.end.toISOString() : slot.end,
+                    _originalId: slot._originalId,
+                    _subEvents: slot._subEvents,
+                    _smartData: slot._smartData,
+                    // ★★★ v1.2: Serialize split tile metadata ★★★
+                    _splitHalf: slot._splitHalf,
+                    _splitParentEvent: slot._splitParentEvent,
+                    _splitAct1: slot._splitAct1,
+                    _splitAct2: slot._splitAct2,
+                    _originalStartMin: slot._originalStartMin,
+                    _originalEndMin: slot._originalEndMin
+                }))
+            };
+            // ★ v1.3: Preserve per-bunk slot data for auto-mode schedules
+            if (slots._isPerBunk && slots._perBunkSlots) {
+                entry._isPerBunk = true;
+                entry._perBunkSlots = slots._perBunkSlots;
+            }
+            serialized[divName] = entry;
         }
-        
+
         return serialized;
     }
 
     function deserializeDivisionTimes(serialized) {
         if (!serialized) return {};
-        
+
         const divisionTimes = {};
-        
-        for (const [divName, slots] of Object.entries(serialized)) {
-            divisionTimes[divName] = (slots || []).map(slot => ({
+
+        for (const [divName, data] of Object.entries(serialized)) {
+            // ★ v1.3: Handle new format (object with _slots) and legacy format (plain array)
+            const slotsArr = Array.isArray(data) ? data : (data?._slots || []);
+            const result = slotsArr.map(slot => ({
                 ...slot,
                 start: new Date(slot.start),
                 end: new Date(slot.end),
@@ -655,8 +666,14 @@ divisionTimes[divName] = slotsForDiv;
                 duration: slot.duration || (slot.endMin - slot.startMin),
                 slotIndex: slot.slotIndex
             }));
+            // Restore per-bunk metadata if present
+            if (data && !Array.isArray(data) && data._isPerBunk && data._perBunkSlots) {
+                result._isPerBunk = true;
+                result._perBunkSlots = data._perBunkSlots;
+            }
+            divisionTimes[divName] = result;
         }
-        
+
         return divisionTimes;
     }
 
