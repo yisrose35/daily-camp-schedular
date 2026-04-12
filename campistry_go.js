@@ -981,14 +981,56 @@
         document.getElementById('counselorCount').textContent = D.counselors.length;
         if (!D.counselors.length) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; return; }
         if (tw) tw.style.display = ''; if (empty) empty.style.display = 'none';
-        tbody.innerHTML = D.counselors.map(c => { const bus = D.buses.find(b => b.id === c.assignedBus); return '<tr><td style="font-weight:600">' + esc(c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + (c.needsStop === 'yes' ? '<span class="badge badge-warning">Yes</span>' : '<span class="badge badge-neutral">No</span>') + '</td><td>' + (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—') + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteCounselor(\'' + c.id + '\')">×</button></div></td></tr>'; }).join('');
+        tbody.innerHTML = D.counselors.map(c => {
+            const bus = D.buses.find(b => b.id === c.assignedBus);
+            const mode = c.assignMode || (c.needsStop === 'yes' ? 'stop' : c.assignedBus ? 'manual' : 'auto');
+            const modeBadge = mode === 'stop' ? '<span class="badge badge-warning">Own Stop</span>' : mode === 'auto' ? '<span class="badge badge-neutral">Auto-assign</span>' : bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '<span class="badge badge-neutral">Manual (unset)</span>';
+            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')"><td style="font-weight:600">' + esc(c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
+        }).join('');
     }
     function openMonitorModal(eId) { _editMonitorId = eId || null; document.getElementById('monitorModalTitle').textContent = eId ? 'Edit Monitor' : 'Add Monitor'; updateBusSelects(); const m = eId ? D.monitors.find(x => x.id === eId) : null; document.getElementById('monitorName').value = m?.name || ''; document.getElementById('monitorAddress').value = m?.address || ''; document.getElementById('monitorPhone').value = m?.phone || ''; document.getElementById('monitorBusAssign').value = m?.assignedBus || ''; openModal('monitorModal'); document.getElementById('monitorName').focus(); }
     function saveMonitor() { const n = document.getElementById('monitorName')?.value.trim(); if (!n) { toast('Enter name', 'error'); return; } const a = document.getElementById('monitorAddress')?.value.trim(), p = document.getElementById('monitorPhone')?.value.trim(), b = document.getElementById('monitorBusAssign')?.value || ''; if (_editMonitorId) { const m = D.monitors.find(x => x.id === _editMonitorId); if (m) { m.name = n; m.address = a; m.phone = p; m.assignedBus = b; } } else D.monitors.push({ id: uid(), name: n, address: a, phone: p, assignedBus: b }); save(); closeModal('monitorModal'); renderStaff(); renderFleet(); updateStats(); toast(_editMonitorId ? 'Updated' : 'Monitor added'); }
     function editMonitor(id) { openMonitorModal(id); }
     function deleteMonitor(id) { const m = D.monitors.find(x => x.id === id); if (!m || !confirm('Delete "' + m.name + '"?')) return; D.monitors = D.monitors.filter(x => x.id !== id); save(); renderStaff(); renderFleet(); updateStats(); toast('Deleted'); }
-    function openCounselorModal(eId) { _editCounselorId = eId || null; document.getElementById('counselorModalTitle').textContent = eId ? 'Edit Counselor' : 'Add Counselor'; updateBusSelects(); const c = eId ? D.counselors.find(x => x.id === eId) : null; document.getElementById('counselorName').value = c?.name || ''; document.getElementById('counselorAddress').value = c?.address || ''; document.getElementById('counselorBunk').value = c?.bunk || ''; document.getElementById('counselorNeedsStop').value = c?.needsStop || 'no'; document.getElementById('counselorBusAssign').value = c?.assignedBus || ''; openModal('counselorModal'); document.getElementById('counselorName').focus(); }
-    function saveCounselor() { const n = document.getElementById('counselorName')?.value.trim(); if (!n) { toast('Enter name', 'error'); return; } const a = document.getElementById('counselorAddress')?.value.trim(), b = document.getElementById('counselorBunk')?.value.trim(), ns = document.getElementById('counselorNeedsStop')?.value || 'no', bus = document.getElementById('counselorBusAssign')?.value || ''; if (_editCounselorId) { const c = D.counselors.find(x => x.id === _editCounselorId); if (c) { c.name = n; c.address = a; c.bunk = b; c.needsStop = ns; c.assignedBus = bus; } } else D.counselors.push({ id: uid(), name: n, address: a, bunk: b, needsStop: ns, assignedBus: bus }); save(); closeModal('counselorModal'); renderStaff(); renderFleet(); updateStats(); toast(_editCounselorId ? 'Updated' : 'Counselor added'); }
+    function openCounselorModal(eId) {
+        _editCounselorId = eId || null;
+        document.getElementById('counselorModalTitle').textContent = eId ? 'Edit Counselor' : 'Add Counselor';
+        const c = eId ? D.counselors.find(x => x.id === eId) : null;
+        document.getElementById('counselorName').value = c?.name || '';
+        document.getElementById('counselorAddress').value = c?.address || '';
+        document.getElementById('counselorBunk').value = c?.bunk || '';
+        document.getElementById('counselorNeedsStop').value = c?.needsStop || 'no';
+        document.getElementById('counselorStopNote').style.display = c?.needsStop === 'yes' ? 'block' : 'none';
+        document.getElementById('counselorBusGroup').style.display = c?.needsStop === 'yes' ? 'none' : 'block';
+        // Bus assignment
+        const assignSel = document.getElementById('counselorBusAssign');
+        const manualSel = document.getElementById('counselorBusManual');
+        assignSel.value = c?.assignedBus ? '__manual__' : '';
+        manualSel.innerHTML = '<option value="">— Select bus —</option>' + D.buses.map(b => '<option value="' + esc(b.id) + '"' + (c?.assignedBus === b.id ? ' selected' : '') + '>' + esc(b.name) + '</option>').join('');
+        manualSel.style.display = c?.assignedBus ? '' : 'none';
+        assignSel.onchange = function() { manualSel.style.display = assignSel.value === '__manual__' ? '' : 'none'; };
+        openModal('counselorModal'); document.getElementById('counselorName').focus();
+    }
+    function saveCounselor() {
+        const n = document.getElementById('counselorName')?.value.trim();
+        if (!n) { toast('Enter name', 'error'); return; }
+        const a = document.getElementById('counselorAddress')?.value.trim();
+        const b = document.getElementById('counselorBunk')?.value.trim();
+        const ns = document.getElementById('counselorNeedsStop')?.value || 'no';
+        let bus = '';
+        if (ns === 'no') {
+            const assignMode = document.getElementById('counselorBusAssign')?.value || '';
+            if (assignMode === '__manual__') bus = document.getElementById('counselorBusManual')?.value || '';
+            // else empty = auto-assign later
+        }
+        if (_editCounselorId) {
+            const c = D.counselors.find(x => x.id === _editCounselorId);
+            if (c) { c.name = n; c.address = a; c.bunk = b; c.needsStop = ns; c.assignedBus = bus; c.assignMode = ns === 'yes' ? 'stop' : bus ? 'manual' : 'auto'; }
+        } else {
+            D.counselors.push({ id: uid(), name: n, address: a, bunk: b, needsStop: ns, assignedBus: bus, assignMode: ns === 'yes' ? 'stop' : bus ? 'manual' : 'auto' });
+        }
+        save(); closeModal('counselorModal'); renderStaff(); renderFleet(); updateStats(); toast(_editCounselorId ? 'Updated' : 'Counselor added');
+    }
     function editCounselor(id) { openCounselorModal(id); }
     function deleteCounselor(id) { const c = D.counselors.find(x => x.id === id); if (!c || !confirm('Delete "' + c.name + '"?')) return; D.counselors = D.counselors.filter(x => x.id !== id); save(); renderStaff(); renderFleet(); updateStats(); toast('Deleted'); }
 
@@ -3206,11 +3248,17 @@
         console.log('\n[Go] ═══ END AUDIT ═══\n');
 
         // ══════════════════════════════════════════════════════════════
-        // COUNSELOR STOP ASSIGNMENT
-        // Counselors don't get their own stops — they get off at the
-        // closest existing camper stop. Flag anyone >7 min walk away.
+        // COUNSELOR & MONITOR ASSIGNMENT (Smart Auto-Assign)
+        //
+        // Three modes per staff member:
+        //   'stop'   — needsStop=yes: treated like a camper, gets own stop
+        //   'auto'   — no stop needed: auto-assigned to nearest bus route
+        //   'manual' — no stop needed: already assigned to specific bus
+        //
+        // For 'auto' and 'manual' without stop: find nearest existing stop
+        // on their bus. Warn if >7 min walk away.
         // ══════════════════════════════════════════════════════════════
-        const allStops = []; // flat list of {stop, route} for proximity search
+        const allStops = [];
         allRoutes.forEach(r => r.stops.forEach(st => {
             if (!st.isMonitor && st.lat && st.lng) allStops.push({ stop: st, route: r });
         }));
@@ -3218,7 +3266,7 @@
         const counselorsToAssign = D.counselors.filter(c => c.address);
         if (counselorsToAssign.length && allStops.length) {
             console.log('[Go] ═══ COUNSELOR ASSIGNMENT ═══');
-            const OUTLIER_WALK_FT = 1850; // ~7 min at 3mph
+            const OUTLIER_WALK_FT = 1850;
             const outliers = [];
 
             for (const c of counselorsToAssign) {
@@ -3232,11 +3280,50 @@
                     }
                 }
 
-                // Find nearest stop
+                const mode = c.assignMode || (c.needsStop === 'yes' ? 'stop' : c.assignedBus ? 'manual' : 'auto');
+
+                // MODE: 'stop' — they need their own stop, handled during route generation
+                // (already included as a camper address if needsStop=yes)
+                if (mode === 'stop') {
+                    console.log('[Go]   ' + c.name + ' — has dedicated stop (treated as camper)');
+                    continue;
+                }
+
+                // MODE: 'auto' — find the bus whose route passes closest
+                if (mode === 'auto') {
+                    let bestRoute = null, bestDist = Infinity;
+                    for (const r of allRoutes) {
+                        if (!r.stops.length) continue;
+                        // Find closest stop on this route
+                        for (const st of r.stops) {
+                            if (!st.lat) continue;
+                            const d = manhattanMi(c._lat, c._lng, st.lat, st.lng);
+                            if (d < bestDist) { bestDist = d; bestRoute = r; }
+                        }
+                    }
+                    if (bestRoute) {
+                        c.assignedBus = bestRoute.busId;
+                        c._assignedBusName = bestRoute.busName;
+                        console.log('[Go]   ' + c.name + ' → AUTO-ASSIGNED to ' + bestRoute.busName + ' (' + Math.round(bestDist * 5280) + 'ft from nearest stop)');
+                    }
+                }
+
+                // Find nearest stop — prefer their assigned bus, fall back to any bus
                 let bestStop = null, bestRoute = null, bestDist = Infinity;
-                for (const { stop, route } of allStops) {
-                    const d = manhattanMi(c._lat, c._lng, stop.lat, stop.lng);
-                    if (d < bestDist) { bestDist = d; bestStop = stop; bestRoute = route; }
+                // First pass: only stops on assigned bus
+                if (c.assignedBus) {
+                    for (const { stop, route } of allStops) {
+                        if (route.busId !== c.assignedBus) continue;
+                        const d = manhattanMi(c._lat, c._lng, stop.lat, stop.lng);
+                        if (d < bestDist) { bestDist = d; bestStop = stop; bestRoute = route; }
+                    }
+                }
+                // Second pass: any bus (if assigned bus has no nearby stops)
+                if (!bestStop || bestDist * 5280 > 3000) {
+                    for (const { stop, route } of allStops) {
+                        const d = manhattanMi(c._lat, c._lng, stop.lat, stop.lng);
+                        if (d < bestDist) { bestDist = d; bestStop = stop; bestRoute = route; }
+                    }
                 }
 
                 if (!bestStop) continue;
