@@ -971,7 +971,10 @@ function getRotationQuotas(dateKey) {
         if (todayIdx < 0) return;
         const daysLeft = allDates.length - todayIdx; // includes today
         const isLastDay = daysLeft <= 1;
-        const dailyTarget = Math.ceil(remaining.length / daysLeft);
+        // Front-load: try 1.6× the even split on early days so later days are lighter
+        // e.g., 38 bunks / 3 days: day1 target=21, day2=15, day3=remaining 2
+        const evenTarget = Math.ceil(remaining.length / daysLeft);
+        const dailyTarget = isLastDay ? remaining.length : Math.min(remaining.length, Math.ceil(evenTarget * 1.6));
         quotas[evt.id] = {
             eventId: evt.id,
             eventName: evt.name,
