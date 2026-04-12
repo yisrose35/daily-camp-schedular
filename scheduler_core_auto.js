@@ -1246,10 +1246,9 @@
                 }
             }
             if (uniqueCandidates.length === 0) { warn('[P0] No free league gap for ' + grade); return null; }
-            // ★ v12.2: Always pick the BEST league position. League position
-            // is too critical to vary by iteration — bad positions create
-            // tiny unusable gaps. Iteration variation comes from other sources.
-            var bestStart = uniqueCandidates[0].start;
+            // Select candidate based on _iterSeed — different iteration = different position
+            var candidateIdx = _iterSeed % uniqueCandidates.length;
+            var bestStart = uniqueCandidates[candidateIdx].start;
 
             const expandedDur = expandLeagueDur(bestStart, bunks);
             bunks.forEach(bunk => {
@@ -4536,310 +4535,221 @@
             if (guaranteeCount > 0) log('[Phase3] ⚡ Forced ' + guaranteeCount + ' missing swim/snack placements');
 
             // ══════════════════════════════════════════════════════════
-            // ★ v13.0: THE DAY PLANNER
-            // Thinks like a Tetris player: sees all pieces, plans the
-            // whole board, validates, and iterates until perfect.
+            // ★ v13.1: SMART FINISHER — three safe passes, never reconstructs
+            // Pass A: Inject missing snacks/needs into gaps
+            // Pass B: Rebalance durations (steal from oversized neighbors)
+            // Pass C: Extend flexible blocks to fill remaining gaps
             //
-            // For each bunk:
-            //   1. Identify walls (immovable) → segments between walls
-            //   2. Identify ALL pieces: needs (swim/snack/special) + sports
-            //   3. Inject any MISSING required needs
-            //   4. PLAN: assign pieces to segments, compute durations
-            //   5. VALIDATE: gaps? dMin violations? missing pieces?
-            //   6. If imperfect: LEARN from the problem, try different plan
-            //   7. Repeat until perfect or max attempts
-            //   8. Place the winning plan contiguously
-            //
-            // The key difference: durations are computed SIMULTANEOUSLY
-            // as a system of equations, not greedily one at a time.
-            // Gaps are algebraically impossible in a valid plan.
+            // SAFETY: Only ADDS blocks and ADJUSTS durations. Never removes,
+            // never reconstructs, never moves walls.
             // ══════════════════════════════════════════════════════════
-            var plannerStats = { bunks: 0, perfect: 0, attempts: 0, injected: 0 };
 
-            for (var wdi = 0; wdi < allBunkIds.length; wdi++) {
-                var wdBunk = allBunkIds[wdi];
-                var wdMeta = bunkMeta[wdBunk];
-                if (!wdMeta) continue;
-                var wdTl = bunkTimelines[wdBunk] || [];
-                wdTl.sort(function(a, b) { return a.startMin - b.startMin; });
-                var wdGrade = wdMeta.grade;
+            // ── Pass A: Inject missing required needs into gaps ──────
+            var injectCount = 0;
+            for (var ia = 0; ia < allBunkIds.length; ia++) {
+                var iaBunk = allBunkIds[ia];
+                var iaMeta = bunkMeta[iaBunk];
+                if (!iaMeta) continue;
+                var iaGrade = iaMeta.grade;
+                var iaTl = bunkTimelines[iaBunk] || [];
+                var iaLayers = layersByGrade[iaGrade] || [];
 
-                // ── STEP 1: Identify all pieces ──────────────────────────
-                var walls = [];
-                var pieces = []; // ALL non-wall blocks, typed
-
-                for (var wdj = 0; wdj < wdTl.length; wdj++) {
-                    if (isPhase0(wdTl[wdj])) walls.push(wdTl[wdj]);
-                    else pieces.push(wdTl[wdj]);
+                // Check what types this bunk already has
+                var iaHas = {};
+                for (var ih = 0; ih < iaTl.length; ih++) {
+                    var iht = (iaTl[ih].type || '').toLowerCase();
+                    if (iht === 'snack') iht = 'snacks';
+                    iaHas[iht] = true;
                 }
 
-                // ── STEP 2: Inject missing required needs ────────────────
-                var wdLayers = layersByGrade[wdGrade] || [];
-                var hasType = {};
-                for (var ht = 0; ht < pieces.length; ht++) {
-                    var htt = (pieces[ht].type || '').toLowerCase();
-                    if (htt === 'snack') htt = 'snacks';
-                    hasType[htt] = true;
-                }
-                for (var hw = 0; hw < walls.length; hw++) {
-                    var hwt = (walls[hw].type || '').toLowerCase();
-                    if (hwt === 'snack') hwt = 'snacks';
-                    hasType[hwt] = true;
-                }
-                for (var mni = 0; mni < wdLayers.length; mni++) {
-                    var mnl = wdLayers[mni];
-                    var mnt = (mnl.type || '').toLowerCase();
-                    if (mnt === 'snack') mnt = 'snacks';
-                    if (['snacks', 'swim', 'special'].indexOf(mnt) < 0) continue;
-                    if (hasType[mnt]) continue;
-                    if (mnt === 'swim') {
-                        var swimsToday2 = todaysSwimmers[wdGrade] ? todaysSwimmers[wdGrade].has(String(wdBunk)) : false;
-                        if (!swimsToday2) continue;
+                for (var il = 0; il < iaLayers.length; il++) {
+                    var ial = iaLayers[il];
+                    var iat = (ial.type || '').toLowerCase();
+                    if (iat === 'snack') iat = 'snacks';
+                    if (['snacks', 'swim', 'special'].indexOf(iat) < 0) continue;
+                    if (iaHas[iat]) continue;
+                    if (iat === 'swim') {
+                        var iaSwimsToday = todaysSwimmers[iaGrade] ? todaysSwimmers[iaGrade].has(String(iaBunk)) : false;
+                        if (!iaSwimsToday) continue;
                     }
-                    var mnc = resolveConstraints(mnl, mnt);
-                    var mnEvent = mnl.event || mnt;
-                    if (mnt === 'special') {
-                        var mnDraft = draftResults[wdBunk];
-                        if (mnDraft && mnDraft.specials && mnDraft.specials.length > 0) mnEvent = mnDraft.specials[0].name;
-                        else continue;
+                    if (iat === 'special') {
+                        var iaDraft = draftResults[iaBunk];
+                        if (!iaDraft || !iaDraft.specials || !iaDraft.specials.length) continue;
                     }
-                    pieces.push({
-                        type: mnt === 'snacks' ? 'snacks' : mnt, event: mnEvent, layer: mnl,
-                        startMin: 0, endMin: 0, dMin: mnc.dMin, dMax: mnc.dMax,
-                        _source: 'planner-inject', _activityLocked: true,
-                        _assignedSpecial: mnt === 'special' ? mnEvent : null
-                    });
-                    hasType[mnt] = true;
-                    plannerStats.injected++;
-                }
 
-                // ── STEP 3: Compute segments between walls ───────────────
-                walls.sort(function(a, b) { return a.startMin - b.startMin; });
-                var segments = [];
-                var segCursor = wdMeta.gradeStart;
-                for (var wdk = 0; wdk < walls.length; wdk++) {
-                    if (walls[wdk].startMin > segCursor) {
-                        segments.push({ start: segCursor, end: walls[wdk].startMin });
+                    var iac = resolveConstraints(ial, iat);
+                    var iaWinS = ial.startMin || iaMeta.gradeStart;
+                    var iaWinE = ial.endMin || iaMeta.gradeEnd;
+                    var iaEvent = iat === 'special' ? draftResults[iaBunk].specials[0].name : (ial.event || iat);
+
+                    // Find the best gap for this need
+                    iaTl.sort(function(a, b) { return a.startMin - b.startMin; });
+                    var iaGaps = findGaps(iaTl, iaMeta.gradeStart, iaMeta.gradeEnd);
+                    var iaBestGap = null, iaBestScore = -Infinity;
+
+                    for (var ig = 0; ig < iaGaps.length; ig++) {
+                        var gap = iaGaps[ig];
+                        var gapDur = gap.end - gap.start;
+                        if (gapDur < iac.dMin) continue;
+                        // Prefer gaps within the need's time window
+                        var oS = Math.max(gap.start, iaWinS), oE = Math.min(gap.end, iaWinE);
+                        var overlap = oE - oS;
+                        var score = overlap >= iac.dMin ? overlap * 10 : gapDur;
+                        if (score > iaBestScore) { iaBestScore = score; iaBestGap = gap; }
                     }
-                    segCursor = Math.max(segCursor, walls[wdk].endMin);
-                }
-                if (segCursor < wdMeta.gradeEnd) {
-                    segments.push({ start: segCursor, end: wdMeta.gradeEnd });
-                }
-                if (segments.length === 0) {
-                    bunkTimelines[wdBunk] = walls.slice();
-                    allTemplates[wdBunk] = bunkTimelines[wdBunk];
-                    plannerStats.bunks++;
-                    continue;
-                }
-
-                // ── STEP 4: Classify pieces ──────────────────────────────
-                var needs = []; // swim/snack/special/custom/rotation — have time windows
-                var sports = []; // sport/slot — fill whatever space remains
-                for (var pi = 0; pi < pieces.length; pi++) {
-                    var pt = (pieces[pi].type || '').toLowerCase();
-                    if (['sport', 'slot', 'sports'].indexOf(pt) >= 0) sports.push(pieces[pi]);
-                    else needs.push(pieces[pi]);
-                }
-
-                // ── STEP 5: THE PLANNING LOOP ────────────────────────────
-                // Try different arrangements until one produces a perfect day.
-                // Each attempt assigns needs to segments, fills with sports,
-                // and validates. Learning: if a segment overflows, spread needs.
-
-                var bestPlan = null, bestScore = Infinity;
-                var maxAttempts = 3;
-
-                for (var attempt = 0; attempt < maxAttempts; attempt++) {
-                    plannerStats.attempts++;
-
-                    // Assign needs to segments
-                    var segNeeds = [];
-                    for (var sn = 0; sn < segments.length; sn++) segNeeds.push([]);
-
-                    // Sort needs: on attempt 0, prefer window match. On retry, spread more evenly.
-                    var needOrder = needs.slice();
-                    if (attempt > 0) {
-                        // Shuffle needs to try different assignment
-                        for (var ns = needOrder.length - 1; ns > 0; ns--) {
-                            var nj = (attempt * 7 + ns * 13) % (ns + 1);
-                            var tmp = needOrder[ns]; needOrder[ns] = needOrder[nj]; needOrder[nj] = tmp;
+                    // Fallback: any gap at all
+                    if (!iaBestGap) {
+                        for (var ig2 = 0; ig2 < iaGaps.length; ig2++) {
+                            if (iaGaps[ig2].end - iaGaps[ig2].start >= 5) { iaBestGap = iaGaps[ig2]; break; }
                         }
                     }
 
-                    for (var ni = 0; ni < needOrder.length; ni++) {
-                        var nb = needOrder[ni];
-                        var nbt = (nb.type || '').toLowerCase();
-                        var nc = resolveConstraints(nb.layer, nbt, nb);
-                        var nWinS = (nb.layer && nb.layer.startMin != null) ? nb.layer.startMin : wdMeta.gradeStart;
-                        var nWinE = (nb.layer && nb.layer.endMin != null) ? nb.layer.endMin : wdMeta.gradeEnd;
+                    if (iaBestGap) {
+                        // Place the need: take dMin from the gap, let rebalancer adjust later
+                        var placeStart = Math.max(iaBestGap.start, iaWinS);
+                        var placeDur = Math.min(iac.dMin, iaBestGap.end - placeStart);
+                        if (placeDur < 5) { placeStart = iaBestGap.start; placeDur = Math.min(iac.dMin, iaBestGap.end - iaBestGap.start); }
+                        var placeEnd = placeStart + placeDur;
+                        placeEnd = Math.round(placeEnd / 5) * 5;
+                        if (placeEnd <= placeStart) placeEnd = placeStart + 5;
 
-                        // Find best segment: most overlap with window AND has room
-                        var bestSeg = -1, bestVal = -Infinity;
-                        for (var si2 = 0; si2 < segments.length; si2++) {
-                            var seg = segments[si2];
-                            var oS = Math.max(seg.start, nWinS), oE = Math.min(seg.end, nWinE);
-                            var overlap = oE - oS;
-                            // Compute remaining room in this segment
-                            var usedInSeg = 0;
-                            for (var su = 0; su < segNeeds[si2].length; su++) usedInSeg += segNeeds[si2][su].dMin;
-                            var room = (seg.end - seg.start) - usedInSeg;
-                            if (room < nc.dMin) continue; // won't fit
-                            var val = overlap * 2 + room; // prefer window match + room
-                            if (val > bestVal) { bestVal = val; bestSeg = si2; }
-                        }
-                        // Fallback: any segment with room
-                        if (bestSeg < 0) {
-                            for (var si3 = 0; si3 < segments.length; si3++) {
-                                var used3 = 0;
-                                for (var su3 = 0; su3 < segNeeds[si3].length; su3++) used3 += segNeeds[si3][su3].dMin;
-                                if ((segments[si3].end - segments[si3].start) - used3 >= 5) { bestSeg = si3; break; }
-                            }
-                        }
-                        // Last resort: largest segment
-                        if (bestSeg < 0) {
-                            var lrg = 0;
-                            for (var si4 = 1; si4 < segments.length; si4++) {
-                                if ((segments[si4].end - segments[si4].start) > (segments[lrg].end - segments[lrg].start)) lrg = si4;
-                            }
-                            bestSeg = lrg;
-                        }
-                        segNeeds[bestSeg].push({ block: nb, dMin: nc.dMin, dMax: nc.dMax, type: nbt, isSport: false });
-                    }
-
-                    // Fill each segment: needs + sport blocks + solve durations
-                    var plan = []; // all blocks for this attempt
-                    var sportIdx = 0;
-                    var planScore = 0; // lower = better
-
-                    for (var si5 = 0; si5 < segments.length; si5++) {
-                        var seg = segments[si5];
-                        var segSize = seg.end - seg.start;
-                        var items = segNeeds[si5].slice(); // needs assigned here
-
-                        // Compute how much space sports get
-                        var needsMin = 0;
-                        for (var nm = 0; nm < items.length; nm++) needsMin += items[nm].dMin;
-                        var sportSpace = segSize - needsMin;
-
-                        // Add sport blocks to fill sportSpace
-                        var ceil = wdMeta.sportCeiling || 60;
-                        var flr = wdMeta.fillMinDur || 20;
-                        if (sportSpace >= 5) {
-                            var numSport = Math.max(1, Math.ceil(sportSpace / ceil));
-                            while (numSport > 1 && sportSpace / numSport < flr) numSport--;
-                            for (var spi = 0; spi < numSport; spi++) {
-                                var spBlk = (sportIdx < sports.length) ? sports[sportIdx++] : {
-                                    type: 'slot', event: 'General Activity Slot',
-                                    layer: wdMeta.sportLayer, field: null, _source: 'planner-fill',
-                                    _sportFallbacks: wdMeta.priorityList ? wdMeta.priorityList.map(function(s) { return s.name; }) : []
-                                };
-                                items.push({ block: spBlk, dMin: Math.min(flr, sportSpace), dMax: ceil, type: (spBlk.type || 'slot').toLowerCase(), isSport: true });
-                            }
-                        }
-
-                        if (items.length === 0 && segSize >= 5) {
-                            // Empty segment — one filler
-                            items.push({
-                                block: { type: 'slot', event: 'General Activity Slot', layer: wdMeta.sportLayer, field: null, _source: 'planner-fill',
-                                    _sportFallbacks: wdMeta.priorityList ? wdMeta.priorityList.map(function(s) { return s.name; }) : [] },
-                                dMin: segSize, dMax: segSize, type: 'slot', isSport: true
-                            });
-                        }
-
-                        // SOLVE: compute durations summing to exactly segSize
-                        var totalMin = 0;
-                        for (var tm = 0; tm < items.length; tm++) totalMin += items[tm].dMin;
-
-                        // Start at dMin
-                        for (var sd = 0; sd < items.length; sd++) items[sd].dur = items[sd].dMin;
-
-                        var excess = segSize - totalMin;
-                        if (excess < 0) {
-                            // Overcommitted: proportional shrink
-                            var ratio = segSize / totalMin;
-                            var alloc = 0;
-                            for (var sh = 0; sh < items.length; sh++) {
-                                if (sh === items.length - 1) items[sh].dur = segSize - alloc;
-                                else { items[sh].dur = Math.max(5, Math.round(items[sh].dMin * ratio)); alloc += items[sh].dur; }
-                            }
-                            planScore += (totalMin - segSize) * 100; // penalty
-                        } else if (excess > 0) {
-                            // Distribute: non-sport first, then sport
-                            for (var ex1 = 0; ex1 < items.length && excess > 0; ex1++) {
-                                if (items[ex1].isSport) continue;
-                                var g1 = Math.min(items[ex1].dMax - items[ex1].dur, excess);
-                                if (g1 > 0) { items[ex1].dur += g1; excess -= g1; }
-                            }
-                            for (var ex2 = 0; ex2 < items.length && excess > 0; ex2++) {
-                                if (!items[ex2].isSport) continue;
-                                var g2 = Math.min(items[ex2].dMax - items[ex2].dur, excess);
-                                if (g2 > 0) { items[ex2].dur += g2; excess -= g2; }
-                            }
-                            // Any remaining excess: last sport absorbs it
-                            if (excess > 0) {
-                                for (var ex3 = items.length - 1; ex3 >= 0; ex3--) {
-                                    if (items[ex3].isSport) { items[ex3].dur += excess; excess = 0; break; }
+                        // If we're taking space from a sport block, shrink it
+                        for (var is2 = 0; is2 < iaTl.length; is2++) {
+                            var isb = iaTl[is2];
+                            if (isb._fixed || isPhase0(isb)) continue;
+                            var isbt = (isb.type || '').toLowerCase();
+                            if (['sport', 'slot'].indexOf(isbt) < 0) continue;
+                            // If this sport block contains our placement, split it
+                            if (isb.startMin <= placeStart && isb.endMin >= placeEnd) {
+                                var origEnd = isb.endMin;
+                                isb.endMin = placeStart; // shrink sport to end before need
+                                // Add remainder sport after need if room
+                                if (origEnd - placeEnd >= 5) {
+                                    iaTl.push({
+                                        startMin: placeEnd, endMin: origEnd,
+                                        type: isb.type, event: isb.event, layer: isb.layer, field: isb.field,
+                                        dMin: isb.dMin, dMax: isb.dMax, _source: 'split-remainder',
+                                        _assignedSport: isb._assignedSport, _sportFallbacks: isb._sportFallbacks
+                                    });
                                 }
+                                // Remove sport if zero-length
+                                if (isb.endMin <= isb.startMin) { iaTl.splice(is2, 1); is2--; }
+                                break;
                             }
-                            if (excess > 0 && items.length > 0) { items[items.length - 1].dur += excess; }
                         }
 
-                        // Place contiguously
-                        var cursor = seg.start;
-                        for (var pl = 0; pl < items.length; pl++) {
-                            var d = Math.round(items[pl].dur / 5) * 5;
-                            if (d < 5) d = 5;
-                            if (pl === items.length - 1) d = seg.end - cursor; // last gets remainder
-                            if (d < 5) d = 5;
-                            items[pl].block.startMin = cursor;
-                            items[pl].block.endMin = cursor + d;
-                            items[pl].block.dMin = items[pl].dMin;
-                            items[pl].block.dMax = items[pl].dMax;
-                            plan.push(items[pl].block);
-                            cursor += d;
-                        }
-
-                        // VALIDATE this segment
-                        if (cursor !== seg.end) planScore += Math.abs(cursor - seg.end) * 1000; // gap!
-                        for (var vi = 0; vi < items.length; vi++) {
-                            var vDur = items[vi].block.endMin - items[vi].block.startMin;
-                            if (vDur < items[vi].dMin) planScore += (items[vi].dMin - vDur) * 500;
-                            if (vDur > items[vi].dMax && !items[vi].isSport) planScore += (vDur - items[vi].dMax) * 200;
-                        }
+                        // Insert the need block
+                        iaTl.push({
+                            startMin: placeStart, endMin: placeEnd,
+                            type: iat === 'snacks' ? 'snacks' : iat, event: iaEvent, layer: ial,
+                            dMin: iac.dMin, dMax: iac.dMax,
+                            _source: 'finisher-inject', _activityLocked: true, _final: true,
+                            _assignedSpecial: iat === 'special' ? iaEvent : null
+                        });
+                        iaTl.sort(function(a, b) { return a.startMin - b.startMin; });
+                        bunkTimelines[iaBunk] = iaTl;
+                        iaHas[iat] = true;
+                        injectCount++;
                     }
-
-                    // Check for missing needs in the plan
-                    var planTypes = {};
-                    for (var pc = 0; pc < plan.length; pc++) {
-                        var pct = (plan[pc].type || '').toLowerCase();
-                        if (pct === 'snack') pct = 'snacks';
-                        planTypes[pct] = true;
-                    }
-                    for (var mc = 0; mc < needs.length; mc++) {
-                        var mct = (needs[mc].type || '').toLowerCase();
-                        if (mct === 'snack') mct = 'snacks';
-                        if (!planTypes[mct]) planScore += 50000; // missing need!
-                    }
-
-                    // Is this the best plan so far?
-                    if (planScore < bestScore) {
-                        bestScore = planScore;
-                        bestPlan = plan;
-                    }
-                    if (planScore === 0) break; // perfect — no need to try more
                 }
-
-                // ── STEP 6: Apply the winning plan ───────────────────────
-                bunkTimelines[wdBunk] = walls.concat(bestPlan || []);
-                bunkTimelines[wdBunk].sort(function(a, b) { return a.startMin - b.startMin; });
-                allTemplates[wdBunk] = bunkTimelines[wdBunk];
-                plannerStats.bunks++;
-                if (bestScore === 0) plannerStats.perfect++;
             }
-            log('[Phase3] ★ DAY PLANNER: ' + plannerStats.bunks + ' bunks, ' + plannerStats.perfect + ' perfect, ' + plannerStats.attempts + ' attempts, ' + plannerStats.injected + ' needs injected');
+            if (injectCount > 0) log('[Phase3] ★ INJECT: placed ' + injectCount + ' missing needs into gaps');
 
-            // ★ v11.4: ZERO-GAP FINALIZER (kept as safety net — should be no-op after day repair)
+            // ── Pass B: Rebalance durations ──────────────────────────
+            var rebalanceTotal = 0;
+            for (var rbi = 0; rbi < allBunkIds.length; rbi++) {
+                var rbBunk = allBunkIds[rbi];
+                var rbTmpl = bunkTimelines[rbBunk] || [];
+                rbTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                var rbChanged = true, rbPasses = 0;
+                while (rbChanged && rbPasses < 8) {
+                    rbChanged = false; rbPasses++;
+                    for (var rbj = 0; rbj < rbTmpl.length; rbj++) {
+                        var rbBlk = rbTmpl[rbj];
+                        var rbType = (rbBlk.type || '').toLowerCase();
+                        var rbDur = rbBlk.endMin - rbBlk.startMin;
+                        var rbC = resolveConstraints(rbBlk.layer, rbType, rbBlk);
+                        if (rbDur >= rbC.dMin) continue;
+                        var rbDeficit = Math.ceil((rbC.dMin - rbDur) / 5) * 5;
+                        if (rbDeficit < 5) continue;
+                        // Steal from previous neighbor
+                        if (rbj > 0 && !isPhase0(rbTmpl[rbj-1])) {
+                            var don = rbTmpl[rbj-1];
+                            var donC = resolveConstraints(don.layer, (don.type || '').toLowerCase(), don);
+                            var surplus = Math.floor(((don.endMin - don.startMin) - donC.dMin) / 5) * 5;
+                            if (surplus >= 5) {
+                                var steal = Math.min(rbDeficit, surplus);
+                                don.endMin -= steal; rbBlk.startMin -= steal;
+                                rbChanged = true; rebalanceTotal++; continue;
+                            }
+                        }
+                        // Steal from next neighbor
+                        if (rbj < rbTmpl.length - 1 && !isPhase0(rbTmpl[rbj+1])) {
+                            var don2 = rbTmpl[rbj+1];
+                            var don2C = resolveConstraints(don2.layer, (don2.type || '').toLowerCase(), don2);
+                            var surplus2 = Math.floor(((don2.endMin - don2.startMin) - don2C.dMin) / 5) * 5;
+                            if (surplus2 >= 5) {
+                                var steal2 = Math.min(rbDeficit, surplus2);
+                                don2.startMin += steal2; rbBlk.endMin += steal2;
+                                rbChanged = true; rebalanceTotal++; continue;
+                            }
+                        }
+                    }
+                }
+                bunkTimelines[rbBunk] = rbTmpl;
+            }
+            if (rebalanceTotal > 0) log('[Phase3] ★ REBALANCE: fixed ' + rebalanceTotal + ' duration imbalances');
+
+            // ── Pass C: Fill remaining gaps ──────────────────────────
+            for (var fc = 0; fc < allBunkIds.length; fc++) {
+                var fcBunk = allBunkIds[fc];
+                var fcMeta = bunkMeta[fcBunk];
+                if (!fcMeta) continue;
+                var fcTl = bunkTimelines[fcBunk] || [];
+                fcTl.sort(function(a, b) { return a.startMin - b.startMin; });
+                var fcGaps = findGaps(fcTl, fcMeta.gradeStart, fcMeta.gradeEnd);
+                for (var fg = 0; fg < fcGaps.length; fg++) {
+                    var fgGap = fcGaps[fg];
+                    var fgDur = fgGap.end - fgGap.start;
+                    if (fgDur <= 0) continue;
+                    // Try extending previous block
+                    var extended = false;
+                    for (var fe = fcTl.length - 1; fe >= 0; fe--) {
+                        if (fcTl[fe].endMin === fgGap.start && !isPhase0(fcTl[fe])) {
+                            var feMax = fcTl[fe].dMax || (TYPE_CEILINGS[(fcTl[fe].type || '').toLowerCase()] || 60);
+                            if ((fcTl[fe].endMin - fcTl[fe].startMin) + fgDur <= feMax) {
+                                fcTl[fe].endMin = fgGap.end; extended = true; break;
+                            }
+                        }
+                    }
+                    if (extended) continue;
+                    // Try extending next block
+                    for (var fn = 0; fn < fcTl.length; fn++) {
+                        if (fcTl[fn].startMin === fgGap.end && !isPhase0(fcTl[fn])) {
+                            var fnMax = fcTl[fn].dMax || (TYPE_CEILINGS[(fcTl[fn].type || '').toLowerCase()] || 60);
+                            if ((fcTl[fn].endMin - fcTl[fn].startMin) + fgDur <= fnMax) {
+                                fcTl[fn].startMin = fgGap.start; extended = true; break;
+                            }
+                        }
+                    }
+                    if (extended) continue;
+                    // Create filler slot
+                    if (fgDur >= 5) {
+                        fcTl.push({
+                            startMin: fgGap.start, endMin: fgGap.end,
+                            type: 'slot', event: 'General Activity Slot',
+                            layer: fcMeta.sportLayer, field: null,
+                            dMin: fgDur, dMax: fgDur, _source: 'gap-fill', _final: true,
+                            _sportFallbacks: fcMeta.priorityList ? fcMeta.priorityList.map(function(s) { return s.name; }) : []
+                        });
+                    }
+                }
+                fcTl.sort(function(a, b) { return a.startMin - b.startMin; });
+                bunkTimelines[fcBunk] = fcTl;
+                allTemplates[fcBunk] = fcTl;
+            }
+
+            // ★ v11.4: ZERO-GAP FINALIZER
             // Eliminate every remaining gap by distributing time to adjacent
             // flexible blocks. A gap-free schedule means zero Frees.
             // ══════════════════════════════════════════════════════════
