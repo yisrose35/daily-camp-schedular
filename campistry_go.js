@@ -724,7 +724,6 @@
         if (existing) existing.remove();
         const overlay = document.createElement('div');
         overlay.id = 'quickCreateModal';
-        overlay.className = 'modal-overlay';
         overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
         overlay.innerHTML = '<div class="modal" style="max-width:480px"><div class="modal-header"><h3>Quick Create Buses</h3><button class="modal-close" onclick="document.getElementById(\'quickCreateModal\').remove()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">' + h + '</div><div class="modal-footer"><button class="btn btn-secondary" onclick="document.getElementById(\'quickCreateModal\').remove()">Cancel</button><button class="btn btn-primary" id="qcCreate">Create Buses</button></div></div>';
         document.body.appendChild(overlay);
