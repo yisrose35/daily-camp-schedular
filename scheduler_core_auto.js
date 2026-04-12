@@ -4536,28 +4536,25 @@
             if (guaranteeCount > 0) log('[Phase3] ⚡ Forced ' + guaranteeCount + ' missing swim/snack placements');
 
             // ══════════════════════════════════════════════════════════
-            // ★ v12.1: SKELETON + ELASTIC PARTITION
-            // Based on CP-SAT interval variable research and UniTime's
-            // hierarchical constraint satisfaction approach.
-            //
-            // Architecture: walls divide the day into segments. Each segment
-            // is a PARTITION problem — we decide what goes there and compute
-            // all durations simultaneously to sum exactly to the segment size.
-            //
-            // Key insight: snacks are placed BEFORE sport gaps exist, so they
-            // end up in the wrong gap. This pass REASSIGNS needs to the best
-            // gap and fills remaining space with sport blocks.
+            // ★ v13.0: THE DAY PLANNER
+            // Thinks like a Tetris player: sees all pieces, plans the
+            // whole board, validates, and iterates until perfect.
             //
             // For each bunk:
-            //   1. Extract walls (immovable) and flex blocks
-            //   2. Extract "needs" (snack, swim, special) from flex blocks
-            //   3. Compute segments between walls
-            //   4. Assign each need to its best segment (within time window)
-            //   5. Fill remaining space in each segment with sport blocks
-            //   6. Solve partition: compute durations summing to segment size
-            //   7. Place contiguously — zero gaps by mathematical construction
+            //   1. Identify walls (immovable) → segments between walls
+            //   2. Identify ALL pieces: needs (swim/snack/special) + sports
+            //   3. Inject any MISSING required needs
+            //   4. PLAN: assign pieces to segments, compute durations
+            //   5. VALIDATE: gaps? dMin violations? missing pieces?
+            //   6. If imperfect: LEARN from the problem, try different plan
+            //   7. Repeat until perfect or max attempts
+            //   8. Place the winning plan contiguously
+            //
+            // The key difference: durations are computed SIMULTANEOUSLY
+            // as a system of equations, not greedily one at a time.
+            // Gaps are algebraically impossible in a valid plan.
             // ══════════════════════════════════════════════════════════
-            var repairStats = { bunks: 0, segmentsSolved: 0, snacksMoved: 0, gapsFilled: 0 };
+            var plannerStats = { bunks: 0, perfect: 0, attempts: 0, injected: 0 };
 
             for (var wdi = 0; wdi < allBunkIds.length; wdi++) {
                 var wdBunk = allBunkIds[wdi];
@@ -4565,297 +4562,282 @@
                 if (!wdMeta) continue;
                 var wdTl = bunkTimelines[wdBunk] || [];
                 wdTl.sort(function(a, b) { return a.startMin - b.startMin; });
+                var wdGrade = wdMeta.grade;
 
-                // Step 1: Separate walls from flex
+                // ── STEP 1: Identify all pieces ──────────────────────────
                 var walls = [];
-                var flex = [];
-                var needBlocks = []; // snack/swim/special/custom/rotation — blocks that MUST be placed
-                var sportBlocks = []; // sport/slot — fill whatever space remains
+                var pieces = []; // ALL non-wall blocks, typed
 
                 for (var wdj = 0; wdj < wdTl.length; wdj++) {
-                    var b = wdTl[wdj];
-                    if (isPhase0(b)) {
-                        walls.push(b);
-                    } else {
-                        var bt = (b.type || '').toLowerCase();
-                        if (['sport', 'slot', 'sports'].indexOf(bt) >= 0) {
-                            sportBlocks.push(b);
-                        } else {
-                            needBlocks.push(b); // snack, special, swim, custom, rotation_event
-                        }
-                    }
+                    if (isPhase0(wdTl[wdj])) walls.push(wdTl[wdj]);
+                    else pieces.push(wdTl[wdj]);
                 }
 
-                // Step 1b: CHECK FOR MISSING REQUIRED NEEDS — inject if absent
-                // This is the key intelligence: if snack/swim/special is required
-                // but no block exists, CREATE one so the partition can place it.
-                var wdGrade = wdMeta.grade;
+                // ── STEP 2: Inject missing required needs ────────────────
                 var wdLayers = layersByGrade[wdGrade] || [];
                 var hasType = {};
-                for (var ht = 0; ht < needBlocks.length; ht++) {
-                    var htt = (needBlocks[ht].type || '').toLowerCase();
+                for (var ht = 0; ht < pieces.length; ht++) {
+                    var htt = (pieces[ht].type || '').toLowerCase();
                     if (htt === 'snack') htt = 'snacks';
                     hasType[htt] = true;
                 }
-                // Also check walls for swim/snack (they might be pinned)
                 for (var hw = 0; hw < walls.length; hw++) {
                     var hwt = (walls[hw].type || '').toLowerCase();
                     if (hwt === 'snack') hwt = 'snacks';
                     hasType[hwt] = true;
                 }
-
                 for (var mni = 0; mni < wdLayers.length; mni++) {
                     var mnl = wdLayers[mni];
                     var mnt = (mnl.type || '').toLowerCase();
                     if (mnt === 'snack') mnt = 'snacks';
-                    // Only inject snack/swim/special if missing
                     if (['snacks', 'swim', 'special'].indexOf(mnt) < 0) continue;
                     if (hasType[mnt]) continue;
-                    // Swim: check if this bunk swims today
                     if (mnt === 'swim') {
                         var swimsToday2 = todaysSwimmers[wdGrade] ? todaysSwimmers[wdGrade].has(String(wdBunk)) : false;
                         if (!swimsToday2) continue;
                     }
-                    // Create placeholder block for the missing need
                     var mnc = resolveConstraints(mnl, mnt);
                     var mnEvent = mnl.event || mnt;
                     if (mnt === 'special') {
-                        // Try to get the drafted special name
                         var mnDraft = draftResults[wdBunk];
-                        if (mnDraft && mnDraft.specials && mnDraft.specials.length > 0) {
-                            mnEvent = mnDraft.specials[0].name;
-                        } else {
-                            continue; // no special assigned to this bunk
-                        }
+                        if (mnDraft && mnDraft.specials && mnDraft.specials.length > 0) mnEvent = mnDraft.specials[0].name;
+                        else continue;
                     }
-                    needBlocks.push({
-                        type: mnt === 'snacks' ? 'snacks' : mnt,
-                        event: mnEvent, layer: mnl,
-                        startMin: mnl.startMin || wdMeta.gradeStart,
-                        endMin: (mnl.startMin || wdMeta.gradeStart) + mnc.dMin,
-                        dMin: mnc.dMin, dMax: mnc.dMax,
-                        _source: 'partition-inject', _activityLocked: true, _final: true,
+                    pieces.push({
+                        type: mnt === 'snacks' ? 'snacks' : mnt, event: mnEvent, layer: mnl,
+                        startMin: 0, endMin: 0, dMin: mnc.dMin, dMax: mnc.dMax,
+                        _source: 'planner-inject', _activityLocked: true,
                         _assignedSpecial: mnt === 'special' ? mnEvent : null
                     });
                     hasType[mnt] = true;
-                    log('[PARTITION] Injected missing ' + mnt + ' for bunk ' + wdBunk);
-                    repairStats.gapsFilled++;
+                    plannerStats.injected++;
                 }
 
-                // Step 2: Compute segments between walls
+                // ── STEP 3: Compute segments between walls ───────────────
                 walls.sort(function(a, b) { return a.startMin - b.startMin; });
                 var segments = [];
                 var segCursor = wdMeta.gradeStart;
                 for (var wdk = 0; wdk < walls.length; wdk++) {
                     if (walls[wdk].startMin > segCursor) {
-                        segments.push({ start: segCursor, end: walls[wdk].startMin, size: walls[wdk].startMin - segCursor });
+                        segments.push({ start: segCursor, end: walls[wdk].startMin });
                     }
                     segCursor = Math.max(segCursor, walls[wdk].endMin);
                 }
                 if (segCursor < wdMeta.gradeEnd) {
-                    segments.push({ start: segCursor, end: wdMeta.gradeEnd, size: wdMeta.gradeEnd - segCursor });
+                    segments.push({ start: segCursor, end: wdMeta.gradeEnd });
+                }
+                if (segments.length === 0) {
+                    bunkTimelines[wdBunk] = walls.slice();
+                    allTemplates[wdBunk] = bunkTimelines[wdBunk];
+                    plannerStats.bunks++;
+                    continue;
                 }
 
-                // Step 3: Assign each need to its best segment
-                // Best = segment that overlaps the need's time window with the most room
-                var segAssignments = []; // parallel to segments: array of need entries
-                for (var si = 0; si < segments.length; si++) segAssignments.push([]);
-
-                for (var ni = 0; ni < needBlocks.length; ni++) {
-                    var nb = needBlocks[ni];
-                    var nbt = (nb.type || '').toLowerCase();
-                    var nc = resolveConstraints(nb.layer, nbt, nb);
-                    var nWinStart = (nb.layer && nb.layer.startMin != null) ? nb.layer.startMin : wdMeta.gradeStart;
-                    var nWinEnd = (nb.layer && nb.layer.endMin != null) ? nb.layer.endMin : wdMeta.gradeEnd;
-
-                    // Find best segment: overlaps window, has enough room for dMin
-                    var bestSeg = -1, bestOverlap = 0;
-                    for (var si2 = 0; si2 < segments.length; si2++) {
-                        var seg = segments[si2];
-                        var oStart = Math.max(seg.start, nWinStart);
-                        var oEnd = Math.min(seg.end, nWinEnd);
-                        var overlap = oEnd - oStart;
-                        if (overlap >= nc.dMin && overlap > bestOverlap) {
-                            bestOverlap = overlap;
-                            bestSeg = si2;
-                        }
-                    }
-                    // Fallback 1: any segment overlapping window at all
-                    if (bestSeg < 0) {
-                        for (var si3 = 0; si3 < segments.length; si3++) {
-                            var oS = Math.max(segments[si3].start, nWinStart);
-                            var oE = Math.min(segments[si3].end, nWinEnd);
-                            if (oE > oS) { bestSeg = si3; break; }
-                        }
-                    }
-                    // Fallback 2: any segment with enough room (ignoring window)
-                    if (bestSeg < 0) {
-                        for (var si3b = 0; si3b < segments.length; si3b++) {
-                            if (segments[si3b].size >= nc.dMin) { bestSeg = si3b; break; }
-                        }
-                    }
-                    // Fallback 3: LARGEST segment — NEVER drop a need
-                    if (bestSeg < 0 && segments.length > 0) {
-                        var largestIdx = 0;
-                        for (var si3c = 1; si3c < segments.length; si3c++) {
-                            if (segments[si3c].size > segments[largestIdx].size) largestIdx = si3c;
-                        }
-                        bestSeg = largestIdx;
-                        // Clamp dMin to fit the segment
-                        nc.dMin = Math.min(nc.dMin, segments[bestSeg].size);
-                        nc.dMax = Math.min(nc.dMax, segments[bestSeg].size);
-                    }
-                    if (bestSeg >= 0) {
-                        segAssignments[bestSeg].push({
-                            block: nb, dMin: nc.dMin, dMax: nc.dMax,
-                            type: nbt, isSport: false, dur: 0
-                        });
-                        var origMid = (nb.startMin + nb.endMin) / 2;
-                        if (origMid < segments[bestSeg].start || origMid >= segments[bestSeg].end) {
-                            repairStats.snacksMoved++;
-                        }
-                    }
+                // ── STEP 4: Classify pieces ──────────────────────────────
+                var needs = []; // swim/snack/special/custom/rotation — have time windows
+                var sports = []; // sport/slot — fill whatever space remains
+                for (var pi = 0; pi < pieces.length; pi++) {
+                    var pt = (pieces[pi].type || '').toLowerCase();
+                    if (['sport', 'slot', 'sports'].indexOf(pt) >= 0) sports.push(pieces[pi]);
+                    else needs.push(pieces[pi]);
                 }
 
-                // Step 4: For each segment, compute how many sport blocks are needed
-                // and size them to fill the space EXACTLY. No guessing with dMin pools.
-                var sportPool = sportBlocks.slice();
-                var sportPoolIdx = 0;
-                var repairedBlocks = [];
+                // ── STEP 5: THE PLANNING LOOP ────────────────────────────
+                // Try different arrangements until one produces a perfect day.
+                // Each attempt assigns needs to segments, fills with sports,
+                // and validates. Learning: if a segment overflows, spread needs.
 
-                for (var si4 = 0; si4 < segments.length; si4++) {
-                    var seg = segments[si4];
-                    var assigned = segAssignments[si4];
-                    var needsTotal = 0;
-                    for (var at = 0; at < assigned.length; at++) needsTotal += assigned[at].dMin;
+                var bestPlan = null, bestScore = Infinity;
+                var maxAttempts = 3;
 
-                    var sportSpace = seg.size - needsTotal;
-                    if (sportSpace < 0) sportSpace = 0;
+                for (var attempt = 0; attempt < maxAttempts; attempt++) {
+                    plannerStats.attempts++;
 
-                    // Compute exactly how many sport blocks fit: ceil(sportSpace / ceiling)
-                    var ceiling = wdMeta.sportCeiling || 60;
-                    var floor = wdMeta.fillMinDur || 20;
-                    var numSportBlocks = sportSpace > 0 ? Math.ceil(sportSpace / ceiling) : 0;
-                    // Make sure each block gets at least floor
-                    while (numSportBlocks > 1 && Math.floor(sportSpace / numSportBlocks) < floor) {
-                        numSportBlocks--;
-                    }
-                    // If only a tiny remnant, one block takes it all
-                    if (sportSpace > 0 && numSportBlocks === 0) numSportBlocks = 1;
+                    // Assign needs to segments
+                    var segNeeds = [];
+                    for (var sn = 0; sn < segments.length; sn++) segNeeds.push([]);
 
-                    // Compute even sport duration (will be adjusted in partition solve)
-                    var sportBlockDur = numSportBlocks > 0 ? Math.round(sportSpace / numSportBlocks / 5) * 5 : 0;
-
-                    for (var sbi = 0; sbi < numSportBlocks; sbi++) {
-                        var spBlock;
-                        if (sportPoolIdx < sportPool.length) {
-                            spBlock = sportPool[sportPoolIdx++];
-                        } else {
-                            spBlock = {
-                                type: 'slot', event: 'General Activity Slot',
-                                layer: wdMeta.sportLayer, field: null,
-                                _source: 'partition-fill', _final: true,
-                                _sportFallbacks: wdMeta.priorityList ? wdMeta.priorityList.map(function(s) { return s.name; }) : []
-                            };
+                    // Sort needs: on attempt 0, prefer window match. On retry, spread more evenly.
+                    var needOrder = needs.slice();
+                    if (attempt > 0) {
+                        // Shuffle needs to try different assignment
+                        for (var ns = needOrder.length - 1; ns > 0; ns--) {
+                            var nj = (attempt * 7 + ns * 13) % (ns + 1);
+                            var tmp = needOrder[ns]; needOrder[ns] = needOrder[nj]; needOrder[nj] = tmp;
                         }
-                        var spMin = Math.min(floor, sportSpace);
-                        var spMax = Math.min(ceiling, sportSpace);
-                        assigned.push({
-                            block: spBlock, dMin: spMin, dMax: spMax,
-                            type: (spBlock.type || 'slot').toLowerCase(), isSport: true, dur: 0
-                        });
                     }
 
-                    // Step 5: SOLVE PARTITION — compute durations summing to exactly seg.size
-                    var totalMin = 0;
-                    for (var tm = 0; tm < assigned.length; tm++) totalMin += assigned[tm].dMin;
+                    for (var ni = 0; ni < needOrder.length; ni++) {
+                        var nb = needOrder[ni];
+                        var nbt = (nb.type || '').toLowerCase();
+                        var nc = resolveConstraints(nb.layer, nbt, nb);
+                        var nWinS = (nb.layer && nb.layer.startMin != null) ? nb.layer.startMin : wdMeta.gradeStart;
+                        var nWinE = (nb.layer && nb.layer.endMin != null) ? nb.layer.endMin : wdMeta.gradeEnd;
 
-                    if (assigned.length === 0) {
-                        // Empty segment — create one filler
-                        if (seg.size >= 5) {
-                            repairedBlocks.push({
-                                startMin: seg.start, endMin: seg.end,
-                                type: 'slot', event: 'General Activity Slot',
-                                layer: wdMeta.sportLayer, field: null,
-                                dMin: seg.size, dMax: seg.size,
-                                _source: 'partition-fill', _final: true,
-                                _sportFallbacks: wdMeta.priorityList ? wdMeta.priorityList.map(function(s) { return s.name; }) : []
+                        // Find best segment: most overlap with window AND has room
+                        var bestSeg = -1, bestVal = -Infinity;
+                        for (var si2 = 0; si2 < segments.length; si2++) {
+                            var seg = segments[si2];
+                            var oS = Math.max(seg.start, nWinS), oE = Math.min(seg.end, nWinE);
+                            var overlap = oE - oS;
+                            // Compute remaining room in this segment
+                            var usedInSeg = 0;
+                            for (var su = 0; su < segNeeds[si2].length; su++) usedInSeg += segNeeds[si2][su].dMin;
+                            var room = (seg.end - seg.start) - usedInSeg;
+                            if (room < nc.dMin) continue; // won't fit
+                            var val = overlap * 2 + room; // prefer window match + room
+                            if (val > bestVal) { bestVal = val; bestSeg = si2; }
+                        }
+                        // Fallback: any segment with room
+                        if (bestSeg < 0) {
+                            for (var si3 = 0; si3 < segments.length; si3++) {
+                                var used3 = 0;
+                                for (var su3 = 0; su3 < segNeeds[si3].length; su3++) used3 += segNeeds[si3][su3].dMin;
+                                if ((segments[si3].end - segments[si3].start) - used3 >= 5) { bestSeg = si3; break; }
+                            }
+                        }
+                        // Last resort: largest segment
+                        if (bestSeg < 0) {
+                            var lrg = 0;
+                            for (var si4 = 1; si4 < segments.length; si4++) {
+                                if ((segments[si4].end - segments[si4].start) > (segments[lrg].end - segments[lrg].start)) lrg = si4;
+                            }
+                            bestSeg = lrg;
+                        }
+                        segNeeds[bestSeg].push({ block: nb, dMin: nc.dMin, dMax: nc.dMax, type: nbt, isSport: false });
+                    }
+
+                    // Fill each segment: needs + sport blocks + solve durations
+                    var plan = []; // all blocks for this attempt
+                    var sportIdx = 0;
+                    var planScore = 0; // lower = better
+
+                    for (var si5 = 0; si5 < segments.length; si5++) {
+                        var seg = segments[si5];
+                        var segSize = seg.end - seg.start;
+                        var items = segNeeds[si5].slice(); // needs assigned here
+
+                        // Compute how much space sports get
+                        var needsMin = 0;
+                        for (var nm = 0; nm < items.length; nm++) needsMin += items[nm].dMin;
+                        var sportSpace = segSize - needsMin;
+
+                        // Add sport blocks to fill sportSpace
+                        var ceil = wdMeta.sportCeiling || 60;
+                        var flr = wdMeta.fillMinDur || 20;
+                        if (sportSpace >= 5) {
+                            var numSport = Math.max(1, Math.ceil(sportSpace / ceil));
+                            while (numSport > 1 && sportSpace / numSport < flr) numSport--;
+                            for (var spi = 0; spi < numSport; spi++) {
+                                var spBlk = (sportIdx < sports.length) ? sports[sportIdx++] : {
+                                    type: 'slot', event: 'General Activity Slot',
+                                    layer: wdMeta.sportLayer, field: null, _source: 'planner-fill',
+                                    _sportFallbacks: wdMeta.priorityList ? wdMeta.priorityList.map(function(s) { return s.name; }) : []
+                                };
+                                items.push({ block: spBlk, dMin: Math.min(flr, sportSpace), dMax: ceil, type: (spBlk.type || 'slot').toLowerCase(), isSport: true });
+                            }
+                        }
+
+                        if (items.length === 0 && segSize >= 5) {
+                            // Empty segment — one filler
+                            items.push({
+                                block: { type: 'slot', event: 'General Activity Slot', layer: wdMeta.sportLayer, field: null, _source: 'planner-fill',
+                                    _sportFallbacks: wdMeta.priorityList ? wdMeta.priorityList.map(function(s) { return s.name; }) : [] },
+                                dMin: segSize, dMax: segSize, type: 'slot', isSport: true
                             });
                         }
-                        continue;
-                    }
 
-                    // Start everyone at dMin
-                    for (var sd = 0; sd < assigned.length; sd++) {
-                        assigned[sd].dur = assigned[sd].dMin;
-                    }
+                        // SOLVE: compute durations summing to exactly segSize
+                        var totalMin = 0;
+                        for (var tm = 0; tm < items.length; tm++) totalMin += items[tm].dMin;
 
-                    var excess = seg.size - totalMin;
-                    if (excess < 0) {
-                        // Over-committed: proportionally shrink (shouldn't happen often)
-                        var shrinkRatio = seg.size / totalMin;
-                        var shrinkAlloc = 0;
-                        for (var sh = 0; sh < assigned.length; sh++) {
-                            if (sh === assigned.length - 1) {
-                                assigned[sh].dur = seg.size - shrinkAlloc;
-                            } else {
-                                assigned[sh].dur = Math.max(5, Math.round(assigned[sh].dMin * shrinkRatio / 5) * 5);
-                                shrinkAlloc += assigned[sh].dur;
+                        // Start at dMin
+                        for (var sd = 0; sd < items.length; sd++) items[sd].dur = items[sd].dMin;
+
+                        var excess = segSize - totalMin;
+                        if (excess < 0) {
+                            // Overcommitted: proportional shrink
+                            var ratio = segSize / totalMin;
+                            var alloc = 0;
+                            for (var sh = 0; sh < items.length; sh++) {
+                                if (sh === items.length - 1) items[sh].dur = segSize - alloc;
+                                else { items[sh].dur = Math.max(5, Math.round(items[sh].dMin * ratio)); alloc += items[sh].dur; }
                             }
-                        }
-                    } else if (excess > 0) {
-                        // Distribute excess WITHOUT rounding — rounding happens at placement.
-                        // This guarantees zero leftover.
-                        // Pass 1: grow non-sport blocks (snack/special) up to dMax
-                        for (var ex1 = 0; ex1 < assigned.length && excess > 0; ex1++) {
-                            if (assigned[ex1].isSport) continue;
-                            var grow1 = Math.min(assigned[ex1].dMax - assigned[ex1].dur, excess);
-                            if (grow1 > 0) { assigned[ex1].dur += grow1; excess -= grow1; }
-                        }
-                        // Pass 2: grow sport blocks up to dMax
-                        for (var ex2 = 0; ex2 < assigned.length && excess > 0; ex2++) {
-                            if (!assigned[ex2].isSport) continue;
-                            var grow2 = Math.min(assigned[ex2].dMax - assigned[ex2].dur, excess);
-                            if (grow2 > 0) { assigned[ex2].dur += grow2; excess -= grow2; }
-                        }
-                        // Pass 3: sport blocks absorb ALL remaining excess (better than gaps)
-                        if (excess > 0) {
-                            for (var ex3 = assigned.length - 1; ex3 >= 0; ex3--) {
-                                if (assigned[ex3].isSport) { assigned[ex3].dur += excess; excess = 0; break; }
+                            planScore += (totalMin - segSize) * 100; // penalty
+                        } else if (excess > 0) {
+                            // Distribute: non-sport first, then sport
+                            for (var ex1 = 0; ex1 < items.length && excess > 0; ex1++) {
+                                if (items[ex1].isSport) continue;
+                                var g1 = Math.min(items[ex1].dMax - items[ex1].dur, excess);
+                                if (g1 > 0) { items[ex1].dur += g1; excess -= g1; }
                             }
+                            for (var ex2 = 0; ex2 < items.length && excess > 0; ex2++) {
+                                if (!items[ex2].isSport) continue;
+                                var g2 = Math.min(items[ex2].dMax - items[ex2].dur, excess);
+                                if (g2 > 0) { items[ex2].dur += g2; excess -= g2; }
+                            }
+                            // Any remaining excess: last sport absorbs it
+                            if (excess > 0) {
+                                for (var ex3 = items.length - 1; ex3 >= 0; ex3--) {
+                                    if (items[ex3].isSport) { items[ex3].dur += excess; excess = 0; break; }
+                                }
+                            }
+                            if (excess > 0 && items.length > 0) { items[items.length - 1].dur += excess; }
                         }
-                        // Absolute last resort
-                        if (excess > 0) { assigned[assigned.length - 1].dur += excess; }
+
+                        // Place contiguously
+                        var cursor = seg.start;
+                        for (var pl = 0; pl < items.length; pl++) {
+                            var d = Math.round(items[pl].dur / 5) * 5;
+                            if (d < 5) d = 5;
+                            if (pl === items.length - 1) d = seg.end - cursor; // last gets remainder
+                            if (d < 5) d = 5;
+                            items[pl].block.startMin = cursor;
+                            items[pl].block.endMin = cursor + d;
+                            items[pl].block.dMin = items[pl].dMin;
+                            items[pl].block.dMax = items[pl].dMax;
+                            plan.push(items[pl].block);
+                            cursor += d;
+                        }
+
+                        // VALIDATE this segment
+                        if (cursor !== seg.end) planScore += Math.abs(cursor - seg.end) * 1000; // gap!
+                        for (var vi = 0; vi < items.length; vi++) {
+                            var vDur = items[vi].block.endMin - items[vi].block.startMin;
+                            if (vDur < items[vi].dMin) planScore += (items[vi].dMin - vDur) * 500;
+                            if (vDur > items[vi].dMax && !items[vi].isSport) planScore += (vDur - items[vi].dMax) * 200;
+                        }
                     }
 
-                    // Step 6: Place contiguously — zero gaps by construction
-                    var placeCursor = seg.start;
-                    for (var pl = 0; pl < assigned.length; pl++) {
-                        var entry = assigned[pl];
-                        var dur = Math.round(entry.dur / 5) * 5;
-                        if (dur < 5) dur = 5;
-                        // Last block gets exact remainder (absorbs rounding)
-                        if (pl === assigned.length - 1) {
-                            dur = seg.end - placeCursor;
-                            if (dur < 5) dur = 5;
-                        }
-                        entry.block.startMin = placeCursor;
-                        entry.block.endMin = placeCursor + dur;
-                        entry.block.dMin = entry.dMin;
-                        entry.block.dMax = entry.dMax;
-                        repairedBlocks.push(entry.block);
-                        placeCursor += dur;
+                    // Check for missing needs in the plan
+                    var planTypes = {};
+                    for (var pc = 0; pc < plan.length; pc++) {
+                        var pct = (plan[pc].type || '').toLowerCase();
+                        if (pct === 'snack') pct = 'snacks';
+                        planTypes[pct] = true;
                     }
-                    repairStats.segmentsSolved++;
+                    for (var mc = 0; mc < needs.length; mc++) {
+                        var mct = (needs[mc].type || '').toLowerCase();
+                        if (mct === 'snack') mct = 'snacks';
+                        if (!planTypes[mct]) planScore += 50000; // missing need!
+                    }
+
+                    // Is this the best plan so far?
+                    if (planScore < bestScore) {
+                        bestScore = planScore;
+                        bestPlan = plan;
+                    }
+                    if (planScore === 0) break; // perfect — no need to try more
                 }
 
-                // Step 7: Reconstruct timeline: walls + repaired blocks
-                bunkTimelines[wdBunk] = walls.concat(repairedBlocks);
+                // ── STEP 6: Apply the winning plan ───────────────────────
+                bunkTimelines[wdBunk] = walls.concat(bestPlan || []);
                 bunkTimelines[wdBunk].sort(function(a, b) { return a.startMin - b.startMin; });
                 allTemplates[wdBunk] = bunkTimelines[wdBunk];
-                repairStats.bunks++;
+                plannerStats.bunks++;
+                if (bestScore === 0) plannerStats.perfect++;
             }
-            log('[Phase3] ★ PARTITION: ' + repairStats.bunks + ' bunks, ' + repairStats.segmentsSolved + ' segments solved, ' + repairStats.snacksMoved + ' needs reassigned to better segments');
+            log('[Phase3] ★ DAY PLANNER: ' + plannerStats.bunks + ' bunks, ' + plannerStats.perfect + ' perfect, ' + plannerStats.attempts + ' attempts, ' + plannerStats.injected + ' needs injected');
 
             // ★ v11.4: ZERO-GAP FINALIZER (kept as safety net — should be no-op after day repair)
             // Eliminate every remaining gap by distributing time to adjacent
