@@ -635,6 +635,31 @@
         return data.routes[0].legs.map(leg => leg.duration); // seconds
     }
 
+    // =========================================================================
+    // OSRM WALKING DISTANCE VALIDATION
+    // Uses OSRM foot profile to verify actual walking distances.
+    // Manhattan distance underestimates when there are dead-ends, parks, etc.
+    // =========================================================================
+    async function fetchWalkingDistances(stopLat, stopLng, camperCoords) {
+        if (!camperCoords.length) return null;
+        // OSRM table: stop as source, camper homes as destinations
+        const coords = [stopLng + ',' + stopLat];
+        camperCoords.forEach(c => coords.push(c.lng + ',' + c.lat));
+        if (coords.length > 25) return null; // OSRM limit
+        try {
+            const url = 'https://router.project-osrm.org/table/v1/foot/' + coords.join(';') +
+                '?sources=0&annotations=distance';
+            const resp = await fetch(url);
+            if (!resp.ok) return null;
+            const data = await resp.json();
+            if (data.code !== 'Ok' || !data.distances?.[0]) return null;
+            // Returns distances in meters from stop to each camper
+            return data.distances[0].slice(1); // skip stop-to-self
+        } catch (e) {
+            return null;
+        }
+    }
+
     function decodePolyline(encoded) {
         const points = []; let i = 0, lat = 0, lng = 0;
         while (i < encoded.length) {
@@ -4427,29 +4452,55 @@
         // Smart clustering: street-aware, capacity-capped
         const bestClusters = smartCluster(campers, walkMi, sibMap);
 
-        // Build stops — median point for optimal pickup location
+        // Build stops — snap to nearest camper's house with camp-facing bias
         const stops = bestClusters.map(cluster => {
             if (cluster.length === 1) {
                 return { lat: cluster[0].lat, lng: cluster[0].lng, address: cluster[0].address, campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })) };
             }
 
-            // Coordinate-wise median = exact L1 optimal point
+            // Step 1: Compute coordinate-wise median as starting point
             const sortedLats = cluster.map(k => k.lat).sort((a, b) => a - b);
             const sortedLngs = cluster.map(k => k.lng).sort((a, b) => a - b);
-            const medianLat = sortedLats[Math.floor(sortedLats.length / 2)];
-            const medianLng = sortedLngs[Math.floor(sortedLngs.length / 2)];
+            let medianLat = sortedLats[Math.floor(sortedLats.length / 2)];
+            let medianLng = sortedLngs[Math.floor(sortedLngs.length / 2)];
 
-            let nearestAddr = cluster[0].address, nearestDist = Infinity;
+            // Step 2: Camp-facing bias — shift the stop 15% of cluster radius
+            // toward camp so the bus approaches from the camp side
+            if (_campCoordsCache) {
+                const clusterRadius = Math.max(...cluster.map(k => manhattanMi(medianLat, medianLng, k.lat, k.lng)));
+                if (clusterRadius > 0.005) { // only bias if cluster has meaningful spread
+                    const bearingLat = _campCoordsCache.lat - medianLat;
+                    const bearingLng = _campCoordsCache.lng - medianLng;
+                    const bearingDist = Math.sqrt(bearingLat ** 2 + bearingLng ** 2);
+                    if (bearingDist > 0) {
+                        const shift = clusterRadius * 0.15; // 15% bias toward camp
+                        const shiftLat = medianLat + (bearingLat / bearingDist) * shift * 14.5; // ~14.5 = degrees per mile at this latitude
+                        const shiftLng = medianLng + (bearingLng / bearingDist) * shift * 14.5;
+                        // Verify all kids still within walk distance of shifted point
+                        const allFit = cluster.every(k => manhattanMi(shiftLat, shiftLng, k.lat, k.lng) <= walkMi);
+                        if (allFit) {
+                            medianLat = shiftLat;
+                            medianLng = shiftLng;
+                        }
+                    }
+                }
+            }
+
+            // Step 3: Snap to nearest camper's house instead of geometric point
+            // A real address on a real street is always better than a median
+            // that might land in a parking lot or park
+            let bestHouse = cluster[0], bestDist = Infinity;
             cluster.forEach(k => {
                 const d = manhattanMi(medianLat, medianLng, k.lat, k.lng);
-                if (d < nearestDist) { nearestDist = d; nearestAddr = k.address; }
+                if (d < bestDist) { bestDist = d; bestHouse = k; }
             });
 
-            const parsed = parseAddress(nearestAddr);
-            const streetLabel = parsed.street || nearestAddr.split(',')[0];
-            const label = nearestDist < 0.01 ? nearestAddr : 'Near ' + streetLabel;
+            // Use the nearest house's actual coordinates and address
+            const stopLat = bestHouse.lat;
+            const stopLng = bestHouse.lng;
+            const stopAddr = bestHouse.address;
 
-            return { lat: medianLat, lng: medianLng, address: label, campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })) };
+            return { lat: stopLat, lng: stopLng, address: stopAddr, campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })) };
         });
 
         console.log('[Go] Optimized stops: ' + stops.length + ' from ' + campers.length + ' campers');
