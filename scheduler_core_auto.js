@@ -5530,13 +5530,6 @@
             // ══════════════════════════════════════════════════════════
             {
                 var swapCount = 0;
-                var swapGrades = Object.keys(gradeGroupedBunks || {});
-                if (!swapGrades.length) {
-                    // Build grade groups if not available from timeSweepFillAll closure
-                    var _sgb = {};
-                    allGrades.forEach(function(g) { _sgb[g] = getBunksForGrade(g, divisions); });
-                    swapGrades = Object.keys(_sgb);
-                }
 
                 allGrades.forEach(function(swapGrade) {
                     var swapBunks = getBunksForGrade(swapGrade, divisions);
