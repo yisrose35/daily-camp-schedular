@@ -2352,12 +2352,14 @@
                         });
                     }
 
-                    // Find nearest under-capacity zone
+                    // Find nearest under-capacity zone within reasonable distance
+                    // Don't move kids to a zone more than 3mi away — that stretches routes
                     let bestZone = null, bestDist = Infinity;
                     for (const tz of zones) {
                         if (tz === zone) continue;
                         if (tz.camperNames.length + atomNames.length > hardCap) continue;
                         const d = candCamper ? haversineMi(candCamper.lat, candCamper.lng, tz.centroidLat, tz.centroidLng) : Infinity;
+                        if (d > MAX_ABSORB_MI) continue; // don't stretch zones across distant areas
                         if (d < bestDist) { bestDist = d; bestZone = tz; }
                     }
 
@@ -2377,36 +2379,45 @@
             if (!anyOver) break;
         }
 
-        // ── E. Absorb small ZIPs ──
-        for (const smallReg of smallZips) {
+        // ── E. Absorb small ZIPs — with max distance cap ──
+        // Without a distance cap, small ZIPs get absorbed into distant zones
+        // just because they have room, creating stretched routes across ZIP codes.
+        // Max absorption distance: 3 miles (keeps zones geographically tight)
+        const MAX_ABSORB_MI = 3.0;
+
+        // Sort small ZIPs by size descending — absorb larger ones first so they
+        // get priority on nearby zones with room
+        const sortedSmallZips = [...smallZips].sort((a, b) => b.camperNames.length - a.camperNames.length);
+
+        const unabsorbed = []; // small ZIPs that couldn't be absorbed within distance cap
+
+        for (const smallReg of sortedSmallZips) {
             const regCampers = allCampers.filter(c => smallReg.camperNames.includes(c.name));
             if (!regCampers.length) continue;
 
             const centLat = regCampers.reduce((s, c) => s + c.lat, 0) / regCampers.length;
             const centLng = regCampers.reduce((s, c) => s + c.lng, 0) / regCampers.length;
 
-            // Try at 90%, 95%, 100% fill
+            // Try at 90%, 95%, 100% fill — but enforce max distance
             let absorbed = false;
             for (const tryPct of [targetFillPct, 0.95, 1.0]) {
                 const tryFill = Math.floor(avgEffCap * tryPct);
-                // Find closest pocket with room
                 let bestZone = null, bestDist = Infinity;
                 for (const z of zones) {
                     if (z.camperNames.length + smallReg.camperNames.length > tryFill) continue;
                     const d = haversineMi(centLat, centLng, z.centroidLat, z.centroidLng);
+                    if (d > MAX_ABSORB_MI) continue; // too far — don't stretch the zone
                     if (d < bestDist) { bestDist = d; bestZone = z; }
                 }
                 if (bestZone) {
                     const oldName = bestZone.name;
                     bestZone.camperNames.push(...smallReg.camperNames);
                     bestZone.regionIds.push(smallReg.id);
-                    // Recalculate centroid
                     const allInZone = allCampers.filter(c => bestZone.camperNames.includes(c.name));
                     if (allInZone.length) {
                         bestZone.centroidLat = allInZone.reduce((s, c) => s + c.lat, 0) / allInZone.length;
                         bestZone.centroidLng = allInZone.reduce((s, c) => s + c.lng, 0) / allInZone.length;
                     }
-                    // Rename: two-component max
                     const parts = oldName.split(' + ');
                     const smallCity = smallReg.name.split(' (')[0];
                     if (parts.length >= 2) {
@@ -2415,17 +2426,32 @@
                         bestZone.name = oldName.split(' (')[0] + ' + ' + smallCity;
                     }
                     console.log('[Go] Zone: Absorbed ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids) into ' + oldName + ' → "' + bestZone.name + '" (' + bestZone.camperNames.length + ' kids, ' + bestDist.toFixed(2) + 'mi away)');
-                    // List all parts
                     console.log('[Go] Zone:   Parts: ' + bestZone.regionIds.map(id => regions.find(r => r.id === id)?.name || id).join(', '));
                     absorbed = true;
                     break;
                 }
             }
             if (!absorbed) {
-                console.error('[Go] Zone: ABORT — could not absorb ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids), no zone has room');
-                toast('Cannot absorb ' + smallReg.name + ': no zone has room', 'error');
-                return null;
+                unabsorbed.push(smallReg);
             }
+        }
+
+        // Small ZIPs that were too far to absorb → make their own zones
+        // Better a small dedicated zone than a stretched multi-ZIP monster
+        for (const smallReg of unabsorbed) {
+            const regCampers = allCampers.filter(c => smallReg.camperNames.includes(c.name));
+            if (!regCampers.length) continue;
+            zones.push({
+                id: 'zone_' + smallReg.zip,
+                name: smallReg.name,
+                camperNames: [...smallReg.camperNames],
+                centroidLat: smallReg.centroidLat,
+                centroidLng: smallReg.centroidLng,
+                regionIds: [smallReg.id],
+                sourceType: 'small-standalone',
+                color: REGION_COLORS[zones.length % REGION_COLORS.length]
+            });
+            console.log('[Go] Zone: ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids) → standalone zone (no nearby zone within ' + MAX_ABSORB_MI + 'mi had room)');
         }
 
         // ── H. Invariant check ──
