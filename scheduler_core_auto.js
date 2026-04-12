@@ -1192,38 +1192,48 @@
             for (let ts = layer.startMin; ts + dMin <= layer.endMin; ts += 5) times.push(ts);
             if (gradeStagger.searchDirection === 'late') times.reverse();
 
-            let bestStart = null, bestScore = Infinity;
+            // ★ v11.0: League Placement Flexibility — collect top 4 candidates,
+            // use _iterSeed to vary which one is selected across iterations.
+            var leagueCandidates = [];
             for (const ts of times) {
                 const te = ts + dMin;
                 if (!bunks.every(bk => !(bunkTimelines[bk] || []).some(b => b.startMin < te && b.endMin > ts))) continue;
               let score = scorePositionByContention(ts, te, 'league', null, null);
                 score += getCrossGradeConflicts('league', ts, te, grade) * 10000;
-                // Iteration jitter: vary league placement across iterations
-                score += (seedJitter(_iterSeed, ts) - 0.5) * 2000;
                 // ★ v4.0: Prefer the rotation matrix's league band (strong suggestion)
                 if (leagueBand && ts >= leagueBand.start && te <= leagueBand.end) score -= 500;
                 else if (leagueBand) score += 200;
                 // ★ v5.1: Penalize positions that create un-fillable dead zones
-                // Check gap between this league and adjacent walls
                 const leagueDur = expandLeagueDur(ts, bunks);
                 const leagueEnd = ts + leagueDur;
                 const _minFill = getMinFillable(grade);
                 bunks.forEach(bk => {
                     const tl = bunkTimelines[bk] || [];
-                    // Check gap BEFORE this league
                     let prevEnd = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                     tl.forEach(b => { if (b.endMin <= ts && b.endMin > prevEnd) prevEnd = b.endMin; });
                     const gapBefore = ts - prevEnd;
                     if (gapBefore > 0 && gapBefore < _minFill) score += 5000;
-                    // Check gap AFTER this league
                     let nextStart = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
                     tl.forEach(b => { if (b.startMin >= leagueEnd && b.startMin < nextStart) nextStart = b.startMin; });
                     const gapAfter = nextStart - leagueEnd;
                     if (gapAfter > 0 && gapAfter < _minFill) score += 5000;
                 });
-                if (score < bestScore) { bestScore = score; bestStart = ts; }
+                leagueCandidates.push({ start: ts, score: score });
             }
-            if (bestStart === null) { warn('[P0] No free league gap for ' + grade); return null; }
+            // Sort by score, keep top 4 distinct positions
+            leagueCandidates.sort(function(a, b) { return a.score - b.score; });
+            var uniqueCandidates = [];
+            var seenStarts = {};
+            for (var lci = 0; lci < leagueCandidates.length && uniqueCandidates.length < 4; lci++) {
+                if (!seenStarts[leagueCandidates[lci].start]) {
+                    seenStarts[leagueCandidates[lci].start] = true;
+                    uniqueCandidates.push(leagueCandidates[lci]);
+                }
+            }
+            if (uniqueCandidates.length === 0) { warn('[P0] No free league gap for ' + grade); return null; }
+            // Select candidate based on _iterSeed — different iteration = different position
+            var candidateIdx = _iterSeed % uniqueCandidates.length;
+            var bestStart = uniqueCandidates[candidateIdx].start;
 
             const expandedDur = expandLeagueDur(bestStart, bunks);
             bunks.forEach(bunk => {
@@ -1302,6 +1312,20 @@
                     score = window.RotationEngine.calculateRotationScore({ bunkName: bunk, activityName: name, divisionName: grade, beforeSlotIndex: 0, allActivities: null, activityProperties });
                 }
                 if (score === Infinity) score = 99999;
+                // ★ v11.0: Multi-day awareness — adjust score based on week history
+                if (weekActivityHistory) {
+                    var bunkHist = weekActivityHistory[String(bunk)] || {};
+                    var recentDays = getRecentDays(currentDate, 5);
+                    var daysSince = Infinity;
+                    for (var rd = 0; rd < recentDays.length; rd++) {
+                        if ((bunkHist[recentDays[rd]] || []).indexOf(name) >= 0) { daysSince = rd + 1; break; }
+                    }
+                    if (daysSince <= 1) score += 3000;         // done yesterday — avoid
+                    else if (daysSince <= 2) score += 1000;    // done 2 days ago — mild avoid
+                    else if (daysSince >= 4) score -= 500;     // overdue — prioritize
+                    var streak = countConsecutiveStreak(bunkHist, currentDate, name);
+                    if (streak >= 3) score += 10000 * streak;  // long streak is terrible
+                }
                 const playerReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(name);
                 const needsPairing = playerReqs?.minPlayers && bunkSize < playerReqs.minPlayers;
                 sportPriorityList.push({
@@ -1313,7 +1337,8 @@
             });
             sportPriorityList.sort((a, b) => a.rotationScore - b.rotationScore);
             // Iteration variation: partially shuffle sport order
-            if (_iterSeed > 0) {
+            // ★ v11.0: When bias = sportVariety, skip shuffle to preserve rotation-optimal order
+            if (_iterSeed > 0 && iterationBias.category !== 'sportVariety') {
                 const top = Math.min(5, sportPriorityList.length);
                 const topSlice = seedShuffle(sportPriorityList.slice(0, top), _iterSeed + parseInt(String(bunk).replace(/\D/g,'')) || 0);
                 for (let si = 0; si < top; si++) sportPriorityList[si] = topSlice[si];
@@ -3114,6 +3139,14 @@
                         // 4. Iteration learning: bonus for positions that historically scored well
                         score += iterationMemoryBank.getBonus(grade, need.type, pos.start) * 5;
 
+                        // 5. ★ v11.0: Guided iteration bias — amplify relevant penalties
+                        if (iterationBias.category === 'gaps') {
+                            score -= deadGaps * 800; // 4x extra penalty when gaps are the issue
+                        }
+                        if (iterationBias.category === 'missingLayers') {
+                            if (['swim', 'snack', 'snacks', 'special'].indexOf(need.type) >= 0) score += 500;
+                        }
+
                         return score;
                     }
 
@@ -3233,10 +3266,59 @@
                             }
                         }
                     } else {
-                        // Solver couldn't place all needs — place what we can
+                        // ★ v11.0: CONSTRAINT RELAXATION — structured fallback when CSP fails
+                        // Try each need with progressive relaxation levels before giving up
                         for (var fi2 = 0; fi2 < needs.length; fi2++) {
                             var need = needs[fi2];
                             var positions = getValidPositions(need, template, gradeStart, gradeEnd, fillMinDur);
+                            var relaxationType = null, relaxationDetail = null;
+
+                            // Level 0: Try original constraints
+                            if (positions.length === 0) {
+                                // Level 1: Shift time window ±15min
+                                var shifted = {};
+                                for (var _sk in need) shifted[_sk] = need[_sk];
+                                shifted.windowStart = Math.max(gradeStart, (need.windowStart || gradeStart) - 15);
+                                shifted.windowEnd = Math.min(gradeEnd, (need.windowEnd || gradeEnd) + 15);
+                                positions = getValidPositions(shifted, template, gradeStart, gradeEnd, fillMinDur);
+                                if (positions.length > 0) { relaxationType = 'time_shift'; relaxationDetail = '±15min window shift'; }
+                            }
+                            if (positions.length === 0) {
+                                // Level 2: Reduce dMin by 5min (never below type floor)
+                                var shortened = {};
+                                for (var _sk2 in need) shortened[_sk2] = need[_sk2];
+                                var typeFloor = TYPE_FLOORS[(need.type || 'slot').toLowerCase()] || 15;
+                                if (need.dMin > typeFloor + 5) {
+                                    shortened.dMin = Math.max(typeFloor, need.dMin - 5);
+                                    shortened.dMax = Math.max(shortened.dMin, (need.dMax || 60) - 5);
+                                    positions = getValidPositions(shortened, template, gradeStart, gradeEnd, fillMinDur);
+                                    if (positions.length > 0) { relaxationType = 'duration_reduce'; relaxationDetail = '-5min duration'; need = shortened; }
+                                }
+                            }
+                            if (positions.length === 0) {
+                                // Level 3: Combined shift + reduce
+                                var combined = {};
+                                for (var _sk3 in need) combined[_sk3] = need[_sk3];
+                                combined.windowStart = Math.max(gradeStart, (need.windowStart || gradeStart) - 15);
+                                combined.windowEnd = Math.min(gradeEnd, (need.windowEnd || gradeEnd) + 15);
+                                var typeFloor2 = TYPE_FLOORS[(need.type || 'slot').toLowerCase()] || 15;
+                                if (need.dMin > typeFloor2 + 5) {
+                                    combined.dMin = Math.max(typeFloor2, need.dMin - 5);
+                                    combined.dMax = Math.max(combined.dMin, (need.dMax || 60) - 5);
+                                }
+                                positions = getValidPositions(combined, template, gradeStart, gradeEnd, fillMinDur);
+                                if (positions.length > 0) { relaxationType = 'combined'; relaxationDetail = 'shift+reduce'; need = combined; }
+                            }
+                            if (positions.length === 0) {
+                                // Level 4: Wide shift ±30min
+                                var wide = {};
+                                for (var _sk4 in need) wide[_sk4] = need[_sk4];
+                                wide.windowStart = Math.max(gradeStart, (need.windowStart || gradeStart) - 30);
+                                wide.windowEnd = Math.min(gradeEnd, (need.windowEnd || gradeEnd) + 30);
+                                positions = getValidPositions(wide, template, gradeStart, gradeEnd, fillMinDur);
+                                if (positions.length > 0) { relaxationType = 'wide_shift'; relaxationDetail = '±30min window shift'; }
+                            }
+
                             if (positions.length > 0) {
                                 var pos = positions[0];
                                 var placeEnd = pos.start + pos.dur;
@@ -3258,16 +3340,17 @@
                                     _customActivity: need._customActivity || null, _customField: need._customField || null,
                                     _customBunks: need._customBunks || null,
                                     _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                    _rotationEventColor: need._rotationEventColor || null, _final: true
+                                    _rotationEventColor: need._rotationEventColor || null, _final: true,
+                                    _relaxed: !!relaxationType, _relaxationType: relaxationType, _relaxationDetail: relaxationDetail
                                 });
-                                // ★ Rotation quota: increment placed counter on fallback placement
                                 if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
                                     var _rq2 = rotationQuotas[need._rotationEventId];
                                     if (_rq2) _rq2.placed++;
                                 }
                                 if (blk) template.push(blk);
+                                if (relaxationType) log('[Phase3] CSP-Relax: ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' via ' + relaxationDetail);
                             } else {
-                                log('[Phase3] CSP: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk);
+                                log('[Phase3] CSP: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' (even with relaxation)');
                             }
                         }
                     }
@@ -3330,6 +3413,25 @@
                         else if (!isUsed) score += 500;            // good: not used
                         // else: reuse, score stays 0
                         score -= demand * 10;                      // prefer LOW demand fields
+                        // ★ v11.0: Multi-day awareness in sport selection
+                        if (weekActivityHistory) {
+                            var _bh = weekActivityHistory[String(bunk)] || {};
+                            var _ds = Infinity;
+                            var _rd = getRecentDays(currentDate, 5);
+                            for (var _ri = 0; _ri < _rd.length; _ri++) {
+                                if ((_bh[_rd[_ri]] || []).indexOf(sport.name) >= 0) { _ds = _ri + 1; break; }
+                            }
+                            if (_ds <= 1) score -= 300;           // done yesterday — avoid
+                            else if (_ds >= 4) score += 200;       // overdue — prefer
+                        }
+                        // ★ v11.0: Cross-bunk awareness — defer scarce fields
+                        if (gradeFieldBudget) {
+                            var _bk = grade + ':' + timeSlot;
+                            var _bi = gradeFieldBudget[_bk];
+                            if (_bi && _bi.demand > _bi.total && candidates.length >= 3) {
+                                score -= 200; // I have alternatives, leave scarce fields for others
+                            }
+                        }
                         candidates.push({ name: sport.name, field: sport.fields[f], score: score });
                     }
                 }
@@ -3391,6 +3493,47 @@
                         for (var gp = 0; gp < gPlan.length; gp++) {
                             allGapBlocks.push({ bunk: gradeBunks[gb2], start: gPlan[gp].start, end: gPlan[gp].end, filled: false });
                         }
+                    }
+                }
+
+                // ★ v11.0: PROACTIVE SHARING ALIGNMENT
+                // Detect overlapping (not identical) gaps between bunks in the same grade.
+                // Re-split them to create aligned blocks that the sharing pass can match.
+                for (var ai = 0; ai < allGapBlocks.length; ai++) {
+                    for (var aj = ai + 1; aj < allGapBlocks.length; aj++) {
+                        var aA = allGapBlocks[ai], aB = allGapBlocks[aj];
+                        if (aA.bunk === aB.bunk || aA.filled || aB.filled) continue;
+                        if (aA.start === aB.start && aA.end === aB.end) continue; // already exact match
+                        var oStart = Math.max(aA.start, aB.start);
+                        var oEnd = Math.min(aA.end, aB.end);
+                        var aFillMin = bunkMeta[aA.bunk].fillMinDur;
+                        if (oEnd - oStart < aFillMin) continue;
+                        // Check if a shared-capacity field exists for this overlap window
+                        var hasSharedField = false;
+                        var _flKeys = Object.keys(fieldLedger);
+                        for (var _fk = 0; _fk < _flKeys.length; _fk++) {
+                            var _fl = fieldLedger[_flKeys[_fk]];
+                            if (_fl.capacity >= 2 && !_fl._isSpecialLocation && _fl.activities.length > 0) {
+                                if (isFieldAvailable(_flKeys[_fk], oStart, oEnd, aA.bunk, gradeKey)) {
+                                    hasSharedField = true; break;
+                                }
+                            }
+                        }
+                        if (!hasSharedField) continue;
+                        // Align: carve out the overlap as new exact-match blocks
+                        var aCeiling = bunkMeta[aA.bunk].sportCeiling;
+                        var sharedDur = Math.min(oEnd - oStart, aCeiling);
+                        var aBeforeA = oStart - aA.start, aAfterA = aA.end - (oStart + sharedDur);
+                        var aBeforeB = oStart - aB.start, aAfterB = aB.end - (oStart + sharedDur);
+                        // Replace A and B with aligned blocks
+                        aA.start = oStart; aA.end = oStart + sharedDur; aA._alignedForSharing = true;
+                        aB.start = oStart; aB.end = oStart + sharedDur; aB._alignedForSharing = true;
+                        // Add back leftover fragments
+                        if (aBeforeA >= aFillMin) allGapBlocks.push({ bunk: aA.bunk, start: oStart - aBeforeA, end: oStart, filled: false });
+                        if (aAfterA >= aFillMin) allGapBlocks.push({ bunk: aA.bunk, start: oStart + sharedDur, end: oStart + sharedDur + aAfterA, filled: false });
+                        if (aBeforeB >= aFillMin) allGapBlocks.push({ bunk: aB.bunk, start: oStart - aBeforeB, end: oStart, filled: false });
+                        if (aAfterB >= aFillMin) allGapBlocks.push({ bunk: aB.bunk, start: oStart + sharedDur, end: oStart + sharedDur + aAfterB, filled: false });
+                        break; // move on after first alignment per block
                     }
                 }
 
@@ -3461,15 +3604,89 @@
                 }
             });
 
-            // Phase B: AGGRESSIVE gap filling — never give up on finding a field
-            // Strategy 1: Try full block duration
-            // Strategy 2: Try from the END of the gap (league locks may have ended)
-            // Strategy 3: Split the block in half, find different fields for each half
-            // Strategy 4: Try every 5-min sub-window within the block
-            for (var si = 0; si < allBunkIds.length; si++) {
-                var sBunk = allBunkIds[si];
+            // ══════════════════════════════════════════════════════════
+            // ★ v11.0: BOTTLENECK-FIRST SCHEDULING + CROSS-BUNK BUDGET
+            // Build contention heatmap and grade field budget before Phase B.
+            // Sort gap assignments by contention (highest deficit first).
+            // ══════════════════════════════════════════════════════════
+
+            var gradeFieldBudget = {};
+            var contentionMap = {};
+            var campStartGlobal = Math.min.apply(null, allGrades.map(function(g) { return parseTimeToMinutes(divisions[g]?.startTime) || 540; }));
+            var campEndGlobal = Math.max.apply(null, allGrades.map(function(g) { return parseTimeToMinutes(divisions[g]?.endTime) || 960; }));
+
+            // Build supply map: field capacity per grade per 30-min slot
+            for (var ct = campStartGlobal; ct < campEndGlobal; ct += 30) {
+                var ctEnd = Math.min(ct + 30, campEndGlobal);
+                allGrades.forEach(function(cGrade) {
+                    var supply = 0;
+                    Object.values(fieldLedger).forEach(function(ledger) {
+                        if (isRainy && !ledger.isIndoor) return;
+                        if (ledger._isSpecialLocation) return;
+                        if (ledger.activities.length === 0) return;
+                        var timeOk = ledger.timeRules.some(function(rule) {
+                            return rule.startMin <= ct && rule.endMin >= ctEnd &&
+                                   (!rule.divisions || rule.divisions.indexOf(cGrade) >= 0);
+                        });
+                        if (!timeOk) return;
+                        var claims = ledger.claims.filter(function(c) { return c.startMin < ctEnd && c.endMin > ct; });
+                        var crossGrade = claims.some(function(c) { return c.grade !== cGrade; });
+                        if (ledger.shareType === 'not_sharable') { if (claims.length === 0) supply += 1; }
+                        else if (ledger.shareType === 'same_division') { if (!crossGrade) supply += Math.max(0, ledger.capacity - claims.filter(function(c) { return c.grade === cGrade; }).length); }
+                        else { supply += Math.max(0, ledger.capacity - claims.length); }
+                    });
+                    contentionMap[ct + ':' + cGrade] = { supply: supply, demand: 0, bunks: [] };
+                });
+            }
+
+            // Build demand map: count bunks needing fields per grade per 30-min slot
+            allBunkIds.forEach(function(cBunk) {
+                var cMeta = bunkMeta[cBunk];
+                if (!cMeta) return;
+                var cGaps = findGaps(cMeta.template, cMeta.gradeStart, cMeta.gradeEnd);
+                cGaps.forEach(function(cGap) {
+                    for (var ct2 = Math.floor(cGap.start / 30) * 30; ct2 < cGap.end; ct2 += 30) {
+                        var cKey = ct2 + ':' + cMeta.grade;
+                        if (contentionMap[cKey]) {
+                            contentionMap[cKey].demand++;
+                            contentionMap[cKey].bunks.push(cBunk);
+                        }
+                    }
+                });
+            });
+
+            // Build grade field budget from contention map
+            Object.keys(contentionMap).forEach(function(cKey) {
+                var entry = contentionMap[cKey];
+                entry.deficit = entry.demand - entry.supply;
+                gradeFieldBudget[cKey] = { total: entry.supply, demand: entry.demand, perBunk: entry.demand > 0 ? Math.floor(entry.supply / entry.demand) : entry.supply };
+            });
+
+            // Build contention-sorted gap queue for Phase B
+            var gapQueue = [];
+            allBunkIds.forEach(function(qBunk) {
+                var qMeta = bunkMeta[qBunk];
+                if (!qMeta) return;
+                var qGaps = findGaps(qMeta.template, qMeta.gradeStart, qMeta.gradeEnd);
+                qGaps.forEach(function(qGap) {
+                    if (qGap.end - qGap.start < qMeta.fillMinDur) return;
+                    var maxDeficit = 0;
+                    for (var qt = Math.floor(qGap.start / 30) * 30; qt < qGap.end; qt += 30) {
+                        var qEntry = contentionMap[qt + ':' + qMeta.grade];
+                        if (qEntry && qEntry.deficit > maxDeficit) maxDeficit = qEntry.deficit;
+                    }
+                    gapQueue.push({ bunk: qBunk, gap: qGap, contention: maxDeficit });
+                });
+            });
+            gapQueue.sort(function(a, b) { return b.contention - a.contention; });
+            log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, max contention=' + (gapQueue.length > 0 ? gapQueue[0].contention : 0));
+
+            // Phase B: AGGRESSIVE gap filling — BOTTLENECK-FIRST ORDER
+            // Processes gaps by contention (most constrained time windows first)
+            for (var si = 0; si < gapQueue.length; si++) {
+                var sBunk = gapQueue[si].bunk;
                 var sMeta = bunkMeta[sBunk];
-                var sGaps = findGaps(sMeta.template, sMeta.gradeStart, sMeta.gradeEnd);
+                var sGaps = [gapQueue[si].gap]; // process one gap at a time from the queue
 
                 for (var sg = 0; sg < sGaps.length; sg++) {
                     var gap = sGaps[sg];
@@ -4235,6 +4452,21 @@
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
 
+        // ★ v11.0: GUIDED ITERATION — decompose score into categories for bias
+        var iterationScoreBreakdown = { gaps: 0, durationViolations: 0, missingLayers: 0, sportVariety: 0, fieldSaturation: 0, estimatedFrees: 0 };
+        var iterationBias = { category: null, strength: 0, history: [] };
+
+        function computeIterationBias(breakdown, totalScore) {
+            var entries = [];
+            Object.keys(breakdown).forEach(function(k) { if (breakdown[k] > 0) entries.push({ cat: k, val: breakdown[k] }); });
+            if (entries.length === 0) { iterationBias.category = null; iterationBias.strength = 0; return; }
+            entries.sort(function(a, b) { return b.val - a.val; });
+            iterationBias.category = entries[0].cat;
+            iterationBias.strength = Math.min(1.0, entries[0].val / (totalScore || 1));
+            iterationBias.history.push({ cat: entries[0].cat, val: entries[0].val });
+            if (iterationBias.history.length > 5) iterationBias.history.shift();
+        }
+
         // ★ Rotation quotas — computed once for scoring; timeSweepFillAll computes its own with placed counters
         var rotationQuotasForScoring = null;
         if (window.RotationEvents && typeof window.RotationEvents.getRotationQuotas === 'function') {
@@ -4309,6 +4541,8 @@
 
        function scoreTimelines(timelines, iterWarnings) {
             let score = 0;
+            // ★ v11.0: Track breakdown by category for guided iteration
+            var bd = { gaps: 0, durationViolations: 0, missingLayers: 0, sportVariety: 0, fieldSaturation: 0, estimatedFrees: 0 };
             const campStart = Math.min(...Object.values(divisions).map(d => parseTimeToMinutes(d.startTime) || 660));
             const campEnd = Math.max(...Object.values(divisions).map(d => parseTimeToMinutes(d.endTime) || 990));
 
@@ -4325,25 +4559,29 @@
                 // Gaps — ★ v6.0: Dead zones (gaps < 25min) get 10× penalty
                 const _mfScore = getMinFillable(gradeKey || '') || GAP_MIN_DUR;
                 const scoreGap = (g) => g <= 0 ? 0 : (g < _mfScore ? g * 150 : g * 15);
-                if (sorted.length > 0 && sorted[0].startMin > dayStart) score += scoreGap(sorted[0].startMin - dayStart);
-                for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; score += scoreGap(gap); }
-                if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) score += scoreGap(dayEnd - sorted[sorted.length - 1].endMin);
+                if (sorted.length > 0 && sorted[0].startMin > dayStart) { var _gp = scoreGap(sorted[0].startMin - dayStart); score += _gp; bd.gaps += _gp; }
+                for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; var _gp2 = scoreGap(gap); score += _gp2; bd.gaps += _gp2; }
+                if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) { var _gp3 = scoreGap(dayEnd - sorted[sorted.length - 1].endMin); score += _gp3; bd.gaps += _gp3; }
 
                 // Duration violations — ★ v10.5: Penalize BOTH dMin and dMax violations.
-                // A duration violation is NEVER acceptable. Prefer a Free over a short sport.
                 timeline.forEach(block => {
                     if (block._fromGapDetection && !block.layer) return;
                     const { dMin, dMax } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                     const dur = block.endMin - block.startMin;
-                    if (dur < dMin) score += (dMin - dur) * 10000 + 100000;
-                    if (dur > dMax) score += (dur - dMax) * 8000 + 80000;
+                    if (dur < dMin) { var _dv = (dMin - dur) * 10000 + 100000; score += _dv; bd.durationViolations += _dv; }
+                    if (dur > dMax) { var _dv2 = (dur - dMax) * 8000 + 80000; score += _dv2; bd.durationViolations += _dv2; }
+                });
+
+                // Relaxation penalty — ★ v11.0: mild penalty for relaxed blocks
+                timeline.forEach(block => {
+                    if (block._relaxed) { score += 500; bd.missingLayers += 500; }
                 });
 
                 // Out of bounds
-                if (gradeKey) timeline.forEach(b => { if (b.endMin <= dayStart || b.startMin >= dayEnd) score += 10000; });
+                if (gradeKey) timeline.forEach(b => { if (b.endMin <= dayStart || b.startMin >= dayEnd) { score += 10000; bd.gaps += 10000; } });
             });
 
-            iterWarnings.forEach(w => { if (w.type === 'placement_failure') score += 500; if (w.type === 'overlap') score += 1000; });
+            iterWarnings.forEach(w => { if (w.type === 'placement_failure') { score += 500; bd.missingLayers += 500; } if (w.type === 'overlap') { score += 1000; bd.gaps += 1000; } });
 
             // ★ v9.3 LEVEL 3: SCHEDULE QUALITY SCORING
             Object.entries(timelines).forEach(([bunk, timeline]) => {
@@ -4358,14 +4596,29 @@
                         const prevName = sorted[i-1]._assignedSport || sorted[i-1].event;
                         const curName = sorted[i]._assignedSport || sorted[i].event;
                         if (prevName && curName && prevName === curName && t === 'sport') {
-                            score += 2000; // same sport back-to-back is bad
+                            score += 2000; bd.sportVariety += 2000;
                         }
                     }
                 }
                 // Sport variety: penalize if too few unique sports
                 const uniqueSports = new Set(sportNames);
                 if (sportNames.length >= 3 && uniqueSports.size < Math.min(3, sportNames.length)) {
-                    score += (sportNames.length - uniqueSports.size) * 1000; // low variety penalty
+                    var _svp = (sportNames.length - uniqueSports.size) * 1000;
+                    score += _svp; bd.sportVariety += _svp;
+                }
+
+                // ★ v11.0: Multi-day streak penalty
+                if (weekActivityHistory) {
+                    var bunkHist = weekActivityHistory[String(bunk)] || {};
+                    sportNames.forEach(function(sport) {
+                        var streak = 0;
+                        var recentDays = getRecentDays(currentDate, 5);
+                        for (var d = 0; d < recentDays.length; d++) {
+                            if ((bunkHist[recentDays[d]] || []).indexOf(sport) >= 0) streak++;
+                            else break;
+                        }
+                        if (streak >= 3) { var _sp = 5000 * (streak - 2); score += _sp; bd.sportVariety += _sp; }
+                    });
                 }
 
                 // Missing required layers penalty
@@ -4376,18 +4629,18 @@
                     const lt = (ll.type || '').toLowerCase();
                     if (['swim', 'snack', 'snacks', 'special'].includes(lt)) {
                         const hasIt = sorted.some(b => (b.type || '').toLowerCase() === lt || (lt === 'snacks' && (b.type || '').toLowerCase() === 'snack'));
-                        if (!hasIt) score += 20000; // missing required layer is very bad
+                        if (!hasIt) { score += 20000; bd.missingLayers += 20000; }
                     }
                 }
 
-                // ★ Missing rotation event penalty — check if bunk was supposed to get one
+                // ★ Missing rotation event penalty
                 if (rotationQuotasForScoring) {
                     const hasRot = sorted.some(b => b._source === 'rotation_event' && b._rotationEventId);
                     if (!hasRot) {
-                        // Check if this bunk was eligible (remaining + not over quota)
                         Object.values(rotationQuotasForScoring).forEach(q => {
                             if (q.remainingBunks && q.remainingBunks.has(String(bunk))) {
-                                score += q.isLastDay ? 50000 : 15000; // heavier on last day
+                                var _rp = q.isLastDay ? 50000 : 15000;
+                                score += _rp; bd.missingLayers += _rp;
                             }
                         });
                     }
@@ -4395,13 +4648,8 @@
             });
 
             // ── Per-grade field saturation scoring ──
-            // For each time slice, count how many bunks per grade need a field
-            // vs how many field slots that grade can actually use.
-            // Heavily penalize any slice where demand > supply (causes Frees).
             for (let t = campStart; t < campEnd; t += 5) {
                 const se = t + 5;
-
-                // Count field consumers per grade at this time
                 const gradeConsumers = {};
                 Object.entries(timelines).forEach(([bk, tl]) => {
                     const g = _bunkGradeCache[String(bk)];
@@ -4414,26 +4662,20 @@
                     }
                 });
 
-                // Count available field capacity per grade at this time
-                // using the field ledger (already initialized for this iteration)
                 Object.entries(gradeConsumers).forEach(([grade, demand]) => {
                     let supply = 0;
                     Object.values(fieldLedger).forEach(ledger => {
                         if (isRainy && !ledger.isIndoor) return;
                         if (ledger._isSpecialLocation) return;
                         if (ledger.activities.length === 0) return;
-
                         const timeOk = ledger.timeRules.some(rule => {
                             if (rule.startMin > t || rule.endMin < se) return false;
                             if (rule.divisions && !rule.divisions.includes(grade)) return false;
                             return true;
                         });
                         if (!timeOk) return;
-
-                        // Check cross-grade blocking
                         const claims = ledger.claims.filter(c => c.startMin < se && c.endMin > t);
                         const crossGrade = claims.some(c => c.grade !== grade);
-
                         if (ledger.shareType === 'not_sharable') {
                             if (claims.length === 0) supply += 1;
                         } else if (ledger.shareType === 'same_division') {
@@ -4443,24 +4685,23 @@
                         }
                     });
 
-                    // Penalize saturation: the more demand exceeds supply, the worse
                     const deficit = demand - supply;
                     if (deficit > 0) {
-                        // Each over-capacity bunk is very likely to become a Free
-                        score += deficit * 5000;
+                        var _fsp = deficit * 5000;
+                        score += _fsp; bd.fieldSaturation += _fsp;
                     } else if (supply > 0 && demand > 0) {
-                        // Mild penalty for tight margins (supply barely >= demand)
                         const ratio = demand / supply;
-                        if (ratio > 0.8) score += Math.round((ratio - 0.8) * 500);
+                        if (ratio > 0.8) { var _fsp2 = Math.round((ratio - 0.8) * 500); score += _fsp2; bd.fieldSaturation += _fsp2; }
                     }
                 });
 
-                // Also penalize total cross-camp contention (original check, relaxed threshold)
                 let totalCnt = 0;
                 Object.values(gradeConsumers).forEach(c => { totalCnt += c; });
-                if (totalCnt > 20) score += (totalCnt - 20) * 100;
+                if (totalCnt > 20) { var _fsp3 = (totalCnt - 20) * 100; score += _fsp3; bd.fieldSaturation += _fsp3; }
             }
 
+            // ★ v11.0: Store breakdown for guided iteration
+            iterationScoreBreakdown = bd;
             return score;
         }
         // =====================================================================
@@ -4484,6 +4725,78 @@
                 localStorage.setItem('campistry_swimRotationHistory', JSON.stringify(swimHistory));
                 if (window.IntegrationHooks?.queueChange) window.IntegrationHooks.queueChange('swimRotationHistory', swimHistory);
             } catch (e) { /* ignore */ }
+        }
+
+        // =====================================================================
+        // ★ v11.0: MULTI-DAY AWARENESS — weekly activity history
+        // =====================================================================
+
+        var weekActivityHistory = {};
+        function loadWeekHistory() {
+            try {
+                var gs = getGlobalSettings();
+                var stored = gs.activityHistory || (gs.app1 && gs.app1.activityHistory);
+                if (stored) Object.keys(stored).forEach(function(k) { weekActivityHistory[k] = stored[k]; });
+                var ls = localStorage.getItem('campistry_activityHistory');
+                if (ls && !stored) {
+                    var parsed = JSON.parse(ls);
+                    Object.keys(parsed).forEach(function(k) { weekActivityHistory[k] = parsed[k]; });
+                }
+            } catch (e) { /* ignore */ }
+        }
+        function saveWeekHistory(timelines) {
+            try {
+                // Record today's sport assignments per bunk
+                Object.keys(timelines).forEach(function(bunk) {
+                    if (!weekActivityHistory[bunk]) weekActivityHistory[bunk] = {};
+                    var sports = [];
+                    (timelines[bunk] || []).forEach(function(b) {
+                        if ((b.type || '').toLowerCase() === 'sport' && b._assignedSport) {
+                            sports.push(b._assignedSport);
+                        }
+                    });
+                    if (sports.length > 0) weekActivityHistory[bunk][currentDate] = sports;
+                });
+                // Prune history older than 2 weeks
+                var cutoff = getMondayOfWeek(currentDate, -1); // Monday of last week
+                Object.keys(weekActivityHistory).forEach(function(bunk) {
+                    var hist = weekActivityHistory[bunk];
+                    Object.keys(hist).forEach(function(dateStr) {
+                        if (dateStr < cutoff) delete hist[dateStr];
+                    });
+                });
+                var gs = getGlobalSettings();
+                if (gs.app1) gs.app1.activityHistory = weekActivityHistory;
+                localStorage.setItem('campistry_activityHistory', JSON.stringify(weekActivityHistory));
+                if (window.IntegrationHooks && window.IntegrationHooks.queueChange) {
+                    window.IntegrationHooks.queueChange('activityHistory', weekActivityHistory);
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        // Helper: get array of date strings for last N days (most recent first)
+        function getRecentDays(today, count) {
+            var days = [];
+            var d = new Date(today + 'T12:00:00');
+            for (var i = 1; i <= count; i++) {
+                var prev = new Date(d.getTime() - i * 86400000);
+                var yyyy = prev.getFullYear();
+                var mm = String(prev.getMonth() + 1).padStart(2, '0');
+                var dd = String(prev.getDate()).padStart(2, '0');
+                days.push(yyyy + '-' + mm + '-' + dd);
+            }
+            return days;
+        }
+
+        // Helper: count consecutive days a bunk played a sport (going backward from today)
+        function countConsecutiveStreak(bunkHist, today, sport) {
+            var streak = 0;
+            var recentDays = getRecentDays(today, 7);
+            for (var d = 0; d < recentDays.length; d++) {
+                if ((bunkHist[recentDays[d]] || []).indexOf(sport) >= 0) streak++;
+                else break;
+            }
+            return streak;
         }
 
         function getSwimmersForToday(grade, allBunks, swimLayer, seed) {
@@ -4521,6 +4834,7 @@
         }
 
         loadSwimHistory();
+        loadWeekHistory();
 
 
         // =====================================================================
@@ -5239,6 +5553,7 @@
             let iterScore = scoreTimelines(bunkTimelines, iterWarnings);
             // ★ Massive penalty for estimated Frees — #1 priority to minimize
             iterScore += iterFreeEstimate * 50000;
+            iterationScoreBreakdown.estimatedFrees = iterFreeEstimate * 50000;
             totalIters++;
             extractFragments(bunkTimelines);
 
@@ -5266,6 +5581,9 @@
 
             // ★ v10.0: Update repair targets for next iteration
             repairTargets.update(bunkTimelines);
+
+            // ★ v11.0: Compute iteration bias from score breakdown
+            computeIterationBias(iterationScoreBreakdown, iterScore);
 
             if (bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
 
@@ -6280,6 +6598,7 @@
         // STEP 5 — SAVE
         // =====================================================================
         saveSwimHistory();
+        saveWeekHistory(bunkTimelines);
         log('\n[STEP 5] Saving...');
         if (window.saveCurrentDailyData) {
             try {
