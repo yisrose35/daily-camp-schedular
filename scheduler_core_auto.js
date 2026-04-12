@@ -3690,15 +3690,25 @@
                         dBlk.startMin = Math.round(dBlk.startMin / 5) * 5;
                         continue;
                     }
-                    // Can't fix — merge into neighbor or remove
+                    // Can't fix — merge into neighbor. NEVER delete (leaves unfillable gaps).
                     if (di > 0 && !vTmpl[di-1]._fixed && ['sport','slot'].includes((vTmpl[di-1].type||'').toLowerCase())) {
                         vTmpl[di-1].endMin = dBlk.endMin;
                         vTmpl.splice(di, 1);
                     } else if (di < vTmpl.length - 1 && !vTmpl[di+1]._fixed && ['sport','slot'].includes((vTmpl[di+1].type||'').toLowerCase())) {
                         vTmpl[di+1].startMin = dBlk.startMin;
                         vTmpl.splice(di, 1);
+                    } else if (di > 0 && !vTmpl[di-1]._fixed) {
+                        // ★ v10.1: Absorb into ANY non-fixed neighbor (not just sport/slot)
+                        vTmpl[di-1].endMin = dBlk.endMin;
+                        vTmpl.splice(di, 1);
+                    } else if (di < vTmpl.length - 1 && !vTmpl[di+1]._fixed) {
+                        vTmpl[di+1].startMin = dBlk.startMin;
+                        vTmpl.splice(di, 1);
                     } else {
-                        vTmpl.splice(di, 1); // truly unfixable — remove
+                        // ★ v10.1: Between two fixed walls — keep the block instead of deleting.
+                        // A short activity is better than an empty gap that can never be filled.
+                        // Mark it so the solver knows it's undersized but intentional.
+                        dBlk._belowDMin = true;
                     }
                 }
                 vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
@@ -3708,9 +3718,65 @@
                 vTmpl = bunkTimelines[vBunk];
 
                 var vGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
+                // ★ v10.1: PERFECTION PASS — fill remaining gaps by extending neighbors or creating blocks
                 if (vGaps.length > 0) {
-                    log('[Phase3] WARN: bunk ' + vBunk + ' has ' + vGaps.length + ' unfilled gaps');
-                    totalWarnings++;
+                    for (var vgi = 0; vgi < vGaps.length; vgi++) {
+                        var vGap = vGaps[vgi];
+                        var vGapDur = vGap.end - vGap.start;
+                        if (vGapDur <= 0) continue;
+                        var filled = false;
+
+                        // Strategy 1: Extend previous non-fixed block to cover the gap
+                        var prevBlock = null;
+                        for (var pb = vTmpl.length - 1; pb >= 0; pb--) {
+                            if (vTmpl[pb].endMin <= vGap.start && !vTmpl[pb]._fixed) { prevBlock = vTmpl[pb]; break; }
+                        }
+                        if (prevBlock && prevBlock.endMin === vGap.start) {
+                            var maxExt = vMeta.sportCeiling || 60;
+                            var newDur = (vGap.end) - prevBlock.startMin;
+                            if (newDur <= maxExt) {
+                                prevBlock.endMin = vGap.end;
+                                filled = true;
+                            }
+                        }
+
+                        // Strategy 2: Pull next non-fixed block backward to cover the gap
+                        if (!filled) {
+                            var nextBlock = null;
+                            for (var nb = 0; nb < vTmpl.length; nb++) {
+                                if (vTmpl[nb].startMin >= vGap.end && !vTmpl[nb]._fixed) { nextBlock = vTmpl[nb]; break; }
+                            }
+                            if (nextBlock && nextBlock.startMin === vGap.end) {
+                                var newDur2 = nextBlock.endMin - vGap.start;
+                                var maxExt2 = vMeta.sportCeiling || 60;
+                                if (newDur2 <= maxExt2) {
+                                    nextBlock.startMin = vGap.start;
+                                    filled = true;
+                                }
+                            }
+                        }
+
+                        // Strategy 3: Create a new sport block to fill the gap (even if short)
+                        if (!filled) {
+                            addSportBlocks(vTmpl, vGap.start, vGap.end, {
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: vMeta.sportLayer, field: null,
+                                dMin: Math.min(vGapDur, vMeta.fillMinDur), dMax: vMeta.sportCeiling,
+                                _source: 'perfection-fill',
+                                _sportFallbacks: vMeta.priorityList ? vMeta.priorityList.map(function(s) { return s.name; }) : [],
+                                _final: true
+                            }, vMeta.sportCeiling || 60, Math.min(vGapDur, vMeta.fillMinDur));
+                            filled = true;
+                        }
+                    }
+                    vTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                    // Recheck gaps after filling
+                    var remainingGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
+                    if (remainingGaps.length > 0) {
+                        log('[Phase3] WARN: bunk ' + vBunk + ' has ' + remainingGaps.length + ' unfilled gaps after perfection pass');
+                        totalWarnings++;
+                    }
                 }
 
                 allTemplates[vBunk] = vTmpl;
@@ -5868,6 +5934,68 @@
             warnings.push({ type: 'constraint_demotions', count: totalConstraintFixes });
         } else {
             log('[4.5] ✅ No violations');
+        }
+
+        // ★ v10.1: STEP 4.9 — FINAL PERFECTION PASS
+        // Eliminate ALL remaining Frees by extending adjacent activities.
+        // A Free block means dead time — a slightly longer sport is always better.
+        // =====================================================================
+        {
+            var perfFreeCount = 0, perfFixedCount = 0;
+            var perfSA = window.scheduleAssignments || {};
+            var perfDT = window.divisionTimes || {};
+            var perfDivisions = window.divisions || {};
+
+            Object.entries(perfSA).forEach(function(entry) {
+                var bunk = entry[0], slots = entry[1];
+                if (!Array.isArray(slots)) return;
+                var grade = '';
+                for (var g in perfDivisions) {
+                    if ((perfDivisions[g].bunks || []).map(String).includes(String(bunk))) { grade = g; break; }
+                }
+                var pbs = perfDT[grade]?._perBunkSlots?.[bunk] || perfDT[grade] || [];
+
+                slots.forEach(function(slotEntry, idx) {
+                    if (!slotEntry || slotEntry.field !== 'Free') return;
+                    perfFreeCount++;
+                    var slot = pbs[idx];
+                    if (!slot) return;
+
+                    // Strategy 1: Extend previous slot to absorb this Free
+                    if (idx > 0 && slots[idx - 1] && slots[idx - 1].field && slots[idx - 1].field !== 'Free') {
+                        var prevSlot = pbs[idx - 1];
+                        if (prevSlot) {
+                            // Extend previous activity to cover this slot's time
+                            slots[idx] = {
+                                field: slots[idx - 1].field,
+                                sport: slots[idx - 1].sport,
+                                _activity: slots[idx - 1]._activity || slots[idx - 1].sport,
+                                _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                                continuation: true
+                            };
+                            perfFixedCount++;
+                            return;
+                        }
+                    }
+
+                    // Strategy 2: Pull next slot backward to absorb this Free
+                    if (idx < slots.length - 1 && slots[idx + 1] && slots[idx + 1].field && slots[idx + 1].field !== 'Free') {
+                        slots[idx] = {
+                            field: slots[idx + 1].field,
+                            sport: slots[idx + 1].sport,
+                            _activity: slots[idx + 1]._activity || slots[idx + 1].sport,
+                            _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                            continuation: true
+                        };
+                        perfFixedCount++;
+                        return;
+                    }
+                });
+            });
+
+            if (perfFreeCount > 0) {
+                log('\n[STEP 4.9] Perfection pass: ' + perfFreeCount + ' Frees found, ' + perfFixedCount + ' fixed by extending neighbors');
+            }
         }
 
         // STEP 5 — SAVE
