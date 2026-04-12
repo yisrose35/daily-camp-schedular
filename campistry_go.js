@@ -1023,6 +1023,7 @@
                 street: a.street || '', city: a.city || '', state: a.state || '', zip: a.zip || '',
                 geocoded: !!a.geocoded, zipMismatch: !!a._zipMismatch,
                 geocodeWarning: a._geocodeWarning || '',
+                validated: !!a._validated,
                 hasAddr: !!a.street
             };
         });
@@ -1073,7 +1074,8 @@
 
         tbody.innerHTML = rows.map(r => {
             const full = r.hasAddr ? [r.street, r.city, r.state, r.zip].filter(Boolean).join(', ') : '';
-            const badge = r.hasAddr ? (r.geocodeWarning ? '<span class="badge badge-danger" title="' + esc(r.geocodeWarning) + '">⚠ Rejected</span>' : r.geocoded ? (r.zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch">⚠ Check</span>' : '<span class="badge badge-success">Geocoded</span>') : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
+            const validated = r.validated;
+            const badge = r.hasAddr ? (r.geocodeWarning ? '<span class="badge badge-danger" title="' + esc(r.geocodeWarning) + '">⚠ ' + esc(r.geocodeWarning.substring(0,20)) + '</span>' : r.geocoded ? (r.zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch">⚠ Check</span>' : validated ? '<span class="badge badge-success">✓ Verified</span>' : '<span class="badge badge-success">Geocoded</span>') : validated ? '<span class="badge badge-warning">Verified, not geocoded</span>' : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
             return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (r.id ? '#' + String(r.id).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(r.last) + '</td><td>' + esc(r.first) + '</td><td>' + (esc(r.division) || '—') + '</td><td>' + (esc(r.grade) || '—') + '</td><td>' + (esc(r.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')">' + (r.hasAddr ? 'Edit' : 'Add') + '</button>' + (r.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + '</div></td></tr>';
         }).join('');
     }
@@ -1109,6 +1111,110 @@
         const params = { text: q, size: '5', 'boundary.country': 'US' };
         if (_campCoordsCache) { params['focus.point.lat'] = _campCoordsCache.lat; params['focus.point.lon'] = _campCoordsCache.lng; }
         try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams(params), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return false; const d = await r.json(); if (!d.features?.length) return false; let best = null; if (a.zip) best = d.features.find(f => (f.properties?.postalcode || '') === a.zip); if (!best) best = d.features[0]; const co = best.geometry.coordinates; if (!validateGeocode(co[1], co[0], q, name)) return false; a.lng = co[0]; a.lat = co[1]; a.geocoded = true; a._geocodeSource = 'ors'; a._zipMismatch = !!(a.zip && best.properties?.postalcode && best.properties.postalcode !== a.zip); return true; } catch (e) { return false; }
+    }
+
+    // =========================================================================
+    // ADDRESS VALIDATION — USPS standardization with Census fallback
+    // =========================================================================
+    async function validateAllAddresses() {
+        const names = Object.keys(D.addresses).filter(n => D.addresses[n]?.street);
+        if (!names.length) { toast('No addresses to validate', 'error'); return; }
+
+        toast('Validating ' + names.length + ' addresses...');
+        let uspsOk = 0, censusOk = 0, failed = 0, updated = 0;
+        const supUrl = window.__CAMPISTRY_SUPABASE__?.url;
+        const supKey = window.__CAMPISTRY_SUPABASE__?.anonKey;
+        const hasUSPS = !!(supUrl && supKey);
+
+        for (let i = 0; i < names.length; i++) {
+            const name = names[i];
+            const a = D.addresses[name];
+            if (!a.street) continue;
+
+            let standardized = null;
+
+            // Try USPS Edge Function first
+            if (hasUSPS) {
+                try {
+                    const resp = await fetch(supUrl + '/functions/v1/validate-address', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + supKey, 'apikey': supKey },
+                        body: JSON.stringify({ street: a.street, city: a.city, state: a.state, zip: a.zip })
+                    });
+                    const result = await resp.json();
+                    if (result.valid && result.standardized) {
+                        standardized = result.standardized;
+                        uspsOk++;
+                    }
+                } catch (_) {}
+            }
+
+            // Fallback: Census geocoder returns standardized address
+            if (!standardized) {
+                const censusQ = normalizeCensusAddress(a.street, a.city, a.state, a.zip);
+                try {
+                    const d = await censusGeocode(censusQ);
+                    if (d?.result?.addressMatches?.length) {
+                        const match = d.result.addressMatches[0];
+                        const ma = match.addressComponents;
+                        if (ma) {
+                            standardized = {
+                                street: match.matchedAddress ? match.matchedAddress.split(',')[0].trim() : a.street,
+                                city: ma.city || a.city,
+                                state: ma.state || a.state,
+                                zip: ma.zip || a.zip
+                            };
+                            censusOk++;
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            // Apply standardized address if different
+            if (standardized) {
+                const newStreet = standardized.street || a.street;
+                const newCity = standardized.city || a.city;
+                const newState = standardized.state || a.state;
+                const newZip = standardized.zip || a.zip;
+                const changed = newStreet !== a.street || newCity !== a.city || newState !== a.state || newZip !== a.zip;
+                if (changed) {
+                    a._originalStreet = a.street;
+                    a._originalCity = a.city;
+                    a._originalState = a.state;
+                    a._originalZip = a.zip;
+                    a.street = newStreet;
+                    a.city = newCity;
+                    a.state = newState.toUpperCase();
+                    a.zip = newZip;
+                    // Reset geocode since address changed
+                    a.geocoded = false; a.lat = null; a.lng = null;
+                    updated++;
+                    console.log('[Go] Address standardized: ' + name + ' → ' + [newStreet, newCity, newState, newZip].join(', '));
+                }
+                a._validated = true;
+                delete a._geocodeWarning;
+            } else {
+                a._validated = false;
+                a._geocodeWarning = 'Could not validate — check address';
+                failed++;
+            }
+
+            if ((i + 1) % 10 === 0 || i === names.length - 1) {
+                renderAddresses();
+                toast('Validating: ' + (i + 1) + '/' + names.length + ' (' + updated + ' corrected)');
+            }
+            if (i < names.length - 1) await new Promise(r => setTimeout(r, 350));
+        }
+
+        save(); renderAddresses(); updateStats();
+        const method = uspsOk > 0 ? 'USPS' : 'Census';
+        toast('Validated: ' + (uspsOk + censusOk) + ' confirmed, ' + updated + ' corrected, ' + failed + ' unverified (' + method + ')');
+
+        // Auto-geocode corrected addresses
+        if (updated > 0) {
+            toast('Re-geocoding ' + updated + ' corrected addresses...');
+            await geocodeAll(false);
+        }
     }
 
     async function geocodeAll(force) {
@@ -4640,7 +4746,7 @@
         toggleShiftGrade, setShiftGradeMode, toggleShiftBus, setAllShiftBuses,
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
-        editAddress, saveAddress, geocodeAll, downloadAddressTemplate, importAddressCsv, sortAddresses,
+        editAddress, saveAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck,
         generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
