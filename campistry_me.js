@@ -1800,87 +1800,372 @@ function fmtIIFDate(d){if(!d)return'';var p=d.split('-');return p[1]+'/'+p[2]+'/
 // ═══════════════════════════════════════════════════════════════
 // BILLING — Full payment hub
 // ═══════════════════════════════════════════════════════════════
-function renderBilling(){
-    var c=document.getElementById('page-billing');
-    // Compute totals from finPayments (real source) + family balances
-    var totalCollected=0,totalOutstanding=0,totalInvoiced=0;
-    finPayments.forEach(function(p){totalCollected+=Number(p.amount)||0});
-    Object.values(families).forEach(function(f){totalOutstanding+=f.balance||0});
-    // Auto-invoices from enrollments
-    var invoices=[];
-    Object.entries(enrollments).forEach(function([id,e]){
-        if(e.status==='enrolled'||e.status==='accepted'){
-            var tuition=Number(e.sessionTuition)||0;
-            var discAmt=e.discount?Number(e.discount.amt)||0:0;
-            var discPct=e.discount?Number(e.discount.pct)||0:0;
-            if(discPct>0) discAmt=Math.round(tuition*discPct/100);
-            var net=tuition-discAmt;
-            var paid=0;
-            finPayments.forEach(function(p){if(p.enrollmentId===id) paid+=Number(p.amount)||0});
-            var bal=net-paid;
-            totalInvoiced+=net;
-            invoices.push({id:id,name:e.camperName||'',session:e.session||'',tuition:tuition,discount:discAmt,net:net,paid:paid,balance:bal,status:bal<=0?'Paid':paid>0?'Partial':'Pending'});
+// ═══════════════════════════════════════════════════════════════
+// BILLING — CampMinder-level family ledger system
+//
+// Every family has a ledger: a running timeline of charges, payments,
+// credits, and discounts. The billing page shows:
+//   1. Financial overview stats
+//   2. Family accounts with balances and status filters
+//   3. Per-family ledger view (click to expand)
+//   4. Batch invoice generation
+//   5. Add charges (tuition, add-ons, fees), record payments, issue credits
+// ═══════════════════════════════════════════════════════════════
+var _billFilter='all'; // all, outstanding, paid, overdue
+
+function buildFamilyLedgers(){
+    // Build a complete ledger for each family from all data sources
+    var ledgers={}; // famKey → {family, entries[], totalCharges, totalPayments, totalCredits, balance}
+    Object.entries(families).forEach(function([fk,f]){
+        ledgers[fk]={family:f,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalCredits:0,balance:0};
+    });
+
+    // 1. Tuition charges from enrollments
+    Object.entries(enrollments).forEach(function([eid,e]){
+        if(e.status!=='enrolled'&&e.status!=='accepted') return;
+        var lastName=(e.camperName||'').split(' ').pop();
+        var fk='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
+        if(!ledgers[fk]){
+            // Try to find family by camper name
+            var found=Object.entries(families).find(function([,f]){return(f.camperIds||[]).indexOf(e.camperName)>=0});
+            if(found) fk=found[0]; else return;
+        }
+        var tuition=Number(e.sessionTuition)||0;
+        var discAmt=e.discount?Number(e.discount.amt)||0:0;
+        if(e.discount&&e.discount.pct>0) discAmt=Math.round(tuition*e.discount.pct/100);
+        var net=tuition-discAmt;
+        ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(e.camperName)+' — '+esc(e.session||''),amount:net,date:e.enrolledDate||e.appliedDate||'',ref:eid});
+        ledgers[fk].totalCharges+=net;
+        if(discAmt>0){
+            ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(e.camperName),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
+            ledgers[fk].totalCredits+=discAmt;
+        }
+        // Installments as sub-entries
+        if(e.installments&&e.installments.length>1){
+            e.installments.forEach(function(inst,ii){
+                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii});
+            });
         }
     });
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+invoices.length+' invoice'+(invoices.length!==1?'s':'')+' · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Record Payment</button></div></div>';
+    // 2. Add-on charges from family.charges array
+    Object.entries(families).forEach(function([fk,f]){
+        if(!ledgers[fk])return;
+        (f.charges||[]).forEach(function(ch){
+            ledgers[fk].entries.push({type:'charge',category:ch.category||'Add-On',desc:ch.description||'',amount:Number(ch.amount)||0,date:ch.date||'',ref:ch.id||''});
+            ledgers[fk].totalCharges+=Number(ch.amount)||0;
+        });
+    });
 
-    // Stats row
-    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:18px">';
+    // 3. Payments
+    finPayments.forEach(function(p){
+        // Match to family
+        var fk=null;
+        Object.entries(families).forEach(function([k,f]){
+            if(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0) fk=k;
+        });
+        if(!fk) return;
+        if(!ledgers[fk]) return;
+        ledgers[fk].entries.push({type:'payment',category:p.method||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||''});
+        ledgers[fk].totalPayments+=Number(p.amount)||0;
+    });
+
+    // 4. Compute balances and sort entries
+    Object.values(ledgers).forEach(function(l){
+        l.balance=l.totalCharges-l.totalPayments-l.totalCredits;
+        l.entries.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});
+        // Determine status
+        var today=new Date().toISOString().split('T')[0];
+        l.status=l.balance<=0?'paid':l.totalPayments>0?'partial':'pending';
+        // Check overdue — any installment past due date?
+        l.entries.forEach(function(e){
+            if(e.type==='installment'&&e.status==='pending'&&e.date&&e.date<today) l.status='overdue';
+        });
+        if(l.balance>0&&l.totalPayments===0) l.status='pending';
+    });
+
+    return ledgers;
+}
+
+function renderBilling(){
+    var c=document.getElementById('page-billing');
+    var ledgers=buildFamilyLedgers();
+    var famList=Object.values(ledgers).sort(function(a,b){return(a.family.name||'').localeCompare(b.family.name||'')});
+
+    // Totals
+    var totalCharged=0,totalCollected=0,totalOutstanding=0,overdueCount=0;
+    famList.forEach(function(l){
+        totalCharged+=l.totalCharges;
+        totalCollected+=l.totalPayments;
+        totalOutstanding+=Math.max(0,l.balance);
+        if(l.status==='overdue') overdueCount++;
+    });
+    var rate=totalCharged>0?Math.round(totalCollected/totalCharged*100):0;
+    var famWithBalance=famList.filter(function(l){return l.balance>0}).length;
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' family account'+(famList.length!==1?'s':'')+' · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Add Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Issue Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Record Payment</button></div></div>';
+
+    // Stats
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:18px">';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+fm(totalCharged)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Total Charged</div></div>';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--ok)">'+fm(totalCollected)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collected</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--err)">'+fm(totalInvoiced-totalCollected)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+fm(totalInvoiced)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Total Invoiced</div></div>';
-    var rate=totalInvoiced>0?Math.round(totalCollected/totalInvoiced*100):0;
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--err)">'+fm(totalOutstanding)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+rate+'%</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collection Rate</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid '+(overdueCount>0?'var(--err)':'var(--s200)')+'"><div style="font-size:1.25rem;font-weight:800;color:'+(overdueCount>0?'var(--err)':'var(--s800)')+'">'+overdueCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Overdue</div></div>';
     h+='</div>';
 
-    // Invoices table
-    if(invoices.length){
-        h+='<div class="me-card"><div class="me-card-head"><h3>Invoices</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Camper</th><th>Session</th><th>Tuition</th><th>Discount</th><th>Net</th><th>Paid</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
-        invoices.sort(function(a,b){return a.name.localeCompare(b.name)}).forEach(function(inv){
-            var sc=inv.status==='Paid'?'ok':inv.status==='Partial'?'warn':'err';
-            h+='<tr><td class="bold">'+esc(inv.name)+'</td><td>'+esc(inv.session)+'</td><td>'+fm(inv.tuition)+'</td><td>'+(inv.discount>0?'-'+fm(inv.discount):'—')+'</td><td style="font-weight:600">'+fm(inv.net)+'</td><td style="color:var(--ok);font-weight:600">'+fm(inv.paid)+'</td><td style="color:'+(inv.balance>0?'var(--err)':'var(--ok)')+';font-weight:700">'+fm(inv.balance)+'</td><td>'+bdg(inv.status,sc)+'</td></tr>';
+    // Filter tabs
+    h+='<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
+    var filters=[['all','All Accounts',famList.length],['outstanding','Outstanding',famWithBalance],['overdue','Overdue',overdueCount],['paid','Paid In Full',famList.filter(function(l){return l.status==='paid'}).length]];
+    filters.forEach(function(f){
+        var active=_billFilter===f[0];
+        h+='<button class="me-btn '+(active?'me-btn--pri':'me-btn--sec')+' me-btn--sm" onclick="CampistryMe.setBillFilter(\''+f[0]+'\')">'+f[1]+' ('+f[2]+')</button>';
+    });
+    h+='</div>';
+
+    // Family accounts
+    var filtered=famList;
+    if(_billFilter==='outstanding') filtered=famList.filter(function(l){return l.balance>0});
+    else if(_billFilter==='overdue') filtered=famList.filter(function(l){return l.status==='overdue'});
+    else if(_billFilter==='paid') filtered=famList.filter(function(l){return l.status==='paid'});
+
+    if(!filtered.length){
+        h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
+    } else {
+        filtered.forEach(function(l){
+            var statusBadge=l.status==='paid'?bdg('Paid','ok'):l.status==='overdue'?bdg('Overdue','err'):l.status==='partial'?bdg('Partial','warn'):bdg('Pending','warn');
+            var camperNames=(l.family.camperIds||[]).join(', ');
+
+            h+='<div class="me-card" style="margin-bottom:12px"><div class="me-card-head" style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'">';
+            h+='<div style="display:flex;align-items:center;gap:12px;flex:1"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span></div>';
+            h+='<div style="display:flex;align-items:center;gap:10px">'+statusBadge;
+            h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
+            h+='<span style="font-size:.7rem;color:var(--s400)">▼</span></div>';
+            h+='</div>';
+
+            // Ledger (collapsed by default)
+            h+='<div style="display:none;padding:0">';
+
+            // Ledger summary bar
+            h+='<div style="display:flex;gap:16px;padding:10px 16px;background:var(--s50);border-bottom:1px solid var(--s100);font-size:.75rem">';
+            h+='<span>Charges: <strong>'+fm(l.totalCharges)+'</strong></span>';
+            h+='<span>Payments: <strong style="color:var(--ok)">'+fm(l.totalPayments)+'</strong></span>';
+            if(l.totalCredits>0) h+='<span>Credits: <strong style="color:var(--purple)">'+fm(l.totalCredits)+'</strong></span>';
+            h+='<span style="margin-left:auto">Balance: <strong style="color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</strong></span>';
+            h+='</div>';
+
+            // Ledger entries table
+            if(l.entries.length){
+                h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th>Status</th></tr></thead><tbody>';
+                var runBal=0;
+                l.entries.forEach(function(e){
+                    if(e.type==='installment') return; // show in detail only
+                    var isCharge=e.type==='charge';
+                    var isPayment=e.type==='payment';
+                    var isCredit=e.type==='credit';
+                    if(isCharge) runBal+=e.amount;
+                    if(isPayment||isCredit) runBal-=e.amount;
+                    h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
+                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isPayment?'ok':'warn')+'</td>';
+                    h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
+                    h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
+                    h+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+((isPayment||isCredit)?fm(e.amount):'')+'</td>';
+                    h+='<td></td></tr>';
+                });
+                h+='</tbody></table>';
+            }
+
+            // Installment schedule if any
+            var installments=l.entries.filter(function(e){return e.type==='installment'});
+            if(installments.length){
+                h+='<div style="padding:10px 16px;border-top:1px solid var(--s100)"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;margin-bottom:6px">Payment Schedule</div>';
+                h+='<div style="display:grid;gap:6px">';
+                var today=new Date().toISOString().split('T')[0];
+                installments.forEach(function(inst){
+                    var isPastDue=inst.status==='pending'&&inst.date&&inst.date<today;
+                    var bg=inst.status==='paid'?'var(--ok)':isPastDue?'var(--err)':'var(--s300)';
+                    h+='<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:6px;background:var(--s50);font-size:.8rem">';
+                    h+='<span style="width:8px;height:8px;border-radius:50%;background:'+bg+';flex-shrink:0"></span>';
+                    h+='<span style="flex:1;font-weight:500">'+esc(inst.desc||inst.category)+'</span>';
+                    h+='<span style="font-size:.75rem;color:var(--s500)">Due: '+esc(inst.date||'TBD')+'</span>';
+                    h+='<span style="font-weight:700">'+fm(inst.amount)+'</span>';
+                    h+=bdg(isPastDue?'Past Due':inst.status==='paid'?'Paid':'Pending',isPastDue?'err':inst.status==='paid'?'ok':'warn');
+                    h+='</div>';
+                });
+                h+='</div></div>';
+            }
+
+            // Quick actions
+            h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100)">';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
+            h+='</div>';
+
+            h+='</div></div>'; // end collapsed, end card
         });
-        h+='</tbody></table></div></div>';
     }
 
-    // Recent payments
-    if(finPayments.length){
-        var sorted=[...finPayments].sort(function(a,b){return(b.date||'').localeCompare(a.date||'')});
-        h+='<div class="me-card"><div class="me-card-head"><h3>Recent Payments</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family / Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
-        sorted.forEach(function(p,i){
-            h+='<tr><td>'+esc(p.date||'')+'</td><td class="bold">'+esc(p.family||p.camper||'')+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'')+'</td><td><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.removePayment('+i+')">×</button></td></tr>';
-        });
-        h+='</tbody></table></div></div>';
-    } else {
-        h+='<div class="me-empty"><h3>No payments recorded yet</h3><p>Click "+ Record Payment" to add one.</p></div>';
-    }
     c.innerHTML=h;
 }
 
-function openPaymentModal(){
-    var names=Object.keys(roster).sort();
-    var famNames=Object.values(families).map(function(f){return f.name}).sort();
-    var opts=famNames.map(function(n){return'<option value="'+esc(n)+'">'+esc(n)+'</option>'}).join('');
-    opts+=names.map(function(n){return'<option value="'+esc(n)+'">'+esc(n)+' (camper)</option>'}).join('');
+function setBillFilter(f){_billFilter=f;renderBilling()}
+
+function openPaymentModal(){openPaymentForFamily(null)}
+
+function openPaymentForFamily(famKey){
+    var famOpts='';
+    if(famKey){
+        var f=families[famKey];
+        famOpts='<option value="'+esc(famKey)+'" selected>'+esc(f?f.name:'')+'</option>';
+    } else {
+        famOpts='<option value="">— Select Family —</option>';
+        Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function([k,f]){
+            var bal=buildFamilyLedgers()[k]?.balance||0;
+            famOpts+='<option value="'+esc(k)+'">'+esc(f.name)+(bal>0?' ('+fm(bal)+' due)':'')+'</option>';
+        });
+    }
     var today=new Date().toISOString().split('T')[0];
-    var h='<div class="me-modal-form"><div class="me-field"><label>Family or Camper</label><select id="payFamily" class="me-input">'+opts+'</select></div><div class="me-field"><label>Amount ($)</label><input type="number" id="payAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div><div class="me-field"><label>Date</label><input type="date" id="payDate" class="me-input" value="'+today+'"></div><div class="me-field"><label>Method</label><select id="payMethod" class="me-input"><option>Credit Card</option><option>Check</option><option>Cash</option><option>ACH/Bank Transfer</option><option>Other</option></select></div><div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="Check #, reference, etc."></div></div>';
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Family</label><select id="payFamKey" class="me-input">'+famOpts+'</select></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="payAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
+    h+='<div class="me-field"><label>Date</label><input type="date" id="payDate" class="me-input" value="'+today+'"></div>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input"><option>Credit Card</option><option>Check</option><option>Cash</option><option>ACH / Bank Transfer</option><option>PayPal</option><option>Zelle</option><option>Other</option></select></div>';
+    h+='<div class="me-field"><label>Reference #</label><input type="text" id="payRef" class="me-input" placeholder="Check #, confirmation, etc."></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="e.g., June installment"></div>';
+    h+='</div>';
     showModal('Record Payment',h,function(){
-        var fam=document.getElementById('payFamily').value;
+        var fk=document.getElementById('payFamKey').value;
+        var f=families[fk];
+        if(!fk||!f){alert('Select a family');return}
         var amt=parseFloat(document.getElementById('payAmount').value)||0;
+        if(!amt){alert('Enter an amount');return}
         var date=document.getElementById('payDate').value;
         var method=document.getElementById('payMethod').value;
+        var ref=document.getElementById('payRef').value.trim();
         var notes=document.getElementById('payNotes').value.trim();
-        if(!amt){alert('Enter an amount');return}
-        finPayments.push({id:'pay_'+Date.now(),family:fam,amount:amt,date:date,method:method,notes:notes,timestamp:Date.now()});
-        // Update family balance if found
-        var fObj=Object.values(families).find(function(f){return f.name===fam});
-        if(fObj){fObj.totalPaid=(fObj.totalPaid||0)+amt;fObj.balance=Math.max(0,(fObj.balance||0)-amt)}
-        save();closeModal();renderBilling();toast('Payment recorded');
+        finPayments.push({id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()});
+        f.totalPaid=(f.totalPaid||0)+amt;
+        f.balance=Math.max(0,(f.balance||0)-amt);
+        save();closeModal('dynModal');renderBilling();toast('Payment of '+fm(amt)+' recorded for '+f.name);
     });
 }
+
+function addCharge(){addChargeForFamily(null)}
+function addChargeForFamily(famKey){
+    var famOpts='';
+    if(famKey){
+        var f=families[famKey];
+        famOpts='<option value="'+esc(famKey)+'" selected>'+esc(f?f.name:'')+'</option>';
+    } else {
+        famOpts='<option value="">— Select Family —</option>';
+        Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function([k,f]){
+            famOpts+='<option value="'+esc(k)+'">'+esc(f.name)+'</option>';
+        });
+    }
+    var today=new Date().toISOString().split('T')[0];
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Family</label><select id="chgFamKey" class="me-input">'+famOpts+'</select></div>';
+    h+='<div class="me-field"><label>Category</label><select id="chgCategory" class="me-input"><option>Activity Add-On</option><option>Trip Fee</option><option>Merchandise</option><option>Late Fee</option><option>Transportation</option><option>Materials</option><option>Convenience Fee</option><option>Other</option></select></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Description</label><input type="text" id="chgDesc" class="me-input" placeholder="e.g., Horseback riding add-on"></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="chgAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>Date</label><input type="date" id="chgDate" class="me-input" value="'+today+'"></div>';
+    h+='</div>';
+    showModal('Add Charge',h,function(){
+        var fk=document.getElementById('chgFamKey').value;
+        var f=families[fk];
+        if(!fk||!f){alert('Select a family');return}
+        var amt=parseFloat(document.getElementById('chgAmount').value)||0;
+        if(!amt){alert('Enter an amount');return}
+        if(!f.charges) f.charges=[];
+        f.charges.push({id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()});
+        f.balance=(f.balance||0)+amt;
+        save();closeModal('dynModal');renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
+    });
+}
+
+function issueCredit(){issueCreditForFamily(null)}
+function issueCreditForFamily(famKey){
+    var famOpts='';
+    if(famKey){
+        var f=families[famKey];
+        famOpts='<option value="'+esc(famKey)+'" selected>'+esc(f?f.name:'')+'</option>';
+    } else {
+        famOpts='<option value="">— Select Family —</option>';
+        Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function([k,f]){
+            famOpts+='<option value="'+esc(k)+'">'+esc(f.name)+'</option>';
+        });
+    }
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Family</label><select id="crFamKey" class="me-input">'+famOpts+'</select></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Reason</label><input type="text" id="crReason" class="me-input" placeholder="e.g., Referral credit, adjustment"></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
+    h+='</div></div>';
+    showModal('Issue Credit',h,function(){
+        var fk=document.getElementById('crFamKey').value;
+        var f=families[fk];
+        if(!fk||!f){alert('Select a family');return}
+        var amt=parseFloat(document.getElementById('crAmount').value)||0;
+        if(!amt){alert('Enter an amount');return}
+        if(!f.credits) f.credits=[];
+        f.credits.push({id:'cr_'+Date.now(),reason:document.getElementById('crReason').value.trim(),amount:amt,date:new Date().toISOString().split('T')[0],timestamp:Date.now()});
+        f.balance=Math.max(0,(f.balance||0)-amt);
+        save();closeModal('dynModal');renderBilling();toast('Credit of '+fm(amt)+' issued to '+f.name);
+    });
+}
+
+function printStatement(famKey){
+    var ledgers=buildFamilyLedgers();
+    var l=ledgers[famKey];if(!l)return;
+    var campName='';try{var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=s.camp_name||s.campName||'Camp'}catch(e){}
+    var w=window.open('','_blank');
+    var h='<!DOCTYPE html><html><head><title>Statement — '+esc(l.family.name)+'</title><style>body{font-family:Arial,sans-serif;font-size:10pt;margin:30px;color:#222}h1{font-size:16pt;margin-bottom:4px}h2{font-size:12pt;margin:20px 0 8px}table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f5f5f5;text-align:left;padding:6px;border:1px solid #ddd;font-size:9pt}td{padding:5px 6px;border:1px solid #ddd;font-size:9pt}.right{text-align:right}.bold{font-weight:bold}@media print{button{display:none}}</style></head><body>';
+    h+='<h1>'+esc(campName)+'</h1><p style="color:#666;margin-bottom:20px">Statement for <strong>'+esc(l.family.name)+'</strong> · Generated '+new Date().toLocaleDateString()+'</p>';
+    // Campers
+    h+='<p>Campers: '+(l.family.camperIds||[]).map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', ')+'</p>';
+    // Parent info
+    var hh=(l.family.households||[])[0];
+    if(hh){
+        var pp=(hh.parents||[])[0];
+        if(pp) h+='<p>'+esc(pp.name||'')+' · '+esc(pp.phone||'')+' · '+esc(pp.email||'')+'</p>';
+        if(hh.address) h+='<p>'+esc(hh.address)+'</p>';
+    }
+    // Ledger
+    h+='<h2>Account Activity</h2><table><thead><tr><th>Date</th><th>Type</th><th>Description</th><th class="right">Charges</th><th class="right">Payments/Credits</th></tr></thead><tbody>';
+    l.entries.filter(function(e){return e.type!=='installment'}).forEach(function(e){
+        var isCharge=e.type==='charge';
+        h+='<tr><td>'+esc(e.date||'')+'</td><td>'+esc(e.category||e.type)+'</td><td>'+esc(e.desc||'')+'</td><td class="right">'+(isCharge?fm(e.amount):'')+'</td><td class="right bold" style="color:#16A34A">'+(isCharge?'':fm(e.amount))+'</td></tr>';
+    });
+    h+='<tr style="border-top:2px solid #333"><td colspan="3" class="bold">Balance Due</td><td colspan="2" class="right bold" style="font-size:12pt;color:'+(l.balance>0?'#DC2626':'#16A34A')+'">'+fm(l.balance)+'</td></tr>';
+    h+='</tbody></table>';
+    // Installment schedule
+    var insts=l.entries.filter(function(e){return e.type==='installment'});
+    if(insts.length){
+        h+='<h2>Payment Schedule</h2><table><thead><tr><th>Installment</th><th>Due Date</th><th class="right">Amount</th><th>Status</th></tr></thead><tbody>';
+        insts.forEach(function(i){h+='<tr><td>'+esc(i.category||i.desc)+'</td><td>'+esc(i.date||'')+'</td><td class="right bold">'+fm(i.amount)+'</td><td>'+esc(i.status||'pending')+'</td></tr>'});
+        h+='</tbody></table>';
+    }
+    h+='<div style="margin-top:30px;text-align:center;color:#999;font-size:9pt">Powered by Campistry</div>';
+    h+='<button onclick="window.print()" style="margin-top:20px;padding:8px 24px;cursor:pointer">Print</button></body></html>';
+    w.document.write(h);w.document.close();
+}
+
 function removePayment(idx){
     if(!confirm('Remove this payment?'))return;
+    var p=finPayments[idx];
+    // Reverse family balance
+    if(p){
+        var f=Object.values(families).find(function(f){return f.name===p.family});
+        if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-p.amount);f.balance=(f.balance||0)+p.amount}
+    }
     finPayments.splice(idx,1);save();renderBilling();toast('Payment removed');
 }
 
@@ -2533,8 +2818,11 @@ window.CampistryMe={
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
     uploadPhoto:uploadPhoto,
-    // Billing
-    openPaymentModal:openPaymentModal,removePayment:removePayment,
+    // Billing — family ledger system
+    openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
+    addCharge:addCharge,addChargeForFamily:addChargeForFamily,
+    issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
+    setBillFilter:setBillFilter,printStatement:printStatement,
     // Broadcasts
     openBroadcastModal:openBroadcastModal,viewBroadcast:viewBroadcast,removeBroadcast:removeBroadcast,
     // Forms & Docs
