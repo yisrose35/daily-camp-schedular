@@ -16,6 +16,9 @@ var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local
 // ═══ INIT ════════════════════════════════════════════════════════
 function init(){
     loadData(); setupSidebar(); setupSearch(); setupModals();
+    // Apply RTL if configured
+    var cs=getCampSettings();
+    if(cs.rtl) document.documentElement.setAttribute('dir','rtl');
     syncAllAddressesToGo();
     nav('campers');
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
@@ -150,6 +153,35 @@ function setupSearch(){
 function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function je(s){return esc(s).replace(/'/g,"\\'")}
 function age(dob){if(!dob)return'';var a=Math.floor((Date.now()-new Date(dob).getTime())/31557600000);return a>=0&&a<25?a:''}
+
+// ── Hebrew date conversion (Intl API — works in all modern browsers) ──
+function toHebrewDate(isoDate){
+    if(!isoDate) return'';
+    try{
+        var d=new Date(isoDate+'T12:00:00');
+        if(isNaN(d.getTime())) return'';
+        // Use Intl.DateTimeFormat with Hebrew calendar
+        var fmt=new Intl.DateTimeFormat('he-IL-u-ca-hebrew',{day:'numeric',month:'long',year:'numeric'});
+        return fmt.format(d);
+    }catch(e){return''}
+}
+
+// ── Locale-aware date formatting ──
+function getCampLocale(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    return(s.campistryMe&&s.campistryMe.locale)||'en-US';
+}
+function getCampSettings(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    return(s.campistryMe&&s.campistryMe.campSettings)||{showHebrewDates:false,showAltNames:true,rtl:false};
+}
+function formatDateLocale(isoDate){
+    if(!isoDate) return'';
+    try{
+        var d=new Date(isoDate+'T12:00:00');
+        return d.toLocaleDateString(getCampLocale(),{month:'long',day:'numeric',year:'numeric'});
+    }catch(e){return isoDate}
+}
 function ini(n){var p=n.split(' ');return((p[0]||'?')[0]+(p.length>1?(p[p.length-1]||'?')[0]:'')).toUpperCase()}
 function avc(n){var h=0;for(var i=0;i<n.length;i++)h+=n.charCodeAt(i);return AV_BG[h%AV_BG.length]}
 function av(n,sz){var w=sz==='l'?52:sz==='m'?38:28,fs=sz==='l'?17:sz==='m'?13:10;return'<div class="av av-'+(sz||'s')+'" style="background:'+avc(n)+'">'+esc(ini(n))+'</div>'}
@@ -436,7 +468,7 @@ function saveFamily(){
 // ── CAMPERS ──────────────────────────────────────────────────────
 function renderCampers(filter){
     var c=document.getElementById('page-campers'),entries=Object.entries(roster),total=entries.length;
-    if(filter){var q=filter.toLowerCase();entries=entries.filter(function([n,d]){return n.toLowerCase().includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)})}
+    if(filter){var q=filter.toLowerCase();entries=entries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)})}
     entries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var h='<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Download Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export All</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     if(!entries.length){h+='<div class="me-empty"><h3>No campers yet</h3><p>Add campers or import from CSV.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>'}
@@ -445,7 +477,9 @@ function renderCampers(filter){
         entries.forEach(function([n,d]){
             var hasMed=!!(d.allergies||d.medications);
             var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
-            h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')">'+'<td style="font-family:monospace;font-size:.75rem;color:var(--s400)">#'+esc(idStr)+'</td><td class="bold">'+esc(n)+'</td><td>'+(d.dob?age(d.dob):'—')+'</td><td>'+esc(d.school||'—')+'</td><td>'+esc(d.schoolGrade||'—')+'</td><td>'+esc(d.teacher||'—')+'</td><td>'+(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+'</td><td>'+esc(d.bunk||'—')+'</td><td>'+(hasMed?'<span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ '+esc((d.allergies||d.medications||'').split(',')[0])+'</span>':'<span style="color:var(--s300)">—</span>')+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
+            var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
+            var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'');
+            h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')">'+'<td style="font-family:monospace;font-size:.75rem;color:var(--s400)">#'+esc(idStr)+'</td><td class="bold">'+nameCell+'</td><td>'+(d.dob?age(d.dob):'—')+'</td><td>'+esc(d.school||'—')+'</td><td>'+esc(d.schoolGrade||'—')+'</td><td>'+esc(d.teacher||'—')+'</td><td>'+(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+'</td><td>'+esc(d.bunk||'—')+'</td><td>'+(hasMed?'<span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ '+esc((d.allergies||d.medications||'').split(',')[0])+'</span>':'<span style="color:var(--s300)">—</span>')+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
         });
         h+='</tbody></table></div></div>';
     }
@@ -463,15 +497,24 @@ function viewCamper(n){
         ?'<img src="'+esc(photoUrl)+'" style="width:72px;height:72px;border-radius:12px;object-fit:cover;border:2px solid var(--s200)">'
         :'<div style="width:72px;height:72px;border-radius:12px;background:var(--s100);border:2px dashed var(--s300);display:flex;align-items:center;justify-content:center;flex-direction:column;cursor:pointer" onclick="CampistryMe.uploadPhoto(\''+je(n)+'\')" title="Click to add photo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--s400)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span style="font-size:.6rem;color:var(--s400);margin-top:2px">Add Photo</span></div>';
 
-    document.getElementById('cvHead').innerHTML='<div style="display:flex;gap:16px;align-items:flex-start;padding:4px 0">'+photoHtml+'<div style="flex:1"><h3 class="cv-name">'+esc(n)+'</h3><div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div></div>';
+    var altDisplay=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
+    var altHtml=altDisplay?'<div style="font-size:.85rem;color:var(--s500);margin-top:2px">'+esc(altDisplay)+'</div>':'';
+    document.getElementById('cvHead').innerHTML='<div style="display:flex;gap:16px;align-items:flex-start;padding:4px 0">'+photoHtml+'<div style="flex:1"><h3 class="cv-name">'+esc(n)+'</h3>'+altHtml+'<div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div></div>';
 
     var b='';
 
     // Personal
     b+='<div class="cv-sec">Personal Information</div>';
     b+=cvR('Full Name',n);
+    var altName=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
+    if(altName) b+=cvR('Alternate Name','<span style="font-size:1rem">'+esc(altName)+'</span>');
     b+=cvR('Camper ID','#'+idStr);
-    if(d.dob)b+=cvR('Date of Birth',new Date(d.dob+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+' (age '+age(d.dob)+')');
+    if(d.dob){
+        var dobStr=new Date(d.dob+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+' (age '+age(d.dob)+')';
+        var hebDate=toHebrewDate(d.dob);
+        if(hebDate) dobStr+=' · <span style="font-size:.85rem;color:var(--me)">'+hebDate+'</span>';
+        b+=cvR('Date of Birth',dobStr);
+    }
     b+=cvR('Gender',d.gender);
     b+=cvR('School',d.school);
     b+=cvR('School Grade',d.schoolGrade);
@@ -543,6 +586,8 @@ function editCamper(n){
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'Will be assigned on save';
     var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="fsec" style="margin:0">Identity</div><span style="font-family:monospace;font-size:.8rem;color:var(--s400);background:var(--s100);padding:3px 10px;border-radius:var(--r)">Camper ID: #'+esc(idStr)+'</span></div>';
     h+='<div class="fr">'+ff('First Name','ceFirst',parts[0]||'')+ff('Last Name','ceLast',parts.slice(1).join(' ')||'')+'</div>';
+    h+='<div class="fr">'+ff('Alternate First Name','ceAltFirst',d.altFirstName||'')+ff('Alternate Last Name','ceAltLast',d.altLastName||'')+'</div>';
+    h+='<p style="font-size:.65rem;color:var(--s400);margin:-4px 0 8px;padding-left:2px">Hebrew, Spanish, Chinese, or any other name used at camp</p>';
     h+='<div class="fr">'+ff('Date of Birth','ceDob',d.dob||'','date')+ff('Gender','ceGender',d.gender||'','select',['','Male','Female','Non-binary','Other'])+'</div>';
     h+='<div class="fr">'+ff('School Name','ceSchool',d.school||'')+ff('School Grade','ceSchoolGr',d.schoolGrade||'')+'</div>';
     h+=ff('Teacher','ceTeacher',d.teacher||'');
@@ -606,6 +651,8 @@ function saveCamper(){
     if(!existingId){existingId=nextCamperId;nextCamperId++}
     roster[full]={
         camperId:existingId,
+        altFirstName:(document.getElementById('ceAltFirst').value||'').trim(),
+        altLastName:(document.getElementById('ceAltLast').value||'').trim(),
         dob:document.getElementById('ceDob').value||'',gender:document.getElementById('ceGender').value||'',
         school:document.getElementById('ceSchool').value||'',schoolGrade:document.getElementById('ceSchoolGr').value||'',
         teacher:document.getElementById('ceTeacher').value||'',
@@ -2768,9 +2815,10 @@ function dlCsv(name,csv){
     var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();toast('Downloaded '+name);
 }
 function exportRosterReport(){
-    var csv='Name,Camper ID,Division,Grade,Bunk,DOB,Gender,School,Parent 1,Parent 1 Phone,Parent 1 Email,Street,City,State,ZIP,Allergies,Medications,Dietary\n';
+    var csv='Name,Alternate Name,Camper ID,Division,Grade,Bunk,DOB,Gender,School,Parent 1,Parent 1 Phone,Parent 1 Email,Street,City,State,ZIP,Allergies,Medications,Dietary\n';
     Object.entries(roster).sort(function(a,b){return a[0].localeCompare(b[0])}).forEach(function([n,c]){
-        csv+=[n,c.camperId||'',c.division||'',c.grade||'',c.bunk||'',c.dob||'',c.gender||'',c.school||'',c.parent1Name||'',c.parent1Phone||'',c.parent1Email||'',c.street||'',c.city||'',c.state||'',c.zip||'',c.allergies||'',c.medications||'',c.dietary||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+        var altN=[c.altFirstName,c.altLastName].filter(Boolean).join(' ');
+        csv+=[n,altN,c.camperId||'',c.division||'',c.grade||'',c.bunk||'',c.dob||'',c.gender||'',c.school||'',c.parent1Name||'',c.parent1Phone||'',c.parent1Email||'',c.street||'',c.city||'',c.state||'',c.zip||'',c.allergies||'',c.medications||'',c.dietary||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
     });
     dlCsv('campistry_roster_'+new Date().toISOString().split('T')[0]+'.csv',csv);
 }
@@ -2832,6 +2880,19 @@ function renderSettings(){
     h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveSettings()">Save Settings</button></div>';
     h+='</div>';
 
+    // Language & locale settings
+    var cs=getCampSettings();
+    var locale=getCampLocale();
+    h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:4px">🌍 Language & Regional</h3><p style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Configure language, date formats, and alternate name display for your camp.</p>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem">Display Language / Locale</label><select id="settLocale" class="me-input"><option value="en-US"'+(locale==='en-US'?' selected':'')+'>English (US)</option><option value="en-GB"'+(locale==='en-GB'?' selected':'')+'>English (UK)</option><option value="he-IL"'+(locale==='he-IL'?' selected':'')+'>עברית (Hebrew)</option><option value="es-ES"'+(locale==='es-ES'?' selected':'')+'>Español (Spanish)</option><option value="fr-FR"'+(locale==='fr-FR'?' selected':'')+'>Français (French)</option><option value="ru-RU"'+(locale==='ru-RU'?' selected':'')+'>Русский (Russian)</option><option value="ar-SA"'+(locale==='ar-SA'?' selected':'')+'>العربية (Arabic)</option><option value="zh-CN"'+(locale==='zh-CN'?' selected':'')+'>中文 (Chinese)</option><option value="pt-BR"'+(locale==='pt-BR'?' selected':'')+'>Português (Portuguese)</option><option value="yi"'+(locale==='yi'?' selected':'')+'>ייִדיש (Yiddish)</option></select></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settHebrewDates" style="accent-color:var(--me);margin-right:6px"'+(cs.showHebrewDates?' checked':'')+'>Show Hebrew dates</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">Display Hebrew calendar date alongside standard dates</p></div>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settAltNames" style="accent-color:var(--me);margin-right:6px"'+(cs.showAltNames!==false?' checked':'')+'>Show alternate names</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">Display Hebrew/alternate names in roster and cards</p></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settRTL" style="accent-color:var(--me);margin-right:6px"'+(cs.rtl?' checked':'')+'>Right-to-left layout (RTL)</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">For Hebrew, Arabic, Yiddish — flips the entire interface direction</p></div>';
+    h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveLocaleSettings()">Save Language Settings</button></div>';
+    h+='</div>';
+
     // Stripe settings
     var stripeKey=(s.campistryMe&&s.campistryMe.stripePublishableKey)||'';
     h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:4px">💳 Payment Processing (Stripe)</h3><p style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments.</p>';
@@ -2855,6 +2916,21 @@ function saveSettings(){
     s.campName=s.camp_name;
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
     save();toast('Settings saved');
+}
+function saveLocaleSettings(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.locale=document.getElementById('settLocale').value||'en-US';
+    s.campistryMe.campSettings={
+        showHebrewDates:document.getElementById('settHebrewDates').checked,
+        showAltNames:document.getElementById('settAltNames').checked,
+        rtl:document.getElementById('settRTL').checked
+    };
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    // Apply RTL immediately
+    if(s.campistryMe.campSettings.rtl) document.documentElement.setAttribute('dir','rtl');
+    else document.documentElement.removeAttribute('dir');
+    save();render(curPage);toast('Language settings saved');
 }
 function saveStripeKey(){
     var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
@@ -3253,6 +3329,6 @@ window.CampistryMe={
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
     // Settings
-    saveSettings:saveSettings,saveStripeKey:saveStripeKey,exportAllData:exportAllData,importAllData:importAllData,clearAllData:clearAllData,
+    saveSettings:saveSettings,saveStripeKey:saveStripeKey,saveLocaleSettings:saveLocaleSettings,exportAllData:exportAllData,importAllData:importAllData,clearAllData:clearAllData,
 };
 })();
