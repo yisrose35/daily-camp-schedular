@@ -55,12 +55,6 @@ function initFacilitiesTab() {
               </div>
             </div>
 
-            <!-- SPORT RULES + FIELD QUALITY — SIDE BY SIDE -->
-            <div style="display:flex; gap:16px; flex-wrap:wrap;">
-              <div id="fac-sport-rules-section" style="flex:1; min-width:280px;"></div>
-              <div id="fac-field-quality-section" style="flex:1; min-width:280px;"></div>
-            </div>
-
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
               <!-- LEFT SIDE: MASTER LIST -->
               <div style="flex:1; min-width:280px;">
@@ -92,8 +86,6 @@ function initFacilitiesTab() {
     document.getElementById("add-facility-btn").onclick = addFacility;
     addFacilityInput.onkeyup = e => { if (e.key === "Enter") addFacility(); };
 
-    renderSportRulesSection();
-    renderFieldQualitySection();
     renderMasterList();
     renderDetailPane();
 }
@@ -1166,7 +1158,6 @@ function renderActivities(item, allSports) {
             }
             const summaryEl = box.closest('.detail-section')?.querySelector('.detail-section-summary');
             if (summaryEl) summaryEl.textContent = summaryActivities(item);
-            renderSportRulesSection();
         }
     };
 
@@ -1982,202 +1973,6 @@ function renderSpecialMultiPart(saData) {
     return container;
 }
 
-// =========================================================================
-// SPORT RULES SECTION (Top-level)
-// =========================================================================
-function renderSportRulesSection() {
-    const container = document.getElementById("fac-sport-rules-section");
-    if (!container) return;
-
-    const allSports = window.getAllGlobalSports?.() || [];
-    if (allSports.length === 0) {
-        container.innerHTML = `
-            <div class="sport-rules-card">
-                <div class="sport-rules-header"><div class="sport-rules-title">Sports Rules</div></div>
-                <div class="sport-rules-body" style="display:block; padding-top:10px; text-align:center;">
-                    <p class="muted" style="padding:10px;">No sports configured yet. Add sports to a facility first.</p>
-                </div>
-            </div>`;
-        return;
-    }
-
-    let sportsHTML = '';
-    [...allSports].sort().forEach(sport => {
-        const meta = sportMetaData[sport] || {};
-        sportsHTML += `
-            <div class="sport-rule-row">
-                <span class="sport-rule-name">${escapeHtml(sport)}</span>
-                <div class="sport-rule-inputs">
-                    <div class="sport-rule-input-group">
-                        <span class="sport-rule-label">Min:</span>
-                        <input type="number" class="sport-rule-input" data-sport="${escapeHtml(sport)}" data-type="min" value="${meta.minPlayers || ''}" placeholder="\u2014" min="1">
-                    </div>
-                    <div class="sport-rule-input-group">
-                        <span class="sport-rule-label">Max:</span>
-                        <input type="number" class="sport-rule-input" data-sport="${escapeHtml(sport)}" data-type="max" value="${meta.maxPlayers || ''}" placeholder="\u221E" min="1">
-                    </div>
-                </div>
-            </div>`;
-    });
-
-    container.innerHTML = `
-        <div class="sport-rules-card">
-            <div class="sport-rules-header" id="fac-sport-rules-toggle">
-                <div class="sport-rules-title">Sports Rules</div>
-                <span id="fac-sport-rules-caret" style="transform:rotate(0deg); transition:transform 0.2s; color:#6B7280;">
-                    <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
-                </span>
-            </div>
-            <div id="fac-sport-rules-body" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;">
-                <div class="sport-rules-hint"><strong>How this works:</strong> Set min/max players per sport. The scheduler matches bunks by size.</div>
-                <div id="fac-sport-rules-list">${sportsHTML}</div>
-                <div style="margin-top:20px; text-align:right;">
-                    <button id="fac-save-sport-rules-btn" style="background:#147D91; color:white; border:none; padding:8px 24px; border-radius:999px; cursor:pointer; font-weight:600; font-size:0.9rem;">Save Rules</button>
-                </div>
-            </div>
-        </div>`;
-
-    document.getElementById('fac-sport-rules-toggle').onclick = () => {
-        const bodyEl = document.getElementById('fac-sport-rules-body');
-        const caretEl = document.getElementById('fac-sport-rules-caret');
-        const isHidden = bodyEl.style.display === 'none';
-        bodyEl.style.display = isHidden ? 'block' : 'none';
-        caretEl.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
-    };
-
-    container.querySelectorAll('.sport-rule-input').forEach(input => {
-        input.addEventListener('change', () => {
-            const sport = input.dataset.sport;
-            const type = input.dataset.type;
-            const val = parseInt(input.value) || null;
-            if (!sportMetaData[sport]) sportMetaData[sport] = {};
-            if (type === 'min') sportMetaData[sport].minPlayers = val;
-            else if (type === 'max') sportMetaData[sport].maxPlayers = val;
-        });
-    });
-
-    const saveBtn = document.getElementById('fac-save-sport-rules-btn');
-    if (saveBtn) {
-        saveBtn.onclick = (e) => {
-            e.stopPropagation();
-            container.querySelectorAll('.sport-rule-input').forEach(input => {
-                const sport = input.dataset.sport;
-                const type = input.dataset.type;
-                const val = parseInt(input.value) || null;
-                if (!sportMetaData[sport]) sportMetaData[sport] = {};
-                if (type === 'min') sportMetaData[sport].minPlayers = val;
-                else if (type === 'max') sportMetaData[sport].maxPlayers = val;
-            });
-            saveFieldData();
-            saveBtn.textContent = '\u2713 Saved!';
-            saveBtn.style.background = '#0F6A7A';
-            setTimeout(() => { saveBtn.textContent = 'Save Rules'; saveBtn.style.background = '#147D91'; }, 1500);
-        };
-    }
-}
-
-// =========================================================================
-// FIELD QUALITY GROUPS (Top-level)
-// =========================================================================
-function renderFieldQualitySection() {
-    const container = document.getElementById("fac-field-quality-section");
-    if (!container) return;
-
-    const groups = getExistingFieldGroups();
-    const groupNames = [...groups.keys()];
-    const groupCount = groupNames.length;
-
-    container.innerHTML = '<div class="sport-rules-card">' +
-        '<div class="sport-rules-header" id="fac-fq-toggle">' +
-        '<div class="sport-rules-title">Field Quality Groups' +
-        (groupCount > 0 ? ' <span class="sport-rules-badge">' + groupCount + ' group' + (groupCount !== 1 ? 's' : '') + '</span>' : '') +
-        '</div>' +
-        '<span id="fac-fq-caret" style="transform:rotate(0deg); transition:transform 0.2s; color:#6B7280;">' +
-        '<svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>' +
-        '</span></div>' +
-        '<div id="fac-fq-body" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;">' +
-        '<div class="sport-rules-hint"><strong>How this works:</strong> Group related fields and rank by quality. The scheduler gives the best field to the most senior grade.</div>' +
-        '<div id="fac-fq-groups-list"></div>' +
-        '<div style="margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;">' +
-        '<div style="font-weight:600; font-size:0.9rem; margin-bottom:8px;">Create New Group</div>' +
-        '<div style="display:flex; gap:8px; align-items:center;">' +
-        '<input id="fac-fq-new-input" type="text" placeholder="Group name (e.g., Baseball Fields)" style="flex:1; padding:8px 12px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.9rem; outline:none;">' +
-        '<button id="fac-fq-add-btn" style="background:#111; color:white; border:none; border-radius:8px; padding:8px 16px; font-size:0.85rem; cursor:pointer; font-weight:500; white-space:nowrap;">+ Add Group</button>' +
-        '</div></div></div></div>';
-
-    document.getElementById('fac-fq-toggle').onclick = function () {
-        const bodyEl = document.getElementById('fac-fq-body');
-        const caretEl = document.getElementById('fac-fq-caret');
-        const hidden = bodyEl.style.display === 'none';
-        bodyEl.style.display = hidden ? 'block' : 'none';
-        caretEl.style.transform = hidden ? 'rotate(180deg)' : 'rotate(0deg)';
-    };
-
-    renderFieldGroupsList();
-
-    const addBtn = document.getElementById('fac-fq-add-btn');
-    const addInput = document.getElementById('fac-fq-new-input');
-    if (addBtn) addBtn.onclick = function () {
-        const name = addInput.value.trim();
-        if (!name) return;
-        if (groupNames.includes(name)) { alert('Group already exists.'); return; }
-        addInput.value = '';
-        // Just display a message - field quality groups require sports facilities
-        alert('Create sports facilities first, then assign them to quality groups.');
-    };
-}
-
-function renderFieldGroupsList() {
-    const listEl = document.getElementById('fac-fq-groups-list');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-
-    const groups = getExistingFieldGroups();
-    const groupNames = [...groups.keys()];
-
-    if (groupNames.length === 0) {
-        listEl.innerHTML = '<div style="text-align:center; padding:20px; color:#9CA3AF; font-size:0.9rem;">No field groups yet.</div>';
-        return;
-    }
-
-    groupNames.forEach(groupName => {
-        const members = groups.get(groupName);
-        const card = document.createElement('div');
-        card.style.cssText = 'border:1px solid #E5E7EB; border-radius:12px; padding:16px; margin-bottom:12px; background:#fff;';
-        card.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <span style="font-weight:600; font-size:0.95rem;">${escapeHtml(groupName)}</span>
-                <span style="font-size:0.75rem; color:#6B7280; background:#F3F4F6; padding:2px 8px; border-radius:99px;">${members.length} field${members.length !== 1 ? 's' : ''}</span>
-            </div></div>`;
-
-        members.forEach((m, idx) => {
-            const row = document.createElement('div');
-            row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 12px; background:#F9FAFB; border-radius:8px; border:1px solid #F3F4F6; margin-bottom:4px;';
-            row.innerHTML = `<div style="width:26px; height:26px; line-height:26px; text-align:center; border-radius:50%; font-weight:700; font-size:0.8rem; background:${idx === 0 ? '#DCFCE7' : '#F3F4F6'}; color:${idx === 0 ? '#166534' : '#6B7280'};">${m.qualityRank || (idx + 1)}</div>
-                <span style="flex:1; font-size:0.88rem; font-weight:500;">${escapeHtml(m.name)}</span>
-                <span style="font-size:0.75rem; color:#9CA3AF;">${idx === 0 ? 'Best' : idx === members.length - 1 ? 'Lowest' : ''}</span>`;
-            card.appendChild(row);
-        });
-
-        listEl.appendChild(card);
-    });
-}
-
-function getExistingFieldGroups() {
-    const settings = window.loadGlobalSettings?.() || {};
-    const allFields = settings.app1?.fields || [];
-    const groups = new Map();
-    for (const f of allFields) {
-        if (f.fieldGroup) {
-            if (!groups.has(f.fieldGroup)) groups.set(f.fieldGroup, []);
-            groups.get(f.fieldGroup).push({ name: f.name, qualityRank: f.qualityRank || 0 });
-        }
-    }
-    for (const [, members] of groups) {
-        members.sort((a, b) => (a.qualityRank || 999) - (b.qualityRank || 999));
-    }
-    return groups;
-}
 
 // =========================================================================
 // COMBINED FIELD HELPERS

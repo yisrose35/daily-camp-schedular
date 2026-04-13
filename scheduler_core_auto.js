@@ -3274,6 +3274,14 @@
                                 }
                                 if (!ok) continue;
 
+                                // ★ Cooldown rule check
+                                if (window.SchedulingRules && !window.SchedulingRules.isCandidateAllowed(
+                                    { startMin: pos, endMin: pos + dur, type: need.type, event: need.event,
+                                      field: need._customField || null,
+                                      _assignedSpecial: need._assignedSpecial || null,
+                                      _specialLocation: need._specialLocation || null },
+                                    tmpl, { auto: true })) continue;
+
                                 // Score: dead gap penalty + LCV (how much flexibility remains for others)
                                 var lGap = pos - gap.start;
                                 var rGap = gap.end - (pos + dur);
@@ -3289,6 +3297,14 @@
                                 if (need.type === 'swim') ok2 = canUsePoolAtTime(grade, endAligned, endAligned + dur);
                                 if (need.type === 'special' && need._assignedSpecial) ok2 = canUseSpecialAtTime(need._assignedSpecial, grade, endAligned, endAligned + dur);
                                 if (need.type === 'rotation_event' && need._rotationEventId) ok2 = canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency || 1, grade, endAligned, endAligned + dur);
+                                if (ok2 && window.SchedulingRules) {
+                                    ok2 = window.SchedulingRules.isCandidateAllowed(
+                                        { startMin: endAligned, endMin: endAligned + dur, type: need.type, event: need.event,
+                                          field: need._customField || null,
+                                          _assignedSpecial: need._assignedSpecial || null,
+                                          _specialLocation: need._specialLocation || null },
+                                        tmpl, { auto: true });
+                                }
                                 if (ok2) {
                                     var rG = gap.end - (endAligned + dur);
                                     positions.push({ start: endAligned, dur: dur, deadGaps: rG > 0 && rG < fMin ? 1 : 0, lGap: endAligned - gap.start, rGap: rG });
@@ -3681,6 +3697,18 @@
                 if (candidates.length === 0) return null;
                 // Pick the highest-scoring candidate
                 candidates.sort(function(a, b) { return b.score - a.score; });
+                // ★ Cooldown rule filter — walk candidates in score order, skip blocked
+                if (window.SchedulingRules && meta && meta.template) {
+                    for (var ci = 0; ci < candidates.length; ci++) {
+                        var cand = candidates[ci];
+                        var ok = window.SchedulingRules.isCandidateAllowed(
+                            { startMin: startMin, endMin: endMin, type: 'sport',
+                              event: cand.name, field: cand.field },
+                            meta.template, { auto: true });
+                        if (ok) return { name: cand.name, field: cand.field };
+                    }
+                    return null; // all candidates blocked by cooldown
+                }
                 return { name: candidates[0].name, field: candidates[0].field };
             }
 
