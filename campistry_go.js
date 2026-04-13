@@ -106,6 +106,29 @@
         el.classList.add('modal-entering');
         setTimeout(() => { el.classList.remove('open', 'modal-entering'); }, 200);
     }
+    // ★★★ STARTER PLAN: Camper limit check (counts Me + Go combined) ★★★
+    async function checkCamperLimitGo(newCount) {
+        newCount = newCount || 1;
+        try {
+            var client = window.CampistryDB?.getClient?.() || window.supabase;
+            var campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('campistry_camp_id');
+            if (!client || !campId) return { allowed: true };
+
+            var result = await client.rpc('check_camper_limit', { p_camp_id: campId, p_new_count: newCount });
+            if (!result.error && result.data && result.data.allowed === false) {
+                toast('Camper limit reached (' + result.data.current + '/' + result.data.max + '). Upgrade for more.', 'error');
+                window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                    detail: { type: 'camper', current: result.data.current, max: result.data.max }
+                }));
+                return { allowed: false };
+            }
+            return { allowed: true };
+        } catch (e) {
+            console.warn('[Go] Camper limit check failed, proceeding:', e);
+            return { allowed: true };
+        }
+    }
+
     function getApiKey() { return window.__CAMPISTRY_ORS_KEY__ || D.setup.orsApiKey || _PLATFORM_KEYS.ors; }
     function getGHKey() { return window.__CAMPISTRY_GH_KEY__ || D.setup.graphhopperKey || _PLATFORM_KEYS.graphhopper; }
     function getMBToken() { return D.setup.mapboxToken || _PLATFORM_KEYS.mapbox; }
@@ -1901,10 +1924,15 @@
         document.getElementById('addrState').value = a.state || 'NY'; document.getElementById('addrZip').value = a.zip || '';
         openModal('addressModal'); document.getElementById('addrStreet').focus();
     }
-    function saveAddress() {
+    async function saveAddress() {
         if (!_editCamper) return;
         const st = document.getElementById('addrStreet')?.value.trim(), ci = document.getElementById('addrCity')?.value.trim(), sa = document.getElementById('addrState')?.value.trim().toUpperCase(), z = document.getElementById('addrZip')?.value.trim();
         if (!st) { delete D.addresses[_editCamper]; save(); closeModal('addressModal'); renderAddresses(); updateStats(); toast('Address cleared'); return; }
+        // ★ Starter plan: check limit if this is a NEW address
+        if (!D.addresses[_editCamper]) {
+            var limit = await checkCamperLimitGo(1);
+            if (!limit.allowed) return;
+        }
         D.addresses[_editCamper] = { street: st, city: ci, state: sa, zip: z, lat: null, lng: null, geocoded: false };
         save(); closeModal('addressModal'); renderAddresses(); updateStats(); toast('Saved — geocoding...');
         geocodeOne(_editCamper).then(ok => { if (ok) { save(); renderAddresses(); toast('Geocoded'); } });
@@ -2473,9 +2501,15 @@
             toast('Could not read Excel file: ' + e.message, 'error');
         }
     }
-    function parseCsv(text) {
+    async function parseCsv(text) {
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         const lines = text.split(/\r?\n/).filter(l => l.trim()); if (lines.length < 2) { toast('Empty CSV', 'error'); return; }
+        // ★ Starter plan: check limit before importing
+        var newCount = lines.length - 1; // subtract header row
+        if (newCount > 0) {
+            var limit = await checkCamperLimitGo(newCount);
+            if (!limit.allowed) return;
+        }
         const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim());
 
         // Detect column indices — support multiple naming conventions
