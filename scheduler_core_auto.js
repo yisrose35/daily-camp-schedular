@@ -427,6 +427,26 @@
 
 
         // =====================================================================
+        // STEP 1.6 — FEASIBILITY PRE-CHECK
+        // =====================================================================
+        if (window.AutoFeasibilityCheck) {
+            log('\n[STEP 1.6] Running feasibility pre-checks...');
+            const feasResult = window.AutoFeasibilityCheck.run({
+                divisions, layers: classified, globalSettings, isRainy: isRainy,
+                dayName, dailyData, allDailyData, currentDate
+            });
+            if (!feasResult.feasible) {
+                warn('[STEP 1.6] INFEASIBLE — ' + feasResult.issues.filter(i => i.severity === 'error').length + ' error(s):');
+                feasResult.issues.filter(i => i.severity === 'error').forEach(i => warn('  ' + i.message));
+            } else {
+                log('[STEP 1.6] ✅ All pre-checks passed');
+                if (feasResult.issues.length > 0) log('[STEP 1.6] ' + feasResult.issues.length + ' warning(s)');
+            }
+            window._autoBuilderFeasibilityIssues = feasResult.issues;
+        }
+
+
+        // =====================================================================
         // MUTABLE STATE
         // =====================================================================
         const bunkTimelines = {};
@@ -5808,32 +5828,118 @@
                 if (t === 'specialty_league' && dailyDisabledSpecialtyLeagues.includes(leagueName)) return false;
                 return true;
             });
-            leagueLayers.sort((a, b) => ((staggerPlan[a.grade || a.division] || {}).offset || 0) - ((staggerPlan[b.grade || b.division] || {}).offset || 0));
-            // ★ v9.6: Respect league qty/quantity — place multiple league blocks if configured
-            leagueLayers.forEach(layer => {
-                var leagueCount = parseInt(layer.qty) || parseInt(layer.quantity) || parseInt(layer.count) || 1;
-                for (var lc = 0; lc < leagueCount; lc++) {
-                    // Clear shared time cache so second league finds a NEW time
-                    var leagueName = (() => {
-                        var lg = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {}))
-                            .find(function(l) { return (l.divisions || []).includes(layer.grade || layer.division); });
-                        return lg ? lg.name : null;
-                    })();
-                    if (lc > 0 && leagueName && sharedLeagueTime[leagueName] != null) {
-                        delete sharedLeagueTime[leagueName]; // force new time search
-                    }
-                    placeLeagueForGrade(layer.grade || layer.division, layer);
-                }
+            // ★ v5.0: JOINT GRADE-WIDE PLACEMENT — attempt to place all leagues +
+            // full-grade blocks simultaneously via CSP for better cross-grade coordination.
+            // Falls back to sequential v9.6 placement if joint placer unavailable or fails.
+            const fullGradeLayers = nonPinnedLayers.filter(layer => {
+                const grade = layer.grade || layer.division;
+                if (!grade) return false;
+                const t = (layer.type || '').toLowerCase();
+                if (t === 'league' || t === 'specialty_league' || t === 'swim' || t === 'custom') return false;
+                const isFullGrade = activityProperties[layer.event]?.fullGrade || activityProperties[layer.name]?.fullGrade;
+                return isFullGrade && layer._classification !== 'pinned';
             });
 
-            // Full-grade non-pinned
+            let jointPlacementUsed = false;
+            if (window.AutoJointPlacer && (leagueLayers.length + fullGradeLayers.length) > 1) {
+                const gradeWideBlocks = [];
+                leagueLayers.forEach(layer => {
+                    const grade = layer.grade || layer.division;
+                    const c = resolveConstraints(layer, layer.type, {});
+                    const divTimes = getDivisionTimes(grade, divisions);
+                    const qty = parseInt(layer.qty) || parseInt(layer.quantity) || parseInt(layer.count) || 1;
+                    for (let q = 0; q < qty; q++) {
+                        gradeWideBlocks.push({
+                            grade, type: (layer.type || '').toLowerCase(),
+                            event: layer.event || layer.name || '', layer,
+                            dMin: c.dMin, dMax: c.dMax,
+                            windowStart: layer.startMin || divTimes.start,
+                            windowEnd: layer.endMin || divTimes.end,
+                            needsPool: false, needsField: !!layer.field, fieldName: layer.field || null
+                        });
+                    }
+                });
+                fullGradeLayers.forEach(layer => {
+                    const grade = layer.grade || layer.division;
+                    const c = resolveConstraints(layer, layer.type, {});
+                    const divTimes = getDivisionTimes(grade, divisions);
+                    gradeWideBlocks.push({
+                        grade, type: (layer.type || '').toLowerCase(),
+                        event: layer.event || layer.name || '', layer,
+                        dMin: c.dMin, dMax: c.dMax,
+                        windowStart: layer.startMin || divTimes.start,
+                        windowEnd: layer.endMin || divTimes.end,
+                        needsPool: (layer.type || '').toLowerCase() === 'swim',
+                        needsField: false, fieldName: null
+                    });
+                });
+
+                try {
+                    const jointResult = window.AutoJointPlacer.solve({
+                        divisions, gradeWideBlocks,
+                        isFieldAvailable, canUsePoolAtTime, canUseSpecialAtTime,
+                        claimField, rtRegister: function(type, name, grade, sMin, eMin) { registerSpecialUsage(name, grade, sMin, eMin); },
+                        bunkTimelines, getBunksForGrade: function(g) { return getBunksForGrade(g, divisions); },
+                        seed: _iterSeed
+                    });
+
+                    if (jointResult.success) {
+                        jointResult.placements.forEach(p => {
+                            getBunksForGrade(p.grade, divisions).forEach(bunk => {
+                                bunkTimelines[bunk].push({
+                                    startMin: p.startMin, endMin: p.endMin,
+                                    type: p.type, event: p.event, layer: p.layer, field: p.fieldName || null,
+                                    _classification: 'windowed', _committed: true, _fixed: true,
+                                    _gradeWide: true, _activityLocked: true, _noBacktrack: true,
+                                    _source: 'joint_placer'
+                                });
+                            });
+                            registerCrossGrade(p.grade, p.type, p.startMin, p.endMin, p.event);
+                            if (p.fieldName) getBunksForGrade(p.grade, divisions).forEach(bunk => claimField(p.fieldName, p.startMin, p.endMin, String(bunk), p.grade, p.event));
+                        });
+                        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => bunkTimelines[bunk].sort((a, b) => a.startMin - b.startMin)));
+                        jointPlacementUsed = true;
+                        if (totalIters < 1) log('[P0-JOINT] ✅ Placed ' + jointResult.placements.length + '/' + gradeWideBlocks.length + ' grade-wide blocks jointly');
+                    }
+                } catch (e) {
+                    warn('[P0-JOINT] Joint placer failed, falling back to sequential: ' + e.message);
+                }
+            }
+
+            if (!jointPlacementUsed) {
+                // Fallback: v9.6 sequential placement
+                leagueLayers.sort((a, b) => ((staggerPlan[a.grade || a.division] || {}).offset || 0) - ((staggerPlan[b.grade || b.division] || {}).offset || 0));
+                leagueLayers.forEach(layer => {
+                    var leagueCount = parseInt(layer.qty) || parseInt(layer.quantity) || parseInt(layer.count) || 1;
+                    for (var lc = 0; lc < leagueCount; lc++) {
+                        var leagueName = (() => {
+                            var lg = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {}))
+                                .find(function(l) { return (l.divisions || []).includes(layer.grade || layer.division); });
+                            return lg ? lg.name : null;
+                        })();
+                        if (lc > 0 && leagueName && sharedLeagueTime[leagueName] != null) {
+                            delete sharedLeagueTime[leagueName];
+                        }
+                        placeLeagueForGrade(layer.grade || layer.division, layer);
+                    }
+                });
+            }
+
+            // Full-grade non-pinned (only if not placed by joint placer)
             nonPinnedLayers.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade) return;
                 const t = (layer.type || '').toLowerCase();
                 if (t === 'league' || t === 'specialty_league' || t === 'swim' || t === 'custom') return;
                 const isFullGrade = activityProperties[layer.event]?.fullGrade || activityProperties[layer.name]?.fullGrade;
-                if (isFullGrade && layer._classification !== 'pinned') placeLeagueForGrade(grade, layer);
+                if (!isFullGrade || layer._classification === 'pinned') return;
+                if (jointPlacementUsed) {
+                    const alreadyPlaced = getBunksForGrade(grade, divisions).some(bunk =>
+                        (bunkTimelines[bunk] || []).some(b => b.event === (layer.event || layer.name) && b._source === 'joint_placer')
+                    );
+                    if (alreadyPlaced) return;
+                }
+                placeLeagueForGrade(grade, layer);
             });
 
             // Phase 1: Shopping lists
@@ -6103,10 +6209,82 @@
                 });
             }
 
-            // ── Phase 3: Time-sweep sport filler (v8.0) ──
-            // All bunks processed simultaneously. Walls never move.
-            const sweepResult = timeSweepFillAll(shoppingLists, draftResults, allGrades);
-            Object.assign(allTemplates, sweepResult);
+            // ── Phase 3: Sport filler ──
+            // ★ v5.0: Use backtracking packer on even iterations for diversity.
+            // The backtracker processes bunks individually with undo-on-failure.
+            // timeSweepFillAll processes all bunks simultaneously (v8.0).
+            // Alternating gives the iteration loop more diverse candidates.
+            const useBacktracker = !!window.AutoBacktrackPacker && (_iterSeed % 3 === 0);
+
+            if (useBacktracker) {
+                staggeredGrades.forEach(grade => {
+                    const divTimes = getDivisionTimes(grade, divisions);
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const swimsToday = todaysSwimmers[grade] ? todaysSwimmers[grade].has(String(bunk)) : true;
+                        const dr = draftResults[bunk] || { sports: [], specials: [], elective: [], generic: [], usedActivities: new Set() };
+                        const priorityList = shoppingLists[bunk]?.sports?.priorityList || [];
+                        const usedSportsForBunk = new Set();
+                        (bunkTimelines[bunk] || []).forEach(b => {
+                            const act = (b._assignedSport || '').toLowerCase().trim();
+                            if (act) usedSportsForBunk.add(act);
+                        });
+
+                        function _findSportWithField(bunkArg, gradeArg, sMin, eMin, usedToday) {
+                            for (const ds of (dr.sports || [])) {
+                                if (usedToday && usedToday.has(ds.name.toLowerCase().trim())) continue;
+                                if (usedSportsForBunk.has(ds.name.toLowerCase().trim())) continue;
+                                const sportInfo = priorityList.find(s => s.name === ds.name);
+                                if (sportInfo) {
+                                    for (const fn of (sportInfo.fields || [])) {
+                                        if (isFieldAvailable(fn, sMin, eMin, bunkArg, gradeArg, ds.name)) {
+                                            usedSportsForBunk.add(ds.name.toLowerCase().trim());
+                                            return { sport: ds.name, field: fn };
+                                        }
+                                    }
+                                }
+                            }
+                            for (const sport of priorityList) {
+                                if (usedToday && usedToday.has(sport.name.toLowerCase().trim())) continue;
+                                if (usedSportsForBunk.has(sport.name.toLowerCase().trim())) continue;
+                                for (const fn of (sport.fields || [])) {
+                                    if (isFieldAvailable(fn, sMin, eMin, bunkArg, gradeArg, sport.name)) {
+                                        usedSportsForBunk.add(sport.name.toLowerCase().trim());
+                                        return { sport: sport.name, field: fn };
+                                    }
+                                }
+                            }
+                            for (const sport of priorityList) {
+                                for (const fn of (sport.fields || [])) {
+                                    if (isFieldAvailable(fn, sMin, eMin, bunkArg, gradeArg, sport.name)) {
+                                        return { sport: sport.name, field: fn };
+                                    }
+                                }
+                            }
+                            return null;
+                        }
+
+                        allTemplates[bunk] = window.AutoBacktrackPacker.packBunk({
+                            bunk, grade, draftResult: dr,
+                            shoppingList: shoppingLists[bunk],
+                            staggerOffset: (staggerPlan[grade] || { offset: 0 }).offset,
+                            swimsToday, bunkTimelines,
+                            gradeStart: divTimes.start, gradeEnd: divTimes.end,
+                            layersByGrade, isFieldAvailable, claimField, unclaimFieldsForBunk,
+                            canUsePoolAtTime, canUseSpecialAtTime, canUseRotationSlotAtTime,
+                            registerSpecialUsage, registerCrossGrade, rtRegister, rtCanUse,
+                            getSwimWindow, findSportWithField: _findSportWithField,
+                            resolveConstraints,
+                            getSpecialDuration: function(name) { return getSpecialDuration(name, activityProperties, globalSettings); },
+                            fieldLedger, iterSeed: _iterSeed, globalSettings,
+                            isRainy: isRainy, rotationEngine: window.RotationEngine
+                        });
+                    });
+                });
+            } else {
+                // Default: v8.0 simultaneous all-bunk solver
+                const sweepResult = timeSweepFillAll(shoppingLists, draftResults, allGrades);
+                Object.assign(allTemplates, sweepResult);
+            }
 
             // Phase 4: Execute
             executeTemplates(allTemplates);
