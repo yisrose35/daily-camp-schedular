@@ -1,0 +1,492 @@
+
+<!DOCTYPE html>
+<html lang="en" data-product="go">
+<head>
+    <meta charset="UTF-8" />
+    <title>Campistry Go | Bus Routing & Transportation</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Leaflet Map (free, no key needed) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+    <!-- FOUC Prevention -->
+    <style>
+        html:not(.css-ready) body { opacity: 0; }
+        html.css-ready body { transition: opacity 0.15s ease; }
+    </style>
+    <link rel="stylesheet" href="campistry-unified.css">
+    <link rel="stylesheet" href="campistry_go.css" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="mobile-responsive.css">
+    <noscript><style>html body { opacity: 1 !important; }</style></noscript>
+</head>
+<body>
+<!-- Auth Loading Screen (matches other Campistry pages) -->
+<div id="auth-loading-screen" class="auth-loading">
+    <div class="auth-loading-inner">
+        <div class="auth-loading-brand">Campistry Go</div>
+        <div class="auth-loading-spinner"></div>
+    </div>
+</div>
+
+<div id="main-app-container" style="display:none;">
+<div class="app-content">
+    <!-- NAV -->
+    <nav class="nav">
+        <div class="nav-inner">
+            <div class="nav-left">
+                <a href="dashboard.html" class="nav-back">&larr; Dashboard</a>
+                <div class="nav-go-logo">
+                    <img src="Go_clean.png" alt="Campistry Go" style="height:43px;width:auto;object-fit:contain;position:relative;top:2px;">
+                </div>
+                <a href="campistry_me.html" class="nav-app-switch" title="Campistry Me">
+                    <img src="Me_clean.png" alt="Campistry Me" style="height:38px;width:auto;object-fit:contain;">
+                </a>
+                <a href="flow.html" class="nav-app-switch" title="Campistry Flow">
+                    <img src="Flow_clean.png" alt="Campistry Flow" style="height:38px;width:auto;object-fit:contain;">
+                </a>
+            </div>
+            <div class="sync-badge">
+                <div class="sync-dot" id="syncDot"></div>
+                <span id="syncText">Synced</span>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main">
+        <header class="page-header">
+            <h1 class="page-title">Bus Routing & Transportation</h1>
+            <div style="display:flex;align-items:center;gap:.5rem;margin-top:.625rem;">
+                <div class="mode-toggle">
+                    <button class="mode-btn" data-mode="arrival" onclick="CampistryGo.switchMode('arrival')">Arrival (AM)</button>
+                    <button class="mode-btn active" data-mode="dismissal" onclick="CampistryGo.switchMode('dismissal')">Dismissal (PM)</button>
+                </div>
+                <span id="modeLabel">Afternoon Drop-off Routes</span>
+            </div>
+        </header>
+
+        <!-- TABS -->
+        <div class="tabs" role="tablist">
+            <button class="tab-btn active" data-tab="setup">Setup</button>
+            <button class="tab-btn" data-tab="addresses">Addresses</button>
+            <button class="tab-btn" data-tab="fleet">Bus Fleet</button>
+            <button class="tab-btn" data-tab="staff">Staff</button>
+            <button class="tab-btn" data-tab="routes">Routes & Map</button>
+        </div>
+
+        <!-- SETUP -->
+        <div id="tab-setup" class="tab-content active">
+            <!-- Stats (only visible on Setup) -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="22" height="10" rx="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg></div>
+                    <div><div class="stat-value" id="statBuses">0</div><div class="stat-label">Buses</div></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+                    <div><div class="stat-value" id="statCampers">0</div><div class="stat-label">Campers</div></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/></svg></div>
+                    <div><div class="stat-value" id="statShifts">0</div><div class="stat-label">Shifts</div></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
+                    <div><div class="stat-value" id="statAddresses">0/0</div><div class="stat-label">Addresses</div></div>
+                </div>
+            </div>
+            <div class="setup-grid">
+                <div class="setup-card">
+                    <h3>Camp Departure Point</h3>
+                    <p class="muted">Where buses leave from</p>
+                    <div class="form-grid">
+                        <div class="form-group full-width"><label class="form-label">Camp Address</label><input type="text" class="form-input" id="campAddress" placeholder="123 Camp Road, Town, NY ZIP"></div>
+                        <div class="form-group"><label class="form-label">Camp Name</label><input type="text" class="form-input" id="campName" placeholder="Camp Sunshine"></div>
+                        <div class="form-group"><label class="form-label">Avg Speed (mph)</label><input type="number" class="form-input" id="avgSpeed" value="25" min="5" max="65"><span class="form-hint">Suburban ~20-30 mph</span></div>
+                    </div>
+                </div>
+                <div class="setup-card">
+                    <h3>Route Settings</h3>
+                    <p class="muted">Global defaults</p>
+                    <div class="form-grid">
+                        <div class="form-group"><label class="form-label">Reserve Seats/Bus</label><input type="number" class="form-input" id="reserveSeats" value="2" min="0" max="20"></div>
+                        <div class="form-group"><label class="form-label">Time Per Stop (min)</label><input type="number" class="form-input" id="avgStopTime" value="2" min="1" max="10"></div>
+                        <div class="form-group"><label class="form-label">Max Walk (ft)</label><input type="number" class="form-input" id="maxWalkDistance" value="500" min="100" max="2640" step="50"><span class="form-hint">For optimized stops mode</span></div>
+                    </div>
+                </div>
+                <div class="setup-card" style="padding:0;overflow:hidden;">
+                    <button type="button" onclick="this.parentElement.classList.toggle('advanced-open')" style="width:100%;padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;background:none;border:none;cursor:pointer;font:inherit;">
+                        <div><h3 style="margin:0;">Advanced Settings</h3><p class="muted" style="margin:0;">API keys &amp; map configuration</p></div>
+                        <svg class="advanced-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform .2s;flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div class="advanced-panel" style="max-height:0;overflow:hidden;transition:max-height .3s ease;">
+                        <div style="padding:0 1.25rem 1.25rem;display:flex;flex-direction:column;gap:1rem;">
+                            <div id="orsKeyCard">
+                                <h4 style="margin:0 0 .25rem;">OpenRouteService API Key</h4>
+                                <p class="muted" style="margin:0 0 .5rem;font-size:.8125rem;">Only needed if no platform key is configured</p>
+                                <div class="form-group full-width">
+                                    <label class="form-label">API Key</label>
+                                    <input type="text" class="form-input" id="orsApiKey" placeholder="Paste your ORS token">
+                                    <span class="form-hint">Get free at <a href="https://openrouteservice.org/dev/#/signup" target="_blank" style="color:var(--blue-600)">openrouteservice.org</a> (geocoding & directions)</span>
+                                </div>
+                            </div>
+                            <div>
+                                <h4 style="margin:0 0 .5rem;">GraphHopper Key <span style="background:#059669;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">RECOMMENDED</span></h4>
+                                <div class="form-group full-width">
+                                    <input type="text" class="form-input" id="ghApiKey" placeholder="Paste your GraphHopper key">
+                                    <span class="form-hint">Get free at <a href="https://graphhopper.com/dashboard/signup" target="_blank" style="color:var(--blue-600)">graphhopper.com</a> (route optimization — makes routes 10x better)</span>
+                                </div>
+                                <div style="margin-top:.5rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+                                    <button class="btn btn-secondary btn-sm" onclick="CampistryGo.testApiKey()">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Test
+                                    </button>
+                                    <span id="apiKeyStatus" style="font-size:.8125rem;"></span>
+                                </div>
+                            </div>
+                            <div>
+                                <h4 style="margin:0 0 .5rem;">Mapbox Access Token</h4>
+                                <p class="muted" style="margin:0 0 .5rem;font-size:.8125rem;">Shows road-accurate route lines on the map (free)</p>
+                                <div class="form-group full-width">
+                                    <label class="form-label">Access Token</label>
+                                    <input type="text" class="form-input" id="mapboxToken" placeholder="pk.eyJ1Ijo...">
+                                    <span class="form-hint">Get free at <a href="https://account.mapbox.com/access-tokens/" target="_blank" style="color:var(--blue-600)">mapbox.com</a> — 100K requests/month free. Without this, route lines use OSRM (less accurate in some neighborhoods).</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="setup-card" style="display:flex;align-items:center;justify-content:space-between;">
+                    <div><h3>Save Configuration</h3><p class="muted" style="margin-bottom:0">Sync across devices</p></div>
+                    <button class="btn btn-primary" onclick="CampistryGo.saveSetup()">Save Setup</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- FLEET -->
+        <div id="tab-fleet" class="tab-content">
+            <!-- BUSES -->
+            <div class="action-bar">
+                <button class="btn btn-primary" onclick="CampistryGo.openBusModal()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add Bus</button>
+                <button class="btn btn-secondary" onclick="CampistryGo.quickCreateBuses()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> Quick Create</button>
+                <div class="action-spacer"></div>
+                <span class="card-count" id="fleetCount">0</span>
+            </div>
+            <div class="card">
+                <div id="fleetContainer"></div>
+                <div class="empty-state" id="fleetEmptyState" style="display:none">
+                    <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="6" width="22" height="10" rx="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg></div>
+                    <h3>No buses yet</h3><p>Add buses to build your fleet</p>
+                </div>
+            </div>
+
+            <!-- SHIFTS (merged into fleet) -->
+            <div style="margin-top:1.5rem">
+                <div class="action-bar">
+                    <button class="btn btn-primary" onclick="CampistryGo.addShift()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add Shift</button>
+                    <div class="action-spacer"></div>
+                    <span class="card-count" id="shiftCount">0</span>
+                </div>
+                <div style="margin-bottom:1rem;padding:.75rem 1rem;background:var(--blue-50);border:1px solid var(--blue-100);border-radius:var(--radius-sm);font-size:.8125rem;color:var(--text-secondary);">
+                    <strong style="color:var(--blue-600)">How shifts work:</strong> Buses do multiple runs. Shift 1 (e.g. Freshies) departs first, buses return, then Shift 2 (Juniors), etc. Assign divisions to each shift. <strong>Buses keep the same geographic region across shifts.</strong>
+                </div>
+                <div id="shiftsContainer"></div>
+                <div class="empty-state" id="shiftsEmptyState" style="display:none">
+                    <div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+                    <h3>No shifts yet</h3><p>Add shifts and assign divisions</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- STAFF -->
+        <div id="tab-staff" class="tab-content">
+            <div class="action-bar">
+                <button class="btn btn-primary" onclick="CampistryGo.openMonitorModal()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add Monitor</button>
+                <button class="btn btn-secondary" onclick="CampistryGo.openCounselorModal()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add Counselor</button>
+                <div class="action-spacer"></div>
+                <span class="card-count" id="staffCount">0</span>
+            </div>
+            <div class="card">
+                <div class="card-header"><h2>Bus Monitors</h2><span class="card-count" id="monitorCount">0</span></div>
+                <div class="table-wrapper"><table class="data-table"><thead><tr><th style="width:50px">ID</th><th>Last Name</th><th>First Name</th><th>Address</th><th>Phone</th><th>Bus</th><th style="width:80px"></th></tr></thead><tbody id="monitorTableBody"></tbody></table></div>
+                <div class="empty-state" id="monitorEmptyState" style="display:none"><div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div><h3>No monitors</h3><p>Monitors supervise drop-off</p></div>
+            </div>
+            <div class="card" style="margin-top:1.5rem">
+                <div class="card-header"><h2>Counselors on Buses</h2><span class="card-count" id="counselorCount">0</span></div>
+                <div class="table-wrapper"><table class="data-table"><thead><tr><th style="width:50px">ID</th><th>Last Name</th><th>First Name</th><th>Address</th><th>Div / Bunk</th><th>Bus Assignment</th><th>Walk</th></tr></thead><tbody id="counselorTableBody"></tbody></table></div>
+                <div class="empty-state" id="counselorEmptyState" style="display:none"><div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><h3>No counselors</h3><p>Add counselors who ride buses</p></div>
+            </div>
+        </div>
+
+        <!-- ADDRESSES -->
+        <div id="tab-addresses" class="tab-content">
+            <!-- Import / Download banner -->
+            <div class="card" style="margin-bottom:1rem;border:2px dashed var(--green-300);background:var(--green-50,#f0fdf4)">
+                <div class="card-body" style="padding:1.25rem 1.5rem;display:flex;align-items:center;gap:1.25rem;flex-wrap:wrap">
+                    <div style="flex:1;min-width:200px">
+                        <div style="font-weight:700;font-size:.9375rem;color:var(--green-700,#15803d);margin-bottom:4px">📥 Import Camper Addresses</div>
+                        <div style="font-size:.8rem;color:var(--text-secondary)">Upload a CSV or Excel file with camper names and addresses. <a href="#" onclick="CampistryGo.downloadAddressTemplate();return false" style="color:var(--green-600,#16a34a);font-weight:600;text-decoration:underline">Download template →</a></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="CampistryGo.importAddressCsv()" style="background:var(--green-600,#16a34a);border-color:var(--green-600,#16a34a);padding:10px 20px;font-size:.875rem"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Upload CSV / Excel</button>
+                </div>
+            </div>
+
+            <div class="action-bar">
+                <button class="btn btn-primary" onclick="CampistryGo.validateAllAddresses()" title="Validate addresses against USPS/Census, then geocode"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Validate & Geocode</button>
+                <div class="action-spacer"></div>
+                <input type="text" class="form-input" id="addressSearch" placeholder="Search camper or address..." style="max-width:280px">
+            </div>
+            <div class="card" style="margin-bottom:1.5rem"><div class="card-body" style="padding:1rem 1.5rem">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem"><span style="font-weight:600;font-size:.875rem">Address Completion</span><span class="progress-text" id="addressProgressText">0 of 0</span></div>
+                <div class="progress-bar-wrap"><div class="progress-bar-fill" id="addressProgressBar" style="width:0%"></div></div>
+                <div style="font-size:.75rem;color:var(--text-muted);margin-top:.375rem">Import addresses via CSV/Excel above, or add them individually below.</div>
+            </div></div>
+            <div class="card">
+                <div class="card-header"><h2>Camper Addresses</h2><span class="card-count" id="addressCount">0</span></div>
+              <div class="table-wrapper"><table class="data-table"><thead><tr><th style="width:60px;cursor:pointer" onclick="CampistryGo.sortAddresses('id')">ID</th><th style="cursor:pointer" onclick="CampistryGo.sortAddresses('last')">Last Name</th><th style="cursor:pointer" onclick="CampistryGo.sortAddresses('first')">First Name</th><th style="cursor:pointer" onclick="CampistryGo.sortAddresses('division')">Division</th><th style="cursor:pointer" onclick="CampistryGo.sortAddresses('grade')">Grade</th><th style="cursor:pointer" onclick="CampistryGo.sortAddresses('bunk')">Bunk</th><th style="cursor:pointer" onclick="CampistryGo.sortAddresses('address')">Address</th><th style="cursor:pointer" onclick="CampistryGo.sortAddresses('status')">Status</th><th style="width:80px"></th></tr></thead><tbody id="addressTableBody"></tbody></table></div>           <div class="empty-state" id="addressEmptyState" style="display:none"><div class="empty-state-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div><h3>No campers yet</h3><p>Import a CSV/Excel file above or add campers in Campistry Me</p></div>
+            </div>
+        </div>
+
+        <!-- PREFLIGHT -->
+        <!-- ROUTES & MAP -->
+        <div id="tab-routes" class="tab-content">
+            <!-- Preflight checklist (collapsible) -->
+            <details class="card" style="margin-bottom:1rem">
+                <summary class="card-header" style="cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;justify-content:space-between"><h2 style="display:flex;align-items:center;gap:8px">Pre-Flight Checklist <span style="font-size:.7rem;color:var(--text-muted);font-weight:400">▼</span></h2><span class="badge badge-neutral" id="preflightStatus">—</span></summary>
+                <div class="card-body" id="preflightBody"></div>
+            </details>
+            <!-- Action bar -->
+            <div class="action-bar" style="margin-bottom:1rem;">
+                <button class="btn btn-primary" id="generateRoutesBtn" onclick="CampistryGo.generateRoutes()" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <span id="generateBtnLabel">Generate Routes</span>
+                </button>
+                <button class="btn btn-secondary" onclick="CampistryGo.openOverrideModal()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Daily Adjustment
+                </button>
+                <div class="action-spacer"></div>
+                <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+                    <select class="form-select" id="routeMode" style="width:auto;font-size:.75rem;padding:.3rem .6rem;"><option value="door-to-door">Door-to-Door (every house)</option><option value="optimized-stops">Optimized Stops (walking distance)</option><option value="corner-stops">Corner Stops (nearest intersection)</option></select>
+                    <label style="font-size:.75rem;color:var(--text-muted);">Reserve:</label>
+                    <input type="number" class="form-input" id="routeReserveSeats" value="2" min="0" max="20" style="width:50px;font-size:.75rem;padding:.3rem .5rem;">
+                    <button class="btn btn-secondary btn-sm" onclick="CampistryGo.exportRoutesCsv()">CSV</button>
+                    <button class="btn btn-secondary btn-sm" onclick="CampistryGo.printRoutes()">Print</button>
+                </div>
+            </div>
+
+            <!-- Progress -->
+            <div class="card" style="margin-bottom:1rem;display:none" id="routeProgressCard"><div class="card-body" style="padding:.75rem 1.25rem"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.375rem"><span style="font-weight:600;font-size:.8125rem" id="routeProgressLabel">Generating...</span><span class="progress-text" id="routeProgressPct">0%</span></div><div class="progress-bar-wrap"><div class="progress-bar-fill" id="routeProgressBar" style="width:0%"></div></div></div></div>
+
+            <!-- Capacity Warnings -->
+            <div id="capacityWarnings" style="display:none;margin-bottom:1rem;"></div>
+
+            <!-- Daily Overrides (collapsible) -->
+            <details class="collapsible-card" id="overridesSection">
+                <summary class="collapsible-header">
+                    <span>Today's Changes</span>
+                    <span class="card-count" id="overrideCount">0</span>
+                </summary>
+                <div class="collapsible-body" id="dailyOverridesBody">
+                    <div style="text-align:center;padding:.75rem;color:var(--text-muted);font-size:.8125rem;">No overrides for today.</div>
+                </div>
+            </details>
+
+            <!-- Carpool & Pairings -->
+            <div class="card" id="carpoolCard" style="display:none;">
+                <div class="card-header">
+                    <h2 style="display:flex;align-items:center;gap:.5rem;">🚗 Carpool & Pairings</h2>
+                    <span class="badge badge-neutral" id="carpoolCount">0</span>
+                </div>
+                <div id="carpoolBody" style="padding:.75rem;"></div>
+            </div>
+
+            <div id="routeResults" style="display:none">
+                <!-- Camper Search -->
+                <div style="margin-bottom:1rem;position:relative;">
+                    <div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius-sm);">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" class="form-input" id="camperRouteSearch" placeholder="Find a camper..." style="flex:1;border:none;padding:.25rem 0;box-shadow:none;font-size:.8125rem;" oninput="CampistryGo.searchCamperInRoutes(this.value)">
+                    </div>
+                    <div id="camperSearchResults" style="display:none;max-height:200px;overflow-y:auto;position:absolute;left:0;right:0;top:100%;background:var(--bg-secondary);border:1px solid var(--border-light);border-top:none;border-radius:0 0 var(--radius-sm) var(--radius-sm);box-shadow:var(--shadow-lg);z-index:50;"></div>
+                </div>
+
+                <!-- Route Map -->
+                <div class="card" style="margin-bottom:1.5rem" id="routeMapCard">
+                    <div style="display:flex;align-items:center;justify-content:flex-end;padding:.375rem .75rem;border-bottom:1px solid var(--border-light);"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.toggleMapFullscreen()" title="Toggle fullscreen"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg> Fullscreen</button></div>
+                    <div id="mapShiftSelect" style="display:flex;gap:0;border-bottom:1px solid var(--border-light);overflow-x:auto;padding:0 .75rem;background:var(--bg-secondary);"></div>
+                    <div id="mapBusTabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-light);overflow-x:auto;padding:0 .75rem;background:var(--bg-tertiary);"></div>
+                    <div id="routeMap" style="height:500px;width:100%;background:var(--bg-tertiary);"></div>
+                    <div id="mapLegend" style="display:none;padding:.5rem 1rem;background:var(--bg-secondary);border-top:1px solid var(--border-light);display:flex;align-items:center;gap:.25rem;flex-wrap:wrap;"></div>
+                </div>
+
+                <!-- Bus Region Assignments (collapsible) -->
+                <details class="collapsible-card">
+                    <summary class="collapsible-header"><span>Bus Region Assignments</span></summary>
+                    <div class="collapsible-body" id="busAssignmentTable"></div>
+                </details>
+
+                <!-- Route Details per shift (collapsible) -->
+                <div id="shiftResultsContainer"></div>
+
+                <!-- Master List (collapsible) -->
+                <details class="collapsible-card">
+                    <summary class="collapsible-header">
+                        <span id="masterListLabel">Master Drop-off List</span>
+                        <span class="card-count" id="masterListCount">0</span>
+                    </summary>
+                    <div class="collapsible-body" style="padding:0;">
+                        <div class="table-wrapper"><table class="data-table"><thead id="masterListHead"><tr><th>First Name</th><th>Last Name</th><th>Shift</th><th>Bus</th><th>Stop #</th><th>Address</th><th>Est. Time</th></tr></thead><tbody id="masterListBody"></tbody></table></div>
+                    </div>
+                </details>
+            </div>
+        </div>
+
+    </main>
+</div>
+</div><!-- /main-app-container -->
+
+<!-- ==================== MODALS ==================== -->
+<div class="modal-overlay" id="busModal"><div class="modal"><div class="modal-header"><h3 id="busModalTitle">Add Bus</h3><button class="modal-close" onclick="CampistryGo.closeModal('busModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Bus Name / Number</label><input type="text" class="form-input" id="busName" placeholder="e.g. Bus 1 or Blue Bus"></div><div class="form-group"><label class="form-label">Available Seats</label><input type="number" class="form-input" id="busCapacity" placeholder="46" min="1" max="100"><span class="form-hint">Total passenger seats (not counting the driver)</span></div><div class="form-group"><label class="form-label">Reserve Seats</label><div style="display:flex;align-items:center;gap:8px"><select class="form-select" id="busReserveMode" style="width:auto" onchange="document.getElementById('busReserveCustom').style.display=this.value==='custom'?'':'none'"><option value="default">Use default (from Setup)</option><option value="custom">Custom for this bus</option></select><input type="number" class="form-input" id="busReserveCustom" style="width:80px;display:none" min="0" max="20" placeholder="0"></div></div><div class="form-group"><label class="form-label">Bus Color</label><div class="color-swatch-row" id="busColorPicker"></div></div><div class="form-group"><label class="form-label">Notes</label><input type="text" class="form-input" id="busNotes" placeholder="Optional"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" id="busDeleteBtn" style="color:var(--red-500);margin-right:auto;display:none" onclick="CampistryGo.deleteBusFromModal()">Delete Bus</button><button class="btn btn-secondary" onclick="CampistryGo.closeModal('busModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.saveBus()">Save</button></div></div></div>
+
+<div class="modal-overlay" id="monitorModal"><div class="modal"><div class="modal-header"><h3 id="monitorModalTitle">Add Monitor</h3><button class="modal-close" onclick="CampistryGo.closeModal('monitorModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Full Name</label><input type="text" class="form-input" id="monitorName"></div><div class="form-group"><label class="form-label">Home Address</label><input type="text" class="form-input" id="monitorAddress" placeholder="For end-of-route drop-off"></div><div class="form-group"><label class="form-label">Phone</label><input type="tel" class="form-input" id="monitorPhone"></div><div class="form-group"><label class="form-label">Bus</label><select class="form-select" id="monitorBusAssign"><option value="">— Later —</option></select></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('monitorModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.saveMonitor()">Save</button></div></div></div>
+
+<div class="modal-overlay" id="counselorModal"><div class="modal"><div class="modal-header"><h3 id="counselorModalTitle">Add Counselor</h3><button class="modal-close" onclick="CampistryGo.closeModal('counselorModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Full Name</label><input type="text" class="form-input" id="counselorName"></div><div class="form-group"><label class="form-label">Home Address</label><input type="text" class="form-input" id="counselorAddress" placeholder="Full address for bus assignment"></div><div class="form-group"><label class="form-label">Division / Bunk</label><input type="text" class="form-input" id="counselorBunk"></div><div class="form-group"><label class="form-label">Needs a dedicated bus stop?</label><select class="form-select" id="counselorNeedsStop" onchange="document.getElementById('counselorStopNote').style.display=this.value==='yes'?'block':'none';document.getElementById('counselorBusGroup').style.display=this.value==='no'?'block':'none'"><option value="no">No — rides the bus but doesn't need their own stop</option><option value="yes">Yes — treat like a camper, create a stop near their home</option></select><div id="counselorStopNote" style="display:none;margin-top:6px;padding:8px 12px;background:var(--blue-50,#eff6ff);border-radius:6px;font-size:.75rem;color:var(--text-secondary)">Their address will be included in route generation with extended walking distance. They'll be assigned to the nearest bus automatically.</div></div><div class="form-group" id="counselorBusGroup"><label class="form-label">Bus Assignment</label><select class="form-select" id="counselorBusAssign"><option value="">Auto-assign after route generation</option><option value="__manual__">Choose manually:</option></select><select class="form-select" id="counselorBusManual" style="margin-top:6px;display:none"><option value="">— Select bus —</option></select><div style="margin-top:6px;font-size:.75rem;color:var(--text-muted)"><strong>Auto-assign:</strong> System places them on the bus whose route passes closest to their home.<br><strong>Manual:</strong> You pick the bus now. System will warn if they're far from the route.</div></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('counselorModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.saveCounselor()">Save</button></div></div></div>
+
+<div class="modal-overlay" id="addressModal"><div class="modal"><div class="modal-header"><h3>Edit Address</h3><button class="modal-close" onclick="CampistryGo.closeModal('addressModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div style="margin-bottom:1rem"><span style="font-weight:600;font-size:1rem" id="addressCamperName"></span><span style="color:var(--text-muted);font-size:.8125rem;margin-left:.5rem" id="addressCamperBunk"></span></div><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Street</label><input type="text" class="form-input" id="addrStreet" placeholder="123 Main St"></div><div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">City</label><input type="text" class="form-input" id="addrCity"></div><div class="form-group"><label class="form-label">State</label><input type="text" class="form-input" id="addrState" value="NY" maxlength="2" style="text-transform:uppercase"></div><div class="form-group"><label class="form-label">ZIP</label><input type="text" class="form-input" id="addrZip" maxlength="10"></div></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('addressModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.saveAddress()">Save</button></div></div></div>
+
+<div class="modal-overlay" id="overrideModal"><div class="modal"><div class="modal-header"><h3>Add Daily Override</h3><button class="modal-close" onclick="CampistryGo.closeModal('overrideModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Search Camper</label><input type="text" class="form-input" id="overrideSearch" placeholder="Type name to search..." oninput="CampistryGo.filterOverrideSelect('overrideSearch','overrideCamper')"></div><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="overrideCamper"><option value="">— Select —</option></select></div><div class="form-group"><label class="form-label">What's happening today?</label><select class="form-select" id="overrideType" onchange="CampistryGo.onOverrideTypeChange()"><option value="not-riding">Not going home by bus today</option><option value="ride-with">Going home with another camper</option><option value="add-rider">Carpool kid riding bus today</option></select></div><div class="form-group" id="overrideRideWithGroup" style="display:none"><label class="form-label">Search who they're riding with</label><input type="text" class="form-input" id="overrideTargetSearch" placeholder="Type name..." oninput="CampistryGo.filterOverrideSelect('overrideTargetSearch','overrideTarget')"><select class="form-select" id="overrideTarget" style="margin-top:.375rem"><option value="">— Select —</option></select><span class="form-hint">This camper will join that camper's bus &amp; stop</span></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('overrideModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.saveOverride()">Save Override</button></div></div></div>
+
+<div class="modal-overlay" id="moveModal"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3>Move Camper</h3><button class="modal-close" onclick="CampistryGo.closeModal('moveModal')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><p style="font-size:.875rem;margin-bottom:1rem;">Move <strong id="moveCamperName"></strong> to a different bus:</p><div class="form-group"><label class="form-label">Move to</label><select class="form-select" id="moveToBus"></select></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('moveModal')">Cancel</button><button class="btn btn-primary" id="moveConfirmBtn">Move</button></div></div></div>
+
+<!-- Carpool Group Modal -->
+<div class="modal-overlay" id="carpoolGroupModal"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3 id="carpoolGroupModalTitle">New Carpool Group</h3><button class="modal-close" onclick="CampistryGo.closeModal('carpoolGroupModal')">×</button></div><div class="modal-body"><div class="form-group"><label class="form-label">Carpool Number</label><input type="text" class="form-input" id="carpoolGroupNum" placeholder="e.g. 109"></div><div class="form-group"><label class="form-label">Driver Name <span style="color:var(--text-muted);font-weight:400">(optional)</span></label><input type="text" class="form-input" id="carpoolGroupDriver" placeholder="Mrs. Cohen"></div><div class="form-group"><label class="form-label">Phone <span style="color:var(--text-muted);font-weight:400">(optional)</span></label><input type="text" class="form-input" id="carpoolGroupPhone" placeholder="555-1234"></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('carpoolGroupModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.saveCarpoolGroup()">Save</button></div></div></div>
+
+<!-- Add to Carpool Modal -->
+<div class="modal-overlay" id="addToCarpoolModal"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3 id="addToCarpoolTitle">Add to Carpool</h3><button class="modal-close" onclick="CampistryGo.closeModal('addToCarpoolModal')">×</button></div><div class="modal-body"><input type="hidden" id="addToCarpoolNum"><div class="form-group"><label class="form-label">Search</label><input type="text" class="form-input" id="addToCarpoolSearch" placeholder="Type name..." oninput="CampistryGo.filterAddToCarpool()"></div><div class="form-group"><label class="form-label">Select Camper</label><select class="form-input" id="addToCarpoolSelect" size="6" style="height:auto;"></select><span class="form-hint">🚗 = pickup, 🚌 = bus (will switch to pickup)</span></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('addToCarpoolModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.confirmAddToCarpool()">Add</button></div></div></div>
+
+<input type="file" id="csvFileInput" accept=".csv,.tsv,.txt" style="display:none">
+<div class="toast" id="toastEl"></div>
+
+<!-- =============================================================== -->
+<!-- SCRIPT LOADING (ORDER MATCHES CAMPISTRY ARCHITECTURE) -->
+<!-- =============================================================== -->
+
+<!-- CLOUD FOUNDATION -->
+<script src="offline_data.js" onerror=""></script>
+<script src="demo_mode.js"></script>
+<script src="config.js"></script>
+<script>
+// Supabase SDK loader (same pattern as flow.html / campistry_me.html)
+(function() {
+    var src = window.location.protocol === 'file:'
+        ? 'supabase-js-local.js'
+        : 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+    var s = document.createElement('script');
+    s.src = src;
+    s.onload = function() {
+        var c = document.createElement('script');
+        c.src = 'supabase_client.js';
+        document.head.appendChild(c);
+    };
+    s.onerror = function() {
+        console.error('[Go] Failed to load Supabase SDK from:', src);
+    };
+    document.head.appendChild(s);
+})();
+</script>
+<script src="campistry_security.js"></script>
+<script src="access_control.js"></script>
+<script src="integration_hooks.js"></script>
+<script src="cloud_sync_helpers.js"></script>
+
+<!-- AUTH CHECK (matches campistry_me.html / flow.html pattern) -->
+<script>
+(function() {
+    'use strict';
+    var loadingScreen = document.getElementById('auth-loading-screen');
+    var mainApp = document.getElementById('main-app-container');
+    
+    async function checkAuthAndBoot() {
+        try {
+            // Wait for Supabase to be ready
+            var attempts = 0;
+            while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
+                await new Promise(function(r) { setTimeout(r, 100); });
+                attempts++;
+            }
+            
+            // Check for cached auth tokens (fast-pass)
+            var cachedUserId = localStorage.getItem('campistry_auth_user_id') || localStorage.getItem('campistry_user_id');
+            var cachedCampId = localStorage.getItem('campistry_camp_id');
+            var hasLocalAuth = !!(cachedUserId && cachedCampId);
+            
+            if (!window.supabase || !window.supabase.auth) {
+                if (hasLocalAuth) {
+                    console.log('[Go] Supabase slow — proceeding with cached auth');
+                } else {
+                    window.location.href = 'index.html';
+                    return;
+                }
+            } else {
+                var result = await window.supabase.auth.getSession();
+                var session = result && result.data && result.data.session;
+                if (!session && !hasLocalAuth) {
+                    window.location.href = 'index.html';
+                    return;
+                }
+            }
+            
+            // Authenticated — show app
+            if (loadingScreen) loadingScreen.style.display = 'none';
+            if (mainApp) mainApp.style.display = '';
+            console.log('[Go] Authenticated — booting');
+            
+            // Wait for cloud data if integration_hooks loaded
+            if (window.loadGlobalSettings) {
+                console.log('[Go] Cloud sync available via integration_hooks');
+            } else {
+                console.log('[Go] Using localStorage fallback (integration_hooks not loaded)');
+            }
+        } catch (e) {
+            console.error('[Go] Auth error:', e);
+            if (localStorage.getItem('campistry_auth_user_id')) {
+                if (loadingScreen) loadingScreen.style.display = 'none';
+                if (mainApp) mainApp.style.display = '';
+            } else {
+                window.location.href = 'index.html';
+            }
+        }
+    }
+    
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', checkAuthAndBoot);
+    } else {
+        checkAuthAndBoot();
+    }
+})();
+</script>
+
+<!-- CAMPISTRY GO ENGINE -->
+<script src="campistry_go.js"></script>
+    <script src="campistry_go_map_editor.js"></script>
+<script>
+// Show ORS key card only if no platform key is configured
+(function() {
+    function checkOrsKey() {
+        var card = document.getElementById('orsKeyCard');
+        if (card && !window.__CAMPISTRY_ORS_KEY__) card.style.display = '';
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', checkOrsKey);
+    else setTimeout(checkOrsKey, 500);
+})();
+</script>
+
+<!-- Analytics (optional, matches other pages) -->
+<script src="trial_guard.js"></script>
+<script>
+    window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+</script>
+<script defer src="/_vercel/insights/script.js"></script>
+</body>
+</html>
