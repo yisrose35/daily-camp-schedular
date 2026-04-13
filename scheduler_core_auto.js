@@ -5367,10 +5367,113 @@
         // SCORING ENGINE
         // =====================================================================
 
-        const MAX_ITERATIONS = 20;  // ★ v10.0: reduced from 40 — repair-driven iteration converges faster
-        const STALE_STOP = 8;     // ★ v10.0: reduced from 12
+        const MAX_ITERATIONS = 25;  // ★ v14.0: raised slightly — elite breeding may find improvements late
+        const BASE_STALE_STOP = 8;
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
+
+        // =====================================================================
+        // ★ v14.0: TABU LIST — remember seeds that produced bad results
+        // Prevents wasting iterations revisiting configurations that failed.
+        // Each entry: { seed, score, reasons[], forbidUntilIter }
+        // =====================================================================
+        const TABU_TENURE = 5; // How many iterations to remember a bad seed
+        const tabuList = new Map(); // seed → { score, reasons, forbidUntilIter }
+
+        function recordTabuSeed(seed, score, reasons) {
+            tabuList.set(seed, {
+                score, reasons,
+                failedAtIter: totalIters,
+                forbidUntilIter: totalIters + TABU_TENURE
+            });
+        }
+
+        function isSeedTabu(seed) {
+            const entry = tabuList.get(seed);
+            return entry && totalIters < entry.forbidUntilIter;
+        }
+
+        function getNextSeed(currentSeed) {
+            let candidate = currentSeed + 1;
+            let attempts = 0;
+            while (isSeedTabu(candidate) && attempts < 15) {
+                candidate++;
+                attempts++;
+            }
+            return candidate;
+        }
+
+        // =====================================================================
+        // ★ v14.0: ELITE PRESERVATION — keep top N schedules, breed from them
+        // Instead of only tracking the single best, we keep a pool of elite
+        // results and use their seeds as starting points for future iterations.
+        // =====================================================================
+        const ELITE_SIZE = 5;
+        const elitePool = []; // { score, seed, timelines, warnings, freeEstimate }
+
+        function updateElitePool(score, seed, timelines, iterWarnings, freeEst) {
+            const entry = {
+                score, seed, freeEstimate: freeEst,
+                timelines: {},
+                warnings: [...iterWarnings]
+            };
+            // Deep copy timelines
+            allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => {
+                entry.timelines[bunk] = (timelines[bunk] || []).map(b => ({ ...b }));
+            }));
+
+            if (elitePool.length < ELITE_SIZE) {
+                elitePool.push(entry);
+                elitePool.sort((a, b) => a.score - b.score);
+            } else {
+                // Replace worst elite if this is better
+                const worst = elitePool[elitePool.length - 1];
+                if (score < worst.score) {
+                    elitePool[elitePool.length - 1] = entry;
+                    elitePool.sort((a, b) => a.score - b.score);
+                }
+            }
+        }
+
+        function getEliteBreedSeed() {
+            if (elitePool.length === 0) return null;
+            // Pick a random elite and mutate its seed slightly
+            const idx = totalIters % elitePool.length;
+            const elite = elitePool[idx];
+            // Mutate: ±1 to ±3 from elite seed
+            const mutation = ((totalIters * 7 + 3) % 5) - 2; // -2 to +2
+            return elite.seed + mutation;
+        }
+
+        // =====================================================================
+        // ★ v14.0: DYNAMIC STOPPING — adaptive stale threshold
+        // When improving fast, be patient. When stuck, stop sooner.
+        // Also considers: if all penalties are structural, stop immediately.
+        // =====================================================================
+        function getDynamicStaleStop() {
+            // Base threshold
+            var threshold = BASE_STALE_STOP;
+
+            // If we have elites and the best is very good, be less patient
+            if (elitePool.length >= 3) {
+                var bestElite = elitePool[0].score;
+                var worstElite = elitePool[elitePool.length - 1].score;
+                // If elites are clustered (< 10% spread), convergence is happening — reduce patience
+                if (worstElite > 0 && (worstElite - bestElite) / worstElite < 0.10) {
+                    threshold = Math.max(4, threshold - 2);
+                }
+            }
+
+            // If best score is already 0, stop immediately
+            if (bestScore === 0) return 0;
+
+            // If recent improvement rate is high, be more patient
+            if (totalIters > 5 && staleCount === 0) {
+                threshold = Math.min(12, threshold + 2);
+            }
+
+            return threshold;
+        }
 
         // ★ v11.0: GUIDED ITERATION — decompose score into categories for bias
         var iterationScoreBreakdown = { gaps: 0, durationViolations: 0, missingLayers: 0, sportVariety: 0, fieldSaturation: 0, estimatedFrees: 0 };
@@ -6561,6 +6664,22 @@
                 staleCount = 0;
             } else staleCount++;
 
+            // ★ v14.0: Update elite pool with this iteration's result
+            updateElitePool(iterScore, _iterSeed, bunkTimelines, iterWarnings, iterFreeEstimate);
+
+            // ★ v14.0: Record tabu for bad seeds (high free count or missing layers)
+            {
+                var tabuReasons = [];
+                if (iterFreeEstimate > 3) tabuReasons.push('high_frees_' + iterFreeEstimate);
+                var _mls = iterationScoreBreakdown.missingLayers || 0;
+                if (_mls > 0) tabuReasons.push('missing_layers');
+                var _gs = iterationScoreBreakdown.gaps || 0;
+                if (_gs > 50000) tabuReasons.push('dead_gaps');
+                if (tabuReasons.length > 0) {
+                    recordTabuSeed(_iterSeed, iterScore, tabuReasons);
+                }
+            }
+
             // ★ v9.3: Record placement patterns from this iteration for learning
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => {
                 (bunkTimelines[bunk] || []).forEach(b => {
@@ -6571,8 +6690,12 @@
                 });
             }));
 
-            if (improved || totalIters <= 3 || totalIters % 10 === 0) {
-               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + ' | estFree=' + iterFreeEstimate);            }
+            // ★ v14.0: Dynamic stale threshold
+            var STALE_STOP = getDynamicStaleStop();
+
+            if (improved || totalIters <= 3 || totalIters % 5 === 0) {
+               log('[ITER ' + totalIters + '] score=' + iterScore + (improved ? ' ★ BEST' : '') + ' | best=' + bestScore + ' | stale=' + staleCount + '/' + STALE_STOP + ' | estFree=' + iterFreeEstimate + ' | elites=' + elitePool.length + ' | tabu=' + tabuList.size);
+            }
 
             // ★ v10.0: Update repair targets for next iteration
             repairTargets.update(bunkTimelines);
@@ -6581,8 +6704,6 @@
             computeIterationBias(iterationScoreBreakdown, iterScore);
 
             // ★ v11.2: Quality-aware termination — detect structurally unfixable scores
-            // If the only remaining penalties are field saturation (supply < demand),
-            // no amount of re-ordering will help. Stop early and report why.
             var _qat = false;
             if (staleCount >= 3 && bestScore > 0) {
                 var _bd = iterationScoreBreakdown;
@@ -6594,16 +6715,45 @@
                 }
             }
 
-            if (!_qat && bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) { _iterSeed++; warnings.length = 0; resetIterState(); }
+            // ★ v14.0: Select next seed using tabu + elite breeding
+            if (!_qat && bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS) {
+                // Strategy: alternate between elite breeding and tabu-aware increment
+                if (elitePool.length >= 2 && totalIters % 3 === 0) {
+                    // Every 3rd iteration: breed from an elite
+                    var breedSeed = getEliteBreedSeed();
+                    if (breedSeed !== null && !isSeedTabu(breedSeed)) {
+                        _iterSeed = breedSeed;
+                        if (totalIters <= 10) log('[ITER] Breeding from elite seed → ' + _iterSeed);
+                    } else {
+                        _iterSeed = getNextSeed(_iterSeed);
+                    }
+                } else {
+                    // Normal: increment but skip tabu seeds
+                    _iterSeed = getNextSeed(_iterSeed);
+                }
+                warnings.length = 0;
+                resetIterState();
+            }
 
         } while (!_qat && bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
 
         log('══════════════════════════════════════════════════════════');
         log('BEST: ' + bestScore + ' after ' + totalIters + ' iterations' + (_qat ? ' (structural limit reached)' : ''));
+        log('Elite pool: ' + elitePool.length + ' schedules | Tabu list: ' + tabuList.size + ' seeds forbidden');
+        if (elitePool.length > 0) {
+            log('Elite scores: ' + elitePool.map(function(e) { return e.score + '(seed=' + e.seed + ')'; }).join(', '));
+        }
         log('══════════════════════════════════════════════════════════');
 
-        // Restore best
-        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = bestTimelines[bunk] || []; }));
+        // ★ v14.0: Restore from best elite (which may be better than bestTimelines
+        // if a later iteration improved an elite via breeding)
+        var restoreSource = bestTimelines;
+        if (elitePool.length > 0 && elitePool[0].score <= bestScore) {
+            restoreSource = elitePool[0].timelines;
+            bestScore = elitePool[0].score;
+            log('Restoring from elite pool (score=' + bestScore + ')');
+        }
+        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = (restoreSource && restoreSource[bunk]) || []; }));
         warnings.length = 0;
         bestWarnings.forEach(w => warnings.push(w));
 
