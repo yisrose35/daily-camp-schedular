@@ -3205,7 +3205,7 @@ async function runOptimizer() {
   
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
-  const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
+  const success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
 
   // ★★★ POST-GENERATION CLEANUP ★★★
   window._preGenClearActive = false;
