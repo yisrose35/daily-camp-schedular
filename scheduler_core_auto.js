@@ -1236,12 +1236,11 @@
 
                 // ★ v14.0: SPECIAL-AWARE LEAGUE SCORING — penalize positions that
                 // leave no gap large enough for the grade's specials.
-                // This prevents leagues from consuming all the time that specials need.
+                // Check PER BUNK (not merged) since walls are per-bunk.
                 var gradeSpecialLayers = (layersByGrade[grade] || []).filter(function(l) {
                     return (l.type || '').toLowerCase() === 'special';
                 });
                 if (gradeSpecialLayers.length > 0) {
-                    // Find the max configured special duration for this grade
                     var maxSpecialDur = 0;
                     gradeSpecialLayers.forEach(function(sl) {
                         var sdName = sl.event || sl.name || '';
@@ -1250,26 +1249,26 @@
                         if (sdDur > maxSpecialDur) maxSpecialDur = sdDur;
                     });
 
-                    // Check: after placing this league, will there be a gap >= maxSpecialDur?
-                    var simWalls = [];
-                    bunks.forEach(function(bk) {
-                        (bunkTimelines[bk] || []).forEach(function(b) { simWalls.push({ s: b.startMin, e: b.endMin }); });
-                    });
-                    simWalls.push({ s: ts, e: leagueEnd });
-                    simWalls.sort(function(a, b) { return a.s - b.s; });
+                    // Check EACH bunk — after league, does it still have a gap >= maxSpecialDur?
                     var gs2Start = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                     var gs2End = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
-                    var maxGapAfterLeague = 0;
-                    var prev2 = gs2Start;
-                    simWalls.forEach(function(w) {
-                        if (w.s > prev2) maxGapAfterLeague = Math.max(maxGapAfterLeague, w.s - prev2);
-                        prev2 = Math.max(prev2, w.e);
+                    var bunksWithNoRoom = 0;
+                    bunks.forEach(function(bk) {
+                        var bkWalls = (bunkTimelines[bk] || []).map(function(b) { return { s: b.startMin, e: b.endMin }; });
+                        bkWalls.push({ s: ts, e: leagueEnd }); // simulate league
+                        bkWalls.sort(function(a, b) { return a.s - b.s; });
+                        var maxGap = 0, prev2 = gs2Start;
+                        bkWalls.forEach(function(w) {
+                            if (w.s > prev2) maxGap = Math.max(maxGap, w.s - prev2);
+                            prev2 = Math.max(prev2, w.e);
+                        });
+                        if (gs2End > prev2) maxGap = Math.max(maxGap, gs2End - prev2);
+                        if (maxGap < maxSpecialDur) bunksWithNoRoom++;
                     });
-                    if (gs2End > prev2) maxGapAfterLeague = Math.max(maxGapAfterLeague, gs2End - prev2);
 
-                    if (maxGapAfterLeague < maxSpecialDur) {
-                        // This league position would make specials impossible — heavy penalty
-                        score += 20000;
+                    if (bunksWithNoRoom > 0) {
+                        // Penalize proportionally — more bunks blocked = worse
+                        score += bunksWithNoRoom * 5000;
                     }
                 }
                 leagueCandidates.push({ start: ts, score: score });
