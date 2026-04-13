@@ -1233,6 +1233,45 @@
                     const gapAfter = nextStart - leagueEnd;
                     if (gapAfter > 0 && gapAfter < _minFill) score += 5000;
                 });
+
+                // ★ v14.0: SPECIAL-AWARE LEAGUE SCORING — penalize positions that
+                // leave no gap large enough for the grade's specials.
+                // This prevents leagues from consuming all the time that specials need.
+                var gradeSpecialLayers = (layersByGrade[grade] || []).filter(function(l) {
+                    return (l.type || '').toLowerCase() === 'special';
+                });
+                if (gradeSpecialLayers.length > 0) {
+                    // Find the max configured special duration for this grade
+                    var maxSpecialDur = 0;
+                    gradeSpecialLayers.forEach(function(sl) {
+                        var sdName = sl.event || sl.name || '';
+                        var sdCfg = getSpecialDuration(sdName, activityProperties, globalSettings);
+                        var sdDur = sdCfg || resolveConstraints(sl, 'special').dMin || 30;
+                        if (sdDur > maxSpecialDur) maxSpecialDur = sdDur;
+                    });
+
+                    // Check: after placing this league, will there be a gap >= maxSpecialDur?
+                    var simWalls = [];
+                    bunks.forEach(function(bk) {
+                        (bunkTimelines[bk] || []).forEach(function(b) { simWalls.push({ s: b.startMin, e: b.endMin }); });
+                    });
+                    simWalls.push({ s: ts, e: leagueEnd });
+                    simWalls.sort(function(a, b) { return a.s - b.s; });
+                    var gs2Start = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    var gs2End = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    var maxGapAfterLeague = 0;
+                    var prev2 = gs2Start;
+                    simWalls.forEach(function(w) {
+                        if (w.s > prev2) maxGapAfterLeague = Math.max(maxGapAfterLeague, w.s - prev2);
+                        prev2 = Math.max(prev2, w.e);
+                    });
+                    if (gs2End > prev2) maxGapAfterLeague = Math.max(maxGapAfterLeague, gs2End - prev2);
+
+                    if (maxGapAfterLeague < maxSpecialDur) {
+                        // This league position would make specials impossible — heavy penalty
+                        score += 20000;
+                    }
+                }
                 leagueCandidates.push({ start: ts, score: score });
             }
             // Sort by score, keep top 4 distinct positions
@@ -6322,13 +6361,14 @@
 
                         // ★ Try ALL valid positions for this special
                         var candidatePositions = [];
+                        var _sp25_rtBlockCount = 0, _sp25_layerBlockCount = 0, _sp25_gapTooSmall = 0;
                         for (var gi = 0; gi < allGapsForBunk.length; gi++) {
                             var gap = allGapsForBunk[gi];
-                            if (gap.e - gap.s < specialDur) continue;
+                            if (gap.e - gap.s < specialDur) { _sp25_gapTooSmall++; continue; }
 
                             for (var pos = gap.s; pos + specialDur <= gap.e; pos += 5) {
                                 // Resource check: can this special run at this time?
-                                if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) continue;
+                                if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) { _sp25_rtBlockCount++; continue; }
 
                                 // Simulate adding special at this position
                                 var withSpecial = existingWalls.concat([{ s: pos, e: pos + specialDur }]);
@@ -6344,7 +6384,7 @@
                                     if (ll.startMin == null || ll.endMin == null) continue;
                                     if (!spCanLayerFit(gapsAfter, ll)) { allLayersFit = false; break; }
                                 }
-                                if (!allLayersFit) continue;
+                                if (!allLayersFit) { _sp25_layerBlockCount++; continue; }
 
                                 // Score this position
                                 var score = 0;
@@ -6445,7 +6485,8 @@
                         if (candidatePositions.length === 0) {
                             if (totalIters < 1) {
                                 var gapSummary = allGapsForBunk.map(function(g) { return (g.e - g.s) + 'min'; }).join(', ');
-                                warn('[Phase2.5] Cannot pre-place ' + special.name + ' (' + specialDur + 'min) for bunk ' + bunk + ' in ' + grade + ' — gaps: [' + gapSummary + ']');
+                                warn('[Phase2.5] Cannot pre-place ' + special.name + ' (' + specialDur + 'min) for bunk ' + bunk + ' in ' + grade +
+                                    ' — gaps: [' + gapSummary + '] | blocked: RT=' + _sp25_rtBlockCount + ' layers=' + _sp25_layerBlockCount + ' gapTooSmall=' + _sp25_gapTooSmall);
                             }
                             return; // defer to CSP
                         }
