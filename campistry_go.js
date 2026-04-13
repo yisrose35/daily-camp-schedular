@@ -107,6 +107,8 @@
         setTimeout(() => { el.classList.remove('open', 'modal-entering'); }, 200);
     }
     function getApiKey() { return window.__CAMPISTRY_ORS_KEY__ || D.setup.orsApiKey || _PLATFORM_KEYS.ors; }
+    function getGHKey() { return window.__CAMPISTRY_GH_KEY__ || D.setup.graphhopperKey || _PLATFORM_KEYS.graphhopper; }
+    function getMBToken() { return D.setup.mapboxToken || _PLATFORM_KEYS.mapbox; }
     let _campCoordsCache = null;
 
     function haversineMi(lat1, lng1, lat2, lng2) {
@@ -116,12 +118,250 @@
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
-    // ── FIX 6: Manhattan distance for realistic grid-street walking ──
-    // Instead of crow-flies haversine, this measures "walk north/south then
-    // east/west" — which is how kids actually walk on a street grid.
-    // At ~40.6° latitude this adds ~40% over haversine for diagonal paths.
+    // Manhattan distance for realistic grid-street walking.
+    // Measures "walk north/south then east/west" — how kids walk on a street grid.
     function manhattanMi(lat1, lng1, lat2, lng2) {
         return haversineMi(lat1, lng1, lat2, lng1) + haversineMi(lat2, lng1, lat2, lng2);
+    }
+
+    // =========================================================================
+    // DRIVING DISTANCE CACHE — shared by all pipeline steps
+    //
+    // Every distance comparison in zones, stops, and routing goes through
+    // drivingDist() which checks this cache first. The cache is populated by
+    // fetchDistanceMatrixCascade() calls during zone building and routing.
+    //
+    // Key format: "lat1_5dec,lng1_5dec|lat2_5dec,lng2_5dec" (sorted so A|B == B|A)
+    // Value: driving duration in seconds
+    // =========================================================================
+    const _drivingCache = new Map();
+    const ROAD_FACTOR = 1.35; // haversine-to-driving approximation factor
+
+    function _cacheKey(lat1, lng1, lat2, lng2) {
+        const a = Math.round(lat1 * 1e5) + ',' + Math.round(lng1 * 1e5);
+        const b = Math.round(lat2 * 1e5) + ',' + Math.round(lng2 * 1e5);
+        return a < b ? a + '|' + b : b + '|' + a;
+    }
+
+    /** Store a driving duration (seconds) between two points in the cache */
+    function _cacheSet(lat1, lng1, lat2, lng2, durationSec) {
+        if (durationSec == null || durationSec < 0) return;
+        _drivingCache.set(_cacheKey(lat1, lng1, lat2, lng2), durationSec);
+    }
+
+    /** Look up cached driving duration (seconds) between two points, or null */
+    function _cacheGet(lat1, lng1, lat2, lng2) {
+        const v = _drivingCache.get(_cacheKey(lat1, lng1, lat2, lng2));
+        return v !== undefined ? v : null;
+    }
+
+    /**
+     * Populate cache from an NxN duration matrix + its coordinate list.
+     * coords = [{lat, lng}, ...], matrix = [[sec, ...], ...]
+     */
+    function _cacheFromMatrix(coords, matrix) {
+        if (!matrix || !coords) return;
+        for (let i = 0; i < coords.length; i++) {
+            for (let j = i + 1; j < coords.length; j++) {
+                const val = matrix[i]?.[j];
+                if (val != null && val >= 0) {
+                    _cacheSet(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng, val);
+                }
+            }
+        }
+    }
+
+    /**
+     * drivingDist — the universal distance function.
+     * Returns driving duration in SECONDS between two points.
+     * Checks cache first; falls back to haversine × ROAD_FACTOR.
+     *
+     * Use drivingDistMi() for miles (approximate).
+     */
+    function drivingDist(lat1, lng1, lat2, lng2) {
+        if (!lat1 || !lng1 || !lat2 || !lng2) return Infinity;
+        // Same point
+        if (Math.abs(lat1 - lat2) < 1e-5 && Math.abs(lng1 - lng2) < 1e-5) return 0;
+        const cached = _cacheGet(lat1, lng1, lat2, lng2);
+        if (cached !== null) return cached;
+        // Fallback: haversine → approximate driving seconds
+        const mi = haversineMi(lat1, lng1, lat2, lng2) * ROAD_FACTOR;
+        const avgSpeedMph = D.setup.avgSpeed || 25;
+        return (mi / avgSpeedMph) * 3600;
+    }
+
+    /** Approximate driving distance in miles (from cache seconds → miles, or haversine×factor) */
+    function drivingDistMi(lat1, lng1, lat2, lng2) {
+        const sec = drivingDist(lat1, lng1, lat2, lng2);
+        if (sec === Infinity) return Infinity;
+        if (sec === 0) return 0;
+        const avgSpeedMph = D.setup.avgSpeed || 25;
+        return (sec / 3600) * avgSpeedMph;
+    }
+
+    // =========================================================================
+    // DISTANCE MATRIX CASCADE — Mapbox → OSRM → haversine fallback
+    // =========================================================================
+
+    /**
+     * fetchDistanceMatrixCascade(coords)
+     * coords = [{lat, lng}, ...]  (max ~25 for a single call)
+     * Returns NxN duration matrix in seconds, or null on total failure.
+     * Also populates _drivingCache.
+     */
+    async function fetchDistanceMatrixCascade(coords) {
+        const n = coords.length;
+        if (n < 2) return null;
+        const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
+
+        // ── Try Mapbox Matrix API ──
+        const mbToken = getMBToken();
+        if (mbToken && n <= 25) {
+            try {
+                const url = 'https://api.mapbox.com/directions-matrix/v1/mapbox/driving/' + coordStr + '?annotations=duration&access_token=' + mbToken;
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.code === 'Ok' && data.durations) {
+                        console.log('[Go] Matrix: Mapbox (' + n + ' points)');
+                        _cacheFromMatrix(coords, data.durations);
+                        return data.durations;
+                    }
+                }
+            } catch (e) {
+                console.warn('[Go] Mapbox Matrix failed:', e.message);
+            }
+        }
+
+        // ── Fallback: OSRM with retry ──
+        const osrmResult = await fetchOSRMWithRetry(coordStr, 3);
+        if (osrmResult) {
+            _cacheFromMatrix(coords, osrmResult);
+            return osrmResult;
+        }
+
+        // ── Last resort: synthetic matrix from haversine × ROAD_FACTOR ──
+        console.warn('[Go] Matrix: all APIs failed, using haversine approximation');
+        const avgSpeedMph = D.setup.avgSpeed || 25;
+        const synthetic = Array.from({ length: n }, (_, i) =>
+            Array.from({ length: n }, (_, j) => {
+                if (i === j) return 0;
+                return (haversineMi(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng) * ROAD_FACTOR / avgSpeedMph) * 3600;
+            })
+        );
+        _cacheFromMatrix(coords, synthetic);
+        return synthetic;
+    }
+
+    /**
+     * fetchLargeMatrixBatched(coords)
+     * Handles >25 coords by pivot-row batching.
+     * Always includes coord[0] (typically camp) in every batch for consistent anchoring.
+     * Returns full NxN matrix in seconds.
+     */
+    async function fetchLargeMatrixBatched(coords) {
+        const n = coords.length;
+        if (n <= 25) return await fetchDistanceMatrixCascade(coords);
+
+        console.log('[Go] Matrix: batching ' + n + ' points (>' + 25 + ')');
+        const matrix = Array.from({ length: n }, () => new Array(n).fill(null));
+        // Self-distances are always 0
+        for (let i = 0; i < n; i++) matrix[i][i] = 0;
+
+        const CHUNK = 24; // leave 1 slot for pivot (coord[0])
+
+        // Strategy: for each batch, include coord[0] (pivot) + up to CHUNK others.
+        // This gives us camp↔stop distances in every batch, plus stop↔stop for each chunk.
+        for (let start = 1; start < n; start += CHUNK) {
+            const end = Math.min(start + CHUNK, n);
+            // Build sub-coord list: [pivot, chunk members...]
+            const subIndices = [0];
+            for (let i = start; i < end; i++) subIndices.push(i);
+
+            const subCoords = subIndices.map(i => coords[i]);
+            const subMatrix = await fetchDistanceMatrixCascade(subCoords);
+
+            if (subMatrix) {
+                // Map sub-matrix back to full matrix
+                for (let si = 0; si < subIndices.length; si++) {
+                    for (let sj = 0; sj < subIndices.length; sj++) {
+                        const gi = subIndices[si], gj = subIndices[sj];
+                        if (subMatrix[si]?.[sj] != null) {
+                            matrix[gi][gj] = subMatrix[si][sj];
+                        }
+                    }
+                }
+            }
+
+            // Stagger to avoid rate limiting
+            if (end < n) await new Promise(r => setTimeout(r, 250));
+        }
+
+        // Now we have camp↔all and within-chunk pairs. Fill cross-chunk gaps
+        // with a second pass: for each pair of chunks, fetch a bridging batch.
+        // But first, check how many gaps remain.
+        let gaps = 0;
+        for (let i = 1; i < n; i++) for (let j = i + 1; j < n; j++) if (matrix[i][j] === null) gaps++;
+
+        if (gaps > 0 && gaps < n * n * 0.3) {
+            // Moderate gaps — fill with targeted cross-chunk batches
+            const chunkStarts = [];
+            for (let s = 1; s < n; s += CHUNK) chunkStarts.push(s);
+
+            for (let ci = 0; ci < chunkStarts.length; ci++) {
+                for (let cj = ci + 1; cj < chunkStarts.length; cj++) {
+                    const aEnd = Math.min(chunkStarts[ci] + CHUNK, n);
+                    const bEnd = Math.min(chunkStarts[cj] + CHUNK, n);
+                    // Pick up to 12 from each chunk for a batch of 24
+                    const aSlice = [], bSlice = [];
+                    for (let i = chunkStarts[ci]; i < aEnd && aSlice.length < 12; i++) aSlice.push(i);
+                    for (let i = chunkStarts[cj]; i < bEnd && bSlice.length < 12; i++) bSlice.push(i);
+                    const crossIndices = [...aSlice, ...bSlice];
+                    if (crossIndices.length < 2) continue;
+
+                    const crossCoords = crossIndices.map(i => coords[i]);
+                    const crossMatrix = await fetchDistanceMatrixCascade(crossCoords);
+                    if (crossMatrix) {
+                        for (let si = 0; si < crossIndices.length; si++) {
+                            for (let sj = 0; sj < crossIndices.length; sj++) {
+                                const gi = crossIndices[si], gj = crossIndices[sj];
+                                if (matrix[gi][gj] === null && crossMatrix[si]?.[sj] != null) {
+                                    matrix[gi][gj] = crossMatrix[si][sj];
+                                }
+                            }
+                        }
+                    }
+                    await new Promise(r => setTimeout(r, 250));
+                }
+            }
+        }
+
+        // Fill any remaining nulls with haversine fallback
+        const avgSpeedMph = D.setup.avgSpeed || 25;
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                if (matrix[i][j] === null) {
+                    matrix[i][j] = (haversineMi(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng) * ROAD_FACTOR / avgSpeedMph) * 3600;
+                }
+            }
+        }
+
+        _cacheFromMatrix(coords, matrix);
+        return matrix;
+    }
+
+    /**
+     * prewarmCache — called after geocoding or at start of generateRoutes.
+     * Fetches camp→all camper distances so drivingDist() has cache hits
+     * for all subsequent zone/stop/route decisions.
+     */
+    async function prewarmCache(camperCoords, campLat, campLng) {
+        if (!camperCoords.length || !campLat || !campLng) return;
+        // Build coord list: [camp, camper1, camper2, ...]
+        const coords = [{ lat: campLat, lng: campLng }, ...camperCoords];
+        console.log('[Go] Cache: pre-warming with ' + coords.length + ' points...');
+        await fetchLargeMatrixBatched(coords);
+        console.log('[Go] Cache: ' + _drivingCache.size + ' pairs cached');
     }
 
     // =========================================================================
@@ -131,36 +371,37 @@
 
     // =========================================================================
     // DIRECTIONAL HELPERS — used by all code paths that order/insert stops
+    // All use drivingDist (driving seconds) for ordering, not haversine.
     // =========================================================================
 
-    /** Sort stops by distance from camp: farthest-first for arrival, nearest-first for dismissal */
+    /** Sort stops by driving distance from camp: farthest-first for arrival, nearest-first for dismissal */
     function directionalSort(stops, campLat, campLng) {
         if (stops.length < 2) return;
         const isArr = D.activeMode === 'arrival';
         stops.forEach(s => {
-            s._dSort = (s.lat && s.lng) ? haversineMi(campLat, campLng, s.lat, s.lng) : 0;
+            s._dSort = (s.lat && s.lng) ? drivingDist(campLat, campLng, s.lat, s.lng) : 0;
         });
         if (isArr) stops.sort((a, b) => b._dSort - a._dSort);
         else stops.sort((a, b) => a._dSort - b._dSort);
         stops.forEach((s, i) => { s.stopNum = i + 1; delete s._dSort; });
     }
 
-    /** Insert a stop at the directionally correct position (by distance from camp) */
+    /** Insert a stop at the directionally correct position (by driving distance from camp) */
     function directionalInsert(stops, newStop, campLat, campLng) {
         if (!newStop.lat || !newStop.lng) { stops.push(newStop); return; }
         const isArr = D.activeMode === 'arrival';
-        const nd = haversineMi(campLat, campLng, newStop.lat, newStop.lng);
-        let insertAt = stops.length; // default: append
+        const nd = drivingDist(campLat, campLng, newStop.lat, newStop.lng);
+        let insertAt = stops.length;
         for (let i = 0; i < stops.length; i++) {
             if (!stops[i].lat || !stops[i].lng) continue;
-            const sd = haversineMi(campLat, campLng, stops[i].lat, stops[i].lng);
+            const sd = drivingDist(campLat, campLng, stops[i].lat, stops[i].lng);
             if (isArr ? (nd > sd) : (nd < sd)) { insertAt = i; break; }
         }
         stops.splice(insertAt, 0, newStop);
         stops.forEach((s, i) => { s.stopNum = i + 1; });
     }
 
-    /** Insert a stop where it adds the least driving distance (preserves VROOM's route flow) */
+    /** Insert a stop where it adds the least driving distance (uses driving cache) */
     function cheapestInsert(stops, newStop) {
         if (!newStop.lat || !newStop.lng || stops.length === 0) {
             stops.push(newStop);
@@ -172,9 +413,9 @@
             const prev = i > 0 ? stops[i - 1] : null;
             const next = i < stops.length ? stops[i] : null;
             let cost = 0;
-            if (prev && prev.lat) cost += haversineMi(prev.lat, prev.lng, newStop.lat, newStop.lng);
-            if (next && next.lat) cost += haversineMi(newStop.lat, newStop.lng, next.lat, next.lng);
-            if (prev && next && prev.lat && next.lat) cost -= haversineMi(prev.lat, prev.lng, next.lat, next.lng);
+            if (prev && prev.lat) cost += drivingDist(prev.lat, prev.lng, newStop.lat, newStop.lng);
+            if (next && next.lat) cost += drivingDist(newStop.lat, newStop.lng, next.lat, next.lng);
+            if (prev && next && prev.lat && next.lat) cost -= drivingDist(prev.lat, prev.lng, next.lat, next.lng);
             if (cost < bestCost) { bestCost = cost; bestPos = i; }
         }
         stops.splice(bestPos, 0, newStop);
@@ -242,14 +483,16 @@
     }
 
     /**
-     * Street-aware cluster distance.
+     * Street-aware cluster distance (in miles, approximate).
+     * Base: driving distance (from cache or haversine×factor).
+     * Multipliers for street awareness:
      * - Same street: 0.7× (kids can walk along their own block)
      * - Different street, no major road between: 1.0×
      * - Different street, major road between: 2.5× (don't make kids cross Broadway)
-     * - Same street + same parity (same side): extra 0.1× bonus
+     * - Same street + same parity (same side): extra 0.85× bonus
      */
     function smartClusterDist(lat1, lng1, addr1, lat2, lng2, addr2) {
-        let dist = manhattanMi(lat1, lng1, lat2, lng2);
+        let dist = drivingDistMi(lat1, lng1, lat2, lng2);
         if (dist < 0.001) return dist; // same house
 
         const p1 = parseAddress(addr1);
@@ -338,8 +581,8 @@
             [...campers].sort((a, b) => b.lat - a.lat),
             [...campers].sort((a, b) => a.lng - b.lng),
             [...campers].sort((a, b) => b.lng - a.lng),
-            [...campers].sort((a, b) => haversineMi(avgLat, avgLng, a.lat, a.lng) - haversineMi(avgLat, avgLng, b.lat, b.lng)),
-            [...campers].sort((a, b) => haversineMi(avgLat, avgLng, b.lat, b.lng) - haversineMi(avgLat, avgLng, a.lat, a.lng)),
+            [...campers].sort((a, b) => drivingDist(avgLat, avgLng, a.lat, a.lng) - drivingDist(avgLat, avgLng, b.lat, b.lng)),
+            [...campers].sort((a, b) => drivingDist(avgLat, avgLng, b.lat, b.lng) - drivingDist(avgLat, avgLng, a.lat, a.lng)),
             // Sort by street name then house number — groups same-street kids
             [...campers].sort((a, b) => {
                 const pa = parseAddress(a.address), pb = parseAddress(b.address);
@@ -380,44 +623,11 @@
         return finalClusters;
     }
 
-    // ── Distance matrix: Mapbox (primary) → OSRM (fallback) ──
-    // Mapbox Matrix API is more reliable than public OSRM and uses the
-    // same token already configured for route geometry rendering.
-    // Returns an NxN duration matrix in seconds, or null on failure.
-    async function fetchDistanceMatrix(coords, campLat, campLng) {
-        // coords = array of {lat, lng} with index 0 = camp
-        const n = coords.length;
-        if (n < 2) return null;
-
-        // Build coordinate string: lng,lat;lng,lat;...
-        const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
-
-        // ── Try Mapbox Matrix API first ──
-        const mbToken = D.setup.mapboxToken || _PLATFORM_KEYS.mapbox;
-        if (mbToken) {
-            try {
-                // Mapbox allows up to 25 coordinates per request
-                if (n <= 25) {
-                    const url = 'https://api.mapbox.com/directions-matrix/v1/mapbox/driving/' + coordStr + '?annotations=duration&access_token=' + mbToken;
-                    const resp = await fetch(url);
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        if (data.code === 'Ok' && data.durations) {
-                            console.log('[Go] Matrix: Mapbox (' + n + ' points)');
-                            return data.durations;
-                        }
-                    }
-                } else {
-                    // >25 coords: split into chunks (rare for bus routes)
-                    console.log('[Go] Matrix: ' + n + ' points exceeds Mapbox limit, falling back to OSRM');
-                }
-            } catch (e) {
-                console.warn('[Go] Mapbox Matrix failed:', e.message);
-            }
-        }
-
-        // ── Fallback: OSRM with retry ──
-        return await fetchOSRMWithRetry(coordStr, 3);
+    // ── Distance matrix: backward-compatible wrapper ──
+    // Delegates to fetchDistanceMatrixCascade (Mapbox → OSRM → haversine).
+    // Kept for any code that still calls fetchDistanceMatrix(coords).
+    async function fetchDistanceMatrix(coords) {
+        return await fetchDistanceMatrixCascade(coords);
     }
 
     async function fetchOSRMWithRetry(coordStr, retries) {
@@ -2294,7 +2504,7 @@
                 const remaining = { ...needed };
                 vehicles.forEach(v => { const prevRegion = prevAssign[v.busId]; if (prevRegion && remaining[prevRegion] > 0) { assignments[sh.id][prevRegion].push(v.busId); currAssign[v.busId] = prevRegion; usedBuses.add(v.busId); remaining[prevRegion]--; } });
                 const unassigned = vehicles.filter(v => !usedBuses.has(v.busId));
-                regions.filter(r => (remaining[r.id] || 0) > 0).forEach(reg => { while ((remaining[reg.id] || 0) > 0 && unassigned.length > 0) { let bestIdx = 0, bestDist = Infinity; unassigned.forEach((v, i) => { const prevReg = prevAssign[v.busId]; const prevRegObj = prevReg ? regions.find(r => r.id === prevReg) : null; const d = prevRegObj ? haversineMi(prevRegObj.centroidLat, prevRegObj.centroidLng, reg.centroidLat, reg.centroidLng) : 999; if (d < bestDist) { bestDist = d; bestIdx = i; } }); const v = unassigned.splice(bestIdx, 1)[0]; assignments[sh.id][reg.id].push(v.busId); currAssign[v.busId] = reg.id; remaining[reg.id]--; } });
+                regions.filter(r => (remaining[r.id] || 0) > 0).forEach(reg => { while ((remaining[reg.id] || 0) > 0 && unassigned.length > 0) { let bestIdx = 0, bestDist = Infinity; unassigned.forEach((v, i) => { const prevReg = prevAssign[v.busId]; const prevRegObj = prevReg ? regions.find(r => r.id === prevReg) : null; const d = prevRegObj ? drivingDist(prevRegObj.centroidLat, prevRegObj.centroidLng, reg.centroidLat, reg.centroidLng) : Infinity; if (d < bestDist) { bestDist = d; bestIdx = i; } }); const v = unassigned.splice(bestIdx, 1)[0]; assignments[sh.id][reg.id].push(v.busId); currAssign[v.busId] = reg.id; remaining[reg.id]--; } });
                 unassigned.forEach(v => { const biggest = regions.reduce((best, r) => (needed[r.id] || 0) > (needed[best.id] || 0) ? r : best, regions[0]); assignments[sh.id][biggest.id].push(v.busId); currAssign[v.busId] = biggest.id; });
             }
             prevAssign = currAssign;
@@ -2427,73 +2637,9 @@
         // ── C. Slice big ZIPs using driving-time clustering ──
         const zones = []; // final output: [{name, camperNames, centroidLat, centroidLng, busIdx, regionIds}]
 
-        // Helper: stitch multiple matrix calls for >25 coords into one NxN matrix
+        // Delegate to top-level fetchLargeMatrixBatched (Mapbox → OSRM → haversine)
         async function fetchLargeMatrix(coords) {
-            const n = coords.length;
-            if (n <= 25) {
-                return await fetchDistanceMatrix(coords);
-            }
-            // Chunk into groups under 25, run multiple calls, stitch
-            console.log('[Go] Zone: stitching matrix for ' + n + ' points (>' + 25 + ')');
-            const matrix = Array.from({ length: n }, () => new Array(n).fill(null));
-            const CHUNK = 24; // leave room for overhead
-            for (let i = 0; i < n; i += CHUNK) {
-                for (let j = 0; j < n; j += CHUNK) {
-                    const rowEnd = Math.min(i + CHUNK, n);
-                    const colEnd = Math.min(j + CHUNK, n);
-                    // Build unique index set for this sub-matrix
-                    const indices = new Set();
-                    for (let r = i; r < rowEnd; r++) indices.add(r);
-                    for (let c = j; c < colEnd; c++) indices.add(c);
-                    const idxArr = [...indices];
-                    if (idxArr.length > 25) {
-                        // Too many unique indices — fallback to haversine for this chunk
-                        for (let r = i; r < rowEnd; r++) {
-                            for (let c = j; c < colEnd; c++) {
-                                if (matrix[r][c] === null) {
-                                    matrix[r][c] = haversineMi(coords[r].lat, coords[r].lng, coords[c].lat, coords[c].lng) * 3600 / 25;
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    const subCoords = idxArr.map(idx => coords[idx]);
-                    const subMatrix = await fetchDistanceMatrix(subCoords);
-                    if (!subMatrix) {
-                        // Fallback for this chunk
-                        for (let r = i; r < rowEnd; r++) {
-                            for (let c = j; c < colEnd; c++) {
-                                if (matrix[r][c] === null) {
-                                    matrix[r][c] = haversineMi(coords[r].lat, coords[r].lng, coords[c].lat, coords[c].lng) * 3600 / 25;
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    // Map sub-matrix back to full matrix
-                    const idxMap = {};
-                    idxArr.forEach((globalIdx, localIdx) => { idxMap[globalIdx] = localIdx; });
-                    for (let r = i; r < rowEnd; r++) {
-                        for (let c = j; c < colEnd; c++) {
-                            const lr = idxMap[r], lc = idxMap[c];
-                            if (lr !== undefined && lc !== undefined && subMatrix[lr]?.[lc] != null) {
-                                matrix[r][c] = subMatrix[lr][lc];
-                            }
-                        }
-                    }
-                }
-                // Stagger to avoid rate limiting
-                if (i + CHUNK < n) await new Promise(r => setTimeout(r, 200));
-            }
-            // Fill any remaining nulls with haversine fallback
-            for (let r = 0; r < n; r++) {
-                for (let c = 0; c < n; c++) {
-                    if (matrix[r][c] === null) {
-                        matrix[r][c] = haversineMi(coords[r].lat, coords[r].lng, coords[c].lat, coords[c].lng) * 3600 / 25;
-                    }
-                }
-            }
-            return matrix;
+            return await fetchLargeMatrixBatched(coords);
         }
 
         // k-medoids with driving-time matrix
@@ -2504,7 +2650,7 @@
             // dist helper
             function dist(i, j) {
                 if (useDriveTime && durMatrix?.[i]?.[j] != null && durMatrix[i][j] >= 0) return durMatrix[i][j];
-                return haversineMi(atoms[i].lat, atoms[i].lng, atoms[j].lat, atoms[j].lng) * 3600 / 25;
+                return drivingDist(atoms[i].lat, atoms[i].lng, atoms[j].lat, atoms[j].lng);
             }
 
             // Seed selection: first two = max pairwise drive time
@@ -2676,7 +2822,7 @@
                 const campersWithDist = zone.camperNames.map(name => {
                     const c = allCampers.find(x => x.name === name);
                     if (!c) return { name, dist: 0 };
-                    return { name, dist: haversineMi(c.lat, c.lng, zone.centroidLat, zone.centroidLng) };
+                    return { name, dist: drivingDist(c.lat, c.lng, zone.centroidLat, zone.centroidLng) };
                 }).sort((a, b) => b.dist - a.dist);
 
                 // Median distance — interior threshold
@@ -2714,7 +2860,7 @@
                     for (const tz of zones) {
                         if (tz === zone) continue;
                         if (tz.camperNames.length + atomNames.length > hardCap) continue;
-                        const d = candCamper ? haversineMi(candCamper.lat, candCamper.lng, tz.centroidLat, tz.centroidLng) : Infinity;
+                        const d = candCamper ? drivingDistMi(candCamper.lat, candCamper.lng, tz.centroidLat, tz.centroidLng) : Infinity;
                         if (d > MAX_ABSORB_MI) continue; // don't stretch zones across distant areas
                         if (d < bestDist) { bestDist = d; bestZone = tz; }
                     }
@@ -2759,7 +2905,7 @@
                 let bestZone = null, bestDist = Infinity;
                 for (const z of zones) {
                     if (z.camperNames.length + smallReg.camperNames.length > tryFill) continue;
-                    const d = haversineMi(centLat, centLng, z.centroidLat, z.centroidLng);
+                    const d = drivingDistMi(centLat, centLng, z.centroidLat, z.centroidLng);
                     if (d > MAX_ABSORB_MI) continue; // too far — don't stretch the zone
                     if (d < bestDist) { bestDist = d; bestZone = z; }
                 }
@@ -3027,9 +3173,10 @@
     // =========================================================================
 
     async function generateRoutes() {
-        // Clear intersection cache on each generation so fresh data is fetched
-        // for the full service area (not stale single-region data)
+        // Clear caches on each generation
         _intersectionCache = null;
+        _drivingCache.clear();
+        _ghQuotaExhausted = false;
 
         const roster = getRoster();
         const mode = document.getElementById('routeMode')?.value || 'door-to-door';
@@ -3037,7 +3184,7 @@
         const avgStopMin = D.setup.avgStopTime || 2;
         const avgSpeedMph = D.setup.avgSpeed || 25;
         const key = getApiKey();
-        if (!key) { toast('ORS API key required for VROOM optimization', 'error'); return; }
+        if (!key && !getGHKey()) { toast('API key required (ORS or GraphHopper)', 'error'); return; }
 
         if (!_detectedRegions?.length) detectRegions();
         if (!_detectedRegions?.length) { toast('No regions detected', 'error'); return; }
@@ -3057,6 +3204,17 @@
         }
         const campLat = campCoords?.lat || _detectedRegions[0].centroidLat;
         const campLng = campCoords?.lng || _detectedRegions[0].centroidLng;
+
+        // ── Pre-warm driving distance cache ──
+        showProgress('Building driving distance cache...', 7);
+        const allCamperCoords = [];
+        Object.keys(roster).forEach(name => {
+            const a = D.addresses[name];
+            if (a?.geocoded && a.lat && a.lng && a.transport !== 'pickup') {
+                allCamperCoords.push({ lat: a.lat, lng: a.lng });
+            }
+        });
+        await prewarmCache(allCamperCoords, campLat, campLng);
 
         // ── Zone Reconfiguration Step ──
         // Try isochrone-based zones first (road-network-aware), fall back to ZIP-based
@@ -3197,7 +3355,7 @@
                         const val = mx[stopA._matrixIdx]?.[stopB._matrixIdx];
                         if (val != null && val >= 0) return val / 60;
                     }
-                    if (stopA.lat && stopB.lat) return (haversineMi(stopA.lat, stopA.lng, stopB.lat, stopB.lng) / avgSpeedMph) * 60;
+                    if (stopA.lat && stopB.lat) return drivingDist(stopA.lat, stopA.lng, stopB.lat, stopB.lng) / 60;
                     return 3;
                 }
                 function campToStop(stop) {
@@ -3205,7 +3363,7 @@
                         const val = mx[0]?.[stop._matrixIdx];
                         if (val != null && val >= 0) return val / 60;
                     }
-                    if (stop.lat && _campCoordsCache) return (haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, stop.lat, stop.lng) / avgSpeedMph) * 60;
+                    if (stop.lat && _campCoordsCache) return drivingDist(_campCoordsCache.lat, _campCoordsCache.lng, stop.lat, stop.lng) / 60;
                     return 15;
                 }
                 function stopToCamp(stop) {
@@ -3213,7 +3371,7 @@
                         const val = mx[stop._matrixIdx]?.[0];
                         if (val != null && val >= 0) return val / 60;
                     }
-                    if (stop.lat && _campCoordsCache) return (haversineMi(stop.lat, stop.lng, _campCoordsCache.lat, _campCoordsCache.lng) / avgSpeedMph) * 60;
+                    if (stop.lat && _campCoordsCache) return drivingDist(stop.lat, stop.lng, _campCoordsCache.lat, _campCoordsCache.lng) / 60;
                     return 15;
                 }
 
@@ -3312,7 +3470,134 @@
     }
 
     // =========================================================================
-    // VROOM SOLVER — the core engine
+    // GRAPHHOPPER ROUTE OPTIMIZATION — primary solver
+    // Sends stops + single vehicle to GH VRP endpoint.
+    // Returns ordered stops array, or null on failure.
+    // Free tier: 5 vehicles, 30 services per request.
+    // =========================================================================
+    let _ghQuotaExhausted = false; // set to true if GH returns 429/quota error
+
+    async function solveWithGraphHopper(stops, vehicle, campLat, campLng, isArrival, needsReturn) {
+        const ghKey = getGHKey();
+        if (!ghKey || _ghQuotaExhausted) return null;
+
+        const serviceTime = (D.setup.avgStopTime || 2) * 60;
+        const MAX_GH_SERVICES = 30;
+
+        // If >30 stops, optimize the 30 most spread-out, then cheapestInsert the rest
+        let primaryStops = stops;
+        let overflowStops = [];
+        if (stops.length > MAX_GH_SERVICES) {
+            // Pick 30 most spread-out: farthest from centroid first
+            const cLat = stops.reduce((s, st) => s + st.lat, 0) / stops.length;
+            const cLng = stops.reduce((s, st) => s + st.lng, 0) / stops.length;
+            const ranked = stops.map((st, i) => ({ st, i, d: drivingDist(cLat, cLng, st.lat, st.lng) }));
+            ranked.sort((a, b) => b.d - a.d);
+            const primaryIndices = new Set(ranked.slice(0, MAX_GH_SERVICES).map(r => r.i));
+            primaryStops = [];
+            overflowStops = [];
+            stops.forEach((st, i) => {
+                if (primaryIndices.has(i)) primaryStops.push(st);
+                else overflowStops.push(st);
+            });
+            console.log('[Go] GH: ' + stops.length + ' stops, optimizing ' + primaryStops.length + ', will insert ' + overflowStops.length + ' after');
+        }
+
+        // Build GH VRP request
+        const services = primaryStops.map((st, i) => ({
+            id: 'stop_' + i,
+            address: { location_id: 'stop_' + i, lon: st.lng, lat: st.lat },
+            size: [st.campers.length],
+            duration: serviceTime
+        }));
+
+        const veh = {
+            vehicle_id: vehicle.busId || 'bus_1',
+            type_id: 'bus',
+            return_to_depot: needsReturn
+        };
+
+        if (isArrival) {
+            // Arrival: start from farthest stop, end at camp
+            let fIdx = 0, fDist = 0;
+            primaryStops.forEach((s, i) => {
+                const d = drivingDist(campLat, campLng, s.lat, s.lng);
+                if (d > fDist) { fDist = d; fIdx = i; }
+            });
+            veh.start_address = { location_id: 'farthest', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
+            veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
+        } else {
+            // Dismissal: start from camp
+            veh.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
+            if (needsReturn) {
+                veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
+            }
+        }
+
+        const body = {
+            vehicles: [veh],
+            vehicle_types: [{ type_id: 'bus', capacity: [vehicle.capacity || 999] }],
+            services: services
+        };
+
+        try {
+            const resp = await fetch('https://graphhopper.com/api/1/vrp?key=' + ghKey, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+
+            if (resp.status === 429 || resp.status === 402) {
+                console.warn('[Go] GH: quota exhausted (HTTP ' + resp.status + '), switching to VROOM');
+                _ghQuotaExhausted = true;
+                return null;
+            }
+
+            if (!resp.ok) {
+                console.warn('[Go] GH: HTTP ' + resp.status);
+                return null;
+            }
+
+            const result = await resp.json();
+            const route = result.solution?.routes?.[0];
+            if (!route?.activities?.length) {
+                console.warn('[Go] GH: no solution returned');
+                return null;
+            }
+
+            // Map activities back to stops
+            const ordered = [];
+            route.activities.forEach(act => {
+                if (act.type !== 'service') return;
+                const idx = parseInt(act.id?.replace('stop_', ''));
+                if (!isNaN(idx) && primaryStops[idx]) ordered.push(primaryStops[idx]);
+            });
+
+            // Handle unassigned
+            const assignedIds = new Set(ordered.map((_, i) => i));
+            if (result.solution?.unassigned?.services?.length) {
+                result.solution.unassigned.services.forEach(ua => {
+                    const idx = parseInt(ua.id?.replace('stop_', ''));
+                    if (!isNaN(idx) && primaryStops[idx] && !ordered.includes(primaryStops[idx])) {
+                        cheapestInsert(ordered, primaryStops[idx]);
+                    }
+                });
+            }
+
+            // Insert overflow stops using cheapestInsert with driving distances
+            overflowStops.forEach(st => cheapestInsert(ordered, st));
+
+            console.log('[Go] GH: optimized ' + ordered.length + ' stops for ' + (vehicle.name || vehicle.busId));
+            return ordered;
+
+        } catch (e) {
+            console.warn('[Go] GH: request failed:', e.message);
+            return null;
+        }
+    }
+
+    // =========================================================================
+    // VROOM SOLVER (ORS) — fallback when GraphHopper unavailable
     // =========================================================================
     async function solveWithVROOM(campers, vehicles, campLat, campLng, mode, apiKey, shift, shiftIdx, totalShifts, zones) {
         const isArrival = D.activeMode === 'arrival';
@@ -3380,7 +3665,7 @@
         let dedups = 0;
         for (let i = 0; i < stops.length; i++) {
             for (let j = i + 1; j < stops.length; j++) {
-                if (haversineMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= dedupDist) {
+                if (drivingDistMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= dedupDist) {
                     // Don't merge if any kid would walk > MAX_WALK_FT to combined stop
                     const keepLat = stops[i].lat, keepLng = stops[i].lng;
                     let tooFar = false;
@@ -3504,9 +3789,9 @@
                         }
                         const veh = vehicles[b];
                         const zone = shiftZones[z];
-                        // Geographic cost: distance from camp through zone centroid
+                        // Geographic cost: driving distance from camp through zone centroid
                         const geoDist = _campCoordsCache ?
-                            haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, zone.centroidLat, zone.centroidLng) : 0;
+                            drivingDistMi(_campCoordsCache.lat, _campCoordsCache.lng, zone.centroidLat, zone.centroidLng) : 0;
                         // Capacity mismatch: penalize assigning a bus that's too small
                         const capMismatch = Math.max(0, zone.camperNames.length - veh.capacity) * 2;
                         // Waste penalty: mildly penalize assigning a large bus to a small zone
@@ -3532,7 +3817,7 @@
                     if (assignedZoneIds.has(z.id)) return;
                     let bestIdx = 0, bestDist = Infinity;
                     for (let j = 0; j < zoneAssignments.length; j++) {
-                        const d = haversineMi(z.centroidLat, z.centroidLng, zoneAssignments[j].zone.centroidLat, zoneAssignments[j].zone.centroidLng);
+                        const d = drivingDist(z.centroidLat, z.centroidLng, zoneAssignments[j].zone.centroidLat, zoneAssignments[j].zone.centroidLng);
                         if (d < bestDist) { bestDist = d; bestIdx = j; }
                     }
                     zoneAssignments[bestIdx].zone.camperNames.push(...z.camperNames);
@@ -3622,7 +3907,7 @@
                             let fDist = 0, fStop = null;
                             allStops.forEach((s, si) => {
                                 if (stopZoneIdx[si] !== vi) return;
-                                const d = haversineMi(campLat, campLng, s.lat, s.lng);
+                                const d = drivingDist(campLat, campLng, s.lat, s.lng);
                                 if (d > fDist) { fDist = d; fStop = s; }
                             });
                             zoneFarthestStop[vi] = fStop;
@@ -3693,8 +3978,8 @@
                                     // Orientation: VROOM already orders optimally,
                                     // but verify direction for arrival/dismissal
                                     if (orderedStops.length >= 2) {
-                                        const firstDist = haversineMi(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
-                                        const lastDist = haversineMi(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
+                                        const firstDist = drivingDist(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
+                                        const lastDist = drivingDist(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
                                         if (isArrival && firstDist < lastDist) orderedStops.reverse();
                                         if (!isArrival && firstDist > lastDist) orderedStops.reverse();
                                     }
@@ -3804,7 +4089,7 @@
                 if (isArrival) {
                     let fIdx = 0, fDist = 0;
                     zoneStops.forEach((s, i) => {
-                        const d = haversineMi(campLat, campLng, s.lat, s.lng);
+                        const d = drivingDist(campLat, campLng, s.lat, s.lng);
                         if (d > fDist) { fDist = d; fIdx = i; }
                     });
                     veh.start = [zoneStops[fIdx].lng, zoneStops[fIdx].lat];
@@ -3814,44 +4099,54 @@
                     if (needsReturn) veh.end = [campLng, campLat];
                 }
 
-                console.log('[Go] VROOM → ' + v.name + ' (' + za.zone.name + '): ' + jobs.length + ' stops, ' + zoneCampers.length + ' kids');
+                // ── Route optimization cascade: GraphHopper → VROOM → local TSP ──
+                let orderedStops = null;
 
-                let orderedStops = zoneStops;
-                try {
-                    const resp = await fetch('https://api.openrouteservice.org/optimization', {
-                        method: 'POST',
-                        headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ jobs, vehicles: [veh] })
-                    });
+                // 1. Try GraphHopper
+                orderedStops = await solveWithGraphHopper(zoneStops, v, campLat, campLng, isArrival, needsReturn);
 
-                    if (resp.ok) {
-                        const result = await resp.json();
-                        const vroomRoute = result.routes?.[0];
-                        if (vroomRoute) {
-                            const ordered = [];
-                            vroomRoute.steps.forEach(step => {
-                                if (step.type !== 'job') return;
-                                const stop = zoneStops[step.id - 1];
-                                if (stop) ordered.push(stop);
-                            });
-                            if (result.unassigned?.length) {
-                                result.unassigned.forEach(ua => {
-                                    const stop = zoneStops[ua.id - 1];
-                                    if (stop) cheapestInsert(ordered, stop);
+                // 2. Fallback: ORS VROOM
+                if (!orderedStops) {
+                    console.log('[Go] VROOM → ' + v.name + ' (' + za.zone.name + '): ' + jobs.length + ' stops');
+                    try {
+                        const resp = await fetch('https://api.openrouteservice.org/optimization', {
+                            method: 'POST',
+                            headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ jobs, vehicles: [veh] })
+                        });
+                        if (resp.ok) {
+                            const result = await resp.json();
+                            const vroomRoute = result.routes?.[0];
+                            if (vroomRoute) {
+                                const ordered = [];
+                                vroomRoute.steps.forEach(step => {
+                                    if (step.type !== 'job') return;
+                                    const stop = zoneStops[step.id - 1];
+                                    if (stop) ordered.push(stop);
                                 });
+                                if (result.unassigned?.length) {
+                                    result.unassigned.forEach(ua => {
+                                        const stop = zoneStops[ua.id - 1];
+                                        if (stop) cheapestInsert(ordered, stop);
+                                    });
+                                }
+                                orderedStops = ordered;
                             }
-                            orderedStops = ordered;
+                        } else {
+                            console.warn('[Go] VROOM error for ' + v.name + ': HTTP ' + resp.status);
                         }
-                    } else {
-                        console.warn('[Go] VROOM error for ' + v.name + ': HTTP ' + resp.status);
-                        directionalSort(zoneStops, campLat, campLng);
+                    } catch (e) {
+                        console.warn('[Go] VROOM failed for ' + v.name + ':', e.message);
                     }
-                } catch (e) {
-                    console.warn('[Go] VROOM failed for ' + v.name + ':', e.message);
-                    directionalSort(zoneStops, campLat, campLng);
                 }
 
-                // 2-opt improvement
+                // 3. Last resort: directional sort by driving distance
+                if (!orderedStops) {
+                    orderedStops = [...zoneStops];
+                    directionalSort(orderedStops, campLat, campLng);
+                }
+
+                // ── 2-opt improvement (using driving distances) ──
                 if (orderedStops.length >= 3) {
                     let improved = true;
                     for (let pass = 0; pass < 5 && improved; pass++) {
@@ -3861,8 +4156,8 @@
                                 const a = orderedStops[i], b = orderedStops[i + 1];
                                 const c = orderedStops[j], d = orderedStops[j + 1] || (isArrival ? { lat: campLat, lng: campLng } : null);
                                 if (!a?.lat || !b?.lat || !c?.lat) continue;
-                                const curDist = haversineMi(a.lat, a.lng, b.lat, b.lng) + (d ? haversineMi(c.lat, c.lng, d.lat, d.lng) : 0);
-                                const newDist = haversineMi(a.lat, a.lng, c.lat, c.lng) + (d ? haversineMi(b.lat, b.lng, d.lat, d.lng) : 0);
+                                const curDist = drivingDist(a.lat, a.lng, b.lat, b.lng) + (d ? drivingDist(c.lat, c.lng, d.lat, d.lng) : 0);
+                                const newDist = drivingDist(a.lat, a.lng, c.lat, c.lng) + (d ? drivingDist(b.lat, b.lng, d.lat, d.lng) : 0);
                                 if (newDist < curDist * 0.95) {
                                     const seg = orderedStops.splice(i + 1, j - i);
                                     seg.reverse();
@@ -3874,7 +4169,7 @@
                     }
                 }
 
-                // Or-opt
+                // ── Or-opt (using driving distances) ──
                 if (orderedStops.length >= 4) {
                     for (let pass = 0; pass < 3; pass++) {
                         let relocated = false;
@@ -3884,10 +4179,10 @@
                             const prev = i > 0 ? orderedStops[i - 1] : null;
                             const next = i < orderedStops.length - 1 ? orderedStops[i + 1] : null;
                             let removeCost = 0;
-                            if (prev?.lat && next?.lat) removeCost = haversineMi(prev.lat, prev.lng, next.lat, next.lng);
+                            if (prev?.lat && next?.lat) removeCost = drivingDist(prev.lat, prev.lng, next.lat, next.lng);
                             let currentCost = 0;
-                            if (prev?.lat) currentCost += haversineMi(prev.lat, prev.lng, s.lat, s.lng);
-                            if (next?.lat) currentCost += haversineMi(s.lat, s.lng, next.lat, next.lng);
+                            if (prev?.lat) currentCost += drivingDist(prev.lat, prev.lng, s.lat, s.lng);
+                            if (next?.lat) currentCost += drivingDist(s.lat, s.lng, next.lat, next.lng);
                             const savings = currentCost - removeCost;
                             let bestJ = -1, bestInsertCost = Infinity;
                             for (let j = 0; j <= orderedStops.length - 1; j++) {
@@ -3898,9 +4193,9 @@
                                 const pBefore = insertAt > 0 ? tempStops[insertAt - 1] : null;
                                 const pAfter = insertAt < tempStops.length ? tempStops[insertAt] : null;
                                 let ic = 0;
-                                if (pBefore?.lat) ic += haversineMi(pBefore.lat, pBefore.lng, s.lat, s.lng);
-                                if (pAfter?.lat) ic += haversineMi(s.lat, s.lng, pAfter.lat, pAfter.lng);
-                                if (pBefore?.lat && pAfter?.lat) ic -= haversineMi(pBefore.lat, pBefore.lng, pAfter.lat, pAfter.lng);
+                                if (pBefore?.lat) ic += drivingDist(pBefore.lat, pBefore.lng, s.lat, s.lng);
+                                if (pAfter?.lat) ic += drivingDist(s.lat, s.lng, pAfter.lat, pAfter.lng);
+                                if (pBefore?.lat && pAfter?.lat) ic -= drivingDist(pBefore.lat, pBefore.lng, pAfter.lat, pAfter.lng);
                                 if (ic < bestInsertCost) { bestInsertCost = ic; bestJ = j; }
                             }
                             if (bestJ >= 0 && bestInsertCost < savings * 0.9) {
@@ -3915,12 +4210,12 @@
                     }
                 }
 
-                // ── Orientation check: ensure correct direction ──
-                // Arrival: first stop should be FARTHEST from camp, last stop NEAREST
-                // Dismissal: first stop should be NEAREST to camp, last stop FARTHEST
+                // ── Orientation check (using driving distances) ──
+                // Arrival: first stop FARTHEST from camp, last stop NEAREST
+                // Dismissal: first stop NEAREST to camp, last stop FARTHEST
                 if (orderedStops.length >= 2) {
-                    const firstDist = haversineMi(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
-                    const lastDist = haversineMi(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
+                    const firstDist = drivingDist(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
+                    const lastDist = drivingDist(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
                     if (isArrival && firstDist < lastDist) {
                         orderedStops.reverse();
                         console.log('[Go] Orient flip (arrival): reversed — first stop was closer than last');
@@ -4004,7 +4299,7 @@
                 const smallest = groups[0];
                 let nearestIdx = 1, nearestDist = Infinity;
                 for (let i = 1; i < groups.length; i++) {
-                    const d = haversineMi(smallest.centroidLat, smallest.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
+                    const d = drivingDist(smallest.centroidLat, smallest.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
                     if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
                 }
                 const target = groups[nearestIdx];
@@ -4106,7 +4401,7 @@
             for (let i = 0; i < r.stops.length - 1; i++) {
                 const a = r.stops[i], b = r.stops[i + 1];
                 if (!a.lat || !b.lat) continue;
-                if (haversineMi(a.lat, a.lng, b.lat, b.lng) > 0.057) continue;
+                if (drivingDistMi(a.lat, a.lng, b.lat, b.lng) > 0.057) continue;
                 const stA = normalizeStreet(parseAddress(a.address).street);
                 const stB = normalizeStreet(parseAddress(b.address).street);
                 if (!stA || !stB) continue;
@@ -4166,13 +4461,13 @@
                 for (let si = 0; si < overBus.stops.length; si++) {
                     const st = overBus.stops[si];
                     if (!st.lat) continue;
-                    const distFromOwn = haversineMi(st.lat, st.lng, overCentLat, overCentLng);
+                    const distFromOwn = drivingDistMi(st.lat, st.lng, overCentLat, overCentLng);
                     for (const r of allRoutes) {
                         if (r === overBus) continue;
                         if (r.camperCount + st.campers.length > r._cap) continue;
                         const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
                         const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                        const distToTarget = haversineMi(st.lat, st.lng, rLat, rLng);
+                        const distToTarget = drivingDistMi(st.lat, st.lng, rLat, rLng);
                         if (distToTarget > capMaxMoveMi) continue;
                         // Higher score = better candidate (far from own bus, close to target)
                         const score = distFromOwn - distToTarget;
@@ -4186,7 +4481,7 @@
             if (bestBus && bestStopIdx >= 0) {
                 // Whole-stop move — stop keeps its geographic location
                 const stopToMove = overBus.stops[bestStopIdx];
-                const moveDist = haversineMi(stopToMove.lat, stopToMove.lng, bestBus.stops.length ? bestBus.stops.reduce((s, x) => s + x.lat, 0) / bestBus.stops.length : campLat, bestBus.stops.length ? bestBus.stops.reduce((s, x) => s + x.lng, 0) / bestBus.stops.length : campLng);
+                const moveDist = drivingDistMi(stopToMove.lat, stopToMove.lng, bestBus.stops.length ? bestBus.stops.reduce((s, x) => s + x.lat, 0) / bestBus.stops.length : campLat, bestBus.stops.length ? bestBus.stops.reduce((s, x) => s + x.lng, 0) / bestBus.stops.length : campLng);
                 console.log('[Go]   Cap move: ' + stopToMove.campers.length + ' kids (' + stopToMove.address + ') from ' + overBus.busName + ' → ' + bestBus.busName + ' (' + moveDist.toFixed(2) + 'mi, boundary score ' + bestScore.toFixed(2) + ')');
                 overBus.stops.splice(bestStopIdx, 1);
                 overBus.camperCount -= stopToMove.campers.length;
@@ -4205,12 +4500,12 @@
                     for (let si = 0; si < overBus.stops.length; si++) {
                         const st = overBus.stops[si];
                         if (!st.lat || st.campers.length <= 1) continue;
-                        const distFromOwn = haversineMi(st.lat, st.lng, overCentLat, overCentLng);
+                        const distFromOwn = drivingDistMi(st.lat, st.lng, overCentLat, overCentLng);
                         for (const r of allRoutes) {
                             if (r === overBus || r.camperCount >= r._cap) continue;
                             const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
                             const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                            const distToTarget = haversineMi(st.lat, st.lng, rLat, rLng);
+                            const distToTarget = drivingDistMi(st.lat, st.lng, rLat, rLng);
                             if (distToTarget > capMaxMoveMi) continue;
                             const score = distFromOwn - distToTarget;
                             if (score > splitScore) { splitScore = score; splitStopIdx = si; splitBus = r; }
@@ -4230,7 +4525,7 @@
                 const movedCampers = stopToSplit.campers.splice(0, toMove);
                 overBus.camperCount -= toMove;
                 // Create a NEW stop on receiving bus at the SAME location — kids stay near their home
-                const splitDist = haversineMi(stopToSplit.lat, stopToSplit.lng, splitBus.stops.length ? splitBus.stops.reduce((s, x) => s + x.lat, 0) / splitBus.stops.length : campLat, splitBus.stops.length ? splitBus.stops.reduce((s, x) => s + x.lng, 0) / splitBus.stops.length : campLng);
+                const splitDist = drivingDistMi(stopToSplit.lat, stopToSplit.lng, splitBus.stops.length ? splitBus.stops.reduce((s, x) => s + x.lat, 0) / splitBus.stops.length : campLat, splitBus.stops.length ? splitBus.stops.reduce((s, x) => s + x.lng, 0) / splitBus.stops.length : campLng);
                 console.log('[Go]   Cap split: ' + toMove + ' kids from ' + stopToSplit.address + ' → new stop on ' + splitBus.busName + ' (' + splitDist.toFixed(2) + 'mi)');
                 cheapestInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToSplit.address, lat: stopToSplit.lat, lng: stopToSplit.lng });
                 splitBus.camperCount += toMove;
@@ -4266,11 +4561,11 @@
                 matrix = await fetchDistanceMatrix(coords, campLat, campLng);
             } catch (_) {}
 
-            // Drive time helper: matrix-based or haversine fallback
+            // Drive time helper: matrix-based or driving cache fallback
             function driveSec(fromIdx, toIdx) {
                 if (matrix?.[fromIdx]?.[toIdx] != null && matrix[fromIdx][toIdx] >= 0) return matrix[fromIdx][toIdx];
                 const a = coords[fromIdx], b = coords[toIdx];
-                return haversineMi(a.lat, a.lng, b.lat, b.lng) * 3600 / (D.setup.avgSpeed || 25);
+                return drivingDist(a.lat, a.lng, b.lat, b.lng);
             }
 
             // Find starting point
@@ -4596,10 +4891,24 @@
         const specialStops = route.stops.filter(s => s.isMonitor || s.isCounselor);
         const nn = stops.length; if (nn < 2) { toast('Not enough stops'); return; }
 
-        // ── Try Mapbox Optimization API first ──
+        // ── Try GraphHopper first (up to 30 stops) ──
+        const ghResult = await solveWithGraphHopper(stops, { busId, capacity: 999, name: route.busName }, campLat, campLng, isArrival, reoptNeedsReturn);
+        if (ghResult) {
+            route.stops = [...ghResult.map((s, i) => ({ ...s, stopNum: i + 1 })), ...specialStops];
+            route.stops.forEach((s, i) => { s.stopNum = i + 1; });
+            route.camperCount = route.stops.reduce((s, st) => s + st.campers.length, 0);
+            D.savedRoutes[shiftIdx ?? 0].routes[D.savedRoutes[shiftIdx ?? 0].routes.indexOf(route)] = route;
+            save();
+            _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
+            renderRouteResults(applyOverrides(D.savedRoutes));
+            toast(route.busName + ' re-optimized (GraphHopper)');
+            return;
+        }
+
+        // ── Try Mapbox Optimization API ──
         let optimizedOrder = null;
         let matrix = null;
-        const mbTok = D.setup.mapboxToken || _PLATFORM_KEYS.mapbox;
+        const mbTok = getMBToken();
 
         if (nn <= 11 && mbTok) {
             // Build coords for Mapbox Optimize
@@ -4642,9 +4951,9 @@
                 if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
                 const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
                 const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
-                return (haversineMi(a.lat, a.lng, b.lat, b.lng) / (D.setup.avgSpeed || 25)) * 3600;
+                return drivingDist(a.lat, a.lng, b.lat, b.lng);
             }
-            const campDists = []; for (let i = 0; i < nn; i++) campDists[i] = haversineMi(campLat, campLng, stops[i].lat, stops[i].lng);
+            const campDists = []; for (let i = 0; i < nn; i++) campDists[i] = drivingDist(campLat, campLng, stops[i].lat, stops[i].lng);
             function tourCost(tour) {
                 let c = 0; if (startsAtCamp) c += dist(0, tour[0] + 1);
                 for (let i = 0; i < tour.length - 1; i++) {
@@ -4677,8 +4986,8 @@
 
             // Orient: reverse if pointing wrong direction
             if (newStops.length >= 2) {
-                const fd = haversineMi(campLat, campLng, newStops[0].lat, newStops[0].lng);
-                const ld = haversineMi(campLat, campLng, newStops[newStops.length - 1].lat, newStops[newStops.length - 1].lng);
+                const fd = drivingDist(campLat, campLng, newStops[0].lat, newStops[0].lng);
+                const ld = drivingDist(campLat, campLng, newStops[newStops.length - 1].lat, newStops[newStops.length - 1].lng);
                 if (isArrival && fd < ld) newStops.reverse();
                 if (!isArrival && fd > ld) newStops.reverse();
             }
@@ -4693,8 +5002,8 @@
         const avgStopMin = D.setup.avgStopTime || 2;
         const avgSpeedMph = D.setup.avgSpeed || 25;
         const timeMin = parseTime(sr.shift.departureTime || (isArrival ? '08:00' : '16:00'));
-        function driveMin(a, b) { if (matrix && a._matrixIdx != null && b._matrixIdx != null) { const v = matrix[a._matrixIdx]?.[b._matrixIdx]; if (v != null && v >= 0) return v / 60; } if (a.lat && b.lat) return (haversineMi(a.lat, a.lng, b.lat, b.lng) / avgSpeedMph) * 60; return 3; }
-        function campToStopMin(s) { if (matrix && s._matrixIdx != null) { const v = matrix[0]?.[s._matrixIdx]; if (v != null && v >= 0) return v / 60; } if (s.lat) return (haversineMi(campLat, campLng, s.lat, s.lng) / avgSpeedMph) * 60; return 15; }
+        function driveMin(a, b) { if (matrix && a._matrixIdx != null && b._matrixIdx != null) { const v = matrix[a._matrixIdx]?.[b._matrixIdx]; if (v != null && v >= 0) return v / 60; } if (a.lat && b.lat) return drivingDist(a.lat, a.lng, b.lat, b.lng) / 60; return 3; }
+        function campToStopMin(s) { if (matrix && s._matrixIdx != null) { const v = matrix[0]?.[s._matrixIdx]; if (v != null && v >= 0) return v / 60; } if (s.lat) return drivingDist(campLat, campLng, s.lat, s.lng) / 60; return 15; }
 
         const rStops = route.stops.filter(s => !s.isMonitor && !s.isCounselor);
         if (isArrival) {
@@ -4840,7 +5149,7 @@
             let minDist = Infinity;
             for (let j = 0; j < campers.length; j++) {
                 if (i === j) continue;
-                const d = haversineMi(campers[i].lat, campers[i].lng, campers[j].lat, campers[j].lng);
+                const d = drivingDistMi(campers[i].lat, campers[i].lng, campers[j].lat, campers[j].lng);
                 if (d < minDist) minDist = d;
             }
             if (minDist < Infinity) nnDists.push(minDist);
