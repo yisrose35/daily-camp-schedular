@@ -1579,6 +1579,7 @@
                 var updated = [];
                 for (var i = 0; i < original.length; i++) {
                     var win = original[i];
+                    if (!win || win.start == null || win.end == null) continue;
                     var cur = win.start;
                     var ol = claimed.filter(function(c) { return c.startMin < win.end && c.endMin > win.start; })
                         .sort(function(a, b) { return a.startMin - b.startMin; });
@@ -1595,6 +1596,7 @@
             function findTimeInRange(fieldName, bunk, grade, dur, freeWindows, rangeStart, rangeEnd, specialName) {
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
+                    if (!win || win.start == null) continue;
                     var effStart = Math.max(win.start, rangeStart);
                     var effEnd = Math.min(win.end, rangeEnd);
                     if (effEnd - effStart < dur) continue;
@@ -1611,6 +1613,7 @@
             function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName) {
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
+                    if (!win || win.start == null) continue;
                     if (win.duration < dur) continue;
                     for (var t = win.start; t + dur <= win.end; t += 5) {
                         if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade)) continue;
@@ -2746,6 +2749,7 @@
             // ─── Helper: Find time in a field's free windows ─────────
             function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows) {
                 for (const win of freeWindows) {
+                    if (!win || win.start == null) continue;
                     if (win.duration < duration) continue;
                     for (let t = win.start; t + duration <= win.end; t += 5) {
                         if (isFieldAvailable(fieldName, t, t + duration, bunk, grade))
@@ -2758,6 +2762,7 @@
             // ─── Helper: Find any free window ────────────────────────
             function findAnyWindowGP(freeWindows, duration) {
                 for (const win of freeWindows) {
+                    if (!win || win.start == null) continue;
                     if (win.duration >= duration)
                         return { startMin: win.start, endMin: win.start + duration };
                 }
