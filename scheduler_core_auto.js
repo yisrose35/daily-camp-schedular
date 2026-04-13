@@ -4134,13 +4134,53 @@
                         vTmpl[di+1].startMin = dBlk.startMin;
                         vTmpl.splice(di, 1);
                     } else {
-                        // ★ v10.2: Between two fixed walls — keep sport/slot blocks instead of deleting.
-                        // A short activity is better than an empty gap that can never be filled.
+                        // Between two fixed walls — try to force dMin by extending into
+                        // the smaller adjacent gap (even if it overlaps a wall slightly),
+                        // then re-resolve. If truly impossible, merge into the nearest
+                        // non-fixed neighbor anywhere in the timeline.
+                        var dFixed = false;
                         if (['sport', 'slot'].includes(dType)) {
-                            dBlk._belowDMin = true;
-                        } else {
-                            // For swim/snack/special: removing is correct — they should be re-placed
-                            // by self-healing with proper duration. Keeping them undersized is worse.
+                            // ★ v14.0: Try to extend to dMin even between walls.
+                            // If the gap between walls IS the block, extend to fill the
+                            // entire wall-to-wall space (it's the best we can do).
+                            var wallLeft = (di > 0) ? vTmpl[di-1].endMin : vMeta.gradeStart;
+                            var wallRight = (di < vTmpl.length - 1) ? vTmpl[di+1].startMin : vMeta.gradeEnd;
+                            var wallGap = wallRight - wallLeft;
+                            if (wallGap >= dMinReq) {
+                                // There IS enough space between walls — center the block
+                                dBlk.startMin = wallLeft;
+                                dBlk.endMin = wallLeft + Math.min(dMinReq, dMaxLimit);
+                                dBlk.endMin = Math.round(dBlk.endMin / 5) * 5;
+                                dFixed = true;
+                            } else if (wallGap > 0) {
+                                // Wall gap < dMin — fill the entire gap and accept it
+                                dBlk.startMin = wallLeft;
+                                dBlk.endMin = wallRight;
+                                // If still < ABSOLUTE_FLOOR (5min), merge into nearest non-fixed
+                                if (wallGap < 5) {
+                                    // Find any non-fixed neighbor in the whole timeline
+                                    for (var dmi = 0; dmi < vTmpl.length; dmi++) {
+                                        if (dmi === di || vTmpl[dmi]._fixed) continue;
+                                        if (['sport','slot'].includes((vTmpl[dmi].type||'').toLowerCase())) {
+                                            var nmMax = vTmpl[dmi].dMax || vMeta.sportCeiling;
+                                            if ((vTmpl[dmi].endMin - vTmpl[dmi].startMin) + dDur <= nmMax) {
+                                                // Absorb: give time to this neighbor
+                                                if (vTmpl[dmi].endMin === dBlk.startMin) vTmpl[dmi].endMin = dBlk.endMin;
+                                                else if (vTmpl[dmi].startMin === dBlk.endMin) vTmpl[dmi].startMin = dBlk.startMin;
+                                                vTmpl.splice(di, 1);
+                                                dFixed = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (!dFixed) { vTmpl.splice(di, 1); dFixed = true; }
+                                } else {
+                                    dFixed = true; // Kept at wall-to-wall size
+                                }
+                            }
+                        }
+                        if (!dFixed) {
+                            // For swim/snack/special or truly unfixable: remove
                             vTmpl.splice(di, 1);
                         }
                     }
@@ -4735,11 +4775,14 @@
                     if (extended) continue;
                     // Create filler slot
                     if (fgDur >= 5) {
+                        // ★ v14.0: Set dMin to actual gap size (we can't make it bigger),
+                        // but set dMax to sportCeiling so rebalancer can extend it later.
                         fcTl.push({
                             startMin: fgGap.start, endMin: fgGap.end,
                             type: 'slot', event: 'General Activity Slot',
                             layer: fcMeta.sportLayer, field: null,
-                            dMin: fgDur, dMax: fgDur, _source: 'gap-fill', _final: true,
+                            dMin: fgDur, dMax: fcMeta.sportCeiling || 60,
+                            _source: 'gap-fill', _final: true,
                             _sportFallbacks: fcMeta.priorityList ? fcMeta.priorityList.map(function(s) { return s.name; }) : []
                         });
                     }
@@ -4810,11 +4853,13 @@
 
                     // Strategy 3: Create a minimal sport/slot block for the remaining gap
                     if (zgDur >= 5) {
+                        // ★ v14.0: dMin = actual gap size (can't extend past walls),
+                        // dMax = sportCeiling so rebalancer can grow it if space opens.
                         var zgBlk = makeBlock({
                             startMin: zgGap.start, endMin: zgGap.end,
                             type: 'slot', event: 'General Activity Slot',
                             layer: zgMeta.sportLayer, field: null,
-                            dMin: Math.min(zgDur, zgMeta.fillMinDur || 20), dMax: zgMeta.sportCeiling || 60,
+                            dMin: zgDur, dMax: zgMeta.sportCeiling || 60,
                             _source: 'zero-gap', _final: true
                         });
                         if (zgBlk) zgTmpl.push(zgBlk);
@@ -5054,14 +5099,16 @@
                         if (eDur <= 0) { eTmpl.splice(ej, 1); ej--; continue; }
                     }
 
-                    // ★ v11.3: Fix dMin violations for ALL types
+                    // ★ v11.3 + v14.0: Fix dMin violations for ALL types
                     if (eDur < eDMin) {
                         var eNextStart = (ej < eTmpl.length - 1) ? eTmpl[ej+1].startMin : (eMeta.gradeEnd || 960);
                         var eAvailR = eNextStart - eBlk.endMin;
+                        var eFixed = false;
                         if (eDur + eAvailR >= eDMin) {
                             eBlk.endMin = eBlk.startMin + Math.min(eDMin, eDMax);
                             eBlk.endMin = Math.round(eBlk.endMin / 5) * 5;
                             enforceFixCount++;
+                            eFixed = true;
                             log('[Phase3] ENFORCE: extended ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + (eBlk.endMin - eBlk.startMin) + 'min (dMin)');
                         } else {
                             var ePrevEnd = (ej > 0) ? eTmpl[ej-1].endMin : (eMeta.gradeStart || 540);
@@ -5070,7 +5117,37 @@
                                 eBlk.startMin = eBlk.endMin - Math.min(eDMin, eDMax);
                                 eBlk.startMin = Math.round(eBlk.startMin / 5) * 5;
                                 enforceFixCount++;
+                                eFixed = true;
                                 log('[Phase3] ENFORCE: extended-left ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + (eBlk.endMin - eBlk.startMin) + 'min (dMin)');
+                            }
+                        }
+                        // ★ v14.0: If neither extension worked, merge into nearest sport/slot neighbor
+                        if (!eFixed && ['sport', 'slot'].includes(eType)) {
+                            var eMerged = false;
+                            // Try merging into previous sport/slot
+                            if (ej > 0 && ['sport','slot'].includes((eTmpl[ej-1].type||'').toLowerCase())) {
+                                var ePrevMax = eTmpl[ej-1].dMax || (TYPE_CEILINGS[(eTmpl[ej-1].type||'').toLowerCase()] || 60);
+                                if ((eTmpl[ej-1].endMin - eTmpl[ej-1].startMin) + eDur <= ePrevMax) {
+                                    eTmpl[ej-1].endMin = eBlk.endMin;
+                                    eTmpl.splice(ej, 1); ej--;
+                                    eMerged = true;
+                                    enforceFixCount++;
+                                    log('[Phase3] ENFORCE: merged sub-dMin ' + eType + ' into prev for bunk ' + eBunk);
+                                }
+                            }
+                            // Try merging into next sport/slot
+                            if (!eMerged && ej < eTmpl.length - 1 && ['sport','slot'].includes((eTmpl[ej+1].type||'').toLowerCase())) {
+                                var eNextMax = eTmpl[ej+1].dMax || (TYPE_CEILINGS[(eTmpl[ej+1].type||'').toLowerCase()] || 60);
+                                if ((eTmpl[ej+1].endMin - eTmpl[ej+1].startMin) + eDur <= eNextMax) {
+                                    eTmpl[ej+1].startMin = eBlk.startMin;
+                                    eTmpl.splice(ej, 1); ej--;
+                                    eMerged = true;
+                                    enforceFixCount++;
+                                    log('[Phase3] ENFORCE: merged sub-dMin ' + eType + ' into next for bunk ' + eBunk);
+                                }
+                            }
+                            if (!eMerged) {
+                                warn('[Phase3] ENFORCE: could not fix sub-dMin ' + eType + ' (' + eDur + '<' + eDMin + ') for bunk ' + eBunk + ' — trapped between walls');
                             }
                         }
                     }
