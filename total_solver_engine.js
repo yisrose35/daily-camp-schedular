@@ -1530,6 +1530,7 @@ else penalty += 200;
             }
             if (!assigned) results.push({blockIdx:bo.bi,candIdx:-1,pick:{field:"Free",sport:null,_activity:"Free"},cost:100000});
         }
+        }
         return results;
     }
 
@@ -1621,7 +1622,6 @@ else penalty += 200;
             var bi=freeIdx[idx],blk=activityBlocks[bi],bunk=blk.bunk,bDiv=blk.divName||'',sM=blk.startTime,eM=blk.endTime,slots=blk.slots||[];
             if (sM===undefined||eM===undefined) continue; S._todayCache.clear();
             var fresh=[];
-            for (var ci=0;ci<allCands.length;ci++) { var c=allCands[ci]; if (disabled.indexOf(c.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue; var _cLoc=window.getLocationForActivity?.(c.activityName||c.field)||window.getPinnedTileDefaultLocation?.(c.activityName||c.field); if (_cLoc&&typeof _cLoc==='string'&&window.GlobalFieldLocks?.isFieldLocked(_cLoc,slots)) continue; if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
             for (var ci=0;ci<allCands.length;ci++) {
                 var c=allCands[ci];
                 if (disabled.indexOf(c.field)!==-1) continue;

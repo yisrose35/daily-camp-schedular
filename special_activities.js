@@ -169,8 +169,6 @@ function validateSpecialActivity(activity, activityName) {
        maxUsagePerGrade: (activity.maxUsagePerGrade && typeof activity.maxUsagePerGrade === 'object')
             ? activity.maxUsagePerGrade : {},
         availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
-            ? activity.availableDays : []
-       availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
             ? activity.availableDays : [],
         duration: (activity.duration != null && parseInt(activity.duration, 10) > 0)
             ? parseInt(activity.duration, 10) : null

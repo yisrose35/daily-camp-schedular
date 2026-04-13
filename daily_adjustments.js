@@ -3027,8 +3027,6 @@ function renderToolbar() {
   };
 
   document.getElementById('da-clear-btn').onclick = async () => {
-    const ok = await daShowConfirm('Clear all blocks?', { danger: true, confirmText: 'Clear All' });
- document.getElementById('da-clear-btn').onclick = async () => {
     const ok = await daShowConfirm(isAutoMode ? 'Clear all layers?' : 'Clear all blocks?', { danger: true, confirmText: 'Clear All' });
     if (ok) {
       if (isAutoMode) {
