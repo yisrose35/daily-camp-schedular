@@ -1585,7 +1585,10 @@
             const suggestion = m._suggestedBus
                 ? '<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">Suggested: <strong>' + esc(m._suggestedBus) + '</strong>, Stop ' + m._suggestedStopNum + ' (' + esc(m._suggestedStop) + ') — ' + (m._walkFt || '?') + 'ft walk</div>'
                 : '';
-            return '<tr><td style="font-weight:600">' + esc(m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—') + suggestion + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
+            const idCol = m._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + m._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
+            const lastCol = '<td>' + esc(m.lastName || '') + '</td>';
+            const firstCol = '<td style="font-weight:600">' + esc(m.firstName || m.name) + '</td>';
+            return '<tr>' + idCol + lastCol + firstCol + '<td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—') + suggestion + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
         }).join('');
     }
     function renderCounselors() {
@@ -1601,11 +1604,31 @@
             const suggestion = (mode !== 'stop' && c._suggestedBus)
                 ? '<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">Suggested: <strong>' + esc(c._suggestedBus) + '</strong>, Stop ' + c._suggestedStopNum + ' (' + esc(c._suggestedStop) + ') — ' + (c._walkFt || '?') + 'ft walk</div>'
                 : '';
-            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')"><td style="font-weight:600">' + esc(c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestion + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
+            const idCol = c._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + c._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
+            const lastCol = '<td>' + esc(c.lastName || '') + '</td>';
+            const firstCol = '<td style="font-weight:600">' + esc(c.firstName || c.name) + '</td>';
+            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">' + idCol + lastCol + firstCol + '<td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestion + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
         }).join('');
     }
     function openMonitorModal(eId) { _editMonitorId = eId || null; document.getElementById('monitorModalTitle').textContent = eId ? 'Edit Monitor' : 'Add Monitor'; updateBusSelects(); const m = eId ? D.monitors.find(x => x.id === eId) : null; document.getElementById('monitorName').value = m?.name || ''; document.getElementById('monitorAddress').value = m?.address || ''; document.getElementById('monitorPhone').value = m?.phone || ''; document.getElementById('monitorBusAssign').value = m?.assignedBus || ''; openModal('monitorModal'); document.getElementById('monitorName').focus(); }
-    function saveMonitor() { const n = document.getElementById('monitorName')?.value.trim(); if (!n) { toast('Enter name', 'error'); return; } const a = document.getElementById('monitorAddress')?.value.trim(), p = document.getElementById('monitorPhone')?.value.trim(), b = document.getElementById('monitorBusAssign')?.value || ''; if (_editMonitorId) { const m = D.monitors.find(x => x.id === _editMonitorId); if (m) { m.name = n; m.address = a; m.phone = p; m.assignedBus = b; } } else D.monitors.push({ id: uid(), name: n, address: a, phone: p, assignedBus: b }); save(); closeModal('monitorModal'); renderStaff(); renderFleet(); updateStats(); toast(_editMonitorId ? 'Updated' : 'Monitor added'); }
+    function saveMonitor() {
+        const n = document.getElementById('monitorName')?.value.trim();
+        if (!n) { toast('Enter name', 'error'); return; }
+        const a = document.getElementById('monitorAddress')?.value.trim();
+        const p = document.getElementById('monitorPhone')?.value.trim();
+        const b = document.getElementById('monitorBusAssign')?.value || '';
+        // Split name into first/last
+        const parts = n.split(/\s+/);
+        const firstName = parts[0] || '';
+        const lastName = parts.length > 1 ? parts.slice(1).join(' ') : '';
+        if (_editMonitorId) {
+            const m = D.monitors.find(x => x.id === _editMonitorId);
+            if (m) { m.name = n; m.firstName = firstName; m.lastName = lastName; m.address = a; m.phone = p; m.assignedBus = b; }
+        } else {
+            D.monitors.push({ id: uid(), name: n, firstName, lastName, address: a, phone: p, assignedBus: b });
+        }
+        save(); closeModal('monitorModal'); renderStaff(); renderFleet(); updateStats(); toast(_editMonitorId ? 'Updated' : 'Monitor added');
+    }
     function editMonitor(id) { openMonitorModal(id); }
     function deleteMonitor(id) { const m = D.monitors.find(x => x.id === id); if (!m || !confirm('Delete "' + m.name + '"?')) return; D.monitors = D.monitors.filter(x => x.id !== id); save(); renderStaff(); renderFleet(); updateStats(); toast('Deleted'); }
     function openCounselorModal(eId) {
@@ -1633,17 +1656,20 @@
         const a = document.getElementById('counselorAddress')?.value.trim();
         const b = document.getElementById('counselorBunk')?.value.trim();
         const ns = document.getElementById('counselorNeedsStop')?.value || 'no';
+        // Split name into first/last
+        const parts = n.split(/\s+/);
+        const firstName = parts[0] || '';
+        const lastName = parts.length > 1 ? parts.slice(1).join(' ') : '';
         let bus = '';
         if (ns === 'no') {
             const assignMode = document.getElementById('counselorBusAssign')?.value || '';
             if (assignMode === '__manual__') bus = document.getElementById('counselorBusManual')?.value || '';
-            // else empty = auto-assign later
         }
         if (_editCounselorId) {
             const c = D.counselors.find(x => x.id === _editCounselorId);
-            if (c) { c.name = n; c.address = a; c.bunk = b; c.needsStop = ns; c.assignedBus = bus; c.assignMode = ns === 'yes' ? 'stop' : bus ? 'manual' : 'auto'; }
+            if (c) { c.name = n; c.firstName = firstName; c.lastName = lastName; c.address = a; c.bunk = b; c.needsStop = ns; c.assignedBus = bus; c.assignMode = ns === 'yes' ? 'stop' : bus ? 'manual' : 'auto'; }
         } else {
-            D.counselors.push({ id: uid(), name: n, address: a, bunk: b, needsStop: ns, assignedBus: bus, assignMode: ns === 'yes' ? 'stop' : bus ? 'manual' : 'auto' });
+            D.counselors.push({ id: uid(), name: n, firstName, lastName, address: a, bunk: b, needsStop: ns, assignedBus: bus, assignMode: ns === 'yes' ? 'stop' : bus ? 'manual' : 'auto' });
         }
         save(); closeModal('counselorModal'); renderStaff(); renderFleet(); updateStats(); toast(_editCounselorId ? 'Updated' : 'Counselor added');
     }
@@ -2274,9 +2300,11 @@
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
         // Always download a clean template with 2 example rows
-        let csv = '\uFEFFCamper ID,Last Name,First Name,Division,Grade,Bunk,Street Address,City,State,ZIP\n';
-        csv += '"0001","Smith","Sarah","Juniors","1st Grade","1A","123 Main Street","Anytown","NY","11559"\n';
-        csv += '"0002","Goldberg","Moshe","Seniors","4th Grade","4B","456 Oak Avenue","Woodmere","NY","11598"\n';
+        let csv = '\uFEFFID,Last Name,First Name,Role,Division,Grade,Bunk,Needs Stop,Street Address,City,State,ZIP\n';
+        csv += '"0001","Smith","Sarah","Camper","Juniors","1st Grade","1A","","123 Main Street","Anytown","NY","11559"\n';
+        csv += '"0002","Goldberg","Moshe","Camper","Seniors","4th Grade","4B","","456 Oak Avenue","Woodmere","NY","11598"\n';
+        csv += '"0003","Cohen","David","Staff","","","","No","789 Elm Street","Cedarhurst","NY","11516"\n';
+        csv += '"0004","Klein","Rachel","Staff","Freshies","","","Yes","321 Pine Road","Lawrence","NY","11559"\n';
         const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
     function importAddressCsv() {
@@ -2344,6 +2372,8 @@
         const zi = hdr.findIndex(h => h === 'zip' || h === 'zip code' || h === 'zipcode' || h.includes('zip'));
         const tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h.includes('pickup') || h.includes('carpool'));
         const rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));
+        const roi = hdr.findIndex(h => h === 'role' || h === 'type' || h === 'person type');
+        const nsi = hdr.findIndex(h => h === 'needs stop' || h === 'needsstop' || h === 'needs_stop' || h === 'stop');
 
         // Must have either (first+last) or (full name), plus an address
         const hasFirstLast = fni >= 0 && lni >= 0;
@@ -2358,66 +2388,114 @@
         _generatedRoutes = null;
         _detectedRegions = null;
         _slicedZones = null;
-        let up = 0;
+        // Clear staff imported from CSV (keep manually added ones)
+        D.counselors = D.counselors.filter(c => !c._fromCsv);
+        D.monitors = D.monitors.filter(m => !m._fromCsv);
+        let camperCount = 0, staffCount = 0;
 
         for (let i = 1; i < lines.length; i++) {
             const cols = parseLine(lines[i]);
 
             // Build full name
-            let name = '';
+            let firstName = '', lastName = '', name = '';
             if (hasFirstLast) {
-                const first = (cols[fni] || '').trim();
-                const last = (cols[lni] || '').trim();
-                if (!first && !last) continue;
-                name = first + (last ? ' ' + last : '');
+                firstName = (cols[fni] || '').trim();
+                lastName = (cols[lni] || '').trim();
+                if (!firstName && !lastName) continue;
+                name = firstName + (lastName ? ' ' + lastName : '');
             } else {
                 name = (cols[ni] || '').trim();
                 if (!name) continue;
+                // Try to split "First Last" for staff records
+                const parts = name.split(/\s+/);
+                if (parts.length >= 2) { firstName = parts[0]; lastName = parts.slice(1).join(' '); }
+                else { firstName = name; lastName = ''; }
             }
-
-            // Try to match existing roster name (case-insensitive)
-            const meRoster = readCampistrySettings()?.app1?.camperRoster || {};
-            const rn = Object.keys(meRoster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
 
             const street = (cols[si] || '').trim();
             if (!street) continue;
 
-            const camperId = idi >= 0 ? (cols[idi] || '').trim() : '';
+            const personId = idi >= 0 ? (cols[idi] || '').trim() : '';
             const division = divi >= 0 ? (cols[divi] || '').trim() : '';
             const grade = gri >= 0 ? (cols[gri] || '').trim() : '';
             const bunk = bki >= 0 ? (cols[bki] || '').trim() : '';
             const transport = tri >= 0 ? (cols[tri] || '').trim().toLowerCase() : 'bus';
             const rideWith = rwi >= 0 ? (cols[rwi] || '').trim() : '';
+            const role = roi >= 0 ? (cols[roi] || '').trim().toLowerCase() : 'camper';
+            const needsStop = nsi >= 0 ? (cols[nsi] || '').trim().toLowerCase() : '';
 
-            D.addresses[rn] = {
-                street,
-                city: ci >= 0 ? (cols[ci] || '').trim() : '',
-                state: sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY',
-                zip: zi >= 0 ? (cols[zi] || '').trim() : '',
-                lat: null, lng: null, geocoded: false,
-                transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus',
-                rideWith: rideWith,
-                _camperId: camperId ? parseInt(camperId) : 0,
-                _division: division,
-                _grade: grade,
-                _bunk: bunk
-            };
+            const city = ci >= 0 ? (cols[ci] || '').trim() : '';
+            const state = sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY';
+            const zip = zi >= 0 ? (cols[zi] || '').trim() : '';
+            const fullAddress = [street, city, state, zip].filter(Boolean).join(', ');
 
-            // Build standalone roster entry (for when Me has no data)
-            _goStandaloneRoster[rn] = {
-                camperId: camperId ? parseInt(camperId) : i,
-                division: division, grade: grade, bunk: bunk
-            };
+            // ── Route based on Role column ──
+            if (role === 'staff' || role === 'counselor' || role === 'monitor') {
+                // Add as staff member (counselor by default, monitor if specified)
+                const isMonitor = role === 'monitor';
+                const wantsStop = needsStop === 'yes' || needsStop === 'y' || needsStop === 'true';
 
-            up++;
+                if (isMonitor) {
+                    D.monitors.push({
+                        id: uid(), name, firstName, lastName,
+                        address: fullAddress, phone: '',
+                        assignedBus: '', _fromCsv: true,
+                        _personId: personId ? parseInt(personId) : 0
+                    });
+                } else {
+                    D.counselors.push({
+                        id: uid(), name, firstName, lastName,
+                        address: fullAddress, bunk: bunk || division,
+                        needsStop: wantsStop ? 'yes' : 'no',
+                        assignedBus: '', assignMode: wantsStop ? 'stop' : 'auto',
+                        _fromCsv: true,
+                        _personId: personId ? parseInt(personId) : 0
+                    });
+                }
+
+                // Staff with stops also need an address entry for geocoding
+                if (wantsStop) {
+                    D.addresses[name] = {
+                        street, city, state, zip,
+                        lat: null, lng: null, geocoded: false,
+                        transport: 'bus', rideWith: '',
+                        _camperId: personId ? parseInt(personId) : 0,
+                        _division: division, _grade: '', _bunk: bunk,
+                        _isStaff: true
+                    };
+                }
+
+                staffCount++;
+                console.log('[Go] CSV: ' + name + ' → ' + (isMonitor ? 'monitor' : 'counselor') + (wantsStop ? ' (needs stop)' : ''));
+            } else {
+                // Default: treat as camper
+                const meRoster = readCampistrySettings()?.app1?.camperRoster || {};
+                const rn = Object.keys(meRoster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
+
+                D.addresses[rn] = {
+                    street, city, state, zip,
+                    lat: null, lng: null, geocoded: false,
+                    transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus',
+                    rideWith: rideWith,
+                    _camperId: personId ? parseInt(personId) : 0,
+                    _division: division, _grade: grade, _bunk: bunk
+                };
+
+                _goStandaloneRoster[rn] = {
+                    camperId: personId ? parseInt(personId) : i,
+                    division: division, grade: grade, bunk: bunk
+                };
+
+                camperCount++;
+            }
         }
-        save(); renderAddresses(); updateStats();
-        const meCount = Object.keys(readCampistrySettings()?.app1?.camperRoster || {}).length;
-        if (meCount === 0 && up > 0) {
-            console.log('[Go] Standalone mode: ' + up + ' campers imported directly into Go');
-            toast(up + ' campers imported (standalone mode)');
+        save(); renderAddresses(); renderStaff(); updateStats();
+        const total = camperCount + staffCount;
+        if (staffCount > 0) {
+            toast(camperCount + ' campers + ' + staffCount + ' staff imported (' + total + ' total)');
+            console.log('[Go] CSV import: ' + camperCount + ' campers, ' + staffCount + ' staff');
         } else {
-            toast(up + ' addresses imported');
+            toast(camperCount + ' addresses imported');
         }
     }
     function parseLine(line) { const r = []; let cur = '', inQ = false; for (let i = 0; i < line.length; i++) { const ch = line[i]; if (inQ) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; } else cur += ch; } else { if (ch === '"') inQ = true; else if (ch === ',' || ch === '\t') { r.push(cur); cur = ''; } else cur += ch; } } r.push(cur); return r; }
