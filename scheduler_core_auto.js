@@ -3280,7 +3280,7 @@
                                       field: need._customField || null,
                                       _assignedSpecial: need._assignedSpecial || null,
                                       _specialLocation: need._specialLocation || null },
-                                    tmpl, { auto: true })) continue;
+                                    tmpl, { mode: "auto" })) continue;
 
                                 // Score: dead gap penalty + LCV (how much flexibility remains for others)
                                 var lGap = pos - gap.start;
@@ -3303,7 +3303,7 @@
                                           field: need._customField || null,
                                           _assignedSpecial: need._assignedSpecial || null,
                                           _specialLocation: need._specialLocation || null },
-                                        tmpl, { auto: true });
+                                        tmpl, { mode: "auto" });
                                 }
                                 if (ok2) {
                                     var rG = gap.end - (endAligned + dur);
@@ -3704,7 +3704,7 @@
                         var ok = window.SchedulingRules.isCandidateAllowed(
                             { startMin: startMin, endMin: endMin, type: 'sport',
                               event: cand.name, field: cand.field },
-                            meta.template, { auto: true });
+                            meta.template, { mode: "auto" });
                         if (ok) return { name: cand.name, field: cand.field };
                     }
                     return null; // all candidates blocked by cooldown

@@ -484,7 +484,26 @@
         }
         
         console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear });
-        
+
+        // ★ Manual-mode cooldown check — soft confirm if the edit would violate a rule
+        if (!isClear && window.SchedulingRules && !editData._cooldownChecked) {
+            try {
+                const tmpl = window.SchedulingRules.buildTemplateFromBunkSlots(bunk, slots);
+                const candidate = {
+                    startMin: startMin, endMin: endMin,
+                    type: window.SchedulingRules.inferTypeFromActivity(activity),
+                    event: activity, field: location || null
+                };
+                const result = window.SchedulingRules.checkCandidateDetailed(candidate, tmpl, { mode: 'manual' });
+                if (!result.allowed) {
+                    const msg = result.violated.map(r => '• ' + window.SchedulingRules.describeRule(r)).join('\n');
+                    const proceed = window.confirm('This placement violates the following cooldown rule(s):\n\n' + msg + '\n\nPlace anyway?');
+                    if (!proceed) return;
+                    editData._cooldownChecked = true;
+                }
+            } catch (e) { console.warn('[PostEdit] cooldown check failed:', e); }
+        }
+
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
 

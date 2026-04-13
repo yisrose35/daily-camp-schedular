@@ -129,14 +129,17 @@ function blockMatchesDescriptor(block, desc) {
 
 // candidate : { startMin, endMin, type, event, field, _assignedSpecial, _specialLocation }
 // template  : array of blocks already placed on the bunk
-// opts      : reserved (auto flag still accepted but cooldowns always apply)
-function isCandidateAllowed(candidate, template, _opts) {
+// opts      : { mode: 'auto' | 'manual' }  — filters rules by their `mode` field
+function isCandidateAllowed(candidate, template, opts) {
+    const mode = (opts && opts.mode) || 'auto';
     const rules = getCooldownRules();
     if (!rules.length || !candidate) return true;
     template = template || [];
     for (let i = 0; i < rules.length; i++) {
         const r = rules[i];
         if (!r.target || !r.reference) continue;
+        const rMode = r.mode || 'both';
+        if (rMode !== 'both' && rMode !== mode) continue;
         if (!blockMatchesDescriptor(candidate, r.target)) continue;
         const minutes = Math.max(0, parseInt(r.minutes) || 0);
         if (minutes === 0) continue;
@@ -182,6 +185,94 @@ function findForbiddenRanges(targetDescriptor, template, _opts) {
         }
     }
     return out;
+}
+
+// Best-effort classify an activity name into a "type" bucket the rules engine
+// understands. Used when building a candidate from a manual edit.
+function inferTypeFromActivity(name) {
+    const a = String(name || '').toLowerCase().trim();
+    if (!a) return 'activity';
+    if (a === 'lunch') return 'lunch';
+    if (a === 'snack' || a === 'snacks') return 'snacks';
+    if (a === 'swim') return 'swim';
+    if (a === 'dismissal') return 'dismissal';
+    if (a === 'arrival') return 'arrival';
+    if (a === 'league') return 'league';
+    const sports = getSportNames().map(s => s.toLowerCase());
+    if (sports.indexOf(a) >= 0) return 'sport';
+    const specials = getSpecialActivityNames().map(s => s.toLowerCase());
+    if (specials.indexOf(a) >= 0) return 'special';
+    return 'activity';
+}
+
+// Build a minimal block template from window.scheduleAssignments[bunk] for
+// cooldown checks during manual edits. `excludeIdx` are slot indices being
+// overwritten by the candidate (so the rule doesn't compare against itself).
+function buildTemplateFromBunkSlots(bunk, excludeIdx) {
+    const slots = (window.scheduleAssignments && window.scheduleAssignments[bunk]) || [];
+    const times = window.unifiedTimes || [];
+    const excl = new Set(Array.isArray(excludeIdx) ? excludeIdx : []);
+    const blocks = [];
+    let current = null;
+    for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
+        const t = times[i];
+        if (excl.has(i) || !s || !s._activity || !t) { current = null; continue; }
+        const act = s._activity;
+        const loc = s.location || s.field || null;
+        const startMin = (typeof t.startMin === 'number') ? t.startMin
+                       : (typeof t.start === 'number') ? t.start : null;
+        const endMin = (typeof t.endMin === 'number') ? t.endMin
+                     : (typeof t.end === 'number') ? t.end : null;
+        if (startMin == null || endMin == null) { current = null; continue; }
+        if (current && current.event === act && current.endMin === startMin && current.field === loc) {
+            current.endMin = endMin;
+        } else {
+            current = { startMin, endMin, type: inferTypeFromActivity(act), event: act, field: loc };
+            blocks.push(current);
+        }
+    }
+    return blocks;
+}
+
+function describeRule(rule) {
+    if (!rule) return '';
+    const descName = (d) => d ? (d.kind === 'any' ? 'anything' : (d.value || d.kind)) : '';
+    const t = descName(rule.target);
+    const r = descName(rule.reference);
+    const timing = rule.timing === 'before' ? 'before' : rule.timing === 'after' ? 'after' : 'before or after';
+    return `Don't place "${t}" within ${rule.minutes || 0} min ${timing} "${r}"`;
+}
+
+// Check a candidate against manual-mode rules; return { allowed, violated: [rules] }
+function checkCandidateDetailed(candidate, template, opts) {
+    const mode = (opts && opts.mode) || 'auto';
+    const rules = getCooldownRules();
+    const violated = [];
+    if (!rules.length || !candidate) return { allowed: true, violated };
+    template = template || [];
+    for (let i = 0; i < rules.length; i++) {
+        const r = rules[i];
+        if (!r.target || !r.reference) continue;
+        const rMode = r.mode || 'both';
+        if (rMode !== 'both' && rMode !== mode) continue;
+        if (!blockMatchesDescriptor(candidate, r.target)) continue;
+        const minutes = Math.max(0, parseInt(r.minutes) || 0);
+        if (minutes === 0) continue;
+        let hit = false;
+        for (let j = 0; j < template.length; j++) {
+            const w = template[j];
+            if (!w || w === candidate) continue;
+            if (!blockMatchesDescriptor(w, r.reference)) continue;
+            const gapBefore = (w.startMin || 0) - (candidate.endMin || 0);
+            const gapAfter  = (candidate.startMin || 0) - (w.endMin || 0);
+            const timing = r.timing || 'both';
+            if ((timing === 'before' || timing === 'both') && gapBefore >= 0 && gapBefore < minutes) { hit = true; break; }
+            if ((timing === 'after'  || timing === 'both') && gapAfter  >= 0 && gapAfter  < minutes) { hit = true; break; }
+        }
+        if (hit) violated.push(r);
+    }
+    return { allowed: violated.length === 0, violated };
 }
 
 function descriptorCanMatch(ruleDesc, candidateDesc) {
@@ -275,23 +366,23 @@ function injectRulesStyles() {
             display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
         }
         .cd-fields {
-            display: grid; grid-template-columns: 1.2fr auto 1.2fr; gap: 14px;
+            display: grid; grid-template-columns: auto 1.2fr auto 1.2fr; gap: 14px;
             align-items: end;
         }
         .cd-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
         .cd-col .rules-select { width: 100%; }
-        .cd-arrow {
-            color: #CBD5E1; font-size: 1.3rem; padding-bottom: 8px; user-select: none;
-        }
+        .cd-col-mode .rules-select { min-width: 130px; }
         .cd-middle {
             display: flex; align-items: center; gap: 8px; padding-bottom: 2px;
             flex-wrap: wrap;
         }
         .cd-middle .rules-select { padding: 7px 10px; font-size: 0.86rem; }
         .cd-delete-wrap { padding-top: 22px; }
-        @media (max-width: 780px) {
+        @media (max-width: 900px) {
+            .cd-fields { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 560px) {
             .cd-fields { grid-template-columns: 1fr; }
-            .cd-arrow { display: none; }
         }
 
         /* Sports rules rows */
@@ -532,11 +623,11 @@ function renderFieldGroupsList(listEl) {
 // ──────────────────────────────────────────────────────────────────────────
 // COOLDOWN RULES CARD
 // ──────────────────────────────────────────────────────────────────────────
-function descriptorPickerHTML(id, currentDesc) {
+function descriptorPickerHTML(id, currentDesc, allowTypes) {
     const sports = getSportNames();
     const specials = getSpecialActivityNames();
     const facilities = getFacilityNames();
-    const cur = currentDesc || { kind: 'any', value: '' };
+    const cur = currentDesc || (allowTypes ? { kind: 'type', value: 'sport' } : { kind: 'activity', value: '' });
 
     const typeSel = ACTIVITY_TYPE_OPTIONS.map(o =>
         `<option value="type:${escapeHtml(o.value)}"${cur.kind === 'type' && cur.value === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
@@ -548,7 +639,7 @@ function descriptorPickerHTML(id, currentDesc) {
         `<option value="facility:${escapeHtml(n)}"${cur.kind === 'facility' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
 
     return `<select class="rules-select" id="${id}">
-            <optgroup label="Category">${typeSel}</optgroup>
+            ${allowTypes ? `<optgroup label="Category">${typeSel}</optgroup>` : ''}
             ${sportSel ? `<optgroup label="Sport">${sportSel}</optgroup>` : ''}
             ${specialSel ? `<optgroup label="Special / Pinned Activity">${specialSel}</optgroup>` : ''}
             ${facSel ? `<optgroup label="Facility">${facSel}</optgroup>` : ''}
@@ -605,6 +696,7 @@ function renderCooldownCard(container) {
         const current = getCooldownRules();
         current.push({
             id: uid('cd_'),
+            mode: 'auto',
             target:    { kind: 'type', value: 'sport' },
             reference: { kind: 'type', value: 'lunch' },
             timing: 'after',
@@ -638,13 +730,23 @@ function renderCooldownList() {
     }
 
     rules.forEach((rule, idx) => {
+        const mode = rule.mode || 'both';
+        const allowTypesInTarget = (mode === 'auto'); // manual/both → no Category options
         const card = document.createElement('div');
         card.className = 'cd-row';
         card.innerHTML = `
             <div class="cd-fields">
+                <div class="cd-col cd-col-mode">
+                    <span class="rules-sub-title">Applies in</span>
+                    <select class="rules-select" id="cd-mode-${idx}">
+                        <option value="auto"   ${mode === 'auto'   ? 'selected' : ''}>Auto Builder</option>
+                        <option value="manual" ${mode === 'manual' ? 'selected' : ''}>Manual Mode</option>
+                        <option value="both"   ${mode === 'both'   ? 'selected' : ''}>Both</option>
+                    </select>
+                </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Don't place</span>
-                    ${descriptorPickerHTML('cd-target-' + idx, rule.target)}
+                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypesInTarget)}
                 </div>
                 <div class="cd-col cd-middle-wrap">
                     <span class="rules-sub-title">Within</span>
@@ -661,7 +763,7 @@ function renderCooldownList() {
                 </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Of</span>
-                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference)}
+                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, true)}
                 </div>
             </div>
             <div class="cd-delete-wrap">
@@ -669,6 +771,7 @@ function renderCooldownList() {
             </div>`;
         listEl.appendChild(card);
 
+        const modeEl = document.getElementById('cd-mode-' + idx);
         const tgtEl = document.getElementById('cd-target-' + idx);
         const refEl = document.getElementById('cd-ref-' + idx);
         const minEl = document.getElementById('cd-min-' + idx);
@@ -679,12 +782,21 @@ function renderCooldownList() {
             const all = getCooldownRules();
             const r = all[idx];
             if (!r) return;
+            r.mode      = modeEl.value;
             r.target    = parseDescValue(tgtEl.value);
             r.reference = parseDescValue(refEl.value);
             r.minutes   = Math.max(0, parseInt(minEl.value) || 0);
             r.timing    = timEl.value;
+            // If mode no longer allows types but target is a type, reset target
+            if (r.mode !== 'auto' && r.target && r.target.kind === 'type') {
+                r.target = { kind: 'activity', value: '' };
+            }
             saveCooldownRules(all);
         }
+        if (modeEl) modeEl.addEventListener('change', () => {
+            persist();
+            renderCooldownList(); // re-render so target options refresh for new mode
+        });
         [tgtEl, refEl, minEl, timEl].forEach(el => el && el.addEventListener('change', persist));
         if (delBtn) delBtn.onclick = () => {
             const all = getCooldownRules();
@@ -734,9 +846,13 @@ window.SchedulingRules = {
     getCooldownRules: getCooldownRules,
     saveCooldownRules: saveCooldownRules,
     isCandidateAllowed: isCandidateAllowed,
+    checkCandidateDetailed: checkCandidateDetailed,
     findForbiddenRanges: findForbiddenRanges,
     blockMatchesDescriptor: blockMatchesDescriptor,
-    getExistingFieldGroups: getExistingFieldGroups
+    getExistingFieldGroups: getExistingFieldGroups,
+    inferTypeFromActivity: inferTypeFromActivity,
+    buildTemplateFromBunkSlots: buildTemplateFromBunkSlots,
+    describeRule: describeRule
 };
 
 console.log('[RULES] rules.js v1.1 ready');
