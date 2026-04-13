@@ -567,15 +567,15 @@ function renderCooldownCard(container) {
                 <div>
                     <div class="rules-card-title">
                         Cooldowns &amp; Spacing
-                        ${count ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>` : ''}
+                        <span id="rules-cd-badge">${count ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>` : ''}</span>
                     </div>
                     <div class="rules-card-subtitle">Tell the auto-builder to keep certain activities or facilities apart in time.</div>
                 </div>
-                <span class="rules-caret open" id="rules-cd-caret">
+                <span class="rules-caret" id="rules-cd-caret">
                     <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </span>
             </div>
-            <div class="rules-card-body" id="rules-cd-body">
+            <div class="rules-card-body" id="rules-cd-body" style="display:none;">
                 <div class="rules-helper">
                     <strong>Applies to the auto-builder only.</strong>
                     Example: "Don't place <em>Any Sport</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
@@ -612,10 +612,20 @@ function renderCooldownCard(container) {
     renderCooldownList();
 }
 
+function updateCooldownBadge() {
+    const badgeEl = document.getElementById('rules-cd-badge');
+    if (!badgeEl) return;
+    const count = getCooldownRules().length;
+    badgeEl.innerHTML = count
+        ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>`
+        : '';
+}
+
 function renderCooldownList() {
     const listEl = document.getElementById('rules-cd-list');
     if (!listEl) return;
     listEl.innerHTML = '';
+    updateCooldownBadge();
     const rules = getCooldownRules();
     if (rules.length === 0) {
         listEl.innerHTML = '<div class="rules-empty">No cooldown rules yet. Click <strong>+ Add Rule</strong> to create one.</div>';
