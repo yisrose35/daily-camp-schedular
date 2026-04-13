@@ -3897,9 +3897,8 @@ function getStyles() {
     /* ★ v14.0: Collapsible sidebar — overlay mode */
     .da-sidebar { width:220px; min-width:0; background:var(--da-surface); border-right:1px solid var(--da-border); display:flex; flex-direction:column; position:absolute; left:0; top:0; bottom:0; z-index:50; transform:translateX(0); transition:transform 0.25s ease, box-shadow 0.25s ease; box-shadow:2px 0 12px rgba(0,0,0,0.08); }
     .da-sidebar.collapsed { transform:translateX(-100%); box-shadow:none; }
-    .da-sidebar-toggle { position:absolute; top:8px; left:8px; z-index:51; width:32px; height:32px; border-radius:8px; border:1px solid var(--da-border); background:var(--da-surface); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:16px; color:var(--da-text2); transition:all 0.2s; box-shadow:0 1px 4px rgba(0,0,0,0.08); }
-    .da-sidebar-toggle:hover { background:var(--da-bg); color:var(--da-text); box-shadow:0 2px 8px rgba(0,0,0,0.12); }
-    .da-sidebar .da-sidebar-toggle { position:relative; top:auto; left:auto; margin:8px 8px 0 auto; }
+    .da-sidebar-toggle { position:absolute; top:50%; left:0; z-index:51; width:24px; height:48px; border-radius:0 8px 8px 0; border:1px solid var(--da-border); border-left:none; background:var(--da-surface); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:14px; color:var(--da-text2); transition:all 0.2s; box-shadow:2px 0 6px rgba(0,0,0,0.08); transform:translateY(-50%); }
+    .da-sidebar-toggle:hover { background:var(--da-bg); color:var(--da-text); box-shadow:2px 0 10px rgba(0,0,0,0.14); width:28px; }
     .da-sidebar-header { padding:14px; border-bottom:1px solid var(--da-border); background:var(--da-bg); display:flex; align-items:center; justify-content:space-between; }
     .da-sidebar-header h3 { margin:0; font-size:12px; font-weight:600; color:var(--da-text2); text-transform:uppercase; letter-spacing:0.5px; }
     .da-sidebar-close { width:28px; height:28px; border-radius:6px; border:none; background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:18px; color:var(--da-text3); transition:all 0.15s; }
@@ -4264,11 +4263,11 @@ function getMainHTML(useMS) {
   if (useMS) {
     return `
       <div class="da-container" style="height:calc(100vh - 160px);">
-        <button class="da-sidebar-toggle" id="da-sidebar-open" title="Open tile palette" style="${sidebarCollapsed ? '' : 'display:none;'}">&#9776;</button>
+        <button class="da-sidebar-toggle" id="da-sidebar-open" title="Open tile palette" style="${sidebarCollapsed ? '' : 'display:none;'}">&#9654;</button>
         <div class="da-sidebar${sidebarCollapsed ? ' collapsed' : ''}" id="da-sidebar">
           <div class="da-sidebar-header">
             <h3>Tile Types</h3>
-            <button class="da-sidebar-close" id="da-sidebar-close" title="Close palette">&times;</button>
+            <button class="da-sidebar-close" id="da-sidebar-close" title="Close palette">&#9664;</button>
           </div>
           <div id="da-palette" class="da-palette"></div>
         </div>
@@ -4334,11 +4333,11 @@ function getMainHTML(useMS) {
   const sidebarCollapsed = localStorage.getItem('campistry_sidebarCollapsed') === 'true';
   return `
     <div class="da-container">
-      <button class="da-sidebar-toggle" id="da-sidebar-open" title="Open tile palette" style="${sidebarCollapsed ? '' : 'display:none;'}">&#9776;</button>
+      <button class="da-sidebar-toggle" id="da-sidebar-open" title="Open tile palette" style="${sidebarCollapsed ? '' : 'display:none;'}">&#9654;</button>
       <div class="da-sidebar${sidebarCollapsed ? ' collapsed' : ''}" id="da-sidebar">
         <div class="da-sidebar-header">
           <h3>Tile Types</h3>
-          <button class="da-sidebar-close" id="da-sidebar-close" title="Close palette">&times;</button>
+          <button class="da-sidebar-close" id="da-sidebar-close" title="Close palette">&#9664;</button>
         </div>
         <div id="da-palette" class="da-palette"></div>
       </div>
