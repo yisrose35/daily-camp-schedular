@@ -446,7 +446,7 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                         } else {
                             // No invite — create camp (camp ID = user ID for owners)
                             
-                            // ★★★ ACCESS CODE VALIDATION (REQUIRED) ★★★
+                            // ★★★ ACCESS CODE VALIDATION — ALL SERVER-SIDE ★★★
                             if (!accessCode) {
                                 throw new Error('An access code is required to create a camp. Contact campistryoffice@gmail.com for access.');
                             }
@@ -455,46 +455,34 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                             let trialStartedAt = null;
                             let trialHours = null;
 
-                            // ★★★ HARDCODED ACCESS CODES ★★★
-                            // 1. Full access — no limits, no expiration
-                            if (accessCode === 'justcampit2026') {
-                                planStatus = 'active';
-                                console.log('[Landing] ✅ Full access code accepted');
-                            }
-                            // 2. Expo trial — 48 hours, full features (no camper/schedule limits)
-                            else if (accessCode === 'expo2026') {
-                                planStatus = 'trial';
-                                trialStartedAt = new Date().toISOString();
-                                trialHours = 48;
-                                console.log('[Landing] ✅ Expo trial code accepted → 48 hours full access');
-                            }
-                            // 3. Starter — unlimited time, but 7 days of generation + 100 campers
-                            else if (accessCode === 'cAMpiStrY$100triAl') {
-                                planStatus = 'starter';
-                                console.log('[Landing] ✅ Starter code accepted → 7 generation days + 100 campers');
-                            }
-                            else {
-                                // Fallback: check promo_codes table for any other codes
-                                try {
-                                    const { data: promoResult, error: promoError } = await supabase
-                                        .rpc('validate_promo_code', { input_code: accessCode });
+                            // Validate via Supabase RPC — codes stored in promo_codes table
+                            try {
+                                const { data: codeResult, error: codeError } = await supabase
+                                    .rpc('validate_access_code', { input_code: accessCode });
 
-                                    console.log('[Landing] Promo code check result:', promoResult, 'error:', promoError);
+                                console.log('[Landing] Access code check:', codeResult, 'error:', codeError);
 
-                                    if (!promoError && promoResult && promoResult.valid) {
-                                        planStatus = promoResult.plan_type || 'trial';
-                                        trialStartedAt = new Date().toISOString();
-                                        trialHours = promoResult.trial_hours || 48;
-                                        console.log('[Landing] ✅ Promo code accepted:', accessCode, '→', planStatus, 'for', trialHours, 'hours');
-                                    }
-                                } catch (promoErr) {
-                                    console.warn('[Landing] Promo check failed:', promoErr);
+                                if (codeError) {
+                                    console.error('[Landing] Access code RPC error:', codeError);
+                                    throw new Error('Could not verify access code. Please try again.');
                                 }
 
-                                // If no valid code matched, reject
-                                if (!planStatus) {
+                                if (!codeResult || !codeResult.valid) {
                                     throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
                                 }
+
+                                planStatus = codeResult.plan_status || 'active';
+                                if (codeResult.trial_hours) {
+                                    trialStartedAt = new Date().toISOString();
+                                    trialHours = codeResult.trial_hours;
+                                }
+                                console.log('[Landing] ✅ Code accepted →', planStatus, trialHours ? '(' + trialHours + 'h)' : '(no time limit)');
+                            } catch (codeErr) {
+                                if (codeErr.message.includes('access code') || codeErr.message.includes('Contact')) {
+                                    throw codeErr; // Re-throw our own errors
+                                }
+                                console.error('[Landing] Code validation failed:', codeErr);
+                                throw new Error('Could not verify access code. Please try again.');
                             }
 
                             const { data: campData, error: campError } = await supabase
