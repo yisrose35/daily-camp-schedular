@@ -3182,7 +3182,7 @@
     function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
         if (!stops.length || !buses.length) return [];
 
-        // Effective capacity per bus
+        // Effective capacity per bus (hard cap — can't exceed)
         const busCaps = buses.map(b => {
             const mon = D.monitors.find(m => m.assignedBus === b.id);
             const couns = D.counselors.filter(c => c.assignedBus === b.id);
@@ -3190,22 +3190,39 @@
             return Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs);
         });
 
+        const totalKids = stops.reduce((s, st) => s + st.campers.length, 0);
+        const numBuses = buses.length;
+
+        // Target fill = spread kids evenly, but never exceed bus capacity
+        // This ensures ALL buses get used
+        const evenTarget = Math.ceil(totalKids / numBuses);
+        const targetFill = busCaps.map(cap => Math.min(cap, Math.max(evenTarget, Math.ceil(totalKids / numBuses * 1.15))));
+
+        console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, target ~' + evenTarget + ' per bus');
+
         // Pre-compute driving distance from camp for each stop
         const campDist = stops.map(s => drivingDist(campLat, campLng, s.lat, s.lng));
-
-        // Pre-compute kid count per stop
         const kidCount = stops.map(s => s.campers.length);
 
-        // Track assignment: which zone index each stop belongs to (-1 = unassigned)
+        // Track assignment: -1 = unassigned
         const assignment = new Array(stops.length).fill(-1);
 
-        // Sort bus indices by capacity descending (biggest bus gets first pick)
-        const busOrder = busCaps.map((cap, i) => ({ i, cap })).sort((a, b) => b.cap - a.cap).map(x => x.i);
+        const zones = [];
 
-        const zones = []; // [{busIdx, stopIndices, camperCount}]
+        // Process ALL buses — every bus gets a zone
+        for (let busRound = 0; busRound < numBuses; busRound++) {
+            // Find which bus to assign next — pick the one with most capacity that doesn't have a zone yet
+            let bi = -1;
+            const usedBusIndices = new Set(zones.map(z => z.busIdx));
+            for (let i = 0; i < numBuses; i++) {
+                if (usedBusIndices.has(i)) continue;
+                if (bi < 0 || busCaps[i] > busCaps[bi]) bi = i;
+            }
+            if (bi < 0) break;
 
-        for (const bi of busOrder) {
-            let remaining = busCaps[bi];
+            const hardCap = busCaps[bi];
+            const softTarget = targetFill[bi];
+            let remaining = softTarget; // aim for even distribution
             if (remaining <= 0) continue;
 
             // Find the farthest unassigned stop from camp
@@ -3216,27 +3233,28 @@
             }
             if (seedIdx < 0) break; // no unassigned stops left
 
-            // Start a new zone with this seed
             const zoneStopIndices = [];
 
-            // Add the seed if it fits
-            if (kidCount[seedIdx] <= remaining) {
+            // Add the seed
+            if (kidCount[seedIdx] <= hardCap) {
                 zoneStopIndices.push(seedIdx);
                 assignment[seedIdx] = zones.length;
                 remaining -= kidCount[seedIdx];
             } else {
-                // Even the seed doesn't fit — this bus is too small for any stop
-                // Skip this bus, leave the stop for a bigger one
+                // Seed too big for this bus — create empty zone, stop will go to overflow
+                zones.push({
+                    busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
+                    busColor: buses[bi].color, stopIndices: [], camperCount: 0,
+                    capacity: hardCap, centroidLat: campLat, centroidLng: campLng
+                });
                 continue;
             }
 
-            // Greedily grab nearest unassigned stops
+            // Greedily grab nearest unassigned stops until target reached
             while (remaining > 0) {
-                // Find nearest unassigned stop to ANY stop already in this zone
                 let bestIdx = -1, bestDist = Infinity;
                 for (let si = 0; si < stops.length; si++) {
                     if (assignment[si] >= 0) continue;
-                    // Distance to nearest zone member
                     let minD = Infinity;
                     for (const zi of zoneStopIndices) {
                         const d = drivingDist(stops[zi].lat, stops[zi].lng, stops[si].lat, stops[si].lng);
@@ -3245,86 +3263,70 @@
                     if (minD < bestDist) { bestDist = minD; bestIdx = si; }
                 }
 
-                if (bestIdx < 0) break; // no more unassigned stops
+                if (bestIdx < 0) break;
 
-                // KEY RULE: if this nearest stop has more kids than remaining
-                // capacity, STOP — don't skip it looking for a smaller one
-                if (kidCount[bestIdx] > remaining) {
-                    break;
-                }
+                // KEY RULE: if nearest stop has more kids than remaining,
+                // STOP — don't skip it looking for a smaller one
+                if (kidCount[bestIdx] > remaining) break;
 
-                // Add it to the zone
+                // Also enforce hard bus capacity
+                const currentKids = zoneStopIndices.reduce((s, si) => s + kidCount[si], 0);
+                if (currentKids + kidCount[bestIdx] > hardCap) break;
+
                 zoneStopIndices.push(bestIdx);
                 assignment[bestIdx] = zones.length;
                 remaining -= kidCount[bestIdx];
             }
 
-            if (zoneStopIndices.length > 0) {
-                const totalKids = zoneStopIndices.reduce((s, si) => s + kidCount[si], 0);
-                const cLat = zoneStopIndices.reduce((s, si) => s + stops[si].lat, 0) / zoneStopIndices.length;
-                const cLng = zoneStopIndices.reduce((s, si) => s + stops[si].lng, 0) / zoneStopIndices.length;
+            const zoneKids = zoneStopIndices.reduce((s, si) => s + kidCount[si], 0);
+            const cLat = zoneStopIndices.length ? zoneStopIndices.reduce((s, si) => s + stops[si].lat, 0) / zoneStopIndices.length : campLat;
+            const cLng = zoneStopIndices.length ? zoneStopIndices.reduce((s, si) => s + stops[si].lng, 0) / zoneStopIndices.length : campLng;
 
-                zones.push({
-                    busIdx: bi,
-                    busId: buses[bi].id,
-                    busName: buses[bi].name,
-                    busColor: buses[bi].color,
-                    stopIndices: zoneStopIndices,
-                    camperCount: totalKids,
-                    capacity: busCaps[bi],
-                    centroidLat: cLat,
-                    centroidLng: cLng
-                });
+            zones.push({
+                busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
+                busColor: buses[bi].color, stopIndices: zoneStopIndices,
+                camperCount: zoneKids, capacity: hardCap,
+                centroidLat: cLat, centroidLng: cLng
+            });
 
-                console.log('[Go] Zone: ' + buses[bi].name + ' — ' + totalKids + '/' + busCaps[bi] + ' kids, ' + zoneStopIndices.length + ' stops (seed: ' + stops[seedIdx].address + ')');
+            console.log('[Go] Zone: ' + buses[bi].name + ' — ' + zoneKids + '/' + hardCap + ' kids, ' + zoneStopIndices.length + ' stops' + (seedIdx >= 0 ? ' (seed: ' + stops[seedIdx].address + ')' : ''));
+        }
+
+        // Assign any leftover stops — distribute to nearest zone that has room
+        for (let si = 0; si < stops.length; si++) {
+            if (assignment[si] >= 0) continue;
+
+            // Find nearest zone with room (under hard cap)
+            let bestZone = -1, bestDist = Infinity;
+            for (let zi = 0; zi < zones.length; zi++) {
+                if (zones[zi].camperCount + kidCount[si] > zones[zi].capacity) continue;
+                for (const zsi of zones[zi].stopIndices) {
+                    const d = drivingDist(stops[si].lat, stops[si].lng, stops[zsi].lat, stops[zsi].lng);
+                    if (d < bestDist) { bestDist = d; bestZone = zi; }
+                }
+            }
+
+            // If nothing fits under hard cap, find nearest zone regardless (will over-cap)
+            if (bestZone < 0) {
+                for (let zi = 0; zi < zones.length; zi++) {
+                    for (const zsi of zones[zi].stopIndices) {
+                        const d = drivingDist(stops[si].lat, stops[si].lng, stops[zsi].lat, stops[zsi].lng);
+                        if (d < bestDist) { bestDist = d; bestZone = zi; }
+                    }
+                }
+            }
+
+            if (bestZone >= 0) {
+                zones[bestZone].stopIndices.push(si);
+                zones[bestZone].camperCount += kidCount[si];
+                assignment[si] = bestZone;
+                console.log('[Go] Zone: overflow ' + stops[si].address + ' (' + kidCount[si] + ' kids) → ' + zones[bestZone].busName);
             }
         }
 
-        // Assign any leftover stops to the bus with most remaining capacity
-        const unassigned = [];
-        for (let si = 0; si < stops.length; si++) {
-            if (assignment[si] < 0) unassigned.push(si);
-        }
-
-        if (unassigned.length > 0) {
-            console.warn('[Go] Zone: ' + unassigned.length + ' stop(s) unassigned after greedy pass, redistributing...');
-
-            // Sort unassigned by distance to nearest zone (closest first)
-            unassigned.forEach(si => {
-                // Find the zone with most remaining capacity
-                let bestZone = -1, bestRoom = 0;
-                for (let zi = 0; zi < zones.length; zi++) {
-                    const room = zones[zi].capacity - zones[zi].camperCount;
-                    if (room >= kidCount[si] && room > bestRoom) {
-                        bestRoom = room;
-                        bestZone = zi;
-                    }
-                }
-
-                // If no zone has enough room, find nearest zone regardless
-                if (bestZone < 0) {
-                    let nearestDist = Infinity;
-                    for (let zi = 0; zi < zones.length; zi++) {
-                        for (const zsi of zones[zi].stopIndices) {
-                            const d = drivingDist(stops[si].lat, stops[si].lng, stops[zsi].lat, stops[zsi].lng);
-                            if (d < nearestDist) { nearestDist = d; bestZone = zi; }
-                        }
-                    }
-                }
-
-                if (bestZone >= 0) {
-                    zones[bestZone].stopIndices.push(si);
-                    zones[bestZone].camperCount += kidCount[si];
-                    assignment[si] = bestZone;
-                    console.log('[Go] Zone: overflow ' + stops[si].address + ' (' + kidCount[si] + ' kids) → ' + zones[bestZone].busName);
-                }
-            });
-        }
-
         // Log summary
-        console.log('[Go] Greedy zones: ' + zones.length + ' zones from ' + stops.length + ' stops');
+        console.log('[Go] Greedy zones: ' + zones.length + ' zones, ' + totalKids + ' kids across ' + stops.length + ' stops');
         zones.forEach(z => {
-            const farthest = Math.max(...z.stopIndices.map(si => campDist[si]));
             console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' + z.stopIndices.length + ' stops');
         });
 
