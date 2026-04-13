@@ -3346,8 +3346,14 @@
         const avgStopMin = D.setup.avgStopTime || 2;
         const avgSpeedMph = D.setup.avgSpeed || 25;
 
-        if (!_detectedRegions?.length) detectRegions();
-        if (!_detectedRegions?.length) { toast('No regions detected', 'error'); return; }
+        // Validate we have buses and geocoded campers
+        if (!D.buses.length) { toast('Add buses first', 'error'); return; }
+        let hasGeocodedCampers = false;
+        Object.keys(roster).forEach(name => {
+            const a = D.addresses[name];
+            if (a?.geocoded && a.lat && a.lng && a.transport !== 'pickup') hasGeocodedCampers = true;
+        });
+        if (!hasGeocodedCampers) { toast('No geocoded campers — geocode addresses first', 'error'); return; }
 
         const vehicles = D.buses.map(b => {
             const mon = D.monitors.find(m => m.assignedBus === b.id);
@@ -3362,8 +3368,13 @@
             campCoords = _campCoordsCache || await geocodeSingle(D.setup.campAddress);
             if (campCoords) { _campCoordsCache = campCoords; D.setup.campLat = campCoords.lat; D.setup.campLng = campCoords.lng; }
         }
-        const campLat = campCoords?.lat || _detectedRegions[0].centroidLat;
-        const campLng = campCoords?.lng || _detectedRegions[0].centroidLng;
+        if (!campCoords && D.setup.campLat && D.setup.campLng) {
+            campCoords = { lat: D.setup.campLat, lng: D.setup.campLng };
+            _campCoordsCache = campCoords;
+        }
+        if (!campCoords) { toast('Set camp address first', 'error'); return; }
+        const campLat = campCoords.lat;
+        const campLng = campCoords.lng;
 
         // ── Pre-warm driving distance cache ──
         showProgress('Building driving distance cache...', 7);
