@@ -3182,7 +3182,10 @@
     function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
         if (!stops.length || !buses.length) return [];
 
-        // Effective capacity per bus (hard cap — can't exceed)
+        const numBuses = buses.length;
+        const numStops = stops.length;
+
+        // Effective capacity per bus
         const busCaps = buses.map(b => {
             const mon = D.monitors.find(m => m.assignedBus === b.id);
             const couns = D.counselors.filter(c => c.assignedBus === b.id);
@@ -3191,141 +3194,167 @@
         });
 
         const totalKids = stops.reduce((s, st) => s + st.campers.length, 0);
-        const numBuses = buses.length;
-
-        // Target fill = spread kids evenly, but never exceed bus capacity
-        // This ensures ALL buses get used
-        const evenTarget = Math.ceil(totalKids / numBuses);
-        const targetFill = busCaps.map(cap => Math.min(cap, Math.max(evenTarget, Math.ceil(totalKids / numBuses * 1.15))));
-
-        console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, target ~' + evenTarget + ' per bus');
-
-        // Pre-compute driving distance from camp for each stop
-        const campDist = stops.map(s => drivingDist(campLat, campLng, s.lat, s.lng));
         const kidCount = stops.map(s => s.campers.length);
 
-        // Track assignment: -1 = unassigned
-        const assignment = new Array(stops.length).fill(-1);
+        console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, ' + numStops + ' stops');
 
-        const zones = [];
+        // =====================================================================
+        // K-MEDOIDS CLUSTERING — produces compact geographic zones
+        //
+        // 1. Seed medoids using farthest-point initialization
+        // 2. Assign each stop to nearest medoid (by driving distance)
+        // 3. Recompute medoids (member that minimizes total intra-cluster dist)
+        // 4. Iterate until stable
+        // 5. Capacity rebalance: move border stops between clusters if over-cap
+        // =====================================================================
 
-        // Process ALL buses — every bus gets a zone
-        for (let busRound = 0; busRound < numBuses; busRound++) {
-            // Find which bus to assign next — pick the one with most capacity that doesn't have a zone yet
-            let bi = -1;
-            const usedBusIndices = new Set(zones.map(z => z.busIdx));
-            for (let i = 0; i < numBuses; i++) {
-                if (usedBusIndices.has(i)) continue;
-                if (bi < 0 || busCaps[i] > busCaps[bi]) bi = i;
-            }
-            if (bi < 0) break;
+        // ── Step 1: Seed medoids ──
+        // Pick k=numBuses initial medoids spread maximally apart
+        const medoids = [];
 
-            const hardCap = busCaps[bi];
-            const softTarget = targetFill[bi];
-            let remaining = softTarget; // aim for even distribution
-            if (remaining <= 0) continue;
+        // First medoid: farthest stop from camp
+        let firstMed = 0, firstDist = 0;
+        for (let i = 0; i < numStops; i++) {
+            const d = drivingDist(campLat, campLng, stops[i].lat, stops[i].lng);
+            if (d > firstDist) { firstDist = d; firstMed = i; }
+        }
+        medoids.push(firstMed);
 
-            // Find the farthest unassigned stop from camp
-            let seedIdx = -1, seedDist = -1;
-            for (let si = 0; si < stops.length; si++) {
-                if (assignment[si] >= 0) continue;
-                if (campDist[si] > seedDist) { seedDist = campDist[si]; seedIdx = si; }
-            }
-            if (seedIdx < 0) break; // no unassigned stops left
-
-            const zoneStopIndices = [];
-
-            // Add the seed
-            if (kidCount[seedIdx] <= hardCap) {
-                zoneStopIndices.push(seedIdx);
-                assignment[seedIdx] = zones.length;
-                remaining -= kidCount[seedIdx];
-            } else {
-                // Seed too big for this bus — create empty zone, stop will go to overflow
-                zones.push({
-                    busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
-                    busColor: buses[bi].color, stopIndices: [], camperCount: 0,
-                    capacity: hardCap, centroidLat: campLat, centroidLng: campLng
-                });
-                continue;
-            }
-
-            // Greedily grab nearest unassigned stops until target reached
-            while (remaining > 0) {
-                let bestIdx = -1, bestDist = Infinity;
-                for (let si = 0; si < stops.length; si++) {
-                    if (assignment[si] >= 0) continue;
-                    let minD = Infinity;
-                    for (const zi of zoneStopIndices) {
-                        const d = drivingDist(stops[zi].lat, stops[zi].lng, stops[si].lat, stops[si].lng);
-                        if (d < minD) minD = d;
-                    }
-                    if (minD < bestDist) { bestDist = minD; bestIdx = si; }
+        // Remaining medoids: farthest from all existing medoids (greedy dispersion)
+        while (medoids.length < numBuses && medoids.length < numStops) {
+            let bestIdx = -1, bestMinDist = -1;
+            for (let i = 0; i < numStops; i++) {
+                if (medoids.includes(i)) continue;
+                let minDist = Infinity;
+                for (const m of medoids) {
+                    const d = drivingDist(stops[i].lat, stops[i].lng, stops[m].lat, stops[m].lng);
+                    if (d < minDist) minDist = d;
                 }
+                if (minDist > bestMinDist) { bestMinDist = minDist; bestIdx = i; }
+            }
+            if (bestIdx < 0) break;
+            medoids.push(bestIdx);
+        }
 
-                if (bestIdx < 0) break;
+        console.log('[Go] Zone: seeded ' + medoids.length + ' medoids');
 
-                // KEY RULE: if nearest stop has more kids than remaining,
-                // STOP — don't skip it looking for a smaller one
-                if (kidCount[bestIdx] > remaining) break;
+        // ── Step 2-4: Iterative assignment + medoid update ──
+        let assignments = new Array(numStops).fill(0);
 
-                // Also enforce hard bus capacity
-                const currentKids = zoneStopIndices.reduce((s, si) => s + kidCount[si], 0);
-                if (currentKids + kidCount[bestIdx] > hardCap) break;
+        function assignAll() {
+            for (let i = 0; i < numStops; i++) {
+                let bestCluster = 0, bestDist = Infinity;
+                for (let m = 0; m < medoids.length; m++) {
+                    const d = drivingDist(stops[i].lat, stops[i].lng, stops[medoids[m]].lat, stops[medoids[m]].lng);
+                    if (d < bestDist) { bestDist = d; bestCluster = m; }
+                }
+                assignments[i] = bestCluster;
+            }
+        }
 
-                zoneStopIndices.push(bestIdx);
-                assignment[bestIdx] = zones.length;
-                remaining -= kidCount[bestIdx];
+        assignAll();
+
+        for (let iter = 0; iter < 30; iter++) {
+            let changed = false;
+
+            // Recompute each medoid: pick cluster member minimizing total dist to others
+            for (let m = 0; m < medoids.length; m++) {
+                const members = [];
+                for (let i = 0; i < numStops; i++) { if (assignments[i] === m) members.push(i); }
+                if (!members.length) continue;
+
+                let bestMed = medoids[m], bestTotal = Infinity;
+                for (const cand of members) {
+                    let total = 0;
+                    for (const other of members) {
+                        if (other !== cand) total += drivingDist(stops[cand].lat, stops[cand].lng, stops[other].lat, stops[other].lng);
+                    }
+                    if (total < bestTotal) { bestTotal = total; bestMed = cand; }
+                }
+                if (bestMed !== medoids[m]) { medoids[m] = bestMed; changed = true; }
             }
 
-            const zoneKids = zoneStopIndices.reduce((s, si) => s + kidCount[si], 0);
-            const cLat = zoneStopIndices.length ? zoneStopIndices.reduce((s, si) => s + stops[si].lat, 0) / zoneStopIndices.length : campLat;
-            const cLng = zoneStopIndices.length ? zoneStopIndices.reduce((s, si) => s + stops[si].lng, 0) / zoneStopIndices.length : campLng;
+            if (!changed) break;
+
+            const oldAssign = [...assignments];
+            assignAll();
+            if (oldAssign.every((a, i) => a === assignments[i])) break;
+        }
+
+        // ── Step 5: Build zones + capacity rebalance ──
+        // Sort buses by capacity descending, assign biggest bus to biggest cluster
+        const clusterSizes = new Array(numBuses).fill(0);
+        for (let i = 0; i < numStops; i++) clusterSizes[assignments[i]] += kidCount[i];
+
+        const clusterOrder = clusterSizes.map((sz, i) => ({ i, sz })).sort((a, b) => b.sz - a.sz);
+        const busOrder = busCaps.map((cap, i) => ({ i, cap })).sort((a, b) => b.cap - a.cap);
+
+        // Map: cluster index → bus index
+        const clusterToBus = {};
+        for (let r = 0; r < Math.min(clusterOrder.length, busOrder.length); r++) {
+            clusterToBus[clusterOrder[r].i] = busOrder[r].i;
+        }
+
+        // Build initial zones
+        const zones = [];
+        for (let m = 0; m < medoids.length; m++) {
+            const bi = clusterToBus[m] ?? m;
+            const stopIndices = [];
+            for (let i = 0; i < numStops; i++) { if (assignments[i] === m) stopIndices.push(i); }
+
+            const zoneKids = stopIndices.reduce((s, si) => s + kidCount[si], 0);
+            const cLat = stopIndices.length ? stopIndices.reduce((s, si) => s + stops[si].lat, 0) / stopIndices.length : campLat;
+            const cLng = stopIndices.length ? stopIndices.reduce((s, si) => s + stops[si].lng, 0) / stopIndices.length : campLng;
 
             zones.push({
                 busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
-                busColor: buses[bi].color, stopIndices: zoneStopIndices,
-                camperCount: zoneKids, capacity: hardCap,
-                centroidLat: cLat, centroidLng: cLng
+                busColor: buses[bi].color, stopIndices, camperCount: zoneKids,
+                capacity: busCaps[bi], centroidLat: cLat, centroidLng: cLng,
+                _medoid: medoids[m]
             });
-
-            console.log('[Go] Zone: ' + buses[bi].name + ' — ' + zoneKids + '/' + hardCap + ' kids, ' + zoneStopIndices.length + ' stops' + (seedIdx >= 0 ? ' (seed: ' + stops[seedIdx].address + ')' : ''));
         }
 
-        // Assign any leftover stops — distribute to nearest zone that has room
-        for (let si = 0; si < stops.length; si++) {
-            if (assignment[si] >= 0) continue;
-
-            // Find nearest zone with room (under hard cap)
-            let bestZone = -1, bestDist = Infinity;
+        // ── Capacity rebalance: move border stops from over-cap zones to nearest under-cap zone ──
+        for (let pass = 0; pass < 200; pass++) {
+            // Find most over-capacity zone
+            let worstZi = -1, worstOver = 0;
             for (let zi = 0; zi < zones.length; zi++) {
-                if (zones[zi].camperCount + kidCount[si] > zones[zi].capacity) continue;
-                for (const zsi of zones[zi].stopIndices) {
-                    const d = drivingDist(stops[si].lat, stops[si].lng, stops[zsi].lat, stops[zsi].lng);
-                    if (d < bestDist) { bestDist = d; bestZone = zi; }
+                const over = zones[zi].camperCount - zones[zi].capacity;
+                if (over > worstOver) { worstOver = over; worstZi = zi; }
+            }
+            if (worstZi < 0) break; // all zones within capacity
+
+            const overZone = zones[worstZi];
+
+            // Find the border stop: farthest from own medoid AND closest to another zone's medoid
+            let bestStopLocalIdx = -1, bestTargetZi = -1, bestScore = -Infinity;
+            for (let li = 0; li < overZone.stopIndices.length; li++) {
+                const si = overZone.stopIndices[li];
+                const distFromOwn = drivingDist(stops[si].lat, stops[si].lng,
+                    stops[overZone._medoid].lat, stops[overZone._medoid].lng);
+
+                for (let tzi = 0; tzi < zones.length; tzi++) {
+                    if (tzi === worstZi) continue;
+                    if (zones[tzi].camperCount + kidCount[si] > zones[tzi].capacity) continue;
+                    const distToTarget = drivingDist(stops[si].lat, stops[si].lng,
+                        stops[zones[tzi]._medoid].lat, stops[zones[tzi]._medoid].lng);
+                    // Score: high = far from own, close to target (true border stop)
+                    const score = distFromOwn - distToTarget;
+                    if (score > bestScore) { bestScore = score; bestStopLocalIdx = li; bestTargetZi = tzi; }
                 }
             }
 
-            // If nothing fits under hard cap, find nearest zone regardless (will over-cap)
-            if (bestZone < 0) {
-                for (let zi = 0; zi < zones.length; zi++) {
-                    for (const zsi of zones[zi].stopIndices) {
-                        const d = drivingDist(stops[si].lat, stops[si].lng, stops[zsi].lat, stops[zsi].lng);
-                        if (d < bestDist) { bestDist = d; bestZone = zi; }
-                    }
-                }
-            }
+            if (bestStopLocalIdx < 0 || bestTargetZi < 0) break; // no valid move
 
-            if (bestZone >= 0) {
-                zones[bestZone].stopIndices.push(si);
-                zones[bestZone].camperCount += kidCount[si];
-                assignment[si] = bestZone;
-                console.log('[Go] Zone: overflow ' + stops[si].address + ' (' + kidCount[si] + ' kids) → ' + zones[bestZone].busName);
-            }
+            // Move the stop
+            const movedSi = overZone.stopIndices.splice(bestStopLocalIdx, 1)[0];
+            overZone.camperCount -= kidCount[movedSi];
+            zones[bestTargetZi].stopIndices.push(movedSi);
+            zones[bestTargetZi].camperCount += kidCount[movedSi];
         }
 
         // Log summary
-        console.log('[Go] Greedy zones: ' + zones.length + ' zones, ' + totalKids + ' kids across ' + stops.length + ' stops');
+        console.log('[Go] Zones: ' + zones.length + ' compact clusters, ' + totalKids + ' kids across ' + numStops + ' stops');
         zones.forEach(z => {
             console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' + z.stopIndices.length + ' stops');
         });
