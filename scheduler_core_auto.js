@@ -6358,6 +6358,22 @@
                         var existingWalls = (bunkTimelines[bunk] || []).map(w => ({ s: w.startMin, e: w.endMin }));
                         var allGapsForBunk = spComputeGaps(existingWalls, gradeStart, gradeEnd);
 
+                        // ★ v14.0: Pre-compute which required layers ALREADY fit in current gaps.
+                        // Only layers that currently fit can block special placement.
+                        // If a layer already can't fit (e.g., snack window has no viable gap),
+                        // don't let it veto the special — the special isn't the cause.
+                        var layersThatCurrentlyFit = [];
+                        for (var pli = 0; pli < gradeLayers.length; pli++) {
+                            var pll = gradeLayers[pli];
+                            var plt = (pll.type || '').toLowerCase();
+                            if (!['swim', 'snack', 'snacks', 'custom'].includes(plt)) continue;
+                            if (plt === 'custom' && pll._classification === 'pinned') continue;
+                            if (pll.startMin == null || pll.endMin == null) continue;
+                            if (spCanLayerFit(allGapsForBunk, pll)) {
+                                layersThatCurrentlyFit.push(pll);
+                            }
+                        }
+
                         // ★ Try ALL valid positions for this special
                         var candidatePositions = [];
                         var _sp25_rtBlockCount = 0, _sp25_layerBlockCount = 0, _sp25_gapTooSmall = 0;
@@ -6373,14 +6389,11 @@
                                 var withSpecial = existingWalls.concat([{ s: pos, e: pos + specialDur }]);
                                 var gapsAfter = spComputeGaps(withSpecial, gradeStart, gradeEnd);
 
-                                // HARD CHECK: can all required layers still fit?
+                                // HARD CHECK: only check layers that CURRENTLY fit.
+                                // If a layer already doesn't fit, the special isn't to blame.
                                 var allLayersFit = true;
-                                for (var li = 0; li < gradeLayers.length; li++) {
-                                    var ll = gradeLayers[li];
-                                    var lt = (ll.type || '').toLowerCase();
-                                    if (!['swim', 'snack', 'snacks', 'custom'].includes(lt)) continue;
-                                    if (lt === 'custom' && ll._classification === 'pinned') continue;
-                                    if (ll.startMin == null || ll.endMin == null) continue;
+                                for (var li = 0; li < layersThatCurrentlyFit.length; li++) {
+                                    var ll = layersThatCurrentlyFit[li];
                                     if (!spCanLayerFit(gapsAfter, ll)) { allLayersFit = false; break; }
                                 }
                                 if (!allLayersFit) { _sp25_layerBlockCount++; continue; }
@@ -6426,11 +6439,8 @@
                                     var withSpecialEnd = existingWalls.concat([{ s: endPos, e: endPos + specialDur }]);
                                     var gapsAfterEnd = spComputeGaps(withSpecialEnd, gradeStart, gradeEnd);
                                     var layersFitEnd = true;
-                                    for (var lei = 0; lei < gradeLayers.length; lei++) {
-                                        var lle = gradeLayers[lei]; var lte = (lle.type || '').toLowerCase();
-                                        if (!['swim', 'snack', 'snacks', 'custom'].includes(lte)) continue;
-                                        if (lte === 'custom' && lle._classification === 'pinned') continue;
-                                        if (lle.startMin == null || lle.endMin == null) continue;
+                                    for (var lei = 0; lei < layersThatCurrentlyFit.length; lei++) {
+                                        var lle = layersThatCurrentlyFit[lei];
                                         if (!spCanLayerFit(gapsAfterEnd, lle)) { layersFitEnd = false; break; }
                                     }
                                     if (layersFitEnd) {
@@ -6464,11 +6474,8 @@
                                         var rwithSpecial = existingWalls.concat([{ s: rpos, e: rpos + triedDur }]);
                                         var rgapsAfter = spComputeGaps(rwithSpecial, gradeStart, gradeEnd);
                                         var rallFit = true;
-                                        for (var rli = 0; rli < gradeLayers.length; rli++) {
-                                            var rll = gradeLayers[rli]; var rlt = (rll.type || '').toLowerCase();
-                                            if (!['swim', 'snack', 'snacks', 'custom'].includes(rlt)) continue;
-                                            if (rlt === 'custom' && rll._classification === 'pinned') continue;
-                                            if (rll.startMin == null || rll.endMin == null) continue;
+                                        for (var rli = 0; rli < layersThatCurrentlyFit.length; rli++) {
+                                            var rll = layersThatCurrentlyFit[rli];
                                             if (!spCanLayerFit(rgapsAfter, rll)) { rallFit = false; break; }
                                         }
                                         if (rallFit) candidatePositions.push({ pos: rpos, score: -100, deadGapCount: 0 });
