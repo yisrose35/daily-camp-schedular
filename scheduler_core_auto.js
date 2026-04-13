@@ -4697,6 +4697,64 @@
                         }
                     }
 
+                    // ★ v14.0: If NO gaps exist at all, force-split the largest sport/slot
+                    // block to create room. This is the absolute last resort — a bunk MUST
+                    // have its required snack/swim even if it means shortening a sport.
+                    if (!iaBestGap && ['snacks', 'swim'].indexOf(iat) >= 0) {
+                        var fsBestIdx = -1, fsBestDur = 0;
+                        for (var fsi = 0; fsi < iaTl.length; fsi++) {
+                            var fsBlk = iaTl[fsi];
+                            if (fsBlk._fixed || isPhase0(fsBlk)) continue;
+                            var fsBt = (fsBlk.type || '').toLowerCase();
+                            if (!['sport', 'slot'].includes(fsBt)) continue;
+                            var fsDur = fsBlk.endMin - fsBlk.startMin;
+                            // Sport must be big enough that splitting leaves both halves >= 5min
+                            if (fsDur >= iac.dMin + 5 && fsDur > fsBestDur) {
+                                fsBestDur = fsDur;
+                                fsBestIdx = fsi;
+                            }
+                        }
+                        if (fsBestIdx >= 0) {
+                            // Create a synthetic gap by shrinking this sport block
+                            var fsSport = iaTl[fsBestIdx];
+                            var fsPlaceStart = Math.max(fsSport.startMin, iaWinS);
+                            var fsPlaceEnd = fsPlaceStart + iac.dMin;
+                            fsPlaceEnd = Math.min(fsPlaceEnd, fsSport.endMin);
+                            fsPlaceEnd = Math.round(fsPlaceEnd / 5) * 5;
+
+                            // Shrink the sport block
+                            var fsOrigEnd = fsSport.endMin;
+                            fsSport.endMin = fsPlaceStart;
+                            // Remainder sport after the snack
+                            if (fsOrigEnd - fsPlaceEnd >= 5) {
+                                iaTl.push({
+                                    startMin: fsPlaceEnd, endMin: fsOrigEnd,
+                                    type: fsSport.type, event: fsSport.event,
+                                    layer: fsSport.layer, field: fsSport.field,
+                                    dMin: fsSport.dMin, dMax: fsSport.dMax,
+                                    _source: 'inject-split', _assignedSport: fsSport._assignedSport,
+                                    _sportFallbacks: fsSport._sportFallbacks
+                                });
+                            }
+                            // Remove zero-length original if needed
+                            if (fsSport.endMin <= fsSport.startMin) { iaTl.splice(fsBestIdx, 1); }
+
+                            // Insert the snack/swim
+                            iaTl.push({
+                                startMin: fsPlaceStart, endMin: fsPlaceEnd,
+                                type: iat === 'snacks' ? 'snacks' : iat, event: iaEvent, layer: ial,
+                                dMin: iac.dMin, dMax: iac.dMax,
+                                _source: 'finisher-force-split', _activityLocked: true, _final: true
+                            });
+                            iaTl.sort(function(a, b) { return a.startMin - b.startMin; });
+                            bunkTimelines[iaBunk] = iaTl;
+                            iaHas[iat] = true;
+                            injectCount++;
+                            log('[Phase3] ★ FORCE-INJECT: split sport block to place ' + iat + ' for bunk ' + iaBunk);
+                            continue;
+                        }
+                    }
+
                     if (iaBestGap) {
                         // Place the need: take dMin from the gap, let rebalancer adjust later
                         var placeStart = Math.max(iaBestGap.start, iaWinS);
