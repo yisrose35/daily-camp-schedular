@@ -126,7 +126,7 @@
     <section id="products" class="products reveal">
         <div class="section-header">
             <span class="section-eyebrow">The Suite</span>
-            <h2 class="section-title">Three products, one mission</h2>
+            <h2 class="section-title">Seven products, one mission</h2>
             <p class="section-sub">Everything you need to run a smooth camp day</p>
         </div>
         <div class="products-grid">
@@ -160,14 +160,7 @@
             <div class="product-card product-go">
                 <div class="product-badge coming-soon">Coming Soon</div>
                 <div class="product-icon-wrapper">
-                    <div class="product-logo-placeholder" title="Campistry Go">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M8 6v6m7-6v6"/>
-                            <rect x="1" y="3" width="22" height="16" rx="3"/>
-                            <circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/>
-                            <path d="M5 19h14"/>
-                        </svg>
-                    </div>
+                    <img src="Go_clean.png" alt="Campistry Go" class="product-logo-img">
                 </div>
                 <h3 class="product-name">Campistry <span>Go</span></h3>
                 <p class="product-tagline">Transportation Management</p>
@@ -208,6 +201,86 @@
                 <button class="product-cta disabled" disabled>
                     Coming Summer 2026
                 </button>
+            </div>
+            <!-- HEALTH -->
+            <div class="product-card product-health">
+                <div class="product-badge coming-soon">Coming Soon</div>
+                <div class="product-icon-wrapper">
+                    <img src="Health_clean.png" alt="Campistry Health" class="product-logo-img">
+                </div>
+                <h3 class="product-name">Campistry <span>Health</span></h3>
+                <p class="product-tagline">Medical Records &amp; Wellness</p>
+                <p class="product-desc">
+                    Centralized health center for medical staff and directors. Track medications, allergies, incidents, and daily wellness checks — all in one HIPAA-aware workspace.
+                </p>
+                <ul class="product-features">
+                    <li>Full medical record management</li>
+                    <li>Daily wellness check-ins</li>
+                    <li>Medication tracking &amp; dispensing logs</li>
+                    <li>Incident &amp; injury reports</li>
+                    <li>Medical staff dashboard</li>
+                    <li>Director-level health overview</li>
+                </ul>
+            </div>
+            <!-- LIVE -->
+            <div class="product-card product-live">
+                <div class="product-badge coming-soon">Coming Soon</div>
+                <div class="product-icon-wrapper">
+                    <img src="Live_clean.png" alt="Campistry Live" class="product-logo-img">
+                </div>
+                <h3 class="product-name">Campistry <span>Live</span></h3>
+                <p class="product-tagline">Daily Attendance Tracking</p>
+                <p class="product-desc">
+                    Real-time attendance for every camper, every day. Syncs with Go for bus arrival confirmation and gives counselors instant headcount tools.
+                </p>
+                <ul class="product-features">
+                    <li>Real-time camper check-in/out</li>
+                    <li>Bus arrival sync with Go</li>
+                    <li>Absence &amp; late arrival alerts</li>
+                    <li>Counselor headcount tools</li>
+                    <li>Daily attendance reports</li>
+                    <li>Parent notification integration</li>
+                </ul>
+            </div>
+            <!-- SNACKS -->
+            <div class="product-card product-snacks">
+                <div class="product-badge coming-soon">Coming Soon</div>
+                <div class="product-icon-wrapper">
+                    <img src="Snacks_clean.png" alt="Campistry Snacks" class="product-logo-img">
+                </div>
+                <h3 class="product-name">Campistry <span>Snacks</span></h3>
+                <p class="product-tagline">Canteen Management</p>
+                <p class="product-desc">
+                    Manage your camp canteen from inventory to point-of-sale. Track balances, handle dietary restrictions, and give parents full visibility into purchases.
+                </p>
+                <ul class="product-features">
+                    <li>Camper balance &amp; spending tracking</li>
+                    <li>Dietary restriction alerts</li>
+                    <li>Inventory management</li>
+                    <li>Point-of-sale interface</li>
+                    <li>Parent spending reports</li>
+                    <li>Daily canteen analytics</li>
+                </ul>
+            </div>
+            <!-- LINK -->
+            <div class="product-card product-link">
+                <div class="product-badge coming-soon">Coming Soon</div>
+                <div class="product-icon-wrapper">
+                    <img src="Link_clean.png" alt="Campistry Link" class="product-logo-img">
+                </div>
+                <h3 class="product-name">Campistry <span>Link</span></h3>
+                <p class="product-tagline">Communication Portal</p>
+                <p class="product-desc">
+                    The bridge between camp and home. Parents, staff, and directors stay connected through a unified communication hub with broadcasts, updates, and direct messaging.
+                </p>
+                <ul class="product-features">
+                    <li>Camp-wide broadcasts</li>
+                    <li>Direct parent messaging</li>
+                    <li>Staff announcements</li>
+                    <li>Photo &amp; update sharing</li>
+                    <li>Emergency notifications</li>
+                    <li>Multi-channel delivery</li>
+                </ul>
             </div>
         </div>
     </section>
@@ -577,6 +650,7 @@
     <!-- ========================================= -->
     <script src="offline_data.js" onerror=""></script>
     <script src="demo_mode.js"></script>
+    <script src="config.js"></script>
     <script>
 if (window.location.protocol === 'file:') {
     document.write('<script src="supabase-js-local.js"><\/script>');

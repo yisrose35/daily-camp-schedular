@@ -301,6 +301,147 @@ function showAlert(message) {
 }
 
 // =================================================================
+// COPY GRADE MODAL — Copy skeleton from one division to others
+// =================================================================
+function showCopyGradeModal(skeleton, onApply) {
+  const divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  if (divisions.length < 2) { showAlert('Need at least 2 grades to copy between.'); return; }
+
+  // Find which divisions have events
+  const divsWithEvents = new Set(skeleton.map(ev => ev.division).filter(Boolean));
+
+  const existing = document.getElementById('ms-modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'ms-modal-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'ms-modal';
+  modal.style.cssText = 'max-width:440px; width:90%;';
+
+  modal.innerHTML = `
+    <div style="padding:20px 24px 0;">
+      <h3 style="margin:0 0 4px; font-size:1.05rem; color:#1E293B;">Copy Grade Schedule</h3>
+      <p style="margin:0 0 16px; font-size:0.82rem; color:#64748B;">Copy the skeleton from one grade and apply it to one or more other grades.</p>
+    </div>
+    <div style="padding:0 24px 20px;">
+      <label style="font-size:0.85rem; font-weight:600; color:#374151; display:block; margin-bottom:6px;">Copy from:</label>
+      <select id="cg-from" style="width:100%; padding:8px 12px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.9rem; margin-bottom:16px;">
+        <option value="">Select source grade...</option>
+        ${divisions.map(d => `<option value="${d}" ${divsWithEvents.has(d) ? '' : 'disabled'}>${d}${divsWithEvents.has(d) ? '' : ' (empty)'}</option>`).join('')}
+      </select>
+
+      <label style="font-size:0.85rem; font-weight:600; color:#374151; display:block; margin-bottom:6px;">Copy to:</label>
+      <div id="cg-targets" style="display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; margin-bottom:16px;">
+      </div>
+    </div>
+    <div class="ms-modal-footer" style="display:flex; gap:8px; justify-content:flex-end; padding:12px 24px; border-top:1px solid #E5E7EB;">
+      <button id="cg-cancel" class="ms-btn ms-btn-ghost">Cancel</button>
+      <button id="cg-apply" class="ms-btn ms-btn-primary" disabled>Copy</button>
+    </div>
+  `;
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  const fromSelect = modal.querySelector('#cg-from');
+  const targetsDiv = modal.querySelector('#cg-targets');
+  const applyBtn = modal.querySelector('#cg-apply');
+  let selectedTargets = new Set();
+
+  function renderTargets() {
+    const sourceDiv = fromSelect.value;
+    targetsDiv.innerHTML = '';
+    selectedTargets.clear();
+
+    if (!sourceDiv) {
+      targetsDiv.innerHTML = '<div style="color:#9CA3AF; font-size:0.82rem; padding:8px;">Select a source grade first.</div>';
+      applyBtn.disabled = true;
+      return;
+    }
+
+    divisions.filter(d => d !== sourceDiv).forEach(d => {
+      const row = document.createElement('label');
+      row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 12px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px; cursor:pointer; user-select:none;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = d;
+      cb.style.cssText = 'width:16px; height:16px; accent-color:#147D91;';
+      cb.onchange = () => {
+        if (cb.checked) selectedTargets.add(d);
+        else selectedTargets.delete(d);
+        applyBtn.disabled = selectedTargets.size === 0;
+      };
+
+      const label = document.createElement('span');
+      label.style.cssText = 'font-size:0.88rem; color:#1F2937;';
+      label.textContent = d;
+
+      const hasEvents = divsWithEvents.has(d);
+      if (hasEvents) {
+        const warn = document.createElement('span');
+        warn.style.cssText = 'font-size:0.7rem; color:#D97706; margin-left:auto;';
+        warn.textContent = 'has events (will be replaced)';
+        row.appendChild(cb); row.appendChild(label); row.appendChild(warn);
+      } else {
+        row.appendChild(cb); row.appendChild(label);
+      }
+
+      targetsDiv.appendChild(row);
+    });
+
+    // Select all button
+    const selectAllRow = document.createElement('div');
+    selectAllRow.style.cssText = 'display:flex; justify-content:flex-end; margin-top:4px;';
+    const selectAllBtn = document.createElement('button');
+    selectAllBtn.textContent = 'Select All';
+    selectAllBtn.style.cssText = 'font-size:0.78rem; color:#147D91; background:none; border:none; cursor:pointer; text-decoration:underline;';
+    selectAllBtn.onclick = () => {
+      targetsDiv.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = true;
+        selectedTargets.add(cb.value);
+      });
+      applyBtn.disabled = false;
+    };
+    selectAllRow.appendChild(selectAllBtn);
+    targetsDiv.appendChild(selectAllRow);
+  }
+
+  fromSelect.onchange = renderTargets;
+  renderTargets();
+
+  modal.querySelector('#cg-cancel').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  applyBtn.onclick = () => {
+    const sourceDiv = fromSelect.value;
+    if (!sourceDiv || selectedTargets.size === 0) return;
+
+    // Get source events
+    const sourceEvents = skeleton.filter(ev => ev.division === sourceDiv);
+    if (sourceEvents.length === 0) { overlay.remove(); showAlert('Source grade has no events to copy.'); return; }
+
+    // Remove existing events for target divisions
+    let updated = skeleton.filter(ev => !selectedTargets.has(ev.division));
+
+    // Copy source events to each target
+    selectedTargets.forEach(targetDiv => {
+      sourceEvents.forEach(ev => {
+        updated.push({
+          ...JSON.parse(JSON.stringify(ev)),
+          division: targetDiv,
+          id: 'evt_' + Math.random().toString(36).slice(2, 9)
+        });
+      });
+    });
+
+    overlay.remove();
+    onApply(updated);
+  };
+}
+
+// =================================================================
 // Get all available locations (fields + facilities + locations + special activities)
 // =================================================================
 function getAllLocations() {
@@ -671,6 +812,13 @@ function renderToolbar() {
         <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
       </button>
     </div>
+
+    <!-- Copy Grade -->
+    <div class="ms-toolbar-group" style="border-right:none;">
+      <button id="tb-copy-grade-btn" class="ms-btn ms-btn-ghost" title="Copy schedule from one grade to others">
+        Copy Grade
+      </button>
+    </div>
   `;
   
   // Bindings
@@ -741,19 +889,19 @@ function renderToolbar() {
   
   document.getElementById('tb-delete-btn').onclick = async () => {
     if (!window.AccessControl?.checkSetupAccess('delete schedule templates')) return;
-    
+
     const nameToDelete = document.getElementById('tb-delete-select').value;
     if (!nameToDelete) {
       await showAlert('Please select a template to delete.');
       return;
     }
-    
+
     const ok = await showConfirm(`Permanently delete "${nameToDelete}"?`);
     if (ok) {
       if (window.deleteSkeleton) {
         window.deleteSkeleton(nameToDelete);
         window.forceSyncToCloud?.();
-        
+
         if (currentLoadedTemplate === nameToDelete) {
           currentLoadedTemplate = null;
           dailySkeleton = [];
@@ -761,12 +909,22 @@ function renderToolbar() {
           clearDraftFromLocalStorage();
           renderGrid();
         }
-        
+
         await showAlert('Template deleted.');
         renderToolbar();
         renderExpandSection();
       }
     }
+  };
+
+  document.getElementById('tb-copy-grade-btn').onclick = () => {
+    showCopyGradeModal(dailySkeleton, (updated) => {
+      dailySkeleton = updated;
+      hasUnsavedChanges = true;
+      saveDraftToLocalStorage();
+      renderGrid();
+      renderToolbar();
+    });
   };
 }
 

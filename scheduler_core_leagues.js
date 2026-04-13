@@ -487,11 +487,16 @@ for (const futureDate of Object.keys(allDailyData)) {
             if (field.available === false) continue;
             if (disabledFields && disabledFields.includes(field.name)) continue;
 
-            // ★★★ CHECK GLOBAL LOCKS FIRST ★★★
+           // ★★★ CHECK GLOBAL LOCKS FIRST (TIME-BASED to avoid cross-division false positives) ★★★
             if (window.GlobalFieldLocks && slots && slots.length > 0) {
-                const lockInfo = window.GlobalFieldLocks.isFieldLocked(field.name, slots);
+                const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
+                const _poolStartMin = _poolDivSlots[slots[0]]?.startMin;
+                const _poolEndMin = _poolDivSlots[slots[slots.length - 1]]?.endMin;
+                const lockInfo = (_poolStartMin != null && _poolEndMin != null)
+                    ? window.GlobalFieldLocks.isFieldLockedByTime(field.name, _poolStartMin, _poolEndMin, divisionNames[0])
+                    : window.GlobalFieldLocks.isFieldLocked(field.name, slots);
                 if (lockInfo) {
-                    console.log(`[RegularLeagues] ⚠️ Field "${field.name}" locked by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
+                    console.log(`[RegularLeagues] ⚠️ Field "${field.name}" time-locked by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
                     continue;
                 }
             }

@@ -227,17 +227,16 @@
                     <button class="sidebar-item active" data-tab="setup">
                         <span class="sidebar-dot"></span> Setup (Bunks / Divisions)
                     </button>
+                    <button class="sidebar-item" data-tab="facilities">
+                        <span class="sidebar-dot"></span> Facilities
                     <button class="sidebar-item" data-tab="rules">
                         <span class="sidebar-dot"></span> Rules
                     </button>
                     <button class="sidebar-item" data-tab="locations">
                         <span class="sidebar-dot"></span> Location Zones
                     </button>
-                    <button class="sidebar-item" data-tab="fields">
-                        <span class="sidebar-dot"></span> Fields
-                    </button>
-                    <button class="sidebar-item" data-tab="special_activities">
-                        <span class="sidebar-dot"></span> Special Activities
+                    <button class="sidebar-item" data-tab="zones">
+                        <span class="sidebar-dot"></span> Zones
                     </button>
                     <button class="sidebar-item" data-tab="leagues">
                         <span class="sidebar-dot"></span> Leagues
@@ -413,9 +412,12 @@
                 <!-- ======================================================= -->
                 <!-- OTHER TABS -->
                 <!-- ======================================================= -->
-                <div id="locations" class="tab-content"></div>
-                <div id="fields" class="tab-content"></div>
-                <div id="special_activities" class="tab-content"></div>
+                <div id="facilities" class="tab-content"></div>
+                <div id="zones" class="tab-content"></div>
+                <!-- Legacy tabs (hidden, kept for API compatibility) -->
+                <div id="locations" class="tab-content" style="display:none"></div>
+                <div id="fields" class="tab-content" style="display:none"></div>
+                <div id="special_activities" class="tab-content" style="display:none"></div>
                 <div id="leagues" class="tab-content"></div>
                <div id="specialty-leagues" class="tab-content"></div>
                 <div id="rules" class="tab-content"></div>
@@ -462,6 +464,8 @@
 <!-- CLOUD FOUNDATION (MUST LOAD FIRST) -->
     <script src="offline_data.js" onerror=""></script>
 <script src="demo_mode.js"></script>
+<!-- Optional: config.js (gitignored) sets window.__CAMPISTRY_SUPABASE__ so keys stay out of repo -->
+<script src="config.js"></script>
 <script>
 // ★ v7.1: Non-blocking Supabase loader (fixes Chrome document.write warning)
 (function() {
@@ -641,6 +645,8 @@
 <script src="midday_rain_stacker.js"></script>
 <script src="special_activities.js"></script>
 <script src="fields.js"></script>
+<script src="facilities.js"></script>
+<script src="zones.js"></script>
 <script src="leagues.js"></script>
 <script src="specialty_leagues.js"></script>
 <script src="master_schedule_builder.js"></script>
@@ -717,9 +723,8 @@ function showTab(id) {
     );
 
     if (id === "setup") window.initApp1?.();
-    if (id === "locations") window.initLocationsTab?.();
-    if (id === "fields") window.initFieldsTab?.();
-    if (id === "special_activities") window.initSpecialActivitiesTab?.();
+    if (id === "facilities") window.initFacilitiesTab?.();
+    if (id === "zones") window.initZonesTab?.();
     if (id === "leagues") window.initLeagues?.();
     if (id === "specialty-leagues") window.initSpecialtyLeagues?.();
     if (id === "rules") window.initRulesTab?.();

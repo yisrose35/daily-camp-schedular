@@ -59,8 +59,8 @@
      */
     GlobalFieldLocks.lockField = function(fieldName, slots, lockInfo) {
         if (!this._initialized) this.reset();
-        if (!fieldName || !slots || slots.length === 0) return false;
-        
+        if (!fieldName || typeof fieldName !== 'string' || !slots || slots.length === 0) return false;
+
         const normalizedField = fieldName.toLowerCase().trim();
         
         for (const slotIdx of slots) {

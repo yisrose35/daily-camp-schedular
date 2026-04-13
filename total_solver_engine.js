@@ -227,7 +227,7 @@
             var capacity = 1, sharingType = 'not_sharable', prefList = null, prefExclusive = false;
             if (fieldProps.sharableWith) {
                 var sw = fieldProps.sharableWith;
-                if (sw.type === 'not_sharable') { capacity = 1; sharingType = 'not_sharable'; }
+                if (sw.type === 'not_sharable') { capacity = parseInt(sw.capacity) || 1; sharingType = 'not_sharable'; }
                 else if (sw.type === 'all') { capacity = parseInt(sw.capacity) || 999; sharingType = 'all'; }
                 else if (sw.type === 'same_division') { capacity = parseInt(sw.capacity) || 2; sharingType = 'same_division'; }
                 else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
@@ -643,11 +643,26 @@
         else { var actPrefProps = activityProperties[act]; if (actPrefProps?.preferences?.enabled && (actPrefProps.preferences.list || []).indexOf(blockDivName) === -1 && actPrefProps.preferences.exclusive) return 999999; }
         var rotationPenalty = getPrecomputedRotationScore(bunk, act);
         if (rotationPenalty === Infinity) return 999999;
-        var specialRule = activityProperties[act];
-        if (specialRule?.maxUsage > 0) {
-            var hist = getActivityCount(bunk, act);
-            var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
-            if (hist + todayCount >= specialRule.maxUsage) return 999999;
+       var specialRule = activityProperties[act];
+        if (specialRule) {
+            // ★ Per-grade cap: use grade-specific override if available
+            var _effectiveMax = specialRule.maxUsage || 0;
+            var _blockDiv = block?._divName || blockDivName;
+            if (_blockDiv && specialRule.maxUsagePerGrade && specialRule.maxUsagePerGrade[_blockDiv] > 0) {
+                _effectiveMax = specialRule.maxUsagePerGrade[_blockDiv];
+            }
+            if (_effectiveMax > 0) {
+                var hist = getActivityCount(bunk, act);
+                var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
+                if (hist + todayCount >= _effectiveMax) return 999999;
+            }
+            // ★ Min frequency: strong bonus when bunk is below the floor
+            var _minFreq = parseInt(specialRule.minFrequency) || 0;
+            if (_minFreq > 0) {
+                var _curCount = getActivityCount(bunk, act);
+                var _shortage = _minFreq - _curCount;
+                if (_shortage > 0) penalty -= (_shortage * 8000);
+            }
         }
 
         // ★ v3.7: Multi-Part gate + follow-up urgency
@@ -1234,6 +1249,8 @@ else penalty += 200;
                 if (!globallyValid[ci2]) continue;
                 var c2 = allCands[ci2], fn = c2.field, fnorm = c2._fieldNorm;
                 if (window.GlobalFieldLocks?.isFieldLocked(fn, slots, blockDiv)) continue;
+                var _dLoc = window.getLocationForActivity?.(c2.activityName||fn) || window.getPinnedTileDefaultLocation?.(c2.activityName||fn);
+                if (_dLoc && typeof _dLoc === 'string' && window.GlobalFieldLocks?.isFieldLocked(_dLoc, slots, blockDiv)) continue;
                 if (hasTime && S.isFieldLockedByTime(fn, startMin, endMin, blockDiv)) continue;
                 // ★ v15.0: Rainy time bypass — skip canBlockFit (which enforces time rules)
                 var skipTimeCheck = S._isRainyDay && S._rainyTimeBypasses.has(fn);
@@ -1361,7 +1378,7 @@ else penalty += 200;
             var blk = activityBlocks[bi], sc = [];
             for (var ci of dom) { var c = allCands[ci]; if (!isPickStillValid(blk,c)) continue;
                 var an = normName(c.activityName);
-                if (an&&an!=='free'&&an!=='free play') { var gd = globalBunkActs.get(blk.bunk); if (gd&&gd.has(an)) continue; }
+               if (an&&an!=='free'&&an!=='free play') { var gd = globalBunkActs.get(blk.bunk); if (gd&&gd.has(an)) continue; var _preTd=S.getActivitiesDoneToday(blk.bunk,blk.slots?.[0]??999); if(_preTd.has(an)) continue; }
                 S.setScratchPick(c); var cost = S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (cost<900000) sc.push({bi:bi,ci:ci,cost:cost}); }
             sc.sort(function(a,b){return a.cost-b.cost;});
             // ★★★ FIX v15.5: If NO valid candidates (all >= 900000), assign Free ★★★
@@ -1421,6 +1438,9 @@ else penalty += 200;
                 var fp=S._fieldPropertyMap.get(fName), cap=fp?fp.capacity:S.getFieldCapacity(fName), st=fp?fp.sharingType:S.getSharingType(fName);
                var liveUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?(st==='not_sharable'?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk)):0;
                 var canFit=false;
+               if (st==='not_sharable') { var _nsBatchUse=0; if(b2.startTime!==undefined&&b2.endTime!==undefined){for(var _nsri=0;_nsri<results.length;_nsri++){var _nsr=results[_nsri];if(_nsr.candIdx===-1||normName(_nsr.pick.field)!==fn2)continue;var _nsrb=activityBlocks[_nsr.blockIdx];if(_nsrb.bunk===b2.bunk)continue;if(_nsrb.startTime<b2.endTime&&_nsrb.endTime>b2.startTime)_nsBatchUse++;}} canFit=(existUse+grpUse+_nsBatchUse<cap); }
+                else if (st==='same_division'||st==='custom') {
+                    var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                 if (liveUse>=cap) { canFit=false; }
                 else if (st==='not_sharable') { canFit=true; }
                 else if (st==='same_division'||st==='custom') {                    var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
@@ -1526,8 +1546,12 @@ else penalty += 200;
     function isPickStillValid(block, cand) {
         var fn=cand.field,fnorm=cand._fieldNorm||normName(fn),bunk=block.bunk,bDiv=block.divName||'',sM=block.startTime,eM=block.endTime;
         if (sM===undefined||eM===undefined) return true;
+        var slots=block.slots||[];
+        if (window.GlobalFieldLocks?.isFieldLocked(fn,slots,bDiv)) return false;
+        var _vLoc=window.getLocationForActivity?.(cand.activityName||fn)||window.getPinnedTileDefaultLocation?.(cand.activityName||fn);
+        if (_vLoc&&typeof _vLoc==='string'&&window.GlobalFieldLocks?.isFieldLocked(_vLoc,slots,bDiv)) return false;
         var cAn=normName(cand.activityName);
-        if (cAn&&cAn!=='free'&&cAn!=='free play') { var bs=window.scheduleAssignments?.[bunk]||[]; var ms=new Set(block.slots||[]); for (var i=0;i<bs.length;i++) { if (ms.has(i)) continue; var e=bs[i]; if (!e||e.continuation||e._isTransition) continue; if (normName(e._activity||e.sport||e.field)===cAn) return false; } }
+        if (cAn&&cAn!=='free'&&cAn!=='free play') { var bs=window.scheduleAssignments?.[bunk]||[]; var ms=new Set(slots); for (var i=0;i<bs.length;i++) { if (ms.has(i)) continue; var e=bs[i]; if (!e||e.continuation||e._isTransition) continue; if (normName(e._activity||e.sport||e.field)===cAn) return false; } }
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
         var fp=S._fieldPropertyMap.get(fn); var cap=fp?fp.capacity:S.getFieldCapacity(fn); var st=fp?fp.sharingType:S.getSharingType(fn);
         if (S.checkCrossDivisionTimeConflict(fn,bDiv,sM,eM,bunk)) return false;
@@ -1597,6 +1621,7 @@ else penalty += 200;
             var bi=freeIdx[idx],blk=activityBlocks[bi],bunk=blk.bunk,bDiv=blk.divName||'',sM=blk.startTime,eM=blk.endTime,slots=blk.slots||[];
             if (sM===undefined||eM===undefined) continue; S._todayCache.clear();
             var fresh=[];
+            for (var ci=0;ci<allCands.length;ci++) { var c=allCands[ci]; if (disabled.indexOf(c.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue; var _cLoc=window.getLocationForActivity?.(c.activityName||c.field)||window.getPinnedTileDefaultLocation?.(c.activityName||c.field); if (_cLoc&&typeof _cLoc==='string'&&window.GlobalFieldLocks?.isFieldLocked(_cLoc,slots)) continue; if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
             for (var ci=0;ci<allCands.length;ci++) {
                 var c=allCands[ci];
                 if (disabled.indexOf(c.field)!==-1) continue;
@@ -1604,8 +1629,7 @@ else penalty += 200;
                 if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue;
                 if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
-                if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }
-                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
+                if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; if(S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
                 if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;
                 S.setScratchPick(c); var dfCost=S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (dfCost<900000) fresh.push({ci:ci,cost:dfCost});
@@ -1624,7 +1648,7 @@ else penalty += 200;
                 var saved={candIdx:oa.candIdx,pick:oa.pick,cost:oa.cost};
                 S.undoPickFromSchedule(ob,oa.pick); var ap=S.clonePick(alts[0].cand); S._assignments.set(obi,{candIdx:alts[0].ci,pick:ap,cost:alts[0].cost}); S.applyPickToSchedule(ob,ap);
                 S.addToFieldTimeIndex(normName(ap.field),ob.startTime,ob.endTime,ob.bunk,ob.divName,normName(ap._activity)); S.removeFromFieldTimeIndex(cfn,ob.startTime,ob.endTime,ob.bunk); S.invalidateRotationCacheForBunk(ob.bunk); S._todayCache.clear();
-                var pf2=[]; for (var pci=0;pci<allCands.length;pci++) { var pc=allCands[pci]; if (disabled.indexOf(pc.field)!==-1) continue; if (S.isFieldLockedByTime(pc.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(pc.field,bDiv,sM,eM,bunk)) continue; var pfp=S._fieldPropertyMap.get(pc.field),pcap=pfp?pfp.capacity:S.getFieldCapacity(pc.field),pst=pfp?pfp.sharingType:S.getSharingType(pc.field); if (pst==='not_sharable') { if (S.getFieldUsageFromTimeIndex(pc._fieldNorm,sM,eM,bunk)>=pcap) continue; } else { if (S.countSameDivisionUsage(pc.field,bDiv,sM,eM,bunk)>=pcap) continue; } var ptd=S.getActivitiesDoneToday(bunk,slots[0]??999),pAn=normName(pc.activityName); if (pAn&&pAn!=='free'&&pAn!=='free play'&&ptd.has(pAn)) continue; if (!actProps[pc.field]&&!actProps[pc.activityName]&&pc.type!=='special') continue; S.setScratchPick(pc); var pCost=S.calculatePenaltyCost(blk,S.setScratchPick(pc)); if (pCost<900000) pf2.push({ci:pci,cost:pCost}); }
+                var pf2=[]; for (var pci=0;pci<allCands.length;pci++) { var pc=allCands[pci]; if (disabled.indexOf(pc.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(pc.field,slots)) continue; var _pLoc=window.getLocationForActivity?.(pc.activityName||pc.field)||window.getPinnedTileDefaultLocation?.(pc.activityName||pc.field); if (_pLoc&&typeof _pLoc==='string'&&window.GlobalFieldLocks?.isFieldLocked(_pLoc,slots)) continue; if (S.isFieldLockedByTime(pc.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(pc.field,bDiv,sM,eM,bunk)) continue; var pfp=S._fieldPropertyMap.get(pc.field),pcap=pfp?pfp.capacity:S.getFieldCapacity(pc.field),pst=pfp?pfp.sharingType:S.getSharingType(pc.field); if (pst==='not_sharable') { if (S.getFieldUsageFromTimeIndex(pc._fieldNorm,sM,eM,bunk)>=pcap) continue; } else { if (S.countSameDivisionUsage(pc.field,bDiv,sM,eM,bunk)>=pcap) continue; } var ptd=S.getActivitiesDoneToday(bunk,slots[0]??999),pAn=normName(pc.activityName); if (pAn&&pAn!=='free'&&pAn!=='free play'&&ptd.has(pAn)) continue; if (!actProps[pc.field]&&!actProps[pc.activityName]&&pc.type!=='special') continue; S.setScratchPick(pc); var pCost=S.calculatePenaltyCost(blk,S.setScratchPick(pc)); if (pCost<900000) pf2.push({ci:pci,cost:pCost}); }
                 if (pf2.length>0) { pf2.sort(function(a,b){return a.cost-b.cost;}); var opk=S.clonePick(allCands[pf2[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:pf2[0].ci,pick:opk,cost:pf2[0].cost}); S.applyPickToSchedule(blk,opk); S.addToFieldTimeIndex(normName(opk.field),sM,eM,bunk,bDiv,normName(opk._activity)); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; break; }
                 else { S.undoPickFromSchedule(ob,ap); S.removeFromFieldTimeIndex(normName(ap.field),ob.startTime,ob.endTime,ob.bunk); S._assignments.set(obi,saved); S.applyPickToSchedule(ob,saved.pick); S.addToFieldTimeIndex(cfn,ob.startTime,ob.endTime,ob.bunk,ob.divName,normName(saved.pick._activity)); S.invalidateRotationCacheForBunk(ob.bunk); S._todayCache.clear(); }
             }
@@ -1899,12 +1923,13 @@ else penalty += 200;
             var c = allCands[ci], fn = c.field, an = normName(c.activityName);
             if (an && an !== 'free' && todayDone.has(an)) continue;
             if (window.GlobalFieldLocks?.isFieldLocked(fn, slots, blockDiv)) continue;
-            if (startMin !== undefined && endMin !== undefined) {
+            if (startMin !== undefined && endMin !== undefined) {f
                 if (S.isFieldLockedByTime(fn, startMin, endMin, blockDiv)) continue;
                 if (S.checkCrossDivisionTimeConflict(fn, blockDiv, startMin, endMin, bunk)) continue;
             }
             var fp = S._fieldPropertyMap.get(fn), cap = fp ? fp.capacity : S.getFieldCapacity(fn), st = fp ? fp.sharingType : S.getSharingType(fn);
             if (startMin !== undefined && endMin !== undefined) {
+                if (S.checkCrossDivisionTimeConflict(fn, blockDiv, startMin, endMin, bunk)) continue;
                 if (st === 'not_sharable') { if (S.getFieldUsageFromTimeIndex(normName(fn), startMin, endMin, bunk) >= cap) continue; }
                 else { if (S.countSameDivisionUsage(fn, blockDiv, startMin, endMin, bunk) >= cap) continue; }
             }

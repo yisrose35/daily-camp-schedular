@@ -180,6 +180,8 @@
         // Tab init functions
         const tabInits = {
             'initApp1 (Setup)':             () => typeof window.initApp1 === 'function',
+            'initFacilitiesTab':            () => typeof window.initFacilitiesTab === 'function',
+            'initZonesTab':                 () => typeof window.initZonesTab === 'function',
             'initLocationsTab':             () => typeof window.initLocationsTab === 'function',
             'initFieldsTab':                () => typeof window.initFieldsTab === 'function',
             'initSpecialActivitiesTab':     () => typeof window.initSpecialActivitiesTab === 'function',
@@ -678,6 +680,8 @@
 
         const tabs = [
             ['setup', 'initApp1'],
+            ['facilities', 'initFacilitiesTab'],
+            ['zones', 'initZonesTab'],
             ['locations', 'initLocationsTab'],
             ['fields', 'initFieldsTab'],
             ['special_activities', 'initSpecialActivitiesTab'],
