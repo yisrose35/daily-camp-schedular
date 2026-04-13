@@ -3480,15 +3480,16 @@
     async function solveWithGraphHopper(stops, vehicle, campLat, campLng, isArrival, needsReturn) {
         const ghKey = getGHKey();
         if (!ghKey || _ghQuotaExhausted) return null;
+        if (!stops.length) return null;
 
         const serviceTime = (D.setup.avgStopTime || 2) * 60;
-        const MAX_GH_SERVICES = 30;
+        // GH free tier: 5 vehicles, up to ~100 services (not 30)
+        const MAX_GH_SERVICES = 80;
 
-        // If >30 stops, optimize the 30 most spread-out, then cheapestInsert the rest
+        // If >MAX stops, optimize the most spread-out, then cheapestInsert the rest
         let primaryStops = stops;
         let overflowStops = [];
         if (stops.length > MAX_GH_SERVICES) {
-            // Pick 30 most spread-out: farthest from centroid first
             const cLat = stops.reduce((s, st) => s + st.lat, 0) / stops.length;
             const cLng = stops.reduce((s, st) => s + st.lng, 0) / stops.length;
             const ranked = stops.map((st, i) => ({ st, i, d: drivingDist(cLat, cLng, st.lat, st.lng) }));
@@ -3503,18 +3504,19 @@
             console.log('[Go] GH: ' + stops.length + ' stops, optimizing ' + primaryStops.length + ', will insert ' + overflowStops.length + ' after');
         }
 
-        // Build GH VRP request
+        // Build GH VRP request — use the documented format exactly
+        // https://docs.graphhopper.com/#tag/Route-Optimization-API
         const services = primaryStops.map((st, i) => ({
             id: 'stop_' + i,
-            address: { location_id: 'stop_' + i, lon: st.lng, lat: st.lat },
+            name: st.address || ('Stop ' + (i + 1)),
+            address: { location_id: 'loc_' + i, lon: st.lng, lat: st.lat },
             size: [st.campers.length],
             duration: serviceTime
         }));
 
         const veh = {
             vehicle_id: vehicle.busId || 'bus_1',
-            type_id: 'bus',
-            return_to_depot: needsReturn
+            type_id: 'bus'
         };
 
         if (isArrival) {
@@ -3524,13 +3526,21 @@
                 const d = drivingDist(campLat, campLng, s.lat, s.lng);
                 if (d > fDist) { fDist = d; fIdx = i; }
             });
-            veh.start_address = { location_id: 'farthest', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
+            veh.start_address = { location_id: 'start', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
             veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
         } else {
             // Dismissal: start from camp
             veh.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
             if (needsReturn) {
-                veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
+                veh.end_address = { location_id: 'camp_end', lon: campLng, lat: campLat };
+            } else {
+                // GH needs end_address even if not returning — use the farthest stop
+                let fIdx = 0, fDist = 0;
+                primaryStops.forEach((s, i) => {
+                    const d = drivingDist(campLat, campLng, s.lat, s.lng);
+                    if (d > fDist) { fDist = d; fIdx = i; }
+                });
+                veh.end_address = { location_id: 'end', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
             }
         }
 
@@ -3554,7 +3564,13 @@
             }
 
             if (!resp.ok) {
-                console.warn('[Go] GH: HTTP ' + resp.status);
+                // Log the error body for debugging
+                try {
+                    const errBody = await resp.text();
+                    console.warn('[Go] GH: HTTP ' + resp.status + ' — ' + errBody.substring(0, 200));
+                } catch (_) {
+                    console.warn('[Go] GH: HTTP ' + resp.status);
+                }
                 return null;
             }
 
@@ -3574,7 +3590,6 @@
             });
 
             // Handle unassigned
-            const assignedIds = new Set(ordered.map((_, i) => i));
             if (result.solution?.unassigned?.services?.length) {
                 result.solution.unassigned.services.forEach(ua => {
                     const idx = parseInt(ua.id?.replace('stop_', ''));
