@@ -61,7 +61,7 @@ let _rainyToggleDebounce = false;
 
 // Constants
 const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
-const PIXELS_PER_MINUTE = 2;
+const PIXELS_PER_MINUTE = 2.5;
 const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
  // ★★★ AUTO BUILDER v2: Check if today uses auto layers ★★★
@@ -1608,13 +1608,13 @@ function renderGrid() {
   
  const gridEl_isMS = gridEl.closest('.ms-container') !== null;
   const G = gridEl_isMS ? 'ms' : 'da';
-  let html = `<div class="${G}-grid" style="grid-template-columns:60px repeat(${availableDivisions.length}, 1fr);">`;
-  
+  let html = `<div class="${G}-grid" style="grid-template-columns:70px repeat(${availableDivisions.length}, 1fr); column-gap:4px;">`;
+
   // Header row
   html += `<div class="da-grid-header da-time-header">Time</div>`;
   availableDivisions.forEach((divName) => {
     const color = divisions[divName]?.color || '#444';
-    html += `<div class="da-grid-header" style="background:${color};color:#fff;">${divName}</div>`;
+    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;">${divName}</div>`;
   });
   
   // Time column
@@ -1801,7 +1801,7 @@ function renderEventTile(ev, top, height) {
   }
   
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
-  const adjustedHeight = Math.max(height - 2, 18); // Minimum 18px height
+  const adjustedHeight = Math.max(height - 2, 24); // ★ v14.0: raised minimum from 18→24
   
   // Night activity styling
   const isNight = !!ev.isNightActivity;
@@ -1812,16 +1812,16 @@ function renderEventTile(ev, top, height) {
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   const nightClass = isNight ? ' da-night-activity' : '';
   
-  // Better font sizing for small tiles
+  // ★ v14.0: Improved font sizing — shifted breakpoints up for taller tiles (2.5px/min)
   let fontSize, lineHeight, padding;
-  if (adjustedHeight < 24) {
-    fontSize = '9px'; lineHeight = '1.1'; padding = '1px 4px';
-  } else if (adjustedHeight < 35) {
-    fontSize = '10px'; lineHeight = '1.2'; padding = '2px 5px';
-  } else if (adjustedHeight < 50) {
-    fontSize = '11px'; lineHeight = '1.2'; padding = '3px 5px';
+  if (adjustedHeight < 30) {
+    fontSize = '10px'; lineHeight = '1.15'; padding = '2px 5px';
+  } else if (adjustedHeight < 45) {
+    fontSize = '11px'; lineHeight = '1.25'; padding = '3px 6px';
+  } else if (adjustedHeight < 60) {
+    fontSize = '12px'; lineHeight = '1.3'; padding = '4px 7px';
   } else {
-    fontSize = '12px'; lineHeight = '1.3'; padding = '4px 6px';
+    fontSize = '13px'; lineHeight = '1.35'; padding = '5px 8px';
   }
   
   const eventName = ev.event || 'Event';
@@ -3924,19 +3924,20 @@ function getStyles() {
     .da-toolbar-group { display:flex; align-items:center; gap:8px; }
     .da-toolbar-label { font-size:12px; color:var(--da-text2); font-weight:500; }
     
-    /* Grid */
-    .da-grid-wrapper { flex:1; overflow:auto; border:1px solid var(--da-border); border-radius:8px; margin:16px; background:#fff; }
+    /* Grid — v14.0: breathing room overhaul */
+    .da-grid-wrapper { flex:1; overflow:auto; border:1px solid var(--da-border); border-radius:10px; margin:16px; background:#f8fafc; }
     .da-grid { display:grid; min-width:700px; }
-    .da-grid-header { position:sticky; top:0; z-index:10; padding:10px 8px; font-weight:600; font-size:12px; text-align:center; border-bottom:1px solid var(--da-border); background:var(--da-bg); }
-    .da-time-header { background:var(--da-surface); }
+    .da-grid-header { position:sticky; top:0; z-index:10; padding:12px 10px; font-weight:600; font-size:13px; text-align:center; border-bottom:2px solid var(--da-border); background:var(--da-bg); letter-spacing:0.3px; }
+    .da-time-header { background:var(--da-surface); font-size:11px; font-weight:500; color:var(--da-text3); }
     .da-time-column { position:relative; background:var(--da-surface); border-right:1px solid var(--da-border); }
-    .da-time-marker { position:absolute; left:0; width:100%; font-size:9px; padding:2px 4px; color:var(--da-text3); border-top:1px dashed #e2e8f0; }
-    .da-grid-cell { position:relative; border-right:1px solid var(--da-border); background:#fff; }
+    .da-time-marker { position:absolute; left:0; width:100%; font-size:11px; padding:3px 6px; color:var(--da-text3); border-top:1px dashed #e2e8f0; font-weight:500; }
+    .da-grid-cell { position:relative; background:#fff; border-radius:0 0 4px 4px; }
+    .da-grid-cell:nth-child(even) { background:#fafbfc; }
     .da-grid-disabled { position:absolute; width:100%; background:repeating-linear-gradient(-45deg,#f1f5f9,#f1f5f9 5px,#e2e8f0 5px,#e2e8f0 10px); z-index:1; pointer-events:none; }
     .da-grid-night-zone { background:rgba(30,41,59,0.1) !important; }
     
     /* Events */
-    .da-event { position:absolute; width:96%; left:2%; padding:4px 6px; border-radius:4px; cursor:pointer; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; overflow:hidden; z-index:2; transition:box-shadow 0.15s; min-height:18px; }
+    .da-event { position:absolute; width:94%; left:3%; padding:5px 8px; border-radius:6px; cursor:pointer; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; overflow:hidden; z-index:2; transition:box-shadow 0.15s, transform 0.1s; min-height:24px; }
     .da-event:hover { box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:5; }
     .da-event.selected { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.3); z-index:10; }
     .da-event.da-resizing { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.25) !important; z-index:100 !important; }
@@ -3970,7 +3971,7 @@ function getStyles() {
     .da-event:hover .da-resize-handle { opacity:1; background:rgba(59,130,246,0.3); }
     
     /* Drop Preview */
-    .da-drop-preview { display:none; position:absolute; left:2%; width:96%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:4px; pointer-events:none; z-index:5; }
+    .da-drop-preview { display:none; position:absolute; left:3%; width:94%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:6px; pointer-events:none; z-index:5; }
     .da-preview-time { text-align:center; padding:8px; color:var(--da-accent); font-weight:600; font-size:12px; background:rgba(255,255,255,0.9); border-radius:3px; margin:4px; }
     
     /* Tooltips & Ghosts */

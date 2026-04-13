@@ -80,21 +80,21 @@ function minutesToTime(min) {
     return h + ':' + m.toString().padStart(2, '0') + ap;
 }
 
-// Format YYYY-MM-DD → DD/MM/YYYY for display
+// Format YYYY-MM-DD → MM/DD/YYYY for display
 function formatDate(dateKey) {
     if (!dateKey || typeof dateKey !== 'string') return dateKey || '';
     const parts = dateKey.split('-');
     if (parts.length !== 3) return dateKey;
-    return parts[2] + '/' + parts[1] + '/' + parts[0];
+    return parts[1] + '/' + parts[2] + '/' + parts[0];
 }
 
-// Parse DD/MM/YYYY or YYYY-MM-DD input → YYYY-MM-DD (internal format)
+// Parse MM/DD/YYYY or YYYY-MM-DD input → YYYY-MM-DD (internal format)
 function parseDateInput(str) {
     if (!str || typeof str !== 'string') return null;
     str = str.trim();
-    // Try DD/MM/YYYY
-    const dmy = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
-    if (dmy) return dmy[3] + '-' + dmy[2].padStart(2, '0') + '-' + dmy[1].padStart(2, '0');
+    // Try MM/DD/YYYY
+    const mdy = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+    if (mdy) return mdy[3] + '-' + mdy[1].padStart(2, '0') + '-' + mdy[2].padStart(2, '0');
     // Try YYYY-MM-DD (already internal format)
     if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
     return null;
@@ -636,8 +636,8 @@ async function showCreateEventModal(containerEl) {
         wide: true,
         fields: [
             { name: 'name', label: 'Name', type: 'text', placeholder: 'e.g., Lice Checking, Photo Day' },
-            { name: 'startDate', label: 'Start Date (DD/MM/YYYY)', type: 'text', placeholder: 'DD/MM/YYYY', default: formatDate(window.currentScheduleDate || '') },
-            { name: 'endDate', label: 'End Date (DD/MM/YYYY)', type: 'text', placeholder: 'DD/MM/YYYY' },
+            { name: 'startDate', label: 'Start Date (MM/DD/YYYY)', type: 'text', placeholder: 'MM/DD/YYYY', default: formatDate(window.currentScheduleDate || '') },
+            { name: 'endDate', label: 'End Date (MM/DD/YYYY)', type: 'text', placeholder: 'MM/DD/YYYY' },
             { name: 'windowStart', label: 'Daily Window Start', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', placeholder: 'e.g., 1:00pm' },
             { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', placeholder: 'e.g., 10' },
@@ -665,11 +665,11 @@ async function showCreateEventModal(containerEl) {
         return;
     }
 
-    // Parse dates (accepts DD/MM/YYYY or YYYY-MM-DD)
+    // Parse dates (accepts MM/DD/YYYY or YYYY-MM-DD)
     const startDate = parseDateInput(result.startDate);
     const endDate = parseDateInput(result.endDate);
     if (!startDate || !endDate) {
-        alertFn('Invalid date format. Please use DD/MM/YYYY.');
+        alertFn('Invalid date format. Please use MM/DD/YYYY.');
         return;
     }
     if (endDate < startDate) {
@@ -724,8 +724,8 @@ async function showEditEventModal(evt, containerEl) {
         wide: true,
         fields: [
             { name: 'name', label: 'Name', type: 'text', default: evt.name },
-            { name: 'startDate', label: 'Start Date (DD/MM/YYYY)', type: 'text', default: formatDate(evt.dateRange.start) },
-            { name: 'endDate', label: 'End Date (DD/MM/YYYY)', type: 'text', default: formatDate(evt.dateRange.end) },
+            { name: 'startDate', label: 'Start Date (MM/DD/YYYY)', type: 'text', default: formatDate(evt.dateRange.start) },
+            { name: 'endDate', label: 'End Date (MM/DD/YYYY)', type: 'text', default: formatDate(evt.dateRange.end) },
             { name: 'windowStart', label: 'Daily Window Start', type: 'text', default: minutesToTime(evt.dailyWindow.startMin) },
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', default: minutesToTime(evt.dailyWindow.endMin) },
             { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', default: String(evt.durationPerBunk) },
