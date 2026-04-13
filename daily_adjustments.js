@@ -2974,6 +2974,7 @@ async function runOptimizer() {
             const success = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
             if (!success) await daShowAlert("Auto scheduler did not complete successfully.");
         } catch (e) {
+            console.error('[AutoScheduler] CRASH:', e.message, '\nStack:', e.stack);
             await daShowAlert("Auto scheduler error: " + e.message);
         }
         return; // ← hard return — never reaches runSkeletonOptimizer
