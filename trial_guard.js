@@ -288,23 +288,31 @@
     // =========================================================================
 
     async function showStarterBanner(campId) {
-        var limits = window.getPlanLimits?.('starter') || { maxScheduleDays: 7, maxCampers: 100 };
-        var scheduleCount = 0;
+        var limits = window.getPlanLimits?.('starter') || { generationWindowDays: 7, maxCampers: 100 };
+        var daysLeft = limits.generationWindowDays || 7;
+        var generationExpired = false;
         var camperCount = 0;
+        var maxCampers = limits.maxCampers || 100;
 
         try {
             var client = window.supabase || window.CampistryDB?.getClient?.();
             if (client && campId) {
-                var schedResult = await client
-                    .from('daily_schedules')
-                    .select('date_key')
-                    .eq('camp_id', campId);
-                if (schedResult.data) {
-                    var dateSet = {};
-                    schedResult.data.forEach(function(r) { dateSet[r.date_key] = true; });
-                    scheduleCount = Object.keys(dateSet).length;
+                // Get first_generation_at from camps table
+                var campResult = await client
+                    .from('camps')
+                    .select('first_generation_at')
+                    .eq('id', campId)
+                    .maybeSingle();
+
+                if (campResult.data?.first_generation_at) {
+                    var firstGen = new Date(campResult.data.first_generation_at).getTime();
+                    var elapsed = Date.now() - firstGen;
+                    var windowMs = (limits.generationWindowDays || 7) * 24 * 60 * 60 * 1000;
+                    daysLeft = Math.max(0, Math.ceil((windowMs - elapsed) / (24 * 60 * 60 * 1000)));
+                    generationExpired = daysLeft <= 0;
                 }
 
+                // Get camper count
                 var stateResult = await client
                     .from('camp_state')
                     .select('state')
@@ -319,11 +327,11 @@
         }
 
         // Determine banner color
-        var schedPct = scheduleCount / limits.maxScheduleDays;
-        var camperPct = camperCount / limits.maxCampers;
-        var maxPct = Math.max(schedPct, camperPct);
-        var bgColor = maxPct >= 1 ? 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)'
-                    : maxPct >= 0.8 ? 'linear-gradient(135deg, #B45309 0%, #D97706 100%)'
+        var camperPct = camperCount / maxCampers;
+        var bgColor = (generationExpired || camperPct >= 1)
+                    ? 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)'
+                    : (daysLeft <= 2 || camperPct >= 0.8)
+                    ? 'linear-gradient(135deg, #B45309 0%, #D97706 100%)'
                     : 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
 
         // Remove existing banner
@@ -342,8 +350,8 @@
         banner.id = 'starter-plan-banner';
         banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:' + bgColor + ';color:white;text-align:center;padding:8px 16px;font-size:0.85rem;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;display:flex;align-items:center;justify-content:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,0.15);animation:trialSlideDown 0.3s ease-out;';
 
-        var schedLabel = scheduleCount + '/' + limits.maxScheduleDays + ' schedules';
-        var camperLabel = camperCount + '/' + limits.maxCampers + ' campers';
+        var schedLabel = generationExpired ? 'Generation expired' : daysLeft + ' day' + (daysLeft !== 1 ? 's' : '') + ' left';
+        var camperLabel = camperCount + '/' + maxCampers + ' campers';
 
         banner.innerHTML = '<span>\u2B50</span>' +
             '<span>Starter Plan: <strong>' + schedLabel + '</strong> \u00B7 <strong>' + camperLabel + '</strong></span>' +

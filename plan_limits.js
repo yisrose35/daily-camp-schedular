@@ -15,11 +15,14 @@
 (function() {
     'use strict';
 
-    // starter: unlimited time, but max 7 unique schedule days + 100 campers
+    // starter: unlimited time in app, but generation expires 7 calendar days
+    //          after first schedule generation + max 100 campers in Me/Go.
+    //          User is NOT locked out — they keep full read/view access,
+    //          they just can't generate new schedules or add more campers.
     // trial (expo2026): 48-hour full access, no feature limits
     // active (justcampit2026): full access, no limits
     var PLAN_LIMITS = Object.freeze({
-        starter:         Object.freeze({ maxScheduleDays: 7,        maxCampers: 100      }),
+        starter:         Object.freeze({ generationWindowDays: 7,   maxCampers: 100      }),
         trial:           Object.freeze({ maxScheduleDays: Infinity,  maxCampers: Infinity }),
         active:          Object.freeze({ maxScheduleDays: Infinity,  maxCampers: Infinity }),
         paid:            Object.freeze({ maxScheduleDays: Infinity,  maxCampers: Infinity }),
@@ -57,10 +60,14 @@
 })();
 
 // =================================================================
-// SQL TO RUN IN SUPABASE DASHBOARD (copy each block separately)
+// SQL TO RUN IN SUPABASE DASHBOARD
 // =================================================================
+// PREREQUISITES:
+//   ALTER TABLE camps ADD COLUMN IF NOT EXISTS first_generation_at TIMESTAMPTZ DEFAULT NULL;
 //
 // --- RPC: check_schedule_limit ---
+// Starter plan: 7 calendar days from first generation, then no more new schedules.
+// Existing schedules can still be viewed/edited. User is NOT locked out.
 /*
 CREATE OR REPLACE FUNCTION check_schedule_limit(p_camp_id UUID, p_date_key TEXT)
 RETURNS JSONB
@@ -69,44 +76,43 @@ SECURITY DEFINER
 AS $$
 DECLARE
     v_plan_status TEXT;
-    v_current_count INT;
-    v_max_days INT := 7;
-    v_date_exists BOOLEAN;
+    v_first_gen TIMESTAMPTZ;
+    v_days_left INT;
+    v_window_days INT := 7;
 BEGIN
-    SELECT plan_status INTO v_plan_status
+    SELECT plan_status, first_generation_at INTO v_plan_status, v_first_gen
     FROM camps WHERE id = p_camp_id;
 
     IF v_plan_status IS DISTINCT FROM 'starter' THEN
         RETURN jsonb_build_object('allowed', true, 'plan', COALESCE(v_plan_status, 'unknown'));
     END IF;
 
-    SELECT EXISTS(
-        SELECT 1 FROM daily_schedules
-        WHERE camp_id = p_camp_id AND date_key = p_date_key
-    ) INTO v_date_exists;
-
-    IF v_date_exists THEN
-        RETURN jsonb_build_object('allowed', true, 'reason', 'existing_date');
+    -- First generation ever: allow and stamp the start time
+    IF v_first_gen IS NULL THEN
+        UPDATE camps SET first_generation_at = NOW() WHERE id = p_camp_id;
+        RETURN jsonb_build_object('allowed', true, 'days_left', v_window_days, 'first_generation', true);
     END IF;
 
-    SELECT COUNT(DISTINCT date_key) INTO v_current_count
-    FROM daily_schedules WHERE camp_id = p_camp_id;
+    -- Calculate remaining days
+    v_days_left := v_window_days - EXTRACT(DAY FROM (NOW() - v_first_gen))::INT;
 
-    IF v_current_count >= v_max_days THEN
+    IF v_days_left <= 0 THEN
         RETURN jsonb_build_object(
             'allowed', false,
-            'reason', 'schedule_limit_reached',
-            'current', v_current_count,
-            'max', v_max_days
+            'reason', 'generation_window_expired',
+            'days_left', 0,
+            'first_generation_at', v_first_gen,
+            'window_days', v_window_days
         );
     END IF;
 
-    RETURN jsonb_build_object('allowed', true, 'current', v_current_count, 'max', v_max_days);
+    RETURN jsonb_build_object('allowed', true, 'days_left', v_days_left, 'window_days', v_window_days);
 END;
 $$;
 */
 //
 // --- RPC: check_camper_limit ---
+// Starter plan: max 100 campers. User can still use app, just can't add more.
 /*
 CREATE OR REPLACE FUNCTION check_camper_limit(p_camp_id UUID, p_new_count INT DEFAULT 1)
 RETURNS JSONB
@@ -147,6 +153,8 @@ $$;
 */
 //
 // --- TRIGGER: enforce_starter_schedule_limit ---
+// Blocks INSERT of new schedules after 7-day window expires.
+// Allows updates to existing schedule rows (upsert on conflict = UPDATE, not INSERT).
 /*
 CREATE OR REPLACE FUNCTION enforce_starter_schedule_limit()
 RETURNS TRIGGER
@@ -154,11 +162,10 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_plan_status TEXT;
-    v_current_count INT;
-    v_max_days INT := 7;
-    v_date_exists BOOLEAN;
+    v_first_gen TIMESTAMPTZ;
+    v_window_days INT := 7;
 BEGIN
-    SELECT plan_status INTO v_plan_status
+    SELECT plan_status, first_generation_at INTO v_plan_status, v_first_gen
     FROM camps WHERE id = NEW.camp_id
     FOR UPDATE;
 
@@ -166,21 +173,15 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    SELECT EXISTS(
-        SELECT 1 FROM daily_schedules
-        WHERE camp_id = NEW.camp_id AND date_key = NEW.date_key
-        AND id IS DISTINCT FROM NEW.id
-    ) INTO v_date_exists;
-
-    IF v_date_exists THEN
+    -- No first generation yet: stamp it and allow
+    IF v_first_gen IS NULL THEN
+        UPDATE camps SET first_generation_at = NOW() WHERE id = NEW.camp_id;
         RETURN NEW;
     END IF;
 
-    SELECT COUNT(DISTINCT date_key) INTO v_current_count
-    FROM daily_schedules WHERE camp_id = NEW.camp_id;
-
-    IF v_current_count >= v_max_days THEN
-        RAISE EXCEPTION 'Starter plan limit: maximum % unique schedule days reached. Upgrade to create more schedules.', v_max_days
+    -- Check if window expired
+    IF (NOW() - v_first_gen) > (v_window_days || ' days')::INTERVAL THEN
+        RAISE EXCEPTION 'Starter plan: your 7-day generation window has expired. Upgrade for unlimited scheduling.'
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -188,6 +189,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS trg_starter_schedule_limit ON daily_schedules;
 CREATE TRIGGER trg_starter_schedule_limit
     BEFORE INSERT ON daily_schedules
     FOR EACH ROW
@@ -195,6 +197,7 @@ CREATE TRIGGER trg_starter_schedule_limit
 */
 //
 // --- TRIGGER: enforce_starter_camper_limit ---
+// Blocks camper roster saves that exceed 100. User keeps existing campers.
 /*
 CREATE OR REPLACE FUNCTION enforce_starter_camper_limit()
 RETURNS TRIGGER
@@ -217,7 +220,7 @@ BEGIN
     FROM jsonb_object_keys(COALESCE(NEW.state->'app1'->'camperRoster', '{}'::jsonb));
 
     IF v_new_count > v_max_campers THEN
-        RAISE EXCEPTION 'Starter plan limit: maximum % campers reached. Upgrade to add more campers.', v_max_campers
+        RAISE EXCEPTION 'Starter plan: maximum % campers reached. Upgrade for unlimited campers.', v_max_campers
             USING ERRCODE = 'P0001';
     END IF;
 
@@ -225,6 +228,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS trg_starter_camper_limit ON camp_state;
 CREATE TRIGGER trg_starter_camper_limit
     BEFORE INSERT OR UPDATE ON camp_state
     FOR EACH ROW
