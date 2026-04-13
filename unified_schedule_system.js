@@ -859,7 +859,8 @@ return activity || field || '';    }
                lower.includes('dismissal') || lower.includes('rest') || lower.includes('free');
     }
 
-    function isLeagueBlockType(eventName) {
+    function isLeagueBlockType(eventName, blockType) {
+        if (blockType === 'league' || blockType === 'specialty_league') return true;
         return eventName && eventName.toLowerCase().includes('league');
     }
 
@@ -2207,7 +2208,7 @@ divBlocks.forEach((block, blockIdx) => {
     }
     tr.appendChild(tdTime);
     
-    if (isLeagueBlockType(block.event)) { 
+    if (isLeagueBlockType(block.event, block.type)) {
         tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable)); 
         tbody.appendChild(tr); 
         return; 
