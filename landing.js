@@ -446,30 +446,54 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                         } else {
                             // No invite — create camp (camp ID = user ID for owners)
                             
-                            // ★★★ PROMO CODE DETECTION ★★★
-                            // Check if the access code is a promo code (trial) or regular (full access)
-                            let planStatus = 'starter'; // Default: starter plan (limited features)
+                            // ★★★ ACCESS CODE VALIDATION (REQUIRED) ★★★
+                            if (!accessCode) {
+                                throw new Error('An access code is required to create a camp. Contact campistryoffice@gmail.com for access.');
+                            }
+
+                            let planStatus = null;
                             let trialStartedAt = null;
                             let trialHours = null;
 
-                            if (accessCode) {
+                            // ★★★ HARDCODED ACCESS CODES ★★★
+                            // 1. Full access — no limits, no expiration
+                            if (accessCode === 'justcampit2026') {
+                                planStatus = 'active';
+                                console.log('[Landing] ✅ Full access code accepted');
+                            }
+                            // 2. Expo trial — 48 hours, full features (no camper/schedule limits)
+                            else if (accessCode === 'expo2026') {
+                                planStatus = 'trial';
+                                trialStartedAt = new Date().toISOString();
+                                trialHours = 48;
+                                console.log('[Landing] ✅ Expo trial code accepted → 48 hours full access');
+                            }
+                            // 3. Starter — unlimited time, but 7 days of generation + 100 campers
+                            else if (accessCode === 'cAMpiStrY$100triAl') {
+                                planStatus = 'starter';
+                                console.log('[Landing] ✅ Starter code accepted → 7 generation days + 100 campers');
+                            }
+                            else {
+                                // Fallback: check promo_codes table for any other codes
                                 try {
                                     const { data: promoResult, error: promoError } = await supabase
                                         .rpc('validate_promo_code', { input_code: accessCode });
-                                    
+
                                     console.log('[Landing] Promo code check result:', promoResult, 'error:', promoError);
-                                    
+
                                     if (!promoError && promoResult && promoResult.valid) {
-                                        planStatus = 'trial';
+                                        planStatus = promoResult.plan_type || 'trial';
                                         trialStartedAt = new Date().toISOString();
                                         trialHours = promoResult.trial_hours || 48;
-                                        console.log('[Landing] ✅ Promo code accepted:', accessCode, '→ trial for', trialHours, 'hours');
-                                    } else {
-                                        planStatus = 'active'; // Regular access code = full access
-                                        console.log('[Landing] Not a promo code, using as regular access code → active');
+                                        console.log('[Landing] ✅ Promo code accepted:', accessCode, '→', planStatus, 'for', trialHours, 'hours');
                                     }
                                 } catch (promoErr) {
-                                    console.warn('[Landing] Promo check failed, proceeding with normal flow:', promoErr);
+                                    console.warn('[Landing] Promo check failed:', promoErr);
+                                }
+
+                                // If no valid code matched, reject
+                                if (!planStatus) {
+                                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
                                 }
                             }
 

@@ -15,6 +15,9 @@
 (function() {
     'use strict';
 
+    // starter: unlimited time, but max 7 unique schedule days + 100 campers
+    // trial (expo2026): 48-hour full access, no feature limits
+    // active (justcampit2026): full access, no limits
     var PLAN_LIMITS = Object.freeze({
         starter:         Object.freeze({ maxScheduleDays: 7,        maxCampers: 100      }),
         trial:           Object.freeze({ maxScheduleDays: Infinity,  maxCampers: Infinity }),
