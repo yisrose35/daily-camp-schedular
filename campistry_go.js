@@ -3440,7 +3440,6 @@
             const isArrival = D.activeMode === 'arrival';
             const hasShifts = shifts.length > 1;
             const isLastShift = si === shifts.length - 1;
-            const needsReturn = hasShifts && !isLastShift;
             const serviceTime = (D.setup.avgStopTime || 2) * 60;
             const key = getApiKey();
 
@@ -3450,11 +3449,17 @@
                 const v = shiftVehicles.find(sv => sv.busId === zone.busId) || shiftVehicles[0];
                 if (!zoneStops.length || !v) continue;
 
+                // Find farthest stop from camp (used for start/end anchoring)
+                let fIdx = 0, fDist = 0;
+                zoneStops.forEach((s, i) => { const d = drivingDist(campLat, campLng, s.lat, s.lng); if (d > fDist) { fDist = d; fIdx = i; } });
+
                 // ── Route optimization cascade: GraphHopper → VROOM → directional sort ──
                 let orderedStops = null;
 
                 // 1. Try GraphHopper
-                orderedStops = await solveWithGraphHopper(zoneStops, v, campLat, campLng, isArrival, needsReturn);
+                // Arrival: farthest first → camp last
+                // Dismissal: camp first → farthest last
+                orderedStops = await solveWithGraphHopper(zoneStops, v, campLat, campLng, isArrival, false);
 
                 // 2. Fallback: ORS VROOM (single-bus ordering)
                 if (!orderedStops && key) {
@@ -3464,13 +3469,13 @@
                     }));
                     const veh = { id: 1, profile: 'driving-car', capacity: [v.capacity], description: v.name };
                     if (isArrival) {
-                        let fIdx = 0, fDist = 0;
-                        zoneStops.forEach((s, i) => { const d = drivingDist(campLat, campLng, s.lat, s.lng); if (d > fDist) { fDist = d; fIdx = i; } });
+                        // Arrival: start at farthest stop, end at camp
                         veh.start = [zoneStops[fIdx].lng, zoneStops[fIdx].lat];
                         veh.end = [campLng, campLat];
                     } else {
+                        // Dismissal: start at camp, end at farthest stop
                         veh.start = [campLng, campLat];
-                        if (needsReturn) veh.end = [campLng, campLat];
+                        veh.end = [zoneStops[fIdx].lng, zoneStops[fIdx].lat];
                     }
                     try {
                         const resp = await fetch('https://api.openrouteservice.org/optimization', {
@@ -3760,29 +3765,21 @@
             type_id: 'bus'
         };
 
+        // Find farthest stop from camp
+        let fIdx = 0, fDist = 0;
+        primaryStops.forEach((s, i) => {
+            const d = drivingDist(campLat, campLng, s.lat, s.lng);
+            if (d > fDist) { fDist = d; fIdx = i; }
+        });
+
         if (isArrival) {
-            // Arrival: start from farthest stop, end at camp
-            let fIdx = 0, fDist = 0;
-            primaryStops.forEach((s, i) => {
-                const d = drivingDist(campLat, campLng, s.lat, s.lng);
-                if (d > fDist) { fDist = d; fIdx = i; }
-            });
-            veh.start_address = { location_id: 'start', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
+            // Arrival: farthest first → closest last → camp
+            veh.start_address = { location_id: 'farthest', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
             veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
         } else {
-            // Dismissal: start from camp
+            // Dismissal: camp → closest first → farthest last
             veh.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
-            if (needsReturn) {
-                veh.end_address = { location_id: 'camp_end', lon: campLng, lat: campLat };
-            } else {
-                // GH needs end_address even if not returning — use the farthest stop
-                let fIdx = 0, fDist = 0;
-                primaryStops.forEach((s, i) => {
-                    const d = drivingDist(campLat, campLng, s.lat, s.lng);
-                    if (d > fDist) { fDist = d; fIdx = i; }
-                });
-                veh.end_address = { location_id: 'end', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
-            }
+            veh.end_address = { location_id: 'farthest', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
         }
 
         const body = {
