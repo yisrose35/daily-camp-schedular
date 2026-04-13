@@ -1574,6 +1574,38 @@
     // STAFF (Monitors + Counselors)
     // =========================================================================
     function renderStaff() { renderMonitors(); renderCounselors(); document.getElementById('staffCount').textContent = (D.monitors.length + D.counselors.length) + ' staff'; }
+    // ── Staff suggestion status badges ──
+    function _staffStatusBadge(staff) {
+        if (staff._assignStatus === 'accepted') {
+            const bus = D.buses.find(b => b.id === staff._acceptedBusId);
+            return '<span class="badge" style="background:var(--green-50);color:var(--green-700);border:1px solid var(--green-200)">Confirmed: ' + esc(bus?.name || staff._acceptedBus) + ', Stop ' + (staff._acceptedStopNum || '?') + '</span>';
+        }
+        if (staff._assignStatus === 'denied') {
+            return '<span class="badge" style="background:var(--red-50);color:var(--red-600);border:1px solid var(--red-200)">Not riding bus</span>';
+        }
+        return '';
+    }
+
+    function _staffSuggestionHtml(staff, type) {
+        // If already accepted/denied, show status badge only
+        if (staff._assignStatus === 'accepted' || staff._assignStatus === 'denied') {
+            return _staffStatusBadge(staff);
+        }
+        // If no suggestion yet, show nothing
+        if (!staff._suggestedBus) return '';
+
+        // Build accept/deny/manual buttons
+        const sid = esc(staff.id);
+        const stype = esc(type); // 'monitor' or 'counselor'
+        return '<div style="margin-top:4px;padding:6px 8px;background:var(--blue-50);border:1px solid var(--blue-100);border-radius:6px;font-size:.8rem;">'
+            + '<div style="margin-bottom:4px">Suggested: <strong>' + esc(staff._suggestedBus) + '</strong>, Stop ' + staff._suggestedStopNum + ' (' + esc(staff._suggestedStop) + ') — ' + (staff._walkFt || '?') + 'ft walk</div>'
+            + '<div style="display:flex;gap:4px;flex-wrap:wrap;">'
+            + '<button class="btn btn-sm" style="background:var(--green-600);color:#fff;border:none;padding:3px 10px;font-size:.75rem" onclick="event.stopPropagation();CampistryGo.acceptStaffAssign(\'' + sid + '\',\'' + stype + '\')">Accept</button>'
+            + '<button class="btn btn-sm" style="background:var(--red-500);color:#fff;border:none;padding:3px 10px;font-size:.75rem" onclick="event.stopPropagation();CampistryGo.denyStaffAssign(\'' + sid + '\',\'' + stype + '\')">Deny</button>'
+            + '<button class="btn btn-sm" style="background:var(--surface-secondary);border:1px solid var(--border-light);padding:3px 10px;font-size:.75rem" onclick="event.stopPropagation();CampistryGo.manualStaffAssign(\'' + sid + '\',\'' + stype + '\')">Manual</button>'
+            + '</div></div>';
+    }
+
     function renderMonitors() {
         const tbody = document.getElementById('monitorTableBody'), empty = document.getElementById('monitorEmptyState');
         const tw = tbody?.closest('.table-wrapper');
@@ -1582,13 +1614,10 @@
         if (tw) tw.style.display = ''; if (empty) empty.style.display = 'none';
         tbody.innerHTML = D.monitors.map(m => {
             const bus = D.buses.find(b => b.id === m.assignedBus);
-            const suggestion = m._suggestedBus
-                ? '<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">Suggested: <strong>' + esc(m._suggestedBus) + '</strong>, Stop ' + m._suggestedStopNum + ' (' + esc(m._suggestedStop) + ') — ' + (m._walkFt || '?') + 'ft walk</div>'
-                : '';
+            const busCol = (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—');
+            const suggestionHtml = _staffSuggestionHtml(m, 'monitor');
             const idCol = m._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + m._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
-            const lastCol = '<td>' + esc(m.lastName || '') + '</td>';
-            const firstCol = '<td style="font-weight:600">' + esc(m.firstName || m.name) + '</td>';
-            return '<tr>' + idCol + lastCol + firstCol + '<td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—') + suggestion + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
+            return '<tr>' + idCol + '<td>' + esc(m.lastName || '') + '</td><td style="font-weight:600">' + esc(m.firstName || m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + busCol + suggestionHtml + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
         }).join('');
     }
     function renderCounselors() {
@@ -1601,14 +1630,105 @@
             const bus = D.buses.find(b => b.id === c.assignedBus);
             const mode = c.assignMode || (c.needsStop === 'yes' ? 'stop' : c.assignedBus ? 'manual' : 'auto');
             const modeBadge = mode === 'stop' ? '<span class="badge badge-warning">Own Stop</span>' : mode === 'auto' ? '<span class="badge badge-neutral">Auto-assign</span>' : bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '<span class="badge badge-neutral">Manual (unset)</span>';
-            const suggestion = (mode !== 'stop' && c._suggestedBus)
-                ? '<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">Suggested: <strong>' + esc(c._suggestedBus) + '</strong>, Stop ' + c._suggestedStopNum + ' (' + esc(c._suggestedStop) + ') — ' + (c._walkFt || '?') + 'ft walk</div>'
-                : '';
+            const suggestionHtml = (mode !== 'stop') ? _staffSuggestionHtml(c, 'counselor') : '';
             const idCol = c._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + c._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
-            const lastCol = '<td>' + esc(c.lastName || '') + '</td>';
-            const firstCol = '<td style="font-weight:600">' + esc(c.firstName || c.name) + '</td>';
-            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">' + idCol + lastCol + firstCol + '<td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestion + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
+            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">' + idCol + '<td>' + esc(c.lastName || '') + '</td><td style="font-weight:600">' + esc(c.firstName || c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestionHtml + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
         }).join('');
+    }
+
+    // ── Staff assignment actions ──
+    function acceptStaffAssign(staffId, type) {
+        const staff = type === 'monitor' ? D.monitors.find(m => m.id === staffId) : D.counselors.find(c => c.id === staffId);
+        if (!staff || !staff._suggestedBusId) return;
+        staff._assignStatus = 'accepted';
+        staff._acceptedBus = staff._suggestedBus;
+        staff._acceptedBusId = staff._suggestedBusId;
+        staff._acceptedStop = staff._suggestedStop;
+        staff._acceptedStopNum = staff._suggestedStopNum;
+        staff.assignedBus = staff._suggestedBusId;
+        save(); renderStaff(); toast(staff.name + ' confirmed on ' + staff._suggestedBus);
+    }
+
+    function denyStaffAssign(staffId, type) {
+        const staff = type === 'monitor' ? D.monitors.find(m => m.id === staffId) : D.counselors.find(c => c.id === staffId);
+        if (!staff) return;
+        staff._assignStatus = 'denied';
+        staff.assignedBus = '';
+        save(); renderStaff(); toast(staff.name + ' — not riding bus');
+    }
+
+    function manualStaffAssign(staffId, type) {
+        const staff = type === 'monitor' ? D.monitors.find(m => m.id === staffId) : D.counselors.find(c => c.id === staffId);
+        if (!staff) return;
+
+        // Build a modal with bus + stop selectors
+        const existing = document.getElementById('staffManualAssignModal');
+        if (existing) existing.remove();
+
+        const busOptions = D.buses.map(b => '<option value="' + esc(b.id) + '">' + esc(b.name) + '</option>').join('');
+
+        const overlay = document.createElement('div');
+        overlay.id = 'staffManualAssignModal';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
+        overlay.innerHTML = '<div class="modal" style="max-width:420px;padding:1.5rem">'
+            + '<h3 style="margin:0 0 1rem">Assign ' + esc(staff.name) + '</h3>'
+            + '<div class="form-group"><label class="form-label">Bus</label><select class="form-input" id="smaBus"><option value="">— Select —</option>' + busOptions + '</select></div>'
+            + '<div class="form-group" id="smaStopGroup" style="display:none"><label class="form-label">Stop</label><select class="form-input" id="smaStop"></select></div>'
+            + '<div style="display:flex;gap:8px;margin-top:1rem;justify-content:flex-end">'
+            + '<button class="btn btn-secondary" onclick="document.getElementById(\'staffManualAssignModal\').remove()">Cancel</button>'
+            + '<button class="btn btn-primary" id="smaConfirm">Assign</button>'
+            + '</div></div>';
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+        // When bus changes, populate stops
+        document.getElementById('smaBus').addEventListener('change', function() {
+            const busId = this.value;
+            const stopGroup = document.getElementById('smaStopGroup');
+            const stopSel = document.getElementById('smaStop');
+            if (!busId || !D.savedRoutes) { stopGroup.style.display = 'none'; return; }
+
+            // Find stops for this bus across all shifts
+            const stops = [];
+            D.savedRoutes.forEach(sr => {
+                const route = sr.routes.find(r => r.busId === busId);
+                if (route) route.stops.forEach(st => {
+                    if (st.lat && st.lng) stops.push(st);
+                });
+            });
+
+            if (!stops.length) { stopGroup.style.display = 'none'; return; }
+            stopGroup.style.display = '';
+            stopSel.innerHTML = stops.map(st => '<option value="' + st.stopNum + '">' + 'Stop ' + st.stopNum + ' — ' + esc(st.address) + ' (' + st.campers.length + ' kids)</option>').join('');
+        });
+
+        // Confirm
+        document.getElementById('smaConfirm').addEventListener('click', function() {
+            const busId = document.getElementById('smaBus').value;
+            if (!busId) { toast('Select a bus', 'error'); return; }
+            const bus = D.buses.find(b => b.id === busId);
+            const stopNum = parseInt(document.getElementById('smaStop')?.value) || 0;
+
+            // Find stop details
+            let stopAddr = '';
+            if (D.savedRoutes && stopNum) {
+                D.savedRoutes.forEach(sr => {
+                    const route = sr.routes.find(r => r.busId === busId);
+                    if (route) { const st = route.stops.find(s => s.stopNum === stopNum); if (st) stopAddr = st.address; }
+                });
+            }
+
+            staff._assignStatus = 'accepted';
+            staff._acceptedBus = bus?.name || '';
+            staff._acceptedBusId = busId;
+            staff._acceptedStop = stopAddr;
+            staff._acceptedStopNum = stopNum;
+            staff.assignedBus = busId;
+
+            save(); renderStaff();
+            overlay.remove();
+            toast(staff.name + ' assigned to ' + (bus?.name || 'bus') + (stopNum ? ', Stop ' + stopNum : ''));
+        });
     }
     function openMonitorModal(eId) { _editMonitorId = eId || null; document.getElementById('monitorModalTitle').textContent = eId ? 'Edit Monitor' : 'Add Monitor'; updateBusSelects(); const m = eId ? D.monitors.find(x => x.id === eId) : null; document.getElementById('monitorName').value = m?.name || ''; document.getElementById('monitorAddress').value = m?.address || ''; document.getElementById('monitorPhone').value = m?.phone || ''; document.getElementById('monitorBusAssign').value = m?.assignedBus || ''; openModal('monitorModal'); document.getElementById('monitorName').focus(); }
     function saveMonitor() {
@@ -6925,6 +7045,7 @@
         toggleShiftGrade, setShiftGradeMode, toggleShiftBus, setAllShiftBuses,
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
+        acceptStaffAssign, denyStaffAssign, manualStaffAssign,
         editAddress, saveAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck,
