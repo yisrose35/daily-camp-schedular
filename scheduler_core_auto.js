@@ -5167,6 +5167,20 @@
                     var eDMin = eConstraints.dMin;
                     var eDMax = eConstraints.dMax;
 
+                    // ★ v14.0: Gap-filler blocks (sport/slot created to fill a specific gap)
+                    // should use their actual size as dMin, not the layer's dMin.
+                    // They were CREATED to fill that exact gap — their purpose IS their size.
+                    var eIsGapFiller = ['sport', 'slot'].includes(eType) &&
+                        (eBlk._source === 'gap-fill' || eBlk._source === 'zero-gap' ||
+                         eBlk._source === 'self-heal' || eBlk._source === 'guarantee' ||
+                         eBlk._source === 'guarantee-pregap' || eBlk._source === 'guarantee-remainder' ||
+                         eBlk._source === 'finisher-inject' || eBlk._source === 'inject-split' ||
+                         eBlk._source === 'split-remainder' || eBlk._source === 'self-heal-pregap');
+                    if (eIsGapFiller && eDur >= 5 && eDur < eDMin) {
+                        // This block was made to fill a gap — its actual size IS its dMin
+                        eDMin = eDur;
+                    }
+
                     // Also update the block's stored dMin/dMax to match resolved values
                     eBlk.dMin = eDMin;
                     eBlk.dMax = eDMax;
@@ -6008,7 +6022,7 @@
         // ITERATION LOOP
         // =====================================================================
         log('\n══════════════════════════════════════════════════════════');
-        log('WHAT→WHEN→WHERE — cap: ' + MAX_ITERATIONS + ' | stale: ' + STALE_STOP);
+        log('WHAT→WHEN→WHERE — cap: ' + MAX_ITERATIONS + ' | stale: ' + BASE_STALE_STOP + ' (adaptive)');
         log('══════════════════════════════════════════════════════════');
 
         let todaysSwimmers = {};
@@ -6395,8 +6409,46 @@
                             }
                         }
 
+                        // ★ v14.0: If no positions found at full configured duration,
+                        // try progressively shorter durations (down to type floor).
+                        // A shorter special is far better than no special at all.
+                        if (candidatePositions.length === 0) {
+                            var spTypeFloor = TYPE_FLOORS.special || 20;
+                            var triedDur = specialDur;
+                            while (candidatePositions.length === 0 && triedDur > spTypeFloor) {
+                                triedDur = Math.max(spTypeFloor, triedDur - 5);
+                                for (var rgi = 0; rgi < allGapsForBunk.length; rgi++) {
+                                    var rgap = allGapsForBunk[rgi];
+                                    if (rgap.e - rgap.s < triedDur) continue;
+                                    for (var rpos = rgap.s; rpos + triedDur <= rgap.e; rpos += 5) {
+                                        if (!canUseSpecialAtTime(special.name, grade, rpos, rpos + triedDur)) continue;
+                                        var rwithSpecial = existingWalls.concat([{ s: rpos, e: rpos + triedDur }]);
+                                        var rgapsAfter = spComputeGaps(rwithSpecial, gradeStart, gradeEnd);
+                                        var rallFit = true;
+                                        for (var rli = 0; rli < gradeLayers.length; rli++) {
+                                            var rll = gradeLayers[rli]; var rlt = (rll.type || '').toLowerCase();
+                                            if (!['swim', 'snack', 'snacks', 'custom'].includes(rlt)) continue;
+                                            if (rlt === 'custom' && rll._classification === 'pinned') continue;
+                                            if (rll.startMin == null || rll.endMin == null) continue;
+                                            if (!spCanLayerFit(rgapsAfter, rll)) { rallFit = false; break; }
+                                        }
+                                        if (rallFit) candidatePositions.push({ pos: rpos, score: -100, deadGapCount: 0 });
+                                    }
+                                }
+                            }
+                            if (candidatePositions.length > 0 && totalIters < 1) {
+                                warn('[Phase2.5] Reduced ' + special.name + ' from ' + specialDur + 'min to ' + triedDur + 'min for bunk ' + bunk + ' (will be corrected by SPECIAL-ENFORCE if room exists later)');
+                            }
+                        }
+
                         // Pick the best position
-                        if (candidatePositions.length === 0) return; // defer to CSP
+                        if (candidatePositions.length === 0) {
+                            if (totalIters < 1) {
+                                var gapSummary = allGapsForBunk.map(function(g) { return (g.e - g.s) + 'min'; }).join(', ');
+                                warn('[Phase2.5] Cannot pre-place ' + special.name + ' (' + specialDur + 'min) for bunk ' + bunk + ' in ' + grade + ' — gaps: [' + gapSummary + ']');
+                            }
+                            return; // defer to CSP
+                        }
 
                         candidatePositions.sort(function(a, b) {
                             if (a.deadGapCount !== b.deadGapCount) return a.deadGapCount - b.deadGapCount;
