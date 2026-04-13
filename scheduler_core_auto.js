@@ -1286,6 +1286,7 @@
             if (uniqueCandidates.length === 0) { warn('[P0] No free league gap for ' + grade); return null; }
             // Select candidate based on _iterSeed — different iteration = different position
             var candidateIdx = _iterSeed % uniqueCandidates.length;
+            if (!uniqueCandidates[candidateIdx]) { warn('[P0] League candidate undefined at idx=' + candidateIdx + ' len=' + uniqueCandidates.length + ' for ' + grade); return null; }
             var bestStart = uniqueCandidates[candidateIdx].start;
 
             const expandedDur = expandLeagueDur(bestStart, bunks);
@@ -5451,7 +5452,7 @@
         }
 
         function getNextSeed(currentSeed) {
-            let candidate = currentSeed + 1;
+            let candidate = Math.max(0, currentSeed + 1);
             let attempts = 0;
             while (isSeedTabu(candidate) && attempts < 15) {
                 candidate++;
@@ -5497,9 +5498,9 @@
             // Pick a random elite and mutate its seed slightly
             const idx = totalIters % elitePool.length;
             const elite = elitePool[idx];
-            // Mutate: ±1 to ±3 from elite seed
-            const mutation = ((totalIters * 7 + 3) % 5) - 2; // -2 to +2
-            return elite.seed + mutation;
+            // Mutate: +1 to +5 from elite seed (always positive to prevent negative modulo bugs)
+            const mutation = ((totalIters * 7 + 3) % 5) + 1; // 1 to 5
+            return Math.abs(elite.seed + mutation);
         }
 
         // =====================================================================
