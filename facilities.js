@@ -821,8 +821,59 @@ function renderSpecialConfig(container, fac) {
         saHeader.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:12px 14px; background:#F9FAFB; border-bottom:1px solid #E5E7EB;";
 
         const saTitle = document.createElement("span");
-        saTitle.style.cssText = "font-weight:600; font-size:0.95rem; color:#7C3AED;";
+        saTitle.style.cssText = "font-weight:600; font-size:0.95rem; color:#7C3AED; cursor:pointer;";
         saTitle.textContent = saName;
+        saTitle.title = "Double click to rename";
+
+        makeEditable(saTitle, newName => {
+            if (!newName.trim()) return;
+            const oldName = saName;
+            if (oldName === newName) return;
+
+            // Check for duplicates across all facilities
+            const allSaNames = [];
+            facilities.forEach(f => (f.specialActivityNames || []).forEach(n => allSaNames.push(n)));
+            if (allSaNames.some(n => n.toLowerCase() === newName.toLowerCase() && n !== oldName)) {
+                alert(`A special activity named "${newName}" already exists.`);
+                return;
+            }
+
+            // 1. Update in this facility's specialActivityNames array
+            const idx = fac.specialActivityNames.indexOf(oldName);
+            if (idx !== -1) fac.specialActivityNames[idx] = newName;
+
+            // 2. Update the global special activity object
+            const allSpecials = window.getAllSpecialActivities?.() || [];
+            const sa = allSpecials.find(s => s.name === oldName);
+            if (sa) sa.name = newName;
+            window.saveGlobalSpecialActivities?.(allSpecials);
+
+            // 3. Update references in schedules
+            const schedules = window.scheduleAssignments || {};
+            for (const bunk of Object.keys(schedules)) {
+                (schedules[bunk] || []).forEach(entry => {
+                    if (!entry) return;
+                    if (entry._activity === oldName) entry._activity = newName;
+                    if (entry.field === oldName) entry.field = newName;
+                    if (entry.sport === oldName) entry.sport = newName;
+                });
+            }
+
+            // 4. Update references in zones
+            const settings = window.loadGlobalSettings?.() || {};
+            const zones = settings.locationZones || {};
+            for (const zone of Object.values(zones)) {
+                if (!zone || !Array.isArray(zone.specialActivities)) continue;
+                const zIdx = zone.specialActivities.indexOf(oldName);
+                if (zIdx !== -1) zone.specialActivities[zIdx] = newName;
+            }
+            if (Object.keys(zones).length > 0) {
+                window.saveLocationZones?.(zones);
+            }
+
+            saveData();
+            renderDetailPane();
+        });
 
         const saDelBtn = document.createElement("button");
         saDelBtn.textContent = "Remove";
@@ -962,7 +1013,31 @@ function renderGeneralConfig(container, fac) {
             row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; margin-bottom:6px;";
 
             const info = document.createElement("div");
-            info.innerHTML = `<strong>${escapeHtml(ga.name)}</strong>`;
+            const gaLabel = document.createElement("strong");
+            gaLabel.textContent = ga.name;
+            gaLabel.style.cursor = "pointer";
+            gaLabel.title = "Double click to rename";
+            info.appendChild(gaLabel);
+
+            makeEditable(gaLabel, newName => {
+                if (!newName.trim()) return;
+                const oldName = ga.name;
+                if (oldName === newName) return;
+                if (fac.generalActivities.some(g => g !== ga && g.name.toLowerCase() === newName.toLowerCase())) {
+                    alert(`"${newName}" already exists in this facility.`);
+                    return;
+                }
+                // Update pinned tile defaults
+                const pinned = window.getPinnedTileDefaults?.() || {};
+                if (pinned[oldName] !== undefined) {
+                    pinned[newName] = pinned[oldName];
+                    delete pinned[oldName];
+                    window.savePinnedTileDefaults?.(pinned);
+                }
+                ga.name = newName;
+                saveData();
+                renderDetailPane();
+            });
 
             const removeBtn = document.createElement("button");
             removeBtn.textContent = "✕";
