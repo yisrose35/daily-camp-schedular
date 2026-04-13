@@ -3167,9 +3167,172 @@
     }
 
     // =========================================================================
-    // ROUTING ENGINE v10.1 — VROOM-powered
+    // GREEDY ZONE BUILDER — Stops-first, then bus-aware zones
     //
-    // v10.1 changes: OSRM retry, aggressive rebalancing, Manhattan walk distance
+    // Algorithm:
+    //   1. All stops are already created (globally, not per-zone)
+    //   2. Sort buses by capacity (biggest first)
+    //   3. Pick the farthest unassigned stop from camp as seed
+    //   4. Greedily grab the nearest unassigned stop — but ONLY if
+    //      its kid count fits in the remaining capacity. If the
+    //      nearest stop has too many kids, STOP (don't skip it).
+    //   5. Move to the next bus and repeat from step 3
+    //   6. Any leftover stops go to the bus with most remaining capacity
+    // =========================================================================
+    function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
+        if (!stops.length || !buses.length) return [];
+
+        // Effective capacity per bus
+        const busCaps = buses.map(b => {
+            const mon = D.monitors.find(m => m.assignedBus === b.id);
+            const couns = D.counselors.filter(c => c.assignedBus === b.id);
+            const brs = b.reserveMode === 'custom' && b.reserveSeats != null ? b.reserveSeats : (reserveSeats || 0);
+            return Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs);
+        });
+
+        // Pre-compute driving distance from camp for each stop
+        const campDist = stops.map(s => drivingDist(campLat, campLng, s.lat, s.lng));
+
+        // Pre-compute kid count per stop
+        const kidCount = stops.map(s => s.campers.length);
+
+        // Track assignment: which zone index each stop belongs to (-1 = unassigned)
+        const assignment = new Array(stops.length).fill(-1);
+
+        // Sort bus indices by capacity descending (biggest bus gets first pick)
+        const busOrder = busCaps.map((cap, i) => ({ i, cap })).sort((a, b) => b.cap - a.cap).map(x => x.i);
+
+        const zones = []; // [{busIdx, stopIndices, camperCount}]
+
+        for (const bi of busOrder) {
+            let remaining = busCaps[bi];
+            if (remaining <= 0) continue;
+
+            // Find the farthest unassigned stop from camp
+            let seedIdx = -1, seedDist = -1;
+            for (let si = 0; si < stops.length; si++) {
+                if (assignment[si] >= 0) continue;
+                if (campDist[si] > seedDist) { seedDist = campDist[si]; seedIdx = si; }
+            }
+            if (seedIdx < 0) break; // no unassigned stops left
+
+            // Start a new zone with this seed
+            const zoneStopIndices = [];
+
+            // Add the seed if it fits
+            if (kidCount[seedIdx] <= remaining) {
+                zoneStopIndices.push(seedIdx);
+                assignment[seedIdx] = zones.length;
+                remaining -= kidCount[seedIdx];
+            } else {
+                // Even the seed doesn't fit — this bus is too small for any stop
+                // Skip this bus, leave the stop for a bigger one
+                continue;
+            }
+
+            // Greedily grab nearest unassigned stops
+            while (remaining > 0) {
+                // Find nearest unassigned stop to ANY stop already in this zone
+                let bestIdx = -1, bestDist = Infinity;
+                for (let si = 0; si < stops.length; si++) {
+                    if (assignment[si] >= 0) continue;
+                    // Distance to nearest zone member
+                    let minD = Infinity;
+                    for (const zi of zoneStopIndices) {
+                        const d = drivingDist(stops[zi].lat, stops[zi].lng, stops[si].lat, stops[si].lng);
+                        if (d < minD) minD = d;
+                    }
+                    if (minD < bestDist) { bestDist = minD; bestIdx = si; }
+                }
+
+                if (bestIdx < 0) break; // no more unassigned stops
+
+                // KEY RULE: if this nearest stop has more kids than remaining
+                // capacity, STOP — don't skip it looking for a smaller one
+                if (kidCount[bestIdx] > remaining) {
+                    break;
+                }
+
+                // Add it to the zone
+                zoneStopIndices.push(bestIdx);
+                assignment[bestIdx] = zones.length;
+                remaining -= kidCount[bestIdx];
+            }
+
+            if (zoneStopIndices.length > 0) {
+                const totalKids = zoneStopIndices.reduce((s, si) => s + kidCount[si], 0);
+                const cLat = zoneStopIndices.reduce((s, si) => s + stops[si].lat, 0) / zoneStopIndices.length;
+                const cLng = zoneStopIndices.reduce((s, si) => s + stops[si].lng, 0) / zoneStopIndices.length;
+
+                zones.push({
+                    busIdx: bi,
+                    busId: buses[bi].id,
+                    busName: buses[bi].name,
+                    busColor: buses[bi].color,
+                    stopIndices: zoneStopIndices,
+                    camperCount: totalKids,
+                    capacity: busCaps[bi],
+                    centroidLat: cLat,
+                    centroidLng: cLng
+                });
+
+                console.log('[Go] Zone: ' + buses[bi].name + ' — ' + totalKids + '/' + busCaps[bi] + ' kids, ' + zoneStopIndices.length + ' stops (seed: ' + stops[seedIdx].address + ')');
+            }
+        }
+
+        // Assign any leftover stops to the bus with most remaining capacity
+        const unassigned = [];
+        for (let si = 0; si < stops.length; si++) {
+            if (assignment[si] < 0) unassigned.push(si);
+        }
+
+        if (unassigned.length > 0) {
+            console.warn('[Go] Zone: ' + unassigned.length + ' stop(s) unassigned after greedy pass, redistributing...');
+
+            // Sort unassigned by distance to nearest zone (closest first)
+            unassigned.forEach(si => {
+                // Find the zone with most remaining capacity
+                let bestZone = -1, bestRoom = 0;
+                for (let zi = 0; zi < zones.length; zi++) {
+                    const room = zones[zi].capacity - zones[zi].camperCount;
+                    if (room >= kidCount[si] && room > bestRoom) {
+                        bestRoom = room;
+                        bestZone = zi;
+                    }
+                }
+
+                // If no zone has enough room, find nearest zone regardless
+                if (bestZone < 0) {
+                    let nearestDist = Infinity;
+                    for (let zi = 0; zi < zones.length; zi++) {
+                        for (const zsi of zones[zi].stopIndices) {
+                            const d = drivingDist(stops[si].lat, stops[si].lng, stops[zsi].lat, stops[zsi].lng);
+                            if (d < nearestDist) { nearestDist = d; bestZone = zi; }
+                        }
+                    }
+                }
+
+                if (bestZone >= 0) {
+                    zones[bestZone].stopIndices.push(si);
+                    zones[bestZone].camperCount += kidCount[si];
+                    assignment[si] = bestZone;
+                    console.log('[Go] Zone: overflow ' + stops[si].address + ' (' + kidCount[si] + ' kids) → ' + zones[bestZone].busName);
+                }
+            });
+        }
+
+        // Log summary
+        console.log('[Go] Greedy zones: ' + zones.length + ' zones from ' + stops.length + ' stops');
+        zones.forEach(z => {
+            const farthest = Math.max(...z.stopIndices.map(si => campDist[si]));
+            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' + z.stopIndices.length + ' stops');
+        });
+
+        return zones;
+    }
+
+    // =========================================================================
+    // ROUTING ENGINE v11.0 — Stops-first + Greedy zones + GH/VROOM
     // =========================================================================
 
     async function generateRoutes() {
@@ -3179,12 +3342,9 @@
         _ghQuotaExhausted = false;
 
         const roster = getRoster();
-        const mode = document.getElementById('routeMode')?.value || 'door-to-door';
         const reserveSeats = parseInt(document.getElementById('routeReserveSeats')?.value) || 0;
         const avgStopMin = D.setup.avgStopTime || 2;
         const avgSpeedMph = D.setup.avgSpeed || 25;
-        const key = getApiKey();
-        if (!key && !getGHKey()) { toast('API key required (ORS or GraphHopper)', 'error'); return; }
 
         if (!_detectedRegions?.length) detectRegions();
         if (!_detectedRegions?.length) { toast('No regions detected', 'error'); return; }
@@ -3216,76 +3376,9 @@
         });
         await prewarmCache(allCamperCoords, campLat, campLng);
 
-        // ── Zone Reconfiguration Step ──
-        // Try isochrone-based zones first (road-network-aware), fall back to ZIP-based
-        showProgress('Building bus zones...', 10);
-        let zones = null;
-        const mbToken = getMapboxToken();
-        if (mbToken && campCoords) {
-            try {
-                showProgress('Fetching drive-time isochrones...', 8);
-                const bands = await fetchIsochrones(campLat, campLng);
-                if (bands && bands.length > 0) {
-                    const roster = getRoster();
-                    const isoCampers = [];
-                    Object.keys(roster).forEach(name => {
-                        const a = D.addresses[name];
-                        if (!a?.geocoded || !a.lat || !a.lng) return;
-                        if (a.transport === 'pickup') return;
-                        isoCampers.push({ name, lat: a.lat, lng: a.lng });
-                    });
-                    const isoBands = assignCampersToIsochroneBands(isoCampers, bands, campLat, campLng);
-                    if (isoBands && isoBands.length > 0) {
-                        showProgress('Slicing isochrone zones...', 10);
-                        zones = await sliceRegionsIntoZones(isoBands, D.buses, reserveSeats);
-                        if (zones) console.log('[Go] Using isochrone-based zones (' + zones.length + ' zones)');
-                    }
-                }
-            } catch (e) {
-                console.warn('[Go] Isochrone zone creation failed, falling back to ZIP:', e.message);
-            }
-        }
-        // Try sweep algorithm if isochrones failed — produces compact pie-slice zones
-        if (!zones && campCoords) {
-            try {
-                showProgress('Building sweep-based zones...', 10);
-                const roster = getRoster();
-                const sweepCampers = [];
-                Object.keys(roster).forEach(name => {
-                    const a = D.addresses[name];
-                    if (!a?.geocoded || !a.lat || !a.lng) return;
-                    if (a.transport === 'pickup') return;
-                    sweepCampers.push({ name, lat: a.lat, lng: a.lng });
-                });
-                const busCaps = vehicles.map(v => v.capacity);
-                const sweepZones = sweepPartition(sweepCampers, busCaps, campLat, campLng);
-                if (sweepZones && sweepZones.length > 0) {
-                    zones = await sliceRegionsIntoZones(sweepZones, D.buses, reserveSeats);
-                    if (zones) console.log('[Go] Using sweep-based zones (' + zones.length + ' zones)');
-                }
-            } catch (e) {
-                console.warn('[Go] Sweep zone creation failed:', e.message);
-            }
-        }
-        // Final fallback: ZIP-based zones
-        if (!zones) {
-            showProgress('Building ZIP-based zones...', 10);
-            zones = await sliceRegionsIntoZones(_detectedRegions, D.buses, reserveSeats);
-        }
-        const useZones = zones && zones.length > 0;
-
-        if (useZones) {
-            // Zone preview logged to console — proceed directly to route generation
-            console.log('[Go] Zone preview: ' + zones.length + ' zones ready, proceeding to route generation');
-            toast(zones.length + ' bus zones created — generating routes...');
-        }
-
-        // Fall back to old region-based assignments if zones failed
-        if (!useZones) {
-            console.warn('[Go] Zone optimization failed — using raw ZIP regions');
-        }
-
-        const assignments = useZones ? null : assignBusesToRegions(vehicles, _detectedRegions, D.shifts);
+        // =========================================================
+        // NEW PIPELINE: Stops first → Greedy zones → Route each zone
+        // =========================================================
 
         const allShiftResults = [];
         const shifts = D.shifts.length ? D.shifts : [{ id: '__all__', label: 'All Campers', divisions: [], departureTime: D.activeMode === 'arrival' ? '07:00' : '16:00', _isVirtual: true }];
@@ -3293,11 +3386,12 @@
         for (let si = 0; si < shifts.length; si++) {
             const shift = shifts[si];
             const pctBase = (si / shifts.length) * 100;
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': creating stops...', pctBase + 10);
 
             const shiftBusIds = shift.assignedBuses?.length ? shift.assignedBuses : vehicles.map(v => v.busId);
             const shiftVehicles = shiftBusIds.map(bid => vehicles.find(v => v.busId === bid)).filter(Boolean);
+            const shiftBuses = shiftBusIds.map(bid => D.buses.find(b => b.id === bid)).filter(Boolean);
 
+            // ── Step 1: Gather all campers for this shift ──
             const allCampers = [];
             Object.keys(roster).forEach(name => {
                 const c = roster[name]; const a = D.addresses[name];
@@ -3308,10 +3402,147 @@
                 }
             });
 
-            let routes = [];
-            if (allCampers.length && shiftVehicles.length) {
-                routes = await solveWithVROOM(allCampers, shiftVehicles, campLat, campLng, mode, key, shift, si, shifts.length, useZones ? zones : null);
+            if (!allCampers.length || !shiftVehicles.length) {
+                allShiftResults.push({ shift, routes: [], camperCount: 0 });
+                continue;
             }
+
+            // ── Step 2: Create ALL stops globally (not per-zone) ──
+            showProgress((shift.label || 'Shift ' + (si + 1)) + ': creating stops...', pctBase + 10);
+            const mode = document.getElementById('routeMode')?.value || 'door-to-door';
+            let allStops;
+            if (mode === 'optimized-stops') allStops = createOptimizedStops(allCampers);
+            else if (mode === 'corner-stops') allStops = await createCornerStops(allCampers);
+            else allStops = createHouseStops(allCampers);
+
+            console.log('[Go] Step 2: ' + allStops.length + ' stops from ' + allCampers.length + ' campers (mode: ' + mode + ')');
+
+            // ── Step 3: Build greedy bus-aware zones from stops ──
+            showProgress((shift.label || 'Shift ' + (si + 1)) + ': building zones...', pctBase + 30);
+            const greedyZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
+            toast(greedyZones.length + ' bus zones created — optimizing routes...');
+
+            // ── Step 4: Route each zone (GH → VROOM → local TSP) ──
+            showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing routes...', pctBase + 50);
+            const isArrival = D.activeMode === 'arrival';
+            const hasShifts = shifts.length > 1;
+            const isLastShift = si === shifts.length - 1;
+            const needsReturn = hasShifts && !isLastShift;
+            const serviceTime = (D.setup.avgStopTime || 2) * 60;
+            const key = getApiKey();
+
+            let routes = [];
+            for (const zone of greedyZones) {
+                const zoneStops = zone.stopIndices.map(si => allStops[si]);
+                const v = shiftVehicles.find(sv => sv.busId === zone.busId) || shiftVehicles[0];
+                if (!zoneStops.length || !v) continue;
+
+                // ── Route optimization cascade: GraphHopper → VROOM → directional sort ──
+                let orderedStops = null;
+
+                // 1. Try GraphHopper
+                orderedStops = await solveWithGraphHopper(zoneStops, v, campLat, campLng, isArrival, needsReturn);
+
+                // 2. Fallback: ORS VROOM (single-bus ordering)
+                if (!orderedStops && key) {
+                    const jobs = zoneStops.map((stop, i) => ({
+                        id: i + 1, location: [stop.lng, stop.lat],
+                        service: serviceTime, amount: [stop.campers.length], description: stop.address
+                    }));
+                    const veh = { id: 1, profile: 'driving-car', capacity: [v.capacity], description: v.name };
+                    if (isArrival) {
+                        let fIdx = 0, fDist = 0;
+                        zoneStops.forEach((s, i) => { const d = drivingDist(campLat, campLng, s.lat, s.lng); if (d > fDist) { fDist = d; fIdx = i; } });
+                        veh.start = [zoneStops[fIdx].lng, zoneStops[fIdx].lat];
+                        veh.end = [campLng, campLat];
+                    } else {
+                        veh.start = [campLng, campLat];
+                        if (needsReturn) veh.end = [campLng, campLat];
+                    }
+                    try {
+                        const resp = await fetch('https://api.openrouteservice.org/optimization', {
+                            method: 'POST',
+                            headers: { 'Authorization': key, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ jobs, vehicles: [veh] })
+                        });
+                        if (resp.ok) {
+                            const result = await resp.json();
+                            const vroomRoute = result.routes?.[0];
+                            if (vroomRoute) {
+                                const ordered = [];
+                                vroomRoute.steps.forEach(step => {
+                                    if (step.type !== 'job') return;
+                                    const stop = zoneStops[step.id - 1];
+                                    if (stop) ordered.push(stop);
+                                });
+                                if (result.unassigned?.length) {
+                                    result.unassigned.forEach(ua => { const stop = zoneStops[ua.id - 1]; if (stop) cheapestInsert(ordered, stop); });
+                                }
+                                orderedStops = ordered;
+                                console.log('[Go] VROOM → ' + v.name + ': ' + ordered.length + ' stops');
+                            }
+                        }
+                    } catch (e) { console.warn('[Go] VROOM failed for ' + v.name + ':', e.message); }
+                }
+
+                // 3. Last resort: directional sort
+                if (!orderedStops) {
+                    orderedStops = [...zoneStops];
+                    directionalSort(orderedStops, campLat, campLng);
+                }
+
+                // ── 2-opt (driving distances) ──
+                if (orderedStops.length >= 3) {
+                    let improved = true;
+                    for (let pass = 0; pass < 5 && improved; pass++) {
+                        improved = false;
+                        for (let i = 0; i < orderedStops.length - 2; i++) {
+                            for (let j = i + 2; j < orderedStops.length; j++) {
+                                const a = orderedStops[i], b = orderedStops[i + 1];
+                                const c = orderedStops[j], d2 = orderedStops[j + 1] || (isArrival ? { lat: campLat, lng: campLng } : null);
+                                if (!a?.lat || !b?.lat || !c?.lat) continue;
+                                const curD = drivingDist(a.lat, a.lng, b.lat, b.lng) + (d2 ? drivingDist(c.lat, c.lng, d2.lat, d2.lng) : 0);
+                                const newD = drivingDist(a.lat, a.lng, c.lat, c.lng) + (d2 ? drivingDist(b.lat, b.lng, d2.lat, d2.lng) : 0);
+                                if (newD < curD * 0.95) {
+                                    const seg = orderedStops.splice(i + 1, j - i);
+                                    seg.reverse();
+                                    orderedStops.splice(i + 1, 0, ...seg);
+                                    improved = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Orientation check (driving distances) ──
+                if (orderedStops.length >= 2) {
+                    const firstDist = drivingDist(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
+                    const lastDist = drivingDist(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
+                    if (isArrival && firstDist < lastDist) { orderedStops.reverse(); }
+                    if (!isArrival && firstDist > lastDist) { orderedStops.reverse(); }
+                }
+
+                const routeStops = orderedStops.map((stop, i) => ({
+                    stopNum: i + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng
+                }));
+
+                routes.push({
+                    busId: v.busId, busName: v.name, busColor: v.color,
+                    monitor: v.monitor, counselors: v.counselors || [],
+                    stops: routeStops,
+                    camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
+                    _cap: v.capacity, totalDuration: 0
+                });
+            }
+
+            // Ensure all buses have route entries
+            shiftVehicles.forEach(v => {
+                if (!routes.find(r => r.busId === v.busId)) {
+                    routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0 });
+                }
+            });
+
+            console.log('[Go] All routes complete: ' + routes.length + ' bus routes');
 
             // Add monitor stops (counselors handled post-generation)
             routes.forEach(r => {
@@ -3319,9 +3550,6 @@
             });
 
             // Calculate ETAs
-            const isArrival = D.activeMode === 'arrival';
-            const hasShifts = shifts.length > 1;
-            const isLastShift = si === shifts.length - 1;
             const shiftNeedsReturn = hasShifts && !isLastShift;
             const timeMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
 
