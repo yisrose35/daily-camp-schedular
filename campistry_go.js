@@ -1580,7 +1580,13 @@
         document.getElementById('monitorCount').textContent = D.monitors.length;
         if (!D.monitors.length) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; return; }
         if (tw) tw.style.display = ''; if (empty) empty.style.display = 'none';
-        tbody.innerHTML = D.monitors.map(m => { const bus = D.buses.find(b => b.id === m.assignedBus); return '<tr><td style="font-weight:600">' + esc(m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—') + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>'; }).join('');
+        tbody.innerHTML = D.monitors.map(m => {
+            const bus = D.buses.find(b => b.id === m.assignedBus);
+            const suggestion = m._suggestedBus
+                ? '<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">Suggested: <strong>' + esc(m._suggestedBus) + '</strong>, Stop ' + m._suggestedStopNum + ' (' + esc(m._suggestedStop) + ') — ' + (m._walkFt || '?') + 'ft walk</div>'
+                : '';
+            return '<tr><td style="font-weight:600">' + esc(m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—') + suggestion + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
+        }).join('');
     }
     function renderCounselors() {
         const tbody = document.getElementById('counselorTableBody'), empty = document.getElementById('counselorEmptyState');
@@ -1592,7 +1598,10 @@
             const bus = D.buses.find(b => b.id === c.assignedBus);
             const mode = c.assignMode || (c.needsStop === 'yes' ? 'stop' : c.assignedBus ? 'manual' : 'auto');
             const modeBadge = mode === 'stop' ? '<span class="badge badge-warning">Own Stop</span>' : mode === 'auto' ? '<span class="badge badge-neutral">Auto-assign</span>' : bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '<span class="badge badge-neutral">Manual (unset)</span>';
-            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')"><td style="font-weight:600">' + esc(c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
+            const suggestion = (mode !== 'stop' && c._suggestedBus)
+                ? '<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">Suggested: <strong>' + esc(c._suggestedBus) + '</strong>, Stop ' + c._suggestedStopNum + ' (' + esc(c._suggestedStop) + ') — ' + (c._walkFt || '?') + 'ft walk</div>'
+                : '';
+            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')"><td style="font-weight:600">' + esc(c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestion + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
         }).join('');
     }
     function openMonitorModal(eId) { _editMonitorId = eId || null; document.getElementById('monitorModalTitle').textContent = eId ? 'Edit Monitor' : 'Add Monitor'; updateBusSelects(); const m = eId ? D.monitors.find(x => x.id === eId) : null; document.getElementById('monitorName').value = m?.name || ''; document.getElementById('monitorAddress').value = m?.address || ''; document.getElementById('monitorPhone').value = m?.phone || ''; document.getElementById('monitorBusAssign').value = m?.assignedBus || ''; openModal('monitorModal'); document.getElementById('monitorName').focus(); }
@@ -3444,12 +3453,72 @@
                 }
             });
 
+            // ── Step 1b: Geocode staff + inject "needs stop" staff as campers ──
+            // Staff with needsStop='yes' are treated identically to campers for
+            // stop creation — they get included in clustering and assigned a stop.
+            // Staff with needsStop='no' (or monitors) are handled post-generation.
+            const noStopStaff = []; // [{name, address, lat, lng, busId, role}] — suggested after routes
+            const staffWithStops = []; // names injected as campers
+
+            for (const counselor of D.counselors) {
+                if (!counselor.address) continue;
+                // Geocode the address
+                let staffCoords = null;
+                if (counselor._lat && counselor._lng) {
+                    staffCoords = { lat: counselor._lat, lng: counselor._lng };
+                } else {
+                    staffCoords = await geocodeSingle(counselor.address);
+                    if (staffCoords) { counselor._lat = staffCoords.lat; counselor._lng = staffCoords.lng; }
+                }
+                if (!staffCoords) continue;
+
+                if (counselor.needsStop === 'yes') {
+                    // Inject as camper — will get a stop like any kid
+                    allCampers.push({
+                        name: '⚐ ' + counselor.name, division: counselor.bunk || 'Staff',
+                        bunk: 'Staff', lat: staffCoords.lat, lng: staffCoords.lng,
+                        address: counselor.address, _isStaff: true, _staffId: counselor.id
+                    });
+                    staffWithStops.push(counselor.name);
+                } else {
+                    // No stop — will suggest closest stop post-generation
+                    noStopStaff.push({
+                        name: counselor.name, address: counselor.address,
+                        lat: staffCoords.lat, lng: staffCoords.lng,
+                        busId: counselor.assignedBus || null, role: 'counselor', id: counselor.id
+                    });
+                }
+            }
+
+            for (const monitor of D.monitors) {
+                if (!monitor.address) continue;
+                let staffCoords = null;
+                if (monitor._lat && monitor._lng) {
+                    staffCoords = { lat: monitor._lat, lng: monitor._lng };
+                } else {
+                    staffCoords = await geocodeSingle(monitor.address);
+                    if (staffCoords) { monitor._lat = staffCoords.lat; monitor._lng = staffCoords.lng; }
+                }
+                if (!staffCoords) continue;
+
+                // Monitors are always "no stop" — they ride the bus
+                noStopStaff.push({
+                    name: monitor.name, address: monitor.address,
+                    lat: staffCoords.lat, lng: staffCoords.lng,
+                    busId: monitor.assignedBus || null, role: 'monitor', id: monitor.id
+                });
+            }
+
+            if (staffWithStops.length) console.log('[Go] Staff with stops: ' + staffWithStops.join(', '));
+            if (noStopStaff.length) console.log('[Go] Staff without stops (will suggest): ' + noStopStaff.map(s => s.name).join(', '));
+
             if (!allCampers.length || !shiftVehicles.length) {
                 allShiftResults.push({ shift, routes: [], camperCount: 0 });
                 continue;
             }
 
             // ── Step 2: Create ALL stops globally (not per-zone) ──
+            // This includes "needs stop" staff who were injected as campers above
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': creating stops...', pctBase + 10);
             const mode = document.getElementById('routeMode')?.value || 'door-to-door';
             let allStops;
@@ -3591,10 +3660,54 @@
 
             console.log('[Go] All routes complete: ' + routes.length + ' bus routes');
 
-            // Add monitor stops (counselors handled post-generation)
-            routes.forEach(r => {
-                if (r.monitor?.address) r.stops.push({ stopNum: r.stops.length + 1, campers: [], address: r.monitor.address, lat: null, lng: null, isMonitor: true, monitorName: r.monitor.name });
-            });
+            // ── Staff suggestions: find closest stop for "no stop" staff ──
+            // For each staff member without a dedicated stop, find the closest
+            // existing stop on their assigned bus (or any bus if unassigned).
+            // Store suggestion on the staff object for display in the Staff tab.
+            if (noStopStaff.length) {
+                console.log('[Go] Suggesting stops for ' + noStopStaff.length + ' staff...');
+                noStopStaff.forEach(staff => {
+                    let bestRoute = null, bestStop = null, bestDist = Infinity;
+
+                    const candidateRoutes = staff.busId
+                        ? routes.filter(r => r.busId === staff.busId)
+                        : routes;
+
+                    // If assigned bus has no routes or no stops, search all buses
+                    const searchRoutes = candidateRoutes.some(r => r.stops.length > 0) ? candidateRoutes : routes;
+
+                    for (const r of searchRoutes) {
+                        for (const st of r.stops) {
+                            if (!st.lat || !st.lng) continue;
+                            const d = drivingDist(staff.lat, staff.lng, st.lat, st.lng);
+                            if (d < bestDist) { bestDist = d; bestStop = st; bestRoute = r; }
+                        }
+                    }
+
+                    if (bestRoute && bestStop) {
+                        const walkFt = Math.round(manhattanMi(staff.lat, staff.lng, bestStop.lat, bestStop.lng) * 5280);
+                        staff._suggestedBus = bestRoute.busName;
+                        staff._suggestedBusId = bestRoute.busId;
+                        staff._suggestedStop = bestStop.address;
+                        staff._suggestedStopNum = bestStop.stopNum;
+                        staff._walkFt = walkFt;
+
+                        // Update the actual staff object so the UI can show it
+                        const staffObj = staff.role === 'monitor'
+                            ? D.monitors.find(m => m.id === staff.id)
+                            : D.counselors.find(c => c.id === staff.id);
+                        if (staffObj) {
+                            staffObj._suggestedBus = bestRoute.busName;
+                            staffObj._suggestedBusId = bestRoute.busId;
+                            staffObj._suggestedStop = bestStop.address;
+                            staffObj._suggestedStopNum = bestStop.stopNum;
+                            staffObj._walkFt = walkFt;
+                        }
+
+                        console.log('[Go]   ' + staff.role + ' ' + staff.name + ' → ' + bestRoute.busName + ', Stop ' + bestStop.stopNum + ' (' + bestStop.address + ') — ' + walkFt + 'ft walk');
+                    }
+                });
+            }
 
             // Calculate ETAs
             const shiftNeedsReturn = hasShifts && !isLastShift;
@@ -3741,7 +3854,7 @@
         D.savedRoutes = allShiftResults;
         save();
         showProgress('Done!', 100);
-        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); }, 400);
+        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); renderStaff(); }, 400);
     }
 
     // =========================================================================
