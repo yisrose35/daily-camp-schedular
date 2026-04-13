@@ -862,7 +862,7 @@
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
             "font-src 'self' https://fonts.gstatic.com",
             "img-src 'self' data: blob: https:",
-            "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.open-meteo.com https://api.openrouteservice.org https://api.mapbox.com https://router.project-osrm.org https://overpass-api.de https://overpass.kumi.systems https://api.graphhopper.com https://nominatim.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://geocoding.geo.census.gov https://js.stripe.com https://api.stripe.com",
+            "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.open-meteo.com https://api.openrouteservice.org https://api.mapbox.com https://router.project-osrm.org https://overpass-api.de https://overpass.kumi.systems https://maps.mail.ru https://api.graphhopper.com https://graphhopper.com https://nominatim.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://geocoding.geo.census.gov https://js.stripe.com https://api.stripe.com",
             "base-uri 'self'",
             "form-action 'self'"
         ].join('; ');
