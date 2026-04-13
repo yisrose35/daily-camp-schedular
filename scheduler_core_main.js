@@ -2742,43 +2742,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         
         console.log(`[STEP 5.5] League assignments consolidated for ${Object.keys(window.leagueAssignments).length} divisions`);
 
-        // =========================================================================
-        // ★★★ STEP 5.6: WRITE LEAGUE DATA TO PER-BUNK scheduleAssignments ★★★
-        // =========================================================================
-        // fillBlock stores league matchups in leagueAssignments only (division-level).
-        // We must also write to scheduleAssignments per bunk so the schedule grid renders them.
-        console.log("[STEP 5.6] Writing league data to per-bunk scheduleAssignments...");
-        let leagueBunkWrites = 0;
-        for (const [divName, slots] of Object.entries(window.leagueAssignments || {})) {
-            const divBunks = divisions[divName]?.bunks || [];
-            if (divBunks.length === 0) continue;
-            for (const [slotKey, leagueData] of Object.entries(slots)) {
-                const slotIdx = parseInt(slotKey);
-                if (isNaN(slotIdx)) continue;
-                for (const bunk of divBunks) {
-                    if (!window.scheduleAssignments[bunk]) continue;
-                    const existing = window.scheduleAssignments[bunk][slotIdx];
-                    // Only write if slot is empty or already a league slot
-                    if (!existing || existing._league || !existing._activity || existing._activity === 'Free') {
-                        window.scheduleAssignments[bunk][slotIdx] = {
-                            field: leagueData.sport || 'League Game',
-                            sport: leagueData.sport || null,
-                            _activity: 'League Game',
-                            _league: true,
-                            _leagueName: leagueData.leagueName || '',
-                            _gameLabel: leagueData.gameLabel || '',
-                            matchups: leagueData.matchups || [],
-                            _allMatchups: leagueData.matchups || [],
-                            _fixed: true,
-                            continuation: false
-                        };
-                        leagueBunkWrites++;
-                    }
-                }
-            }
-        }
-        console.log(`[STEP 5.6] Wrote league data to ${leagueBunkWrites} bunk slots`);
-
         } // ★★★ END: Skip leagues on rainy day ★★★
 
         // =========================================================================
