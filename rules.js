@@ -296,18 +296,23 @@ function injectRulesStyles() {
 
         /* Sports rules rows */
         .sr-grid {
-            display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 10px;
         }
         .sr-row {
-            display: flex; align-items: center; justify-content: space-between;
+            display: flex; align-items: center; gap: 10px;
             padding: 10px 12px; background: #F8FAFC; border: 1px solid #E2E8F0;
-            border-radius: 10px;
+            border-radius: 10px; min-width: 0;
         }
-        .sr-row .sr-name { font-weight: 600; color: #0F172A; font-size: 0.88rem; }
-        .sr-row .sr-inputs { display: flex; gap: 8px; align-items: center; }
-        .sr-row .rules-input-num { width: 56px; padding: 6px 8px; font-size: 0.85rem; }
-        .sr-label { font-size: 0.72rem; color: #64748B; font-weight: 600; }
+        .sr-name {
+            flex: 1 1 auto; min-width: 0; font-weight: 600; color: #0F172A;
+            font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .sr-inputs { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+        .sr-inputs .rules-input-num {
+            width: 52px; padding: 6px 6px; font-size: 0.85rem; text-align: center;
+        }
+        .sr-label { font-size: 0.7rem; color: #64748B; font-weight: 600; }
 
         /* Field quality groups */
         .fq-group {
