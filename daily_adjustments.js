@@ -3144,7 +3144,7 @@ async function runOptimizer() {
     
 
     // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
-  
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
 
   // 1. Clear window globals
