@@ -4352,6 +4352,25 @@
                             if (hfit2 < hBestFit) { hBestFit = hfit2; hBestIdx = hsi2; }
                         }
                     }
+                    // ★ v14.0 Pass 3: Merge two adjacent sport/slot blocks to create space
+                    if (hBestIdx < 0) {
+                        for (var hmi = 0; hmi < hTmpl.length - 1; hmi++) {
+                            var hm1 = hTmpl[hmi], hm2 = hTmpl[hmi + 1];
+                            if (hm1._fixed || hm2._fixed) continue;
+                            var hm1t = (hm1.type || '').toLowerCase();
+                            var hm2t = (hm2.type || '').toLowerCase();
+                            if (!['sport', 'slot'].includes(hm1t) || !['sport', 'slot'].includes(hm2t)) continue;
+                            if (hm1.endMin !== hm2.startMin) continue;
+                            var hCombined = hm2.endMin - hm1.startMin;
+                            if (hCombined >= hNeedDMin) {
+                                hm1.endMin = hm2.endMin;
+                                hTmpl.splice(hmi + 1, 1);
+                                hBestIdx = hmi;
+                                hBestFit = Math.abs(hCombined - hNeedDMin);
+                                break;
+                            }
+                        }
+                    }
 
                     if (hBestIdx >= 0) {
                         var hVictim = hTmpl[hBestIdx];
@@ -4532,6 +4551,30 @@
                         }
                     }
 
+                    // ★ v14.0: If no single sport block is big enough, try merging
+                    // two adjacent sport/slot blocks to create enough space.
+                    if (gBestIdx < 0) {
+                        for (var gmi = 0; gmi < gTmpl.length - 1; gmi++) {
+                            var gm1 = gTmpl[gmi], gm2 = gTmpl[gmi + 1];
+                            if (gm1._fixed || gm2._fixed) continue;
+                            var gm1t = (gm1.type || '').toLowerCase();
+                            var gm2t = (gm2.type || '').toLowerCase();
+                            if (!['sport', 'slot'].includes(gm1t) || !['sport', 'slot'].includes(gm2t)) continue;
+                            // Must be adjacent (no gap between them)
+                            if (gm1.endMin !== gm2.startMin) continue;
+                            var gCombinedDur = gm2.endMin - gm1.startMin;
+                            if (gCombinedDur >= gNeedDMin) {
+                                // Merge: extend first block to cover both, remove second
+                                gm1.endMin = gm2.endMin;
+                                gTmpl.splice(gmi + 1, 1);
+                                gBestIdx = gmi;
+                                gBestDur = gCombinedDur;
+                                log('[Phase3] ⚡ Merged 2 adjacent sport blocks for ' + glt + ' guarantee (bunk ' + gBunk + ')');
+                                break;
+                            }
+                        }
+                    }
+
                     if (gBestIdx >= 0) {
                         var gVictim = gTmpl[gBestIdx];
                         // ★ v11.1: Clamp to layer window AND dMax
@@ -4571,7 +4614,6 @@
                                 _source: 'guarantee-remainder', _final: true
                             }, gMeta.sportCeiling || 60, Math.min(gRemainDur, gMeta.fillMinDur || 20));
                         }
-                        // If remainder is < 10 min, just leave it — small gap is better than layer above dMax
 
                         gTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
                         bunkTimelines[gBunk] = gTmpl;
