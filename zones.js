@@ -680,4 +680,190 @@ function makeEditable(el, save) {
 // =========================================================================
 window.initZonesTab = initZonesTab;
 
+// =========================================================================
+// ZONE QUERY FUNCTIONS (migrated from legacy locations.js)
+// =========================================================================
+
+// Get all locations across all zones (for dropdowns in other modules)
+window.getAllLocations = function(){
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    const locations = [];
+    const specialNames = new Set((window.getAllSpecialActivities?.() || []).map(s => s.name));
+    const fieldNames = new Set((window.getFields?.() || []).map(f => f.name));
+    Object.entries(zones).forEach(([zoneName, zone]) => {
+        if (!zone || typeof zone !== 'object') return;
+        Object.keys(zone.locations || {}).forEach(locName => {
+            if (specialNames.has(locName) || fieldNames.has(locName)) return;
+            locations.push({ name: locName, zone: zoneName, displayName: `${locName} (${zoneName})` });
+        });
+    });
+    return locations;
+};
+
+// Get zone for a specific field
+window.getZoneForField = function(fieldName){
+    if (!fieldName) return null;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if(Array.isArray(zone.fields) && zone.fields.includes(fieldName)) return zone;
+    }
+    return null;
+};
+
+// Get zone for a specific special activity
+window.getZoneForSpecialActivity = function(specialName){
+    if (!specialName) return null;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if(Array.isArray(zone.specialActivities) && zone.specialActivities.includes(specialName)) return zone;
+    }
+    return null;
+};
+
+// Get default location for a pinned tile type (e.g., "Lunch" -> "Lunchroom")
+window.getPinnedTileDefaultLocation = function(tileType){
+    if (!tileType) return null;
+    const settings = window.loadGlobalSettings?.() || {};
+    const defaults = settings.pinnedTileDefaults || {};
+    if (defaults[tileType]) return defaults[tileType];
+    const lowerType = tileType.toLowerCase();
+    for (const [key, value] of Object.entries(defaults)) {
+        if (key.toLowerCase() === lowerType) return value;
+    }
+    const ALIASES = {
+        'swim': ['pool', 'swimming', 'aquatics'],
+        'pool': ['swim', 'swimming', 'aquatics'],
+        'lunch': ['lunchroom', 'dining', 'cafeteria'],
+        'snacks': ['snack', 'snacktime'],
+        'dismissal': ['dismiss', 'end']
+    };
+    const aliases = ALIASES[lowerType] || [];
+    for (const alias of aliases) {
+        for (const [key, value] of Object.entries(defaults)) {
+            if (key.toLowerCase() === alias || key.toLowerCase().includes(alias)) return value;
+        }
+    }
+    return null;
+};
+
+// Get all pinned tile defaults
+window.getPinnedTileDefaults = function(){
+    const settings = window.loadGlobalSettings?.() || {};
+    return settings.pinnedTileDefaults || {};
+};
+
+// Set a pinned tile default location
+window.setPinnedTileDefaultLocation = function(tileType, locationName){
+    if (!tileType) return;
+    const settings = window.loadGlobalSettings?.() || {};
+    settings.pinnedTileDefaults = settings.pinnedTileDefaults || {};
+    settings.pinnedTileDefaults[tileType] = locationName || null;
+    window.saveGlobalSettings?.("pinnedTileDefaults", settings.pinnedTileDefaults);
+};
+
+// Get zone for a location name
+window.getZoneForLocation = function(locationName) {
+    if (!locationName) return null;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if (zone.locations && zone.locations[locationName]) return zone;
+    }
+    return null;
+};
+
+// Get transition times for a field
+window.getTransitionForField = function(fieldName) {
+    const zone = window.getZoneForField?.(fieldName);
+    if (zone && zone.transition) {
+        return { preMin: parseInt(zone.transition.preMin) || 0, postMin: parseInt(zone.transition.postMin) || 0 };
+    }
+    return { preMin: 0, postMin: 0 };
+};
+
+// Get transition times for a special activity
+window.getTransitionForSpecialActivity = function(specialName) {
+    const zone = window.getZoneForSpecialActivity?.(specialName);
+    if (zone && zone.transition) {
+        return { preMin: parseInt(zone.transition.preMin) || 0, postMin: parseInt(zone.transition.postMin) || 0 };
+    }
+    return { preMin: 0, postMin: 0 };
+};
+
+// Get max concurrent activities for a zone
+window.getZoneMaxConcurrent = function(zoneName) {
+    if (!zoneName) return 99;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return parseInt(zone?.maxConcurrent) || 99;
+};
+
+// Check zone capacity
+window.checkZoneCapacity = function(zoneName, slotIndex, currentCount) {
+    const maxConcurrent = window.getZoneMaxConcurrent(zoneName);
+    return (currentCount || 0) < maxConcurrent;
+};
+
+// Get all fields in a zone
+window.getFieldsInZone = function(zoneName) {
+    if (!zoneName) return [];
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return Array.isArray(zone?.fields) ? [...zone.fields] : [];
+};
+
+// Get all special activities in a zone
+window.getSpecialActivitiesInZone = function(zoneName) {
+    if (!zoneName) return [];
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return Array.isArray(zone?.specialActivities) ? [...zone.specialActivities] : [];
+};
+
+// Check if a field belongs to any zone
+window.isFieldInAnyZone = function(fieldName) {
+    if (!fieldName) return false;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for (const zone of Object.values(zones)) {
+        if (!zone || typeof zone !== 'object') continue;
+        if (Array.isArray(zone.fields) && zone.fields.includes(fieldName)) return true;
+    }
+    return false;
+};
+
+// Check if a special activity belongs to any zone
+window.isSpecialActivityInAnyZone = function(specialName) {
+    if (!specialName) return false;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for (const zone of Object.values(zones)) {
+        if (!zone || typeof zone !== 'object') continue;
+        if (Array.isArray(zone.specialActivities) && zone.specialActivities.includes(specialName)) return true;
+    }
+    return false;
+};
+
+// Batch check multiple fields for zone membership
+window.getZonesForFields = function(fieldNames) {
+    if (!Array.isArray(fieldNames)) return {};
+    const result = {};
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for (const fieldName of fieldNames) {
+        result[fieldName] = null;
+        for (const [zoneName, zone] of Object.entries(zones)) {
+            if (!zone || typeof zone !== 'object') continue;
+            if (Array.isArray(zone.fields) && zone.fields.includes(fieldName)) { result[fieldName] = zone; break; }
+        }
+    }
+    return result;
+};
+
 })();
