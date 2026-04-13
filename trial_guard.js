@@ -168,6 +168,16 @@
                 return;
             }
 
+            // ── STARTER: feature-limited, no time restriction ──
+            if (_planStatus === 'starter') {
+                console.log('⏱️ [Trial] Plan is starter — feature limits active');
+                removeOverlay();
+                removeBanner();
+                _isExpired = false;
+                showStarterBanner(camp.id);
+                return;
+            }
+
             // ── NO TRIAL DATA (legacy camp): grandfathered in ──
             if (!camp.trial_started_at) {
                 return;
@@ -267,9 +277,92 @@
     function removeBanner() {
         const b = document.getElementById('trial-countdown-banner');
         if (b) b.remove();
+        const sb = document.getElementById('starter-plan-banner');
+        if (sb) sb.remove();
         document.body.classList.remove('trial-banner-active');
         if (_countdownInterval) clearInterval(_countdownInterval);
     }
+
+    // =========================================================================
+    // UI: STARTER PLAN USAGE BANNER
+    // =========================================================================
+
+    async function showStarterBanner(campId) {
+        var limits = window.getPlanLimits?.('starter') || { maxScheduleDays: 7, maxCampers: 100 };
+        var scheduleCount = 0;
+        var camperCount = 0;
+
+        try {
+            var client = window.supabase || window.CampistryDB?.getClient?.();
+            if (client && campId) {
+                var schedResult = await client
+                    .from('daily_schedules')
+                    .select('date_key')
+                    .eq('camp_id', campId);
+                if (schedResult.data) {
+                    var dateSet = {};
+                    schedResult.data.forEach(function(r) { dateSet[r.date_key] = true; });
+                    scheduleCount = Object.keys(dateSet).length;
+                }
+
+                var stateResult = await client
+                    .from('camp_state')
+                    .select('state')
+                    .eq('camp_id', campId)
+                    .maybeSingle();
+                if (stateResult.data?.state?.app1?.camperRoster) {
+                    camperCount = Object.keys(stateResult.data.state.app1.camperRoster).length;
+                }
+            }
+        } catch (e) {
+            console.warn('⏱️ [Trial] Could not fetch starter usage:', e);
+        }
+
+        // Determine banner color
+        var schedPct = scheduleCount / limits.maxScheduleDays;
+        var camperPct = camperCount / limits.maxCampers;
+        var maxPct = Math.max(schedPct, camperPct);
+        var bgColor = maxPct >= 1 ? 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)'
+                    : maxPct >= 0.8 ? 'linear-gradient(135deg, #B45309 0%, #D97706 100%)'
+                    : 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
+
+        // Remove existing banner
+        var existing = document.getElementById('starter-plan-banner');
+        if (existing) existing.remove();
+
+        // Inject styles if needed
+        if (!document.getElementById('trial-guard-styles')) {
+            var style = document.createElement('style');
+            style.id = 'trial-guard-styles';
+            style.textContent = '@keyframes trialSlideDown { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } } body.trial-banner-active { padding-top: 40px !important; }';
+            document.head.appendChild(style);
+        }
+
+        var banner = document.createElement('div');
+        banner.id = 'starter-plan-banner';
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:' + bgColor + ';color:white;text-align:center;padding:8px 16px;font-size:0.85rem;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;display:flex;align-items:center;justify-content:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,0.15);animation:trialSlideDown 0.3s ease-out;';
+
+        var schedLabel = scheduleCount + '/' + limits.maxScheduleDays + ' schedules';
+        var camperLabel = camperCount + '/' + limits.maxCampers + ' campers';
+
+        banner.innerHTML = '<span>\u2B50</span>' +
+            '<span>Starter Plan: <strong>' + schedLabel + '</strong> \u00B7 <strong>' + camperLabel + '</strong></span>' +
+            '<button id="starter-upgrade-btn" style="color:white;background:rgba(255,255,255,0.2);padding:3px 12px;border-radius:4px;border:none;cursor:pointer;font-size:0.8rem;font-weight:600;">Upgrade</button>' +
+            '<button onclick="this.parentElement.remove();document.body.classList.remove(\'trial-banner-active\');" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:1.1rem;padding:0 4px;margin-left:4px;" title="Dismiss">\u00D7</button>';
+
+        document.body.prepend(banner);
+        document.body.classList.add('trial-banner-active');
+
+        var upgradeBtn = document.getElementById('starter-upgrade-btn');
+        if (upgradeBtn) upgradeBtn.addEventListener('click', openUpgradeEmail);
+    }
+
+    // Listen for plan-limit events from schedule/camper saves
+    window.addEventListener('campistry-plan-limit', function(e) {
+        var detail = e.detail || {};
+        console.log('⏱️ [Trial] Plan limit reached:', detail.type, detail);
+        openUpgradeEmail();
+    });
 
     // =========================================================================
     // UI: LOCKOUT OVERLAY

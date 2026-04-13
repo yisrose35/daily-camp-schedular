@@ -448,7 +448,7 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                             
                             // ★★★ PROMO CODE DETECTION ★★★
                             // Check if the access code is a promo code (trial) or regular (full access)
-                            let planStatus = 'active';
+                            let planStatus = 'starter'; // Default: starter plan (limited features)
                             let trialStartedAt = null;
                             let trialHours = null;
 
@@ -465,7 +465,8 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                                         trialHours = promoResult.trial_hours || 48;
                                         console.log('[Landing] ✅ Promo code accepted:', accessCode, '→ trial for', trialHours, 'hours');
                                     } else {
-                                        console.log('[Landing] Not a promo code, using as regular access code');
+                                        planStatus = 'active'; // Regular access code = full access
+                                        console.log('[Landing] Not a promo code, using as regular access code → active');
                                     }
                                 } catch (promoErr) {
                                     console.warn('[Landing] Promo check failed, proceeding with normal flow:', promoErr);

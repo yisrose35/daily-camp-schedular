@@ -624,6 +624,14 @@
         try {
             const result = await window.ScheduleDB.saveSchedule(dateKey, data);
             
+            // ★★★ STARTER PLAN: Do NOT retry plan-limit blocks ★★★
+            if (result?.target === 'plan-limit') {
+                log('[VERIFIED SAVE] Blocked by plan limit:', result.error?.message || result.error);
+                showNotification(result.error?.message || 'Schedule limit reached. Upgrade for unlimited.', 'warning');
+                _saveInProgress = false;
+                return result;
+            }
+
             if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified')) {
                 log('✅ Schedule saved to cloud:', bunkCount, 'bunks');
                 showNotification(`Saved ${bunkCount} bunks`, 'success');
@@ -649,6 +657,12 @@
                 return result;
             }
         } catch (e) {
+            // ★★★ STARTER PLAN: Detect trigger rejection — do NOT retry ★★★
+            if ((e.message && e.message.includes('Starter plan limit')) || e.code === 'P0001') {
+                showNotification('Starter plan limit reached. Upgrade for unlimited access.', 'warning');
+                _saveInProgress = false;
+                return { success: false, error: e.message, target: 'plan-limit' };
+            }
             logError('[VERIFIED SAVE] Exception:', e);
             if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                 await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));

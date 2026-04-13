@@ -86,6 +86,30 @@
         return getCampId();
     }
 
+    // ★★★ STARTER PLAN: Camper limit check ★★★
+    async function checkCamperLimit(newCount) {
+        newCount = newCount || 1;
+        try {
+            var client = getSupabaseClient();
+            var campId = getCampId() || await ensureCampId();
+            if (!client || !campId) return { allowed: true };
+
+            var result = await client.rpc('check_camper_limit', { p_camp_id: campId, p_new_count: newCount });
+
+            if (!result.error && result.data && result.data.allowed === false) {
+                toast('Camper limit reached (' + result.data.current + '/' + result.data.max + '). Upgrade for more.', 'error');
+                window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                    detail: { type: 'camper', current: result.data.current, max: result.data.max }
+                }));
+                return { allowed: false, current: result.data.current, max: result.data.max };
+            }
+            return { allowed: true, current: result.data?.current, max: result.data?.max };
+        } catch (e) {
+            console.warn('[Me] Camper limit check failed, proceeding:', e);
+            return { allowed: true }; // fail open — trigger is backstop
+        }
+    }
+
     async function loadFromCloud() {
         const client = getSupabaseClient();
         const campId = await ensureCampId();
@@ -208,6 +232,13 @@
                 .single();
 
             if (upsertError) {
+                // ★★★ STARTER PLAN: Detect trigger rejection ★★★
+                var errMsg = upsertError.message || '';
+                if (errMsg.includes('Starter plan limit') || upsertError.code === 'P0001') {
+                    toast('Camper limit reached. Upgrade for unlimited campers.', 'error');
+                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', { detail: { type: 'camper' } }));
+                    return false;
+                }
                 console.error('[Me] Cloud save error:', upsertError.message);
                 return false;
             }
@@ -1052,12 +1083,15 @@
         });
     }
 
-    function quickAddCamper() {
+    async function quickAddCamper() {
         const nameInput = document.getElementById('qaName');
         const name = (nameInput?.value || '').trim().slice(0, MAX_NAME_LENGTH);
         if (!name) { toast('Enter a name', 'error'); nameInput?.focus(); return; }
         if (isUnsafeName(name)) { toast('That name is reserved', 'error'); return; }
         if (camperRoster[name]) { toast('Camper exists', 'error'); return; }
+        // ★ Starter plan check
+        var limit = await checkCamperLimit(1);
+        if (!limit.allowed) return;
         camperRoster[name] = {
             division: document.getElementById('qaDivision')?.value || '',
             grade: document.getElementById('qaGrade')?.value || '',
@@ -1235,8 +1269,14 @@
         return result.map(s => s.replace(/""/g, '"'));
     }
 
-    function importCsv() {
+    async function importCsv() {
         if (!pendingCsvData.length) return;
+        // ★ Starter plan: count truly new campers and check limit
+        var newCamperCount = pendingCsvData.filter(function(r) { return !camperRoster[r.name]; }).length;
+        if (newCamperCount > 0) {
+            var limit = await checkCamperLimit(newCamperCount);
+            if (!limit.allowed) return;
+        }
         let added = 0, updated = 0, skipped = 0;
         let divsCreated = 0, gradesCreated = 0, bunksCreated = 0;
 
