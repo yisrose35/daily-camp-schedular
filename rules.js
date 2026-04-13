@@ -1,11 +1,16 @@
 // ============================================================================
-// rules.js — CAMP SCHEDULING RULES v1.0
+// rules.js — CAMP SCHEDULING RULES v1.1
 // ============================================================================
 // Houses all cross-cutting scheduling "rules" that camps want the scheduler
 // to respect. Sections:
 //   1. Sports Rules (min/max players per sport)   — moved from facilities.js
 //   2. Field Quality Groups                        — moved from facilities.js
 //   3. Cooldown / Spacing Rules (new)             — keep X away from Y
+//
+// NOTE: Cooldown rules apply ONLY to the auto-builder. In manual mode the
+// user decides placement, so a "don't place sport after lunch" rule would
+// just be arguing with the user. We tell the auto-builder; we don't fight
+// manual drags.
 //
 // Data locations:
 //   - sportMetaData, fieldCombos : settings.app1.sportMetaData / app1.fieldCombos
@@ -20,7 +25,7 @@
 (function () {
 'use strict';
 
-console.log('[RULES] rules.js v1.0 loading...');
+console.log('[RULES] rules.js v1.1 loading...');
 
 // ──────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -59,15 +64,15 @@ function getSportNames() {
 
 // Activity-type buckets we can target with "any"
 const ACTIVITY_TYPE_OPTIONS = [
-    { value: 'sport',   label: 'Any Sport' },
-    { value: 'swim',    label: 'Swim' },
-    { value: 'lunch',   label: 'Lunch' },
-    { value: 'snack',   label: 'Snack' },
-    { value: 'special', label: 'Any Special' },
-    { value: 'custom',  label: 'Any Custom' },
-    { value: 'league',  label: 'League' },
+    { value: 'sport',     label: 'Any Sport' },
+    { value: 'swim',      label: 'Swim' },
+    { value: 'lunch',     label: 'Lunch' },
+    { value: 'snack',     label: 'Snack' },
+    { value: 'special',   label: 'Any Special' },
+    { value: 'custom',    label: 'Any Custom' },
+    { value: 'league',    label: 'League' },
     { value: 'dismissal', label: 'Dismissal' },
-    { value: 'arrival', label: 'Arrival' }
+    { value: 'arrival',   label: 'Arrival' }
 ];
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -124,16 +129,13 @@ function blockMatchesDescriptor(block, desc) {
 
 // candidate : { startMin, endMin, type, event, field, _assignedSpecial, _specialLocation }
 // template  : array of blocks already placed on the bunk
-// opts      : { auto: true/false }
-function isCandidateAllowed(candidate, template, opts) {
-    opts = opts || {};
-    const auto = !!opts.auto;
+// opts      : reserved (auto flag still accepted but cooldowns always apply)
+function isCandidateAllowed(candidate, template, _opts) {
     const rules = getCooldownRules();
     if (!rules.length || !candidate) return true;
     template = template || [];
     for (let i = 0; i < rules.length; i++) {
         const r = rules[i];
-        if (r.autoOnly && !auto) continue;
         if (!r.target || !r.reference) continue;
         if (!blockMatchesDescriptor(candidate, r.target)) continue;
         const minutes = Math.max(0, parseInt(r.minutes) || 0);
@@ -142,9 +144,7 @@ function isCandidateAllowed(candidate, template, opts) {
             const w = template[j];
             if (!w || w === candidate) continue;
             if (!blockMatchesDescriptor(w, r.reference)) continue;
-            // gap when candidate is BEFORE the reference
             const gapBefore = (w.startMin || 0) - (candidate.endMin || 0);
-            // gap when candidate is AFTER the reference
             const gapAfter  = (candidate.startMin || 0) - (w.endMin || 0);
             const timing = r.timing || 'both';
             if (timing === 'before' || timing === 'both') {
@@ -158,20 +158,14 @@ function isCandidateAllowed(candidate, template, opts) {
     return true;
 }
 
-// For optimizer: given what you're about to place (descriptor) and the current
-// template, return forbidden [start,end] ranges where placement would violate.
-function findForbiddenRanges(targetDescriptor, template, opts) {
-    opts = opts || {};
-    const auto = !!opts.auto;
+function findForbiddenRanges(targetDescriptor, template, _opts) {
     const out = [];
     const rules = getCooldownRules();
     if (!rules.length) return out;
     template = template || [];
     for (let i = 0; i < rules.length; i++) {
         const r = rules[i];
-        if (r.autoOnly && !auto) continue;
         if (!r.target || !r.reference) continue;
-        // target descriptor must overlap with r.target
         if (!descriptorCanMatch(r.target, targetDescriptor)) continue;
         const minutes = Math.max(0, parseInt(r.minutes) || 0);
         if (minutes === 0) continue;
@@ -180,11 +174,9 @@ function findForbiddenRanges(targetDescriptor, template, opts) {
             if (!blockMatchesDescriptor(w, r.reference)) continue;
             const timing = r.timing || 'both';
             if (timing === 'after' || timing === 'both') {
-                // candidate after w forbidden if candidate.start < w.end + minutes
                 out.push({ start: w.endMin, end: w.endMin + minutes, side: 'after' });
             }
             if (timing === 'before' || timing === 'both') {
-                // candidate before w forbidden if candidate.end > w.start - minutes
                 out.push({ start: w.startMin - minutes, end: w.startMin, side: 'before' });
             }
         }
@@ -198,8 +190,156 @@ function descriptorCanMatch(ruleDesc, candidateDesc) {
     if (ruleDesc.kind === candidateDesc.kind) {
         return String(ruleDesc.value || '').toLowerCase() === String(candidateDesc.value || '').toLowerCase();
     }
-    // type vs activity/facility — can't statically prove, allow (be conservative)
     return true;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// STYLES — injected once
+// ──────────────────────────────────────────────────────────────────────────
+function injectRulesStyles() {
+    if (document.getElementById('rules-tab-styles')) return;
+    const css = `
+        .rules-page { max-width: 1100px; }
+        .rules-card {
+            background: #fff; border: 1px solid #E5E7EB; border-radius: 14px;
+            padding: 18px 20px; margin-bottom: 16px;
+            box-shadow: 0 1px 2px rgba(15,23,42,0.03);
+        }
+        .rules-card-header {
+            display: flex; align-items: center; justify-content: space-between;
+            cursor: pointer; user-select: none;
+        }
+        .rules-card-title {
+            font-size: 1.02rem; font-weight: 700; color: #0F172A;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .rules-card-title .rules-badge {
+            background: #ECFEFF; color: #155E75; border: 1px solid #A5F3FC;
+            font-size: 0.72rem; font-weight: 600; padding: 2px 10px; border-radius: 99px;
+        }
+        .rules-card-subtitle {
+            font-size: 0.85rem; color: #6B7280; margin-top: 4px;
+        }
+        .rules-caret {
+            color: #94A3B8; transition: transform 0.2s; flex-shrink: 0;
+        }
+        .rules-caret.open { transform: rotate(180deg); }
+        .rules-card-body {
+            margin-top: 16px; padding-top: 16px; border-top: 1px solid #F1F5F9;
+        }
+        .rules-helper {
+            background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px;
+            padding: 10px 14px; font-size: 0.85rem; color: #475569; line-height: 1.5;
+        }
+        .rules-helper strong { color: #0F172A; }
+        .rules-sub-title {
+            font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+            color: #64748B; margin-bottom: 4px; display: block;
+        }
+        .rules-select, .rules-input {
+            padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 10px;
+            font-size: 0.9rem; background: #fff; outline: none; color: #0F172A;
+            font-family: inherit; transition: border-color 0.15s, box-shadow 0.15s;
+            min-width: 0;
+        }
+        .rules-select:focus, .rules-input:focus {
+            border-color: #147D91; box-shadow: 0 0 0 3px rgba(20,125,145,0.12);
+        }
+        .rules-input-num { width: 72px; text-align: center; }
+        .rules-btn-primary {
+            background: #147D91; color: #fff; border: none; padding: 9px 22px;
+            border-radius: 999px; font-weight: 600; font-size: 0.88rem; cursor: pointer;
+            transition: background 0.15s;
+        }
+        .rules-btn-primary:hover { background: #0F5F6E; }
+        .rules-btn-dark {
+            background: #111827; color: #fff; border: none; padding: 9px 18px;
+            border-radius: 10px; font-weight: 600; font-size: 0.85rem; cursor: pointer;
+        }
+        .rules-btn-ghost-danger {
+            background: transparent; color: #B91C1C; border: 1px solid #FECACA;
+            padding: 7px 12px; border-radius: 8px; font-weight: 500; font-size: 0.8rem;
+            cursor: pointer; transition: background 0.15s, color 0.15s;
+        }
+        .rules-btn-ghost-danger:hover { background: #FEF2F2; }
+        .rules-empty {
+            text-align: center; padding: 28px 18px; color: #94A3B8;
+            font-size: 0.9rem; border: 1px dashed #E2E8F0; border-radius: 12px;
+            background: #FAFAFA;
+        }
+
+        /* Cooldown row — sentence-style */
+        .cd-row {
+            border: 1px solid #E5E7EB; border-radius: 12px;
+            background: #FAFBFC; padding: 14px 16px; margin-bottom: 10px;
+            display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
+        }
+        .cd-fields {
+            display: grid; grid-template-columns: 1.2fr auto 1.2fr; gap: 14px;
+            align-items: end;
+        }
+        .cd-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .cd-col .rules-select { width: 100%; }
+        .cd-arrow {
+            color: #CBD5E1; font-size: 1.3rem; padding-bottom: 8px; user-select: none;
+        }
+        .cd-middle {
+            display: flex; align-items: center; gap: 8px; padding-bottom: 2px;
+            flex-wrap: wrap;
+        }
+        .cd-middle .rules-select { padding: 7px 10px; font-size: 0.86rem; }
+        .cd-delete-wrap { padding-top: 22px; }
+        @media (max-width: 780px) {
+            .cd-fields { grid-template-columns: 1fr; }
+            .cd-arrow { display: none; }
+        }
+
+        /* Sports rules rows */
+        .sr-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 10px;
+        }
+        .sr-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 12px; background: #F8FAFC; border: 1px solid #E2E8F0;
+            border-radius: 10px;
+        }
+        .sr-row .sr-name { font-weight: 600; color: #0F172A; font-size: 0.88rem; }
+        .sr-row .sr-inputs { display: flex; gap: 8px; align-items: center; }
+        .sr-row .rules-input-num { width: 56px; padding: 6px 8px; font-size: 0.85rem; }
+        .sr-label { font-size: 0.72rem; color: #64748B; font-weight: 600; }
+
+        /* Field quality groups */
+        .fq-group {
+            border: 1px solid #E5E7EB; border-radius: 12px; padding: 14px 16px;
+            margin-bottom: 10px; background: #fff;
+        }
+        .fq-group-head {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+        }
+        .fq-group-name { font-weight: 700; color: #0F172A; font-size: 0.95rem; }
+        .fq-group-count {
+            font-size: 0.72rem; color: #64748B; background: #F1F5F9;
+            padding: 2px 10px; border-radius: 99px;
+        }
+        .fq-member {
+            display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+            background: #F8FAFC; border-radius: 8px; border: 1px solid #F1F5F9;
+            margin-bottom: 4px;
+        }
+        .fq-member-rank {
+            width: 26px; height: 26px; line-height: 26px; text-align: center;
+            border-radius: 50%; font-weight: 700; font-size: 0.78rem;
+            background: #F1F5F9; color: #64748B;
+        }
+        .fq-member-rank.best { background: #DCFCE7; color: #166534; }
+        .fq-member-name { flex: 1; font-size: 0.88rem; font-weight: 500; color: #0F172A; }
+        .fq-member-label { font-size: 0.72rem; color: #94A3B8; }
+    `;
+    const style = document.createElement('style');
+    style.id = 'rules-tab-styles';
+    style.textContent = css;
+    document.head.appendChild(style);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -210,52 +350,31 @@ function renderSportsRulesCard(container) {
     const s = loadSettings();
     const app1 = s.app1 || {};
     const meta = app1.sportMetaData || {};
-    const sports = getSportNames();
-
-    if (sports.length === 0) {
-        container.innerHTML = `
-            <div class="sport-rules-card">
-                <div class="sport-rules-header"><div class="sport-rules-title">Sports Rules</div></div>
-                <div class="sport-rules-body" style="display:block; padding:10px; text-align:center;">
-                    <p class="muted" style="padding:10px;">No sports configured yet. Add sports to a facility first.</p>
-                </div>
-            </div>`;
-        return;
-    }
-
-    let rowsHTML = '';
-    [...sports].sort().forEach(sport => {
-        const m = meta[sport] || {};
-        rowsHTML += `
-            <div class="sport-rule-row">
-                <span class="sport-rule-name">${escapeHtml(sport)}</span>
-                <div class="sport-rule-inputs">
-                    <div class="sport-rule-input-group">
-                        <span class="sport-rule-label">Min:</span>
-                        <input type="number" class="sport-rule-input" data-sport="${escapeHtml(sport)}" data-type="min" value="${m.minPlayers || ''}" placeholder="\u2014" min="1">
-                    </div>
-                    <div class="sport-rule-input-group">
-                        <span class="sport-rule-label">Max:</span>
-                        <input type="number" class="sport-rule-input" data-sport="${escapeHtml(sport)}" data-type="max" value="${m.maxPlayers || ''}" placeholder="\u221E" min="1">
-                    </div>
-                </div>
-            </div>`;
-    });
+    const sports = [...getSportNames()].sort();
+    const count = sports.length;
 
     container.innerHTML = `
-        <div class="sport-rules-card">
-            <div class="sport-rules-header" id="rules-sport-toggle">
-                <div class="sport-rules-title">Sports Rules</div>
-                <span id="rules-sport-caret" style="transform:rotate(0deg); transition:transform 0.2s; color:#6B7280;">
-                    <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        <div class="rules-card">
+            <div class="rules-card-header" id="rules-sport-toggle">
+                <div>
+                    <div class="rules-card-title">
+                        Sports Rules
+                        ${count ? `<span class="rules-badge">${count} sport${count !== 1 ? 's' : ''}</span>` : ''}
+                    </div>
+                    <div class="rules-card-subtitle">Min/max players per sport so the scheduler can match bunks by size.</div>
+                </div>
+                <span class="rules-caret" id="rules-sport-caret">
+                    <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </span>
             </div>
-            <div id="rules-sport-body" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;">
-                <div class="sport-rules-hint"><strong>How this works:</strong> Set min/max players per sport. The scheduler matches bunks by size.</div>
-                <div id="rules-sport-list">${rowsHTML}</div>
-                <div style="margin-top:20px; text-align:right;">
-                    <button id="rules-sport-save" style="background:#147D91; color:white; border:none; padding:8px 24px; border-radius:999px; cursor:pointer; font-weight:600; font-size:0.9rem;">Save Rules</button>
-                </div>
+            <div class="rules-card-body" id="rules-sport-body" style="display:none;">
+                ${count === 0
+                    ? `<div class="rules-empty">No sports configured yet. Add sports to a facility first.</div>`
+                    : `<div class="sr-grid" id="rules-sport-grid"></div>
+                       <div style="margin-top:16px; text-align:right;">
+                         <button class="rules-btn-primary" id="rules-sport-save">Save</button>
+                       </div>`
+                }
             </div>
         </div>`;
 
@@ -265,12 +384,30 @@ function renderSportsRulesCard(container) {
         const caret = document.getElementById('rules-sport-caret');
         const hidden = body.style.display === 'none';
         body.style.display = hidden ? 'block' : 'none';
-        caret.style.transform = hidden ? 'rotate(180deg)' : 'rotate(0deg)';
+        caret.classList.toggle('open', hidden);
     };
 
+    if (count === 0) return;
+
+    const grid = document.getElementById('rules-sport-grid');
+    sports.forEach(sport => {
+        const m = meta[sport] || {};
+        const row = document.createElement('div');
+        row.className = 'sr-row';
+        row.innerHTML = `
+            <span class="sr-name">${escapeHtml(sport)}</span>
+            <div class="sr-inputs">
+                <span class="sr-label">Min</span>
+                <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="min" value="${m.minPlayers || ''}" placeholder="—" min="1">
+                <span class="sr-label">Max</span>
+                <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="max" value="${m.maxPlayers || ''}" placeholder="∞" min="1">
+            </div>`;
+        grid.appendChild(row);
+    });
+
     function collect() {
-        const updated = { ...(loadSettings().app1 && loadSettings().app1.sportMetaData || {}) };
-        container.querySelectorAll('.sport-rule-input').forEach(inp => {
+        const updated = { ...(((loadSettings().app1) || {}).sportMetaData || {}) };
+        container.querySelectorAll('.sr-in').forEach(inp => {
             const sp = inp.dataset.sport;
             const type = inp.dataset.type;
             const v = parseInt(inp.value) || null;
@@ -280,29 +417,23 @@ function renderSportsRulesCard(container) {
         });
         return updated;
     }
-
-    container.querySelectorAll('.sport-rule-input').forEach(inp => {
-        inp.addEventListener('change', () => {
-            const updated = collect();
-            const s2 = loadSettings();
-            const app1b = s2.app1 || {};
-            app1b.sportMetaData = updated;
-            saveKey('app1', app1b);
-        });
-    });
+    function persist() {
+        const updated = collect();
+        const s2 = loadSettings();
+        const app1b = s2.app1 || {};
+        app1b.sportMetaData = updated;
+        saveKey('app1', app1b);
+    }
+    container.querySelectorAll('.sr-in').forEach(inp => inp.addEventListener('change', persist));
 
     const saveBtn = document.getElementById('rules-sport-save');
     if (saveBtn) {
         saveBtn.onclick = (e) => {
             e.stopPropagation();
-            const updated = collect();
-            const s2 = loadSettings();
-            const app1b = s2.app1 || {};
-            app1b.sportMetaData = updated;
-            saveKey('app1', app1b);
-            saveBtn.textContent = '\u2713 Saved!';
+            persist();
+            saveBtn.textContent = '\u2713 Saved';
             saveBtn.style.background = '#0F6A7A';
-            setTimeout(() => { saveBtn.textContent = 'Save Rules'; saveBtn.style.background = '#147D91'; }, 1500);
+            setTimeout(() => { saveBtn.textContent = 'Save'; saveBtn.style.background = ''; }, 1400);
         };
     }
 }
@@ -333,17 +464,20 @@ function renderFieldQualityCard(container) {
     const groupCount = groupNames.length;
 
     container.innerHTML = `
-        <div class="sport-rules-card">
-            <div class="sport-rules-header" id="rules-fq-toggle">
-                <div class="sport-rules-title">Field Quality Groups${groupCount > 0
-                    ? ` <span class="sport-rules-badge">${groupCount} group${groupCount !== 1 ? 's' : ''}</span>`
-                    : ''}</div>
-                <span id="rules-fq-caret" style="transform:rotate(0deg); transition:transform 0.2s; color:#6B7280;">
-                    <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        <div class="rules-card">
+            <div class="rules-card-header" id="rules-fq-toggle">
+                <div>
+                    <div class="rules-card-title">
+                        Field Quality Groups
+                        ${groupCount ? `<span class="rules-badge">${groupCount} group${groupCount !== 1 ? 's' : ''}</span>` : ''}
+                    </div>
+                    <div class="rules-card-subtitle">Rank related fields. The best field goes to the most senior grade.</div>
+                </div>
+                <span class="rules-caret" id="rules-fq-caret">
+                    <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </span>
             </div>
-            <div id="rules-fq-body" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;">
-                <div class="sport-rules-hint"><strong>How this works:</strong> Group related fields and rank by quality. The scheduler gives the best field to the most senior grade.</div>
+            <div class="rules-card-body" id="rules-fq-body" style="display:none;">
                 <div id="rules-fq-list"></div>
             </div>
         </div>`;
@@ -353,7 +487,7 @@ function renderFieldQualityCard(container) {
         const caret = document.getElementById('rules-fq-caret');
         const hidden = body.style.display === 'none';
         body.style.display = hidden ? 'block' : 'none';
-        caret.style.transform = hidden ? 'rotate(180deg)' : 'rotate(0deg)';
+        caret.classList.toggle('open', hidden);
     };
 
     renderFieldGroupsList(document.getElementById('rules-fq-list'));
@@ -365,24 +499,25 @@ function renderFieldGroupsList(listEl) {
     const groups = getExistingFieldGroups();
     const groupNames = [...groups.keys()];
     if (groupNames.length === 0) {
-        listEl.innerHTML = '<div style="text-align:center; padding:20px; color:#9CA3AF; font-size:0.9rem;">No field groups yet. Assign a Field Group to a facility in the Facilities tab.</div>';
+        listEl.innerHTML = '<div class="rules-empty">No field groups yet. Assign a Field Group to a facility in the Facilities tab.</div>';
         return;
     }
     groupNames.forEach(groupName => {
         const members = groups.get(groupName);
         const card = document.createElement('div');
-        card.style.cssText = 'border:1px solid #E5E7EB; border-radius:12px; padding:16px; margin-bottom:12px; background:#fff;';
-        card.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <span style="font-weight:600; font-size:0.95rem;">${escapeHtml(groupName)}</span>
-                <span style="font-size:0.75rem; color:#6B7280; background:#F3F4F6; padding:2px 8px; border-radius:99px;">${members.length} field${members.length !== 1 ? 's' : ''}</span>
-            </div></div>`;
+        card.className = 'fq-group';
+        card.innerHTML = `
+            <div class="fq-group-head">
+                <span class="fq-group-name">${escapeHtml(groupName)}</span>
+                <span class="fq-group-count">${members.length} field${members.length !== 1 ? 's' : ''}</span>
+            </div>`;
         members.forEach((m, idx) => {
             const row = document.createElement('div');
-            row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 12px; background:#F9FAFB; border-radius:8px; border:1px solid #F3F4F6; margin-bottom:4px;';
-            row.innerHTML = `<div style="width:26px; height:26px; line-height:26px; text-align:center; border-radius:50%; font-weight:700; font-size:0.8rem; background:${idx === 0 ? '#DCFCE7' : '#F3F4F6'}; color:${idx === 0 ? '#166534' : '#6B7280'};">${m.qualityRank || (idx + 1)}</div>
-                <span style="flex:1; font-size:0.88rem; font-weight:500;">${escapeHtml(m.name)}</span>
-                <span style="font-size:0.75rem; color:#9CA3AF;">${idx === 0 ? 'Best' : idx === members.length - 1 ? 'Lowest' : ''}</span>`;
+            row.className = 'fq-member';
+            row.innerHTML = `
+                <div class="fq-member-rank ${idx === 0 ? 'best' : ''}">${m.qualityRank || (idx + 1)}</div>
+                <span class="fq-member-name">${escapeHtml(m.name)}</span>
+                <span class="fq-member-label">${idx === 0 ? 'Best' : idx === members.length - 1 ? 'Lowest' : ''}</span>`;
             card.appendChild(row);
         });
         listEl.appendChild(card);
@@ -392,32 +527,26 @@ function renderFieldGroupsList(listEl) {
 // ──────────────────────────────────────────────────────────────────────────
 // COOLDOWN RULES CARD
 // ──────────────────────────────────────────────────────────────────────────
-function descriptorOptions() {
-    // Returns groups used to populate the "kind + value" picker
+function descriptorPickerHTML(id, currentDesc) {
     const sports = getSportNames();
     const specials = getSpecialActivityNames();
     const facilities = getFacilityNames();
-    return { sports, specials, facilities };
-}
-
-function descriptorPickerHTML(id, currentDesc, label) {
-    const opts = descriptorOptions();
     const cur = currentDesc || { kind: 'any', value: '' };
+
     const typeSel = ACTIVITY_TYPE_OPTIONS.map(o =>
         `<option value="type:${escapeHtml(o.value)}"${cur.kind === 'type' && cur.value === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
-    const sportSel = opts.sports.map(n =>
-        `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>Activity: ${escapeHtml(n)}</option>`).join('');
-    const specialSel = opts.specials.map(n =>
-        `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>Activity: ${escapeHtml(n)}</option>`).join('');
-    const facSel = opts.facilities.map(n =>
-        `<option value="facility:${escapeHtml(n)}"${cur.kind === 'facility' && cur.value === n ? ' selected' : ''}>Facility: ${escapeHtml(n)}</option>`).join('');
-    return `
-        <label style="font-size:0.75rem; color:#6B7280; display:block; margin-bottom:2px;">${escapeHtml(label)}</label>
-        <select class="rules-cd-desc" id="${id}" style="padding:6px 10px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.88rem; outline:none; background:white; min-width:170px;">
+    const sportSel = sports.map(n =>
+        `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+    const specialSel = specials.map(n =>
+        `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+    const facSel = facilities.map(n =>
+        `<option value="facility:${escapeHtml(n)}"${cur.kind === 'facility' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+
+    return `<select class="rules-select" id="${id}">
             <optgroup label="Category">${typeSel}</optgroup>
-            ${sportSel ? `<optgroup label="Sports">${sportSel}</optgroup>` : ''}
-            ${specialSel ? `<optgroup label="Specials / Pinned">${specialSel}</optgroup>` : ''}
-            ${facSel ? `<optgroup label="Facilities">${facSel}</optgroup>` : ''}
+            ${sportSel ? `<optgroup label="Sport">${sportSel}</optgroup>` : ''}
+            ${specialSel ? `<optgroup label="Special / Pinned Activity">${specialSel}</optgroup>` : ''}
+            ${facSel ? `<optgroup label="Facility">${facSel}</optgroup>` : ''}
         </select>`;
 }
 
@@ -433,25 +562,28 @@ function renderCooldownCard(container) {
     const rules = getCooldownRules();
     const count = rules.length;
     container.innerHTML = `
-        <div class="sport-rules-card" style="width:100%;">
-            <div class="sport-rules-header" id="rules-cd-toggle">
-                <div class="sport-rules-title">Activity &amp; Facility Cooldowns${count > 0
-                    ? ` <span class="sport-rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>`
-                    : ''}</div>
-                <span id="rules-cd-caret" style="transform:rotate(0deg); transition:transform 0.2s; color:#6B7280;">
-                    <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        <div class="rules-card">
+            <div class="rules-card-header" id="rules-cd-toggle">
+                <div>
+                    <div class="rules-card-title">
+                        Cooldowns &amp; Spacing
+                        ${count ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>` : ''}
+                    </div>
+                    <div class="rules-card-subtitle">Tell the auto-builder to keep certain activities or facilities apart in time.</div>
+                </div>
+                <span class="rules-caret open" id="rules-cd-caret">
+                    <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </span>
             </div>
-            <div id="rules-cd-body" style="display:block; margin-top:16px; padding-top:16px; border-top:1px solid #E5E7EB;">
-                <div class="sport-rules-hint">
-                    <strong>How this works:</strong> Tell the scheduler to keep certain activities or facilities away from others.
-                    For example: "Don't schedule <em>Swim</em> within <em>20 min</em> <em>before</em> <em>Lunch</em>", or
-                    "Don't schedule <em>Basketball</em> within <em>0 min</em> <em>after</em> <em>Painting</em>" (no back-to-back).
-                    Mark a rule <em>Auto-builder only</em> to allow manual overrides.
+            <div class="rules-card-body" id="rules-cd-body">
+                <div class="rules-helper">
+                    <strong>Applies to the auto-builder only.</strong>
+                    Example: "Don't place <em>Any Sport</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
+                    "Don't place <em>Basketball</em> within <em>0 min</em> <em>after</em> <em>Painting</em>" to forbid back-to-back.
                 </div>
-                <div id="rules-cd-list" style="margin-top:12px;"></div>
-                <div style="margin-top:16px; display:flex; justify-content:flex-end;">
-                    <button id="rules-cd-add" style="background:#111; color:white; border:none; border-radius:8px; padding:8px 16px; font-size:0.85rem; cursor:pointer; font-weight:500;">+ Add Rule</button>
+                <div id="rules-cd-list" style="margin-top:14px;"></div>
+                <div style="margin-top:12px; display:flex; justify-content:flex-end;">
+                    <button class="rules-btn-dark" id="rules-cd-add">+ Add Rule</button>
                 </div>
             </div>
         </div>`;
@@ -461,19 +593,17 @@ function renderCooldownCard(container) {
         const caret = document.getElementById('rules-cd-caret');
         const hidden = body.style.display === 'none';
         body.style.display = hidden ? 'block' : 'none';
-        caret.style.transform = hidden ? 'rotate(180deg)' : 'rotate(0deg)';
+        caret.classList.toggle('open', hidden);
     };
 
     document.getElementById('rules-cd-add').onclick = () => {
         const current = getCooldownRules();
         current.push({
             id: uid('cd_'),
-            name: '',
             target:    { kind: 'type', value: 'sport' },
             reference: { kind: 'type', value: 'lunch' },
-            timing: 'both',
-            minutes: 20,
-            autoOnly: false
+            timing: 'after',
+            minutes: 20
         });
         saveCooldownRules(current);
         renderCooldownList();
@@ -488,32 +618,39 @@ function renderCooldownList() {
     listEl.innerHTML = '';
     const rules = getCooldownRules();
     if (rules.length === 0) {
-        listEl.innerHTML = '<div style="text-align:center; padding:20px; color:#9CA3AF; font-size:0.9rem;">No cooldown rules yet. Click "+ Add Rule" to create one.</div>';
+        listEl.innerHTML = '<div class="rules-empty">No cooldown rules yet. Click <strong>+ Add Rule</strong> to create one.</div>';
         return;
     }
 
     rules.forEach((rule, idx) => {
         const card = document.createElement('div');
-        card.style.cssText = 'border:1px solid #E5E7EB; border-radius:12px; padding:14px 16px; margin-bottom:10px; background:#fff;';
+        card.className = 'cd-row';
         card.innerHTML = `
-            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:10px;">
-                <span style="font-size:0.88rem; font-weight:600; color:#111;">Don't schedule</span>
-                <div>${descriptorPickerHTML('cd-target-' + idx, rule.target, 'Target')}</div>
-                <span style="font-size:0.88rem; color:#374151;">within</span>
-                <input type="number" id="cd-min-${idx}" value="${parseInt(rule.minutes) || 0}" min="0" max="480" step="5"
-                    style="width:70px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.88rem; outline:none;">
-                <span style="font-size:0.88rem; color:#374151;">min</span>
-                <select id="cd-timing-${idx}" style="padding:6px 10px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.88rem; outline:none; background:white;">
-                    <option value="before" ${rule.timing === 'before' ? 'selected' : ''}>before</option>
-                    <option value="after" ${rule.timing === 'after' ? 'selected' : ''}>after</option>
-                    <option value="both" ${rule.timing === 'both' || !rule.timing ? 'selected' : ''}>before &amp; after</option>
-                </select>
-                <div>${descriptorPickerHTML('cd-ref-' + idx, rule.reference, 'Reference')}</div>
-                <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; color:#374151; margin-left:auto;">
-                    <input type="checkbox" id="cd-auto-${idx}" ${rule.autoOnly ? 'checked' : ''}>
-                    Auto-builder only
-                </label>
-                <button id="cd-del-${idx}" title="Delete rule" style="background:#FEE2E2; color:#991B1B; border:none; border-radius:6px; padding:6px 10px; font-size:0.8rem; cursor:pointer;">Delete</button>
+            <div class="cd-fields">
+                <div class="cd-col">
+                    <span class="rules-sub-title">Don't place</span>
+                    ${descriptorPickerHTML('cd-target-' + idx, rule.target)}
+                </div>
+                <div class="cd-col cd-middle-wrap">
+                    <span class="rules-sub-title">Within</span>
+                    <div class="cd-middle">
+                        <input type="number" class="rules-input rules-input-num" id="cd-min-${idx}"
+                               value="${parseInt(rule.minutes) || 0}" min="0" max="480" step="5">
+                        <span style="font-size:0.85rem; color:#475569;">min</span>
+                        <select class="rules-select" id="cd-timing-${idx}">
+                            <option value="before" ${rule.timing === 'before' ? 'selected' : ''}>before</option>
+                            <option value="after"  ${rule.timing === 'after'  ? 'selected' : ''}>after</option>
+                            <option value="both"   ${rule.timing === 'both' || !rule.timing ? 'selected' : ''}>before &amp; after</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="cd-col">
+                    <span class="rules-sub-title">Of</span>
+                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference)}
+                </div>
+            </div>
+            <div class="cd-delete-wrap">
+                <button class="rules-btn-ghost-danger" id="cd-del-${idx}" title="Remove this rule">Remove</button>
             </div>`;
         listEl.appendChild(card);
 
@@ -521,7 +658,6 @@ function renderCooldownList() {
         const refEl = document.getElementById('cd-ref-' + idx);
         const minEl = document.getElementById('cd-min-' + idx);
         const timEl = document.getElementById('cd-timing-' + idx);
-        const autoEl = document.getElementById('cd-auto-' + idx);
         const delBtn = document.getElementById('cd-del-' + idx);
 
         function persist() {
@@ -532,10 +668,9 @@ function renderCooldownList() {
             r.reference = parseDescValue(refEl.value);
             r.minutes   = Math.max(0, parseInt(minEl.value) || 0);
             r.timing    = timEl.value;
-            r.autoOnly  = autoEl.checked;
             saveCooldownRules(all);
         }
-        [tgtEl, refEl, minEl, timEl, autoEl].forEach(el => el && el.addEventListener('change', persist));
+        [tgtEl, refEl, minEl, timEl].forEach(el => el && el.addEventListener('change', persist));
         if (delBtn) delBtn.onclick = () => {
             const all = getCooldownRules();
             all.splice(idx, 1);
@@ -551,9 +686,10 @@ function renderCooldownList() {
 function initRulesTab() {
     const container = document.getElementById('rules');
     if (!container) return;
+    injectRulesStyles();
     container.innerHTML = `
         <div class="setup-grid">
-          <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
+          <section class="setup-card setup-card-wide rules-page" style="border:none; box-shadow:none; background:transparent;">
             <div class="setup-card-header" style="margin-bottom:20px;">
               <span class="setup-step-pill">Rules</span>
               <div class="setup-card-text">
@@ -562,18 +698,15 @@ function initRulesTab() {
               </div>
             </div>
 
-            <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:16px;">
-              <div id="rules-sport-section" style="flex:1; min-width:280px;"></div>
-              <div id="rules-fq-section" style="flex:1; min-width:280px;"></div>
-            </div>
-
-            <div id="rules-cd-section" style="width:100%;"></div>
+            <div id="rules-cd-section"></div>
+            <div id="rules-sport-section"></div>
+            <div id="rules-fq-section"></div>
           </section>
         </div>`;
 
+    renderCooldownCard(document.getElementById('rules-cd-section'));
     renderSportsRulesCard(document.getElementById('rules-sport-section'));
     renderFieldQualityCard(document.getElementById('rules-fq-section'));
-    renderCooldownCard(document.getElementById('rules-cd-section'));
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -591,5 +724,5 @@ window.SchedulingRules = {
     getExistingFieldGroups: getExistingFieldGroups
 };
 
-console.log('[RULES] rules.js v1.0 ready');
+console.log('[RULES] rules.js v1.1 ready');
 })();
