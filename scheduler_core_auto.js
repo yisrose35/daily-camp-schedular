@@ -3030,7 +3030,18 @@
                         var b = timeline[wi];
                         var bType = (b.type || '').toLowerCase();
                         var isLeague = bType === 'league' || bType === 'specialty_league';
-                        var c = (isLeague && b.layer) ? resolveConstraints(b.layer, bType) : null;
+                        // ★ v14.0: Resolve constraints for specials too (not just leagues).
+                        // This ensures pre-placed specials carry their configured dMin/dMax
+                        // from getSpecialDuration(), not just their actual placed duration.
+                        var c = null;
+                        if (isLeague && b.layer) {
+                            c = resolveConstraints(b.layer, bType);
+                        } else if (bType === 'special' && b._assignedSpecial) {
+                            var spCfgDur = getSpecialDuration(b._assignedSpecial, activityProperties, globalSettings);
+                            if (spCfgDur && spCfgDur > 0) {
+                                c = { dMin: spCfgDur, dMax: spCfgDur };
+                            }
+                        }
                         template.push(makeBlock({
                             startMin: b.startMin, endMin: b.endMin,
                             type: b.type, event: b.event,
@@ -5157,6 +5168,50 @@
                 bunkTimelines[eBunk] = eTmpl;
                 allTemplates[eBunk] = eTmpl;
             }
+            // ★ v14.0: SPECIAL DURATION ENFORCEMENT — runs on ALL blocks including _fixed.
+            // Specials with configured durations must be exactly that duration.
+            // This catches any specials that were pre-placed at wrong duration.
+            var specialFixCount = 0;
+            for (var si = 0; si < allBunkIds.length; si++) {
+                var sBunk = allBunkIds[si];
+                var sTmpl = bunkTimelines[sBunk] || [];
+                for (var sj = 0; sj < sTmpl.length; sj++) {
+                    var sBlk = sTmpl[sj];
+                    if ((sBlk.type || '').toLowerCase() !== 'special') continue;
+                    var sName = sBlk._assignedSpecial || sBlk.event || '';
+                    if (!sName) continue;
+                    var sCfgDur = getSpecialDuration(sName, activityProperties, globalSettings);
+                    if (!sCfgDur || sCfgDur <= 0) continue;
+                    var sActualDur = sBlk.endMin - sBlk.startMin;
+                    if (sActualDur === sCfgDur) continue;
+                    // Duration mismatch — fix it
+                    var sNewEnd = sBlk.startMin + sCfgDur;
+                    // Check we don't overlap the next block
+                    var sNextStart = (sj < sTmpl.length - 1) ? sTmpl[sj+1].startMin : (bunkMeta[sBunk] ? bunkMeta[sBunk].gradeEnd : 960);
+                    if (sNewEnd <= sNextStart) {
+                        sBlk.endMin = sNewEnd;
+                        sBlk._specialDuration = sCfgDur;
+                        sBlk.dMin = sCfgDur;
+                        sBlk.dMax = sCfgDur;
+                        specialFixCount++;
+                    } else {
+                        // Try shifting start earlier
+                        var sNewStart = sBlk.endMin - sCfgDur;
+                        var sPrevEnd = (sj > 0) ? sTmpl[sj-1].endMin : (bunkMeta[sBunk] ? bunkMeta[sBunk].gradeStart : 540);
+                        if (sNewStart >= sPrevEnd) {
+                            sBlk.startMin = sNewStart;
+                            sBlk._specialDuration = sCfgDur;
+                            sBlk.dMin = sCfgDur;
+                            sBlk.dMax = sCfgDur;
+                            specialFixCount++;
+                        } else {
+                            warn('[Phase3] SPECIAL-ENFORCE: cannot fix ' + sName + ' for bunk ' + sBunk + ' (need ' + sCfgDur + 'min, have ' + sActualDur + 'min, no room)');
+                        }
+                    }
+                }
+            }
+            if (specialFixCount > 0) log('[Phase3] ★ SPECIAL-ENFORCE: fixed ' + specialFixCount + ' special duration(s) to configured values');
+
             if (enforceFixCount > 0) log('[Phase3] ★ ENFORCE: fixed ' + enforceFixCount + ' constraint violations in final sweep');
 
             log('[Phase3] ★ timeSweepFillAll complete: ' + Object.keys(allTemplates).length + ' bunks, ' + totalWarnings + ' warnings');
@@ -6033,7 +6088,10 @@
                         if (!draft || !draft.specials || !draft.specials.length) return;
                         const special = draft.specials[0];
                         if (!special || !special.claimedTime) return;
-                        const specialDur = special.duration || (special.claimedTime.endMin - special.claimedTime.startMin);
+                        // ★ v14.0: Always use configured duration from special_activities config.
+                        // Draft duration may be wrong; getSpecialDuration() is authoritative.
+                        const configuredDur = getSpecialDuration(special.name || special.event || '', activityProperties, globalSettings);
+                        const specialDur = configuredDur || special.duration || (special.claimedTime.endMin - special.claimedTime.startMin);
                         const fieldName = special.claimedField || special.location;
                         const draftStart = special.claimedTime.startMin;
 
