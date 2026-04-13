@@ -1170,7 +1170,10 @@
         // Before ANY generation, wipe today's schedule for the divisions being generated.
         // Schedulers only wipe THEIR bunks. Owners/admins wipe everything.
         // This prevents stale data (old leagues, ghost assignments) from bleeding in.
-        {
+        {// ★ AUTO BUILD: Skip wipe — AutoBuildPrep already did a full wipe
+            if (window._skipGenerationWipe) {
+                console.log('[STEP 0] ⏭️ Skipping wipe — AutoBuildPrep already wiped');
+            } else {
             const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             const role = window.AccessControl?.getCurrentRole?.() || 
                         window.CampistryDB?.getRole?.() || 'owner';
@@ -1291,6 +1294,7 @@
             window._preGenClearActive = true;
 
             console.log('[STEP 0] ★ WIPE COMPLETE — generating from clean slate');
+                }
         }
 
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
@@ -1557,6 +1561,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (s.rainyDayAvailable === false || s.availableOnRainyDay === false) return false;
                 }
 
+                // ★ v7.0: Filter out daily-disabled specials
+                if (disabledSpecials && disabledSpecials.length > 0) {
+                    if (disabledSpecials.includes(s.name)) return false;
+                }
+
                 return true;
             });
 
@@ -1578,11 +1587,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
         console.log('[STEP 1] Building division-specific time slots...');
         
-        if (window.DivisionTimesSystem) {
-            window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
-            console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
-        
+       if (window.DivisionTimesSystem) {
+            if (window._autoDivisionTimesBuilt) {
+                console.log('[STEP 1] Skipping rebuild — auto pipeline already built divisionTimes');
+                window._autoDivisionTimesBuilt = false;
+            } else {
+                window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
+                console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
+            }
         } else {
+           
             console.warn('[STEP 1] DivisionTimesSystem not loaded, using legacy grid');
             const timePoints = new Set([540, 960]);
             manualSkeleton.forEach(item => {

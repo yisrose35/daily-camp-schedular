@@ -182,10 +182,14 @@
                 const localBunkCount = Object.keys(dateData.scheduleAssignments).length;
                 const windowBunkCount = Object.keys(window.scheduleAssignments || {}).length;
                 
-                if (forceOverwrite || windowBunkCount === 0) {
+                const localGenTime = window._localGenerationTimestamp || 0;
+                const timeSinceGen = Date.now() - localGenTime;
+                if ((forceOverwrite && timeSinceGen > 60000) || windowBunkCount === 0) {
                     window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
                     hydrated = true;
                     log('✅ Hydrated scheduleAssignments:', localBunkCount, 'bunks');
+                } else if (timeSinceGen <= 60000) {
+                    log('⏭️ Skipped scheduleAssignments hydration — local generation is fresh');
                 }
             } else {
                 window.scheduleAssignments = window.scheduleAssignments || {};
@@ -211,10 +215,18 @@
                 }
             }
             
-            // Hydrate divisionTimes if present
+            // Hydrate divisionTimes if present — but ONLY if not freshly generated locally
+            // A local generation sets _localGenerationTimestamp. If it's recent (< 60s),
+            // cloud data is stale and must NOT overwrite the local divisionTimes.
             if (dateData.divisionTimes && window.DivisionTimesSystem?.deserialize) {
-                window.divisionTimes = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
-                log('✅ Hydrated divisionTimes');
+                const localGenTime = window._localGenerationTimestamp || 0;
+                const timeSinceGen = Date.now() - localGenTime;
+                if (timeSinceGen > 60000 || !window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
+                    window.divisionTimes = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
+                    log('✅ Hydrated divisionTimes from cloud');
+                } else {
+                    log('⏭️ Skipped divisionTimes hydration — local generation is fresh (' + Math.round(timeSinceGen / 1000) + 's ago)');
+                }
             }
             
             return hydrated;
@@ -641,16 +653,24 @@
             
             if (success) {
                 log('✅ Reconnection successful');
-                showSyncToast('🔄 Reconnected to sync');
                 
                 // Process any queued saves
                 await processOfflineQueue();
                 
-                // Refresh data from cloud
-                if (window.ScheduleDB?.loadSchedule) {
-                    const result = await window.ScheduleDB.loadSchedule(dateKey);
-                    if (result?.success && result.data) {
-                        refreshMultiSchedulerView(dateKey, true);
+                // ★★★ AUTO MODE GUARD: Skip cloud refresh if local schedule is fresh ★★★
+                var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+                var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
+                var _hasFreshGeneration = window._localGenerationTimestamp && (Date.now() - window._localGenerationTimestamp) < 300000; // 5 min
+
+                if (_isAutoMode && (_hasLivePerBunk || _hasFreshGeneration)) {
+                    log('Skipping cloud refresh on reconnect — local schedule is fresh');
+                } else {
+                    // Refresh data from cloud (safe — no per-bunk data to lose)
+                    if (window.ScheduleDB?.loadSchedule) {
+                        const result = await window.ScheduleDB.loadSchedule(dateKey);
+                        if (result?.success && result.data) {
+                            refreshMultiSchedulerView(dateKey, true);
+                        }
                     }
                 }
             } else if (_reconnectAttempts < CONFIG.MAX_RETRY_ATTEMPTS) {
@@ -691,10 +711,18 @@
 
         showSyncToast(`📥 Update from ${payload.new?.scheduler_name || 'another scheduler'}`);
         
-        // Auto-refresh after remote change
-        setTimeout(() => {
-            refreshMultiSchedulerView(_currentDateKey, true);
-        }, 500);
+        // ★★★ AUTO MODE GUARD: Don't refresh from cloud if _perBunkSlots are live ★★★
+        var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+        var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
+        
+        if (_isAutoMode && _hasLivePerBunk) {
+            log('Skipping remote refresh — auto mode _perBunkSlots active in memory');
+        } else {
+            // Auto-refresh after remote change (safe — no per-bunk data to lose)
+            setTimeout(() => {
+                refreshMultiSchedulerView(_currentDateKey, true);
+            }, 500);
+        }
     }
 
     // =========================================================================

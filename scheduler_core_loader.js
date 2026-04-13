@@ -226,10 +226,21 @@
         }
 
         masterActivities.forEach(a => {
+            // ★★★ FIX v2.4: Normalize sharableWith for specials (not just fields) ★★★
+            // Empty {} from special_activities.js overwrites base default without this.
+            const rawSW = a.sharableWith;
+            const normalizedActivitySW = (rawSW && typeof rawSW === 'object' && rawSW.type)
+                ? {
+                    type: rawSW.type,
+                    divisions: Array.isArray(rawSW.divisions) ? rawSW.divisions : [],
+                    capacity: parseInt(rawSW.capacity) || (rawSW.type === 'all' ? 999 : (rawSW.type === 'not_sharable' ? 1 : 2))
+                }
+                : null; // null lets base() default take over
+
             props[a.name] = base({
                 available: a.available !== false,
                 sharable: a.sharable || false,
-                sharableWith: a.sharableWith || null,
+                sharableWith: normalizedActivitySW,
                 preferredDivisions: a.divisions || [],
                 allowedDivisions: a.divisions || [],
                 allowedFields: a.allowedFields || null,
@@ -385,7 +396,22 @@
         // -----------------------------------------------------------------
         // STEP 1: Disable outdoor fields during rainy day
         // -----------------------------------------------------------------
-        let effectiveDisabledFields = [...(dailyOverrides.disabledFields || [])];
+        // ★ v7.0: Read from correct path — overrides are nested under dailyData.overrides
+        let dailyOvNested = dailyOverrides.overrides || {};
+        // Fallback: dedicated localStorage key (survives cloud overwrites)
+        if (!dailyOvNested.disabledFields?.length && !dailyOvNested.disabledSpecials?.length) {
+            try {
+                const dateKey = window.currentScheduleDate || '';
+                const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed?.overrides) dailyOvNested = parsed.overrides;
+                    if (parsed?.dailyFieldAvailability) dailyOverrides.dailyFieldAvailability = parsed.dailyFieldAvailability;
+                    if (parsed?.dailyDisabledSportsByField) dailyOverrides.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
+                }
+            } catch(e) {}
+        }
+        let effectiveDisabledFields = [...(dailyOvNested.disabledFields || dailyOverrides.disabledFields || [])];
         
         if (isRainyMode) {
             // Get all outdoor fields (those without rainyDayAvailable === true)
@@ -486,8 +512,8 @@
             masterLeagues: window.masterLeagues || {},
             masterSpecialtyLeagues: window.masterSpecialtyLeagues || {},
             disabledFields: effectiveDisabledFields,
-            disabledSpecials: dailyOverrides.disabledSpecials || [],
-            disabledLeagues: dailyOverrides.disabledLeagues || [],
+            disabledSpecials: dailyOvNested.disabledSpecials || dailyOverrides.disabledSpecials || [],
+            disabledLeagues: dailyOvNested.leagues || dailyOverrides.disabledLeagues || [],
             disabledSpecialtyLeagues: dailyOverrides.disabledSpecialtyLeagues || [],
             historicalCounts: window.loadHistoricalCounts?.() || {},
             yesterdayHistory: window.loadYesterdayHistory?.() || {},

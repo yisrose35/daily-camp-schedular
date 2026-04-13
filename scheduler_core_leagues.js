@@ -1229,13 +1229,14 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
                     // Record matchup for matchup_variety tracking
                     recordMatchup(league.name, a.team1, a.team2, history);
                 });
-
+window._debugLeagueTimeData = timeData;
                 leagueDivisions.forEach(divName => {
                     const blocksForDiv = timeData.byDivision[divName];
                     if (!blocksForDiv) return;
 
                     blocksForDiv.forEach(block => {
-                        const pick = {
+        if (Number(block.startMin) !== Number(timeKey)) return;
+        const pick = {
                             field: `League: ${league.name}`,
                             sport: `Game ${gameNumber}`,
                             _activity: `League: ${league.name}`,

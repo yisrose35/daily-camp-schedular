@@ -20,7 +20,23 @@ let container=null, palette=null, grid=null;
 let dailySkeleton=[];
 let currentLoadedTemplate = null;
 let selectedTileId = null;
+let builderMode = 'manual';
 let hasUnsavedChanges = false;
+
+// --- UNIVERSAL BUILDER MODE ---
+window.getCampBuilderMode = function() {
+  const g = window.loadGlobalSettings?.() || {};
+  return g.app1?.builderMode || 'manual';
+};
+window.setCampBuilderMode = function(mode) {
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  g.app1.builderMode = mode;
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+};
+
+let currentBuilderMode = window.getCampBuilderMode();
 
 // --- Constants ---
 const SKELETON_DRAFT_KEY = 'master-schedule-draft';
@@ -561,147 +577,51 @@ function findPoolField(allLocations) {
 }
 
 // --- Init ---
-function init(){
-  container=document.getElementById("master-scheduler-content");
+function init(targetElement = null){
+  container = targetElement || document.getElementById("master-scheduler-content");
   if(!container) return;
+
+  // 1. FRESH FETCH: Dynamically check the universal setting so it updates instantly
+  if (window.getCampBuilderMode) {
+      currentBuilderMode = window.getCampBuilderMode();
+  }
+  
+  // 2. CLEAR MEMORY: Reset the locked template so Day Assignments trigger correctly
+  currentLoadedTemplate = null;
     
-  loadDailySkeleton();
+  // Only load manual skeleton in manual mode
+  if (currentBuilderMode !== 'auto') {
+    loadDailySkeleton();
+  } else {
+    dailySkeleton = []; // Clean slate for auto mode
+  }
   
   // Reset unsaved changes since we just loaded fresh
   hasUnsavedChanges = false;
 
-  // Silently restore draft without prompting
-  const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
-  const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
-  if (savedDraft) {
-    try {
-      dailySkeleton = JSON.parse(savedDraft);
-      if(savedDraftName) currentLoadedTemplate = savedDraftName;
-      // Draft means there might be unsaved changes
-      hasUnsavedChanges = true;
-    } catch(e) {
-      clearDraftFromLocalStorage();
+  // Only restore manual draft in manual mode — don't contaminate auto mode
+  if (currentBuilderMode !== 'auto') {
+    // Silently restore draft without prompting
+    const savedDraft = localStorage.getItem(SKELETON_DRAFT_KEY);
+    const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
+    if (savedDraft) {
+      try {
+        dailySkeleton = JSON.parse(savedDraft);
+        if(savedDraftName) currentLoadedTemplate = savedDraftName;
+        // Draft means there might be unsaved changes
+        hasUnsavedChanges = true;
+      } catch(e) {
+        clearDraftFromLocalStorage();
+      }
     }
   }
 
-  // Inject HTML + CSS with new layout
+  // Inject HTML with new layout
   container.innerHTML = `
-    <style>
-      /* === MASTER SCHEDULER STYLES === */
-      .ms-container { display:flex; gap:0; height:calc(100vh - 120px); min-height:300px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
-      
-      /* Left Sidebar - Scrollable */
-      .ms-sidebar { width:180px; min-width:0; background:#f8fafc; border-right:1px solid #e2e8f0; display:flex; flex-direction:column; height:100%; max-height:100%; }
-      .ms-sidebar-header { padding:14px 12px; border-bottom:1px solid #e2e8f0; background:#fff; flex-shrink:0; }
-      .ms-sidebar-header h3 { margin:0; font-size:13px; font-weight:600; color:#475569; }
-      .ms-palette { flex:1; overflow-y:auto; overflow-x:hidden; padding:10px; display:flex; flex-direction:column; gap:6px; scrollbar-width:thin; scrollbar-color:#cbd5e1 #f1f5f9; }
-      .ms-palette::-webkit-scrollbar { width:6px; }
-      .ms-palette::-webkit-scrollbar-track { background:#f1f5f9; border-radius:3px; }
-      .ms-palette::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
-      .ms-palette::-webkit-scrollbar-thumb:hover { background:#94a3b8; }
-      .ms-tile { padding:10px 12px; border-radius:6px; cursor:grab; font-size:12px; font-weight:600; transition:transform 0.15s, box-shadow 0.15s; text-shadow:0 1px 2px rgba(0,0,0,0.2); }
-      .ms-tile:hover { transform:translateX(3px); box-shadow:0 4px 12px rgba(0,0,0,0.15); }
-      .ms-tile:active { cursor:grabbing; }
-      .ms-tile-divider { height:1px; background:#e2e8f0; margin:6px 0; }
-      .ms-tile-label { font-size:10px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:4px 0; }
-      
-      /* Main Content */
-      .ms-main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
-      
-      /* Toolbar */
-      .ms-toolbar { background:#fff; border-bottom:1px solid #e2e8f0; padding:12px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-      .ms-toolbar-group { display:flex; align-items:center; gap:8px; padding:0 12px; border-right:1px solid #e2e8f0; }
-      .ms-toolbar-group:last-child { border-right:none; }
-      .ms-toolbar-group.status { background:#f1f5f9; padding:8px 14px; border-radius:6px; border-right:none; margin-right:4px; }
-      .ms-toolbar-group.status.has-changes { background:#fef3c7; }
-      .ms-status-label { font-size:12px; color:#64748b; }
-      .ms-status-name { font-size:13px; font-weight:600; color:#0f172a; margin-left:4px; }
-      .ms-status-badge { font-size:10px; background:#f59e0b; color:#fff; padding:2px 6px; border-radius:10px; margin-left:6px; }
-      
-      .ms-select { padding:7px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:12px; background:#fff; min-width:130px; }
-      .ms-select:focus { outline:none; border-color:#3b82f6; }
-      .ms-input { padding:7px 10px; border:1px solid #e2e8f0; border-radius:6px; font-size:12px; width:130px; }
-      .ms-input:focus { outline:none; border-color:#3b82f6; }
-      
-      .ms-btn { padding:7px 14px; border:none; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; transition:all 0.15s; display:inline-flex; align-items:center; gap:5px; }
-      .ms-btn-primary { background:#3b82f6; color:#fff; }
-      .ms-btn-primary:hover { background:#2563eb; }
-      .ms-btn-success { background:#10b981; color:#fff; }
-      .ms-btn-success:hover { background:#059669; }
-      .ms-btn-warning { background:#f59e0b; color:#fff; }
-      .ms-btn-warning:hover { background:#d97706; }
-      .ms-btn-danger { background:#ef4444; color:#fff; }
-      .ms-btn-danger:hover { background:#dc2626; }
-      .ms-btn-ghost { background:#f1f5f9; color:#475569; }
-      .ms-btn-ghost:hover { background:#e2e8f0; }
-      .ms-btn:disabled { opacity:0.5; cursor:not-allowed; }
-      .ms-btn-icon { padding:7px 10px; }
-      
-      .ms-toolbar-label { font-size:11px; color:#94a3b8; font-weight:500; }
-      
-      /* Grid Area */
-      .ms-grid-wrapper { flex:1; overflow:auto; background:#fff; }
-      
-      /* Grid Styles */
-      .grid-disabled{position:absolute;width:100%;background-color:#f1f5f9;background-image:linear-gradient(-45deg,#e2e8f0 25%,transparent 25%,transparent 50%,#e2e8f0 50%,#e2e8f0 75%,transparent 75%,transparent);background-size:20px 20px;z-index:1;pointer-events:none}
-      .grid-event{z-index:2;position:relative;box-shadow:none; transition:box-shadow 0.15s, outline 0.15s; border-bottom:1px solid rgba(0,0,0,0.1);}
-      .grid-event:hover { box-shadow:0 2px 8px rgba(0,0,0,0.15); z-index:3; }
-      .grid-event.selected { outline:3px solid #3b82f6; outline-offset:-1px; box-shadow:0 0 0 4px rgba(59,130,246,0.2); z-index:4; }
-      .grid-cell{position:relative; border-right:1px solid #e2e8f0; background:#fff;}
-      
-      /* Resize handles */
-      .resize-handle { position:absolute; left:0; right:0; height:8px; cursor:ns-resize; z-index:5; opacity:0; transition:opacity 0.15s; }
-      .resize-handle-top { top:-2px; }
-      .resize-handle-bottom { bottom:-2px; }
-      .grid-event:hover .resize-handle { opacity:1; background:rgba(59,130,246,0.4); }
-      .grid-event.resizing { box-shadow:0 0 0 2px #2563eb !important; z-index:100 !important; }
-      
-      #resize-tooltip { position:fixed; padding:8px 12px; background:#1e293b; color:#fff; border-radius:6px; font-size:12px; font-weight:600; pointer-events:none; z-index:10002; display:none; box-shadow:0 4px 12px rgba(0,0,0,0.25); }
-      #drag-ghost { position:fixed; padding:8px 12px; background:#fff; border:2px solid #3b82f6; border-radius:6px; box-shadow:0 4px 12px rgba(59,130,246,0.25); pointer-events:none; z-index:10001; display:none; font-size:12px; }
-      .drop-preview { display:none; position:absolute; left:2%; width:96%; background:rgba(59,130,246,0.15); border:2px dashed #3b82f6; border-radius:4px; pointer-events:none; z-index:5; }
-      .preview-time-label { text-align:center; padding:6px; color:#1d4ed8; font-weight:600; font-size:11px; background:rgba(255,255,255,0.95); border-radius:3px; margin:3px; }
-      
-      /* Modal Styles */
-      #ms-modal-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.5); display:flex; align-items:center; justify-content:center; z-index:10000; }
-      .ms-modal { background:#fff; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.3); min-width:280px; max-width:500px; width:95%; max-height:80vh; overflow:hidden; }
-      .ms-modal-header { padding:16px 20px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; justify-content:space-between; }
-      .ms-modal-header h3 { margin:0; font-size:16px; font-weight:600; color:#0f172a; }
-      .ms-modal-close { background:none; border:none; font-size:20px; color:#94a3b8; cursor:pointer; padding:0; line-height:1; }
-      .ms-modal-close:hover { color:#475569; }
-      .ms-modal-body { padding:20px; overflow-y:auto; max-height:50vh; }
-      .ms-modal-desc { margin:0 0 16px; font-size:13px; color:#64748b; line-height:1.5; }
-      .ms-modal-field { margin-bottom:16px; }
-      .ms-modal-field:last-child { margin-bottom:0; }
-      .ms-modal-field label { display:block; font-size:12px; font-weight:500; color:#475569; margin-bottom:6px; }
-      .ms-modal-input { width:100%; padding:10px 12px; border:1px solid #e2e8f0; border-radius:6px; font-size:13px; box-sizing:border-box; }
-      .ms-modal-input:focus { outline:none; border-color:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,0.1); }
-      .ms-modal-footer { padding:16px 20px; border-top:1px solid #e2e8f0; display:flex; justify-content:flex-end; gap:10px; background:#f8fafc; }
-      
-      .ms-checkbox-group { display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; max-height:200px; overflow-y:auto; padding:8px; background:#f8fafc; border-radius:6px; border:1px solid #e2e8f0; }
-      .ms-checkbox-item { display:flex; align-items:center; gap:8px; padding:6px 8px; background:#fff; border-radius:4px; cursor:pointer; font-size:12px; }
-      .ms-checkbox-item:hover { background:#f1f5f9; }
-      .ms-checkbox-item input { margin:0; }
-      .ms-checkbox-item span { color:#334155; }
-      
-      /* ★ v2.5: Grouped checkbox styles (matches DA bunk overrides) */
-      .ms-checkbox-grouped { max-height:250px; overflow-y:auto; padding:8px; background:#f8fafc; border-radius:6px; border:1px solid #e2e8f0; }
-      .ms-checkbox-group-header { font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; padding:8px 4px 4px; margin-top:4px; border-bottom:1px solid #e2e8f0; }
-      .ms-checkbox-group-header:first-child { margin-top:0; padding-top:4px; }
-      .ms-checkbox-group-items { display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; padding:6px 0; }
-      .ms-checkbox-group-empty { font-size:12px; color:#94a3b8; font-style:italic; padding:8px 4px; }
-      
-      /* Assignments Section */
-      .ms-expand { padding:0 16px 12px; }
-      .ms-expand-trigger { font-size:12px; color:#3b82f6; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
-      .ms-expand-trigger:hover { text-decoration:underline; }
-      .ms-expand-content { margin-top:10px; padding:14px; background:#f8fafc; border-radius:8px; display:none; }
-      .ms-expand-content.open { display:block; }
-      .ms-assign-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(100px, 1fr)); gap:10px; }
-      .ms-assign-item label { display:block; font-size:10px; color:#64748b; margin-bottom:3px; font-weight:500; }
-      .ms-assign-item select { width:100%; padding:5px 6px; border:1px solid #e2e8f0; border-radius:4px; font-size:11px; }
-    </style>
     
-    <div class="ms-container">
+      
+    <!-- Manual Mode Container (current system) -->
+    <div class="ms-container" id="ms-manual-container" style="border-radius:0 0 12px 12px;">
       <!-- Left Sidebar -->
       <div class="ms-sidebar">
         <div class="ms-sidebar-header">
@@ -719,16 +639,51 @@ function init(){
         </div>
       </div>
     </div>
+    
+    <!-- Auto Mode Container (DAW layer timeline) -->
+    <div id="ms-auto-container" class="ms-container" style="display:none; border-radius:0 0 12px 12px; background:#fff;">
+      <!-- DAW Sidebar -->
+      <div class="ms-daw-sidebar">
+        <div class="ms-daw-sidebar-header">
+          <h3>Layer Types</h3>
+        </div>
+        <div id="daw-palette" class="ms-daw-palette"></div>
+      </div>
+      
+      <!-- DAW Main -->
+      <div class="ms-auto-container" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
+        <div id="daw-toolbar" class="ms-toolbar"></div>
+        <div id="daw-expand" class="ms-expand"></div>
+        <div class="ms-daw-wrapper">
+          <div id="daw-grid" class="ms-daw-grid"></div>
+        </div>
+      </div>
+    </div>
   `;
     
   palette = document.getElementById("scheduler-palette");
   grid = document.getElementById("scheduler-grid");
     
+  builderMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
+  console.log('[MasterBuilder] Mode:', builderMode);
+
   renderToolbar();
   renderExpandSection();
   renderPalette();
   renderGrid();
   
+  // Force UI to match current universal mode immediately on load
+  const manualEl = document.getElementById('ms-manual-container');
+  const autoEl = document.getElementById('ms-auto-container');
+  if (currentBuilderMode === 'manual') {
+    if (manualEl) manualEl.style.display = 'flex';
+    if (autoEl) autoEl.style.display = 'none';
+  } else {
+    if (manualEl) manualEl.style.display = 'none';
+    if (autoEl) autoEl.style.display = 'flex';
+    renderDAW();
+  }
+
   // Global keyboard listener for Delete key
   document.addEventListener('keydown', handleKeyDown);
 }
@@ -973,6 +928,994 @@ function renderToolbar() {
   };
 }
 
+
+// =================================================================
+// DAW (Digital Audio Workstation) LAYER VIEW
+// =================================================================
+const DAW_LAYER_TYPES = [
+  { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
+  { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
+  { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
+  { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
+  { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
+  { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+  { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
+  { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
+  { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
+  { type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;' },
+];
+
+const DAW_PIXELS_PER_MINUTE = 3;
+let dawLayers = {}; // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
+let dawSelectedBand = null;
+let dawDragData = null;
+
+function loadDAWLayers() {
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  const assignments = window.getSkeletonAssignments?.() || {};
+  
+  const dateStr = window.currentScheduleDate || "";
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0; if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const today = dayNames[dow];
+  
+  // Figure out which template is assigned to today
+  let tmpl = currentLoadedTemplate || assignments[today] || assignments["Default"];
+  
+  // Lock the UI onto the assigned template
+  if (!currentLoadedTemplate && tmpl) {
+      currentLoadedTemplate = tmpl;
+  }
+  
+  // Load the assigned template (or fallback to unsaved draft '_current')
+  if (tmpl && autoTemplates[tmpl]) {
+      dawLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+  } else if (autoTemplates['_current']) {
+      dawLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+  } else {
+      dawLayers = {};
+  }
+  
+  // If empty, seed from divisions
+  if (Object.keys(dawLayers).length === 0) {
+    const divisions = window.divisions || {};
+    Object.keys(divisions).forEach(d => {
+      const div = divisions[d];
+      if (div.isParent) return;
+      dawLayers[d] = [];
+    });
+  }
+}
+
+function saveDAWLayers(forceTemplateName = null) {
+  // Always save as a draft while editing, unless a specific template name is forced (Save/Update)
+  const templateKey = forceTemplateName || '_current';
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  if (!g.app1.autoLayerTemplates) g.app1.autoLayerTemplates = {};
+  g.app1.autoLayerTemplates[templateKey] = JSON.parse(JSON.stringify(dawLayers));
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+}
+
+function renderDAWPalette() {
+  const pal = document.getElementById('daw-palette');
+  if (!pal) return;
+  
+ let html = '';
+  html += '<div class="ms-daw-tile-label">Floaters</div>';
+  DAW_LAYER_TYPES.filter(t => !t.anchor).forEach(t => {
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">
+      ${t.name}
+    </div>`;
+  });
+  
+  html += '<div class="ms-daw-tile-divider"></div>';
+  html += '<div class="ms-daw-tile-label">Anchors</div>';
+  DAW_LAYER_TYPES.filter(t => t.anchor).forEach(t => {
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">
+      ${t.name}
+    </div>`;
+  });
+  
+  pal.innerHTML = html;
+  
+  // Drag from palette
+  pal.querySelectorAll('.ms-daw-tile').forEach(tile => {
+    tile.addEventListener('dragstart', (e) => {
+      dawDragData = { source: 'palette', type: tile.dataset.type };
+      e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+  });
+}
+
+function renderDAWToolbar() {
+  const toolbar = document.getElementById('daw-toolbar');
+  if (!toolbar) return;
+  
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  const autoNames = Object.keys(autoTemplates).filter(n => n !== '_current').sort();
+  const loadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
+  
+  // Use shared assignments so Manual and Auto refer to the same default days
+  const assignments = window.getSkeletonAssignments?.() || {};
+  const dateStr = window.currentScheduleDate || "";
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0; if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const todayName = dayNames[dow];
+  
+  const todayDefault = assignments[todayName] || assignments["Default"] || null;
+  const effectiveTemplate = currentLoadedTemplate || todayDefault;
+  const canUpdate = !!effectiveTemplate;
+  
+  let statusText;
+  let statusSubtext = '';
+  if (currentLoadedTemplate) {
+    statusText = currentLoadedTemplate;
+  } else if (todayDefault) {
+    statusText = todayDefault;
+    statusSubtext = `<span style="font-size:10px;color:#64748b;margin-left:4px;">(${todayName} default)</span>`;
+  } else {
+    statusText = 'No Template';
+  }
+  
+  toolbar.innerHTML = `
+    <div class="ms-toolbar-group status">
+      <span class="ms-status-label">Current:</span>
+      <span class="ms-status-name">${statusText}</span>${statusSubtext}
+    </div>
+    <button id="daw-update-btn" class="ms-btn ms-btn-success" ${!canUpdate ? 'disabled' : ''}>
+      Update
+    </button>
+    
+    <div class="ms-toolbar-group">
+      <span class="ms-toolbar-label">Load:</span>
+      <select id="daw-load-select" class="ms-select">
+        <option value="">Select...</option>
+        ${loadOptions}
+      </select>
+    </div>
+    
+    <div class="ms-toolbar-group">
+      <span class="ms-toolbar-label">New:</span>
+      <input type="text" id="daw-save-name" class="ms-input" placeholder="Template name...">
+      <button id="daw-save-btn" class="ms-btn ms-btn-primary">Save</button>
+    </div>
+    
+    <div class="ms-toolbar-group">
+      <button id="daw-copy-btn" class="ms-btn ms-btn-ghost" title="Copy layers to other grades">📋 Copy To...</button>
+    </div>
+    
+    <button id="daw-clear-btn" class="ms-btn ms-btn-warning ms-btn-icon" title="Clear Grid">
+      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Clear
+    </button>
+    
+    <div class="ms-toolbar-group" style="border-right:none;">
+      <select id="daw-delete-select" class="ms-select" style="min-width:110px;">
+        <option value="">Delete...</option>
+        ${loadOptions}
+      </select>
+      <button id="daw-delete-btn" class="ms-btn ms-btn-danger ms-btn-icon" title="Delete Template">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      </button>
+    </div>
+  `;
+  
+  // Bindings
+  document.getElementById('daw-load-select').onchange = async function() {
+    const name = this.value;
+    if (!name) return;
+    if (autoTemplates[name]) {
+      const ok = await showConfirm(`Load auto template "${name}"?`);
+      if (ok) {
+        dawLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
+        currentLoadedTemplate = name;
+        renderDAW();
+      }
+    }
+    this.value = '';
+  };
+  
+  document.getElementById('daw-update-btn').onclick = async () => {
+    const templateToUpdate = currentLoadedTemplate || todayDefault;
+    if (!templateToUpdate) return;
+    if (!window.AccessControl?.checkSetupAccess('update schedule templates')) return;
+    
+    const ok = await showConfirm(`Overwrite auto layers for "${templateToUpdate}"?`);
+    if (ok) {
+      saveDAWLayers(templateToUpdate);
+      currentLoadedTemplate = templateToUpdate;
+      await showAlert('Auto template updated successfully.');
+      renderDAWToolbar();
+    }
+  };
+  
+  document.getElementById('daw-save-btn').onclick = async () => {
+    if (!window.AccessControl?.checkSetupAccess('save schedule templates')) return;
+    
+    const name = document.getElementById('daw-save-name').value.trim();
+    if (!name) { await showAlert('Enter a template name.'); return; }
+    
+    if (autoTemplates[name]) {
+      const ok = await showConfirm(`"${name}" already exists. Overwrite?`);
+      if (!ok) return;
+    }
+    
+    saveDAWLayers(name);
+    currentLoadedTemplate = name;
+    await showAlert(`Saved auto template "${name}".`);
+    document.getElementById('daw-save-name').value = '';
+    renderDAWToolbar();
+    renderDAWExpandSection();
+  };
+  
+  document.getElementById('daw-clear-btn').onclick = async () => {
+    const ok = await showConfirm('Clear all layers from all grades?');
+    if (ok) {
+      Object.keys(dawLayers).forEach(k => { dawLayers[k] = []; });
+      currentLoadedTemplate = null;
+      saveDAWLayers();
+      renderDAWGrid();
+      renderDAWToolbar();
+    }
+  };
+  
+  document.getElementById('daw-copy-btn').onclick = () => dawCopyLayersDialog();
+  
+  document.getElementById('daw-delete-btn').onclick = async () => {
+    if (!window.AccessControl?.checkSetupAccess('delete schedule templates')) return;
+    
+    const nameToDelete = document.getElementById('daw-delete-select').value;
+    if (!nameToDelete) { await showAlert('Please select a template to delete.'); return; }
+    
+    const ok = await showConfirm(`Permanently delete auto template "${nameToDelete}"?`);
+    if (ok) {
+      const g2 = window.loadGlobalSettings?.() || {};
+      if (g2.app1?.autoLayerTemplates?.[nameToDelete]) {
+        delete g2.app1.autoLayerTemplates[nameToDelete];
+        window.saveGlobalSettings?.('app1', g2.app1);
+        window.forceSyncToCloud?.();
+        
+        if (currentLoadedTemplate === nameToDelete) {
+          currentLoadedTemplate = null;
+          Object.keys(dawLayers).forEach(k => { dawLayers[k] = []; });
+          renderDAWGrid();
+        }
+        
+        await showAlert('Template deleted.');
+        renderDAWToolbar();
+        renderDAWExpandSection();
+      }
+    }
+  };
+}
+
+function renderDAWExpandSection() {
+  const expandEl = document.getElementById('daw-expand');
+  if (!expandEl) return;
+  
+  // Combine names from Manual Builder and Auto Builder so assignments sync cleanly
+  const manualSaved = window.getSavedSkeletons?.() || {};
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  
+  const allNames = [...new Set([...Object.keys(manualSaved), ...Object.keys(autoTemplates)])]
+                    .filter(n => n !== '_current').sort();
+                    
+  const assignments = window.getSkeletonAssignments?.() || {};
+  const loadOptions = allNames.map(n => `<option value="${n}">${n}</option>`).join('');
+  
+  expandEl.innerHTML = `
+    <span class="ms-expand-trigger" onclick="this.nextElementSibling.classList.toggle('open')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+      Day Assignments
+    </span>
+    <div class="ms-expand-content">
+      <div class="ms-assign-grid">
+        ${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Default"].map(day => `
+          <div class="ms-assign-item">
+            <label>${day}</label>
+            <select data-day="${day}">
+              <option value="">None</option>
+              ${loadOptions}
+            </select>
+          </div>
+        `).join('')}
+      </div>
+      <button id="daw-assign-save-btn" class="ms-btn ms-btn-success" style="margin-top:12px;">Save Assignments</button>
+    </div>
+  `;
+  
+  expandEl.querySelectorAll('select[data-day]').forEach(sel => {
+    sel.value = assignments[sel.dataset.day] || '';
+  });
+  
+  document.getElementById('daw-assign-save-btn').onclick = async () => {
+    const map = {};
+    expandEl.querySelectorAll('select[data-day]').forEach(s => { 
+      if (s.value) map[s.dataset.day] = s.value; 
+    });
+    window.saveSkeletonAssignments?.(map);
+    window.forceSyncToCloud?.();
+    await showAlert('Assignments saved.');
+    renderToolbar(); // Sync manual toolbar status
+    renderDAWToolbar(); // Sync auto toolbar status
+  };
+}
+function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
+  const gridEl = externalEl || document.getElementById('daw-grid');
+  if (!gridEl) return;
+
+  // When called externally (from DA), use provided layers + callbacks
+  const isExternal = !!externalEl;
+  const layerSource = isExternal ? externalLayers : dawLayers;
+  const onChanged = externalCallbacks?.onLayersChanged || null;
+  const onSave = isExternal ? (onChanged || function(){}) : saveDAWLayers;
+  const onRender = isExternal ? function(){ renderDAWGrid(externalEl, externalLayers, externalCallbacks); } : renderDAWGrid;
+  
+  const divisions = window.divisions || {};
+  const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort((a, b) => {
+    const na = parseInt(a), nb = parseInt(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.localeCompare(b);
+  });
+  
+  if (grades.length === 0) {
+    gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
+    return;
+  }
+  
+  // Find global time bounds dynamically based on divisions
+  let globalStart = null, globalEnd = null;
+  grades.forEach(g => {
+    const div = divisions[g];
+    const s = parseTimeToMinutes(div?.startTime);
+    const e = parseTimeToMinutes(div?.endTime);
+    if (s !== null && (globalStart === null || s < globalStart)) globalStart = s;
+    if (e !== null && (globalEnd === null || e > globalEnd)) globalEnd = e;
+  });
+  
+  // Fallbacks if no times are set
+  if (globalStart === null) globalStart = 540; // 9:00 AM
+  if (globalEnd === null) globalEnd = 960;     // 4:00 PM
+  
+  const totalWidth = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
+  
+  let html = '';
+  
+  // Time ruler
+  html += `<div class="ms-daw-ruler" style="width:${totalWidth}px;">`;
+  for (let m = globalStart; m < globalEnd; m += 30) {
+    const left = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
+    html += `<div class="ms-daw-ruler-tick" style="position:absolute;left:${left}px;">${minutesToTime(m)}</div>`;
+  }
+  html += '</div>';
+  
+  // Grid lines container (behind bands)
+  html += `<div style="position:relative;">`;
+  
+  // Grade rows
+  grades.forEach(gradeKey => {
+    const div = divisions[gradeKey];
+    const divStart = parseTimeToMinutes(div?.startTime) || globalStart;
+    const divEnd = parseTimeToMinutes(div?.endTime) || globalEnd;
+    const layers = layerSource[gradeKey] || [];
+    
+    // Calculate row height based on layer count (stacking)
+    const layerCount = Math.max(1, layers.length);
+    const rowHeight = Math.max(80, layerCount * 28 + 16);
+    
+    html += `<div class="ms-daw-grade" data-grade="${gradeKey}" style="height:${rowHeight}px;">`;
+    
+    // Grade label
+    const bunkCount = (div?.bunks || []).length;
+    html += `<div class="ms-daw-grade-label">
+      <div class="ms-daw-grade-name">${gradeKey}</div>
+      <div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · ${minutesToTime(divStart)}–${minutesToTime(divEnd)}</div>
+      <div class="ms-daw-grade-actions">
+        <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+ Add</button>
+        <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
+      </div>
+    </div>`;
+    
+    // Track area
+    html += `<div class="ms-daw-track" data-grade="${gradeKey}" style="width:${totalWidth}px;">`;
+    
+    // Gridlines
+    for (let m = globalStart; m < globalEnd; m += 30) {
+      const left = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const cls = m % 60 === 0 ? 'major' : '';
+      html += `<div class="ms-daw-gridline ${cls}" style="left:${left}px;"></div>`;
+    }
+    
+    // Inactive zones (before div start, after div end)
+    if (divStart > globalStart) {
+      const w = (divStart - globalStart) * DAW_PIXELS_PER_MINUTE;
+      html += `<div style="position:absolute;top:0;left:0;width:${w}px;height:100%;background:rgba(0,0,0,0.3);z-index:1;pointer-events:none;"></div>`;
+    }
+    if (divEnd < globalEnd) {
+      const left = (divEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const w = (globalEnd - divEnd) * DAW_PIXELS_PER_MINUTE;
+      html += `<div style="position:absolute;top:0;left:${left}px;width:${w}px;height:100%;background:rgba(0,0,0,0.3);z-index:1;pointer-events:none;"></div>`;
+    }
+    
+    // Render bands
+    layers.forEach((layer, idx) => {
+      const left = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
+      const top = 6 + idx * 26;
+      const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+      const durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
+        ? `${layer.durationMin}-${layer.durationMax}m`
+        : `${layer.durationMin || layer.periodMin || (layer.endMin - layer.startMin)}m`;
+      html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}" 
+        data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
+        style="left:${left}px; width:${width}px; top:${top}px;"
+        draggable="true">
+        <div class="band-resize band-resize-left"></div>
+        <span class="band-label">${DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type}</span>
+        <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
+        <div class="band-resize band-resize-right"></div>
+      </div>`;
+    });
+    
+    html += '</div>'; // track
+    html += '</div>'; // grade row
+  });
+  
+  html += '</div>'; // relative container
+  
+  gridEl.innerHTML = html;
+  
+  // Bind events
+  bindDAWEvents(gridEl, globalStart, globalEnd, { layerSource, onSave, onRender, isExternal });
+}
+
+function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
+  const layerSource = opts?.layerSource || dawLayers;
+  const onSave = opts?.onSave || saveDAWLayers;
+  const onRender = opts?.onRender || renderDAWGrid;
+  const isExternal = opts?.isExternal || false;
+
+  // Click on band to select/edit
+  gridEl.querySelectorAll('.ms-daw-band').forEach(band => {
+    band.addEventListener('click', (e) => {
+      if (e.target.classList.contains('band-resize')) return;
+      const id = band.dataset.id;
+      const grade = band.dataset.grade;
+      dawSelectedBand = dawSelectedBand === id ? null : id;
+      
+      // Remove existing popovers
+      gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+      
+      if (dawSelectedBand) {
+        const layer = (layerSource[grade] || []).find(l => l.id === id);
+        if (layer) showDAWPopover(band, layer, grade, { onSave, onRender, layerSource });
+      }
+      
+      // Update selection styling
+      gridEl.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+      if (dawSelectedBand) band.classList.add('selected');
+    });
+    
+    // Drag existing band to reposition
+    band.addEventListener('dragstart', (e) => {
+      if (e.target.classList.contains('band-resize')) { e.preventDefault(); return; }
+      const id = band.dataset.id;
+      const grade = band.dataset.grade;
+      const layer = (layerSource[grade] || []).find(l => l.id === id);
+      if (!layer) return;
+      dawDragData = { source: 'band', id, grade, layer, offsetMin: 0 };
+      
+      const rect = band.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      dawDragData.offsetMin = Math.round(clickX / DAW_PIXELS_PER_MINUTE);
+      
+      e.dataTransfer.setData('text/daw-band-move', id);
+      e.dataTransfer.effectAllowed = 'move';
+      band.style.opacity = '0.4';
+    });
+    
+    band.addEventListener('dragend', () => {
+      band.style.opacity = '1';
+      dawDragData = null;
+    });
+    
+    // Resize handles
+    band.querySelectorAll('.band-resize').forEach(handle => {
+      let isResizing = false;
+      let startX, startMin, startWidth, isLeft;
+      
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        isResizing = true;
+        isLeft = handle.classList.contains('band-resize-left');
+        startX = e.clientX;
+        
+        const id = band.dataset.id;
+        const grade = band.dataset.grade;
+        const layer = (layerSource[grade] || []).find(l => l.id === id);
+        if (!layer) return;
+        startMin = isLeft ? layer.startMin : layer.endMin;
+        
+        const onMove = (e2) => {
+          if (!isResizing) return;
+          const dx = e2.clientX - startX;
+          const dMin = Math.round(dx / DAW_PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+          const newMin = startMin + dMin;
+          
+          if (isLeft) {
+            layer.startMin = Math.max(globalStart, Math.min(layer.endMin - 15, newMin));
+          } else {
+            layer.endMin = Math.min(globalEnd, Math.max(layer.startMin + 15, newMin));
+          }
+          
+          // Live update position
+          const left = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+          const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
+          band.style.left = left + 'px';
+          band.style.width = width + 'px';
+        };
+        
+        const onUp = () => {
+          isResizing = false;
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          onSave();
+        };
+        
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  });
+  
+  // Drop on tracks (palette → track, or band move)
+  gridEl.querySelectorAll('.ms-daw-track').forEach(track => {
+    track.addEventListener('dragover', (e) => {
+      const isDawDrop = e.dataTransfer.types.includes('text/daw-layer') || e.dataTransfer.types.includes('text/daw-band-move');
+      if (!isDawDrop) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = e.dataTransfer.types.includes('text/daw-band-move') ? 'move' : 'copy';
+      track.classList.add('drop-target');
+    });
+    
+    track.addEventListener('dragleave', (e) => {
+      if (!track.contains(e.relatedTarget)) track.classList.remove('drop-target');
+    });
+    
+    track.addEventListener('drop', (e) => {
+      e.preventDefault();
+      track.classList.remove('drop-target');
+      
+      const grade = track.dataset.grade;
+      const rect = track.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const dropMin = Math.round((x / DAW_PIXELS_PER_MINUTE + globalStart) / SNAP_MINS) * SNAP_MINS;
+      
+      if (e.dataTransfer.types.includes('text/daw-layer')) {
+        // New band from palette
+        const type = e.dataTransfer.getData('text/daw-layer');
+        const layerDef = DAW_LAYER_TYPES.find(t => t.type === type);
+        if (!layerDef) return;
+        
+        const div = (window.divisions || {})[grade] || {};
+        const divStart = parseTimeToMinutes(div.startTime) || globalStart;
+        const divEnd = parseTimeToMinutes(div.endTime) || globalEnd;
+        
+        let startMin, endMin;
+        if (layerDef.anchor) {
+          // Anchors get a fixed 30-min window at drop point
+          startMin = Math.max(divStart, dropMin - 15);
+          endMin = Math.min(divEnd, startMin + 30);
+        } else {
+          // Floaters span the full division range
+          startMin = divStart;
+          endMin = divEnd;
+        }
+        
+        if (!layerSource[grade]) layerSource[grade] = [];
+        layerSource[grade].push({
+          id: 'daw_' + Math.random().toString(36).slice(2, 9),
+          type,
+          startMin,
+          endMin,
+          qty: 1,
+          op: layerDef.anchor ? '=' : '>=',
+          durationMin: layerDef.anchor ? (endMin - startMin) : 30,
+          durationMax: layerDef.anchor ? (endMin - startMin) : 50,
+          periodMin: layerDef.anchor ? (endMin - startMin) : 30,
+        });
+        
+        onSave();
+        onRender();
+      }
+      else if (e.dataTransfer.types.includes('text/daw-band-move') && dawDragData?.source === 'band') {
+        // Move existing band
+        const { id, grade: fromGrade, layer, offsetMin } = dawDragData;
+        const duration = layer.endMin - layer.startMin;
+        const newStart = Math.round((dropMin - offsetMin) / SNAP_MINS) * SNAP_MINS;
+        const newEnd = newStart + duration;
+        
+        // Remove from old grade if moving between grades
+        if (fromGrade !== grade) {
+          layerSource[fromGrade] = (layerSource[fromGrade] || []).filter(l => l.id !== id);
+          if (!layerSource[grade]) layerSource[grade] = [];
+          layer.startMin = Math.max(globalStart, newStart);
+          layer.endMin = Math.min(globalEnd, newEnd);
+          layerSource[grade].push(layer);
+        } else {
+          layer.startMin = Math.max(globalStart, newStart);
+          layer.endMin = Math.min(globalEnd, newEnd);
+        }
+        
+        onSave();
+        onRender();
+      }
+      
+      dawDragData = null;
+    });
+  });
+  
+  // Grade action buttons
+  gridEl.querySelectorAll('[data-action="add-layer"]').forEach(btn => {
+    btn.onclick = () => {
+      const grade = btn.dataset.grade;
+      dawAddLayerDialog(grade);
+    };
+  });
+  
+  gridEl.querySelectorAll('[data-action="clear-grade"]').forEach(btn => {
+    btn.onclick = async () => {
+      const grade = btn.dataset.grade;
+      const ok = await showConfirm(`Clear all layers from ${grade}?`);
+      if (ok) {
+        layerSource[grade] = [];
+        onSave();
+        onRender();
+      }
+    };
+  });
+  
+  // Click on empty track space to deselect
+  gridEl.addEventListener('click', (e) => {
+    if (e.target.classList.contains('ms-daw-track') || e.target.classList.contains('ms-daw-gridline')) {
+      dawSelectedBand = null;
+      gridEl.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+      gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+    }
+  });
+  
+  // Keyboard: Delete selected band
+  const dawKeyHandler = (e) => {
+    if (currentBuilderMode !== 'auto') return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    
+    if ((e.key === 'Delete' || e.key === 'Backspace') && dawSelectedBand) {
+      e.preventDefault();
+      Object.keys(layerSource).forEach(grade => {
+        layerSource[grade] = (layerSource[grade] || []).filter(l => l.id !== dawSelectedBand);
+      });
+      dawSelectedBand = null;
+      onSave();
+      onRender();
+    }
+    if (e.key === 'Escape') {
+      dawSelectedBand = null;
+      gridEl.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+      gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+    }
+  };
+  document.removeEventListener('keydown', dawKeyHandler);
+  document.addEventListener('keydown', dawKeyHandler);
+}
+
+function showDAWPopover(bandEl, layer, grade, opts) {
+  const onSave = opts?.onSave || saveDAWLayers;
+  const onRender = opts?.onRender || renderDAWGrid;
+  
+  // Remove existing
+  document.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+  
+  const typeName = DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type;
+  
+  const popover = document.createElement('div');
+  popover.className = 'ms-daw-popover';
+  popover.innerHTML = `
+    <h4>${typeName}</h4>
+    <label>Time Window</label>
+    <div class="ms-daw-pop-row">
+      <input type="text" id="daw-pop-start" value="${minutesToTime(layer.startMin)}" style="width:45%;">
+      <span style="color:#8888aa;">→</span>
+      <input type="text" id="daw-pop-end" value="${minutesToTime(layer.endMin)}" style="width:45%;">
+    </div>
+   <label>Activity Duration (min)</label>
+    <div class="ms-daw-pop-row">
+      <input type="number" id="daw-pop-dur-min" value="${layer.durationMin || layer.periodMin || 30}" min="5" max="180" step="5" style="width:60px;" placeholder="Min">
+      <span style="color:#8888aa;">to</span>
+      <input type="number" id="daw-pop-dur-max" value="${layer.durationMax || layer.periodMin || 50}" min="5" max="180" step="5" style="width:60px;" placeholder="Max">
+      <span style="color:#94a3b8;font-size:10px;">min</span>
+    </div>
+    <label>Quantity</label>
+    <div class="ms-daw-pop-row">
+      <button class="ms-daw-pop-op ${layer.op === '>=' ? 'active' : ''}" data-op=">=">≥</button>
+      <button class="ms-daw-pop-op ${layer.op === '=' ? 'active' : ''}" data-op="=">=</button>
+      <button class="ms-daw-pop-op ${layer.op === '<=' ? 'active' : ''}" data-op="<=">≤</button>
+      <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:50px;">
+    </div>
+  <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
+    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Rotation</label>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-2px 0 6px;">Leave blank for no limits</span>
+
+    <label>Bunks / Day</label>
+    <div class="ms-daw-pop-row">
+      <input type="number" id="daw-pop-bpd" value="${layer.bunksPerDay != null ? layer.bunksPerDay : ''}" min="1" max="99" style="width:50px;" placeholder="All">
+      <span style="font-size:10px;color:#94a3b8;">per grade</span>
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">How many bunks do this activity each day. Others get it on a different day.</span>
+
+    <label>Times / Week</label>
+    <div class="ms-daw-pop-row">
+      <button class="ms-daw-pop-op ms-daw-wop ${(layer.weeklyOp || '>=') === '>=' ? 'active' : ''}" data-wop=">=">≥</button>
+      <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '=' ? 'active' : ''}" data-wop="=">=</button>
+      <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '<=' ? 'active' : ''}" data-wop="<=">≤</button>
+      <input type="number" id="daw-pop-week-qty" value="${layer.timesPerWeek != null ? layer.timesPerWeek : ''}" min="1" max="7" style="width:50px;" placeholder="Any">
+      <span style="font-size:10px;color:#94a3b8;">days/wk</span>
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">Target days per week each bunk gets this. System picks bunks that need it most.</span>    
+    ${layer.type === 'custom' ? `
+    <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
+    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Custom Activity</label>
+    
+    <label>Activity Name</label>
+    <div class="ms-daw-pop-row">
+      <input type="text" id="daw-pop-custom-name" value="${layer.customActivity || ''}" placeholder="e.g. Home Run Derby" style="width:100%;">
+    </div>
+
+    <label>Field / Location</label>
+    <div class="ms-daw-pop-row">
+      <select id="daw-pop-custom-field" style="width:100%;">
+        <option value="">-- Select field --</option>
+        ${(() => {
+          const gs = window.loadGlobalSettings?.() || {};
+          const fields = gs.app1?.fields || gs.fields || window.fields || [];
+          const specialLocs = (gs.app1?.specialActivities || []).map(s => s.location).filter(Boolean);
+          const allLocs = [...new Set([...fields.map(f => f.name), ...specialLocs])].sort();
+          return allLocs.map(f => '<option value="' + f + '"' + (f === (layer.customField || '') ? ' selected' : '') + '>' + f + '</option>').join('');
+        })()}
+        <option value="_custom" ${layer.customField && !(() => { const gs = window.loadGlobalSettings?.() || {}; const fields = gs.app1?.fields || []; return fields.some(f => f.name === layer.customField); })() ? 'selected' : ''}>-- Custom location --</option>
+      </select>
+    </div>
+    <div id="daw-pop-custom-field-text-wrap" style="display:${layer.customField && !(() => { const gs = window.loadGlobalSettings?.() || {}; const fields = gs.app1?.fields || []; return fields.some(f => f.name === layer.customField); })() ? 'block' : 'none'};">
+      <div class="ms-daw-pop-row" style="margin-top:4px;">
+        <input type="text" id="daw-pop-custom-field-text" value="${layer.customField || ''}" placeholder="Type location name" style="width:100%;">
+      </div>
+    </div>
+
+    <label>Bunks</label>
+    <div class="ms-daw-pop-row" style="flex-wrap:wrap;gap:4px;">
+      <button id="daw-pop-bunk-all" style="font-size:10px;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#f1f5f9;cursor:pointer;font-weight:600;">All</button>
+      <button id="daw-pop-bunk-none" style="font-size:10px;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#f1f5f9;cursor:pointer;font-weight:600;">None</button>
+    </div>
+    <div id="daw-pop-bunk-grid" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">
+      ${(() => {
+        const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+        const bunks = (divs[grade]?.bunks || []).map(String);
+        const selected = layer.customBunks || bunks;
+        return bunks.map(b => '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (selected.includes(b) ? '#dbeafe' : '#fff') + ';"><input type="checkbox" class="daw-bunk-cb" value="' + b + '"' + (selected.includes(b) ? ' checked' : '') + ' style="width:13px;height:13px;">' + b + '</label>').join('');
+      })()}
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin-top:4px;">Select which bunks participate. Others get regular activities.</span>
+    ` : ''}
+    <div class="ms-daw-pop-actions">      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
+      <button class="ms-daw-pop-btn ms-daw-pop-btn-del">Delete</button>
+      <button class="ms-daw-pop-btn ms-daw-pop-btn-cancel">Close</button>
+    </div>
+    </div>
+  `;
+  
+  // Position below the band
+  const bandRect = bandEl.getBoundingClientRect();
+  const trackRect = bandEl.closest('.ms-daw-track').getBoundingClientRect();
+  popover.style.left = (bandRect.left - trackRect.left) + 'px';
+  popover.style.top = (bandRect.bottom - trackRect.top + 4) + 'px';
+  
+  bandEl.closest('.ms-daw-track').appendChild(popover);
+  
+  // Operator buttons
+  popover.querySelectorAll('.ms-daw-pop-op').forEach(btn => {
+    btn.onclick = () => {
+      popover.querySelectorAll('.ms-daw-pop-op').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    };
+  });
+  
+  // Custom layer: field dropdown toggle + bunk select/deselect
+  const customFieldSelect = popover.querySelector('#daw-pop-custom-field');
+  if (customFieldSelect) {
+    customFieldSelect.onchange = function() {
+      const wrap = popover.querySelector('#daw-pop-custom-field-text-wrap');
+      if (wrap) wrap.style.display = this.value === '_custom' ? 'block' : 'none';
+    };
+  }
+  const bunkAllBtn = popover.querySelector('#daw-pop-bunk-all');
+  const bunkNoneBtn = popover.querySelector('#daw-pop-bunk-none');
+  if (bunkAllBtn) {
+    bunkAllBtn.onclick = () => {
+      popover.querySelectorAll('.daw-bunk-cb').forEach(cb => { cb.checked = true; cb.closest('label').style.background = '#dbeafe'; });
+    };
+  }
+  if (bunkNoneBtn) {
+    bunkNoneBtn.onclick = () => {
+      popover.querySelectorAll('.daw-bunk-cb').forEach(cb => { cb.checked = false; cb.closest('label').style.background = '#fff'; });
+    };
+  }
+  popover.querySelectorAll('.daw-bunk-cb').forEach(cb => {
+    cb.onchange = function() { this.closest('label').style.background = this.checked ? '#dbeafe' : '#fff'; };
+  });
+
+  // Save
+  popover.querySelector('.ms-daw-pop-btn-save').onclick = () => {
+    const startStr = popover.querySelector('#daw-pop-start').value;
+    const endStr = popover.querySelector('#daw-pop-end').value;
+    const s = parseTimeToMinutes(startStr);
+    const e2 = parseTimeToMinutes(endStr);
+    if (s != null) layer.startMin = s;
+    if (e2 != null) layer.endMin = e2;
+    layer.durationMin = parseInt(popover.querySelector('#daw-pop-dur-min').value) || 30;
+    layer.durationMax = parseInt(popover.querySelector('#daw-pop-dur-max').value) || 50;
+    layer.periodMin = layer.durationMin; // backward compat
+    layer.qty = parseInt(popover.querySelector('#daw-pop-qty').value) || 1;
+    const activeOp = popover.querySelector('.ms-daw-pop-op[data-op].active');
+    if (activeOp) layer.op = activeOp.dataset.op;
+
+   // Rotation: Bunks Per Day + Times Per Week (all layer types)
+    const bpdRaw = (popover.querySelector('#daw-pop-bpd')?.value || '').trim();
+    layer.bunksPerDay = bpdRaw !== '' ? Math.max(1, parseInt(bpdRaw) || 1) : null;
+
+    const activeWop = popover.querySelector('.ms-daw-wop[data-wop].active');
+    const weekQtyRaw = (popover.querySelector('#daw-pop-week-qty')?.value || '').trim();
+    const weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
+    layer.timesPerWeek = weekQtyVal;
+    layer.weeklyOp = weekQtyVal != null && activeWop ? activeWop.dataset.wop : '>=';
+
+    // Custom layer: save activity name, field, and bunks
+    if (layer.type === 'custom') {
+      layer.customActivity = (popover.querySelector('#daw-pop-custom-name')?.value || '').trim() || null;
+      const fieldSelect = popover.querySelector('#daw-pop-custom-field');
+      const fieldText = popover.querySelector('#daw-pop-custom-field-text');
+      if (fieldSelect) {
+        if (fieldSelect.value === '_custom') {
+          layer.customField = (fieldText?.value || '').trim() || null;
+        } else {
+          layer.customField = fieldSelect.value || null;
+        }
+      }
+      const checkedBunks = Array.from(popover.querySelectorAll('.daw-bunk-cb:checked')).map(cb => cb.value);
+      const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+      const allBunks = (divs[grade]?.bunks || []).map(String);
+      layer.customBunks = checkedBunks.length === allBunks.length ? null : checkedBunks; // null = all
+    }
+    onSave();
+    onRender();
+  };
+  
+  // Delete
+ popover.querySelector('.ms-daw-pop-btn-del').onclick = () => {
+    const src = opts?.layerSource || dawLayers;
+    src[grade] = (src[grade] || []).filter(l => l.id !== layer.id);
+    dawSelectedBand = null;
+    onSave();
+    onRender();
+  };
+  
+  // Close
+  popover.querySelector('.ms-daw-pop-btn-cancel').onclick = () => {
+    popover.remove();
+    dawSelectedBand = null;
+    document.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+  };
+}
+
+async function dawAddLayerDialog(grade) {
+  const div = (window.divisions || {})[grade] || {};
+  const divStart = parseTimeToMinutes(div.startTime) || 540;
+  const divEnd = parseTimeToMinutes(div.endTime) || 960;
+  
+  const typeOptions = DAW_LAYER_TYPES.map(t => ({ value: t.type, label: t.name }));
+  
+  const result = await showModal({
+    title: `Add Layer to ${grade}`,
+    fields: [
+      { name: 'type', label: 'Layer Type', type: 'select', options: typeOptions, default: 'activity' },
+      { name: 'startTime', label: 'Start Time', type: 'time', default: minutesToTime(divStart), placeholder: '9:00am' },
+      { name: 'endTime', label: 'End Time', type: 'time', default: minutesToTime(divEnd), placeholder: '4:00pm' },
+    ],
+    confirmText: 'Add Layer'
+  });
+  
+  if (!result) return;
+  
+  const startMin = parseTimeToMinutes(result.startTime) || divStart;
+  const endMin = parseTimeToMinutes(result.endTime) || divEnd;
+  
+  if (!dawLayers[grade]) dawLayers[grade] = [];
+  const layerDef = DAW_LAYER_TYPES.find(t => t.type === result.type);
+  
+ dawLayers[grade].push({
+    id: 'daw_' + Math.random().toString(36).slice(2, 9),
+    type: result.type,
+    startMin: Math.max(divStart, startMin),
+    endMin: Math.min(divEnd, endMin),
+    qty: 1,
+    op: layerDef?.anchor ? '=' : '>=',
+    durationMin: layerDef?.anchor ? (endMin - startMin) : 30,
+    durationMax: layerDef?.anchor ? (endMin - startMin) : 50,
+    periodMin: layerDef?.anchor ? (endMin - startMin) : 30,
+  });
+  
+  saveDAWLayers();
+  renderDAWGrid();
+}
+
+async function dawCopyLayersDialog() {
+  const divisions = window.divisions || {};
+  const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort();
+  
+  if (grades.length < 2) {
+    await showAlert('Need at least 2 grades to copy between.');
+    return;
+  }
+  
+  const result = await showModal({
+    title: 'Copy Layers',
+    description: 'Copy all layers from one grade to others.',
+    fields: [
+      { name: 'from', label: 'Copy From', type: 'select', options: grades.map(g => ({ value: g, label: g })) },
+      { name: 'to', label: 'Copy To', type: 'checkbox-group', options: grades },
+    ],
+    confirmText: 'Copy'
+  });
+  
+  if (!result || !result.from || !result.to || result.to.length === 0) return;
+  
+  const source = dawLayers[result.from] || [];
+  let copied = 0;
+  result.to.forEach(targetGrade => {
+    if (targetGrade === result.from) return;
+    // Clone layers with new IDs, adjusting to target division times
+    const targetDiv = divisions[targetGrade] || {};
+    const tStart = parseTimeToMinutes(targetDiv.startTime) || 540;
+    const tEnd = parseTimeToMinutes(targetDiv.endTime) || 960;
+    
+    dawLayers[targetGrade] = source.map(l => ({
+      ...l,
+      id: 'daw_' + Math.random().toString(36).slice(2, 9),
+      startMin: Math.max(tStart, l.startMin),
+      endMin: Math.min(tEnd, l.endMin),
+    }));
+    copied++;
+  });
+  
+  saveDAWLayers();
+  renderDAWGrid();
+  await showAlert(`Copied layers to ${copied} grade(s).`);
+}
+
+function renderDAW() {
+  loadDAWLayers();
+  renderDAWPalette();
+  renderDAWToolbar();
+  renderDAWExpandSection();
+  renderDAWGrid();
+}
 function updateToolbarStatus() {
   const statusGroup = document.querySelector('.ms-toolbar-group.status');
   if (statusGroup) {
@@ -1175,6 +2118,14 @@ function softenColor(hexColor) {
 
 // --- RENDER GRID ---
 function renderGrid() {
+  if (!grid) return;
+
+  // AUTO MODE: render DAW layer timeline instead of stacking grid
+  if (builderMode === 'auto') {
+      renderDAWGrid();
+      return;
+  }
+
   const divisions = window.divisions || {};
   const availableDivisions = window.availableDivisions || [];
 
@@ -1256,8 +2207,9 @@ function renderGrid() {
   addDragToRepositionListeners(grid);
   addResizeListeners(grid);
   addClickToSelectListeners();
-  setTimeout(function() { if (typeof renderMSDoubleHeaderLinker === 'function') renderMSDoubleHeaderLinker(); }, 50);
 }
+
+
 
 function addClickToSelectListeners() {
   grid.querySelectorAll('.grid-event').forEach(el => {
@@ -1313,11 +2265,9 @@ function renderEventTile(ev, top, height) {
   }
   
   
-if (ev.leagueName) {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.leagueName}</div>`;
-  }
-  if (ev._doubleHeaderPairId) {
-    innerHtml += `<div style="font-size:8px;font-weight:700;color:#0F5F6E;background:#E0F2FE;display:inline-block;padding:1px 5px;border-radius:3px;margin-top:2px;letter-spacing:0.5px;">DH</div>`;
+// ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
+  if (ev.leagueName) {
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
   }
 
   if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
@@ -1916,7 +2866,14 @@ function loadDailySkeleton() {
   let dow = 0; if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
   const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const today = dayNames[dow];
+  
   let tmpl = assignments[today] || assignments["Default"];
+  
+  // Lock the UI onto the assigned template for the day
+  if (!currentLoadedTemplate && tmpl) {
+      currentLoadedTemplate = tmpl;
+  }
+  
   dailySkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
 }
 
@@ -1949,92 +2906,7 @@ function minutesToTime(min) {
 }
 
 window.initMasterScheduler = init;
-  // =================================================================
-// DOUBLE-HEADER LINKER (Off-Campus) — Master Schedule Builder
-// =================================================================
-function renderMSDoubleHeaderLinker() {
-  var existing = document.getElementById('ms-dh-linker');
-  if (existing) existing.remove();
 
-  var gs = window.loadGlobalSettings?.() || {};
-  var lbn = gs.leaguesByName || {};
-  var ocLeagues = Object.values(lbn).filter(function(l) {
-    return l && l.offCampus?.enabled && l.offCampus?.zone && l.offCampus?.teamsPerDay > 0 && l.enabled !== false;
-  });
-  if (ocLeagues.length === 0) return;
-
-  var leagueBlocks = dailySkeleton.filter(function(b) {
-    return b.type === 'league' || (b.event && /league/i.test(b.event));
-  });
-  if (leagueBlocks.length < 2) return;
-
-  var grouped = {};
-  leagueBlocks.forEach(function(b) {
-    var key = b.leagueName || 'League Game';
-    var ml = ocLeagues.find(function(l) { return l.name === key; });
-    if (!ml) ml = ocLeagues.find(function(l) { return (l.divisions || []).includes(b.division); });
-    if (!ml) return;
-    if (!grouped[ml.name]) grouped[ml.name] = { league: ml, blocks: [] };
-    grouped[ml.name].blocks.push(b);
-  });
-
-  var linkable = Object.values(grouped).filter(function(g) { return g.blocks.length >= 2; });
-  if (linkable.length === 0) return;
-
-  var panel = document.createElement('div');
-  panel.id = 'ms-dh-linker';
-  panel.style.cssText = 'margin:12px 0; padding:12px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px;';
-  var title = document.createElement('div');
-  title.style.cssText = 'font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:8px;';
-  title.textContent = 'Double-Header Links';
-  panel.appendChild(title);
-
-  linkable.forEach(function(group) {
-    var blocks = group.blocks.sort(function(a, b) { return (parseTimeToMinutes(a.startTime)||0) - (parseTimeToMinutes(b.startTime)||0); });
-    var leagueRow = document.createElement('div');
-    leagueRow.style.cssText = 'margin-bottom:8px;';
-    var lbl = document.createElement('div');
-    lbl.style.cssText = 'font-size:0.75rem; color:#6B7280; margin-bottom:4px;';
-    lbl.textContent = group.league.name + ' (' + group.league.offCampus.zone + ')';
-    leagueRow.appendChild(lbl);
-
-    var existingPairId = null;
-    blocks.forEach(function(b) { if (b._doubleHeaderPairId) existingPairId = b._doubleHeaderPairId; });
-    var isLinked = existingPairId && blocks.filter(function(b) { return b._doubleHeaderPairId === existingPairId; }).length >= 2;
-
-    var row = document.createElement('div');
-    row.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
-    blocks.forEach(function(b, idx) {
-      var chip = document.createElement('span');
-      var inPair = isLinked && b._doubleHeaderPairId === existingPairId;
-      chip.style.cssText = 'display:inline-flex; padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:500; ' +
-        (inPair ? 'background:#DBEAFE; color:#1E40AF; border:1px solid #93C5FD;' : 'background:#F1F5F9; color:#475569; border:1px solid #E2E8F0;');
-      chip.textContent = (b.leagueName || b.event) + ' ' + (b.division||'') + ' ' + (b.startTime||'') + '-' + (b.endTime||'');
-      row.appendChild(chip);
-      if (idx < blocks.length - 1) {
-        var arrow = document.createElement('span');
-        arrow.style.cssText = 'color:#9CA3AF; font-size:0.7rem;';
-        arrow.textContent = isLinked ? '\u2194' : '\u00B7\u00B7\u00B7';
-        row.appendChild(arrow);
-      }
-    });
-
-    var btn = document.createElement('button');
-    btn.style.cssText = 'margin-left:8px; padding:4px 10px; border-radius:5px; font-size:0.7rem; font-weight:600; cursor:pointer; ' +
-      (isLinked ? 'background:none; border:1px solid #E2E8F0; color:#9CA3AF;' : 'background:#0F5F6E; border:1px solid #0F5F6E; color:#fff;');
-    btn.textContent = isLinked ? 'Unlink' : 'Link as Double-Header';
-    btn.onclick = function() {
-      if (isLinked) { blocks.forEach(function(b) { delete b._doubleHeaderPairId; }); }
-      else { var pid = 'dh_' + Date.now().toString(36); blocks[0]._doubleHeaderPairId = pid; blocks[1]._doubleHeaderPairId = pid; }
-      markUnsavedChanges(); saveDraftToLocalStorage(); renderGrid();
-    };
-    row.appendChild(btn);
-    leagueRow.appendChild(row);
-    panel.appendChild(leagueRow);
-  });
-
-  if (grid) grid.parentNode.insertBefore(panel, grid.nextSibling);
-}
 // Expose internals for mobile touch support + auto build integration
 window.MasterSchedulerInternal = {
   get dailySkeleton() { return dailySkeleton; },
@@ -2047,5 +2919,49 @@ window.MasterSchedulerInternal = {
   showModal: typeof showModal === 'function' ? showModal : null,
   parseTimeToMinutes: typeof parseTimeToMinutes === 'function' ? parseTimeToMinutes : function(){ return null; },
   minutesToTime: typeof minutesToTime === 'function' ? minutesToTime : function(){ return ''; },
+  // ★★★ AUTO BUILD integration ★★★
+  triggerAutoBuild: function(layers) {
+    if (!window.AutoBuildEngine) { console.error('AutoBuildEngine not loaded'); return null; }
+    var dateStr = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    var result = window.AutoBuildEngine.build({ layers: layers, dateStr: dateStr });
+    window._autoGeneratedSchedule = true;
+    window._autoBuildTimelines = result.bunkTimelines;
+    dailySkeleton = result.skeleton;
+    if (typeof markUnsavedChanges === 'function') markUnsavedChanges();
+    if (typeof saveDraftToLocalStorage === 'function') saveDraftToLocalStorage();
+    if (typeof renderGrid === 'function') renderGrid();
+    return result;
+  },
+  // Mode (read from Setup & Config, no toggle needed)
+  get currentMode() { return builderMode; },
+  // ★ DAW grid utility for DA to render layers independently
+  renderDAWGridWith: function(el, layers, callbacks) {
+    renderDAWGrid(el, layers, callbacks);
+  },
+  DAW_LAYER_TYPES: DAW_LAYER_TYPES,
+  DAW_PIXELS_PER_MINUTE: DAW_PIXELS_PER_MINUTE,
 };
+  // Listen for mode changes from Setup & Config
+  window.addEventListener('campistry-builder-mode-changed', (e) => {
+    const newMode = e.detail?.mode;
+    if (newMode) {
+      console.log('[MasterBuilder] Mode changed to:', newMode, '— refreshing');
+      currentBuilderMode = newMode;
+      builderMode = newMode;
+      const manualEl = document.getElementById('ms-manual-container');
+      const autoEl = document.getElementById('ms-auto-container');
+      if (newMode === 'manual') {
+        if (manualEl) manualEl.style.display = 'flex';
+        if (autoEl) autoEl.style.display = 'none';
+        loadDailySkeleton();
+        renderGrid();
+        renderToolbar();
+      } else {
+        if (manualEl) manualEl.style.display = 'none';
+        if (autoEl) autoEl.style.display = 'flex';
+        dailySkeleton = [];
+        if (typeof renderDAW === 'function') renderDAW();
+      }
+    }
+  });
 })();

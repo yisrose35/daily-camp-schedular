@@ -110,8 +110,24 @@
         const originalRunSkeletonOptimizer = window.runSkeletonOptimizer;
 
         // Create wrapper that builds divisionTimes first
-        window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
-            
+      window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
+
+            // ★★★ AUTO MODE: full bypass — scheduler_core_auto.js owns the entire pipeline
+            if (window._daBuilderMode === 'auto' || window._divisionTimesLocked) {
+                console.log('[DivTimesIntegration] ⏭️ Auto mode — full bypass');
+                return false;
+            }
+
+            // ★ AUTO BUILD: divisionTimes already built by AutoBuildPrep — skip rebuild
+            if (window._autoBuildRunActive) {
+                console.log('[DivTimesIntegration] ⏭️ Auto mode — bypassing DT rebuild');
+                const optimizer = originalRunSkeletonOptimizer || window._coreRunSkeletonOptimizer;
+                if (optimizer) {
+                    return optimizer.call(this, manualSkeleton, externalOverrides, allowedDivisions, existingScheduleSnapshot, existingUnifiedTimes);
+                }
+                return false;
+            }
+
             // ★★★ FIX v1.1: Fallback if skeleton parameter is empty ★★★
             if (!manualSkeleton || manualSkeleton.length === 0) {
                 log('Skeleton parameter empty, checking fallbacks...');
@@ -262,9 +278,56 @@
                 // proper split-half slots. The localStorage version is stale and
                 // lacks split expansion, so restoring it mid-generation breaks
                 // slot lookups for split tiles and causes mis-indexed pinned events.
-                if (result?.divisionTimes && !window._divisionTimesLocked) {
-                    window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
-                    log('Restored divisionTimes from localStorage');
+               if (result?.divisionTimes && !window._divisionTimesLocked) {
+                    // ★★★ AUTO MODE GUARD: Don't overwrite live per-bunk divisionTimes ★★★
+                    var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+                    var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
+                    if (_isAutoMode && _hasLivePerBunk) {
+                        log('Skipping divisionTimes restore — auto mode _perBunkSlots active in memory');
+                    } else {
+                        window.divisionTimes = window.DivisionTimesSystem?.deserialize(result.divisionTimes) || {};
+                        // ★★★ FIX: Use saved _perBunkSlotsData first, fall back to skeleton rebuild ★★★
+                        if (result._perBunkSlotsData && Object.keys(result._perBunkSlotsData).length > 0) {
+                            Object.keys(result._perBunkSlotsData).forEach(function(grade) {
+                                if (window.divisionTimes[grade]) {
+                                    window.divisionTimes[grade]._isPerBunk = true;
+                                    window.divisionTimes[grade]._perBunkSlots = result._perBunkSlotsData[grade];
+                                }
+                            });
+                            log('Restored divisionTimes + _perBunkSlots from saved data');
+                        } else {
+                            // Legacy fallback: rebuild from skeleton
+                            var _needsPbs = Object.keys(window.divisionTimes).some(function(g) {
+                                return window.divisionTimes[g] && !window.divisionTimes[g]._perBunkSlots;
+                            });
+                            if (_needsPbs) {
+                                var _skel = result.manualSkeleton || window._autoSkeleton || [];
+                                var _divs = window.divisions || {};
+                                if (_skel.length > 0) {
+                                    Object.keys(window.divisionTimes).forEach(function(grade) {
+                                        var bunks = (_divs[grade]?.bunks || []);
+                                        if (bunks.length === 0) return;
+                                        var perBunkSlots = {};
+                                        bunks.forEach(function(bunk) {
+                                            var bunkBlocks = _skel
+                                                .filter(function(b) { return b.division === grade && String(b._bunk) === String(bunk); })
+                                                .sort(function(a, b) { return a.startMin - b.startMin; });
+                                            if (bunkBlocks.length > 0) {
+                                                perBunkSlots[String(bunk)] = bunkBlocks.map(function(b, i) {
+                                                    return { startMin: b.startMin, endMin: b.endMin, startTime: b.startTime, endTime: b.endTime, type: b.type, event: b.event, slotIndex: i, _bunk: bunk, _autoGenerated: true };
+                                                });
+                                            }
+                                        });
+                                        if (Object.keys(perBunkSlots).length > 0) {
+                                            window.divisionTimes[grade]._perBunkSlots = perBunkSlots;
+                                            window.divisionTimes[grade]._isPerBunk = true;
+                                        }
+                                    });
+                                }
+                            }
+                            log('Restored divisionTimes from localStorage (legacy path)');
+                        }
+                    }
                 }
 
                 return result;
@@ -293,11 +356,15 @@
             window.updateTable = function(...args) {
                 // Ensure divisionTimes is synced before rendering
                 if (!window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
-                    const skeleton = getSkeletonFromAnySource();
-                    const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
-                    
-                    if (skeleton.length > 0) {
-                        window.divisionTimes = window.DivisionTimesSystem?.buildFromSkeleton(skeleton, divisions) || {};
+                    // ★★★ AUTO MODE: Don't rebuild from skeleton — it destroys per-bunk geometry ★★★
+                    var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+                    if (!_isAutoMode) {
+                        const skeleton = getSkeletonFromAnySource();
+                        const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+                        
+                        if (skeleton.length > 0) {
+                            window.divisionTimes = window.DivisionTimesSystem?.buildFromSkeleton(skeleton, divisions) || {};
+                        }
                     }
                 }
 
@@ -488,8 +555,14 @@
 
         log('✅ All patches applied');
 
-        // Auto-rebuild if skeleton exists but divisionTimes is empty
+       // Auto-rebuild if skeleton exists but divisionTimes is empty
         setTimeout(() => {
+            // ★★★ AUTO MODE: Skip rebuild — per-bunk data will be restored from _perBunkSlotsData ★★★
+            var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+            if (_isAutoMode) {
+                log('Auto mode — skipping skeleton rebuild (per-bunk data managed by auto scheduler)');
+                return;
+            }
             const skeleton = getSkeletonFromAnySource();
             if (skeleton.length > 0 && 
                 (!window.divisionTimes || Object.keys(window.divisionTimes).length === 0)) {
