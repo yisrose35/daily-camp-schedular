@@ -61,7 +61,8 @@ let _rainyToggleDebounce = false;
 
 // Constants
 const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
-const PIXELS_PER_MINUTE = 2.5;
+// ★ v14.0: PIXELS_PER_MINUTE is now `var` so zoom controls can update it dynamically
+var PIXELS_PER_MINUTE = parseFloat(localStorage.getItem('campistry_gridZoom')) || 2.5;
 const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
  // ★★★ AUTO BUILDER v2: Check if today uses auto layers ★★★
@@ -3891,13 +3892,19 @@ function getStyles() {
       --da-danger: #ef4444;
     }
     
-    .da-container { display:flex; gap:0; height:calc(100vh - 160px); min-height:300px; background:var(--da-bg); border:1px solid var(--da-border); border-radius:12px; overflow:hidden; }
-    
-    /* Sidebar */
-    .da-sidebar { width:180px; min-width:0; background:var(--da-surface); border-right:1px solid var(--da-border); display:flex; flex-direction:column; }
-    .da-sidebar-header { padding:14px; border-bottom:1px solid var(--da-border); background:var(--da-bg); }
+    .da-container { display:flex; gap:0; height:calc(100vh - 160px); min-height:300px; background:var(--da-bg); border:1px solid var(--da-border); border-radius:12px; overflow:hidden; position:relative; }
+
+    /* ★ v14.0: Collapsible sidebar — overlay mode */
+    .da-sidebar { width:220px; min-width:0; background:var(--da-surface); border-right:1px solid var(--da-border); display:flex; flex-direction:column; position:absolute; left:0; top:0; bottom:0; z-index:50; transform:translateX(0); transition:transform 0.25s ease, box-shadow 0.25s ease; box-shadow:2px 0 12px rgba(0,0,0,0.08); }
+    .da-sidebar.collapsed { transform:translateX(-100%); box-shadow:none; }
+    .da-sidebar-toggle { position:absolute; top:8px; left:8px; z-index:51; width:32px; height:32px; border-radius:8px; border:1px solid var(--da-border); background:var(--da-surface); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:16px; color:var(--da-text2); transition:all 0.2s; box-shadow:0 1px 4px rgba(0,0,0,0.08); }
+    .da-sidebar-toggle:hover { background:var(--da-bg); color:var(--da-text); box-shadow:0 2px 8px rgba(0,0,0,0.12); }
+    .da-sidebar .da-sidebar-toggle { position:relative; top:auto; left:auto; margin:8px 8px 0 auto; }
+    .da-sidebar-header { padding:14px; border-bottom:1px solid var(--da-border); background:var(--da-bg); display:flex; align-items:center; justify-content:space-between; }
     .da-sidebar-header h3 { margin:0; font-size:12px; font-weight:600; color:var(--da-text2); text-transform:uppercase; letter-spacing:0.5px; }
-    
+    .da-sidebar-close { width:28px; height:28px; border-radius:6px; border:none; background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:18px; color:var(--da-text3); transition:all 0.15s; }
+    .da-sidebar-close:hover { background:rgba(0,0,0,0.06); color:var(--da-text); }
+
     /* Palette */
     .da-palette { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:4px; }
     .da-tile { padding:8px 10px; border-radius:6px; cursor:grab; font-size:11px; font-weight:600; transition:transform 0.15s, box-shadow 0.15s; }
@@ -3905,6 +3912,18 @@ function getStyles() {
     .da-tile:active { cursor:grabbing; }
     .da-tile-divider { height:1px; background:var(--da-border); margin:4px 0; }
     .da-tile-label { font-size:9px; color:var(--da-text3); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:4px 0; }
+
+    /* ★ v14.0: Zoom controls — floating bottom-right */
+    .da-zoom-controls { position:sticky; bottom:12px; float:right; margin-right:12px; display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.95); border:1px solid var(--da-border); border-radius:8px; padding:4px 8px; box-shadow:0 2px 8px rgba(0,0,0,0.1); z-index:20; backdrop-filter:blur(4px); }
+    .da-zoom-btn { width:28px; height:28px; border-radius:6px; border:1px solid var(--da-border); background:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:600; color:var(--da-text2); transition:all 0.15s; }
+    .da-zoom-btn:hover { background:var(--da-accent); color:#fff; border-color:var(--da-accent); }
+    .da-zoom-label { font-size:11px; font-weight:600; color:var(--da-text2); min-width:36px; text-align:center; }
+
+    /* ★ v14.0: Fullscreen mode */
+    .da-fullscreen-btn { width:28px; height:28px; border-radius:6px; border:1px solid var(--da-border); background:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:14px; color:var(--da-text2); transition:all 0.15s; margin-left:4px; }
+    .da-fullscreen-btn:hover { background:var(--da-accent); color:#fff; border-color:var(--da-accent); }
+    .da-grid-wrapper.da-fullscreen { position:fixed !important; inset:0 !important; z-index:9999 !important; margin:0 !important; border-radius:0 !important; border:none !important; }
+    .da-grid-wrapper.da-fullscreen .da-zoom-controls { position:fixed; bottom:16px; right:16px; }
     
     /* Main */
     .da-main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
@@ -4244,19 +4263,23 @@ function getStyles() {
 function getMainHTML(useMS) {
   if (useMS) {
     return `
-      <div class="ms-container" style="height:calc(100vh - 160px);">
-        <div class="ms-sidebar">
-          <div class="ms-sidebar-header"><h3>Tile Types</h3></div>
-          <div id="da-palette" class="ms-palette"></div>
+      <div class="da-container" style="height:calc(100vh - 160px);">
+        <button class="da-sidebar-toggle" id="da-sidebar-open" title="Open tile palette" style="${sidebarCollapsed ? '' : 'display:none;'}">&#9776;</button>
+        <div class="da-sidebar${sidebarCollapsed ? ' collapsed' : ''}" id="da-sidebar">
+          <div class="da-sidebar-header">
+            <h3>Tile Types</h3>
+            <button class="da-sidebar-close" id="da-sidebar-close" title="Close palette">&times;</button>
+          </div>
+          <div id="da-palette" class="da-palette"></div>
         </div>
-        
-        <div class="ms-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+
+        <div class="da-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
           <div class="da-subtabs">
             <button class="da-subtab active" data-tab="skeleton">Schedule</button>
             <button class="da-subtab" data-tab="trips">Trips</button>
             <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
             <button class="da-subtab" data-tab="resources">Resources</button>
-           
+
           </div>
           
           <div id="da-pane-skeleton" class="da-pane active">
@@ -4265,15 +4288,27 @@ function getMainHTML(useMS) {
             ${window._daBuilderMode === 'auto' ? `
   <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
   <div id="da-view-auto-layers" style="height:calc(100vh - 300px);overflow:auto;">
-    <div class="ms-grid-wrapper">
+    <div class="da-grid-wrapper" id="da-grid-wrapper">
       <div id="da-skeleton-grid"></div>
+      <div class="da-zoom-controls">
+        <button class="da-zoom-btn" id="da-zoom-out" title="Zoom out">−</button>
+        <span class="da-zoom-label" id="da-zoom-label">100%</span>
+        <button class="da-zoom-btn" id="da-zoom-in" title="Zoom in">+</button>
+        <button class="da-fullscreen-btn" id="da-fullscreen" title="Fullscreen">⛶</button>
+      </div>
     </div>
   </div>
 ` : `
   <div id="da-view-skeleton">
     <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
-    <div class="ms-grid-wrapper">
+    <div class="da-grid-wrapper" id="da-grid-wrapper">
       <div id="da-skeleton-grid"></div>
+      <div class="da-zoom-controls">
+        <button class="da-zoom-btn" id="da-zoom-out" title="Zoom out">−</button>
+        <span class="da-zoom-label" id="da-zoom-label">100%</span>
+        <button class="da-zoom-btn" id="da-zoom-in" title="Zoom in">+</button>
+        <button class="da-fullscreen-btn" id="da-fullscreen" title="Fullscreen">⛶</button>
+      </div>
     </div>
   </div>
 `}          </div>
@@ -4296,13 +4331,18 @@ function getMainHTML(useMS) {
       </div>
     `;
   }
+  const sidebarCollapsed = localStorage.getItem('campistry_sidebarCollapsed') === 'true';
   return `
     <div class="da-container">
-      <div class="da-sidebar">
-        <div class="da-sidebar-header"><h3>Tile Types</h3></div>
+      <button class="da-sidebar-toggle" id="da-sidebar-open" title="Open tile palette" style="${sidebarCollapsed ? '' : 'display:none;'}">&#9776;</button>
+      <div class="da-sidebar${sidebarCollapsed ? ' collapsed' : ''}" id="da-sidebar">
+        <div class="da-sidebar-header">
+          <h3>Tile Types</h3>
+          <button class="da-sidebar-close" id="da-sidebar-close" title="Close palette">&times;</button>
+        </div>
         <div id="da-palette" class="da-palette"></div>
       </div>
-      
+
       <div class="da-main">
         <div class="da-subtabs">
           <button class="da-subtab active" data-tab="skeleton">Schedule</button>
@@ -4310,13 +4350,19 @@ function getMainHTML(useMS) {
           <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
         </div>
-        
+
         <div id="da-pane-skeleton" class="da-pane active">
           <div id="da-rainy-panel"></div>
           <div id="da-displaced-tiles-panel" style="display:none;"></div>
           <div id="da-skeleton-toolbar" class="da-toolbar"></div>
-          <div class="da-grid-wrapper">
+          <div class="da-grid-wrapper" id="da-grid-wrapper">
             <div id="da-skeleton-grid"></div>
+            <div class="da-zoom-controls">
+              <button class="da-zoom-btn" id="da-zoom-out" title="Zoom out">−</button>
+              <span class="da-zoom-label" id="da-zoom-label">100%</span>
+              <button class="da-zoom-btn" id="da-zoom-in" title="Zoom in">+</button>
+              <button class="da-fullscreen-btn" id="da-fullscreen" title="Fullscreen">⛶</button>
+            </div>
           </div>
         </div>
         
@@ -4353,6 +4399,103 @@ function setupSubTabs() {
       activeSubTab = tabId;
       
     };
+  });
+}
+
+// =================================================================
+// ★ v14.0: SIDEBAR TOGGLE + ZOOM + FULLSCREEN
+// =================================================================
+function setupSidebarAndZoom() {
+  // ── Sidebar toggle ──
+  const sidebar = document.getElementById('da-sidebar');
+  const openBtn = document.getElementById('da-sidebar-open');
+  const closeBtn = document.getElementById('da-sidebar-close');
+
+  function collapseSidebar() {
+    if (!sidebar) return;
+    sidebar.classList.add('collapsed');
+    if (openBtn) openBtn.style.display = '';
+    localStorage.setItem('campistry_sidebarCollapsed', 'true');
+  }
+  function expandSidebar() {
+    if (!sidebar) return;
+    sidebar.classList.remove('collapsed');
+    if (openBtn) openBtn.style.display = 'none';
+    localStorage.setItem('campistry_sidebarCollapsed', 'false');
+  }
+
+  if (openBtn) openBtn.onclick = expandSidebar;
+  if (closeBtn) closeBtn.onclick = collapseSidebar;
+
+  // Click outside sidebar to collapse
+  document.addEventListener('click', function(e) {
+    if (!sidebar || sidebar.classList.contains('collapsed')) return;
+    if (sidebar.contains(e.target) || (openBtn && openBtn.contains(e.target))) return;
+    collapseSidebar();
+  });
+
+  // ── Zoom controls ──
+  const DEFAULT_ZOOM = 2.5;
+  const MIN_ZOOM = 1.5;
+  const MAX_ZOOM = 4.0;
+  const ZOOM_STEP = 0.5;
+  var currentZoom = parseFloat(localStorage.getItem('campistry_gridZoom')) || DEFAULT_ZOOM;
+
+  function updateZoomLabel() {
+    var pct = Math.round((currentZoom / DEFAULT_ZOOM) * 100);
+    var labels = document.querySelectorAll('#da-zoom-label');
+    labels.forEach(function(el) { el.textContent = pct + '%'; });
+  }
+
+  function setZoom(newZoom) {
+    currentZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+    localStorage.setItem('campistry_gridZoom', String(currentZoom));
+    updateZoomLabel();
+    // Update the module-level variable and re-render
+    PIXELS_PER_MINUTE = currentZoom;
+    if (typeof renderGrid === 'function') renderGrid();
+  }
+
+  // Bind all zoom buttons (may be multiple in MS vs DA mode)
+  document.querySelectorAll('#da-zoom-in').forEach(function(btn) {
+    btn.onclick = function() { setZoom(currentZoom + ZOOM_STEP); };
+  });
+  document.querySelectorAll('#da-zoom-out').forEach(function(btn) {
+    btn.onclick = function() { setZoom(currentZoom - ZOOM_STEP); };
+  });
+
+  // Initialize zoom
+  window._daCurrentZoom = currentZoom;
+  updateZoomLabel();
+
+  // ── Fullscreen toggle ──
+  document.querySelectorAll('#da-fullscreen').forEach(function(btn) {
+    btn.onclick = function() {
+      var wrapper = btn.closest('.da-grid-wrapper');
+      if (!wrapper) return;
+      var isFS = wrapper.classList.toggle('da-fullscreen');
+      btn.textContent = isFS ? '✕' : '⛶';
+      btn.title = isFS ? 'Exit fullscreen' : 'Fullscreen';
+      if (isFS) collapseSidebar();
+    };
+  });
+
+  // ESC exits fullscreen
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.da-grid-wrapper.da-fullscreen').forEach(function(w) {
+        w.classList.remove('da-fullscreen');
+        var btn = w.querySelector('#da-fullscreen');
+        if (btn) { btn.textContent = '⛶'; btn.title = 'Fullscreen'; }
+      });
+    }
+  });
+
+  // Ctrl+=/- for zoom
+  document.addEventListener('keydown', function(e) {
+    if (!e.ctrlKey && !e.metaKey) return;
+    if (e.key === '=' || e.key === '+') { e.preventDefault(); setZoom(currentZoom + ZOOM_STEP); }
+    if (e.key === '-') { e.preventDefault(); setZoom(currentZoom - ZOOM_STEP); }
   });
 }
 
@@ -4514,6 +4657,7 @@ function init() {
   container.innerHTML = getStyles() + getMainHTML();
 
   setupSubTabs();
+  setupSidebarAndZoom();
   setupKeyboardHandler();
   setupVisibilityHandler();
 

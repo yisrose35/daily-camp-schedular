@@ -41,7 +41,8 @@ let isRepositioning = false;
 let repositionState = null;
 
 // Constants (must match both MS and DA)
-const PIXELS_PER_MINUTE = 2.5;
+// ★ v14.0: Read dynamic zoom from localStorage (set by DA zoom controls)
+var PIXELS_PER_MINUTE = parseFloat(localStorage.getItem('campistry_gridZoom')) || 2.5;
 const SNAP_MINS = 5;
 
 // =================================================================
