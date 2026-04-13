@@ -3551,20 +3551,34 @@
         };
 
         try {
-            const resp = await fetch('https://graphhopper.com/api/1/vrp?key=' + ghKey, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
+            // Retry with backoff for 429 (rate limit, not quota)
+            let resp = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                if (attempt > 0) {
+                    const delay = 2000 * attempt; // 2s, 4s
+                    console.log('[Go] GH: rate limited, retrying in ' + delay + 'ms...');
+                    await new Promise(r => setTimeout(r, delay));
+                }
+                resp = await fetch('https://graphhopper.com/api/1/vrp?key=' + ghKey, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (resp.status !== 429) break;
+            }
 
-            if (resp.status === 429 || resp.status === 402) {
-                console.warn('[Go] GH: quota exhausted (HTTP ' + resp.status + '), switching to VROOM');
+            if (resp.status === 402) {
+                console.warn('[Go] GH: billing quota exhausted, switching to VROOM');
                 _ghQuotaExhausted = true;
                 return null;
             }
 
+            if (resp.status === 429) {
+                console.warn('[Go] GH: rate limited after 3 retries, falling back to VROOM');
+                return null; // don't set _ghQuotaExhausted — next zone can retry
+            }
+
             if (!resp.ok) {
-                // Log the error body for debugging
                 try {
                     const errBody = await resp.text();
                     console.warn('[Go] GH: HTTP ' + resp.status + ' — ' + errBody.substring(0, 200));
@@ -4055,7 +4069,8 @@
 
             // ── Per-zone VROOM fallback (if global failed or not attempted) ──
             if (!globalVROOMSucceeded) {
-            const zonePromises = zoneAssignments.map(async (za) => {
+            // Process zones sequentially (not parallel) to respect GH rate limits
+            const zoneHandlers = zoneAssignments.map(za => async () => {
                 const zoneCampers = za.zone.camperNames.map(n => campers.find(c => c.name === n)).filter(Boolean);
                 if (!zoneCampers.length) return null;
 
@@ -4255,8 +4270,11 @@
                 };
             });
 
-            const zoneResults = await Promise.all(zonePromises);
-            zoneResults.forEach(r => { if (r) allRoutes.push(r); });
+            // Run zones sequentially (not parallel) to avoid GH rate limits
+            for (const handler of zoneHandlers) {
+                const r = await handler();
+                if (r) allRoutes.push(r);
+            }
             } // end if (!globalVROOMSucceeded)
 
             // Ensure all buses have route entries
