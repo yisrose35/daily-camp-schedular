@@ -3750,10 +3750,8 @@ function renderResourceOverridesUI() {
     ${rainyBanner}
     <div class="da-resource-layout">
       <div class="da-resource-list">
-        <h4>Fields</h4>
-        <div id="da-override-fields-list"></div>
-        <h4 style="margin-top:16px;">Special Activities</h4>
-        <div id="da-override-specials-list"></div>
+        <h4>Facilities</h4>
+        <div id="da-override-facilities-list"></div>
         <h4 style="margin-top:16px;">Leagues</h4>
         <div id="da-override-leagues-list"></div>
         <h4 style="margin-top:16px;">Specialty Leagues</h4>
@@ -3795,38 +3793,52 @@ function renderResourceOverridesUI() {
       fullOverrides.leagues.length + ' disabled leagues');
   };
   
-  const fields = masterSettings.app1?.fields || [];
-  const fieldsListEl = document.getElementById("da-override-fields-list");
-  
-  fields.forEach(item => {
-    const isDisabled = currentOverrides.disabledFields.includes(item.name);
-    const isOutdoor = item.rainyDayAvailable !== true;
-    const isRainyDisabled = isRainy && isOutdoor;
-    const hasTimeRules = (currentOverrides.dailyFieldAvailability[item.name] || []).length > 0;
-    
+  // Unified Facilities list (reads window.getFacilities() from facilities.js).
+  // Disabling a facility cascades to any special activities hosted at it so
+  // downstream scheduler logic that still consults disabledSpecials stays correct.
+  const facilitiesList = (typeof window.getFacilities === 'function')
+    ? (window.getFacilities() || [])
+    : [];
+  const legacyFields = masterSettings.app1?.fields || [];
+  const legacySpecials = masterSettings.app1?.specialActivities || [];
+
+  // facility name -> list of special-activity names hosted there
+  const specialsByLocation = {};
+  legacySpecials.forEach(s => {
+    if (s && s.location) {
+      (specialsByLocation[s.location] = specialsByLocation[s.location] || []).push(s.name);
+    }
+  });
+
+  const facilitiesListEl = document.getElementById("da-override-facilities-list");
+  facilitiesList.forEach(fac => {
+    const legacy = legacyFields.find(f => f.name === fac.name) || null;
+    const isDisabled = currentOverrides.disabledFields.includes(fac.name);
+    const isSportsFacility = Array.isArray(fac.usedFor) && fac.usedFor.includes('sports');
+    const isOutdoor = legacy ? (legacy.rainyDayAvailable !== true) : false;
+    const isRainyDisabled = isRainy && isOutdoor && isSportsFacility;
+    const hasTimeRules = (currentOverrides.dailyFieldAvailability[fac.name] || []).length > 0;
+
     const onToggle = (isEnabled) => {
-      if (isEnabled) currentOverrides.disabledFields = currentOverrides.disabledFields.filter(n => n !== item.name);
-      else if (!currentOverrides.disabledFields.includes(item.name)) currentOverrides.disabledFields.push(item.name);
+      const specialsHere = specialsByLocation[fac.name] || [];
+      if (isEnabled) {
+        currentOverrides.disabledFields = currentOverrides.disabledFields.filter(n => n !== fac.name);
+        if (specialsHere.length) {
+          currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(s => !specialsHere.includes(s));
+        }
+      } else {
+        if (!currentOverrides.disabledFields.includes(fac.name)) currentOverrides.disabledFields.push(fac.name);
+        specialsHere.forEach(s => {
+          if (!currentOverrides.disabledSpecials.includes(s)) currentOverrides.disabledSpecials.push(s);
+        });
+      }
       saveOverrides();
       renderResourceOverridesUI();
     };
-    
-    fieldsListEl.appendChild(createResourceToggleItem('field', item.name, !isDisabled, onToggle, isOutdoor, isRainyDisabled, false, hasTimeRules));
-  });
-  
-  const specials = masterSettings.app1?.specialActivities || [];
-  const specialsListEl = document.getElementById("da-override-specials-list");
-  specials.forEach(item => {
-    const isDisabled = currentOverrides.disabledSpecials.includes(item.name);
-    const isRainyOnly = item.rainyDayOnly === true;
-    const hasTimeRules = (currentOverrides.dailyFieldAvailability[item.name] || []).length > 0;
-    
-    const onToggle = (isEnabled) => {
-      if (isEnabled) currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(n => n !== item.name);
-      else if (!currentOverrides.disabledSpecials.includes(item.name)) currentOverrides.disabledSpecials.push(item.name);
-      saveOverrides();
-    };
-    specialsListEl.appendChild(createResourceToggleItem('special', item.name, !isDisabled, onToggle, false, false, isRainyOnly, hasTimeRules));
+
+    facilitiesListEl.appendChild(
+      createResourceToggleItem('facility', fac.name, !isDisabled, onToggle, isOutdoor, isRainyDisabled, false, hasTimeRules)
+    );
   });
   
   const leagues = Object.keys(masterSettings.leaguesByName || {});
@@ -3900,13 +3912,27 @@ function renderOverrideDetailPane() {
   const [type, ...nameParts] = selectedOverrideId.split('-');
   const name = nameParts.join('-');
   
-  if (type === 'field' || type === 'special') {
-    const item = type === 'field' 
-      ? (masterSettings.app1?.fields || []).find(f => f.name === name)
-      : (masterSettings.app1?.specialActivities || []).find(s => s.name === name);
-    
+  if (type === 'facility' || type === 'field' || type === 'special') {
+    // Unified lookup: facility is the primary; fall back to legacy field/special lookups
+    // for backwards compat with any stored selection ids from the old two-list UI.
+    let item = null;
+    let facility = null;
+    if (type === 'facility') {
+      facility = (typeof window.getFacilityByName === 'function') ? window.getFacilityByName(name) : null;
+      item = (masterSettings.app1?.fields || []).find(f => f.name === name)
+          || (masterSettings.app1?.specialActivities || []).find(s => s.name === name)
+          || { name, timeRules: [], activities: [] };
+    } else if (type === 'field') {
+      item = (masterSettings.app1?.fields || []).find(f => f.name === name);
+    } else {
+      item = (masterSettings.app1?.specialActivities || []).find(s => s.name === name);
+    }
+
     if (!item) { paneEl.innerHTML = '<p style="color:#ef4444;">Item not found.</p>'; return; }
-    
+
+    // Treat 'facility' with sports-capable legacy data as a field for rendering the sports section
+    const isFieldLike = (type === 'field') || (type === 'facility' && facility && Array.isArray(facility.usedFor) && facility.usedFor.includes('sports'));
+
     // Get global rules from setup and daily rules
     const globalRules = item.timeRules || [];
     if (!currentOverrides.dailyFieldAvailability[name]) {
@@ -3915,9 +3941,12 @@ function renderOverrideDetailPane() {
     const dailyRules = currentOverrides.dailyFieldAvailability[name];
     
     paneEl.innerHTML = `
-      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;">
+      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         ${name}
-        ${type === 'field' ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
+        ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
+        ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
+          ? facility.usedFor.map(u => `<span class="da-badge" style="background:#eef2ff;color:#3730a3;">${u}</span>`).join('')
+          : ''}
       </h4>
       
       <div class="da-detail-section">
@@ -3943,7 +3972,7 @@ function renderOverrideDetailPane() {
         </div>
       </div>
       
-      ${type === 'field' ? `
+      ${isFieldLike ? `
       <div class="da-detail-section">
         <h5>🏃 Sports Availability</h5>
         <p class="da-section-desc">Disable specific sports on this field for today.</p>
@@ -4009,8 +4038,8 @@ function renderOverrideDetailPane() {
       renderResourceOverridesUI();
     };
     
-    // Render sports checkboxes for fields
-    if (type === 'field') {
+    // Render sports checkboxes for fields (or sports-capable facilities)
+    if (isFieldLike) {
       const sports = item.activities || [];
       const checkboxesEl = document.getElementById('da-sports-checkboxes');
       if (sports.length === 0) {
