@@ -346,6 +346,39 @@
             window.isRainyDay = dailyData.rainyDayMode === true || dailyData.isRainyDay === true;
         const isRainy = !!window.isRainyDay;
 
+        // ── Merge Daily Adjustments time-rule overrides into activityProperties ──
+        // Daily rules (DA Resources tab) override global rules. scheduler_core_main
+        // does this merge in its own generate() path; when runAutoScheduler is
+        // invoked directly (e.g. from DA's Auto-Generate button), we must repeat
+        // the merge here or "unavailable 11-2"-style rules will be ignored.
+        try {
+            let dfa = dailyData.dailyFieldAvailability || {};
+            if (!Object.keys(dfa).length) {
+                const _dk = window.currentScheduleDate || '';
+                if (_dk) {
+                    const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                    if (_stored) {
+                        const _parsed = JSON.parse(_stored);
+                        if (_parsed?.dailyFieldAvailability) dfa = _parsed.dailyFieldAvailability;
+                    }
+                }
+            }
+            let _mergedFieldCount = 0;
+            Object.keys(dfa).forEach(function(fieldName) {
+                const rules = dfa[fieldName];
+                if (!Array.isArray(rules) || rules.length === 0) return;
+                if (!activityProperties[fieldName]) activityProperties[fieldName] = {};
+                activityProperties[fieldName].timeRules = rules;
+                if (!window.activityProperties) window.activityProperties = activityProperties;
+                if (!window.activityProperties[fieldName]) window.activityProperties[fieldName] = activityProperties[fieldName];
+                else window.activityProperties[fieldName].timeRules = rules;
+                _mergedFieldCount++;
+            });
+            if (_mergedFieldCount > 0) log('[STEP 1] Merged ' + _mergedFieldCount + ' daily time-rule override(s) into activityProperties.');
+        } catch (e) {
+            warn('Failed to merge dailyFieldAvailability: ' + e.message);
+        }
+
         const currentDate = window.currentScheduleDate || window.currentDate || '';
         let dayName = 'Monday';
         if (currentDate) {
