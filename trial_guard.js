@@ -500,6 +500,13 @@
         _saveStarterCache();
     };
 
+    // Refresh banner once the app is fully loaded and Supabase is ready
+    window.addEventListener('campistry-orchestrator-ready', function() {
+        if (document.getElementById('starter-plan-banner') && window.refreshStarterBanner) {
+            window.refreshStarterBanner();
+        }
+    }, { once: true });
+
     // Listen for plan-limit events from schedule/camper generation
     window.addEventListener('campistry-plan-limit', function(e) {
         var detail = e.detail || {};
