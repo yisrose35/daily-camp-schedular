@@ -76,7 +76,7 @@ DECLARE
     v_plan_status TEXT;
     v_used_days INT;
     v_max_days INT := 7;
-    v_date_exists BOOLEAN;
+    v_date_exists BOOLEAN := false;
 BEGIN
     SELECT plan_status INTO v_plan_status
     FROM camps WHERE id = p_camp_id;
@@ -92,13 +92,17 @@ BEGIN
       AND schedule_data->'scheduleAssignments' IS NOT NULL
       AND schedule_data->'scheduleAssignments' != '{}'::jsonb;
 
-    -- Check if this specific date already has a generated schedule (re-gen = free)
-    SELECT EXISTS(
-        SELECT 1 FROM daily_schedules
-        WHERE camp_id = p_camp_id AND date_key = p_date_key
-          AND schedule_data->'scheduleAssignments' IS NOT NULL
-          AND schedule_data->'scheduleAssignments' != '{}'::jsonb
-    ) INTO v_date_exists;
+    -- Check if this specific date already has content (safe cast for non-date strings)
+    BEGIN
+        SELECT EXISTS(
+            SELECT 1 FROM daily_schedules
+            WHERE camp_id = p_camp_id AND date_key = p_date_key::date
+              AND schedule_data->'scheduleAssignments' IS NOT NULL
+              AND schedule_data->'scheduleAssignments' != '{}'::jsonb
+        ) INTO v_date_exists;
+    EXCEPTION WHEN others THEN
+        v_date_exists := false;
+    END;
 
     -- If date already exists, always allow (re-generation)
     IF v_date_exists THEN
