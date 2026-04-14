@@ -26,27 +26,32 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 .fta{resize:vertical;min-height:60px}
 .fr{display:flex;gap:10px}.fr>*{flex:1;min-width:0}
 .fr3{display:flex;gap:10px}.fr3>*{flex:1;min-width:0}
+/* Session */
 .ss{border:1.5px solid var(--s200);border-radius:var(--r);padding:12px;cursor:pointer;transition:all .15s;position:relative;margin-bottom:6px}
 .ss:hover{border-color:var(--me);background:rgba(217,119,6,.02)}
 .ss.sel{border-color:var(--me);background:rgba(217,119,6,.04);box-shadow:0 0 0 3px rgba(217,119,6,.1)}
-.ss.sel::after{content:'&#10003;';position:absolute;top:10px;right:12px;width:20px;height:20px;border-radius:50%;background:var(--me);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.ss.sel::after{content:'✓';position:absolute;top:10px;right:12px;width:20px;height:20px;border-radius:50%;background:var(--me);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
 .ss-nm{font-size:.88rem;font-weight:700;color:var(--s800)}
 .ss-meta{font-size:.75rem;color:var(--s500);margin-top:2px}
 .ss-price{font-size:.95rem;font-weight:800;color:var(--me);margin-top:4px}
 .ss-eb{font-size:.72rem;color:var(--ok);font-weight:600;margin-top:2px}
+/* Pay */
 .po{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer;transition:all .15s;margin-bottom:5px}
 .po:hover{border-color:var(--s300)}.po.sel{border-color:var(--me);background:rgba(217,119,6,.04)}
 .po input[type=radio]{accent-color:var(--me)}
 .po-l{font-size:.82rem;font-weight:600;color:var(--s700)}
 .po-d{font-size:.72rem;color:var(--s400)}
+/* Check */
 .ck{display:flex;align-items:flex-start;gap:8px;padding:6px 0}
 .ck input[type=checkbox]{accent-color:var(--me);margin-top:3px;flex-shrink:0}
 .ck label{font-size:.8rem;color:var(--s600);line-height:1.4;cursor:pointer}
+/* Sig */
 .sig-wrap{border:1.5px solid var(--s200);border-radius:var(--r);overflow:hidden;position:relative;background:#fff;touch-action:none}
 .sig-wrap canvas{display:block;width:100%;height:120px;cursor:crosshair}
 .sig-clear{position:absolute;top:6px;right:6px;font-size:.7rem;font-weight:600;color:var(--me);background:rgba(255,255,255,.9);border:1px solid var(--s200);border-radius:4px;padding:2px 8px;cursor:pointer}
 .sig-line{position:absolute;bottom:30px;left:20px;right:20px;border-bottom:1px solid var(--s300)}
 .sig-label{position:absolute;bottom:10px;left:20px;font-size:.65rem;color:var(--s400)}
+/* Upload */
 .up-zone{border:2px dashed var(--s200);border-radius:var(--r);padding:16px;text-align:center;cursor:pointer;transition:border .15s;background:var(--s50)}
 .up-zone:hover,.up-zone.dragover{border-color:var(--me);background:rgba(217,119,6,.03)}
 .up-zone p{font-size:.82rem;font-weight:600;color:var(--s700);margin:4px 0 0}
@@ -54,14 +59,17 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 .up-file{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--s200);border-radius:6px;margin-top:6px;font-size:.78rem}
 .up-file .nm{flex:1;font-weight:600;color:var(--s700)}
 .up-file .rm{color:var(--err);cursor:pointer;font-weight:700;font-size:.7rem;border:none;background:none}
+/* Discount */
 .promo-row{display:flex;gap:6px;align-items:flex-end}
 .promo-row .fi{flex:1}
 .promo-btn{padding:9px 14px;border:none;border-radius:var(--r);background:var(--me);color:#fff;font-weight:700;font-size:.8rem;cursor:pointer;font-family:var(--font);white-space:nowrap}
 .promo-msg{font-size:.78rem;margin-top:4px;font-weight:600}
 .promo-ok{color:var(--ok)}.promo-err{color:var(--err)}
+/* Sibling */
 .sib-card{background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);padding:16px;margin-bottom:10px;position:relative}
 .sib-card h4{font-size:.85rem;font-weight:700;color:var(--me);margin:0 0 10px}
 .sib-rm{position:absolute;top:10px;right:10px;font-size:.75rem;color:var(--err);cursor:pointer;background:none;border:none;font-weight:700}
+/* Submit */
 .sub-btn{width:100%;padding:14px;border:none;border-radius:var(--r);background:var(--me);color:#fff;font-size:1rem;font-weight:700;cursor:pointer;font-family:var(--font);transition:all .15s;margin-top:8px}
 .sub-btn:hover{background:var(--me2);box-shadow:0 4px 12px rgba(217,119,6,.25)}
 .sub-btn:disabled{opacity:.5;cursor:not-allowed}
@@ -78,9 +86,11 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="wrap" id="formWrap">
 <div class="hdr"><h1 id="campTitle">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
 
+<!-- Session -->
 <div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Select Session</div>
 <div id="sessList"></div></div>
 
+<!-- Primary Camper -->
 <div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Camper Information</div>
 <div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi" id="rF"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi" id="rL"></div></div>
 <div class="fr"><div class="fg"><label class="fl">Date of Birth<span class="rq">*</span></label><input type="date" class="fi" id="rDob"></div><div class="fg"><label class="fl">Gender</label><select class="fs" id="rGen"><option value="">—</option><option>Male</option><option>Female</option><option>Non-binary</option><option>Other</option></select></div></div>
@@ -88,11 +98,13 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="fg"><label class="fl">Teacher</label><input class="fi" id="rTch"></div>
 </div>
 
+<!-- Siblings -->
 <div class="cd" id="sibCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>Additional Campers (Siblings)</div>
 <div id="sibList"></div>
 <button type="button" style="padding:8px 14px;border:1px dashed var(--s300);border-radius:var(--r);background:none;color:var(--me);font-weight:600;font-size:.82rem;cursor:pointer;font-family:var(--font);width:100%" onclick="addSibling()">+ Add Another Camper</button>
 </div>
 
+<!-- Parent -->
 <div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Parent / Guardian</div>
 <div class="fr"><div class="fg"><label class="fl">Full Name<span class="rq">*</span></label><input class="fi" id="rPar"></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rRel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
 <div class="fr"><div class="fg"><label class="fl">Phone<span class="rq">*</span></label><input type="tel" class="fi" id="rPh"></div><div class="fg"><label class="fl">Email<span class="rq">*</span></label><input type="email" class="fi" id="rEm"></div></div>
@@ -100,16 +112,19 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="fr"><div class="fg"><label class="fl">Name</label><input class="fi" id="rP2"></div><div class="fg"><label class="fl">Phone</label><input type="tel" class="fi" id="rP2Ph"></div></div>
 </div>
 
+<!-- Address -->
 <div class="cd" id="addrCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>Home Address</div>
 <div class="fg"><label class="fl">Street<span class="rq">*</span></label><input class="fi" id="rSt"></div>
 <div class="fr3"><div class="fg"><label class="fl">City<span class="rq">*</span></label><input class="fi" id="rCi"></div><div class="fg"><label class="fl">State</label><input class="fi" id="rSa" value="NY"></div><div class="fg"><label class="fl">ZIP<span class="rq">*</span></label><input class="fi" id="rZp"></div></div>
 </div>
 
+<!-- Emergency -->
 <div class="cd" id="emCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M15.05 5A5 5 0 0119 8.95M15.05 1A9 9 0 0123 8.94"/><path d="M22 16.92v3a2 2 0 01-2.18 2A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Emergency Contact</div>
 <div class="fr"><div class="fg"><label class="fl">Name<span class="rq">*</span></label><input class="fi" id="rEmN"></div><div class="fg"><label class="fl">Relationship</label><input class="fi" id="rEmR" placeholder="e.g. Uncle"></div></div>
 <div class="fg"><label class="fl">Phone<span class="rq">*</span></label><input type="tel" class="fi" id="rEmPh"></div>
 </div>
 
+<!-- Medical -->
 <div class="cd" id="medCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Medical Information</div>
 <div class="fg"><label class="fl">Allergies</label><input class="fi" id="rAlg" placeholder="Food, medication, environmental"></div>
 <div class="fg"><label class="fl">Medications</label><input class="fi" id="rMed" placeholder="Current medications and dosages"></div>
@@ -117,12 +132,14 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="fg"><label class="fl">Additional Medical Notes</label><textarea class="fta" id="rMdN" placeholder="Asthma, ADHD, anxiety, physical limitations, etc."></textarea></div>
 </div>
 
+<!-- Preferences -->
 <div class="cd" id="prefCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Preferences</div>
 <div class="fr"><div class="fg"><label class="fl">Bunkmate Request</label><input class="fi" id="rBnk" placeholder="Name of camper to be with"></div><div class="fg"><label class="fl">Separation Request</label><input class="fi" id="rSep" placeholder="Name to keep apart"></div></div>
 <div class="fr"><div class="fg"><label class="fl">T-Shirt Size</label><select class="fs" id="rShirt"><option value="">—</option><option>YS</option><option>YM</option><option>YL</option><option>AS</option><option>AM</option><option>AL</option><option>AXL</option></select></div><div class="fg"><label class="fl">How did you hear about us?</label><select class="fs" id="rSrc"><option value="">—</option><option>Returning family</option><option>Friend/referral</option><option>School</option><option>Social media</option><option>Website</option><option>Advertisement</option><option>Other</option></select></div></div>
 <div class="fg"><label class="fl">Additional Notes</label><textarea class="fta" id="rNotes" placeholder="Anything else we should know"></textarea></div>
 </div>
 
+<!-- Documents -->
 <div class="cd" id="docCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Document Uploads</div>
 <p style="font-size:.8rem;color:var(--s500);margin-bottom:10px">Upload any required documents (immunization records, health forms, insurance card, etc.)</p>
 <div class="up-zone" id="upZone"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--me)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="15"/></svg><p>Drop files here or click to browse</p><small>PDF, JPG, PNG — max 5MB each</small></div>
@@ -130,8 +147,10 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div id="upFiles"></div>
 </div>
 
+<!-- Payment -->
 <div class="cd" id="payCard"><div class="ct"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Payment</div>
 <div id="priceDisplay" style="margin-bottom:10px"></div>
+<!-- Promo -->
 <div class="fg"><label class="fl">Promo / Discount Code</label>
 <div class="promo-row"><input class="fi" id="promoIn" placeholder="Enter code"><button class="promo-btn" onclick="applyPromo()">Apply</button></div>
 <div id="promoMsg" class="promo-msg" style="display:none"></div></div>
@@ -144,9 +163,11 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <label class="po" onclick="selPay(this,'payment_plan')"><input type="radio" name="pm" value="payment_plan"><div><div class="po-l">Payment Plan</div><div class="po-d">Monthly installments</div></div></label>
 </div></div>
 
+<!-- Custom Questions (hidden by default, shown when config has questions) -->
 <div class="cd" id="customQCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Additional Information</div>
 <div id="cqContent"></div></div>
 
+<!-- Signature -->
 <div class="cd" id="sigCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Agreement & Signature</div>
 <div class="ck"><input type="checkbox" id="ag1"><label for="ag1">I certify that all information provided is accurate and complete.</label></div>
 <div class="ck"><input type="checkbox" id="ag2"><label for="ag2">I understand this is an application and does not guarantee enrollment.</label></div>
@@ -161,9 +182,10 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="pwr">Powered by <a href="index.html">Campistry</a></div>
 </div>
 
+<!-- Success -->
 <div class="wrap" id="successWrap" style="display:none">
 <div class="success">
-<div style="font-size:48px">&#127881;</div>
+<div style="font-size:48px">🎉</div>
 <h2>Application Submitted!</h2>
 <p id="successTxt">Thank you for registering. We'll review your application and be in touch shortly.</p>
 <div style="margin-top:16px;padding:14px;background:var(--s50);border-radius:var(--r);text-align:left">
@@ -176,13 +198,14 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="pwr" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
 </div>
 
+<!-- Status Tracker Page (shown via ?status=ID) -->
 <div class="wrap" id="statusWrap" style="display:none">
 <div class="success" id="statusContent"></div>
 <div class="pwr" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
 </div>
 
 <!-- Cloud sync (loads silently — if scripts not found, falls back to localStorage only) -->
-<script>if(window.location.protocol==='file:')document.write('<script src="supabase-js-local.js"><\/script>');else document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');</script>
+<script src="supabase-js@2.js" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
 <script src="supabase_client.js" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
 <script src="integration_hooks.js" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
 
@@ -211,7 +234,7 @@ function showStatus(id){
         var e=(g.campistryMe?.enrollments||{})[id];
         if(!e){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Application Not Found</h2><p>Please check the link and try again.</p>';return}
         var sc=e.status==='enrolled'?'color:var(--ok)':e.status==='accepted'?'color:#3B82F6':e.status==='waitlisted'?'color:var(--me)':e.status==='declined'?'color:var(--err)':'color:var(--s500)';
-        var h='<div style="font-size:48px;margin-bottom:8px">'+(e.status==='enrolled'?'&#9989;':e.status==='accepted'?'&#128077;':e.status==='waitlisted'?'&#9203;':e.status==='declined'?'&#10060;':'&#128203;')+'</div>';
+        var h='<div style="font-size:48px;margin-bottom:8px">'+(e.status==='enrolled'?'✅':e.status==='accepted'?'👍':e.status==='waitlisted'?'⏳':e.status==='declined'?'❌':'📋')+'</div>';
         h+='<h2 style="'+sc+'">Application Status: '+e.status.charAt(0).toUpperCase()+e.status.slice(1)+'</h2>';
         h+='<p style="font-size:.9rem;color:var(--s700);margin-top:8px"><strong>'+esc(e.camperName)+'</strong></p>';
         h+='<div style="text-align:left;margin-top:14px;padding:12px;background:var(--s50);border-radius:var(--r);font-size:.82rem;color:var(--s600)">';
@@ -224,25 +247,29 @@ function showStatus(id){
     }catch(ex){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Error</h2><p>Unable to load status.</p>'}
 }
 
+// ─── LOAD DATA ───────────────────────────────────────────────
 function load(){
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
         var me=g.campistryMe||{};
         sessions=me.sessions||[];
-        promoCodes=me.promoCodes||(me.enrollSettings&&me.enrollSettings.promoCodes)||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
-        var cn=g.campName||g.app1?.campName||g.camp_name||'';
+        promoCodes=me.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
+        var cn=g.campName||g.app1?.campName||'';
         if(cn){document.getElementById('campTitle').textContent=cn+' Registration';document.getElementById('campNm').textContent=cn}
 
+        // Apply form config
         var fc=me.formConfig;
         if(fc){
             if(fc.welcomeMessage){document.getElementById('campNm').textContent=fc.welcomeMessage}
             if(fc.instructions){var instrEl=document.createElement('p');instrEl.style.cssText='font-size:.85rem;color:var(--s600);text-align:center;margin-top:6px;line-height:1.5';instrEl.textContent=fc.instructions;document.querySelector('.hdr').appendChild(instrEl)}
+            // Section toggles
             var secMap={address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
             if(fc.sections){
                 Object.entries(fc.sections).forEach(function([key,cfg]){
                     if(!cfg.enabled&&secMap[key]){var el=document.getElementById(secMap[key]);if(el)el.style.display='none'}
                 });
             }
+            // Custom questions
             if(fc.customQuestions&&fc.customQuestions.length){
                 var cqEl=document.getElementById('customQCard');
                 if(cqEl){
@@ -295,6 +322,7 @@ function updatePrice(){
     var base=s.tuition;var total=base;var lines=[];
     var today=new Date().toISOString().split('T')[0];
     if(s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline)){total=s.earlyBird;lines.push('<div style="color:var(--ok);font-size:.78rem">Early bird pricing applied</div>')}
+    if(siblings.length>0){var sibDiscount=siblings.length*0;/* sibling discount handled by promo */}
     if(discount.active){
         if(discount.pct){var d=Math.round(total*discount.pct/100);total-=d;lines.push('<div style="color:var(--ok);font-size:.78rem">'+esc(discount.label)+': -'+fm(d)+'</div>')}
         if(discount.amt){total-=discount.amt;lines.push('<div style="color:var(--ok);font-size:.78rem">'+esc(discount.label)+': -'+fm(discount.amt)+'</div>')}
@@ -304,6 +332,7 @@ function updatePrice(){
     el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--s50);border-radius:var(--r);border:1px solid var(--s200)"><div><div style="font-size:.78rem;color:var(--s500)">'+perCamper+' camper'+(perCamper>1?'s':'')+'</div><div style="font-size:1.1rem;font-weight:800;color:var(--me)">'+fm(total*(perCamper))+'</div>'+lines.join('')+'</div><div style="text-align:right;font-size:.75rem;color:var(--s400)">'+fm(total)+' per camper</div></div>';
 }
 
+// ─── PROMO CODES ─────────────────────────────────────────────
 window.applyPromo=function(){
     var code=v('promoIn').toUpperCase();
     var msg=document.getElementById('promoMsg');
@@ -311,11 +340,13 @@ window.applyPromo=function(){
     var p=promoCodes[code];
     if(!p){msg.textContent='Invalid promo code';msg.className='promo-msg promo-err';msg.style.display='block';discount={active:false};updatePrice();return}
     discount={active:true,code:code,pct:p.pct||0,amt:p.amt||0,label:p.label||code};
-    msg.textContent='\u2713 '+discount.label+' applied!';msg.className='promo-msg promo-ok';msg.style.display='block';
+    msg.textContent='✓ '+discount.label+' applied!';msg.className='promo-msg promo-ok';msg.style.display='block';
     updatePrice();
 };
 
+// ─── SIBLINGS ────────────────────────────────────────────────
 window.addSibling=function(){
+    var id=siblings.length;
     siblings.push({first:'',last:'',dob:'',gender:'',school:'',schoolGrade:'',teacher:''});
     renderSiblings();updatePrice();
 };
@@ -331,6 +362,7 @@ function renderSiblings(){
     }).join('');
 }
 
+// ─── UPLOADS ─────────────────────────────────────────────────
 var upZone=document.getElementById('upZone'),upIn=document.getElementById('upInput');
 upZone.onclick=function(){upIn.click()};
 upZone.ondragover=function(e){e.preventDefault();upZone.classList.add('dragover')};
@@ -349,10 +381,11 @@ window.removeUpload=function(i){uploads.splice(i,1);renderUploads()};
 function renderUploads(){
     document.getElementById('upFiles').innerHTML=uploads.map(function(u,i){
         var sz=u.size<1024?u.size+'B':u.size<1048576?Math.round(u.size/1024)+'KB':Math.round(u.size/1048576*10)/10+'MB';
-        return'<div class="up-file"><span style="font-size:14px">&#128196;</span><span class="nm">'+esc(u.name)+'</span><span style="color:var(--s400);font-size:.72rem">'+sz+'</span><button class="rm" onclick="removeUpload('+i+')">&#10005;</button></div>';
+        return'<div class="up-file"><span style="font-size:14px">📄</span><span class="nm">'+esc(u.name)+'</span><span style="color:var(--s400);font-size:.72rem">'+sz+'</span><button class="rm" onclick="removeUpload('+i+')">✕</button></div>';
     }).join('');
 }
 
+// ─── SIGNATURE ───────────────────────────────────────────────
 function initSig(){
     var canvas=document.getElementById('sigCanvas');
     var wrap=document.getElementById('sigWrap');
@@ -367,9 +400,11 @@ function initSig(){
 window.clearSig=function(){sigCtx.clearRect(0,0,sigCtx.canvas.width,sigCtx.canvas.height);sigHasData=false};
 initSig();
 
+// ─── SUBMIT ──────────────────────────────────────────────────
 window.submitApp=function(){
     var err=document.getElementById('formErr');err.style.display='none';
 
+    // Read sibling data from DOM
     document.querySelectorAll('.sib-f').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].first=el.value.trim()});
     document.querySelectorAll('.sib-l').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].last=el.value.trim()});
     document.querySelectorAll('.sib-dob').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].dob=el.value});
@@ -378,6 +413,7 @@ window.submitApp=function(){
     document.querySelectorAll('.sib-gr').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].schoolGrade=el.value.trim()});
     document.querySelectorAll('.sib-tch').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].teacher=el.value.trim()});
 
+    // Validate
     var first=v('rF'),last=v('rL'),dob=v('rDob'),par=v('rPar'),ph=v('rPh'),em=v('rEm'),st=v('rSt'),ci=v('rCi'),zp=v('rZp'),emN=v('rEmN'),emPh=v('rEmPh');
     if(!first||!last)return showErr('Enter camper first and last name.');
     if(!dob)return showErr('Enter date of birth.');
@@ -394,6 +430,7 @@ window.submitApp=function(){
     var sigData=document.getElementById('sigCanvas').toDataURL();
     var sessObj=sessions.find(function(s){return s.name===selSess})||{};
 
+    // Build applications (one per camper)
     var appIds=[];
     var allCampers=[{first:first,last:last,dob:dob,gender:v('rGen'),school:v('rSch'),schoolGrade:v('rSchGr'),teacher:v('rTch')}].concat(siblings);
 
@@ -405,6 +442,7 @@ window.submitApp=function(){
         allCampers.forEach(function(cam){
             var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
             appIds.push(id);
+            // Read custom question answers
             var customAnswers={};
             document.querySelectorAll('.cqInput').forEach(function(el){
                 var qi=el.dataset.q;if(qi!=null&&el.value)customAnswers['q'+qi]=el.value.trim();
@@ -414,6 +452,7 @@ window.submitApp=function(){
                 if(!customAnswers['q'+qi])customAnswers['q'+qi]=[];
                 if(Array.isArray(customAnswers['q'+qi]))customAnswers['q'+qi].push(el.value);
             });
+            // Read formConfig custom question labels for the answers
             var g2=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
             var cqLabels=(g2.campistryMe?.formConfig?.customQuestions||[]).map(function(q){return q.label});
 
@@ -443,31 +482,44 @@ window.submitApp=function(){
         var json=JSON.stringify(g);
         localStorage.setItem('campGlobalSettings_v1',json);
         localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
+        // Also update unified state key if it exists
         try{localStorage.setItem('CAMPISTRY_UNIFIED_STATE',json)}catch(ex){}
 
+        // Verify the write stuck after 500ms
         var expectedCount=Object.keys(g.campistryMe.enrollments).length;
         setTimeout(function(){
             try{
                 var check=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
                 var actualCount=Object.keys((check.campistryMe?.enrollments)||{}).length;
                 if(actualCount<expectedCount){
-                    console.warn('[Register] Save was overwritten — re-saving');
+                    console.warn('[Register] ⚠ Save was overwritten — re-saving');
                     localStorage.setItem('campGlobalSettings_v1',json);
                     localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
+                }else{
+                    console.log('[Register] ✓ Save verified:',actualCount,'enrollments in storage');
                 }
             }catch(ex){}
         },500);
 
+        // Trigger cloud sync if available
+        // integration_hooks.js exposes saveGlobalSettings
         if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
+            console.log('[Register] Syncing to cloud via integration_hooks');
             window.saveGlobalSettings('campistryMe',g.campistryMe);
         }else if(typeof window.forceSyncToCloud==='function'){
+            console.log('[Register] Syncing to cloud via forceSyncToCloud');
             window.forceSyncToCloud();
+        }else{
+            // If no cloud sync is available on this page, try loading Supabase directly
+            // The admin will pick up the data from localStorage when they open Me
+            console.log('[Register] No cloud sync available on this page — saved locally. Data will sync when admin opens Campistry Me.');
         }
     }catch(e){
         console.error('[Register] Save error:',e);
         return showErr('Error submitting. Please try again.');
     }
 
+    // Show success
     document.getElementById('formWrap').style.display='none';
     document.getElementById('successWrap').style.display='block';
     var names=allCampers.map(function(c){return c.first+' '+c.last});
