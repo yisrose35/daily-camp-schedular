@@ -4200,8 +4200,10 @@
         save();
         const elapsed = Math.round((Date.now() - _routeProgStart) / 1000);
         const elapsedStr = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm ' + (elapsed % 60) + 's';
-        showProgress('Routes Complete', 100, 'Finished in ' + elapsedStr);
-        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); renderStaff(); }, 2000);
+        const totalCampers = allShiftResults.reduce((s, sr) => s + sr.camperCount, 0);
+        const totalBuses = allShiftResults.reduce((s, sr) => s + sr.routes.length, 0);
+        showProgressDone('Routes Complete', totalBuses + ' buses, ' + totalCampers + ' campers — finished in ' + elapsedStr);
+        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); renderStaff(); }, 3000);
     }
 
     // =========================================================================
@@ -6361,6 +6363,10 @@
     function showProgress(label, pct, detail, etaDone, etaTotal) {
         const c = document.getElementById('routeProgressCard');
         c.style.display = '';
+        // Add active state on first call
+        if (!c.className.includes('progress-card-active') && !c.className.includes('progress-card-done')) {
+            c.className = c.className.replace(/progress-card-\w+/g, '').trim() + ' progress-card-active';
+        }
         document.getElementById('routeProgressLabel').textContent = label;
         document.getElementById('routeProgressPct').textContent = Math.round(pct) + '%';
         document.getElementById('routeProgressBar').style.width = pct + '%';
@@ -6379,8 +6385,20 @@
             etaEl.textContent = etaDone === 0 ? 'Estimating...' : '';
         }
     }
+    function showProgressDone(label, summary, isError) {
+        const c = document.getElementById('routeProgressCard');
+        c.style.display = '';
+        c.className = c.className.replace(/progress-card-\w+/g, '').trim() + (isError ? ' progress-card-error' : ' progress-card-done');
+        document.getElementById('routeProgressLabel').textContent = label;
+        document.getElementById('routeProgressPct').textContent = '100%';
+        document.getElementById('routeProgressBar').style.width = '100%';
+        document.getElementById('routeProgressDetail').textContent = summary || '';
+        document.getElementById('routeProgressETA').textContent = '';
+    }
     function hideProgress() {
-        document.getElementById('routeProgressCard').style.display = 'none';
+        const c = document.getElementById('routeProgressCard');
+        c.style.display = 'none';
+        c.className = c.className.replace(/progress-card-\w+/g, '').trim();
         document.getElementById('routeProgressDetail').textContent = '';
         document.getElementById('routeProgressETA').textContent = '';
     }
