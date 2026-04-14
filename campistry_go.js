@@ -2287,7 +2287,6 @@
         if (!names.length) return;
 
         progressStart('Validating Addresses');
-        const provider = 'Nominatim';
         let validated = 0, corrected = 0, geocoded = 0, failed = 0;
 
         for (let i = 0; i < names.length; i++) {
@@ -2295,9 +2294,19 @@
             const a = D.addresses[name];
             if (!a.street) continue;
 
+            // Use Census (JSONP — no CORS issues) as primary validator
             let result = null;
-            const nom = await nominatimValidate(a.street, a.city, a.state, a.zip);
-            if (nom && nom.lat && nom.lng) result = { street: nom.street, city: nom.city, state: nom.state, zip: nom.zip, lat: nom.lat, lng: nom.lng, confidence: nom.confidence || 0.6, source: 'nominatim' };
+            const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
+            if (cen && cen.lat && cen.lng) {
+                result = { lat: cen.lat, lng: cen.lng, confidence: cen.confidence, source: 'census', zip: cen.zip || '' };
+            }
+            // Fallback to ORS if Census fails
+            if (!result) {
+                const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
+                if (ors && ors.lat && ors.lng) {
+                    result = { lat: ors.lat, lng: ors.lng, confidence: ors.confidence, source: 'ors', zip: ors.zip || '' };
+                }
+            }
 
             if (result && result.lat && result.lng) {
                 if (!validateGeocode(result.lat, result.lng, a.street, name, result)) {
@@ -2305,28 +2314,9 @@
                     a._geocodeWarning = 'Location invalid — check address';
                     failed++;
                 } else {
-                    const newStreet = result.street || a.street;
-                    const newCity = result.city || a.city;
-                    const newState = result.state || a.state;
-                    const newZip = result.zip || a.zip;
-
-                    const origNorm = (a.street + a.city + a.state + a.zip).toLowerCase().replace(/[^a-z0-9]/g, '');
-                    const newNorm = (newStreet + newCity + newState + newZip).toLowerCase().replace(/[^a-z0-9]/g, '');
-                    const changed = origNorm !== newNorm;
-
-                    if (changed) {
-                        a._originalStreet = a.street;
-                        a._originalCity = a.city;
-                        a._originalState = a.state;
-                        a._originalZip = a.zip;
-                        a.street = newStreet;
-                        a.city = newCity;
-                        if (newState.length === 2) a.state = newState.toUpperCase();
-                        if (newZip && /^\d{5}/.test(newZip)) a.zip = newZip.substring(0, 5);
-                        corrected++;
-                        console.log('[Go] Address corrected: ' + name + ' → ' + [newStreet, newCity, a.state, a.zip].join(', '));
-                    }
-
+                    // Never overwrite the user's address — geocoders return variants
+                    // like "Village of Cedarhurst" instead of "Cedarhurst" which break
+                    // subsequent geocoding. Just validate and set coordinates.
                     a.lat = result.lat;
                     a.lng = result.lng;
                     a.geocoded = true;
@@ -2347,13 +2337,13 @@
 
             if ((i + 1) % 5 === 0 || i === names.length - 1) {
                 renderAddresses();
-                progressUpdate(i + 1, names.length, provider + ' · ' + validated + ' verified, ' + corrected + ' corrected');
+                progressUpdate(i + 1, names.length, 'Census · ' + validated + ' verified');
             }
-            if (i < names.length - 1) await new Promise(r => setTimeout(r, 1100)); // Nominatim rate limit
+            if (i < names.length - 1) await new Promise(r => setTimeout(r, 300)); // Census has no rate limit
         }
 
         save(); renderAddresses(); updateStats();
-        const summary = validated + ' verified, ' + corrected + ' corrected, ' + geocoded + ' geocoded' + (failed > 0 ? ', ' + failed + ' unverified' : '');
+        const summary = validated + ' verified, ' + geocoded + ' geocoded' + (failed > 0 ? ', ' + failed + ' unverified' : '');
         progressEnd(summary, failed > 0);
 
         // For any that couldn't be found, try the full pipeline as backup
