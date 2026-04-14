@@ -3731,6 +3731,7 @@
             return { busId: b.id, name: b.name, color: b.color || '#10b981', capacity: Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs), monitor: mon, counselors: couns };
         });
 
+        _routeProgStart = Date.now();
         let campCoords = null;
         if (D.setup.campAddress) {
             showProgress('Geocoding camp...', 5);
@@ -3765,7 +3766,8 @@
 
         for (let si = 0; si < shifts.length; si++) {
             const shift = shifts[si];
-            const pctBase = (si / shifts.length) * 100;
+            const pctPerShift = 100 / shifts.length;
+            const pctBase = si * pctPerShift;
 
             const shiftBusIds = shift.assignedBuses?.length ? shift.assignedBuses : vehicles.map(v => v.busId);
             const shiftVehicles = shiftBusIds.map(bid => vehicles.find(v => v.busId === bid)).filter(Boolean);
@@ -3871,10 +3873,14 @@
             const key = getApiKey();
 
             let routes = [];
-            for (const zone of greedyZones) {
+            const totalZones = greedyZones.length;
+            for (let zi = 0; zi < greedyZones.length; zi++) {
+                const zone = greedyZones[zi];
                 const zoneStops = zone.stopIndices.map(si => allStops[si]);
                 const v = shiftVehicles.find(sv => sv.busId === zone.busId) || shiftVehicles[0];
                 if (!zoneStops.length || !v) continue;
+                const busProgress = pctBase + 50 + Math.round((zi / totalZones) * (pctPerShift - 55));
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing routes...', busProgress, 'Bus ' + (zi + 1) + ' of ' + totalZones + ' — ' + v.name + ' (' + zoneStops.length + ' stops)', zi, totalZones);
 
                 // Find farthest stop from camp (used for start/end anchoring)
                 let fIdx = 0, fDist = 0;
@@ -4182,8 +4188,10 @@
         _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
         D.savedRoutes = allShiftResults;
         save();
-        showProgress('Done!', 100);
-        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); renderStaff(); }, 400);
+        const elapsed = Math.round((Date.now() - _routeProgStart) / 1000);
+        const elapsedStr = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm ' + (elapsed % 60) + 's';
+        showProgress('Routes Complete', 100, 'Finished in ' + elapsedStr);
+        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); renderStaff(); }, 2000);
     }
 
     // =========================================================================
@@ -6338,8 +6346,33 @@
         return { num: 0, street: firstPart };
     }
 
-    function showProgress(label, pct) { const c = document.getElementById('routeProgressCard'); c.style.display = ''; document.getElementById('routeProgressLabel').textContent = label; document.getElementById('routeProgressPct').textContent = Math.round(pct) + '%'; document.getElementById('routeProgressBar').style.width = pct + '%'; }
-    function hideProgress() { document.getElementById('routeProgressCard').style.display = 'none'; }
+    let _routeProgStart = 0;
+    function showProgress(label, pct, detail, etaDone, etaTotal) {
+        const c = document.getElementById('routeProgressCard');
+        c.style.display = '';
+        document.getElementById('routeProgressLabel').textContent = label;
+        document.getElementById('routeProgressPct').textContent = Math.round(pct) + '%';
+        document.getElementById('routeProgressBar').style.width = pct + '%';
+        const detailEl = document.getElementById('routeProgressDetail');
+        const etaEl = document.getElementById('routeProgressETA');
+        detailEl.textContent = detail || '';
+        if (typeof etaDone === 'number' && typeof etaTotal === 'number' && etaDone > 0 && etaDone < etaTotal) {
+            const elapsed = (Date.now() - _routeProgStart) / 1000;
+            const rate = etaDone / elapsed;
+            const remaining = (etaTotal - etaDone) / rate;
+            if (remaining < 60) etaEl.textContent = '~' + Math.ceil(remaining) + 's remaining';
+            else etaEl.textContent = '~' + Math.ceil(remaining / 60) + 'm ' + Math.ceil(remaining % 60) + 's remaining';
+        } else if (pct >= 100) {
+            etaEl.textContent = '';
+        } else {
+            etaEl.textContent = etaDone === 0 ? 'Estimating...' : '';
+        }
+    }
+    function hideProgress() {
+        document.getElementById('routeProgressCard').style.display = 'none';
+        document.getElementById('routeProgressDetail').textContent = '';
+        document.getElementById('routeProgressETA').textContent = '';
+    }
 
     // =========================================================================
     // RENDER ROUTE RESULTS
