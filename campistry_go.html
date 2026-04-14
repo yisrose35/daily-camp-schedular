@@ -118,6 +118,21 @@
                         <div class="form-group"><label class="form-label">Max Walk (ft)</label><input type="number" class="form-input" id="maxWalkDistance" value="500" min="100" max="2640" step="50"><span class="form-hint">For optimized stops mode</span></div>
                     </div>
                 </div>
+                <div class="setup-card">
+                    <h3>Data Source</h3>
+                    <p class="muted">Where camper data comes from</p>
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem 0">
+                        <div>
+                            <label class="form-label" style="margin-bottom:2px">Standalone Mode</label>
+                            <span class="form-hint" style="display:block">Use Go's own data only — don't connect to Campistry Me</span>
+                        </div>
+                        <label class="go-toggle">
+                            <input type="checkbox" id="standaloneToggle" onchange="CampistryGo.toggleStandalone(this.checked)">
+                            <span class="go-toggle-track"></span>
+                            <span class="go-toggle-thumb"></span>
+                        </label>
+                    </div>
+                </div>
                 <div class="setup-card" style="padding:0;overflow:hidden;">
                     <button type="button" onclick="this.parentElement.classList.toggle('advanced-open')" style="width:100%;padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;background:none;border:none;cursor:pointer;font:inherit;">
                         <div><h3 style="margin:0;">Advanced Settings</h3><p class="muted" style="margin:0;">API keys &amp; map configuration</p></div>

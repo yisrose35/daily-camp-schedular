@@ -47,6 +47,14 @@
 }
 .nav-back:hover { color: var(--brand-600); }
 /* Old nav-go-logo / nav-app-switch styles replaced by quick-switch-bar in campistry-unified.css */
+
+/* Toggle switch */
+.go-toggle { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+.go-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.go-toggle-track { position: absolute; cursor: pointer; inset: 0; background: var(--gray-200); border-radius: 24px; transition: background .2s; }
+.go-toggle-thumb { position: absolute; left: 2px; bottom: 2px; width: 20px; height: 20px; background: #fff; border-radius: 50%; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.15); pointer-events: none; }
+.go-toggle input:checked + .go-toggle-track { background: var(--brand-500); }
+.go-toggle input:checked ~ .go-toggle-thumb { transform: translateX(20px); }
 .sync-badge {
     display: flex; align-items: center; gap: .375rem;
     padding: .3rem .75rem;

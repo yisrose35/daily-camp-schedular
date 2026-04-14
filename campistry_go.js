@@ -1150,7 +1150,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
@@ -1225,19 +1225,21 @@
     let _goStandaloneRoster = {};
 
     function getRoster() {
-        // 1. Try Campistry Me roster first
-        const g = readCampistrySettings();
-        const meRoster = g?.app1?.camperRoster || {};
-        if (Object.keys(meRoster).length > 0) {
-            let needsSave = false, maxId = 0;
-            Object.values(meRoster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
-            let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
-            if (maxId >= nextId) nextId = maxId + 1;
-            Object.entries(meRoster).forEach(([n, c]) => { if (!c.camperId) { c.camperId = nextId; nextId++; needsSave = true; } });
-            if (needsSave) {
-                try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = meRoster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextCamperId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
+        // 1. If not standalone, try Campistry Me roster first
+        if (!D.setup.standaloneMode) {
+            const g = readCampistrySettings();
+            const meRoster = g?.app1?.camperRoster || {};
+            if (Object.keys(meRoster).length > 0) {
+                let needsSave = false, maxId = 0;
+                Object.values(meRoster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
+                let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
+                if (maxId >= nextId) nextId = maxId + 1;
+                Object.entries(meRoster).forEach(([n, c]) => { if (!c.camperId) { c.camperId = nextId; nextId++; needsSave = true; } });
+                if (needsSave) {
+                    try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = meRoster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextCamperId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
+                }
+                return meRoster;
             }
-            return meRoster;
         }
         // 2. Fall back to Go's standalone roster (from CSV import)
         if (Object.keys(_goStandaloneRoster).length > 0) return _goStandaloneRoster;
@@ -1255,10 +1257,12 @@
         return addrRoster;
     }
     function getStructure() {
-        // Try Me's camp structure first
-        const g = readCampistrySettings();
-        const meStruct = g?.campStructure || {};
-        if (Object.keys(meStruct).length) return meStruct;
+        // If not standalone, try Me's camp structure first
+        if (!D.setup.standaloneMode) {
+            const g = readCampistrySettings();
+            const meStruct = g?.campStructure || {};
+            if (Object.keys(meStruct).length) return meStruct;
+        }
 
         // Build structure from Go's standalone data (CSV import or addresses)
         const roster = getRoster();
@@ -1304,6 +1308,12 @@
         document.getElementById('orsApiKey').value = s.orsApiKey || '';
         if (document.getElementById('ghApiKey')) document.getElementById('ghApiKey').value = s.graphhopperKey || '';
         if (document.getElementById('mapboxToken')) document.getElementById('mapboxToken').value = s.mapboxToken || '';
+        if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
+    }
+    function toggleStandalone(on) {
+        D.setup.standaloneMode = !!on;
+        save();
+        console.log('[Go] Standalone mode: ' + (on ? 'ON — using Go data only' : 'OFF — connected to Campistry Me'));
     }
     function saveSetup() {
         const el = id => document.getElementById(id);
@@ -7204,7 +7214,7 @@
     // PUBLIC API
     // =========================================================================
     window.CampistryGo = {
-        saveSetup, testApiKey,
+        saveSetup, testApiKey, toggleStandalone,
         openBusModal, saveBus, editBus, deleteBus, deleteBusFromModal, _pickColor, quickCreateBuses,
         addShift, deleteShift, toggleShiftDiv, updateShiftTime, renameShift,
         toggleShiftGrade, setShiftGradeMode, toggleShiftBus, setAllShiftBuses,
