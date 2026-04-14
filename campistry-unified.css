@@ -544,6 +544,22 @@ body {
 .gap-3 { gap: var(--space-3); } .gap-4 { gap: var(--space-4); }
 
 /* ==================== QUICK-SWITCH NAV ==================== */
+
+/* ── Dashboard back link (shared across Me / Flow / Go) ── */
+.nav-back {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--slate-500);
+    text-decoration: none;
+    font-family: var(--font-body, 'DM Sans', sans-serif);
+    font-weight: 500;
+    font-size: 0.8125rem;
+    transition: color 0.15s ease;
+    flex-shrink: 0;
+}
+.nav-back:hover { color: var(--slate-700); }
+
 /* Glassmorphic floating pill bar for switching between Me / Flow / Go */
 
 .quick-switch-bar {
