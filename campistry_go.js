@@ -1081,9 +1081,9 @@
         // 3. If camp location is known, reject if too far
         if (_campCoordsCache) {
             const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, lat, lng);
-            // Hard limit: 25 miles (day camp service area — tightened from 50)
-            if (dist > 25) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 25) — likely wrong location');
+            // Hard limit: 50 miles (covers spread-out camper bases)
+            if (dist > 50) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 50) — likely wrong location');
                 return false;
             }
         }
