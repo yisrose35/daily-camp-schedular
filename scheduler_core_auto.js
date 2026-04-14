@@ -865,7 +865,25 @@
             const disabled = [...new Set([...baseDisabled, ...dailyDisabled])];
             // Also update window.currentDisabledFields so other modules see it
             window.currentDisabledFields = disabled;
-            const dailyDisabledSports = dailyData.dailyDisabledSportsByField || ovNested.dailyDisabledSportsByField || {};
+            let dailyDisabledSports = dailyData.dailyDisabledSportsByField || ovNested.dailyDisabledSportsByField || {};
+            // Fallback to dedicated localStorage key (survives cloud overwrites)
+            if (!Object.keys(dailyDisabledSports).length) {
+                try {
+                    const dateKey = window.currentScheduleDate || '';
+                    if (dateKey) {
+                        const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+                        if (stored) {
+                            const parsed = JSON.parse(stored);
+                            if (parsed?.dailyDisabledSportsByField) dailyDisabledSports = parsed.dailyDisabledSportsByField;
+                        }
+                    }
+                } catch(e) {}
+            }
+            const _disabledSportKeys = Object.keys(dailyDisabledSports).filter(k => (dailyDisabledSports[k] || []).length);
+            if (_disabledSportKeys.length) {
+                log('[STEP 1] Daily sport-on-field restrictions: ' +
+                    _disabledSportKeys.map(k => k + '→[' + dailyDisabledSports[k].join(',') + ']').join('; '));
+            }
 
             fields.forEach(field => {
                 if (disabled.includes(field.name)) return;
