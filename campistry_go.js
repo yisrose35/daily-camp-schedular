@@ -2128,10 +2128,9 @@
             const matchedAddr = (best.matchedAddress || '').toUpperCase();
             // Extract ZIP from matched address
             const matchedZip = (matchedAddr.match(/\b(\d{5})\b/) || [])[1] || '';
-            let score = 0.75;
+            let score = 0.85; // Census is highly accurate for US residential
             const zipMatch = !!(zip && matchedZip && zip.substring(0, 5) === matchedZip);
             if (zipMatch) score += 0.1;
-            score -= 0.05;
             return {
                 lat, lng, confidence: Math.min(score, 1), source: 'census',
                 zipMatch, precision: 'interpolated',
@@ -2163,7 +2162,7 @@
             const co = best.geometry.coordinates;
             if (isNaN(co[0]) || isNaN(co[1])) return null;
             const props = best.properties || {};
-            let score = Math.min((props.confidence || 0.5), 1) * 0.7;
+            let score = Math.min((props.confidence || 0.5), 1);
             const zipMatch = !!(zip && props.postalcode && props.postalcode === zip);
             if (zipMatch) score += 0.1;
             else if (zip && props.postalcode && props.postalcode !== zip) score -= 0.15;
