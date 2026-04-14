@@ -2240,9 +2240,7 @@
                 q: q, format: 'json', addressdetails: '1',
                 countrycodes: 'us', limit: '1'
             });
-            const resp = await fetch('https://nominatim.openstreetmap.org/search?' + params.toString(), {
-                headers: { 'User-Agent': 'CampistryGo/1.0' }
-            });
+            const resp = await fetch('https://nominatim.openstreetmap.org/search?' + params.toString());
             if (!resp.ok) return null;
             const results = await resp.json();
             if (!results.length) return null;
