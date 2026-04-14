@@ -2362,25 +2362,31 @@
 
         progressStart('Geocoding Addresses');
         const hasMapbox = !!getMapboxToken();
+        const hasOrs = !!getApiKey();
         let totalOk = 0, totalFail = 0;
-        let globalDone = 0;
-        const globalTotal = todo.length;
+
+        // Calculate total work across all passes: every address goes through pass 1,
+        // then we estimate ~30% need pass 2, ~10% need pass 3 (adjusted as we go)
+        let processed = 0;
+        let totalWork = todo.length; // start with pass 1 count, grows as passes are added
+        let currentPass = 'Mapbox';
 
         // ── Pass 1: Mapbox v6 (best accuracy, ~600 free req/min) ──
         if (hasMapbox) {
+            currentPass = 'Mapbox';
             let mbOk = 0;
             for (let i = 0; i < todo.length; i++) {
                 const name = todo[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) { globalDone++; continue; }
+                if (!a?.street || a.geocoded) { processed++; continue; }
                 const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
                 if (mb && validateGeocode(mb.lat, mb.lng, a.street, name)) {
                     applyBestGeocode(a, mb, name);
                     mbOk++;
                 }
-                globalDone++;
+                processed++;
                 if ((i + 1) % 5 === 0 || i === todo.length - 1) {
                     renderAddresses(); updateStats();
-                    progressUpdate(globalDone, globalTotal, 'Pass 1: Mapbox · ' + mbOk + ' geocoded');
+                    progressUpdate(processed, totalWork, 'Pass 1: Mapbox · ' + mbOk + ' geocoded');
                 }
                 if (i < todo.length - 1) await new Promise(r => setTimeout(r, 120));
             }
@@ -2391,22 +2397,21 @@
         // ── Pass 2: Census for any Mapbox missed (free, unlimited) ──
         const stillNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
         if (stillNeeded.length > 0) {
-            // Reset progress for pass 2 with remaining count
-            _progStartTime = Date.now();
-            globalDone = 0;
+            totalWork += stillNeeded.length; // extend the total so bar keeps growing
+            currentPass = 'Census';
             let cenOk = 0;
             for (let i = 0; i < stillNeeded.length; i++) {
                 const name = stillNeeded[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) { globalDone++; continue; }
+                if (!a?.street || a.geocoded) { processed++; continue; }
                 const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
                 if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
                     applyBestGeocode(a, cen, name);
                     cenOk++;
                 }
-                globalDone++;
+                processed++;
                 if ((i + 1) % 5 === 0 || i === stillNeeded.length - 1) {
                     renderAddresses(); updateStats();
-                    progressUpdate(globalDone, stillNeeded.length, 'Pass 2: Census · ' + cenOk + ' geocoded');
+                    progressUpdate(processed, totalWork, 'Pass 2: Census · ' + cenOk + ' geocoded');
                 }
                 if (i < stillNeeded.length - 1) await new Promise(r => setTimeout(r, 300));
             }
@@ -2416,13 +2421,13 @@
 
         // ── Pass 3: ORS for any still remaining ──
         const finalNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
-        if (finalNeeded.length > 0 && getApiKey()) {
-            _progStartTime = Date.now();
-            globalDone = 0;
+        if (finalNeeded.length > 0 && hasOrs) {
+            totalWork += finalNeeded.length; // extend total again
+            currentPass = 'ORS';
             let orsOk = 0;
             for (let i = 0; i < finalNeeded.length; i++) {
                 const name = finalNeeded[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) { globalDone++; continue; }
+                if (!a?.street || a.geocoded) { processed++; continue; }
                 const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
                 if (ors && validateGeocode(ors.lat, ors.lng, a.street, name)) {
                     applyBestGeocode(a, ors, name);
@@ -2431,10 +2436,10 @@
                     a._geocodeWarning = 'All providers failed — verify address';
                     totalFail++;
                 }
-                globalDone++;
+                processed++;
                 if ((i + 1) % 3 === 0 || i === finalNeeded.length - 1) {
                     renderAddresses(); updateStats();
-                    progressUpdate(globalDone, finalNeeded.length, 'Pass 3: ORS · ' + orsOk + ' geocoded');
+                    progressUpdate(processed, totalWork, 'Pass 3: ORS · ' + orsOk + ' geocoded');
                 }
                 if (i < finalNeeded.length - 1) await new Promise(r => setTimeout(r, 1500));
             }
