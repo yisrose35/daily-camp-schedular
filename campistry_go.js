@@ -6227,12 +6227,10 @@
         async function runQuery(query, label) {
             for (const url of endpoints) {
                 try {
+                    // Use GET to avoid CORS preflight (POST with custom content-type triggers it)
+                    const getUrl = url + '?data=' + encodeURIComponent(query);
                     console.log('[Go] Overpass ' + label + ': trying ' + url.split('//')[1].split('/')[0] + '...');
-                    const resp = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: 'data=' + encodeURIComponent(query)
-                    });
+                    const resp = await fetch(getUrl);
                     if (resp.status === 504 || resp.status === 429 || resp.status === 503) {
                         console.warn('[Go] Overpass ' + label + ' ' + resp.status + ' at ' + url + ', trying next mirror...');
                         continue;
@@ -6241,7 +6239,9 @@
                         console.warn('[Go] Overpass ' + label + ' HTTP ' + resp.status + ' at ' + url);
                         continue;
                     }
-                    return await resp.json();
+                    const data = await resp.json();
+                    console.log('[Go] Overpass ' + label + ': got ' + (data?.elements?.length || 0) + ' elements');
+                    return data;
                 } catch (e) {
                     console.warn('[Go] Overpass ' + label + ' error at ' + url + ':', e.message);
                     continue;
