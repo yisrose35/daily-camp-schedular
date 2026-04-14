@@ -239,26 +239,7 @@
         if (n < 2) return null;
         const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
 
-        // ── Try Mapbox Matrix API ──
-        const mbToken = getMBToken();
-        if (mbToken && n <= 25) {
-            try {
-                const url = 'https://api.mapbox.com/directions-matrix/v1/mapbox/driving/' + coordStr + '?annotations=duration&access_token=' + mbToken;
-                const resp = await fetch(url);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    if (data.code === 'Ok' && data.durations) {
-                        console.log('[Go] Matrix: Mapbox (' + n + ' points)');
-                        _cacheFromMatrix(coords, data.durations);
-                        return data.durations;
-                    }
-                }
-            } catch (e) {
-                console.warn('[Go] Mapbox Matrix failed:', e.message);
-            }
-        }
-
-        // ── Fallback: OSRM with retry ──
+        // ── Primary: OSRM (free, no API key) ──
         const osrmResult = await fetchOSRMWithRetry(coordStr, 3);
         if (osrmResult) {
             _cacheFromMatrix(coords, osrmResult);
@@ -913,65 +894,47 @@
     }
 
     // =========================================================================
-    // TRAFFIC-AWARE ETAs
-    // Uses Mapbox Directions API with depart_at for traffic-predicted
-    // leg durations. Falls back to OSRM matrix → haversine.
+    // ETAs — OSRM directions + smart rush hour buffer
+    // Free, no API key. Adds 15-20% buffer during rush hours.
     // =========================================================================
 
-    async function fetchTrafficLegs(orderedStops, campLat, campLng, departureTimeMin, isArrival) {
-        const token = getMapboxToken();
-        if (!token || !orderedStops.length) return null;
+    function getRushHourMultiplier(departureTimeMin) {
+        // Morning rush: 7:00-9:00 AM (420-540 min) → 1.20 (20% slower)
+        // Afternoon rush: 3:00-6:00 PM (900-1080 min) → 1.15 (15% slower)
+        // Off-peak → 1.0 (no adjustment)
+        if (departureTimeMin >= 420 && departureTimeMin <= 540) return 1.20;
+        if (departureTimeMin >= 900 && departureTimeMin <= 1080) return 1.15;
+        return 1.0;
+    }
 
-        // Build waypoint string: camp → stops (dismissal) or stops → camp (arrival)
+    async function fetchTrafficLegs(orderedStops, campLat, campLng, departureTimeMin, isArrival) {
+        if (!orderedStops.length) return null;
+
         const coords = [];
         if (!isArrival) coords.push(campLng + ',' + campLat);
         orderedStops.forEach(s => { if (s.lat && s.lng) coords.push(s.lng + ',' + s.lat); });
         if (isArrival) coords.push(campLng + ',' + campLat);
 
-        if (coords.length < 2 || coords.length > 25) return null; // Mapbox limit
-
-        // Convert departure minutes to ISO 8601 for today
-        const now = new Date();
-        const depHours = Math.floor(departureTimeMin / 60);
-        const depMins = Math.round(departureTimeMin % 60);
-        const depDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), depHours, depMins);
-        // If the time has already passed today, use tomorrow
-        if (depDate < now) depDate.setDate(depDate.getDate() + 1);
-        const isoTime = depDate.toISOString().replace(/\.\d{3}Z$/, 'Z');
+        if (coords.length < 2) return null;
+        // OSRM has no hard waypoint limit but chunk if >100
+        if (coords.length > 100) return null;
 
         try {
-            const url = 'https://api.mapbox.com/directions/v5/mapbox/driving/' +
-                coords.join(';') +
-                '?annotations=duration&overview=false' +
-                '&depart_at=' + isoTime +
-                '&access_token=' + token;
-
+            const url = 'https://router.project-osrm.org/route/v1/driving/' +
+                coords.join(';') + '?annotations=duration&overview=false&steps=false';
             const resp = await fetch(url);
-            if (!resp.ok) {
-                if (resp.status === 422) {
-                    // depart_at may not be supported on free tier — try without
-                    console.warn('[Go] Traffic: depart_at not supported, trying static');
-                    const fallbackUrl = 'https://api.mapbox.com/directions/v5/mapbox/driving/' +
-                        coords.join(';') + '?annotations=duration&overview=false&access_token=' + token;
-                    const fb = await fetch(fallbackUrl);
-                    if (!fb.ok) return null;
-                    const fbData = await fb.json();
-                    return extractLegDurations(fbData);
-                }
-                return null;
-            }
+            if (!resp.ok) return null;
             const data = await resp.json();
-            return extractLegDurations(data);
+            if (!data.routes?.[0]?.legs) return null;
+
+            const multiplier = getRushHourMultiplier(departureTimeMin);
+            const legs = data.routes[0].legs.map(leg => Math.round(leg.duration * multiplier));
+            if (multiplier > 1) console.log('[Go] ETAs: rush hour buffer ×' + multiplier.toFixed(2) + ' applied');
+            return legs;
         } catch (e) {
-            console.warn('[Go] Traffic legs error:', e.message);
+            console.warn('[Go] OSRM legs error:', e.message);
             return null;
         }
-    }
-
-    function extractLegDurations(data) {
-        if (!data.routes?.[0]?.legs) return null;
-        // Each leg = segment between consecutive waypoints, duration in seconds
-        return data.routes[0].legs.map(leg => leg.duration); // seconds
     }
 
     // =========================================================================
@@ -2185,21 +2148,10 @@
         const a = D.addresses[name];
         if (!a?.street) return false;
 
-        // Run providers in priority order, stop early if we get a high-confidence hit
+        // Run free providers in priority order, stop early if high-confidence
         const results = [];
 
-        // 1. Mapbox v6 (best accuracy, structured input)
-        const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
-        if (mb && validateGeocode(mb.lat, mb.lng, a.street, name)) {
-            results.push(mb);
-            // If Mapbox returns high confidence with ZIP match, use it immediately
-            if (mb.confidence >= 0.85 && mb.zipMatch !== false) {
-                applyBestGeocode(a, mb, name);
-                return true;
-            }
-        }
-
-        // 2. Census (free, good for US residential)
+        // 1. Census (free, unlimited, excellent for US residential)
         const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
         if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
             results.push(cen);
@@ -2298,8 +2250,7 @@
         if (!names.length) return;
 
         progressStart('Validating Addresses');
-        const hasMapbox = !!getMapboxToken();
-        const provider = hasMapbox ? 'Mapbox' : 'OpenStreetMap';
+        const provider = 'Nominatim';
         let validated = 0, corrected = 0, geocoded = 0, failed = 0;
 
         for (let i = 0; i < names.length; i++) {
@@ -2308,14 +2259,8 @@
             if (!a.street) continue;
 
             let result = null;
-            if (hasMapbox) {
-                const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
-                if (mb) result = { street: mb.street, city: mb.city, state: mb.state, zip: mb.zip, lat: mb.lat, lng: mb.lng, confidence: mb.confidence, source: 'mapbox' };
-            }
-            if (!result) {
-                const nom = await nominatimValidate(a.street, a.city, a.state, a.zip);
-                if (nom && nom.lat && nom.lng) result = { street: nom.street, city: nom.city, state: nom.state, zip: nom.zip, lat: nom.lat, lng: nom.lng, confidence: nom.confidence || 0.6, source: 'nominatim' };
-            }
+            const nom = await nominatimValidate(a.street, a.city, a.state, a.zip);
+            if (nom && nom.lat && nom.lng) result = { street: nom.street, city: nom.city, state: nom.state, zip: nom.zip, lat: nom.lat, lng: nom.lng, confidence: nom.confidence || 0.6, source: 'nominatim' };
 
             if (result && result.lat && result.lng) {
                 if (!validateGeocode(result.lat, result.lng, a.street, name)) {
@@ -2367,7 +2312,7 @@
                 renderAddresses();
                 progressUpdate(i + 1, names.length, provider + ' · ' + validated + ' verified, ' + corrected + ' corrected');
             }
-            if (i < names.length - 1) await new Promise(r => setTimeout(r, hasMapbox ? 120 : 1100));
+            if (i < names.length - 1) await new Promise(r => setTimeout(r, 1100)); // Nominatim rate limit
         }
 
         save(); renderAddresses(); updateStats();
@@ -2387,7 +2332,6 @@
         if (!todo.length) return;
 
         progressStart('Geocoding Addresses');
-        const hasMapbox = !!getMapboxToken();
         const hasOrs = !!getApiKey();
         let totalOk = 0, totalFail = 0;
 
@@ -2397,33 +2341,8 @@
         let totalWork = todo.length; // start with pass 1 count, grows as passes are added
         let currentPass = 'Mapbox';
 
-        // ── Pass 1: Mapbox v6 (best accuracy, ~600 free req/min) ──
-        if (hasMapbox) {
-            currentPass = 'Mapbox';
-            let mbOk = 0;
-            for (let i = 0; i < todo.length; i++) {
-                const name = todo[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) { processed++; continue; }
-                const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
-                if (mb && validateGeocode(mb.lat, mb.lng, a.street, name)) {
-                    applyBestGeocode(a, mb, name);
-                    mbOk++;
-                }
-                processed++;
-                if ((i + 1) % 5 === 0 || i === todo.length - 1) {
-                    renderAddresses(); updateStats();
-                    progressUpdate(processed, totalWork, 'Pass 1: Mapbox · ' + mbOk + ' geocoded');
-                }
-                if (i < todo.length - 1) await new Promise(r => setTimeout(r, 120));
-            }
-            totalOk += mbOk;
-            save();
-        }
-
-        // ── Pass 2: Census for any Mapbox missed (free, unlimited) ──
-        const stillNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
-        if (stillNeeded.length > 0) {
-            totalWork += stillNeeded.length; // extend the total so bar keeps growing
+        // ── Pass 1: Census (free, unlimited, US residential) ──
+        if (todo.length > 0) {
             currentPass = 'Census';
             let cenOk = 0;
             for (let i = 0; i < stillNeeded.length; i++) {
@@ -2437,7 +2356,7 @@
                 processed++;
                 if ((i + 1) % 5 === 0 || i === stillNeeded.length - 1) {
                     renderAddresses(); updateStats();
-                    progressUpdate(processed, totalWork, 'Pass 2: Census · ' + cenOk + ' geocoded');
+                    progressUpdate(processed, totalWork, 'Pass 1: Census · ' + cenOk + ' geocoded');
                 }
                 if (i < stillNeeded.length - 1) await new Promise(r => setTimeout(r, 300));
             }
@@ -2445,7 +2364,7 @@
             save();
         }
 
-        // ── Pass 3: ORS for any still remaining ──
+        // ── Pass 2: ORS for any still remaining ──
         const finalNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
         if (finalNeeded.length > 0 && hasOrs) {
             totalWork += finalNeeded.length; // extend total again
@@ -2465,7 +2384,7 @@
                 processed++;
                 if ((i + 1) % 3 === 0 || i === finalNeeded.length - 1) {
                     renderAddresses(); updateStats();
-                    progressUpdate(processed, totalWork, 'Pass 3: ORS · ' + orsOk + ' geocoded');
+                    progressUpdate(processed, totalWork, 'Pass 2: ORS · ' + orsOk + ' geocoded');
                 }
                 if (i < finalNeeded.length - 1) await new Promise(r => setTimeout(r, 500));
             }
@@ -5691,40 +5610,11 @@
         const specialStops = route.stops.filter(s => s.isMonitor || s.isCounselor);
         const nn = stops.length; if (nn < 2) { toast('Not enough stops'); return; }
 
-        // ── Try Mapbox Optimization API ──
+        // ── Route optimization: local TSP with directional bias ──
         let optimizedOrder = null;
         let matrix = null;
-        const mbTok = getMBToken();
 
-        if (nn <= 11 && mbTok) {
-            // Build coords for Mapbox Optimize
-            let coords, sourceP, destP, roundtripP;
-            if (isArrival) {
-                coords = stops.map(s => s.lng + ',' + s.lat).join(';') + ';' + campLng + ',' + campLat;
-                sourceP = 'any'; destP = 'last'; roundtripP = 'false';
-            } else if (reoptNeedsReturn) {
-                coords = campLng + ',' + campLat + ';' + stops.map(s => s.lng + ',' + s.lat).join(';');
-                sourceP = 'first'; destP = 'any'; roundtripP = 'true';
-            } else {
-                coords = campLng + ',' + campLat + ';' + stops.map(s => s.lng + ',' + s.lat).join(';');
-                sourceP = 'first'; destP = 'any'; roundtripP = 'false';
-            }
-            try {
-                const url = 'https://api.mapbox.com/optimized-trips/v1/mapbox/driving/' + coords + '?source=' + sourceP + '&destination=' + destP + '&roundtrip=' + roundtripP + '&access_token=' + mbTok;
-                const resp = await fetch(url);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    if (data.code === 'Ok' && data.waypoints?.length) {
-                        const offset = isArrival ? 0 : 1;
-                        const stopWps = data.waypoints.slice(offset, offset + nn);
-                        optimizedOrder = stopWps.map((wp, origIdx) => ({ origIdx, wpIdx: wp.waypoint_index })).sort((a, b) => a.wpIdx - b.wpIdx).map(s => s.origIdx);
-                        console.log('[Go] Re-optimize via Mapbox Optimize');
-                    }
-                }
-            } catch (e) { console.warn('[Go] Mapbox Optimize failed:', e.message); }
-        }
-
-        // ── Fallback: local TSP with directional bias ──
+        // ── Local TSP solver ──
         if (!optimizedOrder) {
             const coordsArr = [{ lat: campLat, lng: campLng }];
             stops.forEach(s => coordsArr.push({ lat: s.lat, lng: s.lng }));
@@ -6735,7 +6625,7 @@
                     if (mapNeedsReturn && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
                     (async function(coordStr, color, ck, temp, dash, w, o) {
                         try {
-                            const url = mbToken ? 'https://api.mapbox.com/directions/v5/mapbox/driving/' + coordStr + '?overview=full&geometries=geojson&access_token=' + mbToken : 'https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true';
+                            const url = 'https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true';
                             const resp = await fetch(url); if (resp.ok) { const data = await resp.json(); const coords = data.routes?.[0]?.geometry?.coordinates; if (coords) { const pts = coords.map(c => [c[1], c[0]]); if (pts.length > 0 && _map) { _routeGeomCache[ck] = pts; _map.removeLayer(temp); const idx = _mapLayers.indexOf(temp); if (idx >= 0) _mapLayers.splice(idx, 1); const road = L.polyline(pts, { color, weight: w, opacity: o, dashArray: dash }).addTo(_map); road._goRouteKey = ck; _mapLayers.push(road); } } }
                         } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
                     })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
