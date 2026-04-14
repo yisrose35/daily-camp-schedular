@@ -462,12 +462,45 @@
         _renderStarterBanner();
     };
 
-    // Listen for plan-limit events from schedule/camper saves
+    // Listen for plan-limit events from schedule/camper generation
     window.addEventListener('campistry-plan-limit', function(e) {
         var detail = e.detail || {};
         console.log('⏱️ [Trial] Plan limit reached:', detail.type, detail);
-        openUpgradeEmail();
+        showPlanLimitPopup(detail);
     });
+
+    function showPlanLimitPopup(detail) {
+        var existing = document.getElementById('plan-limit-popup');
+        if (existing) existing.remove();
+
+        var msg = '';
+        if (detail.type === 'schedule') {
+            msg = 'You\'ve used all <strong>' + (detail.max || 7) + ' schedule days</strong> included in the Starter Plan.';
+        } else if (detail.type === 'camper') {
+            msg = 'You\'ve reached the <strong>' + (detail.max || 100) + ' camper limit</strong> included in the Starter Plan.';
+        } else {
+            msg = 'You\'ve reached a Starter Plan limit.';
+        }
+
+        var popup = document.createElement('div');
+        popup.id = 'plan-limit-popup';
+        popup.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(15,23,42,0.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;animation:trialFadeIn 0.2s ease-out;';
+        popup.innerHTML = '<div style="background:white;border-radius:16px;padding:40px 36px;max-width:420px;width:90%;text-align:center;box-shadow:0 25px 60px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">' +
+            '<div style="font-size:2.5rem;margin-bottom:12px;">&#x1F6A8;</div>' +
+            '<h2 style="margin:0 0 12px;font-size:1.3rem;color:#1e293b;">Generation Limit Reached</h2>' +
+            '<p style="color:#475569;font-size:0.95rem;line-height:1.5;margin:0 0 20px;">' + msg + '</p>' +
+            '<p style="color:#64748b;font-size:0.85rem;line-height:1.5;margin:0 0 24px;">Contact the Campistry office to upgrade your plan for unlimited access.</p>' +
+            '<div style="display:flex;gap:10px;justify-content:center;">' +
+            '<button id="plan-limit-upgrade-btn" style="background:linear-gradient(135deg,#2563eb,#1d4ed8);color:white;border:none;padding:10px 24px;border-radius:8px;font-size:0.9rem;font-weight:600;cursor:pointer;">Contact Us</button>' +
+            '<button id="plan-limit-close-btn" style="background:#f1f5f9;color:#475569;border:none;padding:10px 24px;border-radius:8px;font-size:0.9rem;font-weight:500;cursor:pointer;">Close</button>' +
+            '</div></div>';
+
+        document.body.appendChild(popup);
+
+        document.getElementById('plan-limit-close-btn').addEventListener('click', function() { popup.remove(); });
+        document.getElementById('plan-limit-upgrade-btn').addEventListener('click', function() { popup.remove(); openUpgradeEmail(); });
+        popup.addEventListener('click', function(ev) { if (ev.target === popup) popup.remove(); });
+    }
 
     // =========================================================================
     // UI: LOCKOUT OVERLAY

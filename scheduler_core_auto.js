@@ -286,6 +286,26 @@
         log('═══════════════════════════════════════════════════════════');
         log('AUTO SCHEDULER v' + VERSION + ' — WHAT→WHEN→WHERE Engine');
         log('═══════════════════════════════════════════════════════════');
+
+        // ★★★ STARTER PLAN: Check schedule day limit BEFORE generating ★★★
+        try {
+            var _client = window.CampistryDB?.getClient?.() || window.supabase;
+            var _campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('campistry_camp_id');
+            var _dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            if (_client && _campId) {
+                var _limitRes = await _client.rpc('check_schedule_limit', { p_camp_id: _campId, p_date_key: _dateKey });
+                if (!_limitRes.error && _limitRes.data && _limitRes.data.allowed === false) {
+                    log('BLOCKED by starter plan limit: ' + JSON.stringify(_limitRes.data));
+                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                        detail: { type: 'schedule', used: _limitRes.data.used, max: _limitRes.data.max }
+                    }));
+                    return false;
+                }
+            }
+        } catch (_e) {
+            warn('Schedule limit check failed, proceeding: ' + _e.message);
+        }
+
         const startTime = Date.now();
         const warnings = [];
 
