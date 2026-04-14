@@ -6000,16 +6000,8 @@
 
     let _intersectionCache = null;
 
-    try {
-        const cached = localStorage.getItem('campistry_go_intersections');
-        if (cached) {
-            const parsed = JSON.parse(cached);
-            if (parsed.intersections?.length && parsed.timestamp > Date.now() - 7 * 24 * 60 * 60 * 1000) {
-                _intersectionCache = parsed.intersections;
-                console.log('[Go] Loaded ' + _intersectionCache.length + ' cached intersections (saved ' + new Date(parsed.timestamp).toLocaleDateString() + ')');
-            }
-        }
-    } catch (_) {}
+    // Clear any stale intersection cache and always fetch fresh
+    try { localStorage.removeItem('campistry_go_intersections'); } catch (_) {}
 
     async function createCornerStops(campers) {
         applyRideWith(campers);
@@ -6299,21 +6291,26 @@
             intersections.push({ lat: node.lat, lng: node.lng, name: arr[0] + ' & ' + arr[1], streets: arr });
         });
 
-        console.log('[Go] Overpass: ' + intersections.length + ' intersections found');
+        console.log('[Go] Overpass: ' + intersections.length + ' intersections found' + (intersections.length > 0 ? ' (e.g. ' + intersections[0].name + ')' : ''));
         return intersections.length > 0 ? intersections : null;
     }
 
     function normalizeStreet(name) {
         if (!name) return '';
         let s = name.toLowerCase().trim();
-        const abbrevs = [
-            [/\bst\b\.?/g, 'street'], [/\bave?\b\.?/g, 'avenue'], [/\bblvd\b\.?/g, 'boulevard'],
-            [/\bdr\b\.?/g, 'drive'], [/\brd\b\.?/g, 'road'], [/\bct\b\.?/g, 'court'],
-            [/\bln\b\.?/g, 'lane'], [/\bpl\b\.?/g, 'place'], [/\bpkwy\b\.?/g, 'parkway'],
-            [/\bhwy\b\.?/g, 'highway'], [/\bcir\b\.?/g, 'circle'], [/\bter\b\.?/g, 'terrace'],
-            [/\bn\b\.?/g, 'north'], [/\bs\b\.?/g, 'south'], [/\be\b\.?/g, 'east'], [/\bw\b\.?/g, 'west'],
+        // Suffixes — only match at end of string
+        const suffixes = [
+            [/\bst\.?$/g, 'street'], [/\bave?\.?$/g, 'avenue'], [/\bblvd\.?$/g, 'boulevard'],
+            [/\bdr\.?$/g, 'drive'], [/\brd\.?$/g, 'road'], [/\bct\.?$/g, 'court'],
+            [/\bln\.?$/g, 'lane'], [/\bpl\.?$/g, 'place'], [/\bpkwy\.?$/g, 'parkway'],
+            [/\bhwy\.?$/g, 'highway'], [/\bcir\.?$/g, 'circle'], [/\bter\.?$/g, 'terrace'],
         ];
-        abbrevs.forEach(([rx, rep]) => { s = s.replace(rx, rep); });
+        // Directionals — only match at start of string
+        const dirs = [
+            [/^n\.?\s/g, 'north '], [/^s\.?\s/g, 'south '], [/^e\.?\s/g, 'east '], [/^w\.?\s/g, 'west '],
+        ];
+        dirs.forEach(([rx, rep]) => { s = s.replace(rx, rep); });
+        suffixes.forEach(([rx, rep]) => { s = s.replace(rx, rep); });
         return s.replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
     }
 
