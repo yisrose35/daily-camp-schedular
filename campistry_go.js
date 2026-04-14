@@ -1871,6 +1871,13 @@
             };
         });
 
+        // Filter by active mode (arrival/dismissal)
+        const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
+        rows = rows.filter(r => {
+            const a = D.addresses[r.name];
+            return !a || a[modeKey] !== false; // show if flag missing (default true) or true
+        });
+
         // Filter
         const filter = (document.getElementById('addressSearch')?.value || '').toLowerCase().trim();
         if (filter) rows = rows.filter(r => r.name.toLowerCase().includes(filter) || r.first.toLowerCase().includes(filter) || r.last.toLowerCase().includes(filter) || r.division.toLowerCase().includes(filter) || r.grade.toLowerCase().includes(filter) || r.bunk.toLowerCase().includes(filter) || r.street.toLowerCase().includes(filter) || r.city.toLowerCase().includes(filter));
@@ -2777,11 +2784,20 @@
     function parseLine(line) { const r = []; let cur = '', inQ = false; for (let i = 0; i < line.length; i++) { const ch = line[i]; if (inQ) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; } else cur += ch; } else { if (ch === '"') inQ = true; else if (ch === ',' || ch === '\t') { r.push(cur); cur = ''; } else cur += ch; } } r.push(cur); return r; }
     function updateStats() {
         const roster = getRoster();
-        const addrCount = Object.keys(D.addresses).length;
-        const rosterCount = Object.keys(roster).length;
-        // Use whichever is larger — roster from Me or addresses in Go
-        const c = Math.max(rosterCount, addrCount);
-        let wA = 0; Object.keys(D.addresses).forEach(n => { if (D.addresses[n]?.street) wA++; });
+        const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
+        // Count only campers active in current mode
+        const modeNames = new Set();
+        Object.keys(roster).forEach(n => {
+            const a = D.addresses[n];
+            if (!a || a[modeKey] !== false) modeNames.add(n);
+        });
+        Object.keys(D.addresses).forEach(n => {
+            const a = D.addresses[n];
+            if (a[modeKey] !== false) modeNames.add(n);
+        });
+        const c = modeNames.size;
+        let wA = 0;
+        modeNames.forEach(n => { if (D.addresses[n]?.street) wA++; });
         document.getElementById('statBuses').textContent = D.buses.length;
         document.getElementById('statCampers').textContent = c;
         document.getElementById('statShifts').textContent = D.shifts.length;
