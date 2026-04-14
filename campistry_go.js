@@ -6194,21 +6194,29 @@
     //   Q1: Major roads only (primary/secondary/trunk) — small, fast, for crossing detection
     //   Q2: All named roads but nodes-only via `out center` — for intersection finding
     async function fetchIntersections(campers) {
-        // Use percentile-trimmed bbox (5th-95th) to exclude geocode outliers
+        // Use IQR-based outlier removal to build a tight bbox
         const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
-        if (lats.length < 2 || lngs.length < 2) return null;
-        const lo = Math.floor(lats.length * 0.05);
-        const hi = Math.ceil(lats.length * 0.95) - 1;
-        const minLat = lats[lo], maxLat = lats[hi];
-        const minLng = lngs[lo], maxLng = lngs[hi];
-        const buf = 0.008; // ~0.55mi buffer for edge intersections
+        if (lats.length < 4 || lngs.length < 4) return null;
+        const q1Lat = lats[Math.floor(lats.length * 0.25)], q3Lat = lats[Math.floor(lats.length * 0.75)];
+        const q1Lng = lngs[Math.floor(lngs.length * 0.25)], q3Lng = lngs[Math.floor(lngs.length * 0.75)];
+        const iqrLat = q3Lat - q1Lat, iqrLng = q3Lng - q1Lng;
+        const fenceLat = [q1Lat - 1.5 * iqrLat, q3Lat + 1.5 * iqrLat];
+        const fenceLng = [q1Lng - 1.5 * iqrLng, q3Lng + 1.5 * iqrLng];
+        const cleanLats = lats.filter(v => v >= fenceLat[0] && v <= fenceLat[1]);
+        const cleanLngs = lngs.filter(v => v >= fenceLng[0] && v <= fenceLng[1]);
+        if (cleanLats.length < 2 || cleanLngs.length < 2) return null;
+        const minLat = cleanLats[0], maxLat = cleanLats[cleanLats.length - 1];
+        const minLng = cleanLngs[0], maxLng = cleanLngs[cleanLngs.length - 1];
+        const outlierCount = lats.length - cleanLats.length + lngs.length - cleanLngs.length;
+        if (outlierCount > 0) console.log('[Go] Overpass: excluded ' + outlierCount + ' outlier coordinates via IQR');
+        const buf = 0.008;
         const bbox = (minLat - buf) + ',' + (minLng - buf) + ',' + (maxLat + buf) + ',' + (maxLng + buf);
 
         const area = (maxLat - minLat + 2 * buf) * (maxLng - minLng + 2 * buf);
-        console.log('[Go] Overpass: bbox area ' + area.toFixed(3) + ' deg² (trimmed 5th-95th percentile)');
-        if (area > 0.5) {
-            console.warn('[Go] Overpass: bbox still too large after trimming (' + area.toFixed(3) + ' deg²), skipping');
+        console.log('[Go] Overpass: bbox area ' + area.toFixed(4) + ' deg² (' + cleanLats.length + ' of ' + lats.length + ' points)');
+        if (area > 1.0) {
+            console.warn('[Go] Overpass: bbox too large even after IQR cleanup (' + area.toFixed(3) + ' deg²), skipping');
             return null;
         }
 
