@@ -4260,11 +4260,18 @@
         };
 
         try {
+            // Rate-limit guard: wait between GH calls to stay under free-tier limits
+            const now = Date.now();
+            const minGap = 3000; // 3s between requests (~20/min, well under free-tier cap)
+            if (window._ghLastCall && now - window._ghLastCall < minGap) {
+                await new Promise(r => setTimeout(r, minGap - (now - window._ghLastCall)));
+            }
+
             // Retry with backoff for 429 (rate limit, not quota)
             let resp = null;
-            for (let attempt = 0; attempt < 3; attempt++) {
+            for (let attempt = 0; attempt < 5; attempt++) {
                 if (attempt > 0) {
-                    const delay = 2000 * attempt; // 2s, 4s
+                    const delay = 3000 * Math.pow(2, attempt - 1); // 3s, 6s, 12s, 24s
                     console.log('[Go] GH: rate limited, retrying in ' + delay + 'ms...');
                     await new Promise(r => setTimeout(r, delay));
                 }
@@ -4273,6 +4280,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });
+                window._ghLastCall = Date.now();
                 if (resp.status !== 429) break;
             }
 
@@ -4283,7 +4291,7 @@
             }
 
             if (resp.status === 429) {
-                console.warn('[Go] GH: rate limited after 3 retries, falling back to VROOM');
+                console.warn('[Go] GH: rate limited after 5 retries, falling back to VROOM');
                 return null; // don't set _ghQuotaExhausted — next zone can retry
             }
 
