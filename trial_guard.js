@@ -172,9 +172,14 @@
             if (_planStatus === 'starter') {
                 console.log('⏱️ [Trial] Plan is starter — feature limits active');
                 removeOverlay();
-                removeBanner();
                 _isExpired = false;
-                showStarterBanner(camp.id);
+                // If banner already exists, just refresh the count — don't tear down & rebuild
+                if (document.getElementById('starter-plan-banner')) {
+                    if (window.refreshStarterBanner) window.refreshStarterBanner();
+                } else {
+                    removeBanner();
+                    showStarterBanner(camp.id);
+                }
                 return;
             }
 
@@ -376,10 +381,23 @@
         var max = limits.maxCampers || 100;
 
         if (camperCount === undefined) {
-            // Re-query from Supabase
+            // Try local roster first (instant, no blink)
+            try {
+                var localData = JSON.parse(
+                    localStorage.getItem('campGlobalSettings_v1') ||
+                    localStorage.getItem('campistryGlobalSettings') || '{}'
+                );
+                if (localData.app1?.camperRoster) {
+                    camperCount = Object.keys(localData.app1.camperRoster).length;
+                }
+            } catch (_) {}
+        }
+        if (camperCount === undefined) {
+            // Fall back to Supabase
             try {
                 var client = window.supabase || window.CampistryDB?.getClient?.();
-                var campId = localStorage.getItem('campId');
+                var campId = localStorage.getItem('campistry_camp_id') ||
+                             localStorage.getItem('campistry_user_id');
                 if (client && campId) {
                     var res = await client.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
                     if (res.data?.state?.app1?.camperRoster) {
