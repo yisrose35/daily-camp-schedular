@@ -125,6 +125,10 @@ function save(){
         }else{
             console.log('[Me] ⚠ No cloud sync available — saved to localStorage only');
         }
+        // ★ Update starter-plan banner camper count in real time (trial_guard.js integration)
+        if(typeof window.refreshStarterBanner==='function'){
+            try{window.refreshStarterBanner(rosterCount)}catch(ex){}
+        }
     }catch(e){console.error('[Me] Save:',e)}
 }
 
