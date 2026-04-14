@@ -866,6 +866,29 @@ window.isSpecialActivityInAnyZone = function(specialName) {
     return false;
 };
 
+// Seam-merge travel annotations: consecutive same-off-campus-zone blocks share no
+// middle travel. Mutates `assignments` in place. Returns count of annotations cleared.
+window.seamMergeTravelTime = function(assignments) {
+    if (!assignments || typeof assignments !== 'object') return 0;
+    let cleared = 0;
+    Object.keys(assignments).forEach(function(bunk) {
+        const slots = assignments[bunk];
+        if (!Array.isArray(slots) || slots.length < 2) return;
+        const sorted = slots.slice().sort(function(a, b) { return (a?.startMin || 0) - (b?.startMin || 0); });
+        for (let i = 0; i < sorted.length - 1; i++) {
+            const cur = sorted[i], nxt = sorted[i + 1];
+            if (!cur || !nxt) continue;
+            if (!cur._travelZone || !nxt._travelZone) continue;
+            if (cur._travelZone !== nxt._travelZone) continue;
+            const gap = (nxt.startMin || 0) - (cur.endMin || 0);
+            if (gap > 5) continue;
+            if (cur._travelPost) { cur._travelPost = 0; cleared++; }
+            if (nxt._travelPre)  { nxt._travelPre  = 0; cleared++; }
+        }
+    });
+    return cleared;
+};
+
 // Batch check multiple fields for zone membership
 window.getZonesForFields = function(fieldNames) {
     if (!Array.isArray(fieldNames)) return {};

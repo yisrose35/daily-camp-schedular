@@ -8206,25 +8206,10 @@
 
         // ── Seam-merge travel: consecutive same-off-campus-zone blocks share no middle travel ──
         try {
-            var _sa = window.scheduleAssignments || {};
-            var _mergedSeams = 0;
-            Object.keys(_sa).forEach(function(bunk) {
-                var slots = _sa[bunk];
-                if (!Array.isArray(slots) || slots.length < 2) return;
-                var sorted = slots.slice().sort(function(a, b) { return (a.startMin || 0) - (b.startMin || 0); });
-                for (var i = 0; i < sorted.length - 1; i++) {
-                    var cur = sorted[i], nxt = sorted[i + 1];
-                    if (!cur || !nxt) continue;
-                    if (!cur._travelZone || !nxt._travelZone) continue;
-                    if (cur._travelZone !== nxt._travelZone) continue;
-                    // Back-to-back (allow up to 5 min gap)
-                    var gap = (nxt.startMin || 0) - (cur.endMin || 0);
-                    if (gap > 5) continue;
-                    if (cur._travelPost) { cur._travelPost = 0; _mergedSeams++; }
-                    if (nxt._travelPre)  { nxt._travelPre  = 0; _mergedSeams++; }
-                }
-            });
-            if (_mergedSeams > 0) log('  🚐 Seam-merged ' + _mergedSeams + ' travel annotations between same-zone blocks.');
+            if (typeof window.seamMergeTravelTime === 'function') {
+                var _mergedSeams = window.seamMergeTravelTime(window.scheduleAssignments);
+                if (_mergedSeams > 0) log('  🚐 Seam-merged ' + _mergedSeams + ' travel annotations between same-zone blocks.');
+            }
         } catch (e) { /* non-fatal */ }
 
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
