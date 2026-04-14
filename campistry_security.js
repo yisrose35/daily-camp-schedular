@@ -66,7 +66,8 @@
         ALLOWED_SCRIPT_SOURCES: [
             '', // inline scripts
             window.location.origin,
-            'https://cdn.jsdelivr.net'
+            'https://cdn.jsdelivr.net',
+            'https://geocoding.geo.census.gov'
         ],
 
         // localStorage keys to protect integrity

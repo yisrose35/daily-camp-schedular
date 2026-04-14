@@ -2441,7 +2441,7 @@
                     renderAddresses(); updateStats();
                     progressUpdate(processed, totalWork, 'Pass 3: ORS · ' + orsOk + ' geocoded');
                 }
-                if (i < finalNeeded.length - 1) await new Promise(r => setTimeout(r, 1500));
+                if (i < finalNeeded.length - 1) await new Promise(r => setTimeout(r, 500));
             }
             totalOk += orsOk;
             save();
