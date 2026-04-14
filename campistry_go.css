@@ -374,6 +374,28 @@
 @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 .progress-text { font-size: .75rem; color: var(--text-muted); font-weight: 600; }
 
+/* Geocoding-active progress state */
+.progress-card-active {
+    border-color: var(--brand-400) !important;
+    box-shadow: 0 0 0 2px rgba(20,125,145,.08), var(--shadow-md);
+}
+.progress-card-active .progress-bar-fill {
+    background: linear-gradient(90deg, #0EA5E9, var(--brand-600), #10B981);
+    background-size: 200% 100%;
+    animation: progressGradient 2s ease infinite, shimmer 2s ease-in-out infinite;
+}
+@keyframes progressGradient {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+.progress-card-done .progress-bar-fill {
+    background: linear-gradient(90deg, #10B981, #059669);
+}
+.progress-card-error .progress-bar-fill {
+    background: linear-gradient(90deg, var(--red-500), var(--red-600));
+}
+
 /* ==================== SHIFTS ==================== */
 .shift-card {
     background: var(--bg-secondary);

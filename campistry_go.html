@@ -239,10 +239,16 @@
                 <div class="action-spacer"></div>
                 <input type="text" class="form-input" id="addressSearch" placeholder="Search camper or address..." style="max-width:280px">
             </div>
-            <div class="card" style="margin-bottom:1.5rem"><div class="card-body" style="padding:1rem 1.5rem">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem"><span style="font-weight:600;font-size:.875rem">Address Completion</span><span class="progress-text" id="addressProgressText">0 of 0</span></div>
+            <div class="card" style="margin-bottom:1.5rem" id="progressCard"><div class="card-body" style="padding:1rem 1.5rem">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">
+                    <span style="font-weight:600;font-size:.875rem" id="progressLabel">Address Completion</span>
+                    <span class="progress-text" id="addressProgressText">0 of 0</span>
+                </div>
                 <div class="progress-bar-wrap"><div class="progress-bar-fill" id="addressProgressBar" style="width:0%"></div></div>
-                <div style="font-size:.75rem;color:var(--text-muted);margin-top:.375rem">Import addresses via CSV/Excel above, or add them individually below.</div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:.375rem">
+                    <span style="font-size:.75rem;color:var(--text-muted)" id="progressHint">Import addresses via CSV/Excel above, or add them individually below.</span>
+                    <span style="font-size:.75rem;color:var(--text-muted);font-weight:600;display:none" id="progressETA"></span>
+                </div>
             </div></div>
             <div class="card">
                 <div class="card-header"><h2>Camper Addresses</h2><span class="card-count" id="addressCount">0</span></div>

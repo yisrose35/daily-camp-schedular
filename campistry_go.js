@@ -1915,6 +1915,55 @@
         }).join('');
     }
     function updateAddrProgress(n, t) { const p = t > 0 ? Math.round(n / t * 100) : 0; document.getElementById('addressProgressBar').style.width = p + '%'; document.getElementById('addressProgressText').textContent = n + ' of ' + t + ' (' + p + '%)'; }
+
+    /* ── Progress bar takeover for geocoding / validation ── */
+    let _progStartTime = 0;
+    function progressStart(label) {
+        _progStartTime = Date.now();
+        const card = document.getElementById('progressCard');
+        card.className = card.className.replace(/progress-card-\w+/g, '').trim() + ' progress-card-active';
+        document.getElementById('progressLabel').textContent = label;
+        document.getElementById('progressHint').style.display = 'none';
+        document.getElementById('progressETA').style.display = '';
+        document.getElementById('progressETA').textContent = 'Estimating...';
+    }
+    function progressUpdate(done, total, detail) {
+        const p = total > 0 ? Math.round(done / total * 100) : 0;
+        document.getElementById('addressProgressBar').style.width = p + '%';
+        document.getElementById('addressProgressText').textContent = done + ' of ' + total + ' (' + p + '%)';
+        // ETA calculation
+        const elapsed = (Date.now() - _progStartTime) / 1000;
+        const etaEl = document.getElementById('progressETA');
+        if (done > 0 && done < total) {
+            const rate = done / elapsed;
+            const remaining = (total - done) / rate;
+            let etaStr;
+            if (remaining < 60) etaStr = Math.ceil(remaining) + 's remaining';
+            else if (remaining < 3600) etaStr = Math.ceil(remaining / 60) + 'm ' + Math.ceil(remaining % 60) + 's remaining';
+            else etaStr = Math.floor(remaining / 3600) + 'h ' + Math.ceil((remaining % 3600) / 60) + 'm remaining';
+            etaEl.textContent = (detail ? detail + ' · ' : '') + '~' + etaStr;
+        } else if (done >= total) {
+            etaEl.textContent = detail || 'Finishing...';
+        } else {
+            etaEl.textContent = detail || 'Starting...';
+        }
+    }
+    function progressEnd(summary, isError) {
+        const card = document.getElementById('progressCard');
+        card.className = card.className.replace(/progress-card-\w+/g, '').trim() + (isError ? ' progress-card-error' : ' progress-card-done');
+        document.getElementById('progressLabel').textContent = isError ? 'Geocoding — Issues Found' : 'Geocoding Complete';
+        document.getElementById('progressETA').textContent = summary;
+        document.getElementById('addressProgressBar').style.width = '100%';
+        // Revert to address completion mode after 8 seconds
+        setTimeout(() => {
+            card.className = card.className.replace(/progress-card-\w+/g, '').trim();
+            document.getElementById('progressLabel').textContent = 'Address Completion';
+            document.getElementById('progressHint').style.display = '';
+            document.getElementById('progressHint').textContent = 'Import addresses via CSV/Excel above, or add them individually below.';
+            document.getElementById('progressETA').style.display = 'none';
+            renderAddresses();
+        }, 8000);
+    }
     function editAddress(name) {
         _editCamper = name; const roster = getRoster(), c = roster[name] || {}, a = D.addresses[name] || {};
         document.getElementById('addressCamperName').textContent = name;
@@ -2199,11 +2248,11 @@
 
     async function validateAllAddresses() {
         const names = Object.keys(D.addresses).filter(n => D.addresses[n]?.street);
-        if (!names.length) { toast('No addresses to validate', 'error'); return; }
+        if (!names.length) return;
 
+        progressStart('Validating Addresses');
         const hasMapbox = !!getMapboxToken();
         const provider = hasMapbox ? 'Mapbox' : 'OpenStreetMap';
-        toast('Validating ' + names.length + ' addresses via ' + provider + '...');
         let validated = 0, corrected = 0, geocoded = 0, failed = 0;
 
         for (let i = 0; i < names.length; i++) {
@@ -2211,7 +2260,6 @@
             const a = D.addresses[name];
             if (!a.street) continue;
 
-            // Try Mapbox first (returns standardized address components), fall back to Nominatim
             let result = null;
             if (hasMapbox) {
                 const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
@@ -2228,7 +2276,6 @@
                     a._geocodeWarning = 'Location invalid — check address';
                     failed++;
                 } else {
-                    // Check if address was corrected by the provider
                     const newStreet = result.street || a.street;
                     const newCity = result.city || a.city;
                     const newState = result.state || a.state;
@@ -2269,50 +2316,51 @@
                 console.warn('[Go] Address not found: ' + name + ' (' + [a.street, a.city, a.state, a.zip].join(', ') + ')');
             }
 
-            if ((i + 1) % 10 === 0 || i === names.length - 1) {
+            if ((i + 1) % 5 === 0 || i === names.length - 1) {
                 renderAddresses();
-                toast('Validating: ' + (i + 1) + '/' + names.length + ' (' + validated + ' verified, ' + corrected + ' corrected)');
+                progressUpdate(i + 1, names.length, provider + ' · ' + validated + ' verified, ' + corrected + ' corrected');
             }
-            // Mapbox: ~120ms spacing; Nominatim: 1100ms rate limit
             if (i < names.length - 1) await new Promise(r => setTimeout(r, hasMapbox ? 120 : 1100));
         }
 
         save(); renderAddresses(); updateStats();
-        toast('Done: ' + validated + ' verified, ' + corrected + ' corrected, ' + geocoded + ' geocoded, ' + failed + ' unverified');
+        const summary = validated + ' verified, ' + corrected + ' corrected, ' + geocoded + ' geocoded' + (failed > 0 ? ', ' + failed + ' unverified' : '');
+        progressEnd(summary, failed > 0);
 
         // For any that couldn't be found, try the full pipeline as backup
         const stillUngeocoded = names.filter(n => !D.addresses[n]?.geocoded);
         if (stillUngeocoded.length) {
-            toast('Trying full pipeline for ' + stillUngeocoded.length + ' remaining...');
             await geocodeAll(false);
         }
     }
 
     async function geocodeAll(force) {
-        if (!_campCoordsCache && D.setup.campAddress) { toast('Geocoding camp address first...'); const cc = await geocodeSingle(D.setup.campAddress); if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; save(); } }
+        if (!_campCoordsCache && D.setup.campAddress) { const cc = await geocodeSingle(D.setup.campAddress); if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; save(); } }
         const todo = Object.keys(D.addresses).filter(n => { const a = D.addresses[n]; if (!a?.street) return false; if (force) { a.geocoded = false; a.lat = null; a.lng = null; a._zipMismatch = false; a._geocodeConfidence = null; a._geocodePrecision = null; a._crossValidated = false; return true; } return !a.geocoded; });
-        if (!todo.length) { toast('All addresses already geocoded!'); return; }
+        if (!todo.length) return;
 
+        progressStart('Geocoding Addresses');
         const hasMapbox = !!getMapboxToken();
         let totalOk = 0, totalFail = 0;
+        let globalDone = 0;
+        const globalTotal = todo.length;
 
         // ── Pass 1: Mapbox v6 (best accuracy, ~600 free req/min) ──
         if (hasMapbox) {
-            toast('Pass 1: Mapbox — ' + todo.length + ' addresses...');
             let mbOk = 0;
             for (let i = 0; i < todo.length; i++) {
                 const name = todo[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) continue;
+                if (!a?.street || a.geocoded) { globalDone++; continue; }
                 const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
                 if (mb && validateGeocode(mb.lat, mb.lng, a.street, name)) {
                     applyBestGeocode(a, mb, name);
                     mbOk++;
                 }
-                if ((i + 1) % 10 === 0 || i === todo.length - 1) {
+                globalDone++;
+                if ((i + 1) % 5 === 0 || i === todo.length - 1) {
                     renderAddresses(); updateStats();
-                    toast('Mapbox: ' + mbOk + ' geocoded (' + (i + 1) + '/' + todo.length + ')');
+                    progressUpdate(globalDone, globalTotal, 'Pass 1: Mapbox · ' + mbOk + ' geocoded');
                 }
-                // Mapbox allows ~600/min on free tier — ~100ms spacing is safe
                 if (i < todo.length - 1) await new Promise(r => setTimeout(r, 120));
             }
             totalOk += mbOk;
@@ -2322,19 +2370,22 @@
         // ── Pass 2: Census for any Mapbox missed (free, unlimited) ──
         const stillNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
         if (stillNeeded.length > 0) {
-            toast('Pass 2: Census — ' + stillNeeded.length + ' remaining...');
+            // Reset progress for pass 2 with remaining count
+            _progStartTime = Date.now();
+            globalDone = 0;
             let cenOk = 0;
             for (let i = 0; i < stillNeeded.length; i++) {
                 const name = stillNeeded[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) continue;
+                if (!a?.street || a.geocoded) { globalDone++; continue; }
                 const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
                 if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
                     applyBestGeocode(a, cen, name);
                     cenOk++;
                 }
-                if ((i + 1) % 10 === 0 || i === stillNeeded.length - 1) {
+                globalDone++;
+                if ((i + 1) % 5 === 0 || i === stillNeeded.length - 1) {
                     renderAddresses(); updateStats();
-                    toast('Census: ' + cenOk + ' geocoded (' + (i + 1) + '/' + stillNeeded.length + ')');
+                    progressUpdate(globalDone, stillNeeded.length, 'Pass 2: Census · ' + cenOk + ' geocoded');
                 }
                 if (i < stillNeeded.length - 1) await new Promise(r => setTimeout(r, 300));
             }
@@ -2345,11 +2396,12 @@
         // ── Pass 3: ORS for any still remaining ──
         const finalNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
         if (finalNeeded.length > 0 && getApiKey()) {
-            toast('Pass 3: ORS — ' + finalNeeded.length + ' remaining...');
+            _progStartTime = Date.now();
+            globalDone = 0;
             let orsOk = 0;
             for (let i = 0; i < finalNeeded.length; i++) {
                 const name = finalNeeded[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) continue;
+                if (!a?.street || a.geocoded) { globalDone++; continue; }
                 const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
                 if (ors && validateGeocode(ors.lat, ors.lng, a.street, name)) {
                     applyBestGeocode(a, ors, name);
@@ -2358,16 +2410,16 @@
                     a._geocodeWarning = 'All providers failed — verify address';
                     totalFail++;
                 }
-                if ((i + 1) % 5 === 0 || i === finalNeeded.length - 1) {
+                globalDone++;
+                if ((i + 1) % 3 === 0 || i === finalNeeded.length - 1) {
                     renderAddresses(); updateStats();
-                    toast('ORS: ' + orsOk + ' geocoded (' + (i + 1) + '/' + finalNeeded.length + ')');
+                    progressUpdate(globalDone, finalNeeded.length, 'Pass 3: ORS · ' + orsOk + ' geocoded');
                 }
                 if (i < finalNeeded.length - 1) await new Promise(r => setTimeout(r, 1500));
             }
             totalOk += orsOk;
             save();
         } else if (finalNeeded.length > 0) {
-            // No ORS key — mark remaining as failed
             finalNeeded.forEach(n => {
                 if (!D.addresses[n]?.geocoded) {
                     D.addresses[n]._geocodeWarning = 'Census failed — verify address';
@@ -2383,7 +2435,7 @@
         if (highConf) summary += ' (' + highConf + ' high confidence)';
         if (lowConf) summary += ', ' + lowConf + ' low confidence';
         if (totalFail > 0) summary += ', ' + totalFail + ' failed';
-        toast(totalFail > 0 ? summary : summary + ' — all done!', totalFail > 0 ? 'error' : undefined);
+        progressEnd(summary, totalFail > 0);
     }
 
     async function geocodeSingle(addr) {
