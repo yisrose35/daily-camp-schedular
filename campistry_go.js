@@ -1143,9 +1143,24 @@
     function load() {
         try {
             const g = readCampistrySettings();
-            if (g.campistryGo && Object.keys(g.campistryGo).length) { D = merge(g.campistryGo); console.log('[Go] Loaded from cloud settings'); return; }
-            const raw = localStorage.getItem(STORE);
-            if (raw) { D = merge(JSON.parse(raw)); console.log('[Go] Loaded from localStorage'); }
+            const cloud = g.campistryGo && Object.keys(g.campistryGo).length ? g.campistryGo : null;
+            let local = null;
+            try { const raw = localStorage.getItem(STORE); if (raw) local = JSON.parse(raw); } catch (_) {}
+
+            if (cloud && local) {
+                // Cloud may be missing addresses/savedRoutes (stripped for quota).
+                // Merge: use cloud as base, fill in missing large fields from local.
+                if (!cloud.addresses || !Object.keys(cloud.addresses).length) cloud.addresses = local.addresses || {};
+                if (!cloud.savedRoutes) cloud.savedRoutes = local.savedRoutes || null;
+                D = merge(cloud);
+                console.log('[Go] Loaded from cloud settings (addresses from local)');
+            } else if (cloud) {
+                D = merge(cloud);
+                console.log('[Go] Loaded from cloud settings');
+            } else if (local) {
+                D = merge(local);
+                console.log('[Go] Loaded from localStorage');
+            }
         } catch (e) { console.error('[Go] Load error:', e); }
     }
 
