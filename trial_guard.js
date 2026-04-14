@@ -334,14 +334,24 @@
         try {
             var client = window.supabase || window.CampistryDB?.getClient?.();
             if (client && campId) {
-                // Count distinct schedule dates for this camp
+                // Count distinct schedule dates that have actual content
                 var schedResult = await client
                     .from('daily_schedules')
-                    .select('date_key')
+                    .select('date_key, schedule_data')
                     .eq('camp_id', campId);
 
                 if (schedResult.data) {
-                    var uniqueDates = new Set(schedResult.data.map(function(r) { return r.date_key; }));
+                    var uniqueDates = new Set();
+                    schedResult.data.forEach(function(r) {
+                        var bunks = r.schedule_data?.scheduleAssignments;
+                        if (bunks && Object.keys(bunks).length > 0) {
+                            // Check at least one bunk has real slot data
+                            var hasContent = Object.values(bunks).some(function(b) {
+                                return b && Object.keys(b).length > 0;
+                            });
+                            if (hasContent) uniqueDates.add(r.date_key);
+                        }
+                    });
                     _starterDaysUsed = uniqueDates.size;
                 }
 
@@ -431,9 +441,18 @@
                 var campId = localStorage.getItem('campistry_camp_id') ||
                              localStorage.getItem('campistry_user_id');
                 if (client && campId) {
-                    var schedRes = await client.from('daily_schedules').select('date_key').eq('camp_id', campId);
+                    var schedRes = await client.from('daily_schedules').select('date_key, schedule_data').eq('camp_id', campId);
                     if (schedRes.data) {
-                        var uniqueDates = new Set(schedRes.data.map(function(r) { return r.date_key; }));
+                        var uniqueDates = new Set();
+                        schedRes.data.forEach(function(r) {
+                            var bunks = r.schedule_data?.scheduleAssignments;
+                            if (bunks && Object.keys(bunks).length > 0) {
+                                var hasContent = Object.values(bunks).some(function(b) {
+                                    return b && Object.keys(b).length > 0;
+                                });
+                                if (hasContent) uniqueDates.add(r.date_key);
+                            }
+                        });
                         _starterDaysUsed = uniqueDates.size;
                     }
                 }

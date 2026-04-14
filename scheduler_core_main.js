@@ -1154,6 +1154,27 @@
     window.runSkeletonOptimizer = async function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
        console.log("★★★ OPTIMIZER STARTED (v17.12 - SMART TILE CAMP-WIDE BUDGET) ★★★")
+
+        // ★★★ STARTER PLAN: Check schedule day limit BEFORE generating ★★★
+        try {
+            var _client = window.CampistryDB?.getClient?.() || window.supabase;
+            var _campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('campistry_camp_id');
+            var _dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            if (_client && _campId) {
+                var _limitRes = await _client.rpc('check_schedule_limit', { p_camp_id: _campId, p_date_key: _dateKey });
+                if (!_limitRes.error && _limitRes.data && _limitRes.data.allowed === false) {
+                    console.warn('[OPTIMIZER] Blocked by starter plan limit:', _limitRes.data);
+                    alert('Schedule day limit reached (' + _limitRes.data.used + '/' + _limitRes.data.max + ' days used). Upgrade for unlimited scheduling.');
+                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                        detail: { type: 'schedule', used: _limitRes.data.used, max: _limitRes.data.max }
+                    }));
+                    return false;
+                }
+            }
+        } catch (_e) {
+            console.warn('[OPTIMIZER] Schedule limit check failed, proceeding:', _e);
+        }
+
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
             allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);

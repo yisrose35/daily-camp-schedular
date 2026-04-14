@@ -85,14 +85,19 @@ BEGIN
         RETURN jsonb_build_object('allowed', true, 'plan', COALESCE(v_plan_status, 'unknown'));
     END IF;
 
-    -- Count distinct date_keys already saved for this camp
+    -- Count distinct date_keys that have actual generated content
     SELECT COUNT(DISTINCT date_key) INTO v_used_days
-    FROM daily_schedules WHERE camp_id = p_camp_id;
+    FROM daily_schedules
+    WHERE camp_id = p_camp_id
+      AND schedule_data->'scheduleAssignments' IS NOT NULL
+      AND schedule_data->'scheduleAssignments' != '{}'::jsonb;
 
-    -- Check if this specific date already has a schedule (re-gen = free)
+    -- Check if this specific date already has a generated schedule (re-gen = free)
     SELECT EXISTS(
         SELECT 1 FROM daily_schedules
         WHERE camp_id = p_camp_id AND date_key = p_date_key
+          AND schedule_data->'scheduleAssignments' IS NOT NULL
+          AND schedule_data->'scheduleAssignments' != '{}'::jsonb
     ) INTO v_date_exists;
 
     -- If date already exists, always allow (re-generation)
@@ -157,8 +162,8 @@ $$;
 */
 //
 // --- TRIGGER: enforce_starter_schedule_limit ---
-// Blocks INSERT of new schedule dates beyond 7 distinct days.
-// Updates to existing date_key rows always pass (re-generation is free).
+// Blocks INSERT/UPDATE that would add generated content to a new date beyond 7.
+// Empty saves (auto-save on date browse) always pass. Re-gen of existing dates passes.
 /*
 CREATE OR REPLACE FUNCTION enforce_starter_schedule_limit()
 RETURNS TRIGGER
@@ -169,6 +174,7 @@ DECLARE
     v_used_days INT;
     v_max_days INT := 7;
     v_date_exists BOOLEAN;
+    v_has_content BOOLEAN;
 BEGIN
     SELECT plan_status INTO v_plan_status
     FROM camps WHERE id = NEW.camp_id
@@ -178,19 +184,33 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- Check if this date_key already exists (re-gen = always allowed)
+    -- Only enforce limit for rows with actual generated content
+    v_has_content := (
+        NEW.schedule_data->'scheduleAssignments' IS NOT NULL
+        AND NEW.schedule_data->'scheduleAssignments' != '{}'::jsonb
+    );
+    IF NOT v_has_content THEN
+        RETURN NEW;  -- empty auto-saves always pass
+    END IF;
+
+    -- Check if this date already has generated content (re-gen = allowed)
     SELECT EXISTS(
         SELECT 1 FROM daily_schedules
         WHERE camp_id = NEW.camp_id AND date_key = NEW.date_key
+          AND schedule_data->'scheduleAssignments' IS NOT NULL
+          AND schedule_data->'scheduleAssignments' != '{}'::jsonb
     ) INTO v_date_exists;
 
     IF v_date_exists THEN
         RETURN NEW;
     END IF;
 
-    -- Count distinct dates already used
+    -- Count distinct dates with actual content
     SELECT COUNT(DISTINCT date_key) INTO v_used_days
-    FROM daily_schedules WHERE camp_id = NEW.camp_id;
+    FROM daily_schedules
+    WHERE camp_id = NEW.camp_id
+      AND schedule_data->'scheduleAssignments' IS NOT NULL
+      AND schedule_data->'scheduleAssignments' != '{}'::jsonb;
 
     IF v_used_days >= v_max_days THEN
         RAISE EXCEPTION 'Starter plan: maximum % schedule days reached. Upgrade for unlimited scheduling.', v_max_days
@@ -203,7 +223,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_starter_schedule_limit ON daily_schedules;
 CREATE TRIGGER trg_starter_schedule_limit
-    BEFORE INSERT ON daily_schedules
+    BEFORE INSERT OR UPDATE ON daily_schedules
     FOR EACH ROW
     EXECUTE FUNCTION enforce_starter_schedule_limit();
 */

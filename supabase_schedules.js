@@ -551,27 +551,8 @@
             return { success: true, target: 'local' };
         }
 
-        // ★★★ STARTER PLAN: Check schedule limit before saving ★★★
-        if (!options.skipLimitCheck) {
-            try {
-                var limitCheck = await client.rpc('check_schedule_limit', { p_camp_id: campId, p_date_key: dateKey });
-                if (!limitCheck.error && limitCheck.data && limitCheck.data.allowed === false) {
-                    log('SAVE BLOCKED by starter plan limit:', limitCheck.data.reason);
-                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
-                        detail: { type: 'schedule', current: limitCheck.data.current, max: limitCheck.data.max }
-                    }));
-                    return {
-                        success: false,
-                        error: { message: 'Schedule limit reached (Starter plan: ' + limitCheck.data.max + ' days). Upgrade for unlimited.' },
-                        target: 'plan-limit',
-                        limitInfo: limitCheck.data
-                    };
-                }
-            } catch (limitErr) {
-                // Fail open on RPC errors — trigger is the backstop
-                console.warn('[ScheduleDB] Schedule limit check failed, proceeding:', limitErr);
-            }
-        }
+        // NOTE: Schedule day limit is checked in runSkeletonOptimizer (generation time),
+        // not here — auto-saves and edits to existing dates should never be blocked.
 
         try {
             // ★★★ FIXED FILTERING - Uses AccessControl instead of PermissionsDB ★★★
