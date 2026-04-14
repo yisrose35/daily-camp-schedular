@@ -1875,10 +1875,14 @@
         const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
         rows = rows.filter(r => {
             const a = D.addresses[r.name];
-            return !a || a[modeKey] !== false; // show if flag missing (default true) or true
+            return !a || a[modeKey] !== false;
         });
 
-        // Filter
+        // Capture mode-filtered totals BEFORE search filter
+        const modeTotal = rows.length;
+        const modeWithAddr = rows.filter(r => r.hasAddr).length;
+
+        // Search filter
         const filter = (document.getElementById('addressSearch')?.value || '').toLowerCase().trim();
         if (filter) rows = rows.filter(r => r.name.toLowerCase().includes(filter) || r.first.toLowerCase().includes(filter) || r.last.toLowerCase().includes(filter) || r.division.toLowerCase().includes(filter) || r.grade.toLowerCase().includes(filter) || r.bunk.toLowerCase().includes(filter) || r.street.toLowerCase().includes(filter) || r.city.toLowerCase().includes(filter));
 
@@ -1899,14 +1903,12 @@
             if (av < bv) return -1 * dir; if (av > bv) return 1 * dir; return 0;
         });
 
-        const total = [...allNames].length;
         const tbody = document.getElementById('addressTableBody'), empty = document.getElementById('addressEmptyState');
         const tw = tbody?.closest('.table-wrapper');
-        document.getElementById('addressCount').textContent = filter ? rows.length + ' of ' + total : total;
-        if (!total) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; updateAddrProgress(0, 0); return; }
+        document.getElementById('addressCount').textContent = filter ? rows.length + ' of ' + modeTotal : modeTotal;
+        if (!modeTotal) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; updateAddrProgress(0, 0); return; }
         if (tw) tw.style.display = ''; if (empty) empty.style.display = 'none';
-        let withAddr = 0; rows.forEach(r => { if (r.hasAddr) withAddr++; });
-        updateAddrProgress(withAddr, total);
+        updateAddrProgress(modeWithAddr, modeTotal);
 
         // Update header arrows
         document.querySelectorAll('#addressTableBody')?.forEach(() => {});
@@ -2553,10 +2555,11 @@
         const roster = getRoster(); const names = Object.keys(roster).sort();
         // Always download a clean template with 2 example rows
         let csv = '\uFEFFID,Last Name,First Name,Role,Division,Grade,Bunk,Needs Stop,Street Address,City,State,ZIP,Arrival,Dismissal\n';
-        csv += '"0001","Smith","Sarah","Camper","Juniors","1st Grade","1A","","123 Main Street","Anytown","NY","11559","Y","Y"\n';
-        csv += '"0002","Goldberg","Moshe","Camper","Seniors","4th Grade","4B","","456 Oak Avenue","Woodmere","NY","11598","Y","N"\n';
-        csv += '"0003","Cohen","David","Staff","","","","No","789 Elm Street","Cedarhurst","NY","11516","Y","Y"\n';
-        csv += '"0004","Klein","Rachel","Staff","Freshies","","","Yes","321 Pine Road","Lawrence","NY","11559","N","Y"\n';
+        csv += '"0001","Smith","Sarah","C","Juniors","1st Grade","1A","","123 Main Street","Anytown","NY","11559","Y","Y"\n';
+        csv += '"0002","Goldberg","Moshe","C","Seniors","4th Grade","4B","","456 Oak Avenue","Woodmere","NY","11598","Y","N"\n';
+        csv += '"0003","Cohen","David","S","","","","No","789 Elm Street","Cedarhurst","NY","11516","Y","Y"\n';
+        csv += '"0004","Klein","Rachel","S","Freshies","","","Yes","321 Pine Road","Lawrence","NY","11559","N","Y"\n';
+        csv += '"0005","Levy","Moshe","M","","","","No","555 Bus Depot Rd","Woodmere","NY","11598","Y","Y"\n';
         const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
     function importAddressCsv() {
@@ -2703,10 +2706,10 @@
             const zip = zi >= 0 ? (cols[zi] || '').trim() : '';
             const fullAddress = [street, city, state, zip].filter(Boolean).join(', ');
 
-            // ── Route based on Role column ──
-            if (role === 'staff' || role === 'counselor' || role === 'monitor') {
+            // ── Route based on Role column (supports full names and shortcodes: C/S/M) ──
+            if (role === 'staff' || role === 'counselor' || role === 's' || role === 'monitor' || role === 'm') {
                 // Add as staff member (counselor by default, monitor if specified)
-                const isMonitor = role === 'monitor';
+                const isMonitor = role === 'monitor' || role === 'm';
                 const wantsStop = needsStop === 'yes' || needsStop === 'y' || needsStop === 'true';
 
                 if (isMonitor) {
