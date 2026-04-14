@@ -1031,39 +1031,67 @@
 
     // ── Geocode validation — reject results that don't make sense ──
     function validateGeocode(lat, lng, address, camperName, returnedResult) {
-        // 1. Null or zero coordinates
-        if (!lat || !lng || lat === 0 || lng === 0) {
-            console.warn('[Go] Geocode rejected for ' + camperName + ': null coordinates');
+        // 1. Invalid coordinates (null, zero, NaN, Infinity)
+        if (!lat || !lng || lat === 0 || lng === 0 || isNaN(lat) || isNaN(lng) || !isFinite(lat) || !isFinite(lng)) {
+            console.warn('[Go] Geocode rejected for ' + camperName + ': invalid coordinates (' + lat + ', ' + lng + ')');
             return false;
         }
         // 2. Outside continental US bounds
         if (lat < 24 || lat > 50 || lng < -125 || lng > -66) {
-            console.warn('[Go] Geocode rejected for ' + camperName + ': outside continental US');
+            console.warn('[Go] Geocode rejected for ' + camperName + ': outside continental US (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')');
             return false;
         }
-        // 3. State-level sanity: geocoded coords must be in the input state
+        // 3. If camp location known, hard limit 100 miles
+        if (_campCoordsCache) {
+            const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, lat, lng);
+            if (dist > 100) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(0) + 'mi from camp (max 100)');
+                return false;
+            }
+        }
+        // 4. State-level sanity
         const addrData = D.addresses[camperName];
         if (addrData?.state) {
             const stBounds = {
                 NY: [40.4, 45.1, -80, -71.8], NJ: [38.9, 41.4, -75.6, -73.9],
                 CT: [40.9, 42.1, -73.8, -71.8], PA: [39.7, 42.3, -80.6, -74.7],
                 MA: [41.2, 42.9, -73.5, -69.9], FL: [24.5, 31.0, -87.7, -80.0],
-                CA: [32.5, 42.0, -124.5, -114.1], TX: [25.8, 36.5, -106.7, -93.5]
+                CA: [32.5, 42.0, -124.5, -114.1], TX: [25.8, 36.5, -106.7, -93.5],
+                OH: [38.4, 42.0, -84.9, -80.5], IL: [36.9, 42.5, -91.5, -87.0],
+                GA: [30.3, 35.0, -85.6, -80.8], MI: [41.7, 48.3, -90.4, -82.1],
+                NC: [33.8, 36.6, -84.3, -75.5], CO: [36.9, 41.0, -109.1, -102.0],
+                MD: [37.9, 39.7, -79.5, -75.0], VA: [36.5, 39.5, -83.7, -75.2],
+                WI: [42.5, 47.1, -92.9, -86.8], MN: [43.5, 49.4, -97.3, -89.5],
+                IN: [37.8, 41.8, -88.1, -84.8], AZ: [31.3, 37.0, -115.0, -109.0],
+                TN: [35.0, 36.7, -90.3, -81.6], MO: [35.9, 40.6, -95.8, -89.1],
+                SC: [32.0, 35.2, -83.4, -78.5], AL: [30.2, 35.0, -88.5, -84.9],
+                LA: [28.9, 33.0, -94.0, -88.8], KY: [36.5, 39.2, -89.6, -82.0],
+                OR: [41.9, 46.3, -124.6, -116.5], OK: [33.6, 37.0, -103.0, -94.4],
+                WA: [45.5, 49.0, -124.8, -116.9], IA: [40.4, 43.5, -96.6, -90.1],
+                MS: [30.2, 35.0, -91.7, -88.1], AR: [33.0, 36.5, -94.6, -89.6],
+                KS: [37.0, 40.0, -102.1, -94.6], UT: [37.0, 42.0, -114.1, -109.0],
+                NV: [35.0, 42.0, -120.0, -114.0], NM: [31.3, 37.0, -109.1, -103.0],
+                NE: [40.0, 43.0, -104.1, -95.3], WV: [37.2, 40.6, -82.6, -77.7],
+                ID: [42.0, 49.0, -117.2, -111.0], HI: [18.9, 22.3, -160.3, -154.8],
+                NH: [42.7, 45.3, -72.6, -70.7], ME: [43.1, 47.5, -71.1, -66.9],
+                MT: [44.4, 49.0, -116.1, -104.0], RI: [41.1, 42.0, -71.9, -71.1],
+                DE: [38.4, 39.8, -75.8, -75.0], SD: [42.5, 46.0, -104.1, -96.4],
+                ND: [45.9, 49.0, -104.1, -96.6], AK: [51.0, 71.5, -180, -130],
+                VT: [42.7, 45.0, -73.5, -71.5], WY: [41.0, 45.0, -111.1, -104.1],
+                DC: [38.8, 39.0, -77.1, -77.0]
             };
             const b = stBounds[addrData.state.toUpperCase()];
             if (b && (lat < b[0] || lat > b[1] || lng < b[2] || lng > b[3])) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': coords outside ' + addrData.state + ' bounds');
+                console.warn('[Go] Geocode rejected for ' + camperName + ': coords (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ') outside ' + addrData.state);
                 return false;
             }
         }
-        // 4. ZIP mismatch: if geocoder returned a ZIP and it doesn't match input, flag it
-        //    (warn but don't reject — ZIP boundaries are fuzzy)
+        // 5. ZIP mismatch: flag but don't reject (ZIP boundaries are fuzzy)
         if (addrData?.zip && returnedResult?.zip) {
             const inputZip = addrData.zip.substring(0, 5);
             const returnedZip = (returnedResult.zip + '').substring(0, 5);
             if (inputZip !== returnedZip) {
                 console.warn('[Go] Geocode ZIP mismatch for ' + camperName + ': input ' + inputZip + ' vs returned ' + returnedZip);
-                // Don't reject — just flag it. The address table shows ZIP mismatch badges.
             }
         }
         return true;
@@ -2094,19 +2122,20 @@
             const d = await censusGeocode(censusQ);
             if (!d?.result?.addressMatches?.length) return null;
             const best = d.result.addressMatches[0];
+            if (!best.coordinates || best.coordinates.y == null || best.coordinates.x == null) return null;
             const lat = best.coordinates.y, lng = best.coordinates.x;
-            // Census returns a matchedAddress — score based on how well it matches
+            if (isNaN(lat) || isNaN(lng)) return null;
             const matchedAddr = (best.matchedAddress || '').toUpperCase();
-            const inputAddr = censusQ.toUpperCase().replace(/[^A-Z0-9 ]/g, '');
-            let score = 0.75; // Census baseline — always exact street-level
-            // If matched address contains our ZIP, that's a strong signal
-            if (zip && matchedAddr.includes(zip.substring(0, 5))) score += 0.1;
-            // Slight penalty — Census doesn't do rooftop, only interpolated range
+            // Extract ZIP from matched address
+            const matchedZip = (matchedAddr.match(/\b(\d{5})\b/) || [])[1] || '';
+            let score = 0.75;
+            const zipMatch = !!(zip && matchedZip && zip.substring(0, 5) === matchedZip);
+            if (zipMatch) score += 0.1;
             score -= 0.05;
             return {
                 lat, lng, confidence: Math.min(score, 1), source: 'census',
-                zipMatch: !!(zip && matchedAddr.includes(zip.substring(0, 5))),
-                precision: 'interpolated'
+                zipMatch, precision: 'interpolated',
+                zip: matchedZip
             };
         } catch (e) {
             console.warn('[Go] Census scored error:', e.message);
@@ -2130,17 +2159,20 @@
             let best = null;
             if (zip) best = d.features.find(f => (f.properties?.postalcode || '') === zip);
             if (!best) best = d.features[0];
+            if (!best?.geometry?.coordinates || best.geometry.coordinates.length < 2) return null;
             const co = best.geometry.coordinates;
+            if (isNaN(co[0]) || isNaN(co[1])) return null;
             const props = best.properties || {};
-            let score = Math.min((props.confidence || 0.5), 1) * 0.7; // ORS confidence scaled down — it's less precise
+            let score = Math.min((props.confidence || 0.5), 1) * 0.7;
             const zipMatch = !!(zip && props.postalcode && props.postalcode === zip);
             if (zipMatch) score += 0.1;
             else if (zip && props.postalcode && props.postalcode !== zip) score -= 0.15;
             return {
                 lat: co[1], lng: co[0], confidence: Math.min(score, 1), source: 'ors',
-                zipMatch, precision: 'approximate'
+                zipMatch, precision: 'approximate',
+                zip: props.postalcode || ''
             };
-        } catch (e) { return null; }
+        } catch (e) { console.warn('[Go] ORS geocode error:', e.message); return null; }
     }
 
     // ── Unified geocode: query all providers, pick best valid result ──
@@ -2153,14 +2185,19 @@
 
         // 1. Census (free, unlimited, excellent for US residential)
         const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
-        if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
+        if (cen && validateGeocode(cen.lat, cen.lng, a.street, name, cen)) {
             results.push(cen);
+            // If Census returns high confidence with ZIP match, use immediately
+            if (cen.confidence >= 0.8 && cen.zipMatch !== false) {
+                applyBestGeocode(a, cen, name);
+                return true;
+            }
         }
 
-        // 3. ORS (fallback)
+        // 2. ORS (fallback if Census failed or low confidence)
         if (results.length === 0 || results.every(r => r.confidence < 0.6)) {
             const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
-            if (ors && validateGeocode(ors.lat, ors.lng, a.street, name)) {
+            if (ors && validateGeocode(ors.lat, ors.lng, a.street, name, ors)) {
                 results.push(ors);
             }
         }
@@ -2338,27 +2375,25 @@
         // Calculate total work across all passes: every address goes through pass 1,
         // then we estimate ~30% need pass 2, ~10% need pass 3 (adjusted as we go)
         let processed = 0;
-        let totalWork = todo.length; // start with pass 1 count, grows as passes are added
-        let currentPass = 'Mapbox';
+        let totalWork = todo.length;
 
         // ── Pass 1: Census (free, unlimited, US residential) ──
         if (todo.length > 0) {
-            currentPass = 'Census';
             let cenOk = 0;
-            for (let i = 0; i < stillNeeded.length; i++) {
-                const name = stillNeeded[i]; const a = D.addresses[name];
+            for (let i = 0; i < todo.length; i++) {
+                const name = todo[i]; const a = D.addresses[name];
                 if (!a?.street || a.geocoded) { processed++; continue; }
                 const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
-                if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
+                if (cen && validateGeocode(cen.lat, cen.lng, a.street, name, cen)) {
                     applyBestGeocode(a, cen, name);
                     cenOk++;
                 }
                 processed++;
-                if ((i + 1) % 5 === 0 || i === stillNeeded.length - 1) {
+                if ((i + 1) % 5 === 0 || i === todo.length - 1) {
                     renderAddresses(); updateStats();
                     progressUpdate(processed, totalWork, 'Pass 1: Census · ' + cenOk + ' geocoded');
                 }
-                if (i < stillNeeded.length - 1) await new Promise(r => setTimeout(r, 300));
+                if (i < todo.length - 1) await new Promise(r => setTimeout(r, 300));
             }
             totalOk += cenOk;
             save();
@@ -2374,7 +2409,7 @@
                 const name = finalNeeded[i]; const a = D.addresses[name];
                 if (!a?.street || a.geocoded) { processed++; continue; }
                 const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
-                if (ors && validateGeocode(ors.lat, ors.lng, a.street, name)) {
+                if (ors && validateGeocode(ors.lat, ors.lng, a.street, name, ors)) {
                     applyBestGeocode(a, ors, name);
                     orsOk++;
                 } else {
@@ -2410,23 +2445,48 @@
     }
 
     async function geocodeSingle(addr) {
-        // For single address string (e.g. camp address), try Mapbox → Census → ORS
+        // For single address string (e.g. camp address), try Census → ORS
         const cleanAddr = (addr || '').replace(/\s*[,#]\s*(apt|suite|ste|unit|fl|floor|rm|room)\.?\s*\S*/gi, '').replace(/\s+/g, ' ').trim();
-        // Parse into components for structured geocoding
-        const parts = cleanAddr.split(',').map(s => s.trim());
-        const street = parts[0] || '';
-        const city = parts[1] || '';
-        const stateZip = (parts[2] || '').trim().split(/\s+/);
-        const state = stateZip[0] || '';
-        const zip = stateZip[1] || (parts[3] || '').trim();
-        // 1. Mapbox v6
-        const mb = await mapboxGeocode(street, city, state, zip);
-        if (mb && mb.confidence >= 0.5) return { lat: mb.lat, lng: mb.lng };
-        // 2. Census
-        try { const d = await censusGeocode(cleanAddr); if (d?.result?.addressMatches?.length) { const m = d.result.addressMatches[0]; return { lat: m.coordinates.y, lng: m.coordinates.x }; } } catch (_) {}
-        // 3. ORS
-        const key = getApiKey(); if (!key) return null;
-        try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: addr, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return null; const d = await r.json(); if (d.features?.length) { const co = d.features[0].geometry.coordinates; return { lat: co[1], lng: co[0] }; } } catch (_) {} return null;
+        if (!cleanAddr) return null;
+        // 1. Census (free, unlimited)
+        try {
+            const d = await censusGeocode(cleanAddr);
+            if (d?.result?.addressMatches?.length) {
+                const m = d.result.addressMatches[0];
+                if (m.coordinates?.y && m.coordinates?.x) {
+                    console.log('[Go] geocodeSingle: Census matched ' + cleanAddr);
+                    return { lat: m.coordinates.y, lng: m.coordinates.x };
+                }
+            }
+        } catch (e) { console.warn('[Go] geocodeSingle Census error:', e.message); }
+        // 2. ORS (fallback)
+        const key = getApiKey();
+        if (key) {
+            try {
+                const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: addr, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } });
+                if (r.ok) {
+                    const d = await r.json();
+                    if (d.features?.[0]?.geometry?.coordinates?.length >= 2) {
+                        const co = d.features[0].geometry.coordinates;
+                        console.log('[Go] geocodeSingle: ORS matched ' + cleanAddr);
+                        return { lat: co[1], lng: co[0] };
+                    }
+                }
+            } catch (e) { console.warn('[Go] geocodeSingle ORS error:', e.message); }
+        }
+        // 3. Nominatim (last resort)
+        try {
+            const resp = await fetch('https://nominatim.openstreetmap.org/search?' + new URLSearchParams({ q: cleanAddr, format: 'json', limit: '1', countrycodes: 'us' }));
+            if (resp.ok) {
+                const results = await resp.json();
+                if (results.length && results[0].lat && results[0].lon) {
+                    console.log('[Go] geocodeSingle: Nominatim matched ' + cleanAddr);
+                    return { lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) };
+                }
+            }
+        } catch (e) { console.warn('[Go] geocodeSingle Nominatim error:', e.message); }
+        console.warn('[Go] geocodeSingle: all providers failed for ' + cleanAddr);
+        return null;
     }
 
     // =========================================================================
