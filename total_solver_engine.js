@@ -1438,7 +1438,7 @@ else penalty += 200;
                 var fp=S._fieldPropertyMap.get(fName), cap=fp?fp.capacity:S.getFieldCapacity(fName), st=fp?fp.sharingType:S.getSharingType(fName);
                var liveUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?(st==='not_sharable'?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk)):0;
                 var canFit=false;
-               if (st==='not_sharable') { var _nsBatchUse=0; if(b2.startTime!==undefined&&b2.endTime!==undefined){for(var _nsri=0;_nsri<results.length;_nsri++){var _nsr=results[_nsri];if(_nsr.candIdx===-1||normName(_nsr.pick.field)!==fn2)continue;var _nsrb=activityBlocks[_nsr.blockIdx];if(_nsrb.bunk===b2.bunk)continue;if(_nsrb.startTime<b2.endTime&&_nsrb.endTime>b2.startTime)_nsBatchUse++;}} canFit=(liveUse+grpUse+_nsBatchUse<cap); }
+               if (st==='not_sharable') { var _nsBatchUse=0; if(b2.startTime!==undefined&&b2.endTime!==undefined){for(var _nsri=0;_nsri<results.length;_nsri++){var _nsr=results[_nsri];if(_nsr.candIdx===-1||normName(_nsr.pick.field)!==fn2)continue;var _nsrb=activityBlocks[_nsr.blockIdx];if(_nsrb.bunk===b2.bunk)continue;if(_nsrb.startTime<b2.endTime&&_nsrb.endTime>b2.startTime)_nsBatchUse++;}} canFit=(liveUse+_nsBatchUse<cap); }
                 else if (st==='same_division'||st==='custom') {
                     var xc=S.checkCrossDivisionTimeConflict(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk);
                 if (liveUse>=cap) { canFit=false; }
