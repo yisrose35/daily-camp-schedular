@@ -15,18 +15,18 @@
 (function() {
     'use strict';
 
-    // starter: unlimited time in app, but generation expires 7 calendar days
-    //          after first schedule generation + max 100 campers in Me/Go.
-    //          User is NOT locked out — they keep full read/view access,
-    //          they just can't generate new schedules or add more campers.
+    // starter: unlimited time in app, max 7 distinct schedule dates + max 100
+    //          campers in Me/Go. Re-generating an existing date doesn't count
+    //          as a new day. User is NOT locked out — they keep full read/view
+    //          access, just can't generate for NEW dates or add more campers.
     // trial (expo2026): 48-hour full access, no feature limits
     // active (justcampit2026): full access, no limits
     var PLAN_LIMITS = Object.freeze({
-        starter:         Object.freeze({ generationWindowDays: 7,   maxCampers: 100      }),
-        trial:           Object.freeze({ maxScheduleDays: Infinity,  maxCampers: Infinity }),
-        active:          Object.freeze({ maxScheduleDays: Infinity,  maxCampers: Infinity }),
-        paid:            Object.freeze({ maxScheduleDays: Infinity,  maxCampers: Infinity }),
-        founding_member: Object.freeze({ maxScheduleDays: Infinity,  maxCampers: Infinity })
+        starter:         Object.freeze({ maxScheduleDays: 7,          maxCampers: 100      }),
+        trial:           Object.freeze({ maxScheduleDays: Infinity,   maxCampers: Infinity }),
+        active:          Object.freeze({ maxScheduleDays: Infinity,   maxCampers: Infinity }),
+        paid:            Object.freeze({ maxScheduleDays: Infinity,   maxCampers: Infinity }),
+        founding_member: Object.freeze({ maxScheduleDays: Infinity,   maxCampers: Infinity })
     });
 
     window.PLAN_LIMITS = PLAN_LIMITS;
@@ -62,12 +62,10 @@
 // =================================================================
 // SQL TO RUN IN SUPABASE DASHBOARD
 // =================================================================
-// PREREQUISITES:
-//   ALTER TABLE camps ADD COLUMN IF NOT EXISTS first_generation_at TIMESTAMPTZ DEFAULT NULL;
 //
 // --- RPC: check_schedule_limit ---
-// Starter plan: 7 calendar days from first generation, then no more new schedules.
-// Existing schedules can still be viewed/edited. User is NOT locked out.
+// Starter plan: max 7 distinct schedule dates. Re-generating an existing
+// date does NOT count as a new day. User is NOT locked out of existing data.
 /*
 CREATE OR REPLACE FUNCTION check_schedule_limit(p_camp_id UUID, p_date_key TEXT)
 RETURNS JSONB
@@ -76,37 +74,43 @@ SECURITY DEFINER
 AS $$
 DECLARE
     v_plan_status TEXT;
-    v_first_gen TIMESTAMPTZ;
-    v_days_left INT;
-    v_window_days INT := 7;
+    v_used_days INT;
+    v_max_days INT := 7;
+    v_date_exists BOOLEAN;
 BEGIN
-    SELECT plan_status, first_generation_at INTO v_plan_status, v_first_gen
+    SELECT plan_status INTO v_plan_status
     FROM camps WHERE id = p_camp_id;
 
     IF v_plan_status IS DISTINCT FROM 'starter' THEN
         RETURN jsonb_build_object('allowed', true, 'plan', COALESCE(v_plan_status, 'unknown'));
     END IF;
 
-    -- First generation ever: allow and stamp the start time
-    IF v_first_gen IS NULL THEN
-        UPDATE camps SET first_generation_at = NOW() WHERE id = p_camp_id;
-        RETURN jsonb_build_object('allowed', true, 'days_left', v_window_days, 'first_generation', true);
+    -- Count distinct date_keys already saved for this camp
+    SELECT COUNT(DISTINCT date_key) INTO v_used_days
+    FROM daily_schedules WHERE camp_id = p_camp_id;
+
+    -- Check if this specific date already has a schedule (re-gen = free)
+    SELECT EXISTS(
+        SELECT 1 FROM daily_schedules
+        WHERE camp_id = p_camp_id AND date_key = p_date_key
+    ) INTO v_date_exists;
+
+    -- If date already exists, always allow (re-generation)
+    IF v_date_exists THEN
+        RETURN jsonb_build_object('allowed', true, 'used', v_used_days, 'max', v_max_days, 'is_regen', true);
     END IF;
 
-    -- Calculate remaining days
-    v_days_left := v_window_days - EXTRACT(DAY FROM (NOW() - v_first_gen))::INT;
-
-    IF v_days_left <= 0 THEN
+    -- New date: check if we have room
+    IF v_used_days >= v_max_days THEN
         RETURN jsonb_build_object(
             'allowed', false,
-            'reason', 'generation_window_expired',
-            'days_left', 0,
-            'first_generation_at', v_first_gen,
-            'window_days', v_window_days
+            'reason', 'schedule_day_limit_reached',
+            'used', v_used_days,
+            'max', v_max_days
         );
     END IF;
 
-    RETURN jsonb_build_object('allowed', true, 'days_left', v_days_left, 'window_days', v_window_days);
+    RETURN jsonb_build_object('allowed', true, 'used', v_used_days, 'max', v_max_days);
 END;
 $$;
 */
@@ -153,8 +157,8 @@ $$;
 */
 //
 // --- TRIGGER: enforce_starter_schedule_limit ---
-// Blocks INSERT of new schedules after 7-day window expires.
-// Allows updates to existing schedule rows (upsert on conflict = UPDATE, not INSERT).
+// Blocks INSERT of new schedule dates beyond 7 distinct days.
+// Updates to existing date_key rows always pass (re-generation is free).
 /*
 CREATE OR REPLACE FUNCTION enforce_starter_schedule_limit()
 RETURNS TRIGGER
@@ -162,10 +166,11 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_plan_status TEXT;
-    v_first_gen TIMESTAMPTZ;
-    v_window_days INT := 7;
+    v_used_days INT;
+    v_max_days INT := 7;
+    v_date_exists BOOLEAN;
 BEGIN
-    SELECT plan_status, first_generation_at INTO v_plan_status, v_first_gen
+    SELECT plan_status INTO v_plan_status
     FROM camps WHERE id = NEW.camp_id
     FOR UPDATE;
 
@@ -173,15 +178,22 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- No first generation yet: stamp it and allow
-    IF v_first_gen IS NULL THEN
-        UPDATE camps SET first_generation_at = NOW() WHERE id = NEW.camp_id;
+    -- Check if this date_key already exists (re-gen = always allowed)
+    SELECT EXISTS(
+        SELECT 1 FROM daily_schedules
+        WHERE camp_id = NEW.camp_id AND date_key = NEW.date_key
+    ) INTO v_date_exists;
+
+    IF v_date_exists THEN
         RETURN NEW;
     END IF;
 
-    -- Check if window expired
-    IF (NOW() - v_first_gen) > (v_window_days || ' days')::INTERVAL THEN
-        RAISE EXCEPTION 'Starter plan: your 7-day generation window has expired. Upgrade for unlimited scheduling.'
+    -- Count distinct dates already used
+    SELECT COUNT(DISTINCT date_key) INTO v_used_days
+    FROM daily_schedules WHERE camp_id = NEW.camp_id;
+
+    IF v_used_days >= v_max_days THEN
+        RAISE EXCEPTION 'Starter plan: maximum % schedule days reached. Upgrade for unlimited scheduling.', v_max_days
             USING ERRCODE = 'P0001';
     END IF;
 

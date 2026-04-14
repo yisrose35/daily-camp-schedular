@@ -293,23 +293,21 @@
     // =========================================================================
 
     // ── Starter banner state (kept in memory for fast refresh) ──
-    var _starterDaysLeft = 7;
-    var _starterGenExpired = false;
+    var _starterDaysUsed = 0;
     var _starterCamperCount = 0;
     var _starterMaxCampers = 100;
     var _starterMaxDays = 7;
 
     function _starterBannerColor() {
         var camperPct = _starterCamperCount / _starterMaxCampers;
-        if (_starterGenExpired || camperPct >= 1) return 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)';
-        if (_starterDaysLeft <= 2 || camperPct >= 0.8) return 'linear-gradient(135deg, #B45309 0%, #D97706 100%)';
+        var daysPct = _starterDaysUsed / _starterMaxDays;
+        if (daysPct >= 1 || camperPct >= 1) return 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)';
+        if (daysPct >= 0.7 || camperPct >= 0.8) return 'linear-gradient(135deg, #B45309 0%, #D97706 100%)';
         return 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
     }
 
     function _starterDaysLabel() {
-        if (_starterGenExpired) return 'Generation expired';
-        if (_starterDaysLeft >= _starterMaxDays) return _starterMaxDays + ' of ' + _starterMaxDays + ' days remaining';
-        return _starterDaysLeft + ' of ' + _starterMaxDays + ' days remaining';
+        return _starterDaysUsed + ' of ' + _starterMaxDays + ' days used';
     }
 
     function _starterCamperLabel() {
@@ -327,29 +325,24 @@
     }
 
     async function showStarterBanner(campId) {
-        var limits = window.getPlanLimits?.('starter') || { generationWindowDays: 7, maxCampers: 100 };
-        _starterMaxDays = limits.generationWindowDays || 7;
+        var limits = window.getPlanLimits?.('starter') || { maxScheduleDays: 7, maxCampers: 100 };
+        _starterMaxDays = limits.maxScheduleDays || 7;
         _starterMaxCampers = limits.maxCampers || 100;
-        _starterDaysLeft = _starterMaxDays;
-        _starterGenExpired = false;
+        _starterDaysUsed = 0;
         _starterCamperCount = 0;
 
         try {
             var client = window.supabase || window.CampistryDB?.getClient?.();
             if (client && campId) {
-                // Get first_generation_at from camps table
-                var campResult = await client
-                    .from('camps')
-                    .select('first_generation_at')
-                    .eq('id', campId)
-                    .maybeSingle();
+                // Count distinct schedule dates for this camp
+                var schedResult = await client
+                    .from('daily_schedules')
+                    .select('date_key')
+                    .eq('camp_id', campId);
 
-                if (campResult.data?.first_generation_at) {
-                    var firstGen = new Date(campResult.data.first_generation_at).getTime();
-                    var elapsed = Date.now() - firstGen;
-                    var windowMs = _starterMaxDays * 24 * 60 * 60 * 1000;
-                    _starterDaysLeft = Math.max(0, Math.ceil((windowMs - elapsed) / (24 * 60 * 60 * 1000)));
-                    _starterGenExpired = _starterDaysLeft <= 0;
+                if (schedResult.data) {
+                    var uniqueDates = new Set(schedResult.data.map(function(r) { return r.date_key; }));
+                    _starterDaysUsed = uniqueDates.size;
                 }
 
                 // Get camper count from cloud
@@ -431,20 +424,17 @@
             } catch (_) {}
         }
 
-        // Re-check days from Supabase (only if no explicit count — periodic refresh)
+        // Re-check days used from Supabase (only on periodic refresh, not explicit camper updates)
         if (camperCount === undefined) {
             try {
                 var client = window.supabase || window.CampistryDB?.getClient?.();
                 var campId = localStorage.getItem('campistry_camp_id') ||
                              localStorage.getItem('campistry_user_id');
                 if (client && campId) {
-                    var campRes = await client.from('camps').select('first_generation_at').eq('id', campId).maybeSingle();
-                    if (campRes.data?.first_generation_at) {
-                        var firstGen = new Date(campRes.data.first_generation_at).getTime();
-                        var elapsed = Date.now() - firstGen;
-                        var windowMs = _starterMaxDays * 24 * 60 * 60 * 1000;
-                        _starterDaysLeft = Math.max(0, Math.ceil((windowMs - elapsed) / (24 * 60 * 60 * 1000)));
-                        _starterGenExpired = _starterDaysLeft <= 0;
+                    var schedRes = await client.from('daily_schedules').select('date_key').eq('camp_id', campId);
+                    if (schedRes.data) {
+                        var uniqueDates = new Set(schedRes.data.map(function(r) { return r.date_key; }));
+                        _starterDaysUsed = uniqueDates.size;
                     }
                 }
             } catch (_) {}

@@ -696,8 +696,11 @@
                 };
             }
 
-            return { 
-                success: true, 
+            // ★ Update starter banner days count after successful save
+            if (window.refreshStarterBanner) window.refreshStarterBanner();
+
+            return {
+                success: true,
                 target: 'cloud',
                 bunks: filteredBunkCount,
                 verified: true
