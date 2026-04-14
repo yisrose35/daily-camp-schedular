@@ -514,22 +514,7 @@
 .region-shift-badge { padding: .15rem .5rem; border-radius: var(--radius-sm); font-size: .6875rem; font-weight: 600; background: var(--gray-100); color: var(--text-secondary); }
 .region-buses { font-weight: 700; color: var(--brand-600); }
 
-/* ==================== TOAST ==================== */
-.toast {
-    position: fixed; top: 1.5rem; left: 50%;
-    transform: translateX(-50%) translateY(-120%);
-    background: var(--gray-900); color: #fff;
-    padding: .75rem 1.5rem;
-    border-radius: var(--radius-md);
-    font-size: .8125rem; font-weight: 600;
-    box-shadow: var(--shadow-xl);
-    z-index: 99999;
-    transition: transform .35s var(--ease-out);
-    white-space: nowrap;
-    backdrop-filter: blur(8px);
-}
-.toast.show { transform: translateX(-50%) translateY(0); }
-.toast.error { background: var(--red-600); }
+/* Toast removed */
 
 /* ==================== MODE TOGGLE (legacy support) ==================== */
 .mode-btn.active { background: var(--brand-600); color: #fff; border-color: var(--brand-600); }

@@ -368,7 +368,6 @@
 <div class="modal-overlay" id="addToCarpoolModal"><div class="modal" style="max-width:400px;"><div class="modal-header"><h3 id="addToCarpoolTitle">Add to Carpool</h3><button class="modal-close" onclick="CampistryGo.closeModal('addToCarpoolModal')">×</button></div><div class="modal-body"><input type="hidden" id="addToCarpoolNum"><div class="form-group"><label class="form-label">Search</label><input type="text" class="form-input" id="addToCarpoolSearch" placeholder="Type name..." oninput="CampistryGo.filterAddToCarpool()"></div><div class="form-group"><label class="form-label">Select Camper</label><select class="form-input" id="addToCarpoolSelect" size="6" style="height:auto;"></select><span class="form-hint">🚗 = pickup, 🚌 = bus (will switch to pickup)</span></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryGo.closeModal('addToCarpoolModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryGo.confirmAddToCarpool()">Add</button></div></div></div>
 
 <input type="file" id="csvFileInput" accept=".csv,.tsv,.txt" style="display:none">
-<div class="toast" id="toastEl"></div>
 
 <!-- =============================================================== -->
 <!-- SCRIPT LOADING (ORDER MATCHES CAMPISTRY ARCHITECTURE) -->
