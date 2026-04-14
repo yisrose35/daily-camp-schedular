@@ -1053,6 +1053,41 @@
         console.log(`[app1] v${VERSION} initialized — grades are scheduling units`);
     }
 
+    // Refresh primitive — re-reads divisions/grades/bunks/campers from the
+    // shared store (populated by Campistry Me) and re-renders the setup UI.
+    // Debounced so bursts of storage events collapse into a single render.
+    let _app1RefreshTimer = null;
+    function refreshApp1FromStorage(reason) {
+        try {
+            loadData();
+            setupDivisionButtons();
+            renderDivisionDetailPane();
+            console.log('[app1] refreshed (' + (reason || 'unknown') + ')');
+        } catch (e) {
+            console.warn('[app1] refresh failed:', e);
+        }
+    }
+    function scheduleApp1Refresh(reason) {
+        if (_app1RefreshTimer) clearTimeout(_app1RefreshTimer);
+        _app1RefreshTimer = setTimeout(function () {
+            _app1RefreshTimer = null;
+            refreshApp1FromStorage(reason);
+        }, 200);
+    }
+    window.refreshApp1FromStorage = refreshApp1FromStorage;
+
+    // Layer A — cross-tab: Me in tab 1, Flow in tab 2, same browser.
+    window.addEventListener('storage', function (e) {
+        if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') {
+            scheduleApp1Refresh('storage:' + e.key);
+        }
+    });
+    // Layer B bridge — cloud hydration (including realtime-triggered re-hydrate)
+    // updates globals; re-render the setup UI to match.
+    window.addEventListener('campistry-cloud-hydrated', function () {
+        scheduleApp1Refresh('cloud-hydrated');
+    });
+
     // ==================== WINDOW EXPORTS ====================
     window.initApp1 = initApp1;
     

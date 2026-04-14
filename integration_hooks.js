@@ -491,6 +491,10 @@
                 throw upsertError;
             }
 
+            // Mark self-write so our own camp_state realtime subscription
+            // ignores the echo and doesn't trigger a redundant re-hydrate.
+            _lastSelfWriteAt = Date.now();
+
             _lastSyncTime = Date.now();
             
             console.log('☁️ Cloud sync complete:', {
@@ -1059,6 +1063,76 @@
             window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
         }
     }
+
+    // =========================================================================
+    // ★ LIVE — camp_state realtime subscription
+    // Divisions/grades/bunks/campers come from Campistry Me. When any client
+    // (this tab, another tab, another device) writes camp_state, we re-hydrate
+    // and fire `campistry-cloud-hydrated`. app1/Me/Go all listen for that and
+    // re-render. Self-writes are ignored via _lastSelfWriteAt to prevent echo.
+    // =========================================================================
+
+    let _campStateChannel = null;
+    let _lastSelfWriteAt = 0;
+    let _campStateDebounceTimer = null;
+    let _campStateSubscribed = false;
+
+    async function subscribeToCampState() {
+        if (_campStateSubscribed) return;
+        const client = window.CampistryDB?.getClient?.();
+        const campId = window.CampistryDB?.getCampId?.();
+        if (!client || !campId) {
+            log('camp_state realtime: no client/campId yet, deferring');
+            return;
+        }
+        // Role guard: RLS blocks scheduler/viewer from reading camp_state
+        // changes via realtime too — don't bother subscribing.
+        if (!_canWriteCampState()) {
+            log('camp_state realtime: role cannot read camp_state, skipping subscription');
+            return;
+        }
+        _campStateSubscribed = true;
+        try {
+            const channelName = `camp-state-${campId}-${Date.now()}`;
+            log('camp_state realtime: subscribing on', channelName);
+            _campStateChannel = client.channel(channelName)
+                .on('postgres_changes', {
+                    event: '*',
+                    schema: 'public',
+                    table: 'camp_state',
+                    filter: `camp_id=eq.${campId}`
+                }, function (payload) {
+                    // Self-echo guard: our own UPSERT just fired this event.
+                    if (Date.now() - _lastSelfWriteAt < 3000) {
+                        log('camp_state change ignored (self echo)');
+                        return;
+                    }
+                    // Debounce — bulk edits in Me arrive as a rapid burst.
+                    if (_campStateDebounceTimer) clearTimeout(_campStateDebounceTimer);
+                    _campStateDebounceTimer = setTimeout(async function () {
+                        _campStateDebounceTimer = null;
+                        log('camp_state remote change — re-hydrating');
+                        await hydrateFromCloud();
+                    }, 200);
+                })
+                .subscribe(function (status) {
+                    log('camp_state subscription status:', status);
+                    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        // Reset so a later hydration retry can re-subscribe.
+                        _campStateSubscribed = false;
+                    }
+                });
+        } catch (e) {
+            logError('camp_state subscribe failed:', e);
+            _campStateSubscribed = false;
+        }
+    }
+
+    // Subscribe once the first hydration completes — guarantees CampistryDB
+    // is ready. Subsequent hydrations (realtime, manual) don't re-subscribe.
+    window.addEventListener('campistry-cloud-hydrated', function () {
+        if (!_campStateSubscribed) subscribeToCampState();
+    });
 
     // =========================================================================
     // WAIT FOR ALL SYSTEMS
