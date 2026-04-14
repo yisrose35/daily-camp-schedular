@@ -414,11 +414,6 @@ function renderDetailPane() {
     detailPaneEl.appendChild(offCampusSection);
 
     // -- ACCORDION SECTIONS --
-    const transTime = zone.transition.preMin || zone.transition.postMin || 0;
-    detailPaneEl.appendChild(section("Transition Time",
-        transTime ? `${transTime} min` : "None",
-        () => renderTransitionSection(zone)));
-
     detailPaneEl.appendChild(section("Assign Facilities",
         countFacilitiesInZone(zone),
         () => renderFacilityAssignment(zone)));
@@ -431,39 +426,6 @@ function renderDetailPane() {
 function countFacilitiesInZone(zone) {
     const total = (zone.fields?.length || 0) + (zone.specialActivities?.length || 0) + Object.keys(zone.locations || {}).length;
     return total === 0 ? "None assigned" : `${total} facilit${total === 1 ? 'y' : 'ies'} assigned`;
-}
-
-// =========================================================================
-// TRANSITION TIMES SECTION
-// =========================================================================
-function renderTransitionSection(zone) {
-    const container = document.createElement("div");
-    const currentVal = zone.transition.preMin || zone.transition.postMin || 0;
-
-    container.innerHTML = `
-        <p style="font-size:0.82rem; color:#6B7280; margin:0 0 12px 0;">
-            Buffer time for activities in this zone (applied before and after each activity).
-        </p>
-        <div style="display:flex; align-items:center; gap:8px;">
-            <label style="font-size:0.85rem; font-weight:500;">Transition time:</label>
-            <input type="number" id="zone-transition-min" min="0" max="30" value="${currentVal}"
-                style="width:60px; padding:6px; border:1px solid #D1D5DB; border-radius:6px; text-align:center;">
-            <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
-        </div>`;
-
-    setTimeout(() => {
-        const input = container.querySelector('#zone-transition-min');
-        if (input) input.onchange = () => {
-            const val = Math.max(0, Math.min(30, parseInt(input.value) || 0));
-            zone.transition.preMin = val;
-            zone.transition.postMin = val;
-            saveData();
-            const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-            if (el) el.textContent = val ? `${val} min` : "None";
-        };
-    }, 0);
-
-    return container;
 }
 
 // =========================================================================
