@@ -544,103 +544,130 @@ body {
 .gap-3 { gap: var(--space-3); } .gap-4 { gap: var(--space-4); }
 
 /* ==================== QUICK-SWITCH NAV ==================== */
-/* Shared quick-switch bar for navigating between Me / Flow / Go */
+/* Glassmorphic floating pill bar for switching between Me / Flow / Go */
+
 .quick-switch-bar {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin-left: 12px;
-    padding-left: 12px;
-    border-left: 1px solid var(--slate-200);
+    gap: 4px;
+    margin-left: 14px;
+    padding: 4px;
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-radius: 14px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(255,255,255,0.7) inset;
 }
 
-.quick-switch-link {
-    display: flex;
-    align-items: center;
-    padding: 5px 10px;
-    border-radius: 10px;
-    text-decoration: none;
-    cursor: pointer;
-    background: var(--qs-bg, rgba(0,0,0,0.03));
-    border: 1px solid var(--qs-border, transparent);
-    border-bottom: 3px solid var(--qs-accent, transparent);
-    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-    position: relative;
-}
-
-.quick-switch-link:hover {
-    transform: translateY(-2px) scale(1.04);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    background: var(--qs-bg-hover, rgba(0,0,0,0.05));
-}
-
-.quick-switch-link:active {
-    transform: translateY(0) scale(0.98);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-}
-
-.quick-switch-link img {
-    height: 32px;
-    width: auto;
-    object-fit: contain;
-    display: block;
-}
-
-/* ── Color variants ── */
-.quick-switch-link[data-app="me"] {
-    --qs-bg: rgba(245, 158, 11, 0.06);
-    --qs-bg-hover: rgba(245, 158, 11, 0.12);
-    --qs-border: rgba(245, 158, 11, 0.15);
-    --qs-accent: #F59E0B;
-}
-
-.quick-switch-link[data-app="flow"] {
-    --qs-bg: rgba(20, 125, 145, 0.06);
-    --qs-bg-hover: rgba(20, 125, 145, 0.12);
-    --qs-border: rgba(20, 125, 145, 0.15);
-    --qs-accent: #147D91;
-}
-
-.quick-switch-link[data-app="go"] {
-    --qs-bg: rgba(16, 185, 129, 0.06);
-    --qs-bg-hover: rgba(16, 185, 129, 0.12);
-    --qs-border: rgba(16, 185, 129, 0.15);
-    --qs-accent: #10B981;
-}
-
-/* ── Active app indicator (current page) ── */
+/* ── Shared base for both active + link ── */
+.quick-switch-link,
 .quick-switch-active {
     display: flex;
     align-items: center;
-    padding: 5px 10px;
+    padding: 6px 12px;
     border-radius: 10px;
-    background: var(--qs-bg, rgba(0,0,0,0.03));
-    border: 1.5px solid var(--qs-accent, var(--slate-300));
-    border-bottom: 3px solid var(--qs-accent, var(--slate-400));
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    text-decoration: none;
     position: relative;
+    border: none;
+    outline: none;
+}
+
+/* ── Inactive link ── */
+.quick-switch-link {
+    cursor: pointer;
+    background: transparent;
+    transition: background 0.25s cubic-bezier(.4,0,.2,1),
+                transform 0.25s cubic-bezier(.4,0,.2,1),
+                box-shadow 0.25s cubic-bezier(.4,0,.2,1);
+}
+
+.quick-switch-link:hover {
+    background: var(--qs-bg-hover, rgba(0,0,0,0.04));
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px var(--qs-glow, rgba(0,0,0,0.06));
+}
+
+.quick-switch-link:active {
+    transform: translateY(0) scale(0.96);
+    box-shadow: none;
+    transition-duration: 0.1s;
+}
+
+.quick-switch-link img {
+    height: 30px;
+    width: auto;
+    object-fit: contain;
+    display: block;
+    opacity: 0.7;
+    transition: opacity 0.25s ease;
+}
+
+.quick-switch-link:hover img {
+    opacity: 1;
+}
+
+/* ── Color variants (links) ── */
+.quick-switch-link[data-app="me"] {
+    --qs-bg-hover: rgba(245, 158, 11, 0.10);
+    --qs-glow: rgba(245, 158, 11, 0.15);
+}
+
+.quick-switch-link[data-app="flow"] {
+    --qs-bg-hover: rgba(20, 125, 145, 0.10);
+    --qs-glow: rgba(20, 125, 145, 0.15);
+}
+
+.quick-switch-link[data-app="go"] {
+    --qs-bg-hover: rgba(16, 185, 129, 0.10);
+    --qs-glow: rgba(16, 185, 129, 0.15);
+}
+
+/* ── Active app (current page) ── */
+.quick-switch-active {
+    background: var(--qs-active-bg, rgba(0,0,0,0.05));
+    box-shadow: 0 1px 4px var(--qs-active-shadow, rgba(0,0,0,0.06)),
+                0 0 0 1px var(--qs-active-ring, rgba(0,0,0,0.04)) inset;
+}
+
+.quick-switch-active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 16px;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
+    background: var(--qs-dot, var(--slate-400));
 }
 
 .quick-switch-active img {
-    height: 36px;
+    height: 34px;
     width: auto;
     object-fit: contain;
     display: block;
 }
 
 .quick-switch-active[data-app="me"] {
-    --qs-bg: rgba(245, 158, 11, 0.10);
-    --qs-accent: #F59E0B;
+    --qs-active-bg: rgba(245, 158, 11, 0.10);
+    --qs-active-shadow: rgba(245, 158, 11, 0.12);
+    --qs-active-ring: rgba(245, 158, 11, 0.18);
+    --qs-dot: #F59E0B;
 }
 
 .quick-switch-active[data-app="flow"] {
-    --qs-bg: rgba(20, 125, 145, 0.10);
-    --qs-accent: #147D91;
+    --qs-active-bg: rgba(20, 125, 145, 0.10);
+    --qs-active-shadow: rgba(20, 125, 145, 0.12);
+    --qs-active-ring: rgba(20, 125, 145, 0.18);
+    --qs-dot: #147D91;
 }
 
 .quick-switch-active[data-app="go"] {
-    --qs-bg: rgba(16, 185, 129, 0.10);
-    --qs-accent: #10B981;
+    --qs-active-bg: rgba(16, 185, 129, 0.10);
+    --qs-active-shadow: rgba(16, 185, 129, 0.12);
+    --qs-active-ring: rgba(16, 185, 129, 0.18);
+    --qs-dot: #10B981;
 }
 
 /* ==================== RESPONSIVE ==================== */
@@ -652,11 +679,12 @@ body {
     .c-modal { width: 95vw; max-width: 95vw; border-radius: var(--radius-lg); }
     .c-btn { min-height: 44px; }
     .c-page-title { font-size: 1.5rem; }
-    .quick-switch-bar { margin-left: 6px; padding-left: 6px; gap: 4px; }
-    .quick-switch-link img { height: 24px; }
-    .quick-switch-active img { height: 28px; }
-    .quick-switch-link { padding: 4px 6px; border-radius: 8px; }
-    .quick-switch-active { padding: 4px 6px; border-radius: 8px; }
+    .quick-switch-bar { margin-left: 8px; padding: 3px; gap: 2px; border-radius: 10px; }
+    .quick-switch-link { padding: 4px 7px; border-radius: 8px; }
+    .quick-switch-link img { height: 22px; }
+    .quick-switch-active { padding: 4px 7px; border-radius: 8px; }
+    .quick-switch-active img { height: 26px; }
+    .quick-switch-active::after { width: 12px; height: 2px; }
 }
 
 @media (max-width: 480px) {
