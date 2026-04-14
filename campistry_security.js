@@ -863,7 +863,7 @@
         const csp = [
             "default-src 'self'",
             "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net",
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
             "font-src 'self' https://fonts.gstatic.com",
             "img-src 'self' data: blob: https:",
             "connect-src 'self' https://bzqmhcumuarrbueqttfh.supabase.co wss://bzqmhcumuarrbueqttfh.supabase.co https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.open-meteo.com https://api.mapbox.com https://geocoding.geo.census.gov https://api.openrouteservice.org https://nominatim.openstreetmap.org https://graphhopper.com https://router.project-osrm.org",

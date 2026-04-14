@@ -1081,45 +1081,50 @@
         // 3. If camp location is known, reject if too far
         if (_campCoordsCache) {
             const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, lat, lng);
-            // Hard limit: 50 miles (covers most day camp service areas)
-            if (dist > 50) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 50) — likely wrong location');
+            // Hard limit: 25 miles (day camp service area — tightened from 50)
+            if (dist > 25) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 25) — likely wrong location');
                 return false;
             }
-            // Soft limit: if we have other geocoded addresses, check if this is an outlier
-            // Compare against the cluster of already-geocoded addresses
-            const geocodedAddrs = Object.values(D.addresses).filter(a => a.geocoded && a.lat && a.lng);
-            if (geocodedAddrs.length >= 5) {
-                const avgLat = geocodedAddrs.reduce((s, a) => s + a.lat, 0) / geocodedAddrs.length;
-                const avgLng = geocodedAddrs.reduce((s, a) => s + a.lng, 0) / geocodedAddrs.length;
-                const maxExistingDist = Math.max(...geocodedAddrs.map(a => haversineMi(avgLat, avgLng, a.lat, a.lng)));
-                const thisDist = haversineMi(avgLat, avgLng, lat, lng);
-                // If this address is >3x farther than the farthest existing address, flag it
-                if (maxExistingDist > 0 && thisDist > maxExistingDist * 3 && thisDist > 5) {
-                    console.warn('[Go] Geocode rejected for ' + camperName + ': ' + thisDist.toFixed(1) + 'mi from cluster center (max existing: ' + maxExistingDist.toFixed(1) + 'mi) — likely geocoded to wrong location');
-                    return false;
-                }
+        }
+        // 4. Cluster outlier detection (works with or without camp coords)
+        const geocodedAddrs = Object.values(D.addresses).filter(a => a.geocoded && a.lat && a.lng);
+        if (geocodedAddrs.length >= 3) {
+            const avgLat = geocodedAddrs.reduce((s, a) => s + a.lat, 0) / geocodedAddrs.length;
+            const avgLng = geocodedAddrs.reduce((s, a) => s + a.lng, 0) / geocodedAddrs.length;
+            const dists = geocodedAddrs.map(a => haversineMi(avgLat, avgLng, a.lat, a.lng));
+            // Use median distance instead of max to resist outlier poisoning
+            dists.sort((a, b) => a - b);
+            const medianDist = dists[Math.floor(dists.length / 2)];
+            const thisDist = haversineMi(avgLat, avgLng, lat, lng);
+            // Reject if >2x the median and >3 miles out (avoids false positives for tight clusters)
+            const threshold = Math.max(medianDist * 2, 3);
+            if (thisDist > threshold && thisDist > 5) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + thisDist.toFixed(1) + 'mi from cluster center (median: ' + medianDist.toFixed(1) + 'mi, threshold: ' + threshold.toFixed(1) + 'mi)');
+                return false;
             }
         }
-        // 4. Coordinates that land in the ocean
-        if (lng > -71 && lat < 40.4 && lng < -60) {
-            console.warn('[Go] Geocode rejected for ' + camperName + ': appears to be in the ocean');
-            return false;
-        }
-        // 5. ZIP code cross-check — if camper has a ZIP, verify geocoded location is near that ZIP
+        // 5. ZIP code cross-check (works without camp coords now)
         const addrData = D.addresses[camperName];
-        if (addrData?.zip && _campCoordsCache) {
-            // Check other addresses with same ZIP — are they near this geocoded point?
+        if (addrData?.zip) {
             const sameZipAddrs = Object.values(D.addresses).filter(a => a.zip === addrData.zip && a.geocoded && a.lat && a !== addrData);
             if (sameZipAddrs.length >= 2) {
                 const zipCentLat = sameZipAddrs.reduce((s, a) => s + a.lat, 0) / sameZipAddrs.length;
                 const zipCentLng = sameZipAddrs.reduce((s, a) => s + a.lng, 0) / sameZipAddrs.length;
                 const distFromZip = haversineMi(zipCentLat, zipCentLng, lat, lng);
-                // If geocoded location is >5mi from the centroid of other addresses in the same ZIP, it's wrong
                 if (distFromZip > 5) {
-                    console.warn('[Go] Geocode rejected for ' + camperName + ': ' + distFromZip.toFixed(1) + 'mi from ZIP ' + addrData.zip + ' cluster — likely geocoded to wrong city/state');
+                    console.warn('[Go] Geocode rejected for ' + camperName + ': ' + distFromZip.toFixed(1) + 'mi from ZIP ' + addrData.zip + ' cluster');
                     return false;
                 }
+            }
+        }
+        // 6. State-level sanity: if address has a state, check geocoded coords are roughly in that state
+        if (addrData?.state) {
+            const stBounds = { NY: [40.4, 45.1, -80, -71.8], NJ: [38.9, 41.4, -75.6, -73.9], CT: [40.9, 42.1, -73.8, -71.8], PA: [39.7, 42.3, -80.6, -74.7] };
+            const b = stBounds[addrData.state.toUpperCase()];
+            if (b && (lat < b[0] || lat > b[1] || lng < b[2] || lng > b[3])) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': coords (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ') outside ' + addrData.state + ' bounds');
+                return false;
             }
         }
         return true;
@@ -1181,7 +1186,12 @@
             setSyncStatus('syncing');
             saveModeData();
             localStorage.setItem(STORE, JSON.stringify(D));
-            if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings('campistryGo', D);
+            // Sync to global settings without savedRoutes (too large for localStorage quota)
+            if (typeof window.saveGlobalSettings === 'function') {
+                const lite = Object.assign({}, D);
+                delete lite.savedRoutes; // strip route data — it's already in STORE
+                window.saveGlobalSettings('campistryGo', lite);
+            }
             setTimeout(() => setSyncStatus('synced'), 300);
         } catch (e) { console.error('[Go] Save:', e); setSyncStatus('error'); }
     }
@@ -4206,9 +4216,10 @@
         const ghKey = getGHKey();
         if (!ghKey || _ghQuotaExhausted) return null;
         if (!stops.length) return null;
+        // GH free tier only allows 5 locations per VRP request — skip and fall back to VROOM for larger routes
+        if (stops.length > 5) { console.log('[Go] GH: skipping — ' + stops.length + ' stops exceeds free-tier limit of 5'); return null; }
 
         const serviceTime = (D.setup.avgStopTime || 2) * 60;
-        // GH free tier: 5 vehicles, up to ~100 services (not 30)
         const MAX_GH_SERVICES = 80;
 
         // If >MAX stops, optimize the most spread-out, then cheapestInsert the rest
