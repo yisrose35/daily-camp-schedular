@@ -1097,9 +1097,9 @@
             dists.sort((a, b) => a - b);
             const medianDist = dists[Math.floor(dists.length / 2)];
             const thisDist = haversineMi(avgLat, avgLng, lat, lng);
-            // Reject if >2x the median and >3 miles out (avoids false positives for tight clusters)
-            const threshold = Math.max(medianDist * 2, 3);
-            if (thisDist > threshold && thisDist > 5) {
+            // Reject if >3x the median and >10 miles out (generous for spread-out areas)
+            const threshold = Math.max(medianDist * 3, 10);
+            if (thisDist > threshold) {
                 console.warn('[Go] Geocode rejected for ' + camperName + ': ' + thisDist.toFixed(1) + 'mi from cluster center (median: ' + medianDist.toFixed(1) + 'mi, threshold: ' + threshold.toFixed(1) + 'mi)');
                 return false;
             }
