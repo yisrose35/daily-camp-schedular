@@ -6194,16 +6194,21 @@
     //   Q1: Major roads only (primary/secondary/trunk) — small, fast, for crossing detection
     //   Q2: All named roads but nodes-only via `out center` — for intersection finding
     async function fetchIntersections(campers) {
-        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-        campers.forEach(c => { if (c.lat < minLat) minLat = c.lat; if (c.lat > maxLat) maxLat = c.lat; if (c.lng < minLng) minLng = c.lng; if (c.lng > maxLng) maxLng = c.lng; });
-        // Buffer of ~0.005 deg ≈ ~0.35mi — ensures intersections near cluster edges are included
-        const buf = 0.005;
+        // Use percentile-trimmed bbox (5th-95th) to exclude geocode outliers
+        const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
+        const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
+        if (lats.length < 2 || lngs.length < 2) return null;
+        const lo = Math.floor(lats.length * 0.05);
+        const hi = Math.ceil(lats.length * 0.95) - 1;
+        const minLat = lats[lo], maxLat = lats[hi];
+        const minLng = lngs[lo], maxLng = lngs[hi];
+        const buf = 0.008; // ~0.55mi buffer for edge intersections
         const bbox = (minLat - buf) + ',' + (minLng - buf) + ',' + (maxLat + buf) + ',' + (maxLng + buf);
 
-        // Clamp bbox area — if service area is too large, Overpass will choke
         const area = (maxLat - minLat + 2 * buf) * (maxLng - minLng + 2 * buf);
-        if (area > 0.25) {
-            console.warn('[Go] Overpass: bbox too large (' + area.toFixed(3) + ' deg²), skipping intersection fetch');
+        console.log('[Go] Overpass: bbox area ' + area.toFixed(3) + ' deg² (trimmed 5th-95th percentile)');
+        if (area > 0.5) {
+            console.warn('[Go] Overpass: bbox still too large after trimming (' + area.toFixed(3) + ' deg²), skipping');
             return null;
         }
 

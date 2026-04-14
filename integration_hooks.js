@@ -357,11 +357,17 @@
     function setLocalSettings(data) {
         try {
             _localCache = data;
-            localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
-            
-            // Update legacy keys for backward compatibility
-            localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(data));
-            
+            // Strip large data from Go before writing to shared settings
+            const lite = Object.assign({}, data);
+            if (lite.campistryGo) {
+                lite.campistryGo = Object.assign({}, lite.campistryGo);
+                delete lite.campistryGo.savedRoutes;
+                delete lite.campistryGo.addresses; // stored separately in Go's own key
+            }
+            const json = JSON.stringify(lite);
+            localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
+            localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+
             if (data.divisions || data.bunks) {
                 localStorage.setItem('campGlobalRegistry_v1', JSON.stringify({
                     divisions: data.divisions || {},
