@@ -2300,7 +2300,7 @@
             if (nom && nom.lat && nom.lng) result = { street: nom.street, city: nom.city, state: nom.state, zip: nom.zip, lat: nom.lat, lng: nom.lng, confidence: nom.confidence || 0.6, source: 'nominatim' };
 
             if (result && result.lat && result.lng) {
-                if (!validateGeocode(result.lat, result.lng, a.street, name)) {
+                if (!validateGeocode(result.lat, result.lng, a.street, name, result)) {
                     a._validated = false;
                     a._geocodeWarning = 'Location invalid — check address';
                     failed++;
@@ -2825,7 +2825,8 @@
     // =========================================================================
     function detectRegions() {
         const roster = getRoster(); const zipGroups = {};
-        Object.keys(roster).forEach(name => { const a = D.addresses[name]; if (!a?.geocoded || !a.lat || !a.lng) return; if (a.transport === 'pickup') return; const zip = (a.zip || '').trim(); if (!zip) return; if (!zipGroups[zip]) zipGroups[zip] = { campers: [], cities: {} }; zipGroups[zip].campers.push({ name, lat: a.lat, lng: a.lng, city: a.city || '', division: roster[name].division || '' }); const city = a.city || 'Unknown'; zipGroups[zip].cities[city] = (zipGroups[zip].cities[city] || 0) + 1; });
+        const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
+        Object.keys(roster).forEach(name => { const a = D.addresses[name]; if (!a?.geocoded || !a.lat || !a.lng) return; if (a.transport === 'pickup') return; if (a[modeKey] === false) return; const zip = (a.zip || '').trim(); if (!zip) return; if (!zipGroups[zip]) zipGroups[zip] = { campers: [], cities: {} }; zipGroups[zip].campers.push({ name, lat: a.lat, lng: a.lng, city: a.city || '', division: roster[name].division || '' }); const city = a.city || 'Unknown'; zipGroups[zip].cities[city] = (zipGroups[zip].cities[city] || 0) + 1; });
         if (!Object.keys(zipGroups).length) { toast('No geocoded campers with ZIP codes', 'error'); return; }
         const clusters = [];
         Object.entries(zipGroups).forEach(([zip, data]) => { const campers = data.campers; const regionName = Object.keys(data.cities).sort((a, b) => data.cities[b] - data.cities[a])[0] || zip; const cLat = campers.reduce((s, c) => s + c.lat, 0) / campers.length; const cLng = campers.reduce((s, c) => s + c.lng, 0) / campers.length; clusters.push({ id: 'zip_' + zip, name: regionName + ' (' + zip + ')', color: REGION_COLORS[clusters.length % REGION_COLORS.length], centroidLat: cLat, centroidLng: cLng, camperNames: campers.map(c => c.name), zip: zip }); });
@@ -2888,11 +2889,13 @@
         const roster = getRoster();
         const allCampers = [];
 
-        // Gather all geocoded, bus-riding campers
+        // Gather all geocoded, bus-riding campers (filtered by active mode)
+        const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
         Object.keys(roster).forEach(name => {
             const a = D.addresses[name];
             if (!a?.geocoded || !a.lat || !a.lng) return;
             if (a.transport === 'pickup') return;
+            if (a[modeKey] === false) return;
             allCampers.push({
                 name, lat: a.lat, lng: a.lng,
                 address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '),
