@@ -125,10 +125,6 @@ function save(){
         }else{
             console.log('[Me] ⚠ No cloud sync available — saved to localStorage only');
         }
-        // ★ Update starter-plan banner camper count in real time (trial_guard.js integration)
-        if(typeof window.refreshStarterBanner==='function'){
-            try{window.refreshStarterBanner(rosterCount)}catch(ex){}
-        }
     }catch(e){console.error('[Me] Save:',e)}
 }
 
@@ -866,6 +862,7 @@ function bbDrop(t,e){e.preventDefault();var n=e.dataTransfer.getData('text/plain
 function autoAssign(){var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,gr:gr,div:div})})})});var next={};allB.forEach(function(b){next[b.name]=[]});var campers=Object.entries(roster);campers.sort(function(a,b){return(a[1].grade||'').localeCompare(b[1].grade||'')});campers.forEach(function([n,d]){var el=allB.filter(function(b){return b.gr===d.grade});if(!el.length)el=allB.filter(function(b){return b.div===d.division});if(!el.length)el=allB;if(!el.length)return;el.sort(function(a,b){return next[a.name].length-next[b.name].length});next[el[0].name].push(n)});bunkAsgn=next;save();renderBB();toast('Auto-assigned')}
 function clearBunks(){if(!confirm('Clear all?'))return;bunkAsgn={};save();renderBB();toast('Cleared')}
 
+// ── BILLING / BROADCASTS / SOON ──────────────────────────────────
 // ── REGISTRATION & ENROLLMENT ─────────────────────────────────────
 function renderEnrollment(){
     var c=document.getElementById('page-enrollment');
@@ -1109,20 +1106,6 @@ function saveFormConfig(){
     closeModal('formConfigModal');toast('Form configuration saved');
 }
 
-// Empty stubs for pages that will be filled by the rest of the code below
-function renderSoon(p){var c=document.getElementById('page-'+p);if(c)c.innerHTML='<div class="me-soon"><h2>Coming Soon</h2><p>'+esc(p)+' is being built.</p></div>'}
-
-// The remaining renderer, billing, broadcast, forms, reports, settings, finance,
-// Stripe, sessions, applications, custom fields, docs, scholarships and
-// duplicate-detection logic is assembled in the bottom half of the file.
-// See window.CampistryMe export at end for the full public surface.
-
-// ═══════════════════════════════════════════════════════════════
-// REMAINDER OF ENGINE (sessions, applications, billing, broadcasts,
-// forms, reports, settings, finance, Stripe, custom fields, docs,
-// scholarships, duplicate detection, CSV, etc.)
-// ═══════════════════════════════════════════════════════════════
-
 // View full application (review modal)
 function viewApplication(id){
     var e=enrollments[id];if(!e)return;
@@ -1179,6 +1162,7 @@ function viewApplication(id){
     b+=row('T-Shirt Size',e.tshirtSize);
     b+=row('Additional Notes',e.notes);
 
+    // Custom question answers
     if(e.customAnswers&&Object.keys(e.customAnswers).length){
         b+=sec('Custom Responses');
         var labels=e.customQuestionLabels||[];
@@ -1197,6 +1181,7 @@ function viewApplication(id){
     b+=row('Payment Status',e.paymentStatus||'pending');
     if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',esc(e.discount.label)+' ('+esc(e.discount.code)+')');
 
+    // Documents
     if(e.documents&&e.documents.length){
         b+=sec('Uploaded Documents');
         e.documents.forEach(function(doc){
@@ -1207,11 +1192,13 @@ function viewApplication(id){
         });
     }
 
+    // Signature
     if(e.signature){
         b+=sec('Signature');
         b+='<img src="'+e.signature+'" style="max-width:300px;height:80px;border:1px solid var(--s200);border-radius:var(--r);object-fit:contain;background:#fff">';
     }
 
+    // Sibling group
     if(e.siblingGroup){
         b+=sec('Sibling Group');
         var sibApps=Object.entries(enrollments).filter(function([,x]){return x.siblingGroup===e.siblingGroup||x.siblingGroup===id});
@@ -1222,12 +1209,14 @@ function viewApplication(id){
         }
     }
 
+    // Admin Notes
     b+=sec('Internal Notes');
     b+='<textarea id="avNotes" style="width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.82rem;font-family:var(--font);min-height:60px;resize:vertical;outline:none" placeholder="Add internal notes (only visible to admin)...">'+(e.adminNotes?esc(e.adminNotes):'')+'</textarea>';
     b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.saveAppNote(\''+esc(id)+'\')">Save Notes</button>';
 
     document.getElementById('avBody').innerHTML=b;
 
+    // Footer buttons
     var f='<button class="me-btn me-btn--sec" onclick="CampistryMe.printApplication(\''+esc(id)+'\')" style="margin-right:auto">🖨 Print</button>';
     if(e.status==='applied'){
         f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\');CampistryMe.closeModal(\'appViewModal\')">Accept</button>';
@@ -1259,6 +1248,58 @@ function printApplication(id){
     var h='<html><head><title>Application — '+e.camperName+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
     h+='<h1>'+esc(e.camperName)+'</h1>';
     h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+e.status+' · Applied: '+e.appliedDate+'</div>';
+
+    function sec(t){return'<h2>'+t+'</h2><table>'}
+    function row(l,v){return v?'<tr><td>'+l+'</td><td>'+v+'</td></tr>':''}
+    function end(){return'</table>'}
+
+    h+=sec('Camper');
+    h+=row('Name',esc(e.camperName));h+=row('DOB',e.dob);h+=row('Gender',e.gender);
+    h+=row('School',e.school);h+=row('Grade',e.schoolGrade);h+=row('Teacher',e.teacher);h+=end();
+
+    h+=sec('Parent/Guardian');
+    h+=row('Name',esc(e.parentName)+(e.parentRelation?' ('+e.parentRelation+')':''));
+    h+=row('Phone',e.parentPhone);h+=row('Email',e.parentEmail);
+    if(e.parent2Name)h+=row('Parent 2',esc(e.parent2Name)+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
+
+    h+=sec('Address');
+    h+=row('Street',e.street);h+=row('City',e.city);h+=row('State',e.state);h+=row('ZIP',e.zip);h+=end();
+
+    h+=sec('Emergency Contact');
+    h+=row('Name',esc(e.emergencyName)+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
+
+    h+=sec('Medical');
+    h+=row('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':'None');
+    h+=row('Medications',e.medications?'<span class="med">'+esc(e.medications)+'</span>':'None');
+    h+=row('Dietary',e.dietary||'None');h+=row('Notes',e.medicalNotes);h+=end();
+
+    h+=sec('Preferences');
+    h+=row('Bunkmate',e.bunkmate);h+=row('Separation',e.separateFrom);h+=row('T-Shirt',e.tshirtSize);h+=row('Notes',e.notes);h+=end();
+
+    h+=sec('Payment');
+    h+=row('Session',e.session);h+=row('Tuition',e.sessionTuition?'$'+Number(e.sessionTuition).toLocaleString():'—');
+    h+=row('Method',e.paymentMethod);h+=row('Status',e.paymentStatus);
+    if(e.discount&&e.discount.code)h+=row('Discount',e.discount.label);h+=end();
+
+    if(e.customAnswers&&Object.keys(e.customAnswers).length){
+        h+=sec('Custom Responses');
+        var labels=e.customQuestionLabels||[];
+        Object.entries(e.customAnswers).forEach(function([key,val]){
+            var idx=parseInt(key.replace('q',''));var label=labels[idx]||('Question '+(idx+1));
+            h+=row(label,Array.isArray(val)?val.join(', '):esc(val));
+        });h+=end();
+    }
+
+    if(e.documents&&e.documents.length){
+        h+=sec('Documents');
+        e.documents.forEach(function(d){h+='<div style="padding:2px 0">📄 '+esc(d.name)+'</div>'});
+    }
+
+    if(e.signature){h+=sec('Signature');h+='<img src="'+e.signature+'">';}
+
+    if(e.adminNotes){h+=sec('Admin Notes');h+='<p>'+esc(e.adminNotes)+'</p>';}
+
+    h+='<div style="margin-top:30px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0;padding-top:10px">Printed from Campistry Me · '+new Date().toLocaleString()+'</div>';
     h+='</body></html>';
     w.document.write(h);w.document.close();
     setTimeout(function(){w.print()},300);
@@ -1285,7 +1326,7 @@ function openSessionModal(idx){
     h+='<div class="me-field"><label>Early Bird Deadline</label><input type="date" id="sesEarlyDate" class="me-input" value="'+(s.earlyBirdDeadline||'')+'"></div>';
     h+='</div>';
     h+='<div class="me-field"><label>Sibling Discount (%)</label><input type="number" id="sesSibDisc" class="me-input" value="'+(s.siblingDiscount||'')+'" placeholder="e.g., 10 for 10% off siblings" min="0" max="100"></div>';
-    h+='<div class="me-field"><label>Payment Plan</label><select id="sesPayPlan" class="me-input"><option value="full"'+(s.paymentPlan==='full'?' selected':'')+'>Full payment required</option><option value="2"'+(s.paymentPlan==='2'?' selected':'')+'>2 installments (50/50)</option><option value="3"'+(s.paymentPlan==='3'?' selected':'')+'>3 installments (34/33/33)</option><option value="4"'+(s.paymentPlan==='4'?' selected':'')+'>4 installments (25 each)</option><option value="deposit"'+(s.paymentPlan==='deposit'?' selected':'')+'>Deposit + balance</option></select></div>';
+    h+='<div class="me-field"><label>Payment Plan</label><select id="sesPayPlan" class="me-input"><option value="full"'+(s.paymentPlan==='full'?' selected':'')+'  >Full payment required</option><option value="2"'+(s.paymentPlan==='2'?' selected':'')+'>2 installments (50/50)</option><option value="3"'+(s.paymentPlan==='3'?' selected':'')+'>3 installments (34/33/33)</option><option value="4"'+(s.paymentPlan==='4'?' selected':'')+'>4 installments (25 each)</option><option value="deposit"'+(s.paymentPlan==='deposit'?' selected':'')+'>Deposit + balance</option></select></div>';
     h+='<div id="sesDepositWrap" style="display:'+(s.paymentPlan==='deposit'?'block':'none')+'"><div class="me-field"><label>Deposit Amount ($)</label><input type="number" id="sesDeposit" class="me-input" value="'+(s.depositAmount||'')+'" step="0.01" min="0"></div></div>';
     h+='<div class="me-field"><label>Description / Notes</label><textarea id="sesNotes" class="me-input" rows="2" style="resize:vertical" placeholder="Optional session description for parents">'+(s.notes||'')+'</textarea></div>';
     h+='</div>';
@@ -1308,6 +1349,7 @@ function openSessionModal(idx){
             registrationOpen:idx!==null?(sessions[idx].registrationOpen!==false):true
         };
         if(!obj.name){alert('Enter a session name');return}
+        // Auto-generate date range label from dates if not manually set
         if(!obj.dates&&obj.startDate&&obj.endDate){
             obj.dates=new Date(obj.startDate+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric'})+' – '+new Date(obj.endDate+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
         }
@@ -1338,23 +1380,66 @@ function deleteSession(idx){
 }
 
 function addApplication(){
-    // Simple manual entry — parity with old behavior
-    var first=prompt('Camper first name:');if(!first)return;
-    var last=prompt('Last name:');if(!last)return;
-    var parent=prompt('Parent name:')||'';
-    var phone=prompt('Phone:')||'';
-    var email=prompt('Email:')||'';
-    var session=sessions.length?sessions[0].name:'';
-    var sesObj=sessions.find(function(s){return s.name===session});
-    var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
-    enrollments[id]={
-        camperName:(first+' '+last).trim(),camperLast:last,
-        parentName:parent,parentPhone:phone,parentEmail:email,
-        session:session,sessionTuition:sesObj?sesObj.tuition:0,
-        status:'applied',appliedDate:new Date().toISOString().split('T')[0],
-        formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Manual entry'
-    };
-    save();renderEnrollment();toast('Application added');
+    var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
+    var h='<div class="me-modal-form">';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Camper First Name</label><input type="text" id="appFirst" class="me-input" placeholder="First"></div><div class="me-field"><label>Last Name</label><input type="text" id="appLast" class="me-input" placeholder="Last"></div></div>';
+    h+='<div class="me-field"><label>Session</label><select id="appSession" class="me-input"><option value="">— Select —</option>'+sesOpts+'</select></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Date of Birth</label><input type="date" id="appDob" class="me-input"></div><div class="me-field"><label>Gender</label><select id="appGender" class="me-input"><option value="">—</option><option>Male</option><option>Female</option></select></div></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>School</label><input type="text" id="appSchool" class="me-input"></div><div class="me-field"><label>School Grade</label><input type="text" id="appSchoolGrade" class="me-input"></div></div>';
+    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Parent / Guardian</div></div>';
+    h+='<div class="me-field"><label>Parent Name</label><input type="text" id="appParent" class="me-input" placeholder="Full name"></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Phone</label><input type="tel" id="appPhone" class="me-input"></div><div class="me-field"><label>Email</label><input type="email" id="appEmail" class="me-input"></div></div>';
+    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Address</div></div>';
+    h+='<div class="me-field"><label>Street</label><input type="text" id="appStreet" class="me-input"></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px"><div class="me-field"><label>City</label><input type="text" id="appCity" class="me-input"></div><div class="me-field"><label>State</label><input type="text" id="appState" class="me-input" value="NY" maxlength="2"></div><div class="me-field"><label>ZIP</label><input type="text" id="appZip" class="me-input" maxlength="10"></div></div>';
+    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Medical (optional)</div></div>';
+    h+='<div class="me-field"><label>Allergies</label><input type="text" id="appAllergies" class="me-input" placeholder="None or list allergies"></div>';
+    h+='<div class="me-field"><label>Medications</label><input type="text" id="appMeds" class="me-input" placeholder="None or list medications"></div>';
+    h+='<div class="me-field"><label>Notes</label><textarea id="appNotes" class="me-input" rows="2" style="resize:vertical" placeholder="Special requests, bunkmate preferences, etc."></textarea></div>';
+    h+='</div>';
+
+    showModal('New Application',h,function(){
+        var first=(document.getElementById('appFirst').value||'').trim();
+        var last=(document.getElementById('appLast').value||'').trim();
+        if(!first||!last){alert('Enter camper name');return}
+        var camperName=first+' '+last;
+        var session=document.getElementById('appSession').value||'';
+        var sesObj=sessions.find(function(s){return s.name===session});
+        // Check capacity
+        if(sesObj&&sesObj.capacity>0){
+            var enrolled=Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length;
+            if(enrolled>=sesObj.capacity){
+                if(!confirm(session+' is at capacity ('+enrolled+'/'+sesObj.capacity+'). Add to waitlist?'))return;
+            }
+        }
+        var tuition=sesObj?sesObj.tuition:0;
+        var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
+        enrollments[id]={
+            camperName:camperName,camperLast:last,
+            parentName:(document.getElementById('appParent').value||'').trim(),
+            parentEmail:(document.getElementById('appEmail').value||'').trim(),
+            parentPhone:(document.getElementById('appPhone').value||'').trim(),
+            dob:document.getElementById('appDob').value||'',
+            gender:document.getElementById('appGender').value||'',
+            school:(document.getElementById('appSchool').value||'').trim(),
+            schoolGrade:(document.getElementById('appSchoolGrade').value||'').trim(),
+            street:(document.getElementById('appStreet').value||'').trim(),
+            city:(document.getElementById('appCity').value||'').trim(),
+            state:(document.getElementById('appState').value||'').trim(),
+            zip:(document.getElementById('appZip').value||'').trim(),
+            allergies:(document.getElementById('appAllergies').value||'').trim(),
+            medications:(document.getElementById('appMeds').value||'').trim(),
+            session:session,
+            sessionTuition:tuition,
+            status:sesObj&&sesObj.capacity>0&&Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length>=sesObj.capacity?'waitlisted':'applied',
+            appliedDate:new Date().toISOString().split('T')[0],
+            formsRequired:3,formsCompleted:0,
+            paymentStatus:'pending',paymentAmount:0,
+            notes:(document.getElementById('appNotes').value||'').trim()
+        };
+        save();closeModal('dynModal');renderEnrollment();
+        toast(enrollments[id].status==='waitlisted'?camperName+' added to waitlist':camperName+' application received');
+    });
 }
 
 function updateEnrollStatus(id,status){
@@ -1363,6 +1448,8 @@ function updateEnrollStatus(id,status){
     enrollments[id].status=status;
     enrollments[id].statusHistory=enrollments[id].statusHistory||[];
     enrollments[id].statusHistory.push({from:prev,to:status,date:new Date().toISOString(),by:'office'});
+
+    // If declining/withdrawing someone from a full session, auto-promote next waitlisted
     if((status==='declined'||status==='withdrawn')&&prev!=='waitlisted'){
         var session=enrollments[id].session;
         if(session) autoPromoteWaitlist(session);
@@ -1372,22 +1459,25 @@ function updateEnrollStatus(id,status){
 
 function autoPromoteWaitlist(sessionName){
     var sesObj=sessions.find(function(s){return s.name===sessionName});
-    if(!sesObj||!sesObj.capacity)return;
+    if(!sesObj||!sesObj.capacity)return; // no cap = no waitlist needed
     var enrolled=Object.values(enrollments).filter(function(e){return e.session===sessionName&&(e.status==='enrolled'||e.status==='accepted')}).length;
-    if(enrolled>=sesObj.capacity)return;
+    if(enrolled>=sesObj.capacity)return; // still full
+    // Find oldest waitlisted application for this session
     var waitlisted=Object.entries(enrollments).filter(function([,e]){return e.session===sessionName&&e.status==='waitlisted'}).sort(function(a,b){return(a[1].appliedDate||'').localeCompare(b[1].appliedDate||'')});
     if(waitlisted.length){
-        var wid=waitlisted[0][0],we=waitlisted[0][1];
+        var[wid,we]=waitlisted[0];
         we.status='accepted';
         we.statusHistory=we.statusHistory||[];
         we.statusHistory.push({from:'waitlisted',to:'accepted',date:new Date().toISOString(),by:'auto-promote'});
         toast('Auto-promoted '+we.camperName+' from waitlist!');
+        console.log('[Me] Waitlist auto-promote: '+we.camperName+' for '+sessionName);
     }
 }
 
 function enrollCamper(id){
     var e=enrollments[id];if(!e)return;
     e.status='enrolled';
+    // Auto-create camper in roster with ALL application data
     if(!roster[e.camperName]){
         var newId=nextCamperId;nextCamperId++;
         roster[e.camperName]={
@@ -1400,17 +1490,23 @@ function enrollCamper(id){
             emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||'',
             allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||''
         };
+        // Sync address to Go
         if(e.street)syncAddressToGo(e.camperName,roster[e.camperName]);
-        toast('Enrolled — camper added to roster');
+        toast('Enrolled — camper added to roster with all info');
     }else{
+        // Update existing camper with any missing data from application
         var c=roster[e.camperName];
         if(!c.dob&&e.dob)c.dob=e.dob;
         if(!c.gender&&e.gender)c.gender=e.gender;
         if(!c.school&&e.school)c.school=e.school;
-        if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
+        if(!c.schoolGrade&&e.schoolGrade)c.schoolGrade=e.schoolGrade;
+        if(!c.teacher&&e.teacher)c.teacher=e.teacher;
         if(!c.street&&e.street){c.street=e.street;c.city=e.city;c.state=e.state;c.zip=e.zip;syncAddressToGo(e.camperName,c)}
+        if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
+        if(!c.emergencyName&&e.emergencyName){c.emergencyName=e.emergencyName;c.emergencyPhone=e.emergencyPhone;c.emergencyRel=e.emergencyRel}
         if(!c.allergies&&e.allergies)c.allergies=e.allergies;
         if(!c.medications&&e.medications)c.medications=e.medications;
+        if(!c.dietary&&e.dietary)c.dietary=e.dietary;
         toast('Enrolled — updated existing camper');
     }
     // Auto-create family
@@ -1418,7 +1514,16 @@ function enrollCamper(id){
     var famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
     var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
     var sesObj=sessions.find(function(s){return s.name===e.session});
-    var tuition=e.sessionTuition||(sesObj&&sesObj.tuition)||0;
+    var tuition=e.sessionTuition||sesObj?.tuition||0;
+
+    // Apply sibling discount if applicable
+    if(sesObj&&sesObj.siblingDiscount>0&&families[famKey]&&families[famKey].camperIds.length>0){
+        var discAmt=Math.round(tuition*sesObj.siblingDiscount/100);
+        tuition-=discAmt;
+        e.discount={pct:sesObj.siblingDiscount,amt:discAmt};
+        console.log('[Me] Sibling discount applied: '+sesObj.siblingDiscount+'% (-'+fm(discAmt)+') for '+e.camperName);
+    }
+
     if(!families[famKey]&&e.parentName){
         var parents=[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'}];
         if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',relation:'Parent'});
@@ -1433,168 +1538,1632 @@ function enrollCamper(id){
         if(families[famKey].camperIds.indexOf(e.camperName)<0) families[famKey].camperIds.push(e.camperName);
         families[famKey].balance=(families[famKey].balance||0)+tuition;
     }
+
+    // Generate payment plan / installment schedule
+    if(sesObj&&sesObj.paymentPlan&&sesObj.paymentPlan!=='full'){
+        var plan=sesObj.paymentPlan;
+        e.installments=[];
+        var today=new Date();
+        if(plan==='deposit'){
+            var dep=sesObj.depositAmount||Math.round(tuition*0.25);
+            e.installments.push({label:'Deposit',amount:dep,dueDate:today.toISOString().split('T')[0],status:'pending'});
+            e.installments.push({label:'Balance',amount:tuition-dep,dueDate:sesObj.startDate||'',status:'pending'});
+        }else{
+            var numPayments=parseInt(plan)||2;
+            var perPayment=Math.floor(tuition/numPayments);
+            var remainder=tuition-(perPayment*numPayments);
+            for(var pi=0;pi<numPayments;pi++){
+                var due=new Date(today);due.setDate(due.getDate()+30*(pi));
+                var amt=perPayment+(pi===0?remainder:0);
+                e.installments.push({label:'Payment '+(pi+1)+' of '+numPayments,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending'});
+            }
+        }
+        console.log('[Me] Payment plan: '+e.installments.length+' installments for '+e.camperName);
+    }
+
     e.enrolledDate=new Date().toISOString().split('T')[0];
     save();renderEnrollment();
 }
 
-// ── ANALYTICS (minimal placeholder — shows summary) ──
+// ── ANALYTICS & FINANCE ──────────────────────────────────────
+var _finTab='overview';
+var FIN_CATS=['Food & Catering','Supplies & Equipment','Facilities & Rent','Insurance','Transportation','Activities & Trips','Marketing','Utilities','Miscellaneous'];
+var FIN_ROLES=['Head Counselor','Counselor','Junior Counselor','Specialist','Nurse','Kitchen Staff','Bus Driver','Office Staff','Director','Maintenance'];
+var BAR_COLORS=['#D97706','#3B82F6','#10B981','#8B5CF6','#EF4444','#0EA5E9','#F59E0B','#EC4899','#6366F1','#14B8A6'];
+
 function renderAnalytics(){
     var c=document.getElementById('page-analytics');
-    var totalRev=finPayments.reduce(function(s,p){return s+(p.amount||0)},0);
-    var totalExp=finExpenses.reduce(function(s,e){return s+(e.amount||0)},0);
-    var totalPay=finStaff.reduce(function(s,st){return s+(st.salary||0)},0);
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Analytics & Finance</h2><p class="sec-desc">Financial summary</p></div></div>';
-    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">';
-    h+='<div class="me-card" style="padding:16px"><div style="font-size:1.3rem;font-weight:800;color:var(--ok)">'+fm(totalRev)+'</div><div style="font-size:.72rem;color:var(--s400);text-transform:uppercase;font-weight:600">Revenue</div></div>';
-    h+='<div class="me-card" style="padding:16px"><div style="font-size:1.3rem;font-weight:800;color:var(--err)">'+fm(totalExp)+'</div><div style="font-size:.72rem;color:var(--s400);text-transform:uppercase;font-weight:600">Expenses</div></div>';
-    h+='<div class="me-card" style="padding:16px"><div style="font-size:1.3rem;font-weight:800;color:var(--teal)">'+fm(totalPay)+'</div><div style="font-size:.72rem;color:var(--s400);text-transform:uppercase;font-weight:600">Payroll</div></div>';
-    h+='<div class="me-card" style="padding:16px"><div style="font-size:1.3rem;font-weight:800">'+fm(totalRev-totalExp-totalPay)+'</div><div style="font-size:.72rem;color:var(--s400);text-transform:uppercase;font-weight:600">Net</div></div>';
+
+    // ═══ AUTO-GENERATE INVOICES FROM ENROLLMENTS ═══
+    // Every enrolled camper = an invoice. No manual entry needed.
+    var autoInvoices=[];
+    var overdueDays=finBudget.overdueDays||30; // configurable threshold
+    var todayStr=new Date().toISOString().split('T')[0];
+    var todayMs=new Date().getTime();
+
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled'&&e.status!=='accepted')return;
+        var tuition=e.sessionTuition||0;
+        if(!tuition)return;
+        // Check if manual payment exists for this camper
+        var manualPay=finPayments.filter(function(p){return p.family===e.camperName||p.family===(e.camperLast||'')+' Family'||p.enrollmentId===id});
+        var paidAmount=manualPay.reduce(function(s,p){return s+p.amount},0);
+        var payStatus='pending';
+        if(paidAmount>=tuition)payStatus='paid';
+        else if(paidAmount>0)payStatus='partial';
+        else{
+            // Check if overdue based on enrollment date
+            var enrollDate=new Date(e.appliedDate||todayStr);
+            var daysSince=Math.floor((todayMs-enrollDate.getTime())/(1000*60*60*24));
+            if(daysSince>overdueDays)payStatus='overdue';
+        }
+        // Discount applied?
+        var discountAmt=0;
+        if(e.discount){
+            if(e.discount.pct)discountAmt=Math.round(tuition*e.discount.pct/100);
+            if(e.discount.amt)discountAmt+=e.discount.amt;
+        }
+        var netTuition=tuition-discountAmt;
+        // Get Camper ID from roster
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId||0;
+        var camperIdStr=camperId?String(camperId).padStart(4,'0'):'—';
+        autoInvoices.push({
+            id:id,camperId:camperId,camperIdStr:camperIdStr,
+            camper:e.camperName,family:e.parentName,session:e.session||'',
+            tuition:tuition,discount:discountAmt,netTuition:netTuition,
+            paid:paidAmount,balance:Math.max(netTuition-paidAmount,0),
+            status:payStatus,method:e.paymentMethod||'',
+            enrollDate:e.appliedDate||'',dueDate:'',
+            isOverdue:payStatus==='overdue'
+        });
+    });
+
+    // ═══ AUTO-COMPUTE ALL TOTALS ═══
+    var totalPayroll=finStaff.reduce(function(s,x){return s+(x.salary||0)},0);
+    var totalExp=finExpenses.reduce(function(s,x){return s+(x.amount||0)},0);
+    var projected=autoInvoices.reduce(function(s,inv){return s+inv.netTuition},0);
+    var totalCollected=autoInvoices.reduce(function(s,inv){return s+inv.paid},0);
+    var totalOutstanding=autoInvoices.reduce(function(s,inv){return s+inv.balance},0);
+    var paidCount=autoInvoices.filter(function(inv){return inv.status==='paid'}).length;
+    var partialCount=autoInvoices.filter(function(inv){return inv.status==='partial'}).length;
+    var overdueCount=autoInvoices.filter(function(inv){return inv.status==='overdue'}).length;
+    var pendingCount=autoInvoices.filter(function(inv){return inv.status==='pending'}).length;
+    var netIncome=totalCollected-totalPayroll-totalExp;
+    var enrolledCount=autoInvoices.length;
+
+    var tabs=[{k:'overview',l:'Overview'},{k:'revenue',l:'Revenue'},{k:'payroll',l:'Payroll'},{k:'expenses',l:'Expenses'},{k:'budget',l:'Budget'},{k:'integrations',l:'Integrations'}];
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Analytics & Finance</h2><p class="sec-desc">Financial command center</p></div>';
+    h+='<div class="sec-actions">';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finExportCSV()">↓ Export CSV</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finExportQB()">↓ QuickBooks</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finSetBudget()">Set Budget</button>';
+    h+='</div></div>';
+
+    // Sub-tabs
+    h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">';
+    tabs.forEach(function(t){
+        h+='<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(_finTab===t.k?'var(--me)':'transparent')+';color:'+(_finTab===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.finSetTab(\''+t.k+'\')">'+t.l+'</button>';
+    });
     h+='</div>';
+
+    function stat(label,value,sub,color){return'<div style="flex:1;min-width:140px;background:#fff;border-radius:var(--r);padding:12px 14px;border:1px solid var(--s200);border-left:3px solid '+color+'"><div style="font-size:.65rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+label+'</div><div style="font-size:1.2rem;font-weight:800;color:var(--s800);margin-top:2px">'+value+'</div>'+(sub?'<div style="font-size:.72rem;color:var(--s400);margin-top:1px">'+sub+'</div>':'')+'</div>'}
+    function bar(items,maxVal){var bh='';items.forEach(function(item,i){var pct=maxVal>0?Math.round(item.value/maxVal*100):0;var color=BAR_COLORS[i%BAR_COLORS.length];bh+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:90px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(item.name)+'</div><div style="flex:1;height:20px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+color+';border-radius:4px;transition:width .3s"></div></div><div style="width:60px;font-size:.75rem;font-weight:700;color:var(--s700);text-align:right">'+fm(item.value)+'</div></div>'});return bh}
+
+    if(_finTab==='overview'){
+        // Overdue alert banner
+        if(overdueCount>0){
+            h+='<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;gap:8px"><span style="font-size:18px">⚠️</span><div><div style="font-size:.85rem;font-weight:700;color:var(--err)">'+overdueCount+' overdue account'+(overdueCount>1?'s':'')+'</div><div style="font-size:.75rem;color:#991B1B">'+fm(autoInvoices.filter(function(i){return i.isOverdue}).reduce(function(s,i){return s+i.balance},0))+' outstanding past '+overdueDays+' days</div></div></div>';
+        }
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+        h+=stat('Projected Revenue',fm(projected),enrolledCount+' enrolled campers','var(--me)');
+        h+=stat('Collected',fm(totalCollected),projected>0?Math.round(totalCollected/projected*100)+'% of projected':'','var(--ok)');
+        h+=stat('Outstanding',fm(totalOutstanding),overdueCount+' overdue, '+pendingCount+' pending','var(--err)');
+        h+=stat('Net Income',fm(netIncome),netIncome>=0?'Positive':'Deficit',netIncome>=0?'var(--ok)':'var(--err)');
+        h+='</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
+        h+=stat('Total Payroll',fm(totalPayroll),finStaff.length+' staff','#3B82F6');
+        h+=stat('Total Expenses',fm(totalExp),finExpenses.length+' items','#8B5CF6');
+        h+=stat('Total Costs',fm(totalPayroll+totalExp),'Payroll + Expenses','var(--s600)');
+        h+=stat('Profit Margin',projected>0?Math.round(netIncome/projected*100)+'%':'—','Net / Revenue','#0EA5E9');
+        h+='</div>';
+
+        // Enrollment funnel
+        var eArr=Object.entries(enrollments);
+        var funnel=[{name:'Applied',count:eArr.length,color:'var(--s400)'},{name:'Accepted',count:eArr.filter(function([,e]){return e.status==='accepted'||e.status==='enrolled'}).length,color:'#3B82F6'},{name:'Enrolled',count:eArr.filter(function([,e]){return e.status==='enrolled'}).length,color:'var(--ok)'},{name:'Waitlisted',count:eArr.filter(function([,e]){return e.status==='waitlisted'}).length,color:'var(--me)'},{name:'Declined',count:eArr.filter(function([,e]){return e.status==='declined'}).length,color:'var(--err)'}];
+        var maxFunnel=funnel[0].count||1;
+        h+='<div style="display:flex;gap:14px;flex-wrap:wrap">';
+        h+='<div class="me-card" style="flex:1;min-width:280px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Enrollment Funnel</h4>';
+        funnel.forEach(function(f){var pct=Math.round(f.count/maxFunnel*100);h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:70px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right">'+f.name+'</div><div style="flex:1;height:22px;background:var(--s100);border-radius:4px;overflow:hidden;position:relative"><div style="width:'+pct+'%;height:100%;background:'+f.color+';border-radius:4px"></div><span style="position:absolute;right:6px;top:3px;font-size:.7rem;font-weight:700;color:var(--s600)">'+f.count+'</span></div></div>'});
+        h+='</div>';
+
+        // Payment status
+        h+='<div class="me-card" style="flex:1;min-width:200px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Payment Status</h4>';
+        var payStats=[{name:'Paid',count:paidCount,color:'var(--ok)'},{name:'Partial',count:partialCount,color:'var(--me)'},{name:'Overdue',count:overdueCount,color:'var(--err)'},{name:'Pending',count:pendingCount,color:'var(--s400)'}];
+        var totalPayCount=autoInvoices.length||1;
+        payStats.forEach(function(p){var pct=Math.round(p.count/totalPayCount*100);h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="width:10px;height:10px;border-radius:3px;background:'+p.color+';flex-shrink:0"></div><div style="flex:1;font-size:.82rem;font-weight:600;color:var(--s700)">'+p.name+'</div><div style="font-size:.82rem;font-weight:700;color:var(--s800)">'+p.count+'</div><div style="font-size:.72rem;color:var(--s400);width:35px;text-align:right">'+pct+'%</div></div>'});
+        h+='</div></div>';
+
+        // Expense breakdown
+        var expByCat={};finExpenses.forEach(function(e){expByCat[e.cat]=(expByCat[e.cat]||0)+e.amount});
+        var expItems=Object.entries(expByCat).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
+        var maxExp=expItems.length?expItems[0].value:1;
+        if(expItems.length){
+            h+='<div class="me-card" style="margin-top:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expense Categories</h4>';
+            h+=bar(expItems,maxExp);
+            h+='</div>';
+        }
+    }
+
+    else if(_finTab==='revenue'){
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+        h+=stat('Total Invoiced',fm(projected),'','var(--me)');
+        h+=stat('Collected',fm(totalCollected),'','var(--ok)');
+        h+=stat('Outstanding',fm(totalOutstanding),'','var(--err)');
+        h+=stat('Collection Rate',projected>0?Math.round(totalCollected/projected*100)+'%':'—','','#3B82F6');
+        h+='</div>';
+
+        // Auto-invoice explanation
+        h+='<div style="background:#FFF7ED;border:1px solid #FDBA74;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-size:.78rem;color:var(--s600)"><strong style="color:var(--me)">Auto-Generated Invoices</strong> — Each enrolled camper automatically creates an invoice based on their session tuition. Record payments below to update balances.</div>';
+
+        // Overdue threshold setting
+        h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">';
+        h+='<div style="font-size:.78rem;color:var(--s400)">Accounts are marked overdue after <strong>'+overdueDays+'</strong> days. <button class="me-btn me-btn--ghost me-btn--sm" style="font-size:.72rem" onclick="CampistryMe.finSetOverdue()">Change</button></div>';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddPayment()">+ Record Payment</button>';
+        h+='</div>';
+
+        // Invoices table (auto-generated)
+        h+='<div class="me-card"><div class="me-card-head"><h3>Tuition Invoices ('+autoInvoices.length+' accounts)</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th style="width:70px">Invoice #</th><th>Camper</th><th>Parent</th><th>Session</th><th>Tuition</th><th>Discount</th><th>Paid</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
+        autoInvoices.sort(function(a,b){return a.status==='overdue'?-1:b.status==='overdue'?1:a.camper.localeCompare(b.camper)}).forEach(function(inv){
+            var sc=inv.status==='paid'?'ok':inv.status==='partial'?'warn':inv.status==='overdue'?'err':'gray';
+            var rowStyle=inv.isOverdue?'background:rgba(239,68,68,.03)':'';
+            h+='<tr style="'+rowStyle+'">';
+            h+='<td style="font-family:monospace;font-size:.78rem;color:var(--s500)">#'+esc(inv.camperIdStr)+'</td>';
+            h+='<td class="bold">'+(inv.isOverdue?'⚠ ':'')+esc(inv.camper)+'</td>';
+            h+='<td>'+esc(inv.family||'—')+'</td>';
+            h+='<td style="font-size:.78rem">'+esc(inv.session||'—')+'</td>';
+            h+='<td>'+fm(inv.tuition)+'</td>';
+            h+='<td>'+(inv.discount?'<span style="color:var(--ok)">-'+fm(inv.discount)+'</span>':'—')+'</td>';
+            h+='<td style="color:var(--ok);font-weight:600">'+fm(inv.paid)+'</td>';
+            h+='<td style="font-weight:700;color:'+(inv.balance>0?'var(--err)':'var(--ok)')+'">'+fm(inv.balance)+'</td>';
+            h+='<td>'+bdg(inv.status,sc)+'</td>';
+            h+='</tr>';
+        });
+        h+='</tbody></table></div></div>';
+
+        // Manual payment log (supplementary)
+        if(finPayments.length){
+            h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
+            finPayments.sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment('+i+')">✕</button></td></tr>';
+            });
+            h+='</tbody></table></div></div>';
+        }
+    }
+
+    else if(_finTab==='payroll'){
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+        h+=stat('Total Payroll',fm(totalPayroll),'','#3B82F6');
+        h+=stat('Staff Count',finStaff.length+'','','#8B5CF6');
+        h+=stat('Avg Salary',fm(finStaff.length?totalPayroll/finStaff.length:0),'','#0EA5E9');
+        h+=stat('% of Revenue',projected>0?Math.round(totalPayroll/projected*100)+'%':'—','','var(--me)');
+        h+='</div>';
+        // Cost by role
+        var roleCost={};finStaff.forEach(function(s){roleCost[s.role]=(roleCost[s.role]||0)+s.salary});
+        var roleItems=Object.entries(roleCost).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
+        if(roleItems.length){
+            h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Cost by Role</h4>';
+            h+=bar(roleItems,roleItems[0].value);
+            h+='</div>';
+        }
+        h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddStaff()">+ Add Staff</button></div>';
+        h+='<div class="me-card"><div class="me-card-head"><h3>Staff Directory</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Role</th><th>Type</th><th>Salary</th><th></th></tr></thead><tbody>';
+        finStaff.forEach(function(s,i){
+            h+='<tr><td class="bold">'+esc(s.name)+'</td><td>'+esc(s.role)+'</td><td>'+bdg(s.type||'seasonal',s.type==='annual'?'ok':'gray')+'</td><td style="font-weight:700">'+fm(s.salary)+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemoveStaff('+i+')">✕</button></td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+
+    else if(_finTab==='expenses'){
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+        h+=stat('Total Expenses',fm(totalExp),'','var(--err)');
+        h+=stat('Line Items',finExpenses.length+'','','#8B5CF6');
+        h+=stat('Avg Item',fm(finExpenses.length?totalExp/finExpenses.length:0),'','#0EA5E9');
+        h+=stat('% of Revenue',projected>0?Math.round(totalExp/projected*100)+'%':'—','','var(--me)');
+        h+='</div>';
+        var expByCat2={};finExpenses.forEach(function(e){expByCat2[e.cat]=(expByCat2[e.cat]||0)+e.amount});
+        var expItems2=Object.entries(expByCat2).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
+        if(expItems2.length){
+            h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expenses by Category</h4>';
+            h+=bar(expItems2,expItems2[0].value);
+            h+='</div>';
+        }
+        h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddExpense()">+ Add Expense</button></div>';
+        h+='<div class="me-card"><div class="me-card-head"><h3>Expense Ledger</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Amount</th><th></th></tr></thead><tbody>';
+        finExpenses.sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(e,i){
+            h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(e.date||'—')+'</td><td class="bold">'+esc(e.desc)+'</td><td>'+bdg(e.cat,'gray')+'</td><td style="font-weight:700;color:var(--err)">'+fm(e.amount)+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemoveExpense('+i+')">✕</button></td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+
+    else if(_finTab==='budget'){
+        var budgetItems=[
+            {name:'Revenue',budget:finBudget.revenue||0,actual:totalCollected,good:true},
+            {name:'Payroll',budget:finBudget.payroll||0,actual:totalPayroll,good:false},
+            {name:'Expenses',budget:finBudget.expenses||0,actual:totalExp,good:false}
+        ];
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
+        budgetItems.forEach(function(b){
+            var diff=b.actual-b.budget;var isOver=b.good?diff<0:diff>0;
+            var sub=b.good?(diff>=0?'✓ On track':'⚠ '+fm(Math.abs(diff))+' below'):(diff<=0?'✓ Under budget':'⚠ '+fm(diff)+' over');
+            h+=stat(b.name,fm(b.actual)+' / '+fm(b.budget),sub,isOver?'var(--err)':'var(--ok)');
+        });
+        h+='</div>';
+        // Visual comparison
+        h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 14px">Budget vs Actual</h4>';
+        var maxBudget=Math.max.apply(null,budgetItems.map(function(b){return Math.max(b.budget,b.actual)}))||1;
+        budgetItems.forEach(function(b){
+            var bPct=Math.round(b.budget/maxBudget*100);
+            var aPct=Math.round(b.actual/maxBudget*100);
+            var isOver=b.good?b.actual<b.budget:b.actual>b.budget;
+            h+='<div style="margin-bottom:12px"><div style="font-size:.8rem;font-weight:600;color:var(--s700);margin-bottom:4px">'+b.name+'</div>';
+            h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px"><div style="width:50px;font-size:.7rem;color:var(--s400)">Budget</div><div style="flex:1;height:16px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+bPct+'%;height:100%;background:var(--s300);border-radius:4px"></div></div><div style="width:65px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right">'+fm(b.budget)+'</div></div>';
+            h+='<div style="display:flex;align-items:center;gap:6px"><div style="width:50px;font-size:.7rem;color:var(--s400)">Actual</div><div style="flex:1;height:16px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+aPct+'%;height:100%;background:'+(isOver?'var(--err)':'var(--ok)')+';border-radius:4px"></div></div><div style="width:65px;font-size:.75rem;font-weight:700;color:'+(isOver?'var(--err)':'var(--ok)')+';text-align:right">'+fm(b.actual)+'</div></div></div>';
+        });
+        h+='</div>';
+        h+='<div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finSetBudget()">Edit Budget Targets</button></div>';
+    }
+
+    else if(_finTab==='integrations'){
+        h+='<div class="me-card" style="padding:20px;margin-bottom:14px">';
+        h+='<h4 style="font-size:.9rem;font-weight:700;color:var(--s800);margin:0 0 6px">Accounting Software Integration</h4>';
+        h+='<p style="font-size:.82rem;color:var(--s500);margin-bottom:14px">Export your financial data in formats compatible with popular accounting software. Import transactions from your existing books.</p>';
+
+        h+='<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">';
+        var integrations=[
+            {name:'QuickBooks Online',icon:'📗',desc:'Export as CSV for QBO import',action:'finExportQB'},
+            {name:'QuickBooks Desktop',icon:'📘',desc:'Export as IIF file',action:'finExportIIF'},
+            {name:'Xero',icon:'📙',desc:'Export as Xero-compatible CSV',action:'finExportXero'},
+            {name:'General CSV',icon:'📊',desc:'Universal CSV format',action:'finExportCSV'},
+            {name:'Journal Entries',icon:'📒',desc:'Double-entry journal format',action:'finExportJournal'}
+        ];
+        integrations.forEach(function(ig){
+            h+='<div style="flex:1;min-width:180px;padding:14px;border:1px solid var(--s200);border-radius:var(--r);background:var(--s50)">';
+            h+='<div style="font-size:24px;margin-bottom:6px">'+ig.icon+'</div>';
+            h+='<div style="font-size:.85rem;font-weight:700;color:var(--s800)">'+ig.name+'</div>';
+            h+='<div style="font-size:.72rem;color:var(--s400);margin:3px 0 8px">'+ig.desc+'</div>';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.'+ig.action+'()">↓ Export</button>';
+            h+='</div>';
+        });
+        h+='</div>';
+
+        h+='<div style="border-top:1px solid var(--s200);padding-top:14px">';
+        h+='<h4 style="font-size:.85rem;font-weight:700;color:var(--s800);margin:0 0 6px">Import Transactions</h4>';
+        h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:8px">Upload a CSV export from your accounting software to sync transactions into Campistry.</p>';
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finImportCSV()">↑ Import CSV</button>';
+        h+='<input type="file" id="finImportInput" accept=".csv,.txt" style="display:none">';
+        h+='</div>';
+
+        h+='<div style="border-top:1px solid var(--s200);padding-top:14px;margin-top:14px">';
+        h+='<h4 style="font-size:.85rem;font-weight:700;color:var(--s800);margin:0 0 4px">API Integration (Coming Soon)</h4>';
+        h+='<p style="font-size:.78rem;color:var(--s400)">Direct QuickBooks Online / Xero API sync will be available soon. Contact <a href="mailto:campistryoffice@gmail.com" style="color:var(--me)">campistryoffice@gmail.com</a> to get early access.</p>';
+        h+='</div></div>';
+    }
+
     c.innerHTML=h;
 }
 
-// ── BILLING (minimal summary page) ──
+// Finance actions
+function finSetTab(t){_finTab=t;renderAnalytics()}
+function finAddStaff(){
+    var name=prompt('Staff name:');if(!name)return;
+    var role=prompt('Role ('+FIN_ROLES.join(', ')+'):','Counselor');
+    var salary=prompt('Salary ($):','');if(!salary)return;
+    var type=prompt('Type (seasonal or annual):','seasonal');
+    finStaff.push({id:Date.now(),name:name.trim(),role:(role||'Counselor').trim(),salary:parseFloat(salary)||0,type:(type||'seasonal').trim()});
+    save();renderAnalytics();toast('Staff added');
+}
+function finRemoveStaff(i){finStaff.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finAddExpense(){
+    var desc=prompt('Description:');if(!desc)return;
+    var cat=prompt('Category ('+FIN_CATS.join(', ')+'):','Miscellaneous');
+    var amount=prompt('Amount ($):','');if(!amount)return;
+    var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
+    finExpenses.push({id:Date.now(),desc:desc.trim(),cat:(cat||'Miscellaneous').trim(),amount:parseFloat(amount)||0,date:(date||'').trim()});
+    save();renderAnalytics();toast('Expense added');
+}
+function finRemoveExpense(i){finExpenses.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finAddPayment(){
+    var family=prompt('Family name:');if(!family)return;
+    var amount=prompt('Amount ($):','');if(!amount)return;
+    var method=prompt('Method (Credit Card, ACH, Zelle, Check, Payment Plan):','Credit Card');
+    var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
+    finPayments.push({id:Date.now(),family:family.trim(),amount:parseFloat(amount)||0,method:(method||'Credit Card').trim(),date:(date||'').trim(),status:'paid'});
+    save();renderAnalytics();toast('Payment recorded');
+}
+function finRemovePayment(i){finPayments.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finSetBudget(){
+    var rev=prompt('Revenue target ($):',finBudget.revenue||'');
+    var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
+    var exp=prompt('Expense budget ($):',finBudget.expenses||'');
+    finBudget={revenue:parseFloat(rev)||0,payroll:parseFloat(pay)||0,expenses:parseFloat(exp)||0,overdueDays:finBudget.overdueDays||30};
+    save();renderAnalytics();toast('Budget targets saved');
+}
+function finSetOverdue(){
+    var days=prompt('Mark accounts overdue after how many days?',finBudget.overdueDays||30);
+    if(days===null)return;
+    finBudget.overdueDays=parseInt(days)||30;
+    save();renderAnalytics();toast('Overdue threshold set to '+finBudget.overdueDays+' days');
+}
+
+// ── EXPORT FUNCTIONS ─────────────────────────────────────────
+function finExportCSV(){
+    var csv='\uFEFFType,Date,Description,Category,Amount,Status,Method\n';
+    finPayments.forEach(function(p){csv+='"Payment","'+p.date+'","'+p.family+'","Tuition","'+p.amount+'","'+p.status+'","'+(p.method||'')+'"\n'});
+    finStaff.forEach(function(s){csv+='"Staff","","'+s.name+'","'+s.role+'","'+s.salary+'","'+(s.type||'seasonal')+'",""\n'});
+    finExpenses.forEach(function(e){csv+='"Expense","'+e.date+'","'+e.desc+'","'+e.cat+'","'+e.amount+'","",""\n'});
+    dlFile(csv,'campistry_financials_'+today()+'.csv','text/csv');
+    toast('CSV exported');
+}
+
+function finExportQB(){
+    // QuickBooks Online compatible CSV — includes auto-invoices from enrollments
+    var csv='\uFEFFDate,Transaction Type,Num,Name,Account,Amount,Memo,Status\n';
+    // Auto-invoices from enrolled campers — uses Camper ID as invoice number
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled')return;
+        var tuition=e.sessionTuition||0;if(!tuition)return;
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
+        csv+='"'+esc(e.appliedDate||'')+'","Invoice","INV-'+camperId+'","'+esc(e.camperName)+'","Tuition Income","'+tuition+'","'+esc(e.session||'')+' tuition","'+esc(e.paymentStatus||'pending')+'"\n';
+    });
+    // Manual payments
+    finPayments.forEach(function(p){
+        csv+='"'+p.date+'","Payment","","'+esc(p.family)+'","Tuition Income","'+p.amount+'","'+esc(p.method)+' payment","paid"\n';
+    });
+    // Expenses
+    finExpenses.forEach(function(e){
+        csv+='"'+e.date+'","Expense","","'+esc(e.desc)+'","'+esc(e.cat)+'","-'+e.amount+'","",""\n';
+    });
+    // Payroll
+    finStaff.forEach(function(s){
+        csv+='","Payroll","","'+esc(s.name)+'","Payroll Expense","-'+s.salary+'","'+esc(s.role)+' ('+esc(s.type||'seasonal')+')",""\n';
+    });
+    dlFile(csv,'campistry_quickbooks_'+today()+'.csv','text/csv');
+    toast('QuickBooks CSV exported');
+}
+
+function finExportIIF(){
+    // QuickBooks Desktop IIF format — uses Camper ID as reference
+    var iif='!TRNS\tTRNSTYPE\tDATE\tACCNT\tNAME\tAMOUNT\tMEMO\tNUM\n!SPL\tTRNSTYPE\tDATE\tACCNT\tNAME\tAMOUNT\tMEMO\tNUM\n!ENDTRNS\n';
+    // Auto-invoices
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled')return;
+        var tuition=e.sessionTuition||0;if(!tuition)return;
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
+        iif+='TRNS\tINVOICE\t'+fmtIIFDate(e.appliedDate)+'\tAccounts Receivable\t'+e.camperName+'\t'+tuition+'\t'+esc(e.session||'')+' tuition\tINV-'+camperId+'\n';
+        iif+='SPL\tINVOICE\t'+fmtIIFDate(e.appliedDate)+'\tTuition Income\t'+e.camperName+'\t-'+tuition+'\t\t\n';
+        iif+='ENDTRNS\n';
+    });
+    finPayments.forEach(function(p){
+        iif+='TRNS\tDEPOSIT\t'+fmtIIFDate(p.date)+'\tChecking\t'+p.family+'\t'+p.amount+'\tTuition payment\t\n';
+        iif+='SPL\tDEPOSIT\t'+fmtIIFDate(p.date)+'\tAccounts Receivable\t'+p.family+'\t-'+p.amount+'\t\t\n';
+        iif+='ENDTRNS\n';
+    });
+    finExpenses.forEach(function(e){
+        iif+='TRNS\tCHECK\t'+fmtIIFDate(e.date)+'\tChecking\t'+e.desc+'\t-'+e.amount+'\t'+e.cat+'\n';
+        iif+='SPL\tCHECK\t'+fmtIIFDate(e.date)+'\t'+e.cat+'\t'+e.desc+'\t'+e.amount+'\t\n';
+        iif+='ENDTRNS\n';
+    });
+    dlFile(iif,'campistry_quickbooks_desktop_'+today()+'.iif','text/plain');
+    toast('IIF file exported for QuickBooks Desktop');
+}
+
+function finExportXero(){
+    // Xero-compatible CSV
+    var csv='\uFEFF*ContactName,EmailAddress,InvoiceNumber,InvoiceDate,DueDate,Total,Description,AccountCode\n';
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled')return;
+        var tuition=e.sessionTuition||0;if(!tuition)return;
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
+        csv+='"'+esc(e.parentName||e.camperName)+'","'+esc(e.parentEmail||'')+'","INV-'+camperId+'","'+esc(e.appliedDate||'')+'","'+esc(e.appliedDate||'')+'","'+tuition+'","'+esc(e.session||'')+' tuition — '+esc(e.camperName)+'","200"\n';
+    });
+    finPayments.forEach(function(p,i){
+        csv+='"'+esc(p.family)+'","","PMT-'+String(i+1).padStart(4,'0')+'","'+p.date+'","'+p.date+'","'+p.amount+'","Payment received via '+esc(p.method)+'","200"\n';
+    });
+    finExpenses.forEach(function(e,i){
+        var camperId2=String(i+1).padStart(4,'0');
+        csv+='"'+esc(e.desc)+'","","EXP-'+camperId2+'","'+e.date+'","'+e.date+'","'+e.amount+'","'+esc(e.cat)+'","400"\n';
+    });
+    dlFile(csv,'campistry_xero_'+today()+'.csv','text/csv');
+    toast('Xero CSV exported');
+}
+
+function finExportJournal(){
+    var csv='\uFEFFDate,Invoice #,Account,Debit,Credit,Description,Reference\n';
+    // Auto-invoices
+    Object.entries(enrollments).forEach(function([id,e]){
+        if(e.status!=='enrolled')return;
+        var tuition=e.sessionTuition||0;if(!tuition)return;
+        var camperData=roster[e.camperName]||{};
+        var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
+        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Accounts Receivable","'+tuition+'","","Tuition: '+esc(e.camperName)+'","'+esc(e.session||'')+'"\n';
+        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Tuition Revenue","","'+tuition+'","Tuition: '+esc(e.camperName)+'",""\n';
+    });
+    finPayments.forEach(function(p){
+        csv+='"'+p.date+'","","Cash/Bank","'+p.amount+'","","Payment: '+esc(p.family)+'","'+esc(p.method)+'"\n';
+        csv+='"'+p.date+'","","Accounts Receivable","","'+p.amount+'","Payment: '+esc(p.family)+'",""\n';
+    });
+    finExpenses.forEach(function(e){
+        csv+='"'+e.date+'","","'+esc(e.cat)+'","'+e.amount+'","","'+esc(e.desc)+'",""\n';
+        csv+='"'+e.date+'","","Cash/Bank","","'+e.amount+'","'+esc(e.desc)+'",""\n';
+    });
+    finStaff.forEach(function(s){
+        csv+='","","Payroll Expense","'+s.salary+'","","'+esc(s.name)+' ('+esc(s.role)+')","'+esc(s.type||'seasonal')+'"\n';
+        csv+='","","Cash/Bank","","'+s.salary+'","'+esc(s.name)+' salary",""\n';
+    });
+    dlFile(csv,'campistry_journal_entries_'+today()+'.csv','text/csv');
+    toast('Journal entries exported');
+}
+
+function finImportCSV(){
+    var inp=document.getElementById('finImportInput');
+    inp.onchange=function(){
+        var file=inp.files[0];if(!file)return;
+        var reader=new FileReader();
+        reader.onload=function(e){
+            var text=e.target.result;
+            if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
+            var lines=text.split(/\r?\n/).filter(function(l){return l.trim()});
+            if(lines.length<2){toast('Empty file','error');return}
+            var hdr=lines[0].toLowerCase();
+            var imported=0;
+            for(var i=1;i<lines.length;i++){
+                var cols=lines[i].split(',').map(function(s){return s.trim().replace(/^"|"$/g,'')});
+                if(!cols[0])continue;
+                // Try to auto-detect: if it has "payment" or positive amount with a name
+                var amount=0;
+                for(var c=0;c<cols.length;c++){var n=parseFloat(cols[c]);if(!isNaN(n)&&n>0){amount=n;break}}
+                if(amount>0){
+                    finPayments.push({id:Date.now()+i,family:cols[0]||'Imported',amount:amount,date:cols[1]||today(),method:'Imported',status:'paid'});
+                    imported++;
+                }
+            }
+            save();renderAnalytics();toast(imported+' transactions imported');
+            inp.value='';
+        };
+        reader.readAsText(file);
+    };
+    inp.click();
+}
+
+function dlFile(content,filename,type){var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:type}));a.download=filename;a.click()}
+function today(){return new Date().toISOString().split('T')[0]}
+function fmtIIFDate(d){if(!d)return'';var p=d.split('-');return p[1]+'/'+p[2]+'/'+p[0]}
+
+// ═══════════════════════════════════════════════════════════════
+// BILLING — Full payment hub
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// BILLING — CampMinder-level family ledger system
+//
+// Every family has a ledger: a running timeline of charges, payments,
+// credits, and discounts. The billing page shows:
+//   1. Financial overview stats
+//   2. Family accounts with balances and status filters
+//   3. Per-family ledger view (click to expand)
+//   4. Batch invoice generation
+//   5. Add charges (tuition, add-ons, fees), record payments, issue credits
+// ═══════════════════════════════════════════════════════════════
+var _billFilter='all'; // all, outstanding, paid, overdue
+
+function buildFamilyLedgers(){
+    // Build a complete ledger for each family from all data sources
+    var ledgers={}; // famKey → {family, entries[], totalCharges, totalPayments, totalCredits, balance}
+    Object.entries(families).forEach(function([fk,f]){
+        ledgers[fk]={family:f,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalCredits:0,balance:0};
+    });
+
+    // 1. Tuition charges from enrollments
+    Object.entries(enrollments).forEach(function([eid,e]){
+        if(e.status!=='enrolled'&&e.status!=='accepted') return;
+        var lastName=(e.camperName||'').split(' ').pop();
+        var fk='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
+        if(!ledgers[fk]){
+            // Try to find family by camper name
+            var found=Object.entries(families).find(function([,f]){return(f.camperIds||[]).indexOf(e.camperName)>=0});
+            if(found) fk=found[0]; else return;
+        }
+        var tuition=Number(e.sessionTuition)||0;
+        var discAmt=e.discount?Number(e.discount.amt)||0:0;
+        if(e.discount&&e.discount.pct>0) discAmt=Math.round(tuition*e.discount.pct/100);
+        var net=tuition-discAmt;
+        ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(e.camperName)+' — '+esc(e.session||''),amount:net,date:e.enrolledDate||e.appliedDate||'',ref:eid});
+        ledgers[fk].totalCharges+=net;
+        if(discAmt>0){
+            ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(e.camperName),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
+            ledgers[fk].totalCredits+=discAmt;
+        }
+        // Installments as sub-entries
+        if(e.installments&&e.installments.length>1){
+            e.installments.forEach(function(inst,ii){
+                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii});
+            });
+        }
+    });
+
+    // 2. Add-on charges from family.charges array
+    Object.entries(families).forEach(function([fk,f]){
+        if(!ledgers[fk])return;
+        (f.charges||[]).forEach(function(ch){
+            ledgers[fk].entries.push({type:'charge',category:ch.category||'Add-On',desc:ch.description||'',amount:Number(ch.amount)||0,date:ch.date||'',ref:ch.id||''});
+            ledgers[fk].totalCharges+=Number(ch.amount)||0;
+        });
+    });
+
+    // 3. Payments
+    finPayments.forEach(function(p){
+        // Match to family
+        var fk=null;
+        Object.entries(families).forEach(function([k,f]){
+            if(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0) fk=k;
+        });
+        if(!fk) return;
+        if(!ledgers[fk]) return;
+        ledgers[fk].entries.push({type:'payment',category:p.method||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||''});
+        ledgers[fk].totalPayments+=Number(p.amount)||0;
+    });
+
+    // 4. Compute balances and sort entries
+    Object.values(ledgers).forEach(function(l){
+        l.balance=l.totalCharges-l.totalPayments-l.totalCredits;
+        l.entries.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});
+        // Determine status
+        var today=new Date().toISOString().split('T')[0];
+        l.status=l.balance<=0?'paid':l.totalPayments>0?'partial':'pending';
+        // Check overdue — any installment past due date?
+        l.entries.forEach(function(e){
+            if(e.type==='installment'&&e.status==='pending'&&e.date&&e.date<today) l.status='overdue';
+        });
+        if(l.balance>0&&l.totalPayments===0) l.status='pending';
+    });
+
+    return ledgers;
+}
+
 function renderBilling(){
     var c=document.getElementById('page-billing');
-    var totalBal=Object.values(families).reduce(function(s,f){return s+(f.balance||0)},0);
-    var totalPaid=Object.values(families).reduce(function(s,f){return s+(f.totalPaid||0)},0);
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+Object.keys(families).length+' account'+(Object.keys(families).length!==1?'s':'')+'</p></div></div>';
-    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:18px">';
-    h+='<div class="me-card" style="padding:16px"><div style="font-size:1.3rem;font-weight:800;color:var(--err)">'+fm(totalBal)+'</div><div style="font-size:.72rem;color:var(--s400);text-transform:uppercase;font-weight:600">Outstanding</div></div>';
-    h+='<div class="me-card" style="padding:16px"><div style="font-size:1.3rem;font-weight:800;color:var(--ok)">'+fm(totalPaid)+'</div><div style="font-size:.72rem;color:var(--s400);text-transform:uppercase;font-weight:600">Collected</div></div>';
-    h+='</div>';
-    h+='<div class="me-card"><div class="me-card-head"><h3>Family Accounts</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Family</th><th>Campers</th><th>Paid</th><th>Balance</th></tr></thead><tbody>';
-    Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function([k,f]){
-        var sc=f.balance>0?'err':f.totalPaid>0?'ok':'gray';
-        h+='<tr><td class="bold">'+esc(f.name)+'</td><td>'+((f.camperIds||[]).length)+'</td><td>'+fm(f.totalPaid||0)+'</td><td>'+bdg(fm(f.balance||0),sc)+'</td></tr>';
+    var ledgers=buildFamilyLedgers();
+    var famList=Object.values(ledgers).sort(function(a,b){return(a.family.name||'').localeCompare(b.family.name||'')});
+
+    // Totals
+    var totalCharged=0,totalCollected=0,totalOutstanding=0,overdueCount=0;
+    famList.forEach(function(l){
+        totalCharged+=l.totalCharges;
+        totalCollected+=l.totalPayments;
+        totalOutstanding+=Math.max(0,l.balance);
+        if(l.status==='overdue') overdueCount++;
     });
-    h+='</tbody></table></div></div>';
+    var rate=totalCharged>0?Math.round(totalCollected/totalCharged*100):0;
+    var famWithBalance=famList.filter(function(l){return l.balance>0}).length;
+
+    var cardsOnFile=famList.filter(function(l){return families[l.famKey]?.cardOnFile}).length;
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Payment</button>'+(cardsOnFile>0?'<button class="me-btn me-btn--pri" style="background:var(--purple)" onclick="CampistryMe.batchCharge()">⚡ Batch Charge</button>':'')+'</div></div>';
+
+    // Stats
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:18px">';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+fm(totalCharged)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Total Charged</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--ok)">'+fm(totalCollected)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collected</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--err)">'+fm(totalOutstanding)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+rate+'%</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collection Rate</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid '+(overdueCount>0?'var(--err)':'var(--s200)')+'"><div style="font-size:1.25rem;font-weight:800;color:'+(overdueCount>0?'var(--err)':'var(--s800)')+'">'+overdueCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Overdue</div></div>';
+    h+='</div>';
+
+    // Filter tabs
+    h+='<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
+    var filters=[['all','All Accounts',famList.length],['outstanding','Outstanding',famWithBalance],['overdue','Overdue',overdueCount],['paid','Paid In Full',famList.filter(function(l){return l.status==='paid'}).length]];
+    filters.forEach(function(f){
+        var active=_billFilter===f[0];
+        h+='<button class="me-btn '+(active?'me-btn--pri':'me-btn--sec')+' me-btn--sm" onclick="CampistryMe.setBillFilter(\''+f[0]+'\')">'+f[1]+' ('+f[2]+')</button>';
+    });
+    h+='</div>';
+
+    // Family accounts
+    var filtered=famList;
+    if(_billFilter==='outstanding') filtered=famList.filter(function(l){return l.balance>0});
+    else if(_billFilter==='overdue') filtered=famList.filter(function(l){return l.status==='overdue'});
+    else if(_billFilter==='paid') filtered=famList.filter(function(l){return l.status==='paid'});
+
+    if(!filtered.length){
+        h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
+    } else {
+        filtered.forEach(function(l){
+            var statusBadge=l.status==='paid'?bdg('Paid','ok'):l.status==='overdue'?bdg('Overdue','err'):l.status==='partial'?bdg('Partial','warn'):bdg('Pending','warn');
+            var camperNames=(l.family.camperIds||[]).join(', ');
+
+            h+='<div class="me-card" style="margin-bottom:12px"><div class="me-card-head" style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'">';
+            h+='<div style="display:flex;align-items:center;gap:12px;flex:1"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span></div>';
+            h+='<div style="display:flex;align-items:center;gap:10px">'+statusBadge;
+            h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
+            h+='<span style="font-size:.7rem;color:var(--s400)">▼</span></div>';
+            h+='</div>';
+
+            // Ledger (collapsed by default)
+            h+='<div style="display:none;padding:0">';
+
+            // Ledger summary bar
+            h+='<div style="display:flex;gap:16px;padding:10px 16px;background:var(--s50);border-bottom:1px solid var(--s100);font-size:.75rem">';
+            h+='<span>Charges: <strong>'+fm(l.totalCharges)+'</strong></span>';
+            h+='<span>Payments: <strong style="color:var(--ok)">'+fm(l.totalPayments)+'</strong></span>';
+            if(l.totalCredits>0) h+='<span>Credits: <strong style="color:var(--purple)">'+fm(l.totalCredits)+'</strong></span>';
+            h+='<span style="margin-left:auto">Balance: <strong style="color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</strong></span>';
+            h+='</div>';
+
+            // Ledger entries table
+            if(l.entries.length){
+                h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th>Status</th></tr></thead><tbody>';
+                var runBal=0;
+                l.entries.forEach(function(e){
+                    if(e.type==='installment') return; // show in detail only
+                    var isCharge=e.type==='charge';
+                    var isPayment=e.type==='payment';
+                    var isCredit=e.type==='credit';
+                    if(isCharge) runBal+=e.amount;
+                    if(isPayment||isCredit) runBal-=e.amount;
+                    h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
+                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isPayment?'ok':'warn')+'</td>';
+                    h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
+                    h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
+                    h+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+((isPayment||isCredit)?fm(e.amount):'')+'</td>';
+                    h+='<td></td></tr>';
+                });
+                h+='</tbody></table>';
+            }
+
+            // Installment schedule if any
+            var installments=l.entries.filter(function(e){return e.type==='installment'});
+            if(installments.length){
+                h+='<div style="padding:10px 16px;border-top:1px solid var(--s100)"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;margin-bottom:6px">Payment Schedule</div>';
+                h+='<div style="display:grid;gap:6px">';
+                var today=new Date().toISOString().split('T')[0];
+                installments.forEach(function(inst){
+                    var isPastDue=inst.status==='pending'&&inst.date&&inst.date<today;
+                    var bg=inst.status==='paid'?'var(--ok)':isPastDue?'var(--err)':'var(--s300)';
+                    h+='<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:6px;background:var(--s50);font-size:.8rem">';
+                    h+='<span style="width:8px;height:8px;border-radius:50%;background:'+bg+';flex-shrink:0"></span>';
+                    h+='<span style="flex:1;font-weight:500">'+esc(inst.desc||inst.category)+'</span>';
+                    h+='<span style="font-size:.75rem;color:var(--s500)">Due: '+esc(inst.date||'TBD')+'</span>';
+                    h+='<span style="font-weight:700">'+fm(inst.amount)+'</span>';
+                    h+=bdg(isPastDue?'Past Due':inst.status==='paid'?'Paid':'Pending',isPastDue?'err':inst.status==='paid'?'ok':'warn');
+                    h+='</div>';
+                });
+                h+='</div></div>';
+            }
+
+            // Quick actions
+            var hasCard=families[l.famKey]?.cardOnFile;
+            h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100);flex-wrap:wrap">';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
+            if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
+            if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
+            else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
+            h+='</div>';
+
+            h+='</div></div>'; // end collapsed, end card
+        });
+    }
+
     c.innerHTML=h;
 }
 
+function setBillFilter(f){_billFilter=f;renderBilling()}
+
+function openPaymentModal(){openPaymentForFamily(null)}
+
+function openPaymentForFamily(famKey){
+    var famOpts='';
+    if(famKey){
+        var f=families[famKey];
+        famOpts='<option value="'+esc(famKey)+'" selected>'+esc(f?f.name:'')+'</option>';
+    } else {
+        famOpts='<option value="">— Select Family —</option>';
+        Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function([k,f]){
+            var bal=buildFamilyLedgers()[k]?.balance||0;
+            famOpts+='<option value="'+esc(k)+'">'+esc(f.name)+(bal>0?' ('+fm(bal)+' due)':'')+'</option>';
+        });
+    }
+    var today=new Date().toISOString().split('T')[0];
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Family</label><select id="payFamKey" class="me-input">'+famOpts+'</select></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="payAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
+    h+='<div class="me-field"><label>Date</label><input type="date" id="payDate" class="me-input" value="'+today+'"></div>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input"><option>Credit Card</option><option>Check</option><option>Cash</option><option>ACH / Bank Transfer</option><option>PayPal</option><option>Zelle</option><option>Other</option></select></div>';
+    h+='<div class="me-field"><label>Reference #</label><input type="text" id="payRef" class="me-input" placeholder="Check #, confirmation, etc."></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="e.g., June installment"></div>';
+    h+='</div>';
+    showModal('Record Payment',h,function(){
+        var fk=document.getElementById('payFamKey').value;
+        var f=families[fk];
+        if(!fk||!f){alert('Select a family');return}
+        var amt=parseFloat(document.getElementById('payAmount').value)||0;
+        if(!amt){alert('Enter an amount');return}
+        var date=document.getElementById('payDate').value;
+        var method=document.getElementById('payMethod').value;
+        var ref=document.getElementById('payRef').value.trim();
+        var notes=document.getElementById('payNotes').value.trim();
+        finPayments.push({id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()});
+        f.totalPaid=(f.totalPaid||0)+amt;
+        f.balance=Math.max(0,(f.balance||0)-amt);
+        save();closeModal('dynModal');renderBilling();toast('Payment of '+fm(amt)+' recorded for '+f.name);
+    });
+}
+
+function addCharge(){addChargeForFamily(null)}
+function addChargeForFamily(famKey){
+    var famOpts='';
+    if(famKey){
+        var f=families[famKey];
+        famOpts='<option value="'+esc(famKey)+'" selected>'+esc(f?f.name:'')+'</option>';
+    } else {
+        famOpts='<option value="">— Select Family —</option>';
+        Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function([k,f]){
+            famOpts+='<option value="'+esc(k)+'">'+esc(f.name)+'</option>';
+        });
+    }
+    var today=new Date().toISOString().split('T')[0];
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Family</label><select id="chgFamKey" class="me-input">'+famOpts+'</select></div>';
+    h+='<div class="me-field"><label>Category</label><select id="chgCategory" class="me-input"><option>Activity Add-On</option><option>Trip Fee</option><option>Merchandise</option><option>Late Fee</option><option>Transportation</option><option>Materials</option><option>Convenience Fee</option><option>Other</option></select></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Description</label><input type="text" id="chgDesc" class="me-input" placeholder="e.g., Horseback riding add-on"></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="chgAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>Date</label><input type="date" id="chgDate" class="me-input" value="'+today+'"></div>';
+    h+='</div>';
+    showModal('Add Charge',h,function(){
+        var fk=document.getElementById('chgFamKey').value;
+        var f=families[fk];
+        if(!fk||!f){alert('Select a family');return}
+        var amt=parseFloat(document.getElementById('chgAmount').value)||0;
+        if(!amt){alert('Enter an amount');return}
+        if(!f.charges) f.charges=[];
+        f.charges.push({id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()});
+        f.balance=(f.balance||0)+amt;
+        save();closeModal('dynModal');renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
+    });
+}
+
+function issueCredit(){issueCreditForFamily(null)}
+function issueCreditForFamily(famKey){
+    var famOpts='';
+    if(famKey){
+        var f=families[famKey];
+        famOpts='<option value="'+esc(famKey)+'" selected>'+esc(f?f.name:'')+'</option>';
+    } else {
+        famOpts='<option value="">— Select Family —</option>';
+        Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function([k,f]){
+            famOpts+='<option value="'+esc(k)+'">'+esc(f.name)+'</option>';
+        });
+    }
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Family</label><select id="crFamKey" class="me-input">'+famOpts+'</select></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Reason</label><input type="text" id="crReason" class="me-input" placeholder="e.g., Referral credit, adjustment"></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
+    h+='</div></div>';
+    showModal('Issue Credit',h,function(){
+        var fk=document.getElementById('crFamKey').value;
+        var f=families[fk];
+        if(!fk||!f){alert('Select a family');return}
+        var amt=parseFloat(document.getElementById('crAmount').value)||0;
+        if(!amt){alert('Enter an amount');return}
+        if(!f.credits) f.credits=[];
+        f.credits.push({id:'cr_'+Date.now(),reason:document.getElementById('crReason').value.trim(),amount:amt,date:new Date().toISOString().split('T')[0],timestamp:Date.now()});
+        f.balance=Math.max(0,(f.balance||0)-amt);
+        save();closeModal('dynModal');renderBilling();toast('Credit of '+fm(amt)+' issued to '+f.name);
+    });
+}
+
+function printStatement(famKey){
+    var ledgers=buildFamilyLedgers();
+    var l=ledgers[famKey];if(!l)return;
+    var campName='';try{var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=s.camp_name||s.campName||'Camp'}catch(e){}
+    var w=window.open('','_blank');
+    var h='<!DOCTYPE html><html><head><title>Statement — '+esc(l.family.name)+'</title><style>body{font-family:Arial,sans-serif;font-size:10pt;margin:30px;color:#222}h1{font-size:16pt;margin-bottom:4px}h2{font-size:12pt;margin:20px 0 8px}table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f5f5f5;text-align:left;padding:6px;border:1px solid #ddd;font-size:9pt}td{padding:5px 6px;border:1px solid #ddd;font-size:9pt}.right{text-align:right}.bold{font-weight:bold}@media print{button{display:none}}</style></head><body>';
+    h+='<h1>'+esc(campName)+'</h1><p style="color:#666;margin-bottom:20px">Statement for <strong>'+esc(l.family.name)+'</strong> · Generated '+new Date().toLocaleDateString()+'</p>';
+    // Campers
+    h+='<p>Campers: '+(l.family.camperIds||[]).map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', ')+'</p>';
+    // Parent info
+    var hh=(l.family.households||[])[0];
+    if(hh){
+        var pp=(hh.parents||[])[0];
+        if(pp) h+='<p>'+esc(pp.name||'')+' · '+esc(pp.phone||'')+' · '+esc(pp.email||'')+'</p>';
+        if(hh.address) h+='<p>'+esc(hh.address)+'</p>';
+    }
+    // Ledger
+    h+='<h2>Account Activity</h2><table><thead><tr><th>Date</th><th>Type</th><th>Description</th><th class="right">Charges</th><th class="right">Payments/Credits</th></tr></thead><tbody>';
+    l.entries.filter(function(e){return e.type!=='installment'}).forEach(function(e){
+        var isCharge=e.type==='charge';
+        h+='<tr><td>'+esc(e.date||'')+'</td><td>'+esc(e.category||e.type)+'</td><td>'+esc(e.desc||'')+'</td><td class="right">'+(isCharge?fm(e.amount):'')+'</td><td class="right bold" style="color:#16A34A">'+(isCharge?'':fm(e.amount))+'</td></tr>';
+    });
+    h+='<tr style="border-top:2px solid #333"><td colspan="3" class="bold">Balance Due</td><td colspan="2" class="right bold" style="font-size:12pt;color:'+(l.balance>0?'#DC2626':'#16A34A')+'">'+fm(l.balance)+'</td></tr>';
+    h+='</tbody></table>';
+    // Installment schedule
+    var insts=l.entries.filter(function(e){return e.type==='installment'});
+    if(insts.length){
+        h+='<h2>Payment Schedule</h2><table><thead><tr><th>Installment</th><th>Due Date</th><th class="right">Amount</th><th>Status</th></tr></thead><tbody>';
+        insts.forEach(function(i){h+='<tr><td>'+esc(i.category||i.desc)+'</td><td>'+esc(i.date||'')+'</td><td class="right bold">'+fm(i.amount)+'</td><td>'+esc(i.status||'pending')+'</td></tr>'});
+        h+='</tbody></table>';
+    }
+    h+='<div style="margin-top:30px;text-align:center;color:#999;font-size:9pt">Powered by Campistry</div>';
+    h+='<button onclick="window.print()" style="margin-top:20px;padding:8px 24px;cursor:pointer">Print</button></body></html>';
+    w.document.write(h);w.document.close();
+}
+
+function removePayment(idx){
+    if(!confirm('Remove this payment?'))return;
+    var p=finPayments[idx];
+    if(p){
+        var f=Object.values(families).find(function(f){return f.name===p.family});
+        if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-p.amount);f.balance=(f.balance||0)+p.amount}
+    }
+    finPayments.splice(idx,1);save();renderBilling();toast('Payment removed');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STRIPE INTEGRATION — Save cards, charge stored cards
+// ═══════════════════════════════════════════════════════════════
+function getSupabaseUrl(){return window.__CAMPISTRY_SUPABASE__?.url||''}
+function getSupabaseKey(){return window.__CAMPISTRY_SUPABASE__?.anonKey||''}
+function getStripePublishableKey(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    return(s.campistryMe&&s.campistryMe.stripePublishableKey)||'';
+}
+function getCampId(){return localStorage.getItem('campistry_camp_id')||''}
+
+async function callEdgeFunction(fnName,body){
+    var url=getSupabaseUrl()+'/functions/v1/'+fnName;
+    var resp=await fetch(url,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+getSupabaseKey(),'apikey':getSupabaseKey()},
+        body:JSON.stringify(body)
+    });
+    var data=await resp.json();
+    if(!resp.ok||data.error) throw new Error(data.error||'Edge function error');
+    return data;
+}
+
+// Request a family to save their card
+async function requestCardSetup(famKey){
+    var f=families[famKey];if(!f)return;
+    var email='';
+    (f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
+    if(!email){toast('No parent email on file — add email in Families first','error');return}
+
+    toast('Setting up card collection for '+f.name+'...');
+    try{
+        var result=await callEdgeFunction('stripe-setup',{
+            familyName:f.name,
+            email:email,
+            campId:getCampId(),
+            existingCustomerId:f.stripeCustomerId||null
+        });
+        // Store Stripe customer ID on family
+        f.stripeCustomerId=result.customerId;
+        f.stripeSetupSecret=result.clientSecret;
+        save();
+
+        // Open card collection UI
+        openCardCollectionModal(famKey,result.clientSecret);
+    }catch(err){
+        console.error('[Me] Stripe setup error:',err);
+        toast('Stripe error: '+err.message,'error');
+    }
+}
+
+function openCardCollectionModal(famKey,clientSecret){
+    var f=families[famKey];
+    var pk=getStripePublishableKey();
+    if(!pk){
+        toast('Set your Stripe publishable key in Settings first','error');
+        return;
+    }
+
+    var h='<div id="stripeCardSetup" style="min-height:200px">';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:16px">Enter card details for <strong>'+esc(f.name)+'</strong>. The card will be saved securely with Stripe for future payments.</p>';
+    h+='<div id="stripe-card-element" style="padding:12px;border:1px solid var(--s300);border-radius:var(--r);background:#fff;min-height:44px"></div>';
+    h+='<div id="stripe-card-errors" style="color:var(--err);font-size:.8rem;margin-top:8px"></div>';
+    h+='<div style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">';
+    h+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button>';
+    h+='<button class="me-btn me-btn--pri" id="stripeSubmitBtn" disabled>Save Card</button>';
+    h+='</div></div>';
+
+    showModal('Save Payment Method',h);
+
+    // Load Stripe.js if not already loaded
+    if(!window.Stripe){
+        var script=document.createElement('script');
+        script.src='https://js.stripe.com/v3/';
+        script.onload=function(){initStripeElements(pk,clientSecret,famKey)};
+        document.head.appendChild(script);
+    }else{
+        setTimeout(function(){initStripeElements(pk,clientSecret,famKey)},100);
+    }
+}
+
+function initStripeElements(pk,clientSecret,famKey){
+    var stripe=window.Stripe(pk);
+    var elements=stripe.elements();
+    var cardElement=elements.create('card',{
+        style:{base:{fontSize:'16px',fontFamily:'DM Sans, sans-serif',color:'#1e293b','::placeholder':{color:'#94a3b8'}}}
+    });
+    var mountEl=document.getElementById('stripe-card-element');
+    if(!mountEl)return;
+    cardElement.mount('#stripe-card-element');
+
+    var submitBtn=document.getElementById('stripeSubmitBtn');
+    var errEl=document.getElementById('stripe-card-errors');
+
+    cardElement.on('change',function(ev){
+        if(ev.error) errEl.textContent=ev.error.message;
+        else errEl.textContent='';
+        submitBtn.disabled=!ev.complete;
+    });
+
+    submitBtn.onclick=async function(){
+        submitBtn.disabled=true;
+        submitBtn.textContent='Saving...';
+        var result=await stripe.confirmCardSetup(clientSecret,{payment_method:{card:cardElement}});
+        if(result.error){
+            errEl.textContent=result.error.message;
+            submitBtn.disabled=false;
+            submitBtn.textContent='Save Card';
+        }else{
+            // Card saved successfully
+            var f=families[famKey];
+            if(f){
+                f.stripePaymentMethodId=result.setupIntent.payment_method;
+                f.cardOnFile=true;
+                f.cardSavedDate=new Date().toISOString();
+            }
+            save();
+            closeModal('dynModal');
+            renderBilling();
+            toast('Card saved for '+f.name+'!');
+        }
+    };
+}
+
+// Charge a family's stored card
+async function chargeStoredCard(famKey,amount,description){
+    var f=families[famKey];
+    if(!f||!f.stripeCustomerId){toast('No card on file — save a card first','error');return}
+
+    if(!amount){
+        // Ask for amount
+        var ledgers=buildFamilyLedgers();
+        var balance=ledgers[famKey]?.balance||0;
+        var h='<div class="me-modal-form">';
+        h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:12px">Charge the card on file for <strong>'+esc(f.name)+'</strong></p>';
+        h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance due: <strong style="color:var(--err)">'+fm(balance)+'</strong>'+(f.cardOnFile?' · Card on file ✓':'')+'</div>';
+        h+='<div class="me-field"><label>Amount to Charge ($)</label><input type="number" id="chargeAmt" class="me-input" value="'+balance.toFixed(2)+'" step="0.01" min="0.50"></div>';
+        h+='<div class="me-field"><label>Description</label><input type="text" id="chargeDesc" class="me-input" value="Campistry payment — '+esc(f.name)+'" placeholder="Payment description"></div>';
+        h+='</div>';
+        showModal('Charge Card',h,function(){
+            var amt=parseFloat(document.getElementById('chargeAmt').value)||0;
+            var desc=document.getElementById('chargeDesc').value.trim();
+            if(amt<0.50){alert('Minimum charge is $0.50');return}
+            closeModal('dynModal');
+            chargeStoredCard(famKey,amt,desc);
+        });
+        return;
+    }
+
+    toast('Charging '+fm(amount)+' to '+f.name+'...');
+    try{
+        var result=await callEdgeFunction('stripe-charge',{
+            customerId:f.stripeCustomerId,
+            paymentMethodId:f.stripePaymentMethodId||null,
+            amount:amount,
+            currency:'usd',
+            description:description||'Campistry payment',
+            metadata:{campId:getCampId(),familyName:f.name,familyKey:famKey}
+        });
+
+        if(result.status==='requires_action'){
+            toast('Card requires authentication — parent must approve','error');
+            return;
+        }
+
+        if(result.status==='succeeded'){
+            // Record payment locally
+            finPayments.push({
+                id:'pay_'+Date.now(),
+                family:f.name,
+                familyKey:famKey,
+                amount:amount,
+                date:new Date().toISOString().split('T')[0],
+                method:'Stripe (auto)',
+                reference:result.paymentIntentId,
+                notes:'Auto-charged via Stripe',
+                stripePaymentIntentId:result.paymentIntentId,
+                timestamp:Date.now()
+            });
+            f.totalPaid=(f.totalPaid||0)+amount;
+            f.balance=Math.max(0,(f.balance||0)-amount);
+            save();renderBilling();
+            toast('Charged '+fm(amount)+' to '+f.name+' — payment succeeded!');
+        }else{
+            toast('Payment status: '+result.status,'error');
+        }
+    }catch(err){
+        console.error('[Me] Stripe charge error:',err);
+        toast('Charge failed: '+err.message,'error');
+    }
+}
+
+// Batch charge all families with outstanding balance
+async function batchCharge(){
+    var ledgers=buildFamilyLedgers();
+    var eligible=Object.entries(ledgers).filter(function([fk,l]){
+        return l.balance>0&&families[fk]?.stripeCustomerId&&families[fk]?.cardOnFile;
+    });
+    if(!eligible.length){toast('No families with card on file and outstanding balance','error');return}
+
+    var total=eligible.reduce(function(s,[,l]){return s+l.balance},0);
+    var h='<div>';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">This will charge <strong>'+eligible.length+' families</strong> for a total of <strong>'+fm(total)+'</strong> using their saved cards.</p>';
+    h+='<div style="max-height:250px;overflow-y:auto;border:1px solid var(--s200);border-radius:var(--r);margin-bottom:14px">';
+    eligible.forEach(function([fk,l]){
+        h+='<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--s100);font-size:.8rem"><span class="bold">'+esc(l.family.name)+'</span><span style="font-weight:700;color:var(--err)">'+fm(l.balance)+'</span></div>';
+    });
+    h+='</div>';
+    h+='<p style="font-size:.75rem;color:var(--warn);font-weight:600">⚠ This action will charge real credit cards. Proceed with caution.</p>';
+    h+='</div>';
+
+    showModal('Batch Charge — '+eligible.length+' Families',h,async function(){
+        closeModal('dynModal');
+        toast('Processing batch charges...');
+        var success=0,failed=0;
+        for(var[fk,l]of eligible){
+            try{
+                await chargeStoredCard(fk,l.balance,'Batch payment — '+families[fk].name);
+                success++;
+            }catch(e){
+                console.error('[Me] Batch charge failed for',fk,e);
+                failed++;
+            }
+            // Small delay between charges to avoid rate limits
+            await new Promise(function(r){setTimeout(r,500)});
+        }
+        toast('Batch complete: '+success+' charged, '+failed+' failed');
+        renderBilling();
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BROADCASTS — Full messaging system
+// ═══════════════════════════════════════════════════════════════
 function renderBroadcasts(){
     var c=document.getElementById('page-broadcasts');
-    c.innerHTML='<div class="sec-hd"><div><h2 class="sec-title">Broadcasts</h2><p class="sec-desc">'+broadcasts.length+' sent</p></div></div><div class="me-empty"><h3>Messaging</h3><p>Send updates to families and staff.</p></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Broadcasts & Messaging</h2><p class="sec-desc">'+broadcasts.length+' message'+(broadcasts.length!==1?'s':'')+' sent</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPaymentReminders()">💰 Payment Reminders</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendFormReminders()">📋 Form Reminders</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openBroadcastModal()">+ New Broadcast</button></div></div>';
+
+    // Quick stats
+    var thisWeek=broadcasts.filter(function(b){return b.timestamp&&Date.now()-b.timestamp<7*86400000}).length;
+    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px">';
+    h+='<div style="flex:1;min-width:140px;background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800">'+broadcasts.length+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Total Sent</div></div>';
+    h+='<div style="flex:1;min-width:140px;background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800">'+thisWeek+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">This Week</div></div>';
+    h+='</div>';
+
+    if(broadcasts.length){
+        var sorted=[...broadcasts].sort(function(a,b){return(b.timestamp||0)-(a.timestamp||0)});
+        h+='<div class="me-card"><div class="me-card-head"><h3>Message History</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Subject</th><th>To</th><th>Method</th><th>Recipients</th><th></th></tr></thead><tbody>';
+        sorted.forEach(function(b,i){
+            var d=b.timestamp?new Date(b.timestamp).toLocaleDateString():(b.date||'');
+            h+='<tr><td>'+esc(d)+'</td><td class="bold">'+esc(b.subject||'(no subject)')+'</td><td>'+esc(b.to||'All')+'</td><td>'+bdg(b.method||'In-App','ok')+'</td><td style="font-weight:600">'+(b.recipientCount||'—')+'</td><td><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.viewBroadcast('+i+')">View</button><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.removeBroadcast('+i+')">×</button></td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    } else {
+        h+='<div class="me-empty"><h3>No broadcasts sent yet</h3><p>Send a message to parents, staff, or specific divisions.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.openBroadcastModal()">+ Send First Broadcast</button></div>';
+    }
+    c.innerHTML=h;
 }
+
+function openBroadcastModal(){
+    var divOpts=Object.keys(structure).map(function(d){return'<option value="'+esc(d)+'">'+esc(d)+'</option>'}).join('');
+    var h='<div class="me-modal-form"><div class="me-field"><label>To</label><select id="bcTo" class="me-input" onchange="document.getElementById(\'bcDivWrap\').style.display=this.value===\'division\'?\'block\':\'none\'"><option value="all">All Families</option><option value="division">Specific Division</option><option value="enrolled">Enrolled Families Only</option><option value="staff">Staff Only</option></select></div>';
+    h+='<div id="bcDivWrap" style="display:none"><div class="me-field"><label>Division</label><select id="bcDiv" class="me-input">'+divOpts+'</select></div></div>';
+    h+='<div class="me-field"><label>Method</label><select id="bcMethod" class="me-input"><option value="In-App">In-App (Parent Portal)</option><option value="Email">Email</option><option value="SMS">SMS</option><option value="All Channels">All Channels</option></select></div>';
+    h+='<div class="me-field"><label>Subject</label><input type="text" id="bcSubject" class="me-input" placeholder="Message subject..."></div>';
+    h+='<div class="me-field"><label>Message</label><textarea id="bcBody" class="me-input" rows="6" placeholder="Type your message here..." style="resize:vertical"></textarea></div></div>';
+    showModal('New Broadcast',h,function(){
+        var to=document.getElementById('bcTo').value;
+        var div=document.getElementById('bcDiv')?.value||'';
+        var method=document.getElementById('bcMethod').value;
+        var subject=document.getElementById('bcSubject').value.trim();
+        var body=document.getElementById('bcBody').value.trim();
+        if(!subject&&!body){alert('Enter a subject or message');return}
+        // Count recipients
+        var count=0;
+        if(to==='all') count=Object.keys(families).length||Object.keys(roster).length;
+        else if(to==='division') count=Object.values(roster).filter(function(c){return c.division===div}).length;
+        else if(to==='enrolled') count=Object.values(enrollments).filter(function(e){return e.status==='enrolled'}).length;
+        else if(to==='staff') count=finStaff.length;
+        var label=to==='division'?div:to==='enrolled'?'Enrolled':to==='staff'?'Staff':'All Families';
+        broadcasts.push({subject:subject,body:body,to:label,method:method,recipientCount:count,timestamp:Date.now(),date:new Date().toISOString().split('T')[0]});
+        save();closeModal();renderBroadcasts();
+        toast('Broadcast sent to '+count+' recipient'+(count!==1?'s':''));
+    });
+}
+function viewBroadcast(idx){
+    var sorted=[...broadcasts].sort(function(a,b){return(b.timestamp||0)-(a.timestamp||0)});
+    var b=sorted[idx];if(!b)return;
+    var d=b.timestamp?new Date(b.timestamp).toLocaleString():(b.date||'');
+    var h='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">Sent</div><div>'+esc(d)+'</div></div>';
+    h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">To</div><div>'+esc(b.to||'All')+' · '+esc(b.method||'In-App')+' · '+(b.recipientCount||'?')+' recipients</div></div>';
+    h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">Subject</div><div style="font-weight:600;font-size:1rem">'+esc(b.subject||'')+'</div></div>';
+    h+='<div style="background:var(--s50);padding:14px;border-radius:var(--r);font-size:.85rem;line-height:1.6;white-space:pre-wrap">'+esc(b.body||'(no body)')+'</div>';
+    showModal('Broadcast',h);
+}
+function removeBroadcast(idx){
+    var sorted=[...broadcasts].sort(function(a,b){return(b.timestamp||0)-(a.timestamp||0)});
+    if(!confirm('Delete this broadcast?'))return;
+    var orig=broadcasts.indexOf(sorted[idx]);
+    if(orig>=0) broadcasts.splice(orig,1);
+    save();renderBroadcasts();toast('Broadcast removed');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FORMS & DOCS — Digital form management
+// ═══════════════════════════════════════════════════════════════
+var campForms=[];
+function loadForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campForms=(s.campistryMe&&s.campistryMe.forms)||[]}
+function saveForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.forms=campForms;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
 
 function renderForms(){
+    loadForms();
     var c=document.getElementById('page-forms');
-    c.innerHTML='<div class="sec-hd"><div><h2 class="sec-title">Forms & Docs</h2></div></div><div class="me-empty"><h3>Digital Forms</h3><p>Create and track forms.</p></div>';
+    var completedCount=0,pendingCount=0;
+    campForms.forEach(function(f){
+        var completed=(f.responses||[]).length;
+        var total=Object.keys(roster).length;
+        completedCount+=completed;pendingCount+=(total-completed);
+    });
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Forms & Documents</h2><p class="sec-desc">'+campForms.length+' form'+(campForms.length!==1?'s':'')+' · '+completedCount+' completed, '+pendingCount+' pending</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addForm()">+ Create Form</button></div></div>';
+
+    // Stats
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:18px">';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800">'+campForms.length+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Active Forms</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--ok)">'+completedCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Completed</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--warn)">'+pendingCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Pending</div></div>';
+    h+='</div>';
+
+    if(campForms.length){
+        campForms.forEach(function(f,fi){
+            var total=Object.keys(roster).length;
+            var completed=(f.responses||[]).length;
+            var pct=total>0?Math.round(completed/total*100):0;
+            var barColor=pct===100?'var(--ok)':pct>50?'var(--warn)':'var(--err)';
+            h+='<div class="me-card" style="margin-bottom:12px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px"><div><div style="font-size:.95rem;font-weight:700">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400);margin-top:2px">'+esc(f.type||'General')+' · Created '+(f.created?new Date(f.created).toLocaleDateString():'')+'</div></div><div style="display:flex;gap:6px">'+bdg(f.required?'Required':'Optional',f.required?'err':'warn')+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.viewFormResponses('+fi+')">Responses</button><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteForm('+fi+')">Delete</button></div></div>';
+            h+='<div style="display:flex;align-items:center;gap:10px"><div style="flex:1;height:6px;background:var(--s100);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+barColor+';border-radius:3px;transition:width .3s"></div></div><span style="font-size:.75rem;font-weight:700;color:var(--s600)">'+completed+'/'+total+' ('+pct+'%)</span></div>';
+            if(f.description) h+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px">'+esc(f.description)+'</div>';
+            h+='</div>';
+        });
+    } else {
+        h+='<div class="me-empty"><h3>No forms created yet</h3><p>Create forms for health waivers, permission slips, emergency contacts, and more.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addForm()">+ Create First Form</button></div>';
+    }
+    c.innerHTML=h;
 }
 
+function addForm(){
+    var h='<div class="me-modal-form"><div class="me-field"><label>Form Name</label><input type="text" id="formName" class="me-input" placeholder="e.g., Health Waiver 2026"></div>';
+    h+='<div class="me-field"><label>Type</label><select id="formType" class="me-input"><option>Health Form</option><option>Permission Slip</option><option>Liability Waiver</option><option>Emergency Contact</option><option>Media Release</option><option>Custom</option></select></div>';
+    h+='<div class="me-field"><label>Description</label><textarea id="formDesc" class="me-input" rows="3" placeholder="What this form is for..." style="resize:vertical"></textarea></div>';
+    h+='<div class="me-field"><label>Required?</label><select id="formReq" class="me-input"><option value="1">Yes — must complete before camp</option><option value="0">No — optional</option></select></div>';
+    h+='<div class="me-field"><label>Fields (one per line)</label><textarea id="formFields" class="me-input" rows="6" placeholder="Full Name\nDate of Birth\nAllergies\nMedications\nDoctor Name\nDoctor Phone\nInsurance Provider\nParent Signature" style="resize:vertical;font-family:monospace;font-size:.8rem"></textarea></div></div>';
+    showModal('Create Form',h,function(){
+        var name=document.getElementById('formName').value.trim();
+        if(!name){alert('Enter a form name');return}
+        var fields=(document.getElementById('formFields').value||'').split('\n').map(function(l){return l.trim()}).filter(Boolean);
+        campForms.push({
+            id:'form_'+Date.now(),
+            name:name,
+            type:document.getElementById('formType').value,
+            description:document.getElementById('formDesc').value.trim(),
+            required:document.getElementById('formReq').value==='1',
+            fields:fields,
+            responses:[],
+            created:Date.now()
+        });
+        saveForms();save();closeModal();renderForms();toast('Form created');
+    });
+}
+function deleteForm(idx){if(!confirm('Delete this form?'))return;campForms.splice(idx,1);saveForms();save();renderForms();toast('Form deleted')}
+function viewFormResponses(idx){
+    var f=campForms[idx];if(!f)return;
+    var completed=new Set((f.responses||[]).map(function(r){return r.camper}));
+    var missing=Object.keys(roster).filter(function(n){return!completed.has(n)}).sort();
+    var h='<div style="margin-bottom:14px"><strong>'+esc(f.name)+'</strong> — '+(f.responses||[]).length+' responses</div>';
+    if((f.responses||[]).length){
+        h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Camper</th><th>Submitted</th><th>Status</th></tr></thead><tbody>';
+        f.responses.forEach(function(r){
+            h+='<tr><td class="bold">'+esc(r.camper)+'</td><td>'+(r.date?new Date(r.date).toLocaleDateString():'')+'</td><td>'+bdg('Completed','ok')+'</td></tr>';
+        });
+        h+='</tbody></table></div>';
+    }
+    if(missing.length){
+        h+='<div style="margin-top:14px;font-weight:600;color:var(--err)">Missing ('+missing.length+'):</div><div style="margin-top:6px;font-size:.8rem;color:var(--s600);column-count:2;column-gap:20px">';
+        missing.forEach(function(n){h+='<div style="padding:2px 0">'+esc(n)+'</div>'});
+        h+='</div>';
+    }
+    showModal('Form Responses',h);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REPORTS — Roster, enrollment, attendance, financial reports
+// ═══════════════════════════════════════════════════════════════
 function renderReports(){
     var c=document.getElementById('page-reports');
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Reports & Export</h2></div></div>';
-    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">';
-    h+='<div class="me-card" style="padding:16px"><h3 style="font-size:.9rem;margin-bottom:8px">Camper Roster</h3><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportCsv()">Download CSV</button></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Reports & Export</h2><p class="sec-desc">Generate and download camp reports</p></div></div>';
+
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">';
+
+    // Roster report
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Camper Roster</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Complete roster with divisions, bunks, medical info, contacts</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportRosterReport()">Download CSV</button></div>';
+
+    // Family directory
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Family Directory</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All families with parent contacts, addresses, billing status</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportFamilyReport()">Download CSV</button></div>';
+
+    // Enrollment pipeline
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Enrollment Pipeline</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All applications with status, payment, forms completion</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportEnrollmentReport()">Download CSV</button></div>';
+
+    // Division breakdown
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Division Breakdown</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Camper counts by division, grade, and bunk</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportDivisionReport()">Download CSV</button></div>';
+
+    // Medical summary
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Medical Summary</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All campers with allergies, medications, dietary restrictions</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportMedicalReport()">Download CSV</button></div>';
+
+    // Financial summary
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Financial Summary</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Revenue, payments, outstanding balances, payroll, expenses</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportFinancialReport()">Download CSV</button></div>';
+
     h+='</div>';
     c.innerHTML=h;
 }
 
+function dlCsv(name,csv){
+    var blob=new Blob(['\uFEFF'+csv],{type:'text/csv'});
+    var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();toast('Downloaded '+name);
+}
+function exportRosterReport(){
+    var csv='Name,Alternate Name,Camper ID,Division,Grade,Bunk,DOB,Gender,School,Parent 1,Parent 1 Phone,Parent 1 Email,Street,City,State,ZIP,Allergies,Medications,Dietary\n';
+    Object.entries(roster).sort(function(a,b){return a[0].localeCompare(b[0])}).forEach(function([n,c]){
+        var altN=[c.altFirstName,c.altLastName].filter(Boolean).join(' ');
+        csv+=[n,altN,c.camperId||'',c.division||'',c.grade||'',c.bunk||'',c.dob||'',c.gender||'',c.school||'',c.parent1Name||'',c.parent1Phone||'',c.parent1Email||'',c.street||'',c.city||'',c.state||'',c.zip||'',c.allergies||'',c.medications||'',c.dietary||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+    });
+    dlCsv('campistry_roster_'+new Date().toISOString().split('T')[0]+'.csv',csv);
+}
+function exportFamilyReport(){
+    var csv='Family,Campers,Primary Parent,Phone,Email,Address,Total Paid,Balance,Status\n';
+    Object.values(families).sort(function(a,b){return(a.name||'').localeCompare(b.name||'')}).forEach(function(f){
+        var pp=(f.households||[])[0]?.parents?.[0]||{};
+        var addr=(f.households||[])[0]?.address||'';
+        var status=f.balance>0?'Outstanding':f.totalPaid>0?'Paid':'Pending';
+        csv+=[f.name||'',(f.camperIds||[]).join('; '),pp.name||'',pp.phone||'',pp.email||'',addr,f.totalPaid||0,f.balance||0,status].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+    });
+    dlCsv('campistry_families_'+new Date().toISOString().split('T')[0]+'.csv',csv);
+}
+function exportEnrollmentReport(){
+    var csv='Camper,Session,Status,Applied Date,Tuition,Discount,Paid,Balance,Payment Status,Forms Done\n';
+    Object.values(enrollments).sort(function(a,b){return(a.camperName||'').localeCompare(b.camperName||'')}).forEach(function(e){
+        var disc=e.discount?(e.discount.amt||0):0;
+        csv+=[e.camperName||'',e.session||'',e.status||'',e.appliedDate||'',e.sessionTuition||0,disc,0,0,e.paymentStatus||'',e.formsCompleted||0].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+    });
+    dlCsv('campistry_enrollment_'+new Date().toISOString().split('T')[0]+'.csv',csv);
+}
+function exportDivisionReport(){
+    var csv='Division,Grade,Bunk,Camper Count\n';
+    Object.entries(structure).forEach(function([div,d]){
+        Object.entries(d.grades||{}).forEach(function([grade,g]){
+            (g.bunks||[]).forEach(function(bunk){
+                var count=Object.values(roster).filter(function(c){return c.bunk===bunk}).length;
+                csv+=[div,grade,bunk,count].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+            });
+        });
+    });
+    dlCsv('campistry_divisions_'+new Date().toISOString().split('T')[0]+'.csv',csv);
+}
+function exportMedicalReport(){
+    var csv='Name,Division,Bunk,Allergies,Medications,Dietary,Emergency Contact,Emergency Phone\n';
+    Object.entries(roster).filter(function([,c]){return c.allergies||c.medications||c.dietary}).sort(function(a,b){return a[0].localeCompare(b[0])}).forEach(function([n,c]){
+        csv+=[n,c.division||'',c.bunk||'',c.allergies||'',c.medications||'',c.dietary||'',c.emergencyName||'',c.emergencyPhone||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+    });
+    dlCsv('campistry_medical_'+new Date().toISOString().split('T')[0]+'.csv',csv);
+}
+function exportFinancialReport(){
+    var csv='Type,Date,Description,Amount,Category\n';
+    finPayments.forEach(function(p){csv+=['Payment',p.date||'',p.family||'',p.amount||0,p.method||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n'});
+    finExpenses.forEach(function(e){csv+=['Expense',e.date||'',e.desc||'','-'+(e.amount||0),e.cat||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n'});
+    finStaff.forEach(function(s){csv+=['Payroll','',s.name+' ('+s.role+')','-'+(s.salary||0),s.type||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n'});
+    dlCsv('campistry_financial_'+new Date().toISOString().split('T')[0]+'.csv',csv);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════════════════════════
 function renderSettings(){
     var c=document.getElementById('page-settings');
     var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
     var campName=s.camp_name||s.campName||'';
-    var cs=getCampSettings();
     var h='<div class="sec-hd"><div><h2 class="sec-title">Camp Settings</h2></div></div>';
     h+='<div class="me-card" style="padding:18px;max-width:600px">';
-    h+='<div class="fg"><label class="fl">Camp Name</label><input class="fi" id="settCampName" value="'+esc(campName)+'"></div>';
-    h+='<div class="fg"><label class="fl"><input type="checkbox" id="settHebrewDates" style="accent-color:var(--me);margin-right:6px"'+(cs.showHebrewDates?' checked':'')+'>Show Hebrew dates</label></div>';
-    h+='<div class="fg"><label class="fl"><input type="checkbox" id="settAltNames" style="accent-color:var(--me);margin-right:6px"'+(cs.showAltNames!==false?' checked':'')+'>Show alternate names</label></div>';
-    h+='<div class="fg"><label class="fl"><input type="checkbox" id="settRTL" style="accent-color:var(--me);margin-right:6px"'+(cs.rtl?' checked':'')+'>Right-to-left layout</label></div>';
-    h+='<button class="me-btn me-btn--pri" onclick="CampistryMe.saveSettings()">Save</button>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem">Camp Name</label><input type="text" id="settCampName" class="me-input" value="'+esc(campName)+'" placeholder="Your Camp Name"></div>';
+    h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveSettings()">Save Settings</button></div>';
     h+='</div>';
+
+    // Language & locale settings
+    var cs=getCampSettings();
+    var locale=getCampLocale();
+    h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:4px">🌍 Language & Regional</h3><p style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Configure language, date formats, and alternate name display for your camp.</p>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem">Display Language / Locale</label><select id="settLocale" class="me-input"><option value="en-US"'+(locale==='en-US'?' selected':'')+'>English (US)</option><option value="en-GB"'+(locale==='en-GB'?' selected':'')+'>English (UK)</option><option value="he-IL"'+(locale==='he-IL'?' selected':'')+'>עברית (Hebrew)</option><option value="es-ES"'+(locale==='es-ES'?' selected':'')+'>Español (Spanish)</option><option value="fr-FR"'+(locale==='fr-FR'?' selected':'')+'>Français (French)</option><option value="ru-RU"'+(locale==='ru-RU'?' selected':'')+'>Русский (Russian)</option><option value="ar-SA"'+(locale==='ar-SA'?' selected':'')+'>العربية (Arabic)</option><option value="zh-CN"'+(locale==='zh-CN'?' selected':'')+'>中文 (Chinese)</option><option value="pt-BR"'+(locale==='pt-BR'?' selected':'')+'>Português (Portuguese)</option><option value="yi"'+(locale==='yi'?' selected':'')+'>ייִדיש (Yiddish)</option></select></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settHebrewDates" style="accent-color:var(--me);margin-right:6px"'+(cs.showHebrewDates?' checked':'')+'>Show Hebrew dates</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">Display Hebrew calendar date alongside standard dates</p></div>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settAltNames" style="accent-color:var(--me);margin-right:6px"'+(cs.showAltNames!==false?' checked':'')+'>Show alternate names</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">Display Hebrew/alternate names in roster and cards</p></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settRTL" style="accent-color:var(--me);margin-right:6px"'+(cs.rtl?' checked':'')+'>Right-to-left layout (RTL)</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">For Hebrew, Arabic, Yiddish — flips the entire interface direction</p></div>';
+    h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveLocaleSettings()">Save Language Settings</button></div>';
+    h+='</div>';
+
+    // Stripe settings
+    var stripeKey=(s.campistryMe&&s.campistryMe.stripePublishableKey)||'';
+    h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:4px">💳 Payment Processing (Stripe)</h3><p style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments.</p>';
+    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem">Stripe Publishable Key</label><input type="text" id="settStripeKey" class="me-input" value="'+esc(stripeKey)+'" placeholder="pk_live_... or pk_test_..."></div>';
+    h+='<p style="font-size:.7rem;color:var(--s400);margin-top:4px">Your <strong>secret key</strong> (sk_...) must be set as a Supabase Edge Function secret — never put it in the browser. <a href="https://dashboard.stripe.com/apikeys" target="_blank" style="color:var(--me)">Get your keys from Stripe →</a></p>';
+    h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveStripeKey()">Save Stripe Key</button></div>';
+    h+='</div>';
+
+    // Data management
+    h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px">Data Management</h3>';
+    h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportAllData()">Export All Data (JSON)</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.importAllData()">Import Data (JSON)</button>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.clearAllData()">Clear All Data</button>';
+    h+='</div></div>';
     c.innerHTML=h;
 }
-
 function saveSettings(){
     var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-    s.camp_name=(document.getElementById('settCampName').value||'').trim();
+    s.camp_name=document.getElementById('settCampName').value.trim();
     s.campName=s.camp_name;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    save();toast('Settings saved');
+}
+function saveLocaleSettings(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
     if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.locale=document.getElementById('settLocale').value||'en-US';
     s.campistryMe.campSettings={
         showHebrewDates:document.getElementById('settHebrewDates').checked,
         showAltNames:document.getElementById('settAltNames').checked,
         rtl:document.getElementById('settRTL').checked
     };
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    // Apply RTL immediately
     if(s.campistryMe.campSettings.rtl) document.documentElement.setAttribute('dir','rtl');
     else document.documentElement.removeAttribute('dir');
-    save();toast('Settings saved');
+    save();render(curPage);toast('Language settings saved');
+}
+function saveStripeKey(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.stripePublishableKey=(document.getElementById('settStripeKey').value||'').trim();
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    save();toast('Stripe key saved');
+}
+function exportAllData(){
+    var s=localStorage.getItem('campGlobalSettings_v1')||'{}';
+    var blob=new Blob([s],{type:'application/json'});
+    var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='campistry_backup_'+new Date().toISOString().split('T')[0]+'.json';a.click();toast('Backup exported');
+}
+function importAllData(){
+    var inp=document.createElement('input');inp.type='file';inp.accept='.json';
+    inp.onchange=function(){
+        if(!inp.files[0])return;
+        var r=new FileReader();r.onload=function(e){
+            try{
+                var data=JSON.parse(e.target.result);
+                if(!confirm('This will replace ALL your data. Are you sure?'))return;
+                localStorage.setItem('campGlobalSettings_v1',JSON.stringify(data));
+                loadData();render(curPage);toast('Data imported');
+            }catch(err){alert('Invalid file: '+err.message)}
+        };r.readAsText(inp.files[0]);
+    };inp.click();
+}
+function clearAllData(){
+    if(!confirm('This will DELETE ALL camp data. This cannot be undone. Are you absolutely sure?'))return;
+    if(!confirm('FINAL WARNING: All campers, families, enrollment, financial data will be erased.'))return;
+    localStorage.removeItem('campGlobalSettings_v1');
+    loadData();render(curPage);toast('All data cleared');
 }
 
-// ── Camper notes & timeline stubs ──
+// ═══════════════════════════════════════════════════════════════
+// BROADCAST EMAIL/SMS DELIVERY
+// ═══════════════════════════════════════════════════════════════
+async function sendBroadcastNow(broadcast){
+    var recipients=[];
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(e){}
+    var target=(broadcast.to||'').toLowerCase();
+    if(target==='staff'||target==='staff only'){
+        finStaff.forEach(function(s){if(s.email)recipients.push({email:s.email,name:s.name,phone:''})});
+    }else{
+        Object.values(families).forEach(function(f){(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)recipients.push({email:p.email,name:p.name||'',phone:p.phone||''})})})});
+        var seen=new Set();recipients=recipients.filter(function(r){if(seen.has(r.email))return false;seen.add(r.email);return true});
+        if(target!=='all families'&&target!=='enrolled'&&target!=='all'&&target){
+            var divCampers=new Set();Object.entries(roster).forEach(function([n,c]){if(c.division===broadcast.to)divCampers.add(n)});
+            var divEmails=new Set();Object.values(families).forEach(function(f){if((f.camperIds||[]).some(function(n){return divCampers.has(n)}))(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)divEmails.add(p.email)})})});
+            recipients=recipients.filter(function(r){return divEmails.has(r.email)});
+        }
+    }
+    if(!recipients.length){toast('No recipients with email','error');return{sent:0,failed:0}}
+    try{return await callEdgeFunction('send-broadcast',{to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName})}
+    catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUTOMATED NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════════
+async function sendAutoNotification(type,enrollmentId){
+    var e=enrollments[enrollmentId];if(!e)return;
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
+    if(!e.parentEmail)return;
+    try{await callEdgeFunction('auto-notify',{recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)}
+}
+async function sendPaymentReminders(){
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
+    var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];var sent=0;
+    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';if(e.parentEmail){callEdgeFunction('auto-notify',{recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}}).catch(function(){});sent++}}})});
+    toast(sent+' payment reminder'+(sent!==1?'s':'')+' sent');
+}
+async function sendFormReminders(){
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
+    loadForms();var sent=0;
+    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;callEdgeFunction('auto-notify',{recipients:[{email:c.parent1Email,name:c.parent1Name||''}],type:'form_reminder',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}}).catch(function(){});sent++})});
+    toast(sent+' form reminder'+(sent!==1?'s':'')+' sent');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CAMPER NOTES & TIMELINE
+// ═══════════════════════════════════════════════════════════════
 function addCamperNote(camperName){
-    var body=prompt('Note:');if(!body)return;
-    if(!roster[camperName])return;
-    if(!roster[camperName].notes)roster[camperName].notes=[];
-    roster[camperName].notes.push({type:'General',body:body,date:new Date().toISOString(),by:'office'});
-    save();viewCamper(camperName);toast('Note added');
+    var h='<div class="me-modal-form"><div class="me-field"><label>Note Type</label><select id="noteType" class="me-input"><option>General</option><option>Parent Communication</option><option>Behavior</option><option>Medical</option><option>Bunk Change</option><option>Incident</option><option>Financial</option></select></div><div class="me-field"><label>Note</label><textarea id="noteBody" class="me-input" rows="4" style="resize:vertical" placeholder="What happened..."></textarea></div></div>';
+    showModal('Add Note — '+camperName,h,function(){
+        var body=document.getElementById('noteBody').value.trim();if(!body){alert('Enter a note');return}
+        if(!roster[camperName])return;if(!roster[camperName].notes)roster[camperName].notes=[];
+        roster[camperName].notes.push({type:document.getElementById('noteType').value,body:body,date:new Date().toISOString(),by:'office'});
+        save();closeModal('dynModal');viewCamper(camperName);toast('Note added');
+    });
 }
 function renderCamperTimeline(camperName){
     var d=roster[camperName];if(!d)return'';var notes=d.notes||[];
     if(!notes.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No notes yet</div>';
-    return notes.slice().reverse().map(function(n){var dt=n.date?new Date(n.date).toLocaleDateString():'';return'<div style="padding:6px 0;border-bottom:1px solid var(--s100);font-size:.8rem"><strong>'+esc(n.type)+'</strong> · <span style="color:var(--s400);font-size:.7rem">'+esc(dt)+'</span><div>'+esc(n.body)+'</div></div>'}).join('');
+    var colors={General:'var(--s500)','Parent Communication':'var(--me)',Behavior:'var(--warn)',Medical:'var(--purple)','Bunk Change':'var(--ok)',Incident:'var(--err)',Financial:'#2563EB'};
+    return notes.slice().reverse().map(function(n){var c=colors[n.type]||'var(--s500)';var dt=n.date?new Date(n.date).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';return'<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--s100)"><div style="width:3px;border-radius:2px;background:'+c+';flex-shrink:0"></div><div style="flex:1"><div style="display:flex;justify-content:space-between"><span style="font-size:.7rem;font-weight:600;color:'+c+'">'+esc(n.type)+'</span><span style="font-size:.65rem;color:var(--s400)">'+esc(dt)+'</span></div><div style="font-size:.8rem;color:var(--s700)">'+esc(n.body)+'</div></div></div>'}).join('');
 }
 
-function reEnrollCamper(camperName){toast('Re-enroll: '+camperName)}
+// ═══════════════════════════════════════════════════════════════
+// RE-ENROLLMENT / RETURNING FAMILIES
+// ═══════════════════════════════════════════════════════════════
+function reEnrollCamper(camperName){
+    var d=roster[camperName];if(!d)return;
+    var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
+    var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Re-enroll <strong>'+esc(camperName)+'</strong> for a new session. All info carried over.</p><div style="background:var(--s50);padding:12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem"><strong>'+esc(d.division||'')+'/'+esc(d.bunk||'')+'</strong> · Parent: '+esc(d.parent1Name||'')+'</div><div class="me-field"><label>Session</label><select id="reSession" class="me-input">'+sesOpts+'</select></div></div>';
+    showModal('Re-Enroll Camper',h,function(){
+        var session=document.getElementById('reSession').value;var sesObj=sessions.find(function(s){return s.name===session});
+        var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
+        enrollments[id]={camperName:camperName,camperLast:camperName.split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
+        save();closeModal('dynModal');renderEnrollment();toast(camperName+' re-enrolled (auto-accepted)');
+        if(d.parent1Email)sendAutoNotification('enrollment_confirmation',id);
+    });
+}
 
-// ── Custom fields ──
+// ═══════════════════════════════════════════════════════════════
+// CUSTOM FIELDS
+// ═══════════════════════════════════════════════════════════════
 var customFields=[];
 function loadCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');customFields=(s.campistryMe&&s.campistryMe.customFields)||[]}
-function manageCustomFields(){toast('Custom fields coming soon')}
+function saveCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.customFields=customFields;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
+function manageCustomFields(){
+    loadCustomFields();
+    var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Define custom fields that appear on every camper profile.</p><div id="cfList">';
+    customFields.forEach(function(f,i){h+='<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--s100)"><span style="flex:1;font-size:.85rem;font-weight:600">'+esc(f.label)+'</span><span style="font-size:.7rem;color:var(--s400)">'+esc(f.type)+'</span><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe._removeCustomField('+i+')">x</button></div>'});
+    if(!customFields.length) h+='<div style="font-size:.8rem;color:var(--s400);text-align:center;padding:12px">No custom fields</div>';
+    h+='</div><div style="border-top:1px solid var(--s200);margin-top:14px;padding-top:14px"><div style="display:grid;grid-template-columns:2fr 1fr;gap:8px"><input type="text" id="cfNewLabel" class="me-input" placeholder="Field name"><select id="cfNewType" class="me-input"><option value="text">Text</option><option value="select">Dropdown</option><option value="number">Number</option><option value="checkbox">Yes/No</option></select></div><div id="cfOptWrap" style="display:none;margin-top:6px"><input type="text" id="cfOpts" class="me-input" placeholder="Options (comma separated)"></div><button class="me-btn me-btn--pri me-btn--sm" style="margin-top:8px" onclick="CampistryMe._addCustomField()">+ Add Field</button></div>';
+    showModal('Manage Custom Fields',h);
+    setTimeout(function(){var s=document.getElementById('cfNewType');if(s)s.onchange=function(){document.getElementById('cfOptWrap').style.display=s.value==='select'?'block':'none'}},100);
+}
+function _addCustomField(){var l=(document.getElementById('cfNewLabel').value||'').trim();if(!l){alert('Enter name');return}var t=document.getElementById('cfNewType').value||'text';var o=t==='select'?(document.getElementById('cfOpts').value||'').split(',').map(function(x){return x.trim()}).filter(Boolean):[];customFields.push({label:l,type:t,options:o,id:'cf_'+Date.now()});saveCustomFields();save();closeModal('dynModal');manageCustomFields();toast('Field added')}
+function _removeCustomField(i){customFields.splice(i,1);saveCustomFields();save();closeModal('dynModal');manageCustomFields();toast('Removed')}
 
-// ── Documents ──
+// ═══════════════════════════════════════════════════════════════
+// DOCUMENT ATTACHMENTS
+// ═══════════════════════════════════════════════════════════════
 function uploadDocument(camperName){
-    var inp=document.createElement('input');inp.type='file';
-    inp.onchange=function(){
-        var file=inp.files[0];if(!file)return;if(file.size>5*1024*1024){toast('Max 5MB','error');return}
-        var reader=new FileReader();
-        reader.onload=function(e){if(!roster[camperName])return;if(!roster[camperName].documents)roster[camperName].documents=[];roster[camperName].documents.push({name:file.name,type:file.type,size:file.size,data:e.target.result,uploadDate:new Date().toISOString()});save();viewCamper(camperName);toast('Uploaded')};
-        reader.readAsDataURL(file);
-    };
-    inp.click();
+    var inp=document.createElement('input');inp.type='file';inp.accept='.pdf,.jpg,.jpeg,.png,.doc,.docx';
+    inp.onchange=function(){if(!inp.files[0])return;var file=inp.files[0];if(file.size>5*1024*1024){toast('Max 5MB','error');return}
+    var reader=new FileReader();reader.onload=function(e){if(!roster[camperName])return;if(!roster[camperName].documents)roster[camperName].documents=[];roster[camperName].documents.push({name:file.name,type:file.type,size:file.size,data:e.target.result,uploadDate:new Date().toISOString()});save();viewCamper(camperName);toast('Uploaded: '+file.name)};reader.readAsDataURL(file)};inp.click();
 }
 function renderDocuments(camperName){
-    var docs=(roster[camperName]&&roster[camperName].documents)||[];
-    if(!docs.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No documents</div>';
-    return docs.map(function(d,i){return'<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.8rem"><span>📄</span><a href="'+esc(d.data)+'" download="'+esc(d.name)+'" style="color:var(--me);flex:1">'+esc(d.name)+'</a></div>'}).join('');
+    var docs=(roster[camperName]&&roster[camperName].documents)||[];if(!docs.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No documents</div>';
+    return docs.map(function(d,i){var icon=d.type&&d.type.includes('pdf')?'📄':'📎';return'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:.8rem"><span>'+icon+'</span><a href="'+esc(d.data)+'" download="'+esc(d.name)+'" style="color:var(--me);flex:1">'+esc(d.name)+'</a><span style="font-size:.65rem;color:var(--s400)">'+(d.size?Math.round(d.size/1024)+'KB':'')+'</span><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);font-size:.6rem" onclick="CampistryMe._removeDoc(\''+je(camperName)+'\','+i+')">x</button></div>'}).join('');
 }
+function _removeDoc(n,i){if(!roster[n]||!roster[n].documents)return;roster[n].documents.splice(i,1);save();viewCamper(n);toast('Removed')}
 
-// ── Scholarships ──
+// ═══════════════════════════════════════════════════════════════
+// SCHOLARSHIP / FINANCIAL AID
+// ═══════════════════════════════════════════════════════════════
 function addScholarship(camperName){
-    var amt=parseFloat(prompt('Amount ($):','0'));if(!amt)return;
-    if(!roster[camperName])return;
-    if(!roster[camperName].scholarships)roster[camperName].scholarships=[];
-    roster[camperName].scholarships.push({type:'Scholarship',amount:amt,source:prompt('Source:','')||'',date:new Date().toISOString().split('T')[0]});
-    save();viewCamper(camperName);toast('Aid awarded');
+    var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:12px">Award aid to <strong>'+esc(camperName)+'</strong></p><div class="me-field"><label>Type</label><select id="aidType" class="me-input"><option>Scholarship</option><option>Financial Aid</option><option>Campership</option><option>Staff Discount</option><option>Donor Sponsored</option></select></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Amount ($)</label><input type="number" id="aidAmt" class="me-input" step="0.01" min="0"></div><div class="me-field"><label>Source</label><input type="text" id="aidSrc" class="me-input" placeholder="Donor or fund name"></div></div><div class="me-field"><label>Notes</label><input type="text" id="aidNotes" class="me-input"></div></div>';
+    showModal('Award Financial Aid',h,function(){
+        var amt=parseFloat(document.getElementById('aidAmt').value)||0;if(!amt){alert('Enter amount');return}
+        if(!roster[camperName])return;if(!roster[camperName].scholarships)roster[camperName].scholarships=[];
+        roster[camperName].scholarships.push({type:document.getElementById('aidType').value,amount:amt,source:(document.getElementById('aidSrc').value||'').trim(),notes:(document.getElementById('aidNotes').value||'').trim(),date:new Date().toISOString().split('T')[0]});
+        var famKey=Object.keys(families).find(function(k){return(families[k].camperIds||[]).indexOf(camperName)>=0});
+        if(famKey){if(!families[famKey].credits)families[famKey].credits=[];families[famKey].credits.push({id:'sch_'+Date.now(),reason:document.getElementById('aidType').value+' for '+camperName,amount:amt,date:new Date().toISOString().split('T')[0]});families[famKey].balance=Math.max(0,(families[famKey].balance||0)-amt)}
+        save();closeModal('dynModal');viewCamper(camperName);toast(fm(amt)+' awarded to '+camperName);
+    });
 }
 
-// ── Duplicates ──
-function detectDuplicates(){toast('Duplicate detection coming soon')}
-function mergeCampers(a,b){toast('Merge')}
-
-// ── Photo ──
-function uploadPhoto(camperName){
-    var inp=document.createElement('input');inp.type='file';inp.accept='image/*';
-    inp.onchange=function(){var file=inp.files[0];if(!file)return;if(file.size>2*1024*1024){toast('Max 2MB','error');return}var reader=new FileReader();reader.onload=function(e){if(roster[camperName]){roster[camperName].photoUrl=e.target.result;save();viewCamper(camperName);toast('Photo added')}};reader.readAsDataURL(file)};
-    inp.click();
+// ═══════════════════════════════════════════════════════════════
+// DUPLICATE DETECTION
+// ═══════════════════════════════════════════════════════════════
+function detectDuplicates(){
+    var names=Object.keys(roster);var dupes=[];
+    for(var i=0;i<names.length;i++)for(var j=i+1;j<names.length;j++){var sc=dupeScore(names[i],names[j],roster[names[i]],roster[names[j]]);if(sc>=3)dupes.push({a:names[i],b:names[j],score:sc})}
+    dupes.sort(function(a,b){return b.score-a.score});
+    if(!dupes.length){toast('No duplicates found');return}
+    var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">'+dupes.length+' potential duplicate'+(dupes.length!==1?'s':'')+'</p>';
+    dupes.forEach(function(d){var a=roster[d.a],b=roster[d.b];var conf=d.score>=5?'High':d.score>=4?'Medium':'Low';var cc=d.score>=5?'var(--ok)':d.score>=4?'var(--warn)':'var(--s400)';
+    h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--s50);border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)"><div style="flex:1"><div style="font-weight:700;font-size:.85rem">'+esc(d.a)+' ↔ '+esc(d.b)+'</div><div style="font-size:.7rem;color:var(--s500)">'+(a.dob&&b.dob&&a.dob===b.dob?'Same DOB · ':'')+(a.parent1Name&&b.parent1Name&&a.parent1Name===b.parent1Name?'Same parent · ':'')+(a.street&&b.street&&a.street===b.street?'Same address':'')+'</div></div><span style="font-size:.65rem;font-weight:600;color:'+cc+'">'+conf+'</span><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.mergeCampers(\''+je(d.a)+'\',\''+je(d.b)+'\')">Merge</button></div>'});
+    showModal('Duplicates — '+dupes.length+' found',h);
+}
+function dupeScore(nA,nB,a,b){var s=0;var pA=nA.toLowerCase().split(/\s+/),pB=nB.toLowerCase().split(/\s+/);if(pA[pA.length-1]===pB[pB.length-1])s+=2;if(pA[0]===pB[0])s+=1;if(a.dob&&b.dob&&a.dob===b.dob)s+=2;if(a.parent1Name&&b.parent1Name&&a.parent1Name.toLowerCase()===b.parent1Name.toLowerCase())s+=2;if(a.parent1Email&&b.parent1Email&&a.parent1Email.toLowerCase()===b.parent1Email.toLowerCase())s+=2;if(a.street&&b.street&&a.street.toLowerCase()===b.street.toLowerCase())s+=1;return s}
+function mergeCampers(nA,nB){
+    if(!confirm('Merge "'+nB+'" into "'+nA+'"? "'+nB+'" will be deleted.'))return;
+    var a=roster[nA],b=roster[nB];Object.keys(b).forEach(function(k){if(!a[k]&&b[k])a[k]=b[k]});
+    if(b.notes)a.notes=(a.notes||[]).concat(b.notes);if(b.documents)a.documents=(a.documents||[]).concat(b.documents);if(b.scholarships)a.scholarships=(a.scholarships||[]).concat(b.scholarships);
+    Object.values(families).forEach(function(f){var i=(f.camperIds||[]).indexOf(nB);if(i>=0){f.camperIds.splice(i,1);if(f.camperIds.indexOf(nA)<0)f.camperIds.push(nA)}});
+    Object.values(enrollments).forEach(function(e){if(e.camperName===nB)e.camperName=nA});
+    Object.entries(bunkAsgn).forEach(function([bk,kids]){var i=kids.indexOf(nB);if(i>=0){kids.splice(i,1);if(kids.indexOf(nA)<0)kids.push(nA)}});
+    delete roster[nB];save();closeModal('dynModal');render(curPage);toast('Merged into "'+nA+'"');
 }
 
-// ── CSV ──
+// ── CSV ──────────────────────────────────────────────────────────
 var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Parent 1 Name','Parent 1 Phone','Parent 1 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
 
 function downloadTemplate(){
+    // Build template with headers + league columns
     var leagues=getLeagues();var leagueNames=Object.keys(leagues).sort();
     var headers=CSV_HEADERS.slice();
     leagueNames.forEach(function(lg){headers.push('Team: '+lg)});
     var csv='\uFEFF'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
+    // Add 2 example rows
     csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Mrs. Johnson","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","Jane Smith","555-123-4567","jane@email.com","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
+    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Rabbi Goldstein","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","Rachel Cohen","555-222-3333","rachel@email.com","David Cohen","555-444-5555","Father","","Inhaler","Dairy-free"\n';
+    csv+='"","","","","","","","","","","","","","","","","","","","","","",""\n';
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
     a.download='campistry_camper_template.csv';
     a.click();
-    toast('Template downloaded');
+    toast('Template downloaded — fill it out and import');
 }
 
 function handleCsv(file){
@@ -1605,25 +3174,93 @@ function handleCsv(file){
         if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
         var lines=text.split(/\r?\n/).filter(function(l){return l.trim()});
         if(!lines.length)return;
+
+        // Parse header row to find column indices
         var hdr=parseCsvLine(lines[0]).map(function(h){return h.toLowerCase().trim()});
-        var col=function(names){for(var i=0;i<names.length;i++){var idx=hdr.findIndex(function(h){return h.includes(names[i])});if(idx>=0)return idx}return-1};
-        var iFirst=col(['first name','first']),iLast=col(['last name','last']),iName=col(['name','camper']),iDob=col(['date of birth','dob']),iGender=col(['gender']),iSchool=col(['school name','school']),iSchoolGr=col(['school grade']),iTeacher=col(['teacher']),iDiv=col(['division']),iGrade=col(['grade']),iBunk=col(['bunk','cabin']),iStreet=col(['street','address']),iCity=col(['city']),iState=col(['state']),iZip=col(['zip']),iP1=col(['parent 1 name','parent name']),iP1Ph=col(['parent 1 phone','parent phone']),iP1Em=col(['parent 1 email','parent email']),iEmN=col(['emergency name']),iEmPh=col(['emergency phone']),iEmR=col(['emergency relation']),iAlg=col(['allergies']),iMed=col(['medications']),iDiet=col(['dietary']);
-        var leagueCols={};hdr.forEach(function(h,idx){var m=h.match(/^team:\s*(.+)/i);if(m)leagueCols[m[1].trim()]=idx});
+        var col=function(names){
+            for(var i=0;i<names.length;i++){var idx=hdr.findIndex(function(h){return h.includes(names[i])});if(idx>=0)return idx}
+            return-1;
+        };
+
+        var iFirst=col(['first name','first']);
+        var iLast=col(['last name','last']);
+        var iName=col(['name','camper']);
+        var iDob=col(['date of birth','dob','birth']);
+        var iGender=col(['gender','sex']);
+        var iSchool=col(['school name','school']);
+        var iSchoolGr=col(['school grade']);
+        var iTeacher=col(['teacher']);
+        var iDiv=col(['division']);
+        var iGrade=col(['grade']);
+        var iBunk=col(['bunk','cabin']);
+        var iStreet=col(['street','address']);
+        var iCity=col(['city']);
+        var iState=col(['state']);
+        var iZip=col(['zip','postal']);
+        var iP1=col(['parent 1 name','parent name','parent1','mother','father']);
+        var iP1Ph=col(['parent 1 phone','parent phone','parent1 phone']);
+        var iP1Em=col(['parent 1 email','parent email','parent1 email']);
+        var iEmN=col(['emergency name','emergency contact']);
+        var iEmPh=col(['emergency phone']);
+        var iEmR=col(['emergency relation']);
+        var iAlg=col(['allergies','allergy']);
+        var iMed=col(['medications','medication','meds']);
+        var iDiet=col(['dietary','diet']);
+
+        // Find league team columns (headers like "Team: League Name")
+        var leagueCols={};
+        hdr.forEach(function(h,idx){
+            var m=h.match(/^team:\s*(.+)/i);
+            if(m)leagueCols[m[1].trim()]=idx;
+        });
+
+        var start=1; // skip header
         var rows=[];
-        for(var i=1;i<Math.min(lines.length,5001);i++){
-            var cc=parseCsvLine(lines[i]);
-            var firstName=(iFirst>=0?cc[iFirst]:'').trim();
-            var lastName=(iLast>=0?cc[iLast]:'').trim();
+        for(var i=start;i<Math.min(lines.length,5001);i++){
+            var c=parseCsvLine(lines[i]);
+            var firstName=(iFirst>=0?c[iFirst]:'').trim();
+            var lastName=(iLast>=0?c[iLast]:'').trim();
             var fullName='';
             if(firstName||lastName){fullName=(firstName+' '+lastName).trim()}
-            else if(iName>=0){fullName=(cc[iName]||'').trim()}
+            else if(iName>=0){fullName=(c[iName]||'').trim()}
             if(!fullName)continue;
-            var teams={};Object.entries(leagueCols).forEach(function([lg,idx]){var v=(cc[idx]||'').trim();if(v)teams[lg]=v});
-            rows.push({name:fullName,dob:iDob>=0?(cc[iDob]||'').trim():'',gender:iGender>=0?(cc[iGender]||'').trim():'',school:iSchool>=0?(cc[iSchool]||'').trim():'',schoolGrade:iSchoolGr>=0?(cc[iSchoolGr]||'').trim():'',teacher:iTeacher>=0?(cc[iTeacher]||'').trim():'',division:iDiv>=0?(cc[iDiv]||'').trim():'',grade:iGrade>=0?(cc[iGrade]||'').trim():'',bunk:iBunk>=0?(cc[iBunk]||'').trim():'',street:iStreet>=0?(cc[iStreet]||'').trim():'',city:iCity>=0?(cc[iCity]||'').trim():'',state:iState>=0?(cc[iState]||'').trim():'',zip:iZip>=0?(cc[iZip]||'').trim():'',parent1Name:iP1>=0?(cc[iP1]||'').trim():'',parent1Phone:iP1Ph>=0?(cc[iP1Ph]||'').trim():'',parent1Email:iP1Em>=0?(cc[iP1Em]||'').trim():'',emergencyName:iEmN>=0?(cc[iEmN]||'').trim():'',emergencyPhone:iEmPh>=0?(cc[iEmPh]||'').trim():'',emergencyRel:iEmR>=0?(cc[iEmR]||'').trim():'',allergies:iAlg>=0?(cc[iAlg]||'').trim():'',medications:iMed>=0?(cc[iMed]||'').trim():'',dietary:iDiet>=0?(cc[iDiet]||'').trim():'',teams:teams});
+
+            var teams={};
+            Object.entries(leagueCols).forEach(function([lg,idx]){
+                var v=(c[idx]||'').trim();
+                if(v)teams[lg]=v;
+            });
+
+            rows.push({
+                name:fullName,
+                dob:iDob>=0?(c[iDob]||'').trim():'',
+                gender:iGender>=0?(c[iGender]||'').trim():'',
+                school:iSchool>=0?(c[iSchool]||'').trim():'',
+                schoolGrade:iSchoolGr>=0?(c[iSchoolGr]||'').trim():'',
+                teacher:iTeacher>=0?(c[iTeacher]||'').trim():'',
+                division:iDiv>=0?(c[iDiv]||'').trim():'',
+                grade:iGrade>=0?(c[iGrade]||'').trim():'',
+                bunk:iBunk>=0?(c[iBunk]||'').trim():'',
+                street:iStreet>=0?(c[iStreet]||'').trim():'',
+                city:iCity>=0?(c[iCity]||'').trim():'',
+                state:iState>=0?(c[iState]||'').trim():'',
+                zip:iZip>=0?(c[iZip]||'').trim():'',
+                parent1Name:iP1>=0?(c[iP1]||'').trim():'',
+                parent1Phone:iP1Ph>=0?(c[iP1Ph]||'').trim():'',
+                parent1Email:iP1Em>=0?(c[iP1Em]||'').trim():'',
+                emergencyName:iEmN>=0?(c[iEmN]||'').trim():'',
+                emergencyPhone:iEmPh>=0?(c[iEmPh]||'').trim():'',
+                emergencyRel:iEmR>=0?(c[iEmR]||'').trim():'',
+                allergies:iAlg>=0?(c[iAlg]||'').trim():'',
+                medications:iMed>=0?(c[iMed]||'').trim():'',
+                dietary:iDiet>=0?(c[iDiet]||'').trim():'',
+                teams:teams
+            });
         }
+
         if(rows.length){
             var pvEl=document.getElementById('csvPV');
-            if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div>'}
+            if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
             var btn=document.getElementById('csvBtn');
             if(btn){btn.disabled=false;btn.onclick=function(){importRows(rows)}}
         }
@@ -1643,42 +3280,151 @@ function parseCsvLine(line){
 }
 
 function importRows(rows){
-    // WIPE existing — CSV is the new source of truth
-    roster={};structure={};families={};bunkAsgn={};nextCamperId=1;
-    try{var goRaw=localStorage.getItem('campistry_go_data');var goData=goRaw?JSON.parse(goRaw):{};goData.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(goData))}catch(e){}
+    var added=0,updated=0,newDivisions=0,newGrades=0,newBunks=0,newFamilies=0;
 
+    // ═══ WIPE EXISTING DATA — CSV is the new source of truth ═══
+    roster={};
+    structure={};
+    families={};
+    bunkAsgn={};
+    nextCamperId=1;
+    // Clear Go addresses too
+    try{var goRaw=localStorage.getItem('campistry_go_data');var goData=goRaw?JSON.parse(goRaw):{};goData.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(goData))}catch(e){}
+    // Also wipe the cloud settings so stale data doesn't survive
+    try{
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        g.campStructure={};
+        if(!g.app1)g.app1={};
+        g.app1.camperRoster={};
+        g.app1.divisions={};
+        if(!g.campistryMe)g.campistryMe={};
+        g.campistryMe.families={};
+        g.campistryMe.bunkAssignments={};
+        g.campistryMe.nextCamperId=1;
+        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+    }catch(e){}
+
+    // ═══ PASS 1: Build camp structure from CSV data ═══
     rows.forEach(function(r){
         if(r.division){
-            if(!structure[r.division]){structure[r.division]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}}}
-            if(r.grade&&!structure[r.division].grades[r.grade]){structure[r.division].grades[r.grade]={bunks:[]}}
-            if(r.grade&&r.bunk&&structure[r.division].grades[r.grade]&&structure[r.division].grades[r.grade].bunks.indexOf(r.bunk)===-1){structure[r.division].grades[r.grade].bunks.push(r.bunk)}
+            if(!structure[r.division]){
+                structure[r.division]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
+                newDivisions++;
+            }
+            if(r.grade&&!structure[r.division].grades[r.grade]){
+                structure[r.division].grades[r.grade]={bunks:[]};
+                newGrades++;
+            }
+            if(r.grade&&r.bunk&&structure[r.division].grades[r.grade]&&structure[r.division].grades[r.grade].bunks.indexOf(r.bunk)===-1){
+                structure[r.division].grades[r.grade].bunks.push(r.bunk);
+                newBunks++;
+            }
         }
     });
 
+    // ═══ PASS 2: Create campers ═══
     rows.forEach(function(r){
+        added++;
         var existingId=nextCamperId;nextCamperId++;
-        roster[r.name]={camperId:existingId,dob:r.dob||'',gender:r.gender||'',school:r.school||'',schoolGrade:r.schoolGrade||'',teacher:r.teacher||'',division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',street:r.street||'',city:r.city||'',state:r.state||'',zip:r.zip||'',parent1Name:r.parent1Name||'',parent1Phone:r.parent1Phone||'',parent1Email:r.parent1Email||'',emergencyName:r.emergencyName||'',emergencyPhone:r.emergencyPhone||'',emergencyRel:r.emergencyRel||'',allergies:r.allergies||'',medications:r.medications||'',dietary:r.dietary||'',teams:r.teams||{},team:Object.values(r.teams)[0]||''};
+
+        roster[r.name]={
+            camperId:existingId,
+            dob:r.dob||'',
+            gender:r.gender||'',
+            school:r.school||'',
+            schoolGrade:r.schoolGrade||'',
+            teacher:r.teacher||'',
+            division:r.division||'',
+            grade:r.grade||'',
+            bunk:r.bunk||'',
+            street:r.street||'',
+            city:r.city||'',
+            state:r.state||'',
+            zip:r.zip||'',
+            parent1Name:r.parent1Name||'',
+            parent1Phone:r.parent1Phone||'',
+            parent1Email:r.parent1Email||'',
+            emergencyName:r.emergencyName||'',
+            emergencyPhone:r.emergencyPhone||'',
+            emergencyRel:r.emergencyRel||'',
+            allergies:r.allergies||'',
+            medications:r.medications||'',
+            dietary:r.dietary||'',
+            teams:r.teams||{},
+            team:Object.values(r.teams)[0]||''
+        };
+
+        // Sync address to Go
         if(roster[r.name].street)syncAddressToGo(r.name,roster[r.name]);
     });
 
-    // Auto-generate families
+    // ═══ PASS 3: Auto-generate families from parent data ═══
+    // Group campers by last name + parent name to create family units
     var familyMap={};
     rows.forEach(function(r){
         if(!r.parent1Name)return;
         var lastName=r.name.split(' ').pop();
+        // Key by last name + parent name to handle split households
         var famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
-        if(!familyMap[famKey]){familyMap[famKey]={lastName:lastName,parentName:r.parent1Name,parentPhone:r.parent1Phone||'',parentEmail:r.parent1Email||'',address:[r.street,r.city,r.state,r.zip].filter(Boolean).join(', '),campers:[]}}
-        if(familyMap[famKey].campers.indexOf(r.name)===-1)familyMap[famKey].campers.push(r.name);
+        if(!familyMap[famKey]){
+            familyMap[famKey]={
+                lastName:lastName,
+                parentName:r.parent1Name,
+                parentPhone:r.parent1Phone||'',
+                parentEmail:r.parent1Email||'',
+                address:[r.street,r.city,r.state,r.zip].filter(Boolean).join(', '),
+                campers:[]
+            };
+        }
+        if(familyMap[famKey].campers.indexOf(r.name)===-1){
+            familyMap[famKey].campers.push(r.name);
+        }
     });
+
     Object.entries(familyMap).forEach(function([famKey,fam]){
-        families[famKey]={name:fam.lastName+' Family',households:[{label:'Primary',parents:[{name:fam.parentName,phone:fam.parentPhone,email:fam.parentEmail,relation:'Parent'}],address:fam.address,billingContact:true}],camperIds:fam.campers,balance:0,totalPaid:0,notes:'Auto-created from CSV import'};
+        if(families[famKey]){
+            // Update existing family — add any new campers
+            fam.campers.forEach(function(cn){
+                if(families[famKey].camperIds.indexOf(cn)===-1)families[famKey].camperIds.push(cn);
+            });
+        }else{
+            // Create new family
+            families[famKey]={
+                name:fam.lastName+' Family',
+                households:[{
+                    label:'Primary',
+                    parents:[{name:fam.parentName,phone:fam.parentPhone,email:fam.parentEmail,relation:'Parent'}],
+                    address:fam.address,
+                    billingContact:true
+                }],
+                camperIds:fam.campers,
+                balance:0,totalPaid:0,
+                notes:'Auto-created from CSV import'
+            };
+            newFamilies++;
+        }
     });
 
-    // Auto-populate bunks
-    rows.forEach(function(r){if(r.bunk&&r.name){if(!bunkAsgn[r.bunk])bunkAsgn[r.bunk]=[];if(bunkAsgn[r.bunk].indexOf(r.name)===-1)bunkAsgn[r.bunk].push(r.name)}});
+    // ═══ PASS 4: Auto-populate bunk assignments ═══
+    rows.forEach(function(r){
+        if(r.bunk&&r.name){
+            if(!bunkAsgn[r.bunk])bunkAsgn[r.bunk]=[];
+            if(bunkAsgn[r.bunk].indexOf(r.name)===-1)bunkAsgn[r.bunk].push(r.name);
+        }
+    });
 
+    // ═══ SAVE & REPORT ═══
     save();closeModal('csvModal');render(curPage);
-    toast(rows.length+' campers imported — previous data replaced');
+
+    // Build summary
+    var summary=added+' campers imported';
+    if(newDivisions>0)summary+=', '+newDivisions+' division'+(newDivisions>1?'s':'');
+    if(newGrades>0)summary+=', '+newGrades+' grade'+(newGrades>1?'s':'');
+    if(newBunks>0)summary+=', '+newBunks+' bunk'+(newBunks>1?'s':'');
+    if(newFamilies>0)summary+=', '+newFamilies+' famil'+(newFamilies>1?'ies':'y');
+    summary+=' — previous data replaced';
+    toast(summary);
+    console.log('[Me] CSV import (full overwrite):',summary);
 }
 
 function exportCsv(){
@@ -1706,6 +3452,27 @@ function exportCsv(){
 }
 
 // ═══ BOOT ════════════════════════════════════════════════════════
+// Photo upload (stores as base64 data URL in camper record)
+function uploadPhoto(camperName){
+    var inp=document.createElement('input');
+    inp.type='file';inp.accept='image/*';
+    inp.onchange=function(){
+        var file=inp.files[0];if(!file)return;
+        if(file.size>2*1024*1024){toast('Photo must be under 2MB','error');return}
+        var reader=new FileReader();
+        reader.onload=function(e){
+            if(roster[camperName]){
+                roster[camperName].photoUrl=e.target.result;
+                save();
+                viewCamper(camperName); // refresh the modal
+                toast('Photo added');
+            }
+        };
+        reader.readAsDataURL(file);
+    };
+    inp.click();
+}
+
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 
 window.CampistryMe={
@@ -1720,12 +3487,43 @@ window.CampistryMe={
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
+    finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
+    finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
+    finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
+    finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
+    finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
     uploadPhoto:uploadPhoto,
-    saveSettings:saveSettings,
-    addCamperNote:addCamperNote,reEnrollCamper:reEnrollCamper,
-    manageCustomFields:manageCustomFields,
-    uploadDocument:uploadDocument,addScholarship:addScholarship,
-    detectDuplicates:detectDuplicates,mergeCampers:mergeCampers
+    // Billing — family ledger system
+    openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
+    addCharge:addCharge,addChargeForFamily:addChargeForFamily,
+    issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
+    setBillFilter:setBillFilter,printStatement:printStatement,
+    requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,
+    // Broadcasts
+    openBroadcastModal:openBroadcastModal,viewBroadcast:viewBroadcast,removeBroadcast:removeBroadcast,
+    // Forms & Docs
+    addForm:addForm,deleteForm:deleteForm,viewFormResponses:viewFormResponses,
+    // Reports
+    exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,
+    exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
+    exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
+    // Settings
+    saveSettings:saveSettings,saveStripeKey:saveStripeKey,saveLocaleSettings:saveLocaleSettings,exportAllData:exportAllData,importAllData:importAllData,clearAllData:clearAllData,
+    // Broadcast delivery
+    sendBroadcastNow:sendBroadcastNow,sendPaymentReminders:sendPaymentReminders,sendFormReminders:sendFormReminders,
+    // Camper notes & timeline
+    addCamperNote:addCamperNote,
+    // Re-enrollment
+    reEnrollCamper:reEnrollCamper,
+    // Custom fields
+    manageCustomFields:manageCustomFields,_addCustomField:_addCustomField,_removeCustomField:_removeCustomField,
+    // Documents
+    uploadDocument:uploadDocument,_removeDoc:_removeDoc,
+    // Scholarships
+    addScholarship:addScholarship,
+    // Duplicate detection
+    detectDuplicates:detectDuplicates,mergeCampers:mergeCampers,
 };
 })();
