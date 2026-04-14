@@ -293,12 +293,13 @@
     // =========================================================================
 
     // ── Starter banner state (kept in memory for fast refresh) ──
-    var _starterDaysUsed = 0;
-    var _starterCamperCount = 0;
+    var _starterDaysUsed = -1;  // -1 = not yet loaded
+    var _starterCamperCount = -1;
     var _starterMaxCampers = 100;
     var _starterMaxDays = 7;
 
     function _starterBannerColor() {
+        if (_starterDaysUsed < 0 || _starterCamperCount < 0) return 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
         var camperPct = _starterCamperCount / _starterMaxCampers;
         var daysPct = _starterDaysUsed / _starterMaxDays;
         if (daysPct >= 1 || camperPct >= 1) return 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)';
@@ -307,10 +308,12 @@
     }
 
     function _starterDaysLabel() {
+        if (_starterDaysUsed < 0) return '... of ' + _starterMaxDays + ' days used';
         return _starterDaysUsed + ' of ' + _starterMaxDays + ' days used';
     }
 
     function _starterCamperLabel() {
+        if (_starterCamperCount < 0) return '... of ' + _starterMaxCampers + ' campers';
         return _starterCamperCount + ' of ' + _starterMaxCampers + ' campers';
     }
 
@@ -357,8 +360,8 @@
             if (cached.maxDays) _starterMaxDays = cached.maxDays;
             if (cached.maxCampers) _starterMaxCampers = cached.maxCampers;
         } else {
-            _starterDaysUsed = 0;
-            _starterCamperCount = 0;
+            _starterDaysUsed = -1;  // show "..." until server responds
+            _starterCamperCount = -1;
         }
 
         // Also load local camper roster (instant, may be newer than cache)
