@@ -46,15 +46,7 @@
     display: flex; align-items: center; gap: .25rem;
 }
 .nav-back:hover { color: var(--brand-600); }
-.nav-go-logo { display: flex; align-items: center; }
-.nav-go-logo img { height: 43px; width: auto; object-fit: contain; }
-.nav-app-switch {
-    display: flex; align-items: center; margin-left: 4px;
-    text-decoration: none;
-    transition: transform var(--duration-fast) var(--ease-spring), opacity var(--duration-fast);
-}
-.nav-app-switch:hover { opacity: .8; transform: scale(1.04); }
-.nav-app-switch img { height: 38px; width: auto; object-fit: contain; }
+/* Old nav-go-logo / nav-app-switch styles replaced by quick-switch-bar in campistry-unified.css */
 .sync-badge {
     display: flex; align-items: center; gap: .375rem;
     padding: .3rem .75rem;
