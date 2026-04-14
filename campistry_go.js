@@ -120,9 +120,9 @@
                 window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
                     detail: { type: 'camper', current: result.data.current, max: result.data.max }
                 }));
-                return { allowed: false };
+                return { allowed: false, current: result.data.current, max: result.data.max };
             }
-            return { allowed: true };
+            return { allowed: true, current: result.data?.current, max: result.data?.max };
         } catch (e) {
             console.warn('[Go] Camper limit check failed, proceeding:', e);
             return { allowed: true };
@@ -2504,11 +2504,21 @@
     async function parseCsv(text) {
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         const lines = text.split(/\r?\n/).filter(l => l.trim()); if (lines.length < 2) { toast('Empty CSV', 'error'); return; }
-        // ★ Starter plan: check limit before importing
-        var newCount = lines.length - 1; // subtract header row
+        // ★ Starter plan: check limit and cap import if needed
+        var _goMaxImport = Infinity;
+        var _goCapped = 0;
+        var newCount = lines.length - 1;
         if (newCount > 0) {
             var limit = await checkCamperLimitGo(newCount);
-            if (!limit.allowed) return;
+            if (!limit.allowed && limit.current !== undefined && limit.max !== undefined) {
+                var slotsAvailable = Math.max(0, limit.max - limit.current);
+                if (slotsAvailable === 0) {
+                    toast('Camper limit reached (' + limit.max + '). Upgrade for more.', 'error');
+                    return;
+                }
+                _goMaxImport = slotsAvailable;
+                toast('Accepting ' + slotsAvailable + ' of ' + newCount + ' entries (limit: ' + limit.max + ')');
+            }
         }
         const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim());
 
@@ -2623,6 +2633,9 @@
                 console.log('[Go] CSV: ' + name + ' → ' + (isMonitor ? 'monitor' : 'counselor') + (wantsStop ? ' (needs stop)' : ''));
             } else {
                 // Default: treat as camper
+                // ★ Starter plan: stop adding once cap reached
+                if (camperCount >= _goMaxImport) { _goCapped++; continue; }
+
                 const meRoster = readCampistrySettings()?.app1?.camperRoster || {};
                 const rn = Object.keys(meRoster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
 
@@ -2645,7 +2658,9 @@
         }
         save(); renderAddresses(); renderStaff(); updateStats();
         const total = camperCount + staffCount;
-        if (staffCount > 0) {
+        if (_goCapped > 0) {
+            toast(camperCount + ' imported, ' + _goCapped + ' skipped (plan limit)' + (staffCount > 0 ? ', ' + staffCount + ' staff' : ''));
+        } else if (staffCount > 0) {
             toast(camperCount + ' campers + ' + staffCount + ' staff imported (' + total + ' total)');
             console.log('[Go] CSV import: ' + camperCount + ' campers, ' + staffCount + ' staff');
         } else {

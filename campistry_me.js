@@ -1271,11 +1271,31 @@
 
     async function importCsv() {
         if (!pendingCsvData.length) return;
-        // ★ Starter plan: count truly new campers and check limit
-        var newCamperCount = pendingCsvData.filter(function(r) { return !camperRoster[r.name]; }).length;
-        if (newCamperCount > 0) {
-            var limit = await checkCamperLimit(newCamperCount);
-            if (!limit.allowed) return;
+        // ★ Starter plan: check how many new campers we can accept
+        var newCampers = pendingCsvData.filter(function(r) { return !camperRoster[r.name]; });
+        var cappedCount = 0;
+        if (newCampers.length > 0) {
+            var limit = await checkCamperLimit(newCampers.length);
+            if (!limit.allowed && limit.current !== undefined && limit.max !== undefined) {
+                // Accept as many as we can fit
+                var slotsAvailable = Math.max(0, limit.max - limit.current);
+                if (slotsAvailable === 0) {
+                    toast('Camper limit reached (' + limit.max + '). Upgrade for more.', 'error');
+                    return;
+                }
+                // Mark excess new campers to skip (keep updates for existing campers)
+                var newCount = 0;
+                var skipSet = new Set();
+                for (var ci = 0; ci < pendingCsvData.length; ci++) {
+                    if (!camperRoster[pendingCsvData[ci].name]) {
+                        newCount++;
+                        if (newCount > slotsAvailable) skipSet.add(pendingCsvData[ci].name);
+                    }
+                }
+                cappedCount = skipSet.size;
+                pendingCsvData = pendingCsvData.filter(function(r) { return !skipSet.has(r.name); });
+                toast('Accepting ' + slotsAvailable + ' of ' + newCampers.length + ' new campers (limit: ' + limit.max + ')');
+            }
         }
         let added = 0, updated = 0, skipped = 0;
         let divsCreated = 0, gradesCreated = 0, bunksCreated = 0;
@@ -1328,6 +1348,7 @@
         if (divsCreated) parts.push(divsCreated + ' div' + (divsCreated !== 1 ? 's' : '') + ' created');
         if (gradesCreated) parts.push(gradesCreated + ' grade' + (gradesCreated !== 1 ? 's' : '') + ' created');
         if (bunksCreated) parts.push(bunksCreated + ' bunk' + (bunksCreated !== 1 ? 's' : '') + ' created');
+        if (cappedCount) parts.push(cappedCount + ' skipped (plan limit)');
         toast(parts.join(', ') || 'Import complete');
     }
 
