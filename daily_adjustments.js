@@ -2003,11 +2003,33 @@ function renderEventTile(ev, top, height) {
     }
   }
   
-  return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true" 
+  // Travel strips (off-campus). Prefer stamped values; fall back to live zone lookup (manual = deduct mode).
+  const _travelStrips = (function() {
+    let pre = parseInt(ev._travelPre) || 0;
+    let post = parseInt(ev._travelPost) || 0;
+    let zone = ev._travelZone || '';
+    if (!pre && !post) {
+      const locName = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+      const info = locName ? (window.getTravelForField?.(locName, true) || window.getTravelForSpecialActivity?.(locName, true)) : null;
+      if (info) { pre = info.preMin; post = info.postMin; zone = info.zoneName; }
+    }
+    let html = '';
+    const stripH = adjustedHeight >= 28 ? 8 : 6;
+    if (pre > 0) {
+      html += `<div title="Travel to ${zone}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
+    }
+    if (post > 0) {
+      html += `<div title="Travel from ${zone}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
+    }
+    return html;
+  })();
+
+  return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
           title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
-          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
+          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};position:relative;">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
+          ${_travelStrips}
           <div class="da-resize-handle da-resize-bottom"></div>
           </div>`;
 }

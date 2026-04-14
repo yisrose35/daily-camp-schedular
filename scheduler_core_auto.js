@@ -2916,6 +2916,21 @@
             // ── Helper: build a template block with all required fields ──
             // ★ v9.6: Hard guard — snap to 5min, enforce dMin/dMax, reject invalid blocks
             function makeBlock(opts) {
+                // Off-campus travel: look up zone info for the block's location.
+                // Prefer explicit special-activity location, then field.
+                var _travelLoc = opts._specialLocation || opts.field || null;
+                var _travel = null;
+                if (_travelLoc && _travelLoc !== 'Free' && typeof window.getTravelForField === 'function') {
+                    _travel = window.getTravelForField(_travelLoc, false)
+                           || (typeof window.getTravelForSpecialActivity === 'function'
+                               ? window.getTravelForSpecialActivity(_travelLoc, false)
+                               : null);
+                }
+                if (_travel && _travel.mode === 'extend') {
+                    opts.startMin -= _travel.preMin;
+                    opts.endMin += _travel.postMin;
+                }
+
                 // Snap all blocks to 5-min boundaries
                 opts.startMin = Math.round(opts.startMin / 5) * 5;
                 opts.endMin = Math.round(opts.endMin / 5) * 5;
@@ -2984,6 +2999,10 @@
                     _rotationEventId: opts._rotationEventId || null,
                     _rotationEventLocation: opts._rotationEventLocation || null,
                     _rotationEventColor: opts._rotationEventColor || null,
+                    _travelPre: _travel ? _travel.preMin : 0,
+                    _travelPost: _travel ? _travel.postMin : 0,
+                    _travelZone: _travel ? _travel.zoneName : null,
+                    _travelMode: _travel ? _travel.mode : null,
                     _final: opts._final || false
                 };
             }
@@ -8184,6 +8203,29 @@
 
         // ★ v7.0: Mark local generation time — prevents cloud sync from overwriting fresh results
         window._localGenerationTimestamp = Date.now();
+
+        // ── Seam-merge travel: consecutive same-off-campus-zone blocks share no middle travel ──
+        try {
+            var _sa = window.scheduleAssignments || {};
+            var _mergedSeams = 0;
+            Object.keys(_sa).forEach(function(bunk) {
+                var slots = _sa[bunk];
+                if (!Array.isArray(slots) || slots.length < 2) return;
+                var sorted = slots.slice().sort(function(a, b) { return (a.startMin || 0) - (b.startMin || 0); });
+                for (var i = 0; i < sorted.length - 1; i++) {
+                    var cur = sorted[i], nxt = sorted[i + 1];
+                    if (!cur || !nxt) continue;
+                    if (!cur._travelZone || !nxt._travelZone) continue;
+                    if (cur._travelZone !== nxt._travelZone) continue;
+                    // Back-to-back (allow up to 5 min gap)
+                    var gap = (nxt.startMin || 0) - (cur.endMin || 0);
+                    if (gap > 5) continue;
+                    if (cur._travelPost) { cur._travelPost = 0; _mergedSeams++; }
+                    if (nxt._travelPre)  { nxt._travelPre  = 0; _mergedSeams++; }
+                }
+            });
+            if (_mergedSeams > 0) log('  🚐 Seam-merged ' + _mergedSeams + ' travel annotations between same-zone blocks.');
+        } catch (e) { /* non-fatal */ }
 
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 

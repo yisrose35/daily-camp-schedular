@@ -2285,10 +2285,32 @@ function renderEventTile(ev, top, height) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
   }
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
-  return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove" 
+
+  // Travel strips (off-campus). Prefer stamped values; fall back to live zone lookup (manual = deduct mode).
+  const _travelStrips = (function() {
+    let pre = parseInt(ev._travelPre) || 0;
+    let post = parseInt(ev._travelPost) || 0;
+    let zone = ev._travelZone || '';
+    if (!pre && !post) {
+      const locName = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+      const info = locName ? (window.getTravelForField?.(locName, true) || window.getTravelForSpecialActivity?.(locName, true)) : null;
+      if (info) { pre = info.preMin; post = info.postMin; zone = info.zoneName; }
+    }
+    let html = '';
+    if (pre > 0) {
+      html += `<div title="Travel to ${zone}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${adjustedHeight>=28?8:6}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
+    }
+    if (post > 0) {
+      html += `<div title="Travel from ${zone}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${adjustedHeight>=28?8:6}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
+    }
+    return html;
+  })();
+
+  return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove"
           style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
           <div class="resize-handle resize-handle-top"></div>
           ${innerHtml}
+          ${_travelStrips}
           <div class="resize-handle resize-handle-bottom"></div>
           </div>`;
 }

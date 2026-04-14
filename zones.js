@@ -114,6 +114,7 @@ function createDefaultZone(name, isDefault) {
         isDefault: isDefault || false,
         isOffCampus: false,
         travelTimeMin: 0,
+        travelMode: 'deduct',
         transition: { preMin: 0, postMin: 0 },
         maxConcurrent: 99,
         fields: [],
@@ -153,6 +154,7 @@ function validateZone(zone, zoneName) {
         isDefault: zone.isDefault === true,
         isOffCampus: zone.isOffCampus === true,
         travelTimeMin: parseInt(zone.travelTimeMin) || 0,
+        travelMode: (zone.travelMode === 'extend') ? 'extend' : 'deduct',
         transition: {
             preMin: parseInt(zone.transition?.preMin) || 0,
             postMin: parseInt(zone.transition?.postMin) || 0
@@ -383,6 +385,30 @@ function renderDetailPane() {
         travelRow.appendChild(travelInput);
         travelRow.innerHTML += `<span style="font-size:0.8rem; color:#92400E;">minutes each way</span>`;
         offCampusSection.appendChild(travelRow);
+
+        // Travel mode: add-to-slot vs. deduct-from-slot (only meaningful if travel > 0)
+        const modeRow = document.createElement("div");
+        modeRow.style.cssText = "display:flex; flex-direction:column; gap:6px; margin-top:10px; padding:12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px;";
+        const modeLabel = document.createElement("div");
+        modeLabel.style.cssText = "font-size:0.85rem; font-weight:600; color:#92400E;";
+        modeLabel.textContent = "Travel time mode";
+        const modeHint = document.createElement("div");
+        modeHint.style.cssText = "font-size:0.75rem; color:#92400E; margin-bottom:4px;";
+        modeHint.textContent = "Deduct: travel eats into the activity slot. Add: travel extends the slot (pushes later blocks).";
+        const modeSelect = document.createElement("select");
+        modeSelect.style.cssText = "padding:6px 8px; border:1px solid #FCD34D; border-radius:6px; font-size:0.85rem; background:#fff;";
+        modeSelect.innerHTML = `
+            <option value="deduct">Deduct from activity slot</option>
+            <option value="extend">Add to activity slot</option>`;
+        modeSelect.value = (zone.travelMode === 'extend') ? 'extend' : 'deduct';
+        modeSelect.onchange = () => {
+            zone.travelMode = (modeSelect.value === 'extend') ? 'extend' : 'deduct';
+            saveData();
+        };
+        modeRow.appendChild(modeLabel);
+        modeRow.appendChild(modeHint);
+        modeRow.appendChild(modeSelect);
+        offCampusSection.appendChild(modeRow);
     }
 
     detailPaneEl.appendChild(offCampusSection);
@@ -776,6 +802,34 @@ window.getZoneForLocation = function(locationName) {
         if (zone.locations && zone.locations[locationName]) return zone;
     }
     return null;
+};
+
+// Unified travel-time lookup (off-campus only). Returns null if not off-campus or no travel.
+// manualMode: true to force 'deduct' (manual builder always deducts)
+window.getTravelForField = function(fieldName, manualMode) {
+    const zone = window.getZoneForField?.(fieldName);
+    if (!zone || !zone.isOffCampus) return null;
+    const mins = parseInt(zone.travelTimeMin) || 0;
+    if (mins <= 0) return null;
+    return {
+        preMin: mins,
+        postMin: mins,
+        mode: manualMode ? 'deduct' : ((zone.travelMode === 'extend') ? 'extend' : 'deduct'),
+        zoneName: zone.name
+    };
+};
+
+window.getTravelForSpecialActivity = function(specialName, manualMode) {
+    const zone = window.getZoneForSpecialActivity?.(specialName);
+    if (!zone || !zone.isOffCampus) return null;
+    const mins = parseInt(zone.travelTimeMin) || 0;
+    if (mins <= 0) return null;
+    return {
+        preMin: mins,
+        postMin: mins,
+        mode: manualMode ? 'deduct' : ((zone.travelMode === 'extend') ? 'extend' : 'deduct'),
+        zoneName: zone.name
+    };
 };
 
 // Get transition times for a field

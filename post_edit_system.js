@@ -327,6 +327,11 @@
 
         const fieldValue = location ? `${location} – ${activity}` : activity;
 
+        // Manual edits always use deduct mode for travel-time (user sets the times)
+        const _travelInfo = (!isClear && location)
+            ? (window.getTravelForField?.(location, true) || window.getTravelForSpecialActivity?.(location, true) || null)
+            : null;
+
         slots.forEach((idx, i) => {
             window.scheduleAssignments[bunk][idx] = {
                 field: isClear ? 'Free' : fieldValue,
@@ -336,10 +341,30 @@
                 _activity: isClear ? 'Free' : activity,
                 _location: location,
                 _postEdit: true,
-                _editedAt: Date.now()
+                _editedAt: Date.now(),
+                _travelPre:  _travelInfo ? _travelInfo.preMin  : 0,
+                _travelPost: _travelInfo ? _travelInfo.postMin : 0,
+                _travelZone: _travelInfo ? _travelInfo.zoneName : null,
+                _travelMode: _travelInfo ? 'deduct' : null
             };
             debugLog(`Set bunk ${bunk} slot ${idx}:`, window.scheduleAssignments[bunk][idx]);
         });
+
+        // Seam-merge: if adjacent slot is same off-campus zone, drop the boundary travel
+        if (_travelInfo && window.scheduleAssignments[bunk]) {
+            const arr = window.scheduleAssignments[bunk];
+            slots.forEach(idx => {
+                const prev = arr[idx - 1], cur = arr[idx], next = arr[idx + 1];
+                if (cur && prev && prev._travelZone && prev._travelZone === cur._travelZone) {
+                    prev._travelPost = 0;
+                    cur._travelPre = 0;
+                }
+                if (cur && next && next._travelZone && next._travelZone === cur._travelZone) {
+                    cur._travelPost = 0;
+                    next._travelPre = 0;
+                }
+            });
+        }
         
         if (location && !isClear && window.registerLocationUsage) {
             const divName2 = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) ||

@@ -938,6 +938,48 @@
 
                 blk.title = name + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
 
+                // Travel strips (pre/post) for off-campus blocks — stamped value first, else live zone lookup
+                var _tPre = parseInt(act.entry?._travelPre) || 0;
+                var _tPost = parseInt(act.entry?._travelPost) || 0;
+                var _tZone = act.entry?._travelZone || '';
+                if (!_tPre && !_tPost) {
+                    var _lookupName = act.entry?._location || act.entry?._specialLocation || fieldName || '';
+                    var _liveTravel = _lookupName
+                        ? (window.getTravelForField?.(_lookupName, true) || window.getTravelForSpecialActivity?.(_lookupName, true))
+                        : null;
+                    if (_liveTravel) {
+                        _tPre = _liveTravel.preMin;
+                        _tPost = _liveTravel.postMin;
+                        _tZone = _liveTravel.zoneName;
+                    }
+                }
+                if (_tPre > 0) {
+                    var preStrip = document.createElement('div');
+                    preStrip.style.cssText = 'position:absolute;top:0;left:0;right:0;height:6px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;';
+                    preStrip.title = 'Travel to ' + _tZone + ': ' + _tPre + ' min';
+                    if (blockH >= 28) {
+                        preStrip.style.height = '8px';
+                        var preLabel = document.createElement('span');
+                        preLabel.style.cssText = 'display:block;font-size:0.55rem;line-height:8px;text-align:center;color:#78350F;font-weight:700;';
+                        preLabel.textContent = '🚐 ' + _tPre + 'm';
+                        preStrip.appendChild(preLabel);
+                    }
+                    blk.appendChild(preStrip);
+                }
+                if (_tPost > 0) {
+                    var postStrip = document.createElement('div');
+                    postStrip.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:6px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;';
+                    postStrip.title = 'Travel from ' + _tZone + ': ' + _tPost + ' min';
+                    if (blockH >= 28) {
+                        postStrip.style.height = '8px';
+                        var postLabel = document.createElement('span');
+                        postLabel.style.cssText = 'display:block;font-size:0.55rem;line-height:8px;text-align:center;color:#78350F;font-weight:700;';
+                        postLabel.textContent = '🚐 ' + _tPost + 'm';
+                        postStrip.appendChild(postLabel);
+                    }
+                    blk.appendChild(postStrip);
+                }
+
                 // ★★★ v2.1: EDIT INDICATOR ★★★
                 if (isEditable) {
                     var editIcon = document.createElement('span');
