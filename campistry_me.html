@@ -120,24 +120,15 @@
     <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('csvModal')">Cancel</button><button class="me-btn me-btn--pri" id="csvBtn" disabled>Import</button></div>
 </div></div>
 
-<div id="meToast" class="me-toast"><span id="tI">&#10003;</span> <span id="tM">Done</span></div>
+<div id="meToast" class="me-toast"><span id="tI">✓</span> <span id="tM">Done</span></div>
 
-<!-- Script load order: base utilities → Supabase → cloud sync infra → Me app → plan limits → trial guard -->
 <script src="offline_data.js" onerror=""></script>
 <script src="demo_mode.js"></script>
 <script src="config.js"></script>
 <script>if(window.location.protocol==='file:')document.write('<script src="supabase-js-local.js"><\/script>');else document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');</script>
 <script src="supabase_client.js"></script>
 <script src="campistry_security.js"></script>
-<script src="access_control.js"></script>
-<script src="integration_hooks.js"></script>
-<script src="cloud_sync_helpers.js"></script>
 <script src="campistry_me.js"></script>
-<script src="plan_limits.js"></script>
 <script src="trial_guard.js"></script>
-<script>
-  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
-</script>
-<script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>
