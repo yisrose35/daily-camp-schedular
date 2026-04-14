@@ -334,25 +334,14 @@
         try {
             var client = window.supabase || window.CampistryDB?.getClient?.();
             if (client && campId) {
-                // Count distinct schedule dates that have actual content
-                var schedResult = await client
-                    .from('daily_schedules')
-                    .select('date_key, schedule_data')
-                    .eq('camp_id', campId);
-
-                if (schedResult.data) {
-                    var uniqueDates = new Set();
-                    schedResult.data.forEach(function(r) {
-                        var bunks = r.schedule_data?.scheduleAssignments;
-                        if (bunks && Object.keys(bunks).length > 0) {
-                            // Check at least one bunk has real slot data
-                            var hasContent = Object.values(bunks).some(function(b) {
-                                return b && Object.keys(b).length > 0;
-                            });
-                            if (hasContent) uniqueDates.add(r.date_key);
-                        }
-                    });
-                    _starterDaysUsed = uniqueDates.size;
+                // Use RPC to get accurate schedule day count (SECURITY DEFINER, fast)
+                var schedCheck = await client.rpc('check_schedule_limit', {
+                    p_camp_id: campId, p_date_key: '__banner_check__'
+                });
+                if (!schedCheck.error && schedCheck.data) {
+                    _starterDaysUsed = schedCheck.data.used || 0;
+                    if (schedCheck.data.max) _starterMaxDays = schedCheck.data.max;
+                    console.log('⏱️ [Trial] Schedule days used:', _starterDaysUsed, '/', _starterMaxDays);
                 }
 
                 // Get camper count from cloud
@@ -441,19 +430,11 @@
                 var campId = localStorage.getItem('campistry_camp_id') ||
                              localStorage.getItem('campistry_user_id');
                 if (client && campId) {
-                    var schedRes = await client.from('daily_schedules').select('date_key, schedule_data').eq('camp_id', campId);
-                    if (schedRes.data) {
-                        var uniqueDates = new Set();
-                        schedRes.data.forEach(function(r) {
-                            var bunks = r.schedule_data?.scheduleAssignments;
-                            if (bunks && Object.keys(bunks).length > 0) {
-                                var hasContent = Object.values(bunks).some(function(b) {
-                                    return b && Object.keys(b).length > 0;
-                                });
-                                if (hasContent) uniqueDates.add(r.date_key);
-                            }
-                        });
-                        _starterDaysUsed = uniqueDates.size;
+                    var schedCheck = await client.rpc('check_schedule_limit', {
+                        p_camp_id: campId, p_date_key: '__banner_check__'
+                    });
+                    if (!schedCheck.error && schedCheck.data) {
+                        _starterDaysUsed = schedCheck.data.used || 0;
                     }
                 }
             } catch (_) {}
