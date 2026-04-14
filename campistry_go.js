@@ -1067,64 +1067,40 @@
     }
 
     // ── Geocode validation — reject results that don't make sense ──
-    function validateGeocode(lat, lng, address, camperName) {
+    function validateGeocode(lat, lng, address, camperName, returnedResult) {
         // 1. Null or zero coordinates
         if (!lat || !lng || lat === 0 || lng === 0) {
             console.warn('[Go] Geocode rejected for ' + camperName + ': null coordinates');
             return false;
         }
-        // 2. Outside continental US bounds (rough)
+        // 2. Outside continental US bounds
         if (lat < 24 || lat > 50 || lng < -125 || lng > -66) {
-            console.warn('[Go] Geocode rejected for ' + camperName + ': outside continental US (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')');
+            console.warn('[Go] Geocode rejected for ' + camperName + ': outside continental US');
             return false;
         }
-        // 3. If camp location is known, reject if too far
-        if (_campCoordsCache) {
-            const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, lat, lng);
-            // Hard limit: 50 miles (covers spread-out camper bases)
-            if (dist > 50) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 50) — likely wrong location');
-                return false;
-            }
-        }
-        // 4. Cluster outlier detection (works with or without camp coords)
-        const geocodedAddrs = Object.values(D.addresses).filter(a => a.geocoded && a.lat && a.lng);
-        if (geocodedAddrs.length >= 3) {
-            const avgLat = geocodedAddrs.reduce((s, a) => s + a.lat, 0) / geocodedAddrs.length;
-            const avgLng = geocodedAddrs.reduce((s, a) => s + a.lng, 0) / geocodedAddrs.length;
-            const dists = geocodedAddrs.map(a => haversineMi(avgLat, avgLng, a.lat, a.lng));
-            // Use median distance instead of max to resist outlier poisoning
-            dists.sort((a, b) => a - b);
-            const medianDist = dists[Math.floor(dists.length / 2)];
-            const thisDist = haversineMi(avgLat, avgLng, lat, lng);
-            // Reject if >3x the median and >10 miles out (generous for spread-out areas)
-            const threshold = Math.max(medianDist * 3, 10);
-            if (thisDist > threshold) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + thisDist.toFixed(1) + 'mi from cluster center (median: ' + medianDist.toFixed(1) + 'mi, threshold: ' + threshold.toFixed(1) + 'mi)');
-                return false;
-            }
-        }
-        // 5. ZIP code cross-check (works without camp coords now)
+        // 3. State-level sanity: geocoded coords must be in the input state
         const addrData = D.addresses[camperName];
-        if (addrData?.zip) {
-            const sameZipAddrs = Object.values(D.addresses).filter(a => a.zip === addrData.zip && a.geocoded && a.lat && a !== addrData);
-            if (sameZipAddrs.length >= 2) {
-                const zipCentLat = sameZipAddrs.reduce((s, a) => s + a.lat, 0) / sameZipAddrs.length;
-                const zipCentLng = sameZipAddrs.reduce((s, a) => s + a.lng, 0) / sameZipAddrs.length;
-                const distFromZip = haversineMi(zipCentLat, zipCentLng, lat, lng);
-                if (distFromZip > 5) {
-                    console.warn('[Go] Geocode rejected for ' + camperName + ': ' + distFromZip.toFixed(1) + 'mi from ZIP ' + addrData.zip + ' cluster');
-                    return false;
-                }
-            }
-        }
-        // 6. State-level sanity: if address has a state, check geocoded coords are roughly in that state
         if (addrData?.state) {
-            const stBounds = { NY: [40.4, 45.1, -80, -71.8], NJ: [38.9, 41.4, -75.6, -73.9], CT: [40.9, 42.1, -73.8, -71.8], PA: [39.7, 42.3, -80.6, -74.7] };
+            const stBounds = {
+                NY: [40.4, 45.1, -80, -71.8], NJ: [38.9, 41.4, -75.6, -73.9],
+                CT: [40.9, 42.1, -73.8, -71.8], PA: [39.7, 42.3, -80.6, -74.7],
+                MA: [41.2, 42.9, -73.5, -69.9], FL: [24.5, 31.0, -87.7, -80.0],
+                CA: [32.5, 42.0, -124.5, -114.1], TX: [25.8, 36.5, -106.7, -93.5]
+            };
             const b = stBounds[addrData.state.toUpperCase()];
             if (b && (lat < b[0] || lat > b[1] || lng < b[2] || lng > b[3])) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': coords (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ') outside ' + addrData.state + ' bounds');
+                console.warn('[Go] Geocode rejected for ' + camperName + ': coords outside ' + addrData.state + ' bounds');
                 return false;
+            }
+        }
+        // 4. ZIP mismatch: if geocoder returned a ZIP and it doesn't match input, flag it
+        //    (warn but don't reject — ZIP boundaries are fuzzy)
+        if (addrData?.zip && returnedResult?.zip) {
+            const inputZip = addrData.zip.substring(0, 5);
+            const returnedZip = (returnedResult.zip + '').substring(0, 5);
+            if (inputZip !== returnedZip) {
+                console.warn('[Go] Geocode ZIP mismatch for ' + camperName + ': input ' + inputZip + ' vs returned ' + returnedZip);
+                // Don't reject — just flag it. The address table shows ZIP mismatch badges.
             }
         }
         return true;
