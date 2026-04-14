@@ -1967,26 +1967,49 @@
     function editAddress(name) {
         _editCamper = name; const roster = getRoster(), c = roster[name] || {}, a = D.addresses[name] || {};
         document.getElementById('addressCamperName').textContent = name;
-        const div = c.division || a._division || '';
-        const grade = c.grade || a._grade || '';
-        const bunk = c.bunk || a._bunk || '';
-        document.getElementById('addressCamperBunk').textContent = [div, grade, bunk].filter(Boolean).join(' / ');
-        document.getElementById('addrStreet').value = a.street || ''; document.getElementById('addrCity').value = a.city || '';
-        document.getElementById('addrState').value = a.state || 'NY'; document.getElementById('addrZip').value = a.zip || '';
+        // Camper info fields
+        document.getElementById('addrCamperId').value = c.camperId || a._camperId || '';
+        document.getElementById('addrDivision').value = c.division || a._division || '';
+        document.getElementById('addrGrade').value = c.grade || a._grade || '';
+        document.getElementById('addrBunk').value = c.bunk || a._bunk || '';
+        // Address fields
+        document.getElementById('addrStreet').value = a.street || '';
+        document.getElementById('addrCity').value = a.city || '';
+        document.getElementById('addrState').value = a.state || 'NY';
+        document.getElementById('addrZip').value = a.zip || '';
         openModal('addressModal'); document.getElementById('addrStreet').focus();
     }
     async function saveAddress() {
         if (!_editCamper) return;
         const st = document.getElementById('addrStreet')?.value.trim(), ci = document.getElementById('addrCity')?.value.trim(), sa = document.getElementById('addrState')?.value.trim().toUpperCase(), z = document.getElementById('addrZip')?.value.trim();
-        if (!st) { delete D.addresses[_editCamper]; save(); closeModal('addressModal'); renderAddresses(); updateStats(); toast('Address cleared'); return; }
+        const camperId = parseInt(document.getElementById('addrCamperId')?.value) || 0;
+        const division = document.getElementById('addrDivision')?.value.trim();
+        const grade = document.getElementById('addrGrade')?.value.trim();
+        const bunk = document.getElementById('addrBunk')?.value.trim();
+
+        if (!st) { delete D.addresses[_editCamper]; save(); closeModal('addressModal'); renderAddresses(); updateStats(); return; }
         // ★ Starter plan: check limit if this is a NEW address
         if (!D.addresses[_editCamper]) {
             var limit = await checkCamperLimitGo(1);
             if (!limit.allowed) return;
         }
-        D.addresses[_editCamper] = { street: st, city: ci, state: sa, zip: z, lat: null, lng: null, geocoded: false };
-        save(); closeModal('addressModal'); renderAddresses(); updateStats(); toast('Saved — geocoding...');
-        geocodeOne(_editCamper).then(ok => { if (ok) { save(); renderAddresses(); toast('Geocoded'); } });
+        // Merge: preserve existing fields (geocode data, overrides, transport, etc.)
+        const existing = D.addresses[_editCamper] || {};
+        const addrChanged = existing.street !== st || existing.city !== ci || existing.state !== sa || existing.zip !== z;
+        D.addresses[_editCamper] = Object.assign(existing, {
+            street: st, city: ci, state: sa, zip: z,
+            _camperId: camperId, _division: division, _grade: grade, _bunk: bunk
+        });
+        // Only re-geocode if address actually changed
+        if (addrChanged) {
+            D.addresses[_editCamper].lat = null;
+            D.addresses[_editCamper].lng = null;
+            D.addresses[_editCamper].geocoded = false;
+        }
+        save(); closeModal('addressModal'); renderAddresses(); updateStats();
+        if (addrChanged) {
+            geocodeOne(_editCamper).then(ok => { if (ok) { save(); renderAddresses(); } });
+        }
     }
 
     // =========================================================================
