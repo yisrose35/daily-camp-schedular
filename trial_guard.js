@@ -324,59 +324,44 @@
         if (cLabel) cLabel.textContent = _starterCamperLabel();
     }
 
+    function _saveStarterCache() {
+        try {
+            localStorage.setItem('campistry_starter_cache', JSON.stringify({
+                daysUsed: _starterDaysUsed,
+                camperCount: _starterCamperCount,
+                maxDays: _starterMaxDays,
+                maxCampers: _starterMaxCampers,
+                ts: Date.now()
+            }));
+        } catch (_) {}
+    }
+
+    function _loadStarterCache() {
+        try {
+            var raw = localStorage.getItem('campistry_starter_cache');
+            if (raw) return JSON.parse(raw);
+        } catch (_) {}
+        return null;
+    }
+
     async function showStarterBanner(campId) {
         var limits = window.getPlanLimits?.('starter') || { maxScheduleDays: 7, maxCampers: 100 };
         _starterMaxDays = limits.maxScheduleDays || 7;
         _starterMaxCampers = limits.maxCampers || 100;
-        _starterDaysUsed = 0;
-        _starterCamperCount = 0;
 
-        try {
-            var client = window.supabase || window.CampistryDB?.getClient?.();
-            if (client && campId) {
-                // Try RPC first, fall back to direct count
-                var gotDays = false;
-                try {
-                    var schedCheck = await client.rpc('check_schedule_limit', {
-                        p_camp_id: campId, p_date_key: '__banner_check__'
-                    });
-                    console.log('⏱️ [Trial] RPC result:', JSON.stringify(schedCheck.data), 'error:', schedCheck.error?.message);
-                    if (!schedCheck.error && schedCheck.data && schedCheck.data.used !== undefined) {
-                        _starterDaysUsed = schedCheck.data.used;
-                        if (schedCheck.data.max) _starterMaxDays = schedCheck.data.max;
-                        gotDays = true;
-                    }
-                } catch (rpcErr) {
-                    console.warn('⏱️ [Trial] RPC failed:', rpcErr.message);
-                }
-                // Fallback: count distinct date_keys directly
-                if (!gotDays) {
-                    try {
-                        var schedRows = await client.from('daily_schedules').select('date_key').eq('camp_id', campId);
-                        if (schedRows.data) {
-                            var dates = new Set(schedRows.data.map(function(r) { return r.date_key; }));
-                            _starterDaysUsed = dates.size;
-                        }
-                        console.log('⏱️ [Trial] Fallback count:', _starterDaysUsed);
-                    } catch (_) {}
-                }
-                console.log('⏱️ [Trial] Schedule days used:', _starterDaysUsed, '/', _starterMaxDays);
-
-                // Get camper count from cloud
-                var stateResult = await client
-                    .from('camp_state')
-                    .select('state')
-                    .eq('camp_id', campId)
-                    .maybeSingle();
-                if (stateResult.data?.state?.app1?.camperRoster) {
-                    _starterCamperCount = Object.keys(stateResult.data.state.app1.camperRoster).length;
-                }
-            }
-        } catch (e) {
-            console.warn('⏱️ [Trial] Could not fetch starter usage:', e);
+        // ★ Load cached values FIRST so banner renders instantly with last-known counts
+        var cached = _loadStarterCache();
+        if (cached) {
+            _starterDaysUsed = cached.daysUsed || 0;
+            _starterCamperCount = cached.camperCount || 0;
+            if (cached.maxDays) _starterMaxDays = cached.maxDays;
+            if (cached.maxCampers) _starterMaxCampers = cached.maxCampers;
+        } else {
+            _starterDaysUsed = 0;
+            _starterCamperCount = 0;
         }
 
-        // Also check local roster (may be more up-to-date than cloud)
+        // Also load local camper roster (instant, may be newer than cache)
         try {
             var localData = JSON.parse(
                 localStorage.getItem('campGlobalSettings_v1') ||
@@ -388,11 +373,10 @@
             }
         } catch (_) {}
 
-        // Remove existing banner
+        // ★ RENDER BANNER IMMEDIATELY with cached/local values
         var existing = document.getElementById('starter-plan-banner');
         if (existing) existing.remove();
 
-        // Inject styles if needed
         if (!document.getElementById('trial-guard-styles')) {
             var style = document.createElement('style');
             style.id = 'trial-guard-styles';
@@ -412,9 +396,50 @@
 
         document.body.prepend(banner);
         document.body.classList.add('trial-banner-active');
-
         var upgradeBtn = document.getElementById('starter-upgrade-btn');
         if (upgradeBtn) upgradeBtn.addEventListener('click', openUpgradeEmail);
+
+        // ★ THEN fetch fresh data from server and update in place
+        try {
+            var client = window.supabase || window.CampistryDB?.getClient?.();
+            if (client && campId) {
+                // Days used
+                var gotDays = false;
+                try {
+                    var schedCheck = await client.rpc('check_schedule_limit', {
+                        p_camp_id: campId, p_date_key: '__banner_check__'
+                    });
+                    if (!schedCheck.error && schedCheck.data && schedCheck.data.used !== undefined) {
+                        _starterDaysUsed = schedCheck.data.used;
+                        if (schedCheck.data.max) _starterMaxDays = schedCheck.data.max;
+                        gotDays = true;
+                    }
+                } catch (_) {}
+                if (!gotDays) {
+                    try {
+                        var schedRows = await client.from('daily_schedules').select('date_key').eq('camp_id', campId);
+                        if (schedRows.data) {
+                            _starterDaysUsed = new Set(schedRows.data.map(function(r) { return r.date_key; })).size;
+                        }
+                    } catch (_) {}
+                }
+
+                // Camper count from cloud
+                try {
+                    var stateResult = await client.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
+                    if (stateResult.data?.state?.app1?.camperRoster) {
+                        _starterCamperCount = Object.keys(stateResult.data.state.app1.camperRoster).length;
+                    }
+                } catch (_) {}
+
+                // Update banner + save to cache
+                _renderStarterBanner();
+                _saveStarterCache();
+                console.log('⏱️ [Trial] Banner updated from server:', _starterDaysUsed, '/', _starterMaxDays, 'days,', _starterCamperCount, '/', _starterMaxCampers, 'campers');
+            }
+        } catch (e) {
+            console.warn('⏱️ [Trial] Server fetch failed, using cached values:', e.message);
+        }
     }
 
     /**
@@ -469,6 +494,7 @@
         }
 
         _renderStarterBanner();
+        _saveStarterCache();
     };
 
     // Listen for plan-limit events from schedule/camper generation
