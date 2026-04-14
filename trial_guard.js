@@ -292,12 +292,47 @@
     // UI: STARTER PLAN USAGE BANNER
     // =========================================================================
 
+    // ── Starter banner state (kept in memory for fast refresh) ──
+    var _starterDaysLeft = 7;
+    var _starterGenExpired = false;
+    var _starterCamperCount = 0;
+    var _starterMaxCampers = 100;
+    var _starterMaxDays = 7;
+
+    function _starterBannerColor() {
+        var camperPct = _starterCamperCount / _starterMaxCampers;
+        if (_starterGenExpired || camperPct >= 1) return 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)';
+        if (_starterDaysLeft <= 2 || camperPct >= 0.8) return 'linear-gradient(135deg, #B45309 0%, #D97706 100%)';
+        return 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
+    }
+
+    function _starterDaysLabel() {
+        if (_starterGenExpired) return 'Generation expired';
+        if (_starterDaysLeft >= _starterMaxDays) return _starterMaxDays + ' of ' + _starterMaxDays + ' days remaining';
+        return _starterDaysLeft + ' of ' + _starterMaxDays + ' days remaining';
+    }
+
+    function _starterCamperLabel() {
+        return _starterCamperCount + ' of ' + _starterMaxCampers + ' campers';
+    }
+
+    function _renderStarterBanner() {
+        var banner = document.getElementById('starter-plan-banner');
+        if (!banner) return;
+        banner.style.background = _starterBannerColor();
+        var dLabel = document.getElementById('starter-days-label');
+        var cLabel = document.getElementById('starter-camper-label');
+        if (dLabel) dLabel.textContent = _starterDaysLabel();
+        if (cLabel) cLabel.textContent = _starterCamperLabel();
+    }
+
     async function showStarterBanner(campId) {
         var limits = window.getPlanLimits?.('starter') || { generationWindowDays: 7, maxCampers: 100 };
-        var daysLeft = limits.generationWindowDays || 7;
-        var generationExpired = false;
-        var camperCount = 0;
-        var maxCampers = limits.maxCampers || 100;
+        _starterMaxDays = limits.generationWindowDays || 7;
+        _starterMaxCampers = limits.maxCampers || 100;
+        _starterDaysLeft = _starterMaxDays;
+        _starterGenExpired = false;
+        _starterCamperCount = 0;
 
         try {
             var client = window.supabase || window.CampistryDB?.getClient?.();
@@ -312,32 +347,36 @@
                 if (campResult.data?.first_generation_at) {
                     var firstGen = new Date(campResult.data.first_generation_at).getTime();
                     var elapsed = Date.now() - firstGen;
-                    var windowMs = (limits.generationWindowDays || 7) * 24 * 60 * 60 * 1000;
-                    daysLeft = Math.max(0, Math.ceil((windowMs - elapsed) / (24 * 60 * 60 * 1000)));
-                    generationExpired = daysLeft <= 0;
+                    var windowMs = _starterMaxDays * 24 * 60 * 60 * 1000;
+                    _starterDaysLeft = Math.max(0, Math.ceil((windowMs - elapsed) / (24 * 60 * 60 * 1000)));
+                    _starterGenExpired = _starterDaysLeft <= 0;
                 }
 
-                // Get camper count
+                // Get camper count from cloud
                 var stateResult = await client
                     .from('camp_state')
                     .select('state')
                     .eq('camp_id', campId)
                     .maybeSingle();
                 if (stateResult.data?.state?.app1?.camperRoster) {
-                    camperCount = Object.keys(stateResult.data.state.app1.camperRoster).length;
+                    _starterCamperCount = Object.keys(stateResult.data.state.app1.camperRoster).length;
                 }
             }
         } catch (e) {
             console.warn('⏱️ [Trial] Could not fetch starter usage:', e);
         }
 
-        // Determine banner color
-        var camperPct = camperCount / maxCampers;
-        var bgColor = (generationExpired || camperPct >= 1)
-                    ? 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)'
-                    : (daysLeft <= 2 || camperPct >= 0.8)
-                    ? 'linear-gradient(135deg, #B45309 0%, #D97706 100%)'
-                    : 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
+        // Also check local roster (may be more up-to-date than cloud)
+        try {
+            var localData = JSON.parse(
+                localStorage.getItem('campGlobalSettings_v1') ||
+                localStorage.getItem('campistryGlobalSettings') || '{}'
+            );
+            if (localData.app1?.camperRoster) {
+                var localCount = Object.keys(localData.app1.camperRoster).length;
+                if (localCount > _starterCamperCount) _starterCamperCount = localCount;
+            }
+        } catch (_) {}
 
         // Remove existing banner
         var existing = document.getElementById('starter-plan-banner');
@@ -353,13 +392,11 @@
 
         var banner = document.createElement('div');
         banner.id = 'starter-plan-banner';
-        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:' + bgColor + ';color:white;text-align:center;padding:8px 16px;font-size:0.85rem;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;display:flex;align-items:center;justify-content:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,0.15);animation:trialSlideDown 0.3s ease-out;';
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:' + _starterBannerColor() + ';color:white;text-align:center;padding:8px 16px;font-size:0.85rem;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;display:flex;align-items:center;justify-content:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,0.15);animation:trialSlideDown 0.3s ease-out;';
 
-        var schedLabel = generationExpired ? 'Generation expired' : daysLeft + ' day' + (daysLeft !== 1 ? 's' : '') + ' left';
-        var camperLabel = camperCount + '/' + maxCampers + ' campers';
-
-        banner.innerHTML = '<span>\u2B50</span>' +
-            '<span>Starter Plan: <strong>' + schedLabel + '</strong> \u00B7 <strong id="starter-camper-label">' + camperLabel + '</strong></span>' +
+        banner.innerHTML = '<span style="font-size:1rem;">\u2B50</span>' +
+            '<span>Starter Plan: <strong id="starter-days-label">' + _starterDaysLabel() + '</strong>' +
+            ' \u00B7 <strong id="starter-camper-label">' + _starterCamperLabel() + '</strong></span>' +
             '<button id="starter-upgrade-btn" style="color:white;background:rgba(255,255,255,0.2);padding:3px 12px;border-radius:4px;border:none;cursor:pointer;font-size:0.8rem;font-weight:600;">Upgrade</button>' +
             '<button onclick="this.parentElement.remove();document.body.classList.remove(\'trial-banner-active\');" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:1.1rem;padding:0 4px;margin-left:4px;" title="Dismiss">\u00D7</button>';
 
@@ -371,58 +408,49 @@
     }
 
     /**
-     * Refresh the starter banner camper count in real time.
-     * Can be called with an explicit count, or it re-queries Supabase.
+     * Refresh the starter banner in real time.
+     * Pass camperCount for instant update, or omit to re-read from local/cloud.
      */
     window.refreshStarterBanner = async function(camperCount) {
-        var label = document.getElementById('starter-camper-label');
-        if (!label) return; // banner not showing
-        var limits = window.getPlanLimits?.('starter') || { maxCampers: 100 };
-        var max = limits.maxCampers || 100;
+        var banner = document.getElementById('starter-plan-banner');
+        if (!banner) return; // banner not showing
 
-        if (camperCount === undefined) {
-            // Try local roster first (instant, no blink)
+        // Update camper count
+        if (camperCount !== undefined) {
+            _starterCamperCount = camperCount;
+        } else {
+            // Try local roster first (instant)
             try {
                 var localData = JSON.parse(
                     localStorage.getItem('campGlobalSettings_v1') ||
                     localStorage.getItem('campistryGlobalSettings') || '{}'
                 );
                 if (localData.app1?.camperRoster) {
-                    camperCount = Object.keys(localData.app1.camperRoster).length;
+                    _starterCamperCount = Object.keys(localData.app1.camperRoster).length;
                 }
             } catch (_) {}
         }
+
+        // Re-check days from Supabase (only if no explicit count — periodic refresh)
         if (camperCount === undefined) {
-            // Fall back to Supabase
             try {
                 var client = window.supabase || window.CampistryDB?.getClient?.();
                 var campId = localStorage.getItem('campistry_camp_id') ||
                              localStorage.getItem('campistry_user_id');
                 if (client && campId) {
-                    var res = await client.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
-                    if (res.data?.state?.app1?.camperRoster) {
-                        camperCount = Object.keys(res.data.state.app1.camperRoster).length;
-                    } else {
-                        camperCount = 0;
+                    var campRes = await client.from('camps').select('first_generation_at').eq('id', campId).maybeSingle();
+                    if (campRes.data?.first_generation_at) {
+                        var firstGen = new Date(campRes.data.first_generation_at).getTime();
+                        var elapsed = Date.now() - firstGen;
+                        var windowMs = _starterMaxDays * 24 * 60 * 60 * 1000;
+                        _starterDaysLeft = Math.max(0, Math.ceil((windowMs - elapsed) / (24 * 60 * 60 * 1000)));
+                        _starterGenExpired = _starterDaysLeft <= 0;
                     }
                 }
-            } catch (_) { return; }
+            } catch (_) {}
         }
-        if (camperCount === undefined) return;
 
-        label.textContent = camperCount + '/' + max + ' campers';
-
-        // Update banner color based on usage
-        var banner = document.getElementById('starter-plan-banner');
-        if (banner) {
-            var pct = camperCount / max;
-            var bg = pct >= 1
-                ? 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)'
-                : pct >= 0.8
-                ? 'linear-gradient(135deg, #B45309 0%, #D97706 100%)'
-                : 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
-            banner.style.background = bg;
-        }
+        _renderStarterBanner();
     };
 
     // Listen for plan-limit events from schedule/camper saves
