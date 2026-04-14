@@ -346,6 +346,33 @@
             window.isRainyDay = dailyData.rainyDayMode === true || dailyData.isRainyDay === true;
         const isRainy = !!window.isRainyDay;
 
+        // ── Compute effective disabled facilities (base + DA daily overrides) ──
+        // Several downstream sites read globalSettings.app1?.disabledFields directly,
+        // which misses today's DA Resources toggles. Build the union once and stamp
+        // window.currentDisabledFields BEFORE the sport-priority-list builder and
+        // the solver-engine inputs run — otherwise disabled facilities slip through.
+        try {
+            const _baseDisabled = globalSettings.app1?.disabledFields || globalSettings.disabledFields || [];
+            let _dailyDisabledOv = [];
+            const _ovNested = dailyData?.overrides || {};
+            if (Array.isArray(_ovNested.disabledFields) && _ovNested.disabledFields.length) {
+                _dailyDisabledOv = _ovNested.disabledFields;
+            } else {
+                const _dk = window.currentScheduleDate || '';
+                if (_dk) {
+                    const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                    if (_stored) {
+                        const _parsed = JSON.parse(_stored);
+                        if (_parsed?.overrides?.disabledFields?.length) _dailyDisabledOv = _parsed.overrides.disabledFields;
+                    }
+                }
+            }
+            window.currentDisabledFields = [...new Set([..._baseDisabled, ..._dailyDisabledOv])];
+            if (_dailyDisabledOv.length) log('[STEP 1] Daily-disabled facilities (from DA Resources): ' + _dailyDisabledOv.join(', '));
+        } catch (e) {
+            warn('Failed to compute effective disabled fields: ' + e.message);
+        }
+
         // ── Merge Daily Adjustments time-rule overrides into activityProperties ──
         // Daily rules (DA Resources tab) override global rules. scheduler_core_main
         // does this merge in its own generate() path; when runAutoScheduler is
@@ -1403,7 +1430,10 @@
 
             const sportPriorityList = [];
             const allFieldsArr = getFields(globalSettings);
-            const disabledFields = globalSettings.app1?.disabledFields || [];
+            // Include base setup + DA daily overrides (set at runAutoScheduler start).
+            const disabledFields = (window.currentDisabledFields && window.currentDisabledFields.length)
+                ? window.currentDisabledFields
+                : (globalSettings.app1?.disabledFields || []);
             const sportMap = new Map();
             allFieldsArr.forEach(field => {
                 if (disabledFields.includes(field.name)) return;
@@ -7388,7 +7418,9 @@
                 rotationHistory: window.rotationHistory || {}, yesterdayHistory, divisions,
                 fieldsBySport: window.fieldsBySport || {}, dailyLeagueSportsUsage: {},
                 fillBlock: window.fillBlock || function() {}, fields: getFields(globalSettings),
-                disabledFields: globalSettings.app1?.disabledFields || [],
+                disabledFields: (window.currentDisabledFields && window.currentDisabledFields.length)
+                    ? window.currentDisabledFields
+                    : (globalSettings.app1?.disabledFields || []),
                 leagueAssignments: window.leagueAssignments,
                 storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
                     const league = mla.find(l => l.name === leagueName);
@@ -7578,7 +7610,9 @@
                 masterSpecials,
                 divisions,
                 fieldsBySport: fbs,
-                disabledFields: gs.app1?.disabledFields || [],
+                disabledFields: (window.currentDisabledFields && window.currentDisabledFields.length)
+                    ? window.currentDisabledFields
+                    : (gs.app1?.disabledFields || []),
                 dateStr: currentDate || '',
                 yesterdayHistory,
                 isRainy,
