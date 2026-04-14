@@ -1973,6 +1973,9 @@
         document.getElementById('addrCity').value = a.city || '';
         document.getElementById('addrState').value = a.state || 'NY';
         document.getElementById('addrZip').value = a.zip || '';
+        // Arrival/Dismissal checkboxes (default true if not set)
+        document.getElementById('addrArrival').checked = a._arrival !== false;
+        document.getElementById('addrDismissal').checked = a._dismissal !== false;
         openModal('addressModal'); document.getElementById('addrStreet').focus();
     }
     async function saveAddress() {
@@ -1992,9 +1995,12 @@
         // Merge: preserve existing fields (geocode data, overrides, transport, etc.)
         const existing = D.addresses[_editCamper] || {};
         const addrChanged = existing.street !== st || existing.city !== ci || existing.state !== sa || existing.zip !== z;
+        const forArrival = document.getElementById('addrArrival')?.checked !== false;
+        const forDismissal = document.getElementById('addrDismissal')?.checked !== false;
         D.addresses[_editCamper] = Object.assign(existing, {
             street: st, city: ci, state: sa, zip: z,
-            _camperId: camperId, _division: division, _grade: grade, _bunk: bunk
+            _camperId: camperId, _division: division, _grade: grade, _bunk: bunk,
+            _arrival: forArrival, _dismissal: forDismissal
         });
         // Only re-geocode if address actually changed
         if (addrChanged) {
@@ -2524,11 +2530,11 @@
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
         // Always download a clean template with 2 example rows
-        let csv = '\uFEFFID,Last Name,First Name,Role,Division,Grade,Bunk,Needs Stop,Street Address,City,State,ZIP\n';
-        csv += '"0001","Smith","Sarah","Camper","Juniors","1st Grade","1A","","123 Main Street","Anytown","NY","11559"\n';
-        csv += '"0002","Goldberg","Moshe","Camper","Seniors","4th Grade","4B","","456 Oak Avenue","Woodmere","NY","11598"\n';
-        csv += '"0003","Cohen","David","Staff","","","","No","789 Elm Street","Cedarhurst","NY","11516"\n';
-        csv += '"0004","Klein","Rachel","Staff","Freshies","","","Yes","321 Pine Road","Lawrence","NY","11559"\n';
+        let csv = '\uFEFFID,Last Name,First Name,Role,Division,Grade,Bunk,Needs Stop,Street Address,City,State,ZIP,Arrival,Dismissal\n';
+        csv += '"0001","Smith","Sarah","Camper","Juniors","1st Grade","1A","","123 Main Street","Anytown","NY","11559","Y","Y"\n';
+        csv += '"0002","Goldberg","Moshe","Camper","Seniors","4th Grade","4B","","456 Oak Avenue","Woodmere","NY","11598","Y","N"\n';
+        csv += '"0003","Cohen","David","Staff","","","","No","789 Elm Street","Cedarhurst","NY","11516","Y","Y"\n';
+        csv += '"0004","Klein","Rachel","Staff","Freshies","","","Yes","321 Pine Road","Lawrence","NY","11559","N","Y"\n';
         const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
     function importAddressCsv() {
@@ -2614,6 +2620,8 @@
         const rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));
         const roi = hdr.findIndex(h => h === 'role' || h === 'type' || h === 'person type');
         const nsi = hdr.findIndex(h => h === 'needs stop' || h === 'needsstop' || h === 'needs_stop' || h === 'stop');
+        const arri = hdr.findIndex(h => h === 'arrival' || h === 'arr' || h === 'morning');
+        const disi = hdr.findIndex(h => h === 'dismissal' || h === 'dis' || h === 'dismiss' || h === 'afternoon');
 
         // Must have either (first+last) or (full name), plus an address
         const hasFirstLast = fni >= 0 && lni >= 0;
@@ -2663,6 +2671,10 @@
             const rideWith = rwi >= 0 ? (cols[rwi] || '').trim() : '';
             const role = roi >= 0 ? (cols[roi] || '').trim().toLowerCase() : 'camper';
             const needsStop = nsi >= 0 ? (cols[nsi] || '').trim().toLowerCase() : '';
+            const arrVal = arri >= 0 ? (cols[arri] || '').trim().toLowerCase() : '';
+            const disVal = disi >= 0 ? (cols[disi] || '').trim().toLowerCase() : '';
+            const forArrival = arrVal === 'n' || arrVal === 'no' || arrVal === 'false' ? false : true;
+            const forDismissal = disVal === 'n' || disVal === 'no' || disVal === 'false' ? false : true;
 
             const city = ci >= 0 ? (cols[ci] || '').trim() : '';
             const state = sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY';
@@ -2701,7 +2713,8 @@
                         transport: 'bus', rideWith: '',
                         _camperId: personId ? parseInt(personId) : 0,
                         _division: division, _grade: '', _bunk: bunk,
-                        _isStaff: true
+                        _isStaff: true,
+                        _arrival: forArrival, _dismissal: forDismissal
                     };
                 }
 
@@ -2721,7 +2734,8 @@
                     transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus',
                     rideWith: rideWith,
                     _camperId: personId ? parseInt(personId) : 0,
-                    _division: division, _grade: grade, _bunk: bunk
+                    _division: division, _grade: grade, _bunk: bunk,
+                    _arrival: forArrival, _dismissal: forDismissal
                 };
 
                 _goStandaloneRoster[rn] = {
@@ -3775,6 +3789,9 @@
                 const c = roster[name]; const a = D.addresses[name];
                 if (!c || !a?.geocoded || !a.lat || !a.lng) return;
                 if (a.transport === 'pickup') return;
+                // Filter by arrival/dismissal mode flag
+                const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
+                if (a[modeKey] === false) return;
                 if (shift._isVirtual || camperMatchesShift(c, shift)) {
                     allCampers.push({ name, division: c.division, bunk: c.bunk || '', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') });
                 }
