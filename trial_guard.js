@@ -354,7 +354,7 @@
         var camperLabel = camperCount + '/' + maxCampers + ' campers';
 
         banner.innerHTML = '<span>\u2B50</span>' +
-            '<span>Starter Plan: <strong>' + schedLabel + '</strong> \u00B7 <strong>' + camperLabel + '</strong></span>' +
+            '<span>Starter Plan: <strong>' + schedLabel + '</strong> \u00B7 <strong id="starter-camper-label">' + camperLabel + '</strong></span>' +
             '<button id="starter-upgrade-btn" style="color:white;background:rgba(255,255,255,0.2);padding:3px 12px;border-radius:4px;border:none;cursor:pointer;font-size:0.8rem;font-weight:600;">Upgrade</button>' +
             '<button onclick="this.parentElement.remove();document.body.classList.remove(\'trial-banner-active\');" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:1.1rem;padding:0 4px;margin-left:4px;" title="Dismiss">\u00D7</button>';
 
@@ -364,6 +364,48 @@
         var upgradeBtn = document.getElementById('starter-upgrade-btn');
         if (upgradeBtn) upgradeBtn.addEventListener('click', openUpgradeEmail);
     }
+
+    /**
+     * Refresh the starter banner camper count in real time.
+     * Can be called with an explicit count, or it re-queries Supabase.
+     */
+    window.refreshStarterBanner = async function(camperCount) {
+        var label = document.getElementById('starter-camper-label');
+        if (!label) return; // banner not showing
+        var limits = window.getPlanLimits?.('starter') || { maxCampers: 100 };
+        var max = limits.maxCampers || 100;
+
+        if (camperCount === undefined) {
+            // Re-query from Supabase
+            try {
+                var client = window.supabase || window.CampistryDB?.getClient?.();
+                var campId = localStorage.getItem('campId');
+                if (client && campId) {
+                    var res = await client.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
+                    if (res.data?.state?.app1?.camperRoster) {
+                        camperCount = Object.keys(res.data.state.app1.camperRoster).length;
+                    } else {
+                        camperCount = 0;
+                    }
+                }
+            } catch (_) { return; }
+        }
+        if (camperCount === undefined) return;
+
+        label.textContent = camperCount + '/' + max + ' campers';
+
+        // Update banner color based on usage
+        var banner = document.getElementById('starter-plan-banner');
+        if (banner) {
+            var pct = camperCount / max;
+            var bg = pct >= 1
+                ? 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)'
+                : pct >= 0.8
+                ? 'linear-gradient(135deg, #B45309 0%, #D97706 100%)'
+                : 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
+            banner.style.background = bg;
+        }
+    };
 
     // Listen for plan-limit events from schedule/camper saves
     window.addEventListener('campistry-plan-limit', function(e) {

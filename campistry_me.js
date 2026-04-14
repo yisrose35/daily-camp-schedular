@@ -87,7 +87,7 @@
     }
 
     // ★★★ STARTER PLAN: Camper limit check ★★★
-    async function checkCamperLimit(newCount) {
+    async function checkCamperLimit(newCount, silent) {
         newCount = newCount || 1;
         try {
             var client = getSupabaseClient();
@@ -97,10 +97,12 @@
             var result = await client.rpc('check_camper_limit', { p_camp_id: campId, p_new_count: newCount });
 
             if (!result.error && result.data && result.data.allowed === false) {
-                toast('Camper limit reached (' + result.data.current + '/' + result.data.max + '). Upgrade for more.', 'error');
-                window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
-                    detail: { type: 'camper', current: result.data.current, max: result.data.max }
-                }));
+                if (!silent) {
+                    toast('Camper limit reached (' + result.data.current + '/' + result.data.max + '). Upgrade for more.', 'error');
+                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                        detail: { type: 'camper', current: result.data.current, max: result.data.max }
+                    }));
+                }
                 return { allowed: false, current: result.data.current, max: result.data.max };
             }
             return { allowed: true, current: result.data?.current, max: result.data?.max };
@@ -248,6 +250,11 @@
             }
 
             console.log('[Me] ☁️ Cloud save complete (v' + (_cloudVersion || '?') + ')');
+            // ★ Update starter banner camper count in real time
+            if (window.refreshStarterBanner) {
+                var count = Object.keys(camperRoster).length;
+                window.refreshStarterBanner(count);
+            }
             return true;
         } catch (e) {
             console.error('[Me] Cloud save exception:', e);
@@ -1275,7 +1282,7 @@
         var newCampers = pendingCsvData.filter(function(r) { return !camperRoster[r.name]; });
         var cappedCount = 0;
         if (newCampers.length > 0) {
-            var limit = await checkCamperLimit(newCampers.length);
+            var limit = await checkCamperLimit(newCampers.length, true);
             if (!limit.allowed && limit.current !== undefined && limit.max !== undefined) {
                 // Accept as many as we can fit
                 var slotsAvailable = Math.max(0, limit.max - limit.current);

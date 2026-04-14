@@ -107,7 +107,7 @@
         setTimeout(() => { el.classList.remove('open', 'modal-entering'); }, 200);
     }
     // ★★★ STARTER PLAN: Camper limit check (counts Me + Go combined) ★★★
-    async function checkCamperLimitGo(newCount) {
+    async function checkCamperLimitGo(newCount, silent) {
         newCount = newCount || 1;
         try {
             var client = window.CampistryDB?.getClient?.() || window.supabase;
@@ -116,10 +116,12 @@
 
             var result = await client.rpc('check_camper_limit', { p_camp_id: campId, p_new_count: newCount });
             if (!result.error && result.data && result.data.allowed === false) {
-                toast('Camper limit reached (' + result.data.current + '/' + result.data.max + '). Upgrade for more.', 'error');
-                window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
-                    detail: { type: 'camper', current: result.data.current, max: result.data.max }
-                }));
+                if (!silent) {
+                    toast('Camper limit reached (' + result.data.current + '/' + result.data.max + '). Upgrade for more.', 'error');
+                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                        detail: { type: 'camper', current: result.data.current, max: result.data.max }
+                    }));
+                }
                 return { allowed: false, current: result.data.current, max: result.data.max };
             }
             return { allowed: true, current: result.data?.current, max: result.data?.max };
@@ -2509,7 +2511,7 @@
         var _goCapped = 0;
         var newCount = lines.length - 1;
         if (newCount > 0) {
-            var limit = await checkCamperLimitGo(newCount);
+            var limit = await checkCamperLimitGo(newCount, true);
             if (!limit.allowed && limit.current !== undefined && limit.max !== undefined) {
                 var slotsAvailable = Math.max(0, limit.max - limit.current);
                 if (slotsAvailable === 0) {
@@ -2657,6 +2659,8 @@
             }
         }
         save(); renderAddresses(); renderStaff(); updateStats();
+        // ★ Update starter banner camper count
+        if (window.refreshStarterBanner) window.refreshStarterBanner(camperCount);
         const total = camperCount + staffCount;
         if (_goCapped > 0) {
             toast(camperCount + ' imported, ' + _goCapped + ' skipped (plan limit)' + (staffCount > 0 ? ', ' + staffCount + ' staff' : ''));
