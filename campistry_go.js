@@ -3896,15 +3896,10 @@
                 let fIdx = 0, fDist = 0;
                 zoneStops.forEach((s, i) => { const d = drivingDist(campLat, campLng, s.lat, s.lng); if (d > fDist) { fDist = d; fIdx = i; } });
 
-                // ── Route optimization cascade: GraphHopper → VROOM → directional sort ──
+                // ── Route optimization: VROOM → directional sort ──
                 let orderedStops = null;
 
-                // 1. Try GraphHopper
-                // Arrival: farthest first → camp last
-                // Dismissal: camp first → farthest last
-                orderedStops = await solveWithGraphHopper(zoneStops, v, campLat, campLng, isArrival, false);
-
-                // 2. Fallback: ORS VROOM (single-bus ordering)
+                // 1. ORS VROOM (primary solver)
                 if (!orderedStops && key) {
                     const jobs = zoneStops.map((stop, i) => ({
                         id: i + 1, location: [stop.lng, stop.lat],
@@ -4867,13 +4862,10 @@
                     if (needsReturn) veh.end = [campLng, campLat];
                 }
 
-                // ── Route optimization cascade: GraphHopper → VROOM → local TSP ──
+                // ── Route optimization: VROOM → local TSP ──
                 let orderedStops = null;
 
-                // 1. Try GraphHopper
-                orderedStops = await solveWithGraphHopper(zoneStops, v, campLat, campLng, isArrival, needsReturn);
-
-                // 2. Fallback: ORS VROOM
+                // 1. ORS VROOM
                 if (!orderedStops) {
                     console.log('[Go] VROOM → ' + v.name + ' (' + za.zone.name + '): ' + jobs.length + ' stops');
                     try {
@@ -5661,20 +5653,6 @@
         const stops = route.stops.filter(s => !s.isMonitor && !s.isCounselor);
         const specialStops = route.stops.filter(s => s.isMonitor || s.isCounselor);
         const nn = stops.length; if (nn < 2) { toast('Not enough stops'); return; }
-
-        // ── Try GraphHopper first (up to 30 stops) ──
-        const ghResult = await solveWithGraphHopper(stops, { busId, capacity: 999, name: route.busName }, campLat, campLng, isArrival, reoptNeedsReturn);
-        if (ghResult) {
-            route.stops = [...ghResult.map((s, i) => ({ ...s, stopNum: i + 1 })), ...specialStops];
-            route.stops.forEach((s, i) => { s.stopNum = i + 1; });
-            route.camperCount = route.stops.reduce((s, st) => s + st.campers.length, 0);
-            D.savedRoutes[shiftIdx ?? 0].routes[D.savedRoutes[shiftIdx ?? 0].routes.indexOf(route)] = route;
-            save();
-            _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
-            renderRouteResults(applyOverrides(D.savedRoutes));
-            toast(route.busName + ' re-optimized (GraphHopper)');
-            return;
-        }
 
         // ── Try Mapbox Optimization API ──
         let optimizedOrder = null;
