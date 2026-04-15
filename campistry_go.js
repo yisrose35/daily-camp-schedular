@@ -3811,11 +3811,21 @@
 
             for (const counselor of D.counselors) {
                 if (!counselor.address) continue;
-                // Geocode the address
                 let staffCoords = null;
+                // Check cached coords first
                 if (counselor._lat && counselor._lng) {
                     staffCoords = { lat: counselor._lat, lng: counselor._lng };
-                } else {
+                }
+                // Check if this staff member has a geocoded address in D.addresses
+                if (!staffCoords) {
+                    const staffAddr = D.addresses[counselor.name] || D.addresses[counselor.firstName + ' ' + counselor.lastName];
+                    if (staffAddr?.geocoded && staffAddr.lat && staffAddr.lng) {
+                        staffCoords = { lat: staffAddr.lat, lng: staffAddr.lng };
+                        counselor._lat = staffAddr.lat; counselor._lng = staffAddr.lng;
+                    }
+                }
+                // Last resort: geocode fresh (slow)
+                if (!staffCoords) {
                     staffCoords = await geocodeSingle(counselor.address);
                     if (staffCoords) { counselor._lat = staffCoords.lat; counselor._lng = staffCoords.lng; }
                 }
@@ -3844,7 +3854,15 @@
                 let staffCoords = null;
                 if (monitor._lat && monitor._lng) {
                     staffCoords = { lat: monitor._lat, lng: monitor._lng };
-                } else {
+                }
+                if (!staffCoords) {
+                    const staffAddr = D.addresses[monitor.name] || D.addresses[monitor.firstName + ' ' + monitor.lastName];
+                    if (staffAddr?.geocoded && staffAddr.lat && staffAddr.lng) {
+                        staffCoords = { lat: staffAddr.lat, lng: staffAddr.lng };
+                        monitor._lat = staffAddr.lat; monitor._lng = staffAddr.lng;
+                    }
+                }
+                if (!staffCoords) {
                     staffCoords = await geocodeSingle(monitor.address);
                     if (staffCoords) { monitor._lat = staffCoords.lat; monitor._lng = staffCoords.lng; }
                 }
@@ -5456,13 +5474,15 @@
             const outliers = [];
 
             for (const c of counselorsToAssign) {
-                // Geocode if we don't have coords yet
+                // Use cached coords or look up from D.addresses
                 if (!c._lat || !c._lng) {
-                    const geo = await geocodeSingle(c.address);
-                    if (geo) { c._lat = geo.lat; c._lng = geo.lng; }
-                    else {
-                        console.warn('[Go]   ⚠ Could not geocode: ' + c.name + ' (' + c.address + ')');
-                        continue;
+                    const staffAddr = D.addresses[c.name] || D.addresses[c.firstName + ' ' + c.lastName];
+                    if (staffAddr?.geocoded && staffAddr.lat && staffAddr.lng) {
+                        c._lat = staffAddr.lat; c._lng = staffAddr.lng;
+                    } else {
+                        const geo = await geocodeSingle(c.address);
+                        if (geo) { c._lat = geo.lat; c._lng = geo.lng; }
+                        else { console.warn('[Go]   ⚠ Could not geocode: ' + c.name); continue; }
                     }
                 }
 
