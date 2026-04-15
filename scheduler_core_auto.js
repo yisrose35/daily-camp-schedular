@@ -6785,34 +6785,13 @@
                             }
                         }
 
-                        // ★ v14.0: If no positions found at full configured duration,
-                        // try progressively shorter durations (down to type floor).
-                        // A shorter special is far better than no special at all.
-                        if (candidatePositions.length === 0) {
-                            var spTypeFloor = TYPE_FLOORS.special || 20;
-                            var triedDur = specialDur;
-                            while (candidatePositions.length === 0 && triedDur > spTypeFloor) {
-                                triedDur = Math.max(spTypeFloor, triedDur - 5);
-                                for (var rgi = 0; rgi < allGapsForBunk.length; rgi++) {
-                                    var rgap = allGapsForBunk[rgi];
-                                    if (rgap.e - rgap.s < triedDur) continue;
-                                    for (var rpos = rgap.s; rpos + triedDur <= rgap.e; rpos += 5) {
-                                        if (!canUseSpecialAtTime(special.name, grade, rpos, rpos + triedDur)) continue;
-                                        var rwithSpecial = existingWalls.concat([{ s: rpos, e: rpos + triedDur }]);
-                                        var rgapsAfter = spComputeGaps(rwithSpecial, gradeStart, gradeEnd);
-                                        var rallFit = true;
-                                        for (var rli = 0; rli < layersThatCurrentlyFit.length; rli++) {
-                                            var rll = layersThatCurrentlyFit[rli];
-                                            if (!spCanLayerFit(rgapsAfter, rll)) { rallFit = false; break; }
-                                        }
-                                        if (rallFit) candidatePositions.push({ pos: rpos, score: -100, deadGapCount: 0 });
-                                    }
-                                }
-                            }
-                            if (candidatePositions.length > 0 && totalIters < 1) {
-                                warn('[Phase2.5] Reduced ' + special.name + ' from ' + specialDur + 'min to ' + triedDur + 'min for bunk ' + bunk + ' (will be corrected by SPECIAL-ENFORCE if room exists later)');
-                            }
-                        }
+                        // ★ HARD CONSTRAINT: Special durations configured by the user
+                        // are never reduced. If a special is set to 30min, it must be
+                        // 30min — the engine does not shorten it to make it fit. If
+                        // candidatePositions is empty, the special is deferred to CSP
+                        // or will trigger a missing-special warning.
+                        // (Previous v14.0 behavior of reducing duration-on-failure has
+                        // been removed to respect user configuration.)
 
                         // Pick the best position
                         if (candidatePositions.length === 0) {
@@ -6824,55 +6803,11 @@
                             return; // defer to CSP
                         }
 
-                        // ★ DURATION FLEX: if every full-duration candidate creates a
-                        // dead remainder, try SHORTER durations to see if any yields
-                        // a clean placement. Prevents placing a 60-min special where
-                        // a 55- or 50-min variant would leave no sub-dMin gap — the
-                        // engine trades 5-10 min of special duration for a day that
-                        // has no broken sport blocks downstream.
-                        var chosenDur = specialDur;
-                        var _cpPeek = candidatePositions.slice().sort(function(a, b) { return a.deadGapCount - b.deadGapCount; });
-                        if (_cpPeek[0].deadGapCount > 0) {
-                            var spTypeFloor2 = TYPE_FLOORS.special || 20;
-                            var altLowerBound = Math.max(spTypeFloor2, Math.round(specialDur * 0.7 / 5) * 5);
-                            var altCandidates = [];
-                            for (var altDur = specialDur - 5; altDur >= altLowerBound; altDur -= 5) {
-                                for (var agi = 0; agi < allGapsForBunk.length; agi++) {
-                                    var agap = allGapsForBunk[agi];
-                                    if (agap.e - agap.s < altDur) continue;
-                                    for (var apos = agap.s; apos + altDur <= agap.e; apos += 5) {
-                                        if (!canUseSpecialAtTime(special.name, grade, apos, apos + altDur)) continue;
-                                        var awith = existingWalls.concat([{ s: apos, e: apos + altDur }]);
-                                        var agapsAfter = spComputeGaps(awith, gradeStart, gradeEnd);
-                                        var afit = true;
-                                        for (var ali = 0; ali < layersThatCurrentlyFit.length; ali++) {
-                                            if (!spCanLayerFit(agapsAfter, layersThatCurrentlyFit[ali])) { afit = false; break; }
-                                        }
-                                        if (!afit) continue;
-                                        var aDead = 0;
-                                        for (var aag = 0; aag < agapsAfter.length; aag++) {
-                                            var aSz = agapsAfter[aag].e - agapsAfter[aag].s;
-                                            if (aSz > 0 && aSz < sportFillMin) aDead++;
-                                        }
-                                        if (aDead === 0) altCandidates.push({ pos: apos, dur: altDur });
-                                    }
-                                }
-                                // Stop at the first duration that yields any clean placement
-                                // (closest to configured).
-                                if (altCandidates.length > 0) break;
-                            }
-                            if (altCandidates.length > 0) {
-                                var altIdx = _iterSeed > 0
-                                    ? Math.abs((_iterSeed * 2654435761) >>> 0) % altCandidates.length
-                                    : 0;
-                                var altPick = altCandidates[altIdx];
-                                candidatePositions = [{ pos: altPick.pos, score: 0, deadGapCount: 0 }];
-                                chosenDur = altPick.dur;
-                                if (totalIters < 1) {
-                                    log('[Phase2.5] ★ DUR-FLEX: ' + special.name + ' ' + specialDur + '→' + chosenDur + 'min for bunk ' + bunk + ' (eliminates dead gap)');
-                                }
-                            }
-                        }
+                        // ★ HARD CONSTRAINT: Special durations are honored exactly as
+                        // configured. When every candidate creates a dead gap, we still
+                        // pick the best available — we do NOT shorten the special to
+                        // fit cleanly. The [PLACEMENT-STUCK] diagnostic below warns
+                        // the user so they can adjust walls or duration in their config.
 
                         // Inject iteration-seeded jitter (±40 pts) into scores so
                         // tied candidates (same deadGapCount, similar score) rotate
@@ -6890,20 +6825,21 @@
                         });
                         var best = candidatePositions[0];
 
-                        // ★ Fix 4: PLACEMENT-STUCK diagnostic — if the best placement still
-                        // has a dead remainder even after duration flex, log it so the user
-                        // can see which specials have structurally-incompatible durations.
+                        // PLACEMENT-STUCK diagnostic — if the best placement still has
+                        // a dead remainder, log it. Special duration is a hard constraint,
+                        // so the user needs to resolve this by adjusting adjacent walls
+                        // (lunch, league, custom) — not by shortening the special.
                         if (best.deadGapCount > 0 && totalIters < 1) {
                             var _psGapSummary = allGapsForBunk.map(function(g) { return (g.e - g.s) + 'min'; }).join(', ');
-                            warn('[Phase2.5] [PLACEMENT-STUCK] ' + special.name + ' ' + chosenDur + 'min for bunk ' + bunk +
+                            warn('[Phase2.5] [PLACEMENT-STUCK] ' + special.name + ' ' + specialDur + 'min for bunk ' + bunk +
                                 ' — all ' + candidatePositions.length + ' candidate positions create dead gaps. ' +
                                 'Gaps: [' + _psGapSummary + '] | sport dMin: ' + sportFillMin + '. ' +
-                                'Consider reducing ' + special.name + "'s duration or adjusting adjacent walls.");
+                                'Duration is a hard constraint; adjust adjacent pinned walls to create a clean-fit region.');
                         }
 
-                        // Place the special at the best position
+                        // Place the special at the best position (configured duration — never shortened)
                         var bestStart = best.pos;
-                        var bestEnd = bestStart + chosenDur;
+                        var bestEnd = bestStart + specialDur;
 
                         bunkTimelines[bunk].push({
                             startMin: bestStart, endMin: bestEnd,
@@ -6913,7 +6849,7 @@
                             _gradeWide: false, _activityLocked: true, _noBacktrack: false,
                             _assignedSpecial: special.name,
                             _specialLocation: fieldName,
-                            _specialDuration: chosenDur,
+                            _specialDuration: specialDur,
                             _isSpecialLocation: true, _source: 'pre-placed'
                         });
 
