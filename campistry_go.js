@@ -3640,7 +3640,9 @@
         const totalKids = stops.reduce((s, st) => s + st.campers.length, 0);
         const kidCount = stops.map(s => s.campers.length);
 
-        console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, ' + numStops + ' stops');
+        var totalCap = busCaps.reduce(function(s, c) { return s + c; }, 0);
+
+        console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, ' + numStops + ' stops, totalCap: ' + totalCap);
 
         // =====================================================================
         // DIRECTIONAL CORRIDOR ZONES — two-level zone creation:
