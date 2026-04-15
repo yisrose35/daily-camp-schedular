@@ -3872,7 +3872,84 @@
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // REBALANCE PHASE 4: Re-medoid — update medoids after all moves
+        // REBALANCE PHASE 4: Trim stretched zones — zones with high spread
+        // (farthest stop-to-medoid time) shed their tail stops to the
+        // nearest zone with capacity.  This catches corridor-shaped zones
+        // like Bus 7's 105-min route with 26 stops spanning a long line.
+        // ══════════════════════════════════════════════════════════════════
+        function zoneSpread(z) {
+            var maxD = 0;
+            z.stopIndices.forEach(function(si) {
+                var d = drivingDist(stops[si].lat, stops[si].lng, stops[z._medoid].lat, stops[z._medoid].lng);
+                if (d > maxD) maxD = d;
+            });
+            return maxD;
+        }
+
+        for (let trimPass = 0; trimPass < 200; trimPass++) {
+            // Compute spread for all zones
+            var spreads = zones.map(zoneSpread);
+            var sortedSpreads = spreads.slice().sort((a, b) => a - b);
+            var medianSpread = sortedSpreads[Math.floor(sortedSpreads.length / 2)];
+            // Threshold: a zone is "stretched" if its spread > 1.4× median AND > 20 min (1200s)
+            var stretchThreshold = Math.max(medianSpread * 1.4, 1200);
+
+            // Find the most stretched zone
+            var worstZi3 = -1, worstSpread = 0;
+            for (let zi = 0; zi < zones.length; zi++) {
+                if (spreads[zi] > stretchThreshold && spreads[zi] > worstSpread && zones[zi].stopIndices.length > 2) {
+                    worstSpread = spreads[zi]; worstZi3 = zi;
+                }
+            }
+            if (worstZi3 < 0) break;
+
+            // Find the farthest stop in this zone from its medoid
+            var stretchedZone = zones[worstZi3];
+            var farthestLi = -1, farthestDist = 0;
+            for (var li3 = 0; li3 < stretchedZone.stopIndices.length; li3++) {
+                var si3 = stretchedZone.stopIndices[li3];
+                var d3 = drivingDist(stops[si3].lat, stops[si3].lng,
+                    stops[stretchedZone._medoid].lat, stops[stretchedZone._medoid].lng);
+                if (d3 > farthestDist) { farthestDist = d3; farthestLi = li3; }
+            }
+            if (farthestLi < 0) break;
+
+            var farSi = stretchedZone.stopIndices[farthestLi];
+
+            // Find the best receiving zone: closest to this stop AND has capacity
+            var bestRecvZi = -1, bestRecvDist = Infinity;
+            for (let tzi = 0; tzi < zones.length; tzi++) {
+                if (tzi === worstZi3) continue;
+                if (zones[tzi].camperCount + kidCount[farSi] > zones[tzi].capacity) continue;
+                var td = drivingDist(stops[farSi].lat, stops[farSi].lng,
+                    stops[zones[tzi]._medoid].lat, stops[zones[tzi]._medoid].lng);
+                if (td < bestRecvDist) { bestRecvDist = td; bestRecvZi = tzi; }
+            }
+
+            if (bestRecvZi < 0) break; // no zone can take this stop
+
+            // Move the far stop
+            stretchedZone.stopIndices.splice(farthestLi, 1);
+            stretchedZone.camperCount -= kidCount[farSi];
+            zones[bestRecvZi].stopIndices.push(farSi);
+            zones[bestRecvZi].camperCount += kidCount[farSi];
+
+            // Re-medoid the trimmed zone so next iteration uses updated center
+            if (stretchedZone.stopIndices.length > 0) {
+                var bestM3 = stretchedZone._medoid, bestT3 = Infinity;
+                for (var c3 of stretchedZone.stopIndices) {
+                    var t3 = 0;
+                    for (var o3 of stretchedZone.stopIndices) {
+                        if (o3 !== c3) t3 += drivingDist(stops[c3].lat, stops[c3].lng, stops[o3].lat, stops[o3].lng);
+                    }
+                    if (t3 < bestT3) { bestT3 = t3; bestM3 = c3; }
+                }
+                stretchedZone._medoid = bestM3;
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // REBALANCE PHASE 5: Re-medoid — update medoids after all moves
         // so route optimization uses the actual center of each zone.
         // ══════════════════════════════════════════════════════════════════
         for (let zi = 0; zi < zones.length; zi++) {
