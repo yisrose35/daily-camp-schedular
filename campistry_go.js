@@ -1633,6 +1633,20 @@
             + '</div></div>';
     }
 
+    function _staffGeoBadge(staffMember) {
+        const name = staffMember.name || (staffMember.firstName + ' ' + staffMember.lastName);
+        const a = D.addresses[name];
+        if (!staffMember.address && !a?.street) return '<span class="badge badge-neutral" style="font-size:.65rem">No address</span>';
+        if (a?.geocoded && a._geocodeConfidence) {
+            const pct = Math.round(a._geocodeConfidence * 100);
+            if (pct >= 80) return '<span class="badge badge-success" style="font-size:.65rem">✓ ' + pct + '%</span>';
+            return '<span class="badge badge-warning" style="font-size:.65rem">⚠ ' + pct + '%</span>';
+        }
+        if (a?.geocoded) return '<span class="badge badge-success" style="font-size:.65rem">✓ Geocoded</span>';
+        if (staffMember._lat && staffMember._lng) return '<span class="badge badge-success" style="font-size:.65rem">✓ Geocoded</span>';
+        return '<span class="badge badge-neutral" style="font-size:.65rem">Not geocoded</span>';
+    }
+
     function renderMonitors() {
         const tbody = document.getElementById('monitorTableBody'), empty = document.getElementById('monitorEmptyState');
         const tw = tbody?.closest('.table-wrapper');
@@ -1644,7 +1658,8 @@
             const busCol = (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—');
             const suggestionHtml = _staffSuggestionHtml(m, 'monitor');
             const idCol = m._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + m._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
-            return '<tr>' + idCol + '<td>' + esc(m.lastName || '') + '</td><td style="font-weight:600">' + esc(m.firstName || m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + busCol + suggestionHtml + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
+            const geoBadge = _staffGeoBadge(m);
+            return '<tr>' + idCol + '<td>' + esc(m.lastName || '') + '</td><td style="font-weight:600">' + esc(m.firstName || m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + geoBadge + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + busCol + suggestionHtml + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
         }).join('');
     }
     function renderCounselors() {
@@ -1659,7 +1674,8 @@
             const modeBadge = mode === 'stop' ? '<span class="badge badge-warning">Own Stop</span>' : mode === 'auto' ? '<span class="badge badge-neutral">Auto-assign</span>' : bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '<span class="badge badge-neutral">Manual (unset)</span>';
             const suggestionHtml = (mode !== 'stop') ? _staffSuggestionHtml(c, 'counselor') : '';
             const idCol = c._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + c._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
-            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">' + idCol + '<td>' + esc(c.lastName || '') + '</td><td style="font-weight:600">' + esc(c.firstName || c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestionHtml + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
+            const geoBadge = _staffGeoBadge(c);
+            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">' + idCol + '<td>' + esc(c.lastName || '') + '</td><td style="font-weight:600">' + esc(c.firstName || c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + geoBadge + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestionHtml + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
         }).join('');
     }
 
