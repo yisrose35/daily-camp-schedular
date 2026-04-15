@@ -2345,21 +2345,48 @@
 
                             let assigned = false;
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                            // Sport-dMin determines what counts as a dead remainder. Use the
+                            // user-configured dMin (not adaptive) because Phase 3 will enforce
+                            // this strictly when filling the leftover gap.
+                            const _gpSportMin = Math.max((sl?.sports?.constraints?.dMin || 25), TYPE_FLOORS.sport || 25);
                             for (const special of (sl.specials?.priorityList || [])) {
                                 if (result.usedActivities.has(special.name)) continue;
                                 const dur = special.totalDuration || special.dMin || 30;
 
-                                // Scan all free windows for a valid time
-                                let time = null;
+                                // Scan ALL valid times, score each, pick the best. Replaces the
+                                // previous first-fit scan that always drafted the earliest time —
+                                // which pushed specials into the leftmost gap even when a later
+                                // gap would leave a cleanly-fillable remainder. The draft time
+                                // then propagates to Phase 2.5 via the +200 draft bonus and
+                                // locks in the bad placement.
+                                let time = null, bestScore = -Infinity, candIdx = 0;
                                 for (const win of fw) {
                                     if (win.duration < dur) continue;
                                     for (let t = win.start; t + dur <= win.end; t += 5) {
                                         if (special.location && !isFieldAvailable(special.location, t, t + dur, bunk, grade)) continue;
                                         if (!canAssignSpecialToGrade(special.name, grade, t, t + dur)) continue;
-                                        time = { startMin: t, endMin: t + dur };
-                                        break;
+                                        // Score: left + right remainders within this window
+                                        const leftRem = t - win.start;
+                                        const rightRem = win.end - (t + dur);
+                                        let score = 0;
+                                        if (leftRem === 0 && rightRem === 0) score += 200;       // perfect fit
+                                        if (leftRem === 0) score += 100;                          // wall-aligned
+                                        if (rightRem === 0) score += 100;
+                                        if (leftRem > 0 && leftRem >= _gpSportMin) score += 50;   // clean gap
+                                        if (rightRem > 0 && rightRem >= _gpSportMin) score += 50;
+                                        if (leftRem > 0 && leftRem < _gpSportMin) score -= 1000;  // dead remainder
+                                        if (rightRem > 0 && rightRem < _gpSportMin) score -= 1000;
+                                        // Earliness preference: small bonus for earlier t — breaks
+                                        // ties when nothing else differs (e.g. two equivalent clean gaps).
+                                        score -= (t - gradeStart) * 0.01;
+                                        // Iteration jitter for variety across iterations.
+                                        if (_iterSeed > 0) score += (seedJitter(_iterSeed, candIdx) - 0.5) * 60;
+                                        candIdx++;
+                                        if (score > bestScore) {
+                                            bestScore = score;
+                                            time = { startMin: t, endMin: t + dur };
+                                        }
                                     }
-                                    if (time) break;
                                 }
                                 if (!time) continue;
 
