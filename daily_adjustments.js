@@ -2759,7 +2759,8 @@ function deselectAllTiles() {
 function loadDAAutoLayers() {
   const g = window.loadGlobalSettings?.() || {};
   const autoTemplates = g.app1?.autoLayerTemplates || {};
-  const assignments = g.app1?.skeletonAssignments || {};
+  // Use live API for assignments so we always get the latest data
+  const assignments = window.getSkeletonAssignments?.() || g.app1?.skeletonAssignments || {};
   
   const dateStr = window.currentScheduleDate || '';
   const [Y, M, D] = dateStr.split('-').map(Number);
@@ -2889,16 +2890,17 @@ function saveDAAutoLayers() {
     return;
   }
   
-  // Priority 4: Template
+  // Priority 4: Template — use LIVE API functions so we always get the latest data
+  // (masterSettings.app1 is a snapshot from init and can be stale)
   console.log('[DailyAdj] No saved skeleton found, loading from template...');
-  const assignments = masterSettings.app1?.skeletonAssignments || {};
-  const skeletons = masterSettings.app1?.savedSkeletons || {};
+  const assignments = window.getSkeletonAssignments?.() || masterSettings.app1?.skeletonAssignments || {};
+  const skeletons = window.getSavedSkeletons?.() || masterSettings.app1?.savedSkeletons || {};
   const [Y, M, D] = dateKey.split('-').map(Number);
   let dow = 0;
   if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
   const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   let tmpl = assignments[dayNames[dow]] || assignments["Default"];
-  console.log('[DailyAdj] Loading template:', tmpl || '(none)');
+  console.log('[DailyAdj] Loading template:', tmpl || '(none)', '| assignments:', JSON.stringify(assignments), '| skeletons available:', Object.keys(skeletons));
   dailyOverrideSkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
 }
@@ -4737,6 +4739,26 @@ function init() {
   renderBunkOverridesUI();
   renderResourceOverridesUI();
   if (window.RotationEvents?.injectSubtab) window.RotationEvents.injectSubtab();
+
+  // ★ Re-load skeleton/layers if cloud hydration arrives after init with empty data
+  window.addEventListener('campistry-cloud-hydrated', function _daHydrationHandler() {
+    // Only re-load if we got nothing at init time — avoid overwriting user edits
+    if (window._daBuilderMode === 'auto') {
+      if (Object.keys(daAutoLayers).length === 0 || Object.values(daAutoLayers).every(v => !v || v.length === 0)) {
+        console.log('[DailyAdj] Re-loading auto layers after cloud hydration');
+        loadDAAutoLayers();
+        renderGrid();
+      }
+    } else {
+      if (!dailyOverrideSkeleton || dailyOverrideSkeleton.length === 0) {
+        console.log('[DailyAdj] Re-loading skeleton after cloud hydration');
+        masterSettings.global = window.loadGlobalSettings?.() || {};
+        masterSettings.app1 = masterSettings.global.app1 || {};
+        loadDailySkeleton();
+        renderGrid();
+      }
+    }
+  });
 
   // ★ v7.0: Re-render trips when cloud data syncs (trips may arrive after init)
   window.addEventListener('campistry-cloud-sync', function() {
