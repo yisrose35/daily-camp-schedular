@@ -3084,6 +3084,16 @@
                     // Final snap check
                     blockDur = opts.endMin - opts.startMin;
                     if (blockDur < 5) return null;
+                    // ★ Strict dMin for sport/slot: if we couldn't extend to minDur,
+                    // reject instead of creating a sub-dMin filler block. Callers that
+                    // intentionally want short fills (perfection-fill, self-heal,
+                    // guarantee-pregap/remainder) pass opts.dMin = actual gap size,
+                    // so minDur == blockDur and this check passes. Only "real"
+                    // sub-dMin violations get rejected; the gap stays empty in the
+                    // schedule instead of becoming a broken "General Activity Slot".
+                    if ((blockType === 'sport' || blockType === 'slot') && blockDur < minDur) {
+                        return null;
+                    }
                 }
 
                 // ★ Extend mode: add travel time AFTER dMin/dMax enforcement
@@ -5124,15 +5134,17 @@
                         }
                     }
                     if (extended) continue;
-                    // Create filler slot
-                    if (fgDur >= 5) {
-                        // ★ v14.0: Set dMin to actual gap size (we can't make it bigger),
-                        // but set dMax to sportCeiling so rebalancer can extend it later.
+                    // Create filler slot — ONLY if the gap is large enough to host
+                    // a valid sport block. Sub-fillMinDur gaps stay empty (rendered
+                    // as Free time) instead of becoming broken "General Activity Slot"
+                    // blocks. An empty gap is honest signal that the wall config
+                    // can't produce a smooth schedule here.
+                    if (fgDur >= fcMeta.fillMinDur) {
                         fcTl.push({
                             startMin: fgGap.start, endMin: fgGap.end,
                             type: 'slot', event: 'General Activity Slot',
                             layer: fcMeta.sportLayer, field: null,
-                            dMin: fgDur, dMax: fcMeta.sportCeiling || 60,
+                            dMin: fcMeta.fillMinDur, dMax: fcMeta.sportCeiling || 60,
                             _source: 'gap-fill', _final: true,
                             _sportFallbacks: fcMeta.priorityList ? fcMeta.priorityList.map(function(s) { return s.name; }) : []
                         });
@@ -5203,14 +5215,15 @@
                     }
 
                     // Strategy 3: Create a minimal sport/slot block for the remaining gap
-                    if (zgDur >= 5) {
-                        // ★ v14.0: dMin = actual gap size (can't extend past walls),
-                        // dMax = sportCeiling so rebalancer can grow it if space opens.
+                    // ONLY if the gap is large enough to host a valid sport block.
+                    // Sub-fillMinDur gaps stay empty (Free time). makeBlock's strict
+                    // guard will also reject sub-dMin sport/slot blocks as a backstop.
+                    if (zgDur >= zgMeta.fillMinDur) {
                         var zgBlk = makeBlock({
                             startMin: zgGap.start, endMin: zgGap.end,
                             type: 'slot', event: 'General Activity Slot',
                             layer: zgMeta.sportLayer, field: null,
-                            dMin: zgDur, dMax: zgMeta.sportCeiling || 60,
+                            dMin: zgMeta.fillMinDur, dMax: zgMeta.sportCeiling || 60,
                             _source: 'zero-gap', _final: true
                         });
                         if (zgBlk) zgTmpl.push(zgBlk);
@@ -6801,6 +6814,56 @@
                             return; // defer to CSP
                         }
 
+                        // ★ DURATION FLEX: if every full-duration candidate creates a
+                        // dead remainder, try SHORTER durations to see if any yields
+                        // a clean placement. Prevents placing a 60-min special where
+                        // a 55- or 50-min variant would leave no sub-dMin gap — the
+                        // engine trades 5-10 min of special duration for a day that
+                        // has no broken sport blocks downstream.
+                        var chosenDur = specialDur;
+                        var _cpPeek = candidatePositions.slice().sort(function(a, b) { return a.deadGapCount - b.deadGapCount; });
+                        if (_cpPeek[0].deadGapCount > 0) {
+                            var spTypeFloor2 = TYPE_FLOORS.special || 20;
+                            var altLowerBound = Math.max(spTypeFloor2, Math.round(specialDur * 0.7 / 5) * 5);
+                            var altCandidates = [];
+                            for (var altDur = specialDur - 5; altDur >= altLowerBound; altDur -= 5) {
+                                for (var agi = 0; agi < allGapsForBunk.length; agi++) {
+                                    var agap = allGapsForBunk[agi];
+                                    if (agap.e - agap.s < altDur) continue;
+                                    for (var apos = agap.s; apos + altDur <= agap.e; apos += 5) {
+                                        if (!canUseSpecialAtTime(special.name, grade, apos, apos + altDur)) continue;
+                                        var awith = existingWalls.concat([{ s: apos, e: apos + altDur }]);
+                                        var agapsAfter = spComputeGaps(awith, gradeStart, gradeEnd);
+                                        var afit = true;
+                                        for (var ali = 0; ali < layersThatCurrentlyFit.length; ali++) {
+                                            if (!spCanLayerFit(agapsAfter, layersThatCurrentlyFit[ali])) { afit = false; break; }
+                                        }
+                                        if (!afit) continue;
+                                        var aDead = 0;
+                                        for (var aag = 0; aag < agapsAfter.length; aag++) {
+                                            var aSz = agapsAfter[aag].e - agapsAfter[aag].s;
+                                            if (aSz > 0 && aSz < sportFillMin) aDead++;
+                                        }
+                                        if (aDead === 0) altCandidates.push({ pos: apos, dur: altDur });
+                                    }
+                                }
+                                // Stop at the first duration that yields any clean placement
+                                // (closest to configured).
+                                if (altCandidates.length > 0) break;
+                            }
+                            if (altCandidates.length > 0) {
+                                var altIdx = _iterSeed > 0
+                                    ? Math.abs((_iterSeed * 2654435761) >>> 0) % altCandidates.length
+                                    : 0;
+                                var altPick = altCandidates[altIdx];
+                                candidatePositions = [{ pos: altPick.pos, score: 0, deadGapCount: 0 }];
+                                chosenDur = altPick.dur;
+                                if (totalIters < 1) {
+                                    log('[Phase2.5] ★ DUR-FLEX: ' + special.name + ' ' + specialDur + '→' + chosenDur + 'min for bunk ' + bunk + ' (eliminates dead gap)');
+                                }
+                            }
+                        }
+
                         // Inject iteration-seeded jitter (±40 pts) into scores so
                         // tied candidates (same deadGapCount, similar score) rotate
                         // across iterations. Still far smaller than the 2500
@@ -6817,9 +6880,20 @@
                         });
                         var best = candidatePositions[0];
 
+                        // ★ Fix 4: PLACEMENT-STUCK diagnostic — if the best placement still
+                        // has a dead remainder even after duration flex, log it so the user
+                        // can see which specials have structurally-incompatible durations.
+                        if (best.deadGapCount > 0 && totalIters < 1) {
+                            var _psGapSummary = allGapsForBunk.map(function(g) { return (g.e - g.s) + 'min'; }).join(', ');
+                            warn('[Phase2.5] [PLACEMENT-STUCK] ' + special.name + ' ' + chosenDur + 'min for bunk ' + bunk +
+                                ' — all ' + candidatePositions.length + ' candidate positions create dead gaps. ' +
+                                'Gaps: [' + _psGapSummary + '] | sport dMin: ' + sportFillMin + '. ' +
+                                'Consider reducing ' + special.name + "'s duration or adjusting adjacent walls.");
+                        }
+
                         // Place the special at the best position
                         var bestStart = best.pos;
-                        var bestEnd = bestStart + specialDur;
+                        var bestEnd = bestStart + chosenDur;
 
                         bunkTimelines[bunk].push({
                             startMin: bestStart, endMin: bestEnd,
@@ -6829,7 +6903,7 @@
                             _gradeWide: false, _activityLocked: true, _noBacktrack: false,
                             _assignedSpecial: special.name,
                             _specialLocation: fieldName,
-                            _specialDuration: specialDur,
+                            _specialDuration: chosenDur,
                             _isSpecialLocation: true, _source: 'pre-placed'
                         });
 
