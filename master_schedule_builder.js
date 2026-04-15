@@ -2975,13 +2975,21 @@ window.MasterSchedulerInternal = {
       if (newMode === 'manual') {
         if (manualEl) manualEl.style.display = 'flex';
         if (autoEl) autoEl.style.display = 'none';
+        // ★ Reset template lock so loadDailySkeleton re-evaluates from scratch
+        currentLoadedTemplate = null;
+        hasUnsavedChanges = false;
+        clearDraftFromLocalStorage();
         loadDailySkeleton();
         renderGrid();
         renderToolbar();
+        renderExpandSection();
       } else {
         if (manualEl) manualEl.style.display = 'none';
         if (autoEl) autoEl.style.display = 'flex';
+        // ★ Clean slate for auto — reset manual state fully
         dailySkeleton = [];
+        currentLoadedTemplate = null;
+        hasUnsavedChanges = false;
         if (typeof renderDAW === 'function') renderDAW();
       }
     }

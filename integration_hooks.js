@@ -1042,6 +1042,12 @@
                     mergedState = cloudState;
                     log('Using cloud state (newer)');
                 }
+
+                // ★ Preserve app1 settings (builderMode etc.) through hydration
+                // Deep-merge app1 so local-only keys like builderMode survive cloud sync
+                if (localState.app1 || cloudState.app1) {
+                    mergedState.app1 = { ...(cloudState.app1 || {}), ...(localState.app1 || {}) };
+                }
                 
                 setLocalSettings(mergedState);
                 

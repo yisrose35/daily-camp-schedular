@@ -463,8 +463,8 @@
         wrapper.innerHTML = `
             <div class="builder-mode-slider" id="builderModeSlider" data-mode="${currentMode}">
                 <div class="builder-mode-indicator"></div>
-                <div class="builder-mode-option ${currentMode === 'manual' ? 'active' : ''}" data-target="manual">🛠️ Manual Builder</div>
-                <div class="builder-mode-option ${currentMode === 'auto' ? 'active' : ''}" data-target="auto">⚡ Auto Builder</div>
+                <div class="builder-mode-option ${currentMode === 'manual' ? 'active' : ''}" data-target="manual">Manual Builder</div>
+                <div class="builder-mode-option ${currentMode === 'auto' ? 'active' : ''}" data-target="auto">Auto Builder</div>
             </div>
         `;
 
@@ -491,6 +491,22 @@
                     detail: { mode: targetMode } 
                 }));
             });
+        });
+
+        // ★ Sync slider UI if cloud hydration arrives after initial render
+        window.addEventListener('campistry-cloud-hydrated', () => {
+            const slider = document.getElementById('builderModeSlider');
+            if (!slider) return;
+            const freshMode = window.loadGlobalSettings?.()?.app1?.builderMode || 'manual';
+            if (slider.dataset.mode !== freshMode) {
+                slider.dataset.mode = freshMode;
+                slider.querySelectorAll('.builder-mode-option').forEach(o => {
+                    o.classList.toggle('active', o.dataset.target === freshMode);
+                });
+                window.dispatchEvent(new CustomEvent('campistry-builder-mode-changed', {
+                    detail: { mode: freshMode }
+                }));
+            }
         });
 
         // Safely inject it above the main setup grid layout
