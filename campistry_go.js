@@ -3832,9 +3832,25 @@
         let campCoords = null;
         if (D.setup.campAddress) {
             showProgress('Geocoding camp...', 5);
-            campCoords = _campCoordsCache || await geocodeSingle(D.setup.campAddress);
-            if (campCoords) { _campCoordsCache = campCoords; D.setup.campLat = campCoords.lat; D.setup.campLng = campCoords.lng; }
+            // Always geocode fresh if no cache; use cache only within same session
+            if (_campCoordsCache) {
+                campCoords = _campCoordsCache;
+            } else {
+                campCoords = await geocodeSingle(D.setup.campAddress);
+                if (campCoords) {
+                    // Validate: if saved coords exist and differ significantly, log it
+                    if (D.setup.campLat && D.setup.campLng) {
+                        var drift = haversineMi(D.setup.campLat, D.setup.campLng, campCoords.lat, campCoords.lng);
+                        if (drift > 1) console.warn('[Go] Camp re-geocoded: moved ' + drift.toFixed(1) + 'mi from saved coords (was ' + D.setup.campLat.toFixed(4) + ',' + D.setup.campLng.toFixed(4) + ' → now ' + campCoords.lat.toFixed(4) + ',' + campCoords.lng.toFixed(4) + ')');
+                    }
+                    _campCoordsCache = campCoords;
+                    D.setup.campLat = campCoords.lat;
+                    D.setup.campLng = campCoords.lng;
+                    save();
+                }
+            }
         }
+        // Fallback to saved coords only if geocoding unavailable (offline, etc.)
         if (!campCoords && D.setup.campLat && D.setup.campLng) {
             campCoords = { lat: D.setup.campLat, lng: D.setup.campLng };
             _campCoordsCache = campCoords;
