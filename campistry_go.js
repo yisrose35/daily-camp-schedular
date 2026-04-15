@@ -2707,7 +2707,9 @@
 
             const city = ci >= 0 ? (cols[ci] || '').trim() : '';
             const state = sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY';
-            const zip = zi >= 0 ? (cols[zi] || '').trim() : '';
+            let zip = zi >= 0 ? (cols[zi] || '').trim() : '';
+            // Excel strips leading zeros from zip codes (08701 → 8701) — restore them
+            if (zip && /^\d+$/.test(zip) && zip.length < 5) zip = zip.padStart(5, '0');
             const fullAddress = [street, city, state, zip].filter(Boolean).join(', ');
 
             // ── Route based on Role column (supports full names and shortcodes: C/S/M) ──
