@@ -1490,7 +1490,10 @@
                     isIndoor: sport.isIndoor, _layer: sportLayer
                 });
             });
-            sportPriorityList.sort((a, b) => a.rotationScore - b.rotationScore);
+            sportPriorityList.sort((a, b) => {
+                if (a.rotationScore !== b.rotationScore) return a.rotationScore - b.rotationScore;
+                return (a.fields?.length || 0) - (b.fields?.length || 0);
+            });
             // Iteration variation: partially shuffle sport order
             // ★ v11.0: When bias = sportVariety, skip shuffle to preserve rotation-optimal order
             if (_iterSeed > 0 && iterationBias.category !== 'sportVariety') {
