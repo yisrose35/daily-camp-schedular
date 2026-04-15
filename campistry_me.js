@@ -77,9 +77,14 @@ function save(){
         g.campStructure=structure;
         if(!g.app1)g.app1={};
         g.app1.camperRoster=roster;
-        // Build divisions from structure — full replacement, no merge with old
-        var m={};
-        Object.entries(structure).forEach(function([d,dd]){var b=[];Object.values(dd.grades||{}).forEach(function(gr){(gr.bunks||[]).forEach(function(bk){b.push(bk)})});var ex=(g.app1.divisions&&g.app1.divisions[d])||{};m[d]=Object.assign({},ex,{color:dd.color,bunks:b})});
+        // Build divisions from structure. NON-DESTRUCTIVE MERGE: app1.divisions
+        // is co-owned — Flow writes grade-keyed entries ("A1 Boys") carrying
+        // startTime/endTime/parentDivision, while Me writes division-keyed
+        // entries ("Boys") carrying color/bunks. Starting from existing
+        // g.app1.divisions preserves Flow's entries; we only update/add keys
+        // that match current division names in structure.
+        var m=Object.assign({},g.app1.divisions||{});
+        Object.entries(structure).forEach(function([d,dd]){var b=[];Object.values(dd.grades||{}).forEach(function(gr){(gr.bunks||[]).forEach(function(bk){b.push(bk)})});var ex=m[d]||{};m[d]=Object.assign({},ex,{color:dd.color,bunks:b})});
         g.app1.divisions=m;
         g.campistryMe={
             families:families,
