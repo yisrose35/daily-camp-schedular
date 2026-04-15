@@ -5807,11 +5807,31 @@
                 if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) { var _gp3 = scoreGap(dayEnd - sorted[sorted.length - 1].endMin); score += _gp3; bd.gaps += _gp3; }
 
                 // Duration violations — ★ v10.5: Penalize BOTH dMin and dMax violations.
+                // Intentional sub-dMin placements (CSP duration-relaxation, self-heal,
+                // perfection-fill) are exempted from the catastrophic 100k+ violation
+                // penalty. They were sized deliberately to fit a gap the solver couldn't
+                // otherwise handle, and scoring them against the layer's original dMin
+                // produced a constant massive penalty across every iteration — masking
+                // all other scoring differences and making the engine appear "stuck".
                 timeline.forEach(block => {
                     if (block._fromGapDetection && !block.layer) return;
                     const { dMin, dMax } = resolveConstraints(block.layer, (block.type || 'slot').toLowerCase(), block);
                     const dur = block.endMin - block.startMin;
-                    if (dur < dMin) { var _dv = (dMin - dur) * 10000 + 100000; score += _dv; bd.durationViolations += _dv; }
+                    var src = block._source || '';
+                    var relaxedDuration = block._relaxed && (block._relaxationType === 'duration_reduce' || block._relaxationType === 'combined');
+                    var isIntentionalShort = relaxedDuration || src === 'perfection-fill' || src === 'self-heal' || src === 'self-heal-pregap';
+                    if (dur < dMin) {
+                        var _dv;
+                        if (isIntentionalShort) {
+                            // Mild per-minute shortfall penalty, capped at 600 so the
+                            // iteration picker can still differentiate variants on
+                            // other factors.
+                            _dv = Math.min((dMin - dur) * 60, 600);
+                        } else {
+                            _dv = (dMin - dur) * 10000 + 100000;
+                        }
+                        score += _dv; bd.durationViolations += _dv;
+                    }
                     if (dur > dMax) { var _dv2 = (dur - dMax) * 8000 + 80000; score += _dv2; bd.durationViolations += _dv2; }
                 });
 
