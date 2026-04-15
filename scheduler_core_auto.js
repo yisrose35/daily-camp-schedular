@@ -5791,8 +5791,17 @@
                 // Gaps — Dead zones (gaps < minFillable) get 10× penalty, capped
                 // at 1200 to prevent a single oversized dead gap from outranking
                 // higher-tier violations (back-to-back repeat = 5000, layer missing = 20000).
+                // Past _mfScore, the dead-gap penalty fades linearly across the
+                // next 10 minutes instead of cliffing to 0 — prevents the edge
+                // case where the engine prefers a "barely fillable" 25-min gap
+                // over a 24-min one by a large margin.
                 const _mfScore = getMinFillable(gradeKey || '') || GAP_MIN_DUR;
-                const scoreGap = (g) => g <= 0 ? 0 : (g < _mfScore ? Math.min(g * 150, 1200) : g * 15);
+                const scoreGap = (g) => {
+                    if (g <= 0) return 0;
+                    if (g < _mfScore) return Math.min(g * 150, 1200);
+                    const fadeFactor = Math.max(0, (_mfScore + 10 - g) / 10);
+                    return g * 15 + 800 * fadeFactor;
+                };
                 if (sorted.length > 0 && sorted[0].startMin > dayStart) { var _gp = scoreGap(sorted[0].startMin - dayStart); score += _gp; bd.gaps += _gp; }
                 for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; var _gp2 = scoreGap(gap); score += _gp2; bd.gaps += _gp2; }
                 if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) { var _gp3 = scoreGap(dayEnd - sorted[sorted.length - 1].endMin); score += _gp3; bd.gaps += _gp3; }
