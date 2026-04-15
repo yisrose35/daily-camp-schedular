@@ -6520,12 +6520,31 @@
                     var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                     var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
 
-                    // Sort bunks: most constrained first
+                    // Sort bunks: most constrained first, with seeded shuffle
+                    // inside equal-slack bands (±15) so different iterations try
+                    // different bunk orders. Without this, Phase 2.5 is fully
+                    // deterministic and every iteration inherits the same
+                    // special placement — making the engine unable to escape
+                    // a suboptimal placement even across 40 tries.
                     var bunkOrder = getBunksForGrade(grade, divisions).slice();
                     bunkOrder.sort(function(a, b) {
                         var fa = feasibilityMap[a], fb = feasibilityMap[b];
                         return (fa ? fa.slack : 999) - (fb ? fb.slack : 999);
                     });
+                    if (_iterSeed > 0) {
+                        var _p25Shuf = _iterSeed * 37 + gradesByConstraint.indexOf(grade);
+                        for (var _bsi = bunkOrder.length - 1; _bsi > 0; _bsi--) {
+                            _p25Shuf = (_p25Shuf * 1103515245 + 12345) & 0x7fffffff;
+                            var _bsj = _p25Shuf % (_bsi + 1);
+                            var _saI = feasibilityMap[bunkOrder[_bsi]];
+                            var _saJ = feasibilityMap[bunkOrder[_bsj]];
+                            var _siS = _saI ? _saI.slack : 999;
+                            var _sjS = _saJ ? _saJ.slack : 999;
+                            if (Math.abs(_siS - _sjS) <= 15) {
+                                var _tmp = bunkOrder[_bsi]; bunkOrder[_bsi] = bunkOrder[_bsj]; bunkOrder[_bsj] = _tmp;
+                            }
+                        }
+                    }
 
                     bunkOrder.forEach(bunk => {
                         const draft = draftResults[bunk];
@@ -6696,6 +6715,16 @@
                             return; // defer to CSP
                         }
 
+                        // Inject iteration-seeded jitter (±40 pts) into scores so
+                        // tied candidates (same deadGapCount, similar score) rotate
+                        // across iterations. Still far smaller than the 2500
+                        // dead-gap penalty and 500 wall-alignment bonus — doesn't
+                        // override primary ordering, only breaks local ties.
+                        if (_iterSeed > 0) {
+                            for (var _cpi = 0; _cpi < candidatePositions.length; _cpi++) {
+                                candidatePositions[_cpi].score += (seedJitter(_iterSeed, _cpi) - 0.5) * 80;
+                            }
+                        }
                         candidatePositions.sort(function(a, b) {
                             if (a.deadGapCount !== b.deadGapCount) return a.deadGapCount - b.deadGapCount;
                             return b.score - a.score;
