@@ -1323,7 +1323,15 @@
     }
     function saveSetup() {
         const el = id => document.getElementById(id);
-        D.setup.campAddress = el('campAddress')?.value.trim() || '';
+        const newAddr = el('campAddress')?.value.trim() || '';
+        // If camp address changed, clear cached coordinates so they get re-geocoded
+        if (newAddr !== D.setup.campAddress) {
+            D.setup.campLat = null;
+            D.setup.campLng = null;
+            _campCoordsCache = null;
+            console.log('[Go] Camp address changed — coordinates will re-geocode on next route generation');
+        }
+        D.setup.campAddress = newAddr;
         D.setup.campName = el('campName')?.value.trim() || '';
         D.setup.avgSpeed = parseInt(el('avgSpeed')?.value) || 25;
         D.setup.reserveSeats = parseInt(el('reserveSeats')?.value) || 0;
