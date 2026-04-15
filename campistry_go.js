@@ -2716,7 +2716,10 @@
             if (role === 'staff' || role === 'counselor' || role === 's' || role === 'monitor' || role === 'm') {
                 // Add as staff member (counselor by default, monitor if specified)
                 const isMonitor = role === 'monitor' || role === 'm';
-                const wantsStop = needsStop === 'yes' || needsStop === 'y' || needsStop === 'true';
+                // If no "Needs Stop" column exists (nsi < 0), default to yes for
+                // counselors with addresses — they're in the CSV to get picked up.
+                // Only default to no if the column exists and is explicitly empty/no.
+                const wantsStop = nsi < 0 ? !!street : (needsStop === 'yes' || needsStop === 'y' || needsStop === 'true');
 
                 if (isMonitor) {
                     D.monitors.push({
