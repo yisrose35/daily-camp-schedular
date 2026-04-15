@@ -2698,8 +2698,8 @@
                     });
                 }
 
-                // Staff with stops also need an address entry for geocoding
-                if (wantsStop) {
+                // All staff get an address entry so they're geocoded with campers
+                if (street) {
                     D.addresses[name] = {
                         street, city, state, zip,
                         lat: null, lng: null, geocoded: false,
@@ -3732,13 +3732,6 @@
 
         // Validate we have buses and geocoded campers
         if (!D.buses.length) { toast('Add buses first', 'error'); return; }
-
-        // Auto-geocode any ungeocoded addresses before proceeding
-        const ungeocoded = Object.keys(D.addresses).filter(n => D.addresses[n]?.street && !D.addresses[n]?.geocoded);
-        if (ungeocoded.length > 0) {
-            console.log('[Go] Auto-geocoding ' + ungeocoded.length + ' ungeocoded addresses before route generation...');
-            await geocodeAll(false);
-        }
 
         let hasGeocodedCampers = false;
         Object.keys(roster).forEach(name => {
