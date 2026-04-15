@@ -4126,59 +4126,65 @@
             zones[bestRecv6].camperCount += kidCount[moveSi6];
         }
 
-        // Phase 6b: Even out counts — but only if it doesn't worsen time
-        var idealFill = Math.ceil(totalKids / zones.length * SOFT_FILL_PCT);
-        for (var ep = 0; ep < 200; ep++) {
+        // Phase 6b: Balance route times across all zone pairs.
+        // Goal: minimize the max route time. If bus A is 40min and bus B is
+        // 20min, moving a stop to make them 35/25 is a win (max dropped from
+        // 40→35) even though bus B got slower.
+        //
+        // For each pass, find the zone with the highest route time and try
+        // moving each of its stops to every other zone. Accept the move that
+        // produces the best (lowest) new max time across the pair.
+        var _noImproveCount = 0;
+        for (var ep = 0; ep < 300; ep++) {
             var eTimes = zones.map(function(z) { return estimateRouteTime(z.stopIndices); });
 
-            // Find heaviest zone above 80% capacity
-            var heavyZi = -1, heavyCount = 0;
+            // Find zone with highest route time
+            var slowZi = -1, slowTime = 0;
             for (var zi7 = 0; zi7 < zones.length; zi7++) {
-                var fillPct = zones[zi7].camperCount / zones[zi7].capacity;
-                if (fillPct > SOFT_FILL_PCT && zones[zi7].camperCount > heavyCount && zones[zi7].stopIndices.length > 1) {
-                    heavyCount = zones[zi7].camperCount; heavyZi = zi7;
+                if (eTimes[zi7] > slowTime && zones[zi7].stopIndices.length > 1) {
+                    slowTime = eTimes[zi7]; slowZi = zi7;
                 }
             }
-            if (heavyZi < 0) break;
+            if (slowZi < 0) break;
 
-            // Find lightest zone below 80%
-            var lightZi7 = -1, lightCount7 = Infinity;
-            for (var zi8 = 0; zi8 < zones.length; zi8++) {
-                var fillPct2 = zones[zi8].camperCount / zones[zi8].capacity;
-                if (fillPct2 < SOFT_FILL_PCT && zones[zi8].camperCount < lightCount7) {
-                    lightCount7 = zones[zi8].camperCount; lightZi7 = zi8;
+            // Try every stop in the slow zone against every other zone
+            var bestMove = null; // {fromLi, toZi, newMax}
+            var bestNewMax = slowTime;
+
+            for (var li7 = 0; li7 < zones[slowZi].stopIndices.length; li7++) {
+                var si7 = zones[slowZi].stopIndices[li7];
+
+                for (var tz7 = 0; tz7 < zones.length; tz7++) {
+                    if (tz7 === slowZi) continue;
+                    if (zones[tz7].camperCount + kidCount[si7] > zones[tz7].capacity) continue;
+
+                    // Estimate new times after the move
+                    var donorStops7 = zones[slowZi].stopIndices.filter(function(_, i) { return i !== li7; });
+                    var recvStops7 = zones[tz7].stopIndices.concat([si7]);
+                    var newDonorT = estimateRouteTime(donorStops7);
+                    var newRecvT = estimateRouteTime(recvStops7);
+                    var pairMax = Math.max(newDonorT, newRecvT);
+
+                    // Accept if max time across this pair improves
+                    if (pairMax < bestNewMax) {
+                        bestNewMax = pairMax;
+                        bestMove = { fromLi: li7, toZi: tz7, si: si7 };
+                    }
                 }
             }
-            if (lightZi7 < 0) break;
 
-            // Find the stop in the heavy zone nearest to the light zone's center
-            var bestMove7 = -1, bestMoveLi7 = -1, bestMoveDist7 = Infinity;
-            for (var li7 = 0; li7 < zones[heavyZi].stopIndices.length; li7++) {
-                var si7 = zones[heavyZi].stopIndices[li7];
-                if (zones[lightZi7].camperCount + kidCount[si7] > zones[lightZi7].capacity) continue;
-                var d7 = drivingDist(stops[si7].lat, stops[si7].lng,
-                    stops[zones[lightZi7]._medoid].lat, stops[zones[lightZi7]._medoid].lng);
-                if (d7 < bestMoveDist7) { bestMoveDist7 = d7; bestMove7 = si7; bestMoveLi7 = li7; }
+            if (!bestMove) {
+                _noImproveCount++;
+                if (_noImproveCount > 3) break; // tried enough, no improvements left
+                continue;
             }
-            if (bestMove7 < 0) break;
+            _noImproveCount = 0;
 
-            // Check: does this move worsen EITHER zone's route time?
-            var donorAfter = zones[heavyZi].stopIndices.filter(function(_, i) { return i !== bestMoveLi7; });
-            var recvAfter = zones[lightZi7].stopIndices.concat([bestMove7]);
-            var donorTimeBefore = eTimes[heavyZi];
-            var recvTimeBefore = eTimes[lightZi7];
-            var donorTimeAfter = estimateRouteTime(donorAfter);
-            var recvTimeAfter = estimateRouteTime(recvAfter);
-
-            // ABORT if the move increases max time across both zones
-            var maxBefore = Math.max(donorTimeBefore, recvTimeBefore);
-            var maxAfter = Math.max(donorTimeAfter, recvTimeAfter);
-            if (maxAfter > maxBefore) break; // time gets worse — stop evening out
-
-            zones[heavyZi].stopIndices.splice(bestMoveLi7, 1);
-            zones[heavyZi].camperCount -= kidCount[bestMove7];
-            zones[lightZi7].stopIndices.push(bestMove7);
-            zones[lightZi7].camperCount += kidCount[bestMove7];
+            // Execute the move
+            zones[slowZi].stopIndices.splice(bestMove.fromLi, 1);
+            zones[slowZi].camperCount -= kidCount[bestMove.si];
+            zones[bestMove.toZi].stopIndices.push(bestMove.si);
+            zones[bestMove.toZi].camperCount += kidCount[bestMove.si];
         }
 
         // Remove empty zones (can happen if all stops moved out)
