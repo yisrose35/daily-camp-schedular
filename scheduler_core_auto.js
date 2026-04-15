@@ -4137,17 +4137,29 @@
                         result = findBestSport(sBunk, sMeta.grade, cursor, blockEnd, sMeta, usedSports[sBunk]);
 
                         // Strategy 2: try shorter durations (scan from fillMinDur up)
+                        // Orphan guard: skip any tryDur that would leave a remainder
+                        // smaller than fillMinDur. The next loop iteration can't place
+                        // a valid block there and it'd end up as a sub-dMin leftover.
                         if (!result) {
                             for (var tryDur = sMeta.fillMinDur; tryDur <= dur; tryDur += 5) {
+                                var _rem2 = remaining - tryDur;
+                                if (_rem2 > 0 && _rem2 < sMeta.fillMinDur) continue;
                                 result = findBestSport(sBunk, sMeta.grade, cursor, cursor + tryDur, sMeta, usedSports[sBunk]);
                                 if (result) { blockEnd = cursor + tryDur; break; }
                             }
                         }
 
                         // Strategy 3: try from the END of the gap working backward
+                        // Orphan guard: reject any tryStart that would leave an
+                        // unfillable gap [cursor, tryStart]. Previously the cursor
+                        // jumped forward to tryStart without filling that segment,
+                        // producing a sub-fillMinDur leftover that became a tiny
+                        // filler downstream.
                         if (!result && gap.end - sMeta.fillMinDur >= cursor) {
                             for (var tryEnd = gap.end; tryEnd - sMeta.fillMinDur >= cursor; tryEnd -= 5) {
                                 var tryStart = Math.max(cursor, tryEnd - sMeta.sportCeiling);
+                                var _orphan = tryStart - cursor;
+                                if (_orphan > 0 && _orphan < sMeta.fillMinDur) continue;
                                 result = findBestSport(sBunk, sMeta.grade, tryStart, tryEnd, sMeta, usedSports[sBunk]);
                                 if (result) { cursor = tryStart; blockEnd = tryEnd; break; }
                             }
