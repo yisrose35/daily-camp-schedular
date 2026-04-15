@@ -383,7 +383,10 @@ function renderDetailPane() {
         };
 
         travelRow.appendChild(travelInput);
-        travelRow.innerHTML += `<span style="font-size:0.8rem; color:#92400E;">minutes each way</span>`;
+        const travelSuffix = document.createElement("span");
+        travelSuffix.style.cssText = "font-size:0.8rem; color:#92400E;";
+        travelSuffix.textContent = "minutes each way";
+        travelRow.appendChild(travelSuffix);
         offCampusSection.appendChild(travelRow);
 
         // Travel mode: add-to-slot vs. deduct-from-slot (only meaningful if travel > 0)
