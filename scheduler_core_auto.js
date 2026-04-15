@@ -5788,9 +5788,11 @@
                 const dayEnd = gradeKey ? (parseTimeToMinutes(divisions[gradeKey]?.endTime) || 960) : 960;
                 const sorted = [...timeline].sort((a, b) => a.startMin - b.startMin);
 
-                // Gaps — ★ v6.0: Dead zones (gaps < 25min) get 10× penalty
+                // Gaps — Dead zones (gaps < minFillable) get 10× penalty, capped
+                // at 1200 to prevent a single oversized dead gap from outranking
+                // higher-tier violations (back-to-back repeat = 5000, layer missing = 20000).
                 const _mfScore = getMinFillable(gradeKey || '') || GAP_MIN_DUR;
-                const scoreGap = (g) => g <= 0 ? 0 : (g < _mfScore ? g * 150 : g * 15);
+                const scoreGap = (g) => g <= 0 ? 0 : (g < _mfScore ? Math.min(g * 150, 1200) : g * 15);
                 if (sorted.length > 0 && sorted[0].startMin > dayStart) { var _gp = scoreGap(sorted[0].startMin - dayStart); score += _gp; bd.gaps += _gp; }
                 for (let i = 0; i < sorted.length - 1; i++) { const gap = sorted[i + 1].startMin - sorted[i].endMin; var _gp2 = scoreGap(gap); score += _gp2; bd.gaps += _gp2; }
                 if (sorted.length > 0 && sorted[sorted.length - 1].endMin < dayEnd) { var _gp3 = scoreGap(dayEnd - sorted[sorted.length - 1].endMin); score += _gp3; bd.gaps += _gp3; }
@@ -5831,12 +5833,13 @@
                     const t = (sorted[i].type || '').toLowerCase();
                     if (t === 'sport' && sorted[i]._assignedSport) sportNames.push(sorted[i]._assignedSport);
 
-                    // Back-to-back same activity penalty
+                    // Back-to-back same activity penalty — raised from 2000 to
+                    // 5000 so it always outranks any dead-gap penalty (capped at 1200).
                     if (i > 0) {
                         const prevName = sorted[i-1]._assignedSport || sorted[i-1].event;
                         const curName = sorted[i]._assignedSport || sorted[i].event;
                         if (prevName && curName && prevName === curName && t === 'sport') {
-                            score += 2000; bd.sportVariety += 2000;
+                            score += 5000; bd.sportVariety += 5000;
                         }
                     }
                 }
