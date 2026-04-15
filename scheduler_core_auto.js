@@ -6539,10 +6539,13 @@
                         const fieldName = special.claimedField || special.location;
                         const draftStart = special.claimedTime.startMin;
 
+                        // Use the user's configured sport dMin STRICTLY for dead-gap
+                        // detection — no adaptive reduction. If Phase 3 will enforce
+                        // dMin = 30 when filling the remainder, Phase 2.5 must agree
+                        // that a 25-min remainder is dead. Otherwise Phase 2.5 happily
+                        // places a special that leaves a gap Phase 3 can't fill
+                        // cleanly, producing sub-dMin sport blocks downstream.
                         var sportFillMin = Math.max((shoppingLists[bunk]?.sports?.constraints?.dMin || 25), TYPE_FLOORS.sport || 25);
-                        // ★ v10.0: Use adaptive fillMinDur for constrained bunks
-                        var bf = feasibilityMap[bunk];
-                        if (bf && bf.slack < 30) sportFillMin = Math.max(20, sportFillMin - 5);
 
                         var existingWalls = (bunkTimelines[bunk] || []).map(w => ({ s: w.startMin, e: w.endMin }));
                         var allGapsForBunk = spComputeGaps(existingWalls, gradeStart, gradeEnd);
@@ -6595,7 +6598,14 @@
                                     var gSize = gapsAfter[ag].e - gapsAfter[ag].s;
                                     if (gSize <= 0) continue;
                                     gapSizes.push(gSize);
-                                    if (gSize < sportFillMin) { deadGapCount++; score -= 500; }
+                                    // Dead-gap penalty raised from -500 to -2500 to reflect the
+                                    // true downstream cost: an unfillable remainder becomes
+                                    // either a capped dead gap (~1200) or a sub-dMin sport
+                                    // fill (~1100). At -500 the primary signal was drowned by
+                                    // wall-alignment bonuses when multiple positions tied on
+                                    // deadGapCount — engine picked the bad gap over a slightly
+                                    // less-tidy but cleanly-fillable alternative.
+                                    if (gSize < sportFillMin) { deadGapCount++; score -= 2500; }
                                     else { score += 50; } // fillable gap bonus
                                 }
 
@@ -6637,7 +6647,7 @@
                                         var endDeadGaps = 0;
                                         for (var eg = 0; eg < gapsAfterEnd.length; eg++) {
                                             var egSize = gapsAfterEnd[eg].e - gapsAfterEnd[eg].s;
-                                            if (egSize > 0 && egSize < sportFillMin) { endDeadGaps++; endScore -= 500; }
+                                            if (egSize > 0 && egSize < sportFillMin) { endDeadGaps++; endScore -= 2500; }
                                             else if (egSize > 0) endScore += 50;
                                         }
                                         if (endPos === draftStart) endScore += 200;
