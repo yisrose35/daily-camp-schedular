@@ -2625,7 +2625,7 @@
         const divi = hdr.findIndex(h => h === 'division' || h === 'div');
         const gri = hdr.findIndex(h => h === 'grade');
         const bki = hdr.findIndex(h => h === 'bunk' || h === 'cabin');
-        const si = hdr.findIndex(h => h === 'address' || h.includes('street') || h === 'street address');
+        let si = hdr.findIndex(h => h === 'address' || h.includes('street') || h === 'street address');
         const ci = hdr.findIndex(h => h === 'city' || h === 'city/town' || h === 'town');
         const sti = hdr.findIndex(h => h === 'state');
         const zi = hdr.findIndex(h => h === 'zip' || h === 'zip code' || h === 'zipcode' || h.includes('zip'));
@@ -2635,6 +2635,20 @@
         const nsi = hdr.findIndex(h => h === 'needs stop' || h === 'needsstop' || h === 'needs_stop' || h === 'stop');
         const arri = hdr.findIndex(h => h === 'arrival' || h === 'arr' || h === 'morning');
         const disi = hdr.findIndex(h => h === 'dismissal' || h === 'dis' || h === 'dismiss' || h === 'afternoon');
+
+        // Auto-detect address column: if no known header matched, scan the
+        // first data row for a value that looks like a street address
+        // (starts with a number followed by letters, e.g. "1 Wood Ave").
+        if (si < 0 && lines.length >= 2) {
+            const sampleCols = parseLine(lines[1]);
+            const addrPattern = /^\d+\s+[A-Za-z]/;  // "123 Main St" pattern
+            // Skip columns already claimed by other fields
+            const claimed = new Set([idi, lni, fni, ni, divi, gri, bki, ci, sti, zi, tri, rwi, roi, nsi, arri, disi].filter(x => x >= 0));
+            for (let c = 0; c < sampleCols.length; c++) {
+                if (claimed.has(c)) continue;
+                if (addrPattern.test(sampleCols[c].trim())) { si = c; console.log('[Go] Auto-detected address column: index ' + c + ' ("' + hdr[c] + '") from value "' + sampleCols[c].trim() + '"'); break; }
+            }
+        }
 
         // Must have either (first+last) or (full name), plus an address
         const hasFirstLast = fni >= 0 && lni >= 0;
