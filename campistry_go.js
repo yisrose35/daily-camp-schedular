@@ -3724,6 +3724,97 @@
         }
 
         // ══════════════════════════════════════════════════════════════════
+        // CORRIDOR BALANCING — adjacent zones heading in similar directions
+        // should split by distance (near/far) rather than by angle.
+        // If two neighboring wedges overlap directionally and one is much
+        // heavier, merge their stops and re-split by distance from camp.
+        // ══════════════════════════════════════════════════════════════════
+        function zoneAvgAngle(z) {
+            var sum = 0;
+            z.stopIndices.forEach(function(si) {
+                var dLat = stops[si].lat - campLat;
+                var dLng = (stops[si].lng - campLng) * Math.cos(campLat * Math.PI / 180);
+                var a = Math.atan2(dLng, dLat) * 180 / Math.PI;
+                if (a < 0) a += 360;
+                sum += a;
+            });
+            return sum / z.stopIndices.length;
+        }
+        function angleDiff(a1, a2) {
+            var d = Math.abs(a1 - a2); return d > 180 ? 360 - d : d;
+        }
+
+        // Check all pairs of zones for directional overlap + imbalance
+        for (var cb = 0; cb < zones.length; cb++) {
+            for (var cb2 = cb + 1; cb2 < zones.length; cb2++) {
+                var z1 = zones[cb], z2 = zones[cb2];
+                if (!z1.stopIndices.length || !z2.stopIndices.length) continue;
+
+                var ang1 = zoneAvgAngle(z1), ang2 = zoneAvgAngle(z2);
+                // Only merge if heading in similar direction (<30° apart)
+                if (angleDiff(ang1, ang2) > 30) continue;
+
+                // Only merge if significantly imbalanced (>2:1 ratio)
+                var ratio = Math.max(z1.camperCount, z2.camperCount) / Math.max(1, Math.min(z1.camperCount, z2.camperCount));
+                if (ratio < 1.8) continue;
+
+                console.log('[Go] Corridor balance: merging ' + z1.busName + ' (' + z1.camperCount + ') + ' +
+                    z2.busName + ' (' + z2.camperCount + ') — similar direction (' +
+                    ang1.toFixed(0) + '° vs ' + ang2.toFixed(0) + '°), ratio ' + ratio.toFixed(1));
+
+                // Merge all stops and re-split by distance from camp
+                var allStops = z1.stopIndices.concat(z2.stopIndices);
+                allStops.sort(function(a, b) {
+                    return haversineMi(campLat, campLng, stops[a].lat, stops[a].lng) -
+                           haversineMi(campLat, campLng, stops[b].lat, stops[b].lng);
+                });
+
+                // Split: near half to bigger-capacity bus, far half to other
+                // Try to balance kid counts within capacity
+                var totalK = z1.camperCount + z2.camperCount;
+                var target1 = Math.round(totalK * z1.capacity / (z1.capacity + z2.capacity));
+                var nearStops = [], farStops = [], nearKids = 0;
+                for (var si5 = 0; si5 < allStops.length; si5++) {
+                    if (nearKids < target1 && nearKids + kidCount[allStops[si5]] <= z1.capacity) {
+                        nearStops.push(allStops[si5]);
+                        nearKids += kidCount[allStops[si5]];
+                    } else {
+                        farStops.push(allStops[si5]);
+                    }
+                }
+
+                // Assign near to z1, far to z2 (or swap if z2 has more capacity)
+                if (z1.capacity >= z2.capacity) {
+                    z1.stopIndices = nearStops;
+                    z1.camperCount = nearStops.reduce(function(s, si) { return s + kidCount[si]; }, 0);
+                    z2.stopIndices = farStops;
+                    z2.camperCount = farStops.reduce(function(s, si) { return s + kidCount[si]; }, 0);
+                } else {
+                    z2.stopIndices = nearStops;
+                    z2.camperCount = nearStops.reduce(function(s, si) { return s + kidCount[si]; }, 0);
+                    z1.stopIndices = farStops;
+                    z1.camperCount = farStops.reduce(function(s, si) { return s + kidCount[si]; }, 0);
+                }
+
+                // Update centroids and medoids
+                [z1, z2].forEach(function(z) {
+                    if (!z.stopIndices.length) return;
+                    z.centroidLat = z.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / z.stopIndices.length;
+                    z.centroidLng = z.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / z.stopIndices.length;
+                    var bm = z.stopIndices[0], bd = Infinity;
+                    z.stopIndices.forEach(function(si) {
+                        var d = haversineMi(z.centroidLat, z.centroidLng, stops[si].lat, stops[si].lng);
+                        if (d < bd) { bd = d; bm = si; }
+                    });
+                    z._medoid = bm;
+                });
+
+                console.log('[Go]   → ' + z1.busName + ': ' + z1.camperCount + ' (near), ' +
+                    z2.busName + ': ' + z2.camperCount + ' (far)');
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════
         // REBALANCE PHASE 1: Capacity — move stops out of over-cap zones
         // ══════════════════════════════════════════════════════════════════
         for (let pass = 0; pass < 200; pass++) {
