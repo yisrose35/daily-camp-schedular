@@ -4036,20 +4036,166 @@
             z.centroidLng = z.stopIndices.reduce((s, si) => s + stops[si].lng, 0) / z.stopIndices.length;
         }
 
+        // ══════════════════════════════════════════════════════════════════
+        // REBALANCE PHASE 6: Time-aware optimization
+        //
+        // Priority: ROUTE TIME, not kid count.
+        //
+        // 1. Estimate route time for each zone (sequential stop-to-stop
+        //    driving time + avg stop time, sorted by distance from camp).
+        // 2. If a zone exceeds the soft time target (~50 min), try shedding
+        //    its farthest stop to a neighbor — but ONLY if the move reduces
+        //    the worst route time across both zones.
+        // 3. If two zones are imbalanced in count but both have OK times,
+        //    try evening them out — but ABORT if the move worsens either
+        //    zone's route time.
+        // ══════════════════════════════════════════════════════════════════
+        var AVG_STOP_SEC = (D.setup.avgStopTime || 2) * 60; // seconds per stop
+        var SOFT_TIME_TARGET = 50 * 60; // 50 minutes in seconds
+        var SOFT_FILL_PCT = 0.80; // 80% capacity target
+
+        // Estimate route time: sort stops by distance from camp, sum sequential driving times + stop times
+        function estimateRouteTime(zoneStopIndices) {
+            if (zoneStopIndices.length === 0) return 0;
+            // Sort by distance from camp
+            var sorted = zoneStopIndices.slice().sort(function(a, b) {
+                return haversineMi(campLat, campLng, stops[a].lat, stops[a].lng) -
+                       haversineMi(campLat, campLng, stops[b].lat, stops[b].lng);
+            });
+            // Camp → first stop
+            var time = drivingDist(campLat, campLng, stops[sorted[0]].lat, stops[sorted[0]].lng);
+            time += AVG_STOP_SEC; // first stop service time
+            // Stop-to-stop
+            for (var i = 1; i < sorted.length; i++) {
+                time += drivingDist(stops[sorted[i - 1]].lat, stops[sorted[i - 1]].lng,
+                                     stops[sorted[i]].lat, stops[sorted[i]].lng);
+                time += AVG_STOP_SEC;
+            }
+            return time;
+        }
+
+        // Phase 6a: Shed farthest stops from over-time zones
+        for (var tp = 0; tp < 200; tp++) {
+            var zoneTimes = zones.map(function(z) { return estimateRouteTime(z.stopIndices); });
+
+            // Find zone with highest route time that exceeds target
+            var worstTi = -1, worstTime = SOFT_TIME_TARGET;
+            for (var zi6 = 0; zi6 < zones.length; zi6++) {
+                if (zoneTimes[zi6] > worstTime && zones[zi6].stopIndices.length > 1) {
+                    worstTime = zoneTimes[zi6]; worstTi = zi6;
+                }
+            }
+            if (worstTi < 0) break;
+
+            // Find farthest stop from camp in this zone
+            var overTimeZone = zones[worstTi];
+            var farLi6 = -1, farDist6 = 0;
+            for (var li6 = 0; li6 < overTimeZone.stopIndices.length; li6++) {
+                var d6 = haversineMi(campLat, campLng,
+                    stops[overTimeZone.stopIndices[li6]].lat, stops[overTimeZone.stopIndices[li6]].lng);
+                if (d6 > farDist6) { farDist6 = d6; farLi6 = li6; }
+            }
+            if (farLi6 < 0) break;
+
+            var moveSi6 = overTimeZone.stopIndices[farLi6];
+
+            // Find best receiver: zone that can take this stop without exceeding time target
+            var bestRecv6 = -1, bestNewWorst6 = worstTime;
+            for (var tz6 = 0; tz6 < zones.length; tz6++) {
+                if (tz6 === worstTi) continue;
+                if (zones[tz6].camperCount + kidCount[moveSi6] > zones[tz6].capacity) continue;
+
+                // Estimate new times for both zones after the move
+                var donorStops = overTimeZone.stopIndices.filter(function(_, i) { return i !== farLi6; });
+                var recvStops = zones[tz6].stopIndices.concat([moveSi6]);
+                var newDonorTime = estimateRouteTime(donorStops);
+                var newRecvTime = estimateRouteTime(recvStops);
+                var newWorst = Math.max(newDonorTime, newRecvTime);
+
+                // Only accept if the worst time across both zones improves
+                if (newWorst < bestNewWorst6) {
+                    bestNewWorst6 = newWorst; bestRecv6 = tz6;
+                }
+            }
+
+            if (bestRecv6 < 0) break; // no improvement possible
+
+            overTimeZone.stopIndices.splice(farLi6, 1);
+            overTimeZone.camperCount -= kidCount[moveSi6];
+            zones[bestRecv6].stopIndices.push(moveSi6);
+            zones[bestRecv6].camperCount += kidCount[moveSi6];
+        }
+
+        // Phase 6b: Even out counts — but only if it doesn't worsen time
+        var idealFill = Math.ceil(totalKids / zones.length * SOFT_FILL_PCT);
+        for (var ep = 0; ep < 200; ep++) {
+            var eTimes = zones.map(function(z) { return estimateRouteTime(z.stopIndices); });
+
+            // Find heaviest zone above 80% capacity
+            var heavyZi = -1, heavyCount = 0;
+            for (var zi7 = 0; zi7 < zones.length; zi7++) {
+                var fillPct = zones[zi7].camperCount / zones[zi7].capacity;
+                if (fillPct > SOFT_FILL_PCT && zones[zi7].camperCount > heavyCount && zones[zi7].stopIndices.length > 1) {
+                    heavyCount = zones[zi7].camperCount; heavyZi = zi7;
+                }
+            }
+            if (heavyZi < 0) break;
+
+            // Find lightest zone below 80%
+            var lightZi7 = -1, lightCount7 = Infinity;
+            for (var zi8 = 0; zi8 < zones.length; zi8++) {
+                var fillPct2 = zones[zi8].camperCount / zones[zi8].capacity;
+                if (fillPct2 < SOFT_FILL_PCT && zones[zi8].camperCount < lightCount7) {
+                    lightCount7 = zones[zi8].camperCount; lightZi7 = zi8;
+                }
+            }
+            if (lightZi7 < 0) break;
+
+            // Find the stop in the heavy zone nearest to the light zone's center
+            var bestMove7 = -1, bestMoveLi7 = -1, bestMoveDist7 = Infinity;
+            for (var li7 = 0; li7 < zones[heavyZi].stopIndices.length; li7++) {
+                var si7 = zones[heavyZi].stopIndices[li7];
+                if (zones[lightZi7].camperCount + kidCount[si7] > zones[lightZi7].capacity) continue;
+                var d7 = drivingDist(stops[si7].lat, stops[si7].lng,
+                    stops[zones[lightZi7]._medoid].lat, stops[zones[lightZi7]._medoid].lng);
+                if (d7 < bestMoveDist7) { bestMoveDist7 = d7; bestMove7 = si7; bestMoveLi7 = li7; }
+            }
+            if (bestMove7 < 0) break;
+
+            // Check: does this move worsen EITHER zone's route time?
+            var donorAfter = zones[heavyZi].stopIndices.filter(function(_, i) { return i !== bestMoveLi7; });
+            var recvAfter = zones[lightZi7].stopIndices.concat([bestMove7]);
+            var donorTimeBefore = eTimes[heavyZi];
+            var recvTimeBefore = eTimes[lightZi7];
+            var donorTimeAfter = estimateRouteTime(donorAfter);
+            var recvTimeAfter = estimateRouteTime(recvAfter);
+
+            // ABORT if the move increases max time across both zones
+            var maxBefore = Math.max(donorTimeBefore, recvTimeBefore);
+            var maxAfter = Math.max(donorTimeAfter, recvTimeAfter);
+            if (maxAfter > maxBefore) break; // time gets worse — stop evening out
+
+            zones[heavyZi].stopIndices.splice(bestMoveLi7, 1);
+            zones[heavyZi].camperCount -= kidCount[bestMove7];
+            zones[lightZi7].stopIndices.push(bestMove7);
+            zones[lightZi7].camperCount += kidCount[bestMove7];
+        }
+
         // Remove empty zones (can happen if all stops moved out)
         var finalZones = zones.filter(z => z.stopIndices.length > 0);
 
-        // Log summary
-        console.log('[Go] Zones: ' + finalZones.length + ' compact clusters, ' + totalKids + ' kids across ' + numStops + ' stops');
-        finalZones.forEach(z => {
-            var maxDist = 0;
-            z.stopIndices.forEach(si => {
-                var d = drivingDist(stops[si].lat, stops[si].lng, stops[z._medoid].lat, stops[z._medoid].lng);
-                if (d > maxDist) maxDist = d;
-            });
-            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' +
-                z.stopIndices.length + ' stops, spread: ' + (maxDist / 60).toFixed(0) + 'min');
+        // Log summary with estimated route times
+        var finalTimes = finalZones.map(function(z) { return estimateRouteTime(z.stopIndices); });
+        console.log('[Go] Zones: ' + finalZones.length + ' corridors, ' + totalKids + ' kids, ' + numStops + ' stops');
+        finalZones.forEach(function(z, i) {
+            var timeMin = (finalTimes[i] / 60).toFixed(0);
+            var fill = Math.round(z.camperCount / z.capacity * 100);
+            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' (' + fill + '%), ' +
+                z.stopIndices.length + ' stops, ~' + timeMin + 'min route');
         });
+        var maxTime = Math.max.apply(null, finalTimes);
+        var avgTime = finalTimes.reduce(function(s, t) { return s + t; }, 0) / finalTimes.length;
+        console.log('[Go] Route time: max ' + (maxTime / 60).toFixed(0) + 'min, avg ' + (avgTime / 60).toFixed(0) + 'min');
 
         return finalZones;
     }
