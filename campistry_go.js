@@ -2636,17 +2636,20 @@
         const arri = hdr.findIndex(h => h === 'arrival' || h === 'arr' || h === 'morning');
         const disi = hdr.findIndex(h => h === 'dismissal' || h === 'dis' || h === 'dismiss' || h === 'afternoon');
 
-        // Auto-detect address column: if no known header matched, scan the
-        // first data row for a value that looks like a street address
+        // Auto-detect address column: if no known header matched, scan up to
+        // the first 5 data rows for a value that looks like a street address
         // (starts with a number followed by letters, e.g. "1 Wood Ave").
-        if (si < 0 && lines.length >= 2) {
-            const sampleCols = parseLine(lines[1]);
+        // Checks multiple rows in case the first row has an empty address.
+        if (si < 0) {
             const addrPattern = /^\d+\s+[A-Za-z]/;  // "123 Main St" pattern
-            // Skip columns already claimed by other fields
             const claimed = new Set([idi, lni, fni, ni, divi, gri, bki, ci, sti, zi, tri, rwi, roi, nsi, arri, disi].filter(x => x >= 0));
-            for (let c = 0; c < sampleCols.length; c++) {
-                if (claimed.has(c)) continue;
-                if (addrPattern.test(sampleCols[c].trim())) { si = c; console.log('[Go] Auto-detected address column: index ' + c + ' ("' + hdr[c] + '") from value "' + sampleCols[c].trim() + '"'); break; }
+            var scanLimit = Math.min(lines.length, 6); // header + up to 5 rows
+            for (let row = 1; row < scanLimit && si < 0; row++) {
+                var sampleCols = parseLine(lines[row]);
+                for (let c = 0; c < sampleCols.length; c++) {
+                    if (claimed.has(c)) continue;
+                    if (addrPattern.test(sampleCols[c].trim())) { si = c; console.log('[Go] Auto-detected address column: index ' + c + ' ("' + hdr[c] + '") from row ' + row + ' value "' + sampleCols[c].trim() + '"'); break; }
+                }
             }
         }
 
@@ -2688,7 +2691,6 @@
             }
 
             const street = (cols[si] || '').trim();
-            if (!street) continue;
 
             const personId = idi >= 0 ? (cols[idi] || '').trim() : '';
             const division = divi >= 0 ? (cols[divi] || '').trim() : '';
@@ -2755,15 +2757,17 @@
                 const meRoster = readCampistrySettings()?.app1?.camperRoster || {};
                 const rn = Object.keys(meRoster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
 
-                D.addresses[rn] = {
-                    street, city, state, zip,
-                    lat: null, lng: null, geocoded: false,
-                    transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus',
-                    rideWith: rideWith,
-                    _camperId: personId ? parseInt(personId) : 0,
-                    _division: division, _grade: grade, _bunk: bunk,
-                    _arrival: forArrival, _dismissal: forDismissal
-                };
+                if (street) {
+                    D.addresses[rn] = {
+                        street, city, state, zip,
+                        lat: null, lng: null, geocoded: false,
+                        transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus',
+                        rideWith: rideWith,
+                        _camperId: personId ? parseInt(personId) : 0,
+                        _division: division, _grade: grade, _bunk: bunk,
+                        _arrival: forArrival, _dismissal: forDismissal
+                    };
+                }
 
                 _goStandaloneRoster[rn] = {
                     camperId: personId ? parseInt(personId) : i,
