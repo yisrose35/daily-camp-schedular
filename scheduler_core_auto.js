@@ -3514,16 +3514,26 @@
                                 perfectGaps++; // evenly splittable — good
                             }
                         }
+                        // Calibrated to match Phase 2.5's weights so CSP-placed needs
+                        // (swim, snack, custom, rotation, second-special) avoid dead
+                        // gaps with the same aggression as Phase 2.5's pre-placed
+                        // specials. Previously: -500/-200, which was 5× weaker than
+                        // Phase 2.5's -2500 and let CSP-phase placements drop sub-dMin
+                        // remainders that Phase 2.5 would have refused.
                         score += perfectGaps * 50;   // reward fillable gaps
-                        score -= deadGaps * 500;     // heavily penalize dead gaps
-                        score -= pos.deadGaps * 200;  // penalize dead gaps from this placement
+                        score -= deadGaps * 2500;    // heavily penalize dead gaps
+                        score -= pos.deadGaps * 1000; // penalize dead gaps from this placement
 
                         // 2b. ★ v11.4: Neighbor starvation check — would remaining needs
                         // still fit at their dMin in the leftover gaps?
+                        // Raised from 300 → 1000 per starved minute to match the
+                        // calibrated dead-gap scale: starvation means the engine is
+                        // walking into an unsolvable future, and should be treated as
+                        // catastrophic, not merely bad.
                         var otherMinTotal = 0;
                         for (var om = 0; om < otherNeeds.length; om++) otherMinTotal += otherNeeds[om].dMin || 0;
                         if (totalGapTime < otherMinTotal) {
-                            score -= (otherMinTotal - totalGapTime) * 300; // starvation penalty
+                            score -= (otherMinTotal - totalGapTime) * 1000; // starvation penalty
                         }
 
                         // 3. Balance: prefer positions that create evenly-sized gaps
