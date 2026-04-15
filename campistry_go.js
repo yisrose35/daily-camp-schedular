@@ -2549,21 +2549,21 @@
     function importAddressCsv() {
         const inp = document.createElement('input');
         inp.type = 'file';
-        inp.accept = '.csv,.tsv,.txt,.xlsx,.xls';
+        // No accept filter — allow any file type (some Excel variants get blocked)
         inp.style.display = 'none';
         document.body.appendChild(inp);
         inp.onchange = function () {
             if (!inp.files[0]) { inp.remove(); return; }
             const file = inp.files[0];
             const ext = file.name.split('.').pop().toLowerCase();
-            if (ext === 'xlsx' || ext === 'xls') {
-                // Excel file — read as array buffer and parse
+            if (ext === 'xlsx' || ext === 'xls' || ext === 'xlsm' || ext === 'xlsb') {
+                // Excel file — read as array buffer and parse via SheetJS
                 const r = new FileReader();
                 r.onload = e => { parseExcel(e.target.result); inp.remove(); };
                 r.onerror = () => { toast('Failed to read file', 'error'); inp.remove(); };
                 r.readAsArrayBuffer(file);
             } else {
-                // CSV/TSV/TXT — read as text
+                // CSV/TSV/TXT or anything else — try reading as text
                 const r = new FileReader();
                 r.onload = e => { parseCsv(e.target.result); inp.remove(); };
                 r.onerror = () => { toast('Failed to read file', 'error'); inp.remove(); };
