@@ -3748,52 +3748,166 @@
             });
         }
 
-        // ── Capacity rebalance: move border stops from over-cap zones to nearest under-cap zone ──
+        // ══════════════════════════════════════════════════════════════════
+        // REBALANCE PHASE 1: Capacity — move stops out of over-cap zones
+        // ══════════════════════════════════════════════════════════════════
         for (let pass = 0; pass < 200; pass++) {
-            // Find most over-capacity zone
             let worstZi = -1, worstOver = 0;
             for (let zi = 0; zi < zones.length; zi++) {
                 const over = zones[zi].camperCount - zones[zi].capacity;
                 if (over > worstOver) { worstOver = over; worstZi = zi; }
             }
-            if (worstZi < 0) break; // all zones within capacity
+            if (worstZi < 0) break;
 
             const overZone = zones[worstZi];
-
-            // Find the border stop: farthest from own medoid AND closest to another zone's medoid
             let bestStopLocalIdx = -1, bestTargetZi = -1, bestScore = -Infinity;
             for (let li = 0; li < overZone.stopIndices.length; li++) {
                 const si = overZone.stopIndices[li];
                 const distFromOwn = drivingDist(stops[si].lat, stops[si].lng,
                     stops[overZone._medoid].lat, stops[overZone._medoid].lng);
-
                 for (let tzi = 0; tzi < zones.length; tzi++) {
                     if (tzi === worstZi) continue;
                     if (zones[tzi].camperCount + kidCount[si] > zones[tzi].capacity) continue;
                     const distToTarget = drivingDist(stops[si].lat, stops[si].lng,
                         stops[zones[tzi]._medoid].lat, stops[zones[tzi]._medoid].lng);
-                    // Score: high = far from own, close to target (true border stop)
                     const score = distFromOwn - distToTarget;
                     if (score > bestScore) { bestScore = score; bestStopLocalIdx = li; bestTargetZi = tzi; }
                 }
             }
-
-            if (bestStopLocalIdx < 0 || bestTargetZi < 0) break; // no valid move
-
-            // Move the stop
+            if (bestStopLocalIdx < 0 || bestTargetZi < 0) break;
             const movedSi = overZone.stopIndices.splice(bestStopLocalIdx, 1)[0];
             overZone.camperCount -= kidCount[movedSi];
             zones[bestTargetZi].stopIndices.push(movedSi);
             zones[bestTargetZi].camperCount += kidCount[movedSi];
         }
 
+        // ══════════════════════════════════════════════════════════════════
+        // REBALANCE PHASE 2: Compactness — move misplaced stops closer to
+        // their natural geographic zone.  A stop that is far from its own
+        // medoid but close to another zone's medoid is a "misplaced" stop.
+        // Moving it makes BOTH zones more compact.
+        // ══════════════════════════════════════════════════════════════════
+        for (let pass = 0; pass < 300; pass++) {
+            let bestGain = 0, bestSi = -1, bestFromZi = -1, bestToZi = -1, bestFromLi = -1;
+
+            for (let zi = 0; zi < zones.length; zi++) {
+                const z = zones[zi];
+                if (z.stopIndices.length <= 1) continue; // don't empty a zone
+                for (let li = 0; li < z.stopIndices.length; li++) {
+                    const si = z.stopIndices[li];
+                    const distOwn = drivingDist(stops[si].lat, stops[si].lng,
+                        stops[z._medoid].lat, stops[z._medoid].lng);
+
+                    for (let tzi = 0; tzi < zones.length; tzi++) {
+                        if (tzi === zi) continue;
+                        if (zones[tzi].camperCount + kidCount[si] > zones[tzi].capacity) continue;
+                        const distTarget = drivingDist(stops[si].lat, stops[si].lng,
+                            stops[zones[tzi]._medoid].lat, stops[zones[tzi]._medoid].lng);
+                        // Gain: how much closer this stop is to the target vs its own zone
+                        // Only move if significantly closer (>20% improvement) to avoid thrashing
+                        const gain = distOwn - distTarget;
+                        if (gain > distOwn * 0.2 && gain > bestGain) {
+                            bestGain = gain; bestSi = si; bestFromZi = zi; bestToZi = tzi; bestFromLi = li;
+                        }
+                    }
+                }
+            }
+
+            if (bestFromZi < 0) break; // no more improvements
+
+            zones[bestFromZi].stopIndices.splice(bestFromLi, 1);
+            zones[bestFromZi].camperCount -= kidCount[bestSi];
+            zones[bestToZi].stopIndices.push(bestSi);
+            zones[bestToZi].camperCount += kidCount[bestSi];
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // REBALANCE PHASE 3: Spread — move stops from heavy zones to light
+        // zones when the light zone is geographically nearby.  This avoids
+        // one bus with 44 kids and another with 1.  We use an "ideal" count
+        // (totalKids / numZones) and try to even out toward it.
+        // ══════════════════════════════════════════════════════════════════
+        var idealPerZone = Math.ceil(totalKids / zones.length);
+        var MIN_ZONE_KIDS = Math.max(3, Math.floor(idealPerZone * 0.2)); // at least 20% of ideal
+
+        for (let pass = 0; pass < 300; pass++) {
+            // Find the lightest zone that's below minimum
+            let lightZi = -1, lightCount = Infinity;
+            for (let zi = 0; zi < zones.length; zi++) {
+                if (zones[zi].camperCount < MIN_ZONE_KIDS && zones[zi].camperCount < lightCount) {
+                    lightCount = zones[zi].camperCount; lightZi = zi;
+                }
+            }
+            if (lightZi < 0) break; // all zones above minimum
+
+            var lightZone = zones[lightZi];
+            // Find the nearest stop from a heavy zone (>ideal) that could move here
+            let bestSi2 = -1, bestFromZi2 = -1, bestFromLi2 = -1, bestDist2 = Infinity;
+
+            for (let zi = 0; zi < zones.length; zi++) {
+                if (zi === lightZi) continue;
+                // Only take from zones above ideal, and don't drop them below MIN
+                if (zones[zi].camperCount <= idealPerZone) continue;
+                if (zones[zi].stopIndices.length <= 1) continue;
+
+                for (let li = 0; li < zones[zi].stopIndices.length; li++) {
+                    var si2 = zones[zi].stopIndices[li];
+                    if (lightZone.camperCount + kidCount[si2] > lightZone.capacity) continue;
+                    if (zones[zi].camperCount - kidCount[si2] < MIN_ZONE_KIDS) continue;
+
+                    var distToLight = drivingDist(stops[si2].lat, stops[si2].lng,
+                        stops[lightZone._medoid].lat, stops[lightZone._medoid].lng);
+                    if (distToLight < bestDist2) {
+                        bestDist2 = distToLight; bestSi2 = si2; bestFromZi2 = zi; bestFromLi2 = li;
+                    }
+                }
+            }
+
+            if (bestFromZi2 < 0) break; // can't find a donor
+
+            zones[bestFromZi2].stopIndices.splice(bestFromLi2, 1);
+            zones[bestFromZi2].camperCount -= kidCount[bestSi2];
+            lightZone.stopIndices.push(bestSi2);
+            lightZone.camperCount += kidCount[bestSi2];
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // REBALANCE PHASE 4: Re-medoid — update medoids after all moves
+        // so route optimization uses the actual center of each zone.
+        // ══════════════════════════════════════════════════════════════════
+        for (let zi = 0; zi < zones.length; zi++) {
+            var z = zones[zi];
+            if (!z.stopIndices.length) continue;
+            var bestMed2 = z._medoid, bestTotal2 = Infinity;
+            for (const cand of z.stopIndices) {
+                var total2 = 0;
+                for (const other of z.stopIndices) {
+                    if (other !== cand) total2 += drivingDist(stops[cand].lat, stops[cand].lng, stops[other].lat, stops[other].lng);
+                }
+                if (total2 < bestTotal2) { bestTotal2 = total2; bestMed2 = cand; }
+            }
+            z._medoid = bestMed2;
+            // Update centroid
+            z.centroidLat = z.stopIndices.reduce((s, si) => s + stops[si].lat, 0) / z.stopIndices.length;
+            z.centroidLng = z.stopIndices.reduce((s, si) => s + stops[si].lng, 0) / z.stopIndices.length;
+        }
+
+        // Remove empty zones (can happen if all stops moved out)
+        var finalZones = zones.filter(z => z.stopIndices.length > 0);
+
         // Log summary
-        console.log('[Go] Zones: ' + zones.length + ' compact clusters, ' + totalKids + ' kids across ' + numStops + ' stops');
-        zones.forEach(z => {
-            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' + z.stopIndices.length + ' stops');
+        console.log('[Go] Zones: ' + finalZones.length + ' compact clusters, ' + totalKids + ' kids across ' + numStops + ' stops');
+        finalZones.forEach(z => {
+            var maxDist = 0;
+            z.stopIndices.forEach(si => {
+                var d = drivingDist(stops[si].lat, stops[si].lng, stops[z._medoid].lat, stops[z._medoid].lng);
+                if (d > maxDist) maxDist = d;
+            });
+            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' +
+                z.stopIndices.length + ' stops, spread: ' + (maxDist / 60).toFixed(0) + 'min');
         });
 
-        return zones;
+        return finalZones;
     }
 
     // =========================================================================
