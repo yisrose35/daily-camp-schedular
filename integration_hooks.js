@@ -521,7 +521,7 @@
 
     async function forceSyncToCloud() {
         log('Force sync requested');
-        
+
         if (_syncTimeout) {
             clearTimeout(_syncTimeout);
             _syncTimeout = null;
@@ -534,12 +534,19 @@
             return true;
         }
 
+        // Invalidate the in-memory cache so we re-read whatever was most
+        // recently written to localStorage. Callers like campistry_me.save()
+        // write directly via localStorage.setItem before invoking us, which
+        // leaves _localCache stale — pushing that stale snapshot to cloud
+        // (with a fresh timestamp) corrupts subsequent hydrations.
+        _localCache = null;
+
         const localSettings = getLocalSettings();
         const allChanges = { ...localSettings, ..._pendingChanges };
         _pendingChanges = allChanges;
-        
+
         await executeBatchSync();
-        
+
         return true;
     }
 
