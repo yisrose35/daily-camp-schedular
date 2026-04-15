@@ -3828,7 +3828,17 @@
             const pctPerShift = 100 / shifts.length;
             const pctBase = si * pctPerShift;
 
-            const shiftBusIds = shift.assignedBuses?.length ? shift.assignedBuses : vehicles.map(v => v.busId);
+            // Auto-clean orphaned bus IDs: if buses were recreated, shift may reference old IDs
+            let shiftBusIds = shift.assignedBuses?.length ? shift.assignedBuses : vehicles.map(v => v.busId);
+            if (shift.assignedBuses?.length) {
+                const validIds = shiftBusIds.filter(bid => vehicles.some(v => v.busId === bid));
+                if (validIds.length < shiftBusIds.length) {
+                    console.warn('[Go] Shift "' + (shift.label || shift.id) + '": ' + (shiftBusIds.length - validIds.length) + ' assigned buses no longer exist — using all buses');
+                    shift.assignedBuses = [];  // clear stale refs
+                    shiftBusIds = vehicles.map(v => v.busId);
+                    save();
+                }
+            }
             const shiftVehicles = shiftBusIds.map(bid => vehicles.find(v => v.busId === bid)).filter(Boolean);
             const shiftBuses = shiftBusIds.map(bid => D.buses.find(b => b.id === bid)).filter(Boolean);
 
@@ -3916,6 +3926,8 @@
             if (noStopStaff.length) console.log('[Go] Staff without stops (will suggest): ' + noStopStaff.map(s => s.name).join(', '));
 
             if (!allCampers.length || !shiftVehicles.length) {
+                if (!allCampers.length) console.error('[Go] Shift "' + (shift.label || shift.id) + '": 0 campers matched — skipping');
+                if (!shiftVehicles.length) console.error('[Go] Shift "' + (shift.label || shift.id) + '": 0 vehicles available — skipping');
                 allShiftResults.push({ shift, routes: [], camperCount: 0 });
                 continue;
             }
