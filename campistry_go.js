@@ -1167,7 +1167,18 @@
         try {
             setSyncStatus('syncing');
             saveModeData();
-            localStorage.setItem(STORE, JSON.stringify(D));
+            var json = JSON.stringify(D);
+            try {
+                localStorage.setItem(STORE, json);
+            } catch (quota) {
+                // Quota exceeded — strip savedRoutes from Go data and retry
+                console.warn('[Go] Save: quota exceeded, stripping routes to fit (' + (json.length / 1024).toFixed(0) + 'KB)');
+                var slim = JSON.parse(json);
+                delete slim.savedRoutes;
+                delete slim.arrival?.savedRoutes;
+                delete slim.dismissal?.savedRoutes;
+                localStorage.setItem(STORE, JSON.stringify(slim));
+            }
             // Sync to global settings without savedRoutes (too large for localStorage quota)
             if (typeof window.saveGlobalSettings === 'function') {
                 const lite = Object.assign({}, D);
