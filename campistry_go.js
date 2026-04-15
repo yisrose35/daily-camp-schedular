@@ -3732,6 +3732,14 @@
 
         // Validate we have buses and geocoded campers
         if (!D.buses.length) { toast('Add buses first', 'error'); return; }
+
+        // Auto-geocode any ungeocoded addresses before proceeding
+        const ungeocoded = Object.keys(D.addresses).filter(n => D.addresses[n]?.street && !D.addresses[n]?.geocoded);
+        if (ungeocoded.length > 0) {
+            console.log('[Go] Auto-geocoding ' + ungeocoded.length + ' ungeocoded addresses before route generation...');
+            await geocodeAll(false);
+        }
+
         let hasGeocodedCampers = false;
         Object.keys(roster).forEach(name => {
             const a = D.addresses[name];
@@ -3824,11 +3832,7 @@
                         counselor._lat = staffAddr.lat; counselor._lng = staffAddr.lng;
                     }
                 }
-                // Last resort: geocode fresh (slow)
-                if (!staffCoords) {
-                    staffCoords = await geocodeSingle(counselor.address);
-                    if (staffCoords) { counselor._lat = staffCoords.lat; counselor._lng = staffCoords.lng; }
-                }
+                // Skip if no coords found (already geocoded by auto-geocode step above)
                 if (!staffCoords) continue;
 
                 if (counselor.needsStop === 'yes') {
@@ -3861,10 +3865,6 @@
                         staffCoords = { lat: staffAddr.lat, lng: staffAddr.lng };
                         monitor._lat = staffAddr.lat; monitor._lng = staffAddr.lng;
                     }
-                }
-                if (!staffCoords) {
-                    staffCoords = await geocodeSingle(monitor.address);
-                    if (staffCoords) { monitor._lat = staffCoords.lat; monitor._lng = staffCoords.lng; }
                 }
                 if (!staffCoords) continue;
 
@@ -5480,9 +5480,7 @@
                     if (staffAddr?.geocoded && staffAddr.lat && staffAddr.lng) {
                         c._lat = staffAddr.lat; c._lng = staffAddr.lng;
                     } else {
-                        const geo = await geocodeSingle(c.address);
-                        if (geo) { c._lat = geo.lat; c._lng = geo.lng; }
-                        else { console.warn('[Go]   ⚠ Could not geocode: ' + c.name); continue; }
+                        continue; // Skip — address should have been geocoded in auto-geocode step
                     }
                 }
 
