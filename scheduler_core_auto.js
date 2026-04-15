@@ -5379,6 +5379,47 @@
             }
             if (rebalanceTotal > 0) log('[Phase3] ★ REBALANCE: fixed ' + rebalanceTotal + ' duration imbalances');
 
+            // ★ Diagnostic: scan for residual sub-dMin blocks after rebalance.
+            // If any remain, log why they couldn't be fixed — helps diagnose
+            // cases where the engine "gets stuck" with tiny activities.
+            for (var diag_i = 0; diag_i < allBunkIds.length; diag_i++) {
+                var diag_bunk = allBunkIds[diag_i];
+                var diag_tmpl = bunkTimelines[diag_bunk] || [];
+                for (var diag_j = 0; diag_j < diag_tmpl.length; diag_j++) {
+                    var diag_blk = diag_tmpl[diag_j];
+                    var diag_type = (diag_blk.type || '').toLowerCase();
+                    if (!['sport', 'slot'].includes(diag_type)) continue;
+                    if (diag_blk._fixed || isPhase0(diag_blk)) continue;
+                    var diag_dur = diag_blk.endMin - diag_blk.startMin;
+                    var diag_c = resolveConstraints(diag_blk.layer, diag_type, diag_blk);
+                    if (diag_dur >= diag_c.dMin) continue;
+                    // Found a sub-dMin block that rebalance couldn't fix. Diagnose.
+                    var diag_prev = diag_j > 0 ? diag_tmpl[diag_j-1] : null;
+                    var diag_next = diag_j < diag_tmpl.length - 1 ? diag_tmpl[diag_j+1] : null;
+                    var diag_prevInfo = diag_prev
+                        ? ((diag_prev.type || '') + '/' + (diag_prev.event || '') +
+                           ' ' + (diag_prev.endMin - diag_prev.startMin) + 'min' +
+                           (isPhase0(diag_prev) ? ' [pinned]' : ''))
+                        : 'none';
+                    var diag_nextInfo = diag_next
+                        ? ((diag_next.type || '') + '/' + (diag_next.event || '') +
+                           ' ' + (diag_next.endMin - diag_next.startMin) + 'min' +
+                           (isPhase0(diag_next) ? ' [pinned]' : ''))
+                        : 'none';
+                    var diag_prevSurplus = (diag_prev && !isPhase0(diag_prev))
+                        ? ((diag_prev.endMin - diag_prev.startMin) - resolveConstraints(diag_prev.layer, (diag_prev.type || '').toLowerCase(), diag_prev).dMin)
+                        : 'n/a';
+                    var diag_nextSurplus = (diag_next && !isPhase0(diag_next))
+                        ? ((diag_next.endMin - diag_next.startMin) - resolveConstraints(diag_next.layer, (diag_next.type || '').toLowerCase(), diag_next).dMin)
+                        : 'n/a';
+                    warn('[REBAL-STUCK] bunk=' + diag_bunk + ' ' + diag_type + '/' + (diag_blk.event || '') +
+                        ' ' + diag_dur + 'min (dMin=' + diag_c.dMin + ', deficit=' + (diag_c.dMin - diag_dur) + ')' +
+                        ' _source=' + (diag_blk._source || '?') +
+                        ' | prev=[' + diag_prevInfo + ', surplus=' + diag_prevSurplus + ']' +
+                        ' next=[' + diag_nextInfo + ', surplus=' + diag_nextSurplus + ']');
+                }
+            }
+
             // ★ v10.5: FINAL CONSTRAINT ENFORCEMENT SWEEP
             // Last-pass safety net: clamp every block to its dMin/dMax.
             // Catches any violations introduced by merge/absorb/extend passes.
