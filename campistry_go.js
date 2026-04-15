@@ -2450,16 +2450,35 @@
     }
 
     async function geocodeSingle(addr) {
-        // For single address string (e.g. camp address), try Census → ORS
+        // For single address string (e.g. camp address), try structured Census → freeform Census → ORS
         const cleanAddr = (addr || '').replace(/\s*[,#]\s*(apt|suite|ste|unit|fl|floor|rm|room)\.?\s*\S*/gi, '').replace(/\s+/g, ' ').trim();
         if (!cleanAddr) return null;
-        // 1. Census (free, unlimited)
+        // 0. Try structured Census first (much more accurate for "800 Rockaway Ave, Lakewood, NJ 08701")
+        try {
+            var parts = cleanAddr.split(/\s*,\s*/);
+            if (parts.length >= 3) {
+                var street = parts[0];
+                var city = parts[1];
+                var stZip = parts.slice(2).join(' ').trim();
+                var stMatch = stZip.match(/^([A-Za-z]{2})\s*(\d{5})?/);
+                var state = stMatch ? stMatch[1] : '';
+                var zip = stMatch && stMatch[2] ? stMatch[2] : '';
+                if (street && city && state) {
+                    var scored = await censusGeocodeScored(street, city, state, zip);
+                    if (scored && scored.lat && scored.lng) {
+                        console.log('[Go] geocodeSingle: structured Census matched ' + cleanAddr + ' → (' + scored.lat.toFixed(4) + ', ' + scored.lng.toFixed(4) + ')');
+                        return { lat: scored.lat, lng: scored.lng };
+                    }
+                }
+            }
+        } catch (e) { console.warn('[Go] geocodeSingle structured Census error:', e.message); }
+        // 1. Census freeform (fallback)
         try {
             const d = await censusGeocode(cleanAddr);
             if (d?.result?.addressMatches?.length) {
                 const m = d.result.addressMatches[0];
                 if (m.coordinates?.y && m.coordinates?.x) {
-                    console.log('[Go] geocodeSingle: Census matched ' + cleanAddr);
+                    console.log('[Go] geocodeSingle: Census freeform matched ' + cleanAddr);
                     return { lat: m.coordinates.y, lng: m.coordinates.x };
                 }
             }
