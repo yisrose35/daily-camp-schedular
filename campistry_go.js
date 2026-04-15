@@ -3643,176 +3643,175 @@
         console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, ' + numStops + ' stops');
 
         // =====================================================================
-        // DIRECTIONAL SWEEP — creates corridor/wedge zones radiating from
-        // camp.  Each bus gets a directional slice so stops are naturally
-        // "on the way" from camp to the farthest point and back.
+        // DIRECTIONAL CORRIDOR ZONES — two-level zone creation:
         //
-        // 1. Compute bearing from camp to each stop
-        // 2. Sort stops by angle (radial sweep)
-        // 3. Walk through sorted stops, filling each bus to capacity
-        // 4. Capacity rebalance + compactness passes follow
+        // Level 1: Divide stops into angular SECTORS from camp (pie slices).
+        //          The number of sectors is fewer than buses — dense sectors
+        //          get multiple buses, sparse sectors get one.
+        //
+        // Level 2: Within each sector, sort stops by distance from camp and
+        //          split into BUS-SIZED corridors (near/mid/far bands).
+        //          Each bus covers a distance band within its sector, so
+        //          stops are naturally "on the way" with no backtracking.
         // =====================================================================
 
         // ── Step 1: Compute bearing + distance from camp for each stop ──
-        const stopInfo = stops.map(function(s, i) {
+        var stopInfo = stops.map(function(s, i) {
             var dLat = s.lat - campLat;
             var dLng = (s.lng - campLng) * Math.cos(campLat * Math.PI / 180);
-            var angle = Math.atan2(dLng, dLat) * 180 / Math.PI; // 0=north, 90=east
+            var angle = Math.atan2(dLng, dLat) * 180 / Math.PI;
             if (angle < 0) angle += 360;
             var dist = haversineMi(campLat, campLng, s.lat, s.lng);
             return { idx: i, angle: angle, dist: dist, kids: kidCount[i] };
         });
 
-        // ── Step 2: Sort by angle ──
+        // ── Step 2: Create angular sectors ──
+        // Use fewer sectors than buses — aim for ~numBuses/2 to numBuses/1.5
+        // so dense sectors can get 2-3 buses each
         stopInfo.sort(function(a, b) { return a.angle - b.angle; });
 
-        // ── Step 3: Distribute into wedge zones by sweeping through angles ──
-        // Sort buses by capacity descending so bigger buses get denser areas
-        var busOrder = busCaps.map(function(cap, i) { return { i: i, cap: cap }; });
-        busOrder.sort(function(a, b) { return b.cap - a.cap; });
+        var avgCap = totalCap / numBuses;
+        // Determine sector count: we want sectors big enough to need 1-3 buses
+        var targetSectors = Math.max(4, Math.round(numBuses / 2));
+        var kidsPerSector = Math.ceil(totalKids / targetSectors);
 
-        // Target: each bus gets a proportional share of kids based on its capacity
-        var totalCap = busCaps.reduce(function(s, c) { return s + c; }, 0);
-        var busTargets = busOrder.map(function(b) {
-            return { busIdx: b.i, cap: b.cap, target: Math.round(totalKids * b.cap / totalCap), kids: 0, stopIndices: [] };
+        // Sweep through sorted stops, creating sector boundaries when a sector fills up
+        var sectors = []; // [{stopInfoIndices: [], totalKids: 0}]
+        var curSector = { stops: [], totalKids: 0 };
+        for (var si4 = 0; si4 < stopInfo.length; si4++) {
+            curSector.stops.push(stopInfo[si4]);
+            curSector.totalKids += stopInfo[si4].kids;
+
+            // Cut sector when it has enough kids (unless we'd create too many sectors)
+            var remainingKids = 0;
+            for (var rk = si4 + 1; rk < stopInfo.length; rk++) remainingKids += stopInfo[rk].kids;
+            var remainingSectors = targetSectors - sectors.length - 1;
+
+            if (curSector.totalKids >= kidsPerSector && remainingSectors > 0 && remainingKids > 0) {
+                sectors.push(curSector);
+                curSector = { stops: [], totalKids: 0 };
+            }
+        }
+        if (curSector.stops.length > 0) sectors.push(curSector);
+
+        console.log('[Go] Zone: ' + sectors.length + ' angular sectors from ' + numBuses + ' buses');
+
+        // ── Step 3: Assign buses to sectors proportionally ──
+        // Dense sectors get more buses
+        var busesAssigned = 0;
+        var sectorBusCounts = sectors.map(function(sec) {
+            var share = sec.totalKids / totalKids * numBuses;
+            return Math.max(1, Math.round(share)); // at least 1 bus per sector
         });
 
-        // Greedy sweep: assign each stop to the current bus until it hits target
-        var curBus = 0;
-        for (var si4 = 0; si4 < stopInfo.length; si4++) {
-            var info = stopInfo[si4];
-            // If current bus would exceed capacity, move to next
-            while (curBus < busTargets.length - 1 &&
-                   busTargets[curBus].kids + info.kids > busTargets[curBus].cap) {
-                curBus++;
+        // Adjust to match exact bus count
+        var totalAssigned = sectorBusCounts.reduce(function(s, c) { return s + c; }, 0);
+        while (totalAssigned > numBuses) {
+            // Remove from the sector with the most buses per kid
+            var worstIdx = -1, worstRatio = 0;
+            for (var wi = 0; wi < sectorBusCounts.length; wi++) {
+                if (sectorBusCounts[wi] > 1) {
+                    var r = sectorBusCounts[wi] / sectors[wi].totalKids;
+                    if (r > worstRatio) { worstRatio = r; worstIdx = wi; }
+                }
             }
-            // If current bus hit its target share, move to next (unless last)
-            if (curBus < busTargets.length - 1 &&
-                busTargets[curBus].kids >= busTargets[curBus].target &&
-                busTargets[curBus + 1].kids + info.kids <= busTargets[curBus + 1].cap) {
-                curBus++;
+            if (worstIdx < 0) break;
+            sectorBusCounts[worstIdx]--;
+            totalAssigned--;
+        }
+        while (totalAssigned < numBuses) {
+            // Add to the sector with the most kids per bus
+            var bestIdx = -1, bestRatio = 0;
+            for (var bi2 = 0; bi2 < sectorBusCounts.length; bi2++) {
+                var r2 = sectors[bi2].totalKids / sectorBusCounts[bi2];
+                if (r2 > bestRatio) { bestRatio = r2; bestIdx = bi2; }
             }
-            busTargets[curBus].stopIndices.push(info.idx);
-            busTargets[curBus].kids += info.kids;
+            if (bestIdx < 0) break;
+            sectorBusCounts[bestIdx]++;
+            totalAssigned++;
         }
 
-        console.log('[Go] Zone: directional sweep → ' + busTargets.filter(function(b) { return b.stopIndices.length > 0; }).length + ' wedges');
+        console.log('[Go] Zone: sector bus allocation: ' + sectorBusCounts.join(', ') +
+            ' (kids: ' + sectors.map(function(s) { return s.totalKids; }).join(', ') + ')');
 
-        // ── Step 4: Build zone objects ──
+        // ── Step 4: Within each sector, split by distance into bus corridors ──
+        var busOrder = busCaps.map(function(cap, i) { return { i: i, cap: cap }; });
+        busOrder.sort(function(a, b) { return b.cap - a.cap; });
+        var nextBusIdx = 0;
+
         var zones = [];
-        for (var bt = 0; bt < busTargets.length; bt++) {
-            var b = busTargets[bt];
-            if (!b.stopIndices.length) continue;
-            var bi = b.busIdx;
-            var cLat = b.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / b.stopIndices.length;
-            var cLng = b.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / b.stopIndices.length;
+        for (var secIdx = 0; secIdx < sectors.length; secIdx++) {
+            var sec = sectors[secIdx];
+            var numZoneBuses = sectorBusCounts[secIdx];
 
-            // Medoid: stop closest to centroid
-            var bestMedoid = b.stopIndices[0], bestMedDist = Infinity;
-            for (var mi = 0; mi < b.stopIndices.length; mi++) {
-                var sid = b.stopIndices[mi];
-                var md = haversineMi(cLat, cLng, stops[sid].lat, stops[sid].lng);
-                if (md < bestMedDist) { bestMedDist = md; bestMedoid = sid; }
-            }
+            // Sort stops in this sector by distance from camp (near → far)
+            sec.stops.sort(function(a, b) { return a.dist - b.dist; });
 
-            zones.push({
-                busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
-                busColor: buses[bi].color, stopIndices: b.stopIndices,
-                camperCount: b.kids, capacity: busCaps[bi],
-                centroidLat: cLat, centroidLng: cLng, _medoid: bestMedoid
-            });
-        }
+            if (numZoneBuses === 1) {
+                // Single bus — takes all stops in this sector
+                var bi3 = busOrder[nextBusIdx++].i;
+                var sIndices = sec.stops.map(function(s) { return s.idx; });
+                var sKids = sec.stops.reduce(function(s, st) { return s + st.kids; }, 0);
+                var cLat = sIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / sIndices.length;
+                var cLng = sIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / sIndices.length;
+                var med = sIndices[0], medD = Infinity;
+                sIndices.forEach(function(si) { var d = haversineMi(cLat, cLng, stops[si].lat, stops[si].lng); if (d < medD) { medD = d; med = si; } });
+                zones.push({
+                    busIdx: bi3, busId: buses[bi3].id, busName: buses[bi3].name,
+                    busColor: buses[bi3].color, stopIndices: sIndices,
+                    camperCount: sKids, capacity: busCaps[bi3],
+                    centroidLat: cLat, centroidLng: cLng, _medoid: med
+                });
+            } else {
+                // Multiple buses — split by distance bands
+                // Get the bus capacities for this sector
+                var sectorBuses = [];
+                for (var sb = 0; sb < numZoneBuses && nextBusIdx < busOrder.length; sb++) {
+                    sectorBuses.push(busOrder[nextBusIdx++]);
+                }
+                var sectorTotalCap = sectorBuses.reduce(function(s, b) { return s + b.cap; }, 0);
 
-        // ══════════════════════════════════════════════════════════════════
-        // CORRIDOR BALANCING — adjacent zones heading in similar directions
-        // should split by distance (near/far) rather than by angle.
-        // If two neighboring wedges overlap directionally and one is much
-        // heavier, merge their stops and re-split by distance from camp.
-        // ══════════════════════════════════════════════════════════════════
-        function zoneAvgAngle(z) {
-            var sum = 0;
-            z.stopIndices.forEach(function(si) {
-                var dLat = stops[si].lat - campLat;
-                var dLng = (stops[si].lng - campLng) * Math.cos(campLat * Math.PI / 180);
-                var a = Math.atan2(dLng, dLat) * 180 / Math.PI;
-                if (a < 0) a += 360;
-                sum += a;
-            });
-            return sum / z.stopIndices.length;
-        }
-        function angleDiff(a1, a2) {
-            var d = Math.abs(a1 - a2); return d > 180 ? 360 - d : d;
-        }
-
-        // Check all pairs of zones for directional overlap + imbalance
-        for (var cb = 0; cb < zones.length; cb++) {
-            for (var cb2 = cb + 1; cb2 < zones.length; cb2++) {
-                var z1 = zones[cb], z2 = zones[cb2];
-                if (!z1.stopIndices.length || !z2.stopIndices.length) continue;
-
-                var ang1 = zoneAvgAngle(z1), ang2 = zoneAvgAngle(z2);
-                // Only merge if heading in similar direction (<30° apart)
-                if (angleDiff(ang1, ang2) > 30) continue;
-
-                // Only merge if significantly imbalanced (>2:1 ratio)
-                var ratio = Math.max(z1.camperCount, z2.camperCount) / Math.max(1, Math.min(z1.camperCount, z2.camperCount));
-                if (ratio < 1.8) continue;
-
-                console.log('[Go] Corridor balance: merging ' + z1.busName + ' (' + z1.camperCount + ') + ' +
-                    z2.busName + ' (' + z2.camperCount + ') — similar direction (' +
-                    ang1.toFixed(0) + '° vs ' + ang2.toFixed(0) + '°), ratio ' + ratio.toFixed(1));
-
-                // Merge all stops and re-split by distance from camp
-                var allStops = z1.stopIndices.concat(z2.stopIndices);
-                allStops.sort(function(a, b) {
-                    return haversineMi(campLat, campLng, stops[a].lat, stops[a].lng) -
-                           haversineMi(campLat, campLng, stops[b].lat, stops[b].lng);
+                // Walk through stops near→far, distributing to buses
+                var bandZones = sectorBuses.map(function(b) {
+                    return { busIdx: b.i, cap: b.cap, target: Math.round(sec.totalKids * b.cap / sectorTotalCap), stopIndices: [], kids: 0 };
                 });
 
-                // Split: near half to bigger-capacity bus, far half to other
-                // Try to balance kid counts within capacity
-                var totalK = z1.camperCount + z2.camperCount;
-                var target1 = Math.round(totalK * z1.capacity / (z1.capacity + z2.capacity));
-                var nearStops = [], farStops = [], nearKids = 0;
-                for (var si5 = 0; si5 < allStops.length; si5++) {
-                    if (nearKids < target1 && nearKids + kidCount[allStops[si5]] <= z1.capacity) {
-                        nearStops.push(allStops[si5]);
-                        nearKids += kidCount[allStops[si5]];
-                    } else {
-                        farStops.push(allStops[si5]);
+                var curBand = 0;
+                for (var di = 0; di < sec.stops.length; di++) {
+                    var st = sec.stops[di];
+                    // Move to next band if current one has hit its target (unless last)
+                    while (curBand < bandZones.length - 1 &&
+                           bandZones[curBand].kids >= bandZones[curBand].target) {
+                        curBand++;
                     }
+                    // Also move if current band would exceed capacity
+                    while (curBand < bandZones.length - 1 &&
+                           bandZones[curBand].kids + st.kids > bandZones[curBand].cap) {
+                        curBand++;
+                    }
+                    bandZones[curBand].stopIndices.push(st.idx);
+                    bandZones[curBand].kids += st.kids;
                 }
 
-                // Assign near to z1, far to z2 (or swap if z2 has more capacity)
-                if (z1.capacity >= z2.capacity) {
-                    z1.stopIndices = nearStops;
-                    z1.camperCount = nearStops.reduce(function(s, si) { return s + kidCount[si]; }, 0);
-                    z2.stopIndices = farStops;
-                    z2.camperCount = farStops.reduce(function(s, si) { return s + kidCount[si]; }, 0);
-                } else {
-                    z2.stopIndices = nearStops;
-                    z2.camperCount = nearStops.reduce(function(s, si) { return s + kidCount[si]; }, 0);
-                    z1.stopIndices = farStops;
-                    z1.camperCount = farStops.reduce(function(s, si) { return s + kidCount[si]; }, 0);
-                }
-
-                // Update centroids and medoids
-                [z1, z2].forEach(function(z) {
-                    if (!z.stopIndices.length) return;
-                    z.centroidLat = z.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / z.stopIndices.length;
-                    z.centroidLng = z.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / z.stopIndices.length;
-                    var bm = z.stopIndices[0], bd = Infinity;
-                    z.stopIndices.forEach(function(si) {
-                        var d = haversineMi(z.centroidLat, z.centroidLng, stops[si].lat, stops[si].lng);
-                        if (d < bd) { bd = d; bm = si; }
+                // Build zone objects from bands
+                bandZones.forEach(function(bz) {
+                    if (!bz.stopIndices.length) return;
+                    var bi4 = bz.busIdx;
+                    var cL = bz.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / bz.stopIndices.length;
+                    var cN = bz.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / bz.stopIndices.length;
+                    var m = bz.stopIndices[0], mD = Infinity;
+                    bz.stopIndices.forEach(function(si) { var d = haversineMi(cL, cN, stops[si].lat, stops[si].lng); if (d < mD) { mD = d; m = si; } });
+                    zones.push({
+                        busIdx: bi4, busId: buses[bi4].id, busName: buses[bi4].name,
+                        busColor: buses[bi4].color, stopIndices: bz.stopIndices,
+                        camperCount: bz.kids, capacity: busCaps[bi4],
+                        centroidLat: cL, centroidLng: cN, _medoid: m
                     });
-                    z._medoid = bm;
                 });
-
-                console.log('[Go]   → ' + z1.busName + ': ' + z1.camperCount + ' (near), ' +
-                    z2.busName + ': ' + z2.camperCount + ' (far)');
             }
         }
+
+        console.log('[Go] Zone: ' + zones.length + ' directional corridors created');
 
         // ══════════════════════════════════════════════════════════════════
         // REBALANCE PHASE 1: Capacity — move stops out of over-cap zones
