@@ -3037,11 +3037,6 @@
                                ? window.getTravelForSpecialActivity(_travelLoc, false)
                                : null);
                 }
-                if (_travel && _travel.mode === 'extend') {
-                    opts.startMin -= _travel.preMin;
-                    opts.endMin += _travel.postMin;
-                }
-
                 // Snap all blocks to 5-min boundaries
                 opts.startMin = Math.round(opts.startMin / 5) * 5;
                 opts.endMin = Math.round(opts.endMin / 5) * 5;
@@ -3089,6 +3084,17 @@
                     // Final snap check
                     blockDur = opts.endMin - opts.startMin;
                     if (blockDur < 5) return null;
+                }
+
+                // ★ Extend mode: add travel time AFTER dMin/dMax enforcement
+                // so the activity duration is validated first, then travel is
+                // added on top.  e.g. 30min activity + 5pre + 10post = 45min slot.
+                if (_travel && _travel.mode === 'extend') {
+                    opts.startMin -= _travel.preMin;
+                    opts.endMin += _travel.postMin;
+                    // Re-snap to 5-min after travel extension
+                    opts.startMin = Math.round(opts.startMin / 5) * 5;
+                    opts.endMin = Math.round(opts.endMin / 5) * 5;
                 }
                 return {
                     startMin: opts.startMin, endMin: opts.endMin,

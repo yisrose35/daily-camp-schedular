@@ -2550,19 +2550,23 @@
         const inp = document.createElement('input');
         inp.type = 'file';
         inp.accept = '.csv,.tsv,.txt,.xlsx,.xls';
+        inp.style.display = 'none';
+        document.body.appendChild(inp);
         inp.onchange = function () {
-            if (!inp.files[0]) return;
+            if (!inp.files[0]) { inp.remove(); return; }
             const file = inp.files[0];
             const ext = file.name.split('.').pop().toLowerCase();
             if (ext === 'xlsx' || ext === 'xls') {
                 // Excel file — read as array buffer and parse
                 const r = new FileReader();
-                r.onload = e => { parseExcel(e.target.result); };
+                r.onload = e => { parseExcel(e.target.result); inp.remove(); };
+                r.onerror = () => { toast('Failed to read file', 'error'); inp.remove(); };
                 r.readAsArrayBuffer(file);
             } else {
                 // CSV/TSV/TXT — read as text
                 const r = new FileReader();
-                r.onload = e => { parseCsv(e.target.result); };
+                r.onload = e => { parseCsv(e.target.result); inp.remove(); };
+                r.onerror = () => { toast('Failed to read file', 'error'); inp.remove(); };
                 r.readAsText(file);
             }
         };
