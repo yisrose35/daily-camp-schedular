@@ -287,12 +287,19 @@
                 if (cloudResult?.success && cloudResult.data) {
                     const DAILY_KEY = 'campDailyData_v1';
                     const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                    // cloudResult.data.divisionTimes is the deserialized form (flat arrays
+                    // with _perBunkSlots as a custom property). JSON.stringify would strip
+                    // those custom props — re-serialize before stashing in localStorage.
+                    var _cloudDT = cloudResult.data.divisionTimes;
+                    if (_cloudDT && window.DivisionTimesSystem?.serialize) {
+                        _cloudDT = window.DivisionTimesSystem.serialize(_cloudDT);
+                    }
                     allData[dateKey] = {
                         ...allData[dateKey],
                         scheduleAssignments: cloudResult.data.scheduleAssignments || {},
                         leagueAssignments: cloudResult.data.leagueAssignments || {},
                         unifiedTimes: cloudResult.data.unifiedTimes || allData[dateKey]?.unifiedTimes || [],
-                        divisionTimes: cloudResult.data.divisionTimes || allData[dateKey]?.divisionTimes || {}
+                        divisionTimes: _cloudDT || allData[dateKey]?.divisionTimes || {}
                     };
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
                     log('☁️ Updated localStorage from cloud:', 
