@@ -60,8 +60,91 @@
     const _PLATFORM_KEYS = {
         ors: window.__CAMPISTRY_ORS_KEY__ || '',
         graphhopper: window.__CAMPISTRY_GH_KEY__ || '',
-        mapbox: window.__CAMPISTRY_MAPBOX_TOKEN__ || ''
+        mapbox: window.__CAMPISTRY_MAPBOX_TOKEN__ || '',
+        here: window.__CAMPISTRY_HERE_KEY__ || 'Z25s3ORcMjxXEPmBURvusJk4yxxx6O03yR3s-5Lmyo8'
     };
+    function getHereKey() { return D.setup.hereApiKey || _PLATFORM_KEYS.here; }
+
+    // =========================================================================
+    // INDEXEDDB PERSISTENT DISTANCE CACHE
+    // Stores driving time (seconds) between lat/lng pairs FOREVER so repeated
+    // route generations don't re-fetch from external APIs.
+    // Key: "lat1_5dec,lng1_5dec|lat2_5dec,lng2_5dec" (sorted bidirectional)
+    // =========================================================================
+    var _idb = null;
+    var _idbReady = null;
+    function _openIdb() {
+        if (_idbReady) return _idbReady;
+        _idbReady = new Promise(function(resolve) {
+            try {
+                var req = indexedDB.open('campistry_go_dist', 1);
+                req.onupgradeneeded = function(e) {
+                    var db = e.target.result;
+                    if (!db.objectStoreNames.contains('distances')) {
+                        db.createObjectStore('distances');
+                    }
+                };
+                req.onsuccess = function(e) { _idb = e.target.result; resolve(_idb); };
+                req.onerror = function() { console.warn('[Go] IDB open failed'); resolve(null); };
+            } catch (e) { console.warn('[Go] IDB unavailable:', e.message); resolve(null); }
+        });
+        return _idbReady;
+    }
+    async function _idbGet(key) {
+        var db = await _openIdb();
+        if (!db) return null;
+        return new Promise(function(resolve) {
+            try {
+                var tx = db.transaction('distances', 'readonly');
+                var req = tx.objectStore('distances').get(key);
+                req.onsuccess = function() { resolve(req.result); };
+                req.onerror = function() { resolve(null); };
+            } catch (e) { resolve(null); }
+        });
+    }
+    async function _idbPutBatch(entries) {
+        var db = await _openIdb();
+        if (!db || !entries.length) return;
+        return new Promise(function(resolve) {
+            try {
+                var tx = db.transaction('distances', 'readwrite');
+                var store = tx.objectStore('distances');
+                for (var i = 0; i < entries.length; i++) {
+                    store.put(entries[i].v, entries[i].k);
+                }
+                tx.oncomplete = function() { resolve(); };
+                tx.onerror = function() { resolve(); };
+            } catch (e) { resolve(); }
+        });
+    }
+    // Preload IDB cache into memory for fast lookups at start of route generation
+    async function _preloadIdbCache(coords) {
+        var db = await _openIdb();
+        if (!db) return 0;
+        var hits = 0;
+        var keys = [];
+        for (var i = 0; i < coords.length; i++) {
+            for (var j = i + 1; j < coords.length; j++) {
+                keys.push(_cacheKey(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng));
+            }
+        }
+        return new Promise(function(resolve) {
+            try {
+                var tx = db.transaction('distances', 'readonly');
+                var store = tx.objectStore('distances');
+                var remaining = keys.length;
+                if (!remaining) return resolve(0);
+                keys.forEach(function(k) {
+                    var req = store.get(k);
+                    req.onsuccess = function() {
+                        if (req.result != null) { _drivingCache.set(k, req.result); hits++; }
+                        if (--remaining === 0) resolve(hits);
+                    };
+                    req.onerror = function() { if (--remaining === 0) resolve(hits); };
+                });
+            } catch (e) { resolve(0); }
+        });
+    }
 
     // =========================================================================
     // STATE
@@ -184,16 +267,21 @@
      * Populate cache from an NxN duration matrix + its coordinate list.
      * coords = [{lat, lng}, ...], matrix = [[sec, ...], ...]
      */
-    function _cacheFromMatrix(coords, matrix) {
+    function _cacheFromMatrix(coords, matrix, persist) {
         if (!matrix || !coords) return;
+        var entries = [];
         for (let i = 0; i < coords.length; i++) {
             for (let j = i + 1; j < coords.length; j++) {
                 const val = matrix[i]?.[j];
                 if (val != null && val >= 0) {
                     _cacheSet(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng, val);
+                    if (persist !== false) {
+                        entries.push({ k: _cacheKey(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng), v: val });
+                    }
                 }
             }
         }
+        if (entries.length) _idbPutBatch(entries);
     }
 
     /**
@@ -237,9 +325,21 @@
     async function fetchDistanceMatrixCascade(coords) {
         const n = coords.length;
         if (n < 2) return null;
-        const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
 
-        // ── Primary: OSRM (free, no API key) ──
+        // ── Primary: HERE Maps Matrix Routing v8 (250k/month free) ──
+        const hereKey = getHereKey();
+        if (hereKey) {
+            try {
+                const hereResult = await fetchHereMatrix(coords, hereKey);
+                if (hereResult) {
+                    _cacheFromMatrix(coords, hereResult);
+                    return hereResult;
+                }
+            } catch (e) { console.warn('[Go] HERE Matrix failed:', e.message); }
+        }
+
+        // ── Secondary: OSRM (free, rate-limited) ──
+        const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
         const osrmResult = await fetchOSRMWithRetry(coordStr, 3);
         if (osrmResult) {
             _cacheFromMatrix(coords, osrmResult);
@@ -255,8 +355,49 @@
                 return (haversineMi(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng) * ROAD_FACTOR / avgSpeedMph) * 3600;
             })
         );
-        _cacheFromMatrix(coords, synthetic);
+        _cacheFromMatrix(coords, synthetic, false); // don't persist synthetic
         return synthetic;
+    }
+
+    /**
+     * fetchHereMatrix(coords, apiKey)
+     * Uses HERE Maps Matrix Routing v8 API.  Synchronous mode for small matrices.
+     * Docs: https://developer.here.com/documentation/matrix-routing-api/
+     */
+    async function fetchHereMatrix(coords, apiKey) {
+        const n = coords.length;
+        if (n < 2 || n > 100) return null; // sync mode limit is ~100x100
+        const body = {
+            origins: coords.map(function(c) { return { lat: c.lat, lng: c.lng }; }),
+            destinations: coords.map(function(c) { return { lat: c.lat, lng: c.lng }; }),
+            regionDefinition: { type: 'autoCircle', margin: 5000 },
+            matrixAttributes: ['travelTimes']
+        };
+        const url = 'https://matrix.router.hereapi.com/v8/matrix?apikey=' + encodeURIComponent(apiKey) + '&async=false';
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (!resp.ok) {
+            if (resp.status === 429) console.warn('[Go] HERE Matrix 429 rate limited');
+            else console.warn('[Go] HERE Matrix HTTP ' + resp.status);
+            return null;
+        }
+        const data = await resp.json();
+        if (!data.matrix?.travelTimes) return null;
+        // HERE returns flat array of size n*n, row-major
+        const travelTimes = data.matrix.travelTimes;
+        const matrix = [];
+        for (let i = 0; i < n; i++) {
+            const row = [];
+            for (let j = 0; j < n; j++) {
+                row.push(travelTimes[i * n + j] || 0);
+            }
+            matrix.push(row);
+        }
+        console.log('[Go] HERE Matrix: ' + n + 'x' + n + ' success');
+        return matrix;
     }
 
     /**
@@ -267,14 +408,17 @@
      */
     async function fetchLargeMatrixBatched(coords) {
         const n = coords.length;
-        if (n <= 25) return await fetchDistanceMatrixCascade(coords);
+        // With HERE Maps available, we can handle up to 100x100 in one call
+        const hasHere = !!getHereKey();
+        const singleCallLimit = hasHere ? 100 : 25;
+        if (n <= singleCallLimit) return await fetchDistanceMatrixCascade(coords);
 
-        console.log('[Go] Matrix: batching ' + n + ' points (>' + 25 + ')');
+        console.log('[Go] Matrix: batching ' + n + ' points (limit=' + singleCallLimit + ', HERE=' + hasHere + ')');
         const matrix = Array.from({ length: n }, () => new Array(n).fill(null));
         // Self-distances are always 0
         for (let i = 0; i < n; i++) matrix[i][i] = 0;
 
-        const CHUNK = 24; // leave 1 slot for pivot (coord[0])
+        const CHUNK = singleCallLimit - 1; // leave 1 slot for pivot (coord[0])
 
         // Strategy: for each batch, include coord[0] (pivot) + up to CHUNK others.
         // This gives us camp↔stop distances in every batch, plus stop↔stop for each chunk.
@@ -366,8 +510,24 @@
         // Build coord list: [camp, camper1, camper2, ...]
         const coords = [{ lat: campLat, lng: campLng }, ...camperCoords];
         console.log('[Go] Cache: pre-warming with ' + coords.length + ' points...');
+
+        // Phase 1: Preload from IndexedDB (persistent cache across sessions)
+        const beforeSize = _drivingCache.size;
+        const idbHits = await _preloadIdbCache(coords);
+        if (idbHits > 0) {
+            console.log('[Go] Cache: loaded ' + idbHits + ' pairs from IndexedDB (persistent cache)');
+        }
+
+        // Phase 2: Check if we need API calls at all
+        const totalPairs = coords.length * (coords.length - 1) / 2;
+        if (_drivingCache.size - beforeSize >= totalPairs) {
+            console.log('[Go] Cache: 100% hit from IndexedDB — no API calls needed!');
+            return;
+        }
+
+        // Phase 3: Fetch missing pairs from APIs
         await fetchLargeMatrixBatched(coords);
-        console.log('[Go] Cache: ' + _drivingCache.size + ' pairs cached');
+        console.log('[Go] Cache: ' + _drivingCache.size + ' pairs cached (persistent: ' + idbHits + ')');
     }
 
     // =========================================================================
