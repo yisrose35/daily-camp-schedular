@@ -3972,168 +3972,247 @@
         console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, ' + numStops + ' stops, totalCap: ' + totalCap);
 
         // =====================================================================
-        // CLARKE-WRIGHT SAVINGS ALGORITHM (1964)
+        // CAPACITATED K-MEDOIDS with K-means++ SEEDING
         //
-        // The industry-standard algorithm used by Routefinder, OR-Tools,
-        // and most commercial bus routing systems. It simultaneously builds
-        // zones AND routes through a savings-based merging process.
+        // Spatial clustering that produces compact, capacity-respecting zones.
+        // Every zone looks like a distinct neighborhood on the map.
         //
-        // 1. Start: every stop is its own "route" (camp→stop→camp)
-        // 2. Compute savings for every pair of stops:
-        //    savings(i,j) = dist(i,camp) + dist(camp,j) - dist(i,j)
-        //    High savings = stops are close together AND far from camp
-        // 3. Sort savings descending
-        // 4. For each savings pair, merge their routes if:
-        //    a) They're in different routes
-        //    b) Both are at the END of their respective routes (adjacent to camp)
-        //    c) Combined route doesn't exceed bus capacity
-        //    d) We haven't exceeded the bus count limit
-        // 5. The result is naturally compact, capacity-respecting zones
+        // A. K-means++ seeding — spread 13 seeds across stop density
+        // B. Capacitated assignment — each stop → nearest seed with capacity
+        // C. Lloyd's iteration — re-medoid, re-assign, until stable
+        // D. Compactness polish — swap misplaced stops to nearer zones
+        // E. Bus assignment — biggest cluster → biggest bus
         // =====================================================================
 
         var AVG_STOP_SEC = (D.setup.avgStopTime || 2) * 60;
+        var K = numBuses; // always produce exactly numBuses clusters
 
-        // ── Step 1: Initialize — every stop is its own route ──
-        // Each route is an array of stop indices, implicitly starting/ending at camp
-        var cwRoutes = [];
-        for (var ri = 0; ri < numStops; ri++) {
-            cwRoutes.push({ stopIndices: [ri], kids: kidCount[ri] });
+        // Helper: driving distance between two stops (cached via HERE Matrix)
+        function sd(a, b) { return drivingDist(stops[a].lat, stops[a].lng, stops[b].lat, stops[b].lng); }
+
+        // =====================================================================
+        // Stage A — K-means++ Seeding
+        // =====================================================================
+        var seeds = []; // array of stop indices serving as initial medoids
+
+        // First seed: stop FARTHEST from camp (covers the far-edge area)
+        var farthest = 0, farthestD = 0;
+        for (var si1 = 0; si1 < numStops; si1++) {
+            var dc = drivingDist(stops[si1].lat, stops[si1].lng, campLat, campLng);
+            if (dc > farthestD) { farthestD = dc; farthest = si1; }
         }
-        // Track which route each stop belongs to (for fast lookup)
-        var stopToRoute = new Array(numStops);
-        for (var sr = 0; sr < numStops; sr++) stopToRoute[sr] = sr;
+        seeds.push(farthest);
 
-        // ── Step 2: Compute savings for all pairs ──
-        console.log('[Go] Clarke-Wright: computing savings for ' + numStops + ' stops...');
-        var savings = [];
-        for (var i = 0; i < numStops; i++) {
-            var diCamp = drivingDist(stops[i].lat, stops[i].lng, campLat, campLng);
-            for (var j = i + 1; j < numStops; j++) {
-                var djCamp = drivingDist(stops[j].lat, stops[j].lng, campLat, campLng);
-                var dij = drivingDist(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
-                var sav = diCamp + djCamp - dij;
-                if (sav > 0) savings.push({ i: i, j: j, sav: sav });
+        // Remaining seeds: weighted probabilistic by squared distance to nearest existing seed
+        // (K-means++ — spreads seeds based on data density)
+        while (seeds.length < K && seeds.length < numStops) {
+            var minDist2 = new Array(numStops);
+            var totalWeight = 0;
+            for (var si2 = 0; si2 < numStops; si2++) {
+                if (seeds.indexOf(si2) >= 0) { minDist2[si2] = 0; continue; }
+                var best = Infinity;
+                for (var sj = 0; sj < seeds.length; sj++) {
+                    var d = sd(si2, seeds[sj]);
+                    if (d < best) best = d;
+                }
+                minDist2[si2] = best * best;
+                totalWeight += minDist2[si2];
             }
+            if (totalWeight <= 0) break;
+            // Weighted random pick: walk cumulative weights
+            var pick = Math.random() * totalWeight;
+            var cum = 0, chosen = -1;
+            for (var si3 = 0; si3 < numStops; si3++) {
+                cum += minDist2[si3];
+                if (cum >= pick && minDist2[si3] > 0) { chosen = si3; break; }
+            }
+            if (chosen < 0) break;
+            seeds.push(chosen);
         }
+        console.log('[Go] K-Medoids: ' + seeds.length + ' seeds placed via K-means++');
 
-        // ── Step 3: Sort savings descending ──
-        savings.sort(function(a, b) { return b.sav - a.sav; });
-        console.log('[Go] Clarke-Wright: ' + savings.length + ' savings pairs computed');
-
-        // ── Step 4: Merge routes greedily ──
-        // Sort bus capacities descending — we'll assign biggest buses to biggest routes
+        // =====================================================================
+        // Stage B — Capacitated Assignment
+        //
+        // Sort stops by distance to their nearest seed (closest-to-any-seed first).
+        // For each stop, try nearest seed, 2nd nearest, ... until one has capacity.
+        // Guarantees no capacity violation during growth.
+        //
+        // Capacity per cluster = max bus capacity (all buses get same cap for now).
+        // =====================================================================
         var sortedCaps = busCaps.slice().sort(function(a, b) { return b - a; });
-        // Maximum capacity we'll allow per route (use the largest bus)
-        var maxRouteCap = sortedCaps[0] || 46;
+        var maxClusterCap = sortedCaps[0] || 46;
 
-        var mergeCount = 0;
-        for (var si4 = 0; si4 < savings.length; si4++) {
-            var sv = savings[si4];
-            var ri1 = stopToRoute[sv.i];
-            var ri2 = stopToRoute[sv.j];
-
-            // CHECK 1: Must be in different routes
-            if (ri1 === ri2) continue;
-
-            var route1 = cwRoutes[ri1];
-            var route2 = cwRoutes[ri2];
-            if (!route1 || !route2) continue;
-
-            // CHECK 2: Both stops must be at the ENDS of their routes
-            // (adjacent to the depot = first or last stop in the route)
-            var iAtEnd = (route1.stopIndices[0] === sv.i || route1.stopIndices[route1.stopIndices.length - 1] === sv.i);
-            var jAtEnd = (route2.stopIndices[0] === sv.j || route2.stopIndices[route2.stopIndices.length - 1] === sv.j);
-            if (!iAtEnd || !jAtEnd) continue;
-
-            // CHECK 3: Combined capacity must not exceed max bus capacity
-            if (route1.kids + route2.kids > maxRouteCap) continue;
-
-            // CHECK 4: Don't merge if we'd end up with fewer routes than buses
-            // (we want to use all buses)
-            var activeRoutes = 0;
-            for (var cr = 0; cr < cwRoutes.length; cr++) {
-                if (cwRoutes[cr] && cwRoutes[cr].stopIndices.length > 0) activeRoutes++;
+        function assignAll() {
+            // For each stop, compute distances to all seeds, sort
+            var stopPrefs = [];
+            for (var si = 0; si < numStops; si++) {
+                var distances = [];
+                for (var ki = 0; ki < seeds.length; ki++) {
+                    distances.push({ k: ki, d: sd(si, seeds[ki]) });
+                }
+                distances.sort(function(a, b) { return a.d - b.d; });
+                stopPrefs.push({ stop: si, prefs: distances, nearestDist: distances[0].d });
             }
-            if (activeRoutes <= numBuses) break; // already at target bus count
+            // Sort by nearest-seed distance ascending (strongest preferences go first)
+            stopPrefs.sort(function(a, b) { return a.nearestDist - b.nearestDist; });
 
-            // MERGE: Connect the routes at the i-j junction
-            // Orient so i is at the end of route1 and j is at the start of route2
-            var merged;
-            if (route1.stopIndices[route1.stopIndices.length - 1] === sv.i && route2.stopIndices[0] === sv.j) {
-                merged = route1.stopIndices.concat(route2.stopIndices);
-            } else if (route1.stopIndices[0] === sv.i && route2.stopIndices[route2.stopIndices.length - 1] === sv.j) {
-                merged = route2.stopIndices.concat(route1.stopIndices);
-            } else if (route1.stopIndices[route1.stopIndices.length - 1] === sv.i && route2.stopIndices[route2.stopIndices.length - 1] === sv.j) {
-                merged = route1.stopIndices.concat(route2.stopIndices.slice().reverse());
-            } else {
-                merged = route1.stopIndices.slice().reverse().concat(route2.stopIndices);
+            // Assign
+            var clusters = [];
+            var clusterKids = [];
+            for (var c = 0; c < seeds.length; c++) { clusters.push([]); clusterKids.push(0); }
+
+            for (var ps = 0; ps < stopPrefs.length; ps++) {
+                var pref = stopPrefs[ps];
+                var placed = false;
+                for (var p = 0; p < pref.prefs.length; p++) {
+                    var ci = pref.prefs[p].k;
+                    if (clusterKids[ci] + kidCount[pref.stop] <= maxClusterCap) {
+                        clusters[ci].push(pref.stop);
+                        clusterKids[ci] += kidCount[pref.stop];
+                        placed = true;
+                        break;
+                    }
+                }
+                if (!placed) {
+                    // All clusters full — place in cluster with most remaining room
+                    var best = 0, bestRoom = -Infinity;
+                    for (var ci2 = 0; ci2 < clusters.length; ci2++) {
+                        var room = maxClusterCap - clusterKids[ci2];
+                        if (room > bestRoom) { bestRoom = room; best = ci2; }
+                    }
+                    clusters[best].push(pref.stop);
+                    clusterKids[best] += kidCount[pref.stop];
+                }
             }
-
-            // Apply merge
-            route1.stopIndices = merged;
-            route1.kids = route1.kids + route2.kids;
-
-            // Update stop-to-route mapping for all stops in route2
-            for (var um = 0; um < route2.stopIndices.length; um++) {
-                stopToRoute[route2.stopIndices[um]] = ri1;
-            }
-
-            // Nullify route2
-            cwRoutes[ri2] = null;
-            mergeCount++;
+            return { clusters: clusters, kids: clusterKids };
         }
 
-        // ── Step 5: Collect active routes, assign buses ──
-        var activeRoutesList = [];
-        for (var ar = 0; ar < cwRoutes.length; ar++) {
-            if (cwRoutes[ar] && cwRoutes[ar].stopIndices.length > 0) {
-                activeRoutesList.push(cwRoutes[ar]);
+        // =====================================================================
+        // Stage C — Lloyd's Iteration
+        // =====================================================================
+        function recomputeMedoid(members) {
+            if (!members.length) return -1;
+            if (members.length === 1) return members[0];
+            var bestMed = members[0], bestTotal = Infinity;
+            for (var m = 0; m < members.length; m++) {
+                var total = 0;
+                for (var o = 0; o < members.length; o++) {
+                    if (m !== o) total += sd(members[m], members[o]);
+                }
+                if (total < bestTotal) { bestTotal = total; bestMed = members[m]; }
             }
+            return bestMed;
         }
 
-        // Sort routes by kid count descending, assign biggest bus to biggest route
-        activeRoutesList.sort(function(a, b) { return b.kids - a.kids; });
+        var assignment = assignAll();
+        var prevSeeds = seeds.slice();
+
+        for (var iter = 0; iter < 20; iter++) {
+            // Recompute each seed as its cluster's medoid
+            var changed = false;
+            for (var ki3 = 0; ki3 < seeds.length; ki3++) {
+                var newMed = recomputeMedoid(assignment.clusters[ki3]);
+                if (newMed >= 0 && newMed !== seeds[ki3]) {
+                    seeds[ki3] = newMed;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+            assignment = assignAll();
+
+            // Check assignment stability
+            var stable = true;
+            for (var ks = 0; ks < seeds.length; ks++) {
+                if (seeds[ks] !== prevSeeds[ks]) { stable = false; break; }
+            }
+            if (stable) break;
+            prevSeeds = seeds.slice();
+        }
+        console.log('[Go] K-Medoids: converged in ' + (iter + 1) + ' iterations');
+
+        // =====================================================================
+        // Stage D — Compactness Polish
+        //
+        // For each stop, check every other cluster's medoid. If another is
+        // significantly closer (>10%) AND swap doesn't exceed capacity, move it.
+        // =====================================================================
+        var clusters = assignment.clusters.map(function(c) { return c.slice(); });
+        var clusterKids = assignment.kids.slice();
+
+        var polishSwaps = 0;
+        for (var polishIter = 0; polishIter < 100; polishIter++) {
+            var anySwap = false;
+            for (var ownC = 0; ownC < clusters.length; ownC++) {
+                for (var mIdx = 0; mIdx < clusters[ownC].length; mIdx++) {
+                    var si5 = clusters[ownC][mIdx];
+                    var distOwn = sd(si5, seeds[ownC]);
+                    // Find best other cluster
+                    var bestOther = -1, bestOtherDist = Infinity;
+                    for (var otherC = 0; otherC < clusters.length; otherC++) {
+                        if (otherC === ownC) continue;
+                        if (clusterKids[otherC] + kidCount[si5] > maxClusterCap) continue;
+                        var dOther = sd(si5, seeds[otherC]);
+                        if (dOther < bestOtherDist) { bestOtherDist = dOther; bestOther = otherC; }
+                    }
+                    // Swap if other is significantly closer (>10%)
+                    if (bestOther >= 0 && bestOtherDist < distOwn * 0.9) {
+                        clusters[ownC].splice(mIdx, 1);
+                        clusterKids[ownC] -= kidCount[si5];
+                        clusters[bestOther].push(si5);
+                        clusterKids[bestOther] += kidCount[si5];
+                        anySwap = true;
+                        polishSwaps++;
+                        break; // restart outer loop with updated clusters
+                    }
+                }
+                if (anySwap) break;
+            }
+            if (!anySwap) break;
+
+            // Re-medoid affected clusters
+            for (var kk = 0; kk < seeds.length; kk++) {
+                seeds[kk] = recomputeMedoid(clusters[kk]) || seeds[kk];
+            }
+        }
+        console.log('[Go] K-Medoids: ' + polishSwaps + ' polish swaps for compactness');
+
+        // =====================================================================
+        // Stage E — Bus Assignment
+        //
+        // Sort clusters by kid count descending, buses by capacity descending.
+        // Pair biggest with biggest.
+        // =====================================================================
+        var clusterList = [];
+        for (var cli = 0; cli < clusters.length; cli++) {
+            if (clusters[cli].length > 0) {
+                clusterList.push({ stopIndices: clusters[cli], kids: clusterKids[cli], medoid: seeds[cli] });
+            }
+        }
+        clusterList.sort(function(a, b) { return b.kids - a.kids; });
+
         var busOrder = busCaps.map(function(cap, i) { return { i: i, cap: cap }; });
         busOrder.sort(function(a, b) { return b.cap - a.cap; });
 
-        console.log('[Go] Clarke-Wright: ' + mergeCount + ' merges → ' + activeRoutesList.length + ' routes');
-
-        // ── Step 6: Build zone objects ──
+        // =====================================================================
+        // Stage F — Build Zone Objects (expected format)
+        // =====================================================================
         var zones = [];
-        for (var zi = 0; zi < activeRoutesList.length && zi < busOrder.length; zi++) {
-            var route = activeRoutesList[zi];
+        for (var zi = 0; zi < clusterList.length && zi < busOrder.length; zi++) {
+            var cluster = clusterList[zi];
             var bi = busOrder[zi].i;
-            var cLat = route.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / route.stopIndices.length;
-            var cLng = route.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / route.stopIndices.length;
-            var med = route.stopIndices[0], medD = Infinity;
-            route.stopIndices.forEach(function(si) {
-                var d = haversineMi(cLat, cLng, stops[si].lat, stops[si].lng);
-                if (d < medD) { medD = d; med = si; }
-            });
+            var cLat = cluster.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / cluster.stopIndices.length;
+            var cLng = cluster.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / cluster.stopIndices.length;
+
             zones.push({
                 busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
-                busColor: buses[bi].color, stopIndices: route.stopIndices,
-                camperCount: route.kids, capacity: busCaps[bi],
-                centroidLat: cLat, centroidLng: cLng, _medoid: med
+                busColor: buses[bi].color, stopIndices: cluster.stopIndices,
+                camperCount: cluster.kids, capacity: busCaps[bi],
+                centroidLat: cLat, centroidLng: cLng, _medoid: cluster.medoid
             });
         }
 
-        // If there are more routes than buses, absorb extras into nearest zone
-        for (var ex = busOrder.length; ex < activeRoutesList.length; ex++) {
-            var extra = activeRoutesList[ex];
-            // Find nearest zone with capacity
-            var bestZi = 0, bestZd = Infinity;
-            for (var ezi = 0; ezi < zones.length; ezi++) {
-                if (zones[ezi].camperCount + extra.kids > zones[ezi].capacity) continue;
-                var ed = drivingDist(stops[extra.stopIndices[0]].lat, stops[extra.stopIndices[0]].lng,
-                    zones[ezi].centroidLat, zones[ezi].centroidLng);
-                if (ed < bestZd) { bestZd = ed; bestZi = ezi; }
-            }
-            extra.stopIndices.forEach(function(si) { zones[bestZi].stopIndices.push(si); });
-            zones[bestZi].camperCount += extra.kids;
-        }
-
-        // ── Step 7: Cross-route minimax time balancing ──
+        // Route time estimator (for logging + downstream cross-route exchange)
         function estimateRouteTime(idxArr) {
             if (!idxArr.length) return 0;
             var sorted = idxArr.slice().sort(function(a, b) {
@@ -4148,54 +4227,25 @@
             return t;
         }
 
-        for (var tp = 0; tp < 150; tp++) {
-            var zTimes = zones.map(function(z) { return estimateRouteTime(z.stopIndices); });
-            var gMax = Math.max.apply(null, zTimes);
-            var slowZi = zTimes.indexOf(gMax);
-            if (zones[slowZi].stopIndices.length <= 1) break;
-
-            var bestMv = null, bestNewMax = gMax;
-            for (var mli = 0; mli < zones[slowZi].stopIndices.length; mli++) {
-                var msi = zones[slowZi].stopIndices[mli];
-                for (var mti = 0; mti < zones.length; mti++) {
-                    if (mti === slowZi) continue;
-                    if (zones[mti].camperCount + kidCount[msi] > zones[mti].capacity) continue;
-                    var dStops = zones[slowZi].stopIndices.filter(function(_, idx) { return idx !== mli; });
-                    var rStops = zones[mti].stopIndices.concat([msi]);
-                    var newMax = Math.max(estimateRouteTime(dStops), estimateRouteTime(rStops));
-                    for (var oi = 0; oi < zTimes.length; oi++) { if (oi !== slowZi && oi !== mti && zTimes[oi] > newMax) newMax = zTimes[oi]; }
-                    if (newMax < bestNewMax) { bestNewMax = newMax; bestMv = { li: mli, to: mti, si: msi }; }
-                }
-            }
-            if (!bestMv) break;
-            zones[slowZi].stopIndices.splice(bestMv.li, 1);
-            zones[slowZi].camperCount -= kidCount[bestMv.si];
-            zones[bestMv.to].stopIndices.push(bestMv.si);
-            zones[bestMv.to].camperCount += kidCount[bestMv.si];
-        }
-
-        // Remove empty zones, update medoids
-        var finalZones = zones.filter(function(z) { return z.stopIndices.length > 0; });
-        finalZones.forEach(function(z) {
-            z.centroidLat = z.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / z.stopIndices.length;
-            z.centroidLng = z.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / z.stopIndices.length;
-            var bm = z.stopIndices[0], bd = Infinity;
-            z.stopIndices.forEach(function(si) { var d = haversineMi(z.centroidLat, z.centroidLng, stops[si].lat, stops[si].lng); if (d < bd) { bd = d; bm = si; } });
-            z._medoid = bm;
-        });
-
         // Log summary
-        var finalTimes = finalZones.map(function(z) { return estimateRouteTime(z.stopIndices); });
-        console.log('[Go] Clarke-Wright: ' + finalZones.length + ' zones, ' + totalKids + ' kids, ' + numStops + ' stops');
-        finalZones.forEach(function(z, i) {
+        var finalTimes = zones.map(function(z) { return estimateRouteTime(z.stopIndices); });
+        console.log('[Go] K-Medoids: ' + zones.length + ' zones, ' + totalKids + ' kids, ' + numStops + ' stops');
+        zones.forEach(function(z, i) {
             var tm = (finalTimes[i] / 60).toFixed(0);
             var fill = Math.round(z.camperCount / z.capacity * 100);
-            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' (' + fill + '%), ' + z.stopIndices.length + ' stops, ~' + tm + 'min');
+            // Zone spread: max distance from medoid to any stop (compactness metric)
+            var maxSpread = 0;
+            z.stopIndices.forEach(function(si) {
+                var d = sd(si, z._medoid);
+                if (d > maxSpread) maxSpread = d;
+            });
+            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' (' + fill + '%), ' +
+                z.stopIndices.length + ' stops, ~' + tm + 'min, spread ' + (maxSpread / 60).toFixed(0) + 'min');
         });
         var maxT = Math.max.apply(null, finalTimes), avgT = finalTimes.reduce(function(s, t) { return s + t; }, 0) / finalTimes.length;
         console.log('[Go] Route time: max ' + (maxT / 60).toFixed(0) + 'min, avg ' + (avgT / 60).toFixed(0) + 'min');
 
-        return finalZones;
+        return zones;
     }
 
     // =========================================================================
@@ -4416,73 +4466,16 @@
             const key = getApiKey();
 
             // ══════════════════════════════════════════════════════════════
-            // PRIMARY: HERE Tour Planning — professional minimax VRP solver
+            // PRIMARY: Clarke-Wright Savings — creates compact geographic zones
+            //
+            // HERE Tour Planning was disabled because it globally minimizes total
+            // fleet time, which stretches individual routes across town. Our
+            // goal is compact single-area zones per bus — Clarke-Wright does
+            // this naturally by merging nearby stops that save the most time.
             // ══════════════════════════════════════════════════════════════
-            let greedyZones = null;
-            let hereTourSuccess = false;
-            if (getHereKey() && allStops.length > 0 && shiftVehicles.length > 0) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': HERE Tour Planning (minimax solver)...', pctBase + 25);
-                toast('Solving with HERE Tour Planning...');
-                const tpResult = await fetchHereTourPlan(allStops, shiftVehicles, { lat: campLat, lng: campLng }, {
-                    isArrival: isArrival,
-                    serviceTimeSec: serviceTime
-                });
-                if (tpResult && tpResult.routes.length) {
-                    // Convert HERE Tour Planning output into our zone format
-                    greedyZones = tpResult.routes.map(function(tr) {
-                        const v = shiftVehicles[tr.vehicleIdx];
-                        if (!v) return null;
-                        const busObj = shiftBuses.find(function(b) { return b.id === v.busId; });
-                        return {
-                            busIdx: tr.vehicleIdx,
-                            busId: v.busId,
-                            busName: v.name,
-                            busColor: v.color,
-                            stopIndices: tr.stopIndices,
-                            camperCount: tr.stopIndices.reduce(function(s, si) { return s + allStops[si].campers.length; }, 0),
-                            capacity: v.capacity,
-                            centroidLat: tr.stopIndices.length ? tr.stopIndices.reduce(function(s, si) { return s + allStops[si].lat; }, 0) / tr.stopIndices.length : campLat,
-                            centroidLng: tr.stopIndices.length ? tr.stopIndices.reduce(function(s, si) { return s + allStops[si].lng; }, 0) / tr.stopIndices.length : campLng,
-                            _medoid: tr.stopIndices[0] || 0,
-                            _hereSolved: true
-                        };
-                    }).filter(function(z) { return z && z.stopIndices.length > 0; });
-
-                    // Handle unassigned stops — insert into closest zone with capacity
-                    if (tpResult.unassigned && tpResult.unassigned.length) {
-                        console.warn('[Go] HERE Tour Planning: ' + tpResult.unassigned.length + ' unassigned — inserting');
-                        tpResult.unassigned.forEach(function(si) {
-                            const stop = allStops[si];
-                            if (!stop) return;
-                            let bestZi = 0, bestD = Infinity;
-                            greedyZones.forEach(function(z, zi) {
-                                if (z.camperCount + stop.campers.length > z.capacity) return;
-                                const d = haversineMi(stop.lat, stop.lng, z.centroidLat, z.centroidLng);
-                                if (d < bestD) { bestD = d; bestZi = zi; }
-                            });
-                            if (greedyZones[bestZi]) {
-                                greedyZones[bestZi].stopIndices.push(si);
-                                greedyZones[bestZi].camperCount += stop.campers.length;
-                            }
-                        });
-                    }
-
-                    hereTourSuccess = true;
-                    console.log('[Go] HERE Tour Planning: ' + greedyZones.length + ' optimized zones');
-                    greedyZones.forEach(function(z) {
-                        console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' + z.stopIndices.length + ' stops');
-                    });
-                    toast(greedyZones.length + ' zones from HERE Tour Planning — routing...');
-                }
-            }
-
-            // ── Step 3: FALLBACK — Clarke-Wright zone builder ──
-            if (!hereTourSuccess) {
-                console.log('[Go] Falling back to Clarke-Wright Savings');
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': building zones (Clarke-Wright)...', pctBase + 30);
-                greedyZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
-                toast(greedyZones.length + ' bus zones created — optimizing routes...');
-            }
+            showProgress((shift.label || 'Shift ' + (si + 1)) + ': building zones (Clarke-Wright)...', pctBase + 30);
+            const greedyZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
+            toast(greedyZones.length + ' bus zones created — optimizing routes...');
 
             // ── Step 4: Route each zone (VROOM TSP → directional sort) ──
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing routes...', pctBase + 50);
@@ -4569,9 +4562,12 @@
                 });
             }
 
-            // ── Step 5: Cross-route exchange (minimize max route time) ──
-            // Industry ALNS relocate operator: move stops from the slowest
-            // route to other routes if it reduces the global worst time.
+            // ── Step 5: Conservative cross-route exchange ──
+            // Only move a stop if:
+            //   (a) reduces max route time by ≥5%
+            //   (b) target route's centroid is within 2 miles of the stop
+            //   (c) source route keeps ≥5 stops
+            // Prevents pulling stops away from their natural geographic zone.
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': cross-route balancing...', pctBase + 80);
 
             function _estRouteTime(routeObj) {
@@ -4583,19 +4579,43 @@
                 return t;
             }
 
+            function _routeCentroid(routeObj) {
+                if (!routeObj.stops.length) return { lat: campLat, lng: campLng };
+                var la = routeObj.stops.reduce(function(s, st) { return s + st.lat; }, 0) / routeObj.stops.length;
+                var ln = routeObj.stops.reduce(function(s, st) { return s + st.lng; }, 0) / routeObj.stops.length;
+                return { lat: la, lng: ln };
+            }
+
             var crossMoves = 0;
-            for (var xp = 0; xp < 150; xp++) {
+            var bestNewGlobalMax = 0;
+            var MIN_STOPS_PER_ROUTE = 5;      // never drop source below this
+            var MAX_TARGET_RADIUS_MI = 2.0;   // stop must be within 2mi of target centroid
+            var MIN_IMPROVEMENT_PCT = 0.05;   // move must reduce max time by ≥5%
+
+            for (var xp = 0; xp < 100; xp++) {
                 var rTimes = routes.map(_estRouteTime);
                 var globalMax = Math.max.apply(null, rTimes);
                 var slowRi = rTimes.indexOf(globalMax);
-                if (routes[slowRi].stops.length <= 1) break;
+                if (routes[slowRi].stops.length <= MIN_STOPS_PER_ROUTE) break;
 
-                var bestXMove = null, bestNewGlobalMax = globalMax;
+                // Pre-compute centroids of all receiving routes
+                var centroids = routes.map(_routeCentroid);
+
+                var bestXMove = null;
+                var bestImprovement = globalMax * (1 - MIN_IMPROVEMENT_PCT); // must improve by at least 5%
+
                 for (var xli = 0; xli < routes[slowRi].stops.length; xli++) {
                     var xStop = routes[slowRi].stops[xli];
                     for (var xti = 0; xti < routes.length; xti++) {
                         if (xti === slowRi) continue;
                         if (routes[xti].camperCount + xStop.campers.length > routes[xti]._cap) continue;
+
+                        // GUARD A: target route's centroid must be within 2mi of the stop
+                        var centroidDist = haversineMi(xStop.lat, xStop.lng, centroids[xti].lat, centroids[xti].lng);
+                        if (centroidDist > MAX_TARGET_RADIUS_MI) continue;
+
+                        // GUARD B: source route must keep ≥5 stops after move
+                        if (routes[slowRi].stops.length - 1 < MIN_STOPS_PER_ROUTE) continue;
 
                         // Estimate times after move
                         var donorStops2 = routes[slowRi].stops.filter(function(_, i) { return i !== xli; });
@@ -4607,7 +4627,9 @@
 
                         var newMax = Math.max(newDonorTime, newRecvTime);
                         for (var oi = 0; oi < rTimes.length; oi++) { if (oi !== slowRi && oi !== xti && rTimes[oi] > newMax) newMax = rTimes[oi]; }
-                        if (newMax < bestNewGlobalMax) { bestNewGlobalMax = newMax; bestXMove = { fromRi: slowRi, fromLi: xli, toRi: xti, stop: xStop }; }
+
+                        // GUARD C: must reduce max by ≥5%
+                        if (newMax < bestImprovement) { bestImprovement = newMax; bestNewGlobalMax = newMax; bestXMove = { fromRi: slowRi, fromLi: xli, toRi: xti, stop: xStop }; }
                     }
                 }
                 if (!bestXMove) break;
@@ -4619,7 +4641,8 @@
                 routes[bestXMove.toRi].stops.forEach(function(s, i) { s.stopNum = i + 1; });
                 crossMoves++;
             }
-            if (crossMoves > 0) console.log('[Go] Cross-route: ' + crossMoves + ' moves, max time: ' + (bestNewGlobalMax / 60).toFixed(0) + 'min');
+            if (crossMoves > 0) console.log('[Go] Cross-route (conservative): ' + crossMoves + ' moves, max time: ' + (bestNewGlobalMax / 60).toFixed(0) + 'min');
+            else console.log('[Go] Cross-route (conservative): 0 moves — zones kept compact');
 
             // Ensure all buses have route entries
             shiftVehicles.forEach(v => {
