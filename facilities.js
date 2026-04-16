@@ -1622,22 +1622,32 @@ function saveSpecialData(saData) {
     const idx = allSpecials.findIndex(s => s.name === saData.name);
     if (idx >= 0) allSpecials[idx] = saData;
     else allSpecials.push(saData);
-    window.saveGlobalSpecialActivities?.(allSpecials);
 
-    // ★ FIX: saveGlobalSpecialActivities writes to localStorage but does NOT
-    //   update special_activities.js's in-memory cache. getAllSpecialActivities
-    //   only re-reads from storage when both in-memory arrays are empty
-    //   (special_activities.js:1683), so freshly-added activities or fresh
-    //   default objects never enter the cache. The next render then falls
-    //   back to a new default and any setting just saved (duration, etc.)
-    //   appears to vanish. Sync the in-memory cache so subsequent reads see
-    //   the saved values.
+    // ★ FIX (reload persistence): Special activities live in TWO localStorage
+    //   keys — root `specialActivities` AND nested `app1.specialActivities`.
+    //   cloud_sync_helpers.js's saveGlobalSpecialActivities writes both, but
+    //   app1.js loads later and overrides that function with a version that
+    //   ONLY writes app1.specialActivities. Every reader checks the root key
+    //   first (special_activities.js:289/1686, cloud_sync_helpers.js:124,
+    //   facilities.js:109), so on reload the stale root snapshot wins and any
+    //   setting just saved (duration etc.) appears to vanish. Write both keys
+    //   directly here to guarantee both are in sync.
+    const settings = window.loadGlobalSettings?.() || {};
+    if (!settings.app1) settings.app1 = {};
+    settings.app1.specialActivities = allSpecials;
+    window.saveGlobalSettings?.('app1', settings.app1);
+    window.saveGlobalSettings?.('specialActivities', allSpecials);
+
+    // ★ FIX (in-memory cache): saveGlobalSettings writes localStorage but
+    //   does NOT update special_activities.js's in-memory cache.
+    //   getAllSpecialActivities only re-reads from storage when both
+    //   in-memory arrays are empty (special_activities.js:1683), so
+    //   freshly-added activities never enter the cache. Without this sync,
+    //   switching to another activity re-renders from stale memory.
     if (window.specialActivities !== undefined) {
         window.specialActivities = allSpecials.filter(s => !s.rainyDayExclusive && !s.rainyDayOnly);
     }
     if (typeof window.refreshSpecialActivitiesFromStorage === 'function') {
-        // Also fire the official refresh — when the Special Activities tab
-        // has been initialized, this re-renders its own UI in case it's open.
         window.refreshSpecialActivitiesFromStorage();
     }
 
