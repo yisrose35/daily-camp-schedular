@@ -4178,6 +4178,76 @@
         console.log('[Go] K-Medoids: ' + polishSwaps + ' polish swaps for compactness');
 
         // =====================================================================
+        // Stage D+ — LOAD BALANCE
+        //
+        // After compactness polish, if any cluster is too small (<60% of
+        // target), pull stops from the heaviest nearby cluster. This fixes
+        // the outlier problem: K-means seeds isolated far stops which become
+        // tiny clusters, leaving nearby heavy clusters to handle too much.
+        //
+        // We relax the compactness rule here: a stop can move if it's within
+        // 1.5× as close to the light cluster as to its current (heavy) one.
+        // This lets us pull Bus 8's SW tail into Bus 13/9's area.
+        // =====================================================================
+        var targetPerCluster = Math.ceil(totalKids / seeds.length);
+        var minLoad = Math.max(10, Math.floor(targetPerCluster * 0.6));
+        var maxLoad = Math.min(maxClusterCap, Math.ceil(targetPerCluster * 1.15));
+
+        var lbMoves = 0;
+        for (var lbPass = 0; lbPass < 50; lbPass++) {
+            // Find lightest cluster below minLoad
+            var lightC = -1, lightCount = Infinity;
+            for (var lc = 0; lc < clusters.length; lc++) {
+                if (clusterKids[lc] < minLoad && clusterKids[lc] < lightCount) {
+                    lightCount = clusterKids[lc]; lightC = lc;
+                }
+            }
+            if (lightC < 0) break; // all clusters adequately loaded
+
+            // Find heaviest donor cluster (>target) with stops that would
+            // reasonably fit with the light cluster
+            var bestDonor = -1, bestDonorLi = -1;
+            var bestDonorScore = Infinity;
+            var lightMedoid = seeds[lightC];
+
+            for (var hc = 0; hc < clusters.length; hc++) {
+                if (hc === lightC) continue;
+                if (clusterKids[hc] <= targetPerCluster) continue; // donor must be above target
+
+                for (var li = 0; li < clusters[hc].length; li++) {
+                    var cand = clusters[hc][li];
+                    // Won't fit in light cluster?
+                    if (clusterKids[lightC] + kidCount[cand] > maxLoad) continue;
+                    // Don't strip donor below target
+                    if (clusterKids[hc] - kidCount[cand] < targetPerCluster - 2) continue;
+
+                    var distToLight = sd(cand, lightMedoid);
+                    var distToDonor = sd(cand, seeds[hc]);
+                    // Within 1.5× as close to light as to donor — reasonable transfer
+                    if (distToLight < distToDonor * 1.5 && distToLight < bestDonorScore) {
+                        bestDonorScore = distToLight;
+                        bestDonor = hc;
+                        bestDonorLi = li;
+                    }
+                }
+            }
+
+            if (bestDonor < 0) break; // no reasonable transfer found
+
+            // Execute the move
+            var movedStop = clusters[bestDonor].splice(bestDonorLi, 1)[0];
+            clusterKids[bestDonor] -= kidCount[movedStop];
+            clusters[lightC].push(movedStop);
+            clusterKids[lightC] += kidCount[movedStop];
+            lbMoves++;
+
+            // Re-medoid both affected clusters
+            seeds[lightC] = recomputeMedoid(clusters[lightC]) || seeds[lightC];
+            seeds[bestDonor] = recomputeMedoid(clusters[bestDonor]) || seeds[bestDonor];
+        }
+        console.log('[Go] K-Medoids: ' + lbMoves + ' load-balance moves (target=' + targetPerCluster + ', min=' + minLoad + ')');
+
+        // =====================================================================
         // Stage E — Bus Assignment
         //
         // Sort clusters by kid count descending, buses by capacity descending.
