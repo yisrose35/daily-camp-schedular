@@ -165,7 +165,16 @@
     }
     function setLocalSchedule(dateKey, schedule) {
         const data = getLocalData();
-        data[dateKey] = schedule;
+        // Re-serialize divisionTimes — mergeSchedules returns the deserialized form
+        // (flat arrays with _perBunkSlots as a custom property), and JSON.stringify
+        // strips custom array properties. Wrap back into {_slots, _perBunkSlots} form.
+        let safe = schedule;
+        if (schedule && schedule.divisionTimes && window.DivisionTimesSystem?.serialize) {
+            safe = Object.assign({}, schedule, {
+                divisionTimes: window.DivisionTimesSystem.serialize(schedule.divisionTimes)
+            });
+        }
+        data[dateKey] = safe;
         setLocalData(data);
     }
     function deleteLocalSchedule(dateKey) {
