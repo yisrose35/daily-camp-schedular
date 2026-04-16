@@ -6525,20 +6525,40 @@
                 return true;
             });
             leagueLayers.sort((a, b) => ((staggerPlan[a.grade || a.division] || {}).offset || 0) - ((staggerPlan[b.grade || b.division] || {}).offset || 0));
-            // ★ v9.6: Respect league qty/quantity — place multiple league blocks if configured
-            leagueLayers.forEach(layer => {
-                var leagueCount = parseInt(layer.qty) || parseInt(layer.quantity) || parseInt(layer.count) || 1;
-                for (var lc = 0; lc < leagueCount; lc++) {
-                    // Clear shared time cache so second league finds a NEW time
-                    var leagueName = (() => {
-                        var lg = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {}))
-                            .find(function(l) { return (l.divisions || []).includes(layer.grade || layer.division); });
-                        return lg ? lg.name : null;
-                    })();
-                    if (lc > 0 && leagueName && sharedLeagueTime[leagueName] != null) {
-                        delete sharedLeagueTime[leagueName]; // force new time search
-                    }
-                    placeLeagueForGrade(layer.grade || layer.division, layer);
+            // ★ Group league layers by league name so grades sharing a league
+            // can synchronize game times. Then iterate by ROUND across all
+            // grades so all N-th games are scheduled together at the same time
+            // before we advance to round N+1.
+            //
+            // Previously: outer loop was per-grade, so grade 5 placed its 2
+            // games (T1, T2), then grade 6 placed its 2 games starting from
+            // sharedLeagueTime[league]=T2 (grade 5's second game) — which
+            // meant grade 6 game 1 = grade 5 game 2, and grade 6 game 2 went
+            // off to a third time. Now grade 5 and grade 6 both get their
+            // game 1 at T1 and both get their game 2 at T2.
+            var _leagueLayersByName = {};
+            leagueLayers.forEach(function(layer) {
+                var lg = (Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {}))
+                    .find(function(l) { return (l.divisions || []).includes(layer.grade || layer.division); });
+                var ln = lg ? lg.name : ('__unnamed_' + (layer.grade || layer.division));
+                if (!_leagueLayersByName[ln]) _leagueLayersByName[ln] = [];
+                _leagueLayersByName[ln].push(layer);
+            });
+            Object.keys(_leagueLayersByName).forEach(function(leagueName) {
+                var layers = _leagueLayersByName[leagueName];
+                var maxRounds = Math.max.apply(null, layers.map(function(l) {
+                    return parseInt(l.qty) || parseInt(l.quantity) || parseInt(l.count) || 1;
+                }));
+                for (var gi = 0; gi < maxRounds; gi++) {
+                    // Force a fresh time search for each round so every round
+                    // gets its own unique shared time across all participating grades.
+                    delete sharedLeagueTime[leagueName];
+                    layers.forEach(function(layer) {
+                        var myCount = parseInt(layer.qty) || parseInt(layer.quantity) || parseInt(layer.count) || 1;
+                        if (gi < myCount) {
+                            placeLeagueForGrade(layer.grade || layer.division, layer);
+                        }
+                    });
                 }
             });
 
