@@ -637,6 +637,43 @@
     }
 
     var _osrmLastCall = 0;
+    var _osrmGeomQueue = [];
+    var _osrmGeomRunning = false;
+    async function _drainGeomQueue() {
+        if (_osrmGeomRunning) return;
+        _osrmGeomRunning = true;
+        while (_osrmGeomQueue.length > 0) {
+            var item = _osrmGeomQueue.shift();
+            try {
+                await new Promise(function(r) { setTimeout(r, 500); }); // 500ms between requests
+                var url = 'https://router.project-osrm.org/route/v1/driving/' + item.coordStr + '?overview=full&geometries=geojson&continue_straight=true';
+                var resp = await fetch(url);
+                if (resp.status === 429) {
+                    console.warn('[Go] OSRM 429 — waiting 5s before retry');
+                    await new Promise(function(r) { setTimeout(r, 5000); });
+                    _osrmGeomQueue.unshift(item); // re-queue at front
+                    continue;
+                }
+                if (resp.ok) {
+                    var data = await resp.json();
+                    var coords = data.routes?.[0]?.geometry?.coordinates;
+                    if (coords && _map) {
+                        var pts = coords.map(function(c) { return [c[1], c[0]]; });
+                        if (pts.length > 0) {
+                            _routeGeomCache[item.ck] = pts;
+                            _map.removeLayer(item.temp);
+                            var idx = _mapLayers.indexOf(item.temp);
+                            if (idx >= 0) _mapLayers.splice(idx, 1);
+                            var road = L.polyline(pts, { color: item.color, weight: item.w, opacity: item.o, dashArray: item.dash }).addTo(_map);
+                            road._goRouteKey = item.ck;
+                            _mapLayers.push(road);
+                        }
+                    }
+                }
+            } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
+        }
+        _osrmGeomRunning = false;
+    }
     async function fetchOSRMWithRetry(coordStr, retries) {
         if (retries === undefined) retries = 3;
         // Rate limit: min 200ms between OSRM calls to avoid 429s
@@ -6906,18 +6943,9 @@
                     stopsWithCoords.forEach(s => wp.push(s.lng + ',' + s.lat));
                     if (isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
                     if (mapNeedsReturn && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
-                    (async function(coordStr, color, ck, temp, dash, w, o) {
-                        try {
-                            // Rate limit OSRM geometry requests to avoid 429s
-                            var _gapG = Date.now() - _osrmLastCall;
-                            if (_gapG < 300) await new Promise(function(r) { setTimeout(r, 300 - _gapG); });
-                            _osrmLastCall = Date.now();
-                            const url = 'https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true';
-                            const resp = await fetch(url);
-                            if (resp.status === 429) { console.warn('[Go] OSRM 429 for geometry — skipping'); return; }
-                            if (resp.ok) { const data = await resp.json(); const coords = data.routes?.[0]?.geometry?.coordinates; if (coords) { const pts = coords.map(c => [c[1], c[0]]); if (pts.length > 0 && _map) { _routeGeomCache[ck] = pts; _map.removeLayer(temp); const idx = _mapLayers.indexOf(temp); if (idx >= 0) _mapLayers.splice(idx, 1); const road = L.polyline(pts, { color, weight: w, opacity: o, dashArray: dash }).addTo(_map); road._goRouteKey = ck; _mapLayers.push(road); } } }
-                        } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
-                    })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
+                    // Queue geometry fetch — serialized to avoid OSRM 429s
+                    _osrmGeomQueue.push({ coordStr: wp.join(';'), color: route.busColor, ck: cacheKey, temp: tempLine, dash: dashPattern, w: lineWeight, o: lineOpacity });
+                    if (!_osrmGeomRunning) _drainGeomQueue();
                 }
             }
 
