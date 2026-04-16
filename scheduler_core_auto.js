@@ -3066,24 +3066,38 @@
                     dur = blk.endMin - blk.startMin;
                 }
 
-                // Enforce dMin — try extending into adjacent gap. For fixed blocks
-                // we only extend if a gap is available (don't push neighbors).
+                // Enforce dMin — try extending into adjacent gap. If neither
+                // side has room, DROP the block per the strict-duration rule:
+                // a block that can't fit its dMin shouldn't exist. The slot
+                // becomes Free, which the user can fill manually if desired.
                 if (dur < dMin) {
                     var nextS = (j < tl.length - 1) ? tl[j+1].startMin : 1440;
                     var availR = nextS - blk.endMin;
+                    var extended = false;
                     if (dur + availR >= dMin && blk.startMin + dMin <= nextS) {
                         blk.endMin = blk.startMin + Math.min(dMin, dMax);
                         blk.endMin = Math.round(blk.endMin / 5) * 5;
+                        extended = true;
                     } else {
                         var prevE = (j > 0) ? tl[j-1].endMin : 0;
                         var availL = blk.startMin - prevE;
                         if (dur + availL >= dMin) {
                             blk.startMin = blk.endMin - Math.min(dMin, dMax);
                             blk.startMin = Math.round(blk.startMin / 5) * 5;
-                        } else {
-                            // Can't extend — flag for the post-build sweep so the
-                            // user sees a warning instead of a silent sub-dMin block.
+                            extended = true;
+                        }
+                    }
+                    if (!extended) {
+                        // ★ STRICT: never leave a sub-dMin block. Drop it so
+                        //   the time becomes Free. Pinned/_fixed blocks are
+                        //   the user's explicit intent — keep those but mark
+                        //   the violation so the post-build sweep can warn.
+                        if (blk._fixed) {
                             blk._durationViolation = 'underflow:' + dur + '<' + dMin;
+                        } else {
+                            tl.splice(j, 1);
+                            j--;
+                            continue;
                         }
                     }
                 }
