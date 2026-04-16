@@ -1254,7 +1254,17 @@ window._debugLeagueTimeData = timeData;
                     if (!blocksForDiv) return;
 
                     blocksForDiv.forEach(block => {
-        if (Number(block.startMin) !== Number(timeKey)) return;
+        // ★ FIX: Manual-mode blocks have only `startTime`; auto-mode blocks have both
+        // `startTime` (string) and `startMin` (number). Normalize from `startTime` so
+        // the check works in both modes. Previously checked `block.startMin`, which is
+        // undefined in manual mode → NaN !== timeKey → every block skipped, matchups
+        // never reached fillBlock, leagueAssignments stayed empty, and the renderer
+        // fell back to generic "1 vs 2, 3 vs 4" pairings.
+        const _Utils = window.SchedulerCoreUtils;
+        const _blockKey = (typeof block.startTime === 'number')
+            ? block.startTime
+            : (_Utils?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
+        if (Number(_blockKey) !== Number(timeKey)) return;
         const pick = {
                             field: `League: ${league.name}`,
                             sport: `Game ${gameNumber}`,
