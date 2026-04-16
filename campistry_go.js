@@ -403,10 +403,8 @@
     /**
      * fetchHereTourPlan(stops, buses, camp, opts)
      * Uses HERE Tour Planning API v3 — professional VRP solver.
-     * Objectives (in priority order):
-     *   1. minimize-unassigned (don't drop any kids)
-     *   2. balance-max-load (MINIMIZE MAX ROUTE TIME — minimax)
-     *   3. minimize-duration (reduce total fleet time)
+     * Based on HERE's official working example:
+     * https://www.here.com/learn/blog/here-tour-planning-api-in-a-nutshell
      *
      * Returns: { routes: [{ vehicleIdx, stopIndices: [...] }], unassigned: [...] }
      * or null if the API fails.
@@ -418,22 +416,22 @@
         opts = opts || {};
         const isArrival = opts.isArrival || false;
         const serviceTimeSec = opts.serviceTimeSec || 120; // 2 min per stop
-        const baseTime = '2024-01-15T07:00:00Z'; // HERE requires ISO timestamps
-        const endTime = '2024-01-15T12:00:00Z';
+        const baseTime = '2024-01-15T07:00:00Z';
+        const endTime = '2024-01-15T13:00:00Z'; // 6 hour window (generous)
+
+        // Profile name used in fleet.types[].profile must match fleet.profiles[].name
+        const profileName = 'car_1';
 
         // Build fleet — one vehicle type per bus so we preserve bus identity + capacity
         const fleetTypes = buses.map(function(b, i) {
             return {
                 id: 'bus_' + i,
-                profile: 'bus',
-                // Cost = time only. No fixed or distance cost so the solver
-                // optimizes purely for minimizing total time (and with
-                // maxDuration cap, that means balanced short routes).
-                costs: { fixed: 0, distance: 0, time: 1 },
+                profile: profileName,
+                costs: { fixed: 5.0, distance: 0.07, time: 0.01 },
                 shifts: [{
                     start: {
-                        time: isArrival ? new Date(new Date(baseTime).getTime() - 90*60000).toISOString() : baseTime,
-                        location: isArrival ? { lat: stops[0].lat, lng: stops[0].lng } : { lat: camp.lat, lng: camp.lng }
+                        time: baseTime,
+                        location: { lat: camp.lat, lng: camp.lng }
                     },
                     end: {
                         time: endTime,
@@ -442,9 +440,6 @@
                 }],
                 capacity: [b.capacity || 44],
                 amount: 1
-                // Route duration cap is enforced by shift start/end times above.
-                // HERE v3 fleet.types[].limits only supports maxDistance (meters),
-                // not maxDuration, so we rely on shift time window instead.
             };
         });
 
@@ -454,30 +449,25 @@
                 id: 'stop_' + i,
                 tasks: {
                     deliveries: [{
-                        places: [{ location: { lat: s.lat, lng: s.lng }, duration: serviceTimeSec }],
+                        places: [{
+                            location: { lat: s.lat, lng: s.lng },
+                            duration: serviceTimeSec
+                        }],
                         demand: [s.campers.length]
                     }]
                 }
             };
         });
 
-        // Use bus profile with driving fallback
-        // Objective priorities (ordered, each is a "level"):
-        //   1. minimize-unassigned — serve every kid
-        //   2. minimize-tours — fewer buses if possible
-        //   3. minimize-cost — with time-weighted cost function below, this minimizes total time
-        // Combined with `limits.maxDuration: 3600`, no route will exceed 60min.
+        // Request format matches HERE's official blog example exactly.
+        // Profiles: type BEFORE name (order observed in working example).
+        // No objectives field — HERE uses sensible defaults if omitted.
         const request = {
             fleet: {
                 types: fleetTypes,
-                profiles: [{ name: 'bus', type: 'car' }]
+                profiles: [{ type: 'car', name: profileName }]
             },
-            plan: { jobs: jobs },
-            // Objectives must be FLAT array with camelCase type names
-            objectives: [
-                { type: 'minimizeUnassigned' },
-                { type: 'minimizeDuration' }
-            ]
+            plan: { jobs: jobs }
         };
 
         try {
