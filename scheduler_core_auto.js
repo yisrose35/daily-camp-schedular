@@ -4026,6 +4026,177 @@
                 return plan;
             }
 
+            // ★ v15.0: WHOLE-GAP PLANNER WITH BOUNDED BACKTRACKING
+            //   Replaces the irrevocable left-to-right cursor for Phase B.
+            //   For each gap, recursively searches sequences of (sport, field,
+            //   duration) that completely fill the gap. Speculatively claims
+            //   fields, recurses, and unclaims on failure. Returns the first
+            //   complete fill found, or null.
+            //
+            //   Why this matters: the old cursor would commit a sport+field
+            //   that locked the only available field for the gap's tail —
+            //   leaving sub-dMin remainders that became Free. Backtracking
+            //   tries alternative early commits when the tail can't complete.
+            //
+            //   Bounded: max recursion depth 6 (a gap longer than 6 ceiling-
+            //   sized sub-blocks is unrealistic), max candidates per slot 8
+            //   (already filtered + ranked by findBestSport). Total worst-
+            //   case = 8^6 = 262K combinations, but typical case prunes hard
+            //   because most candidates fail isFieldAvailable on the first
+            //   speculative claim.
+            function solveGapWithBacktracking(bunk, grade, gapStart, gapEnd, sMeta, usedSports) {
+                var fillMin = sMeta.fillMinDur;
+                var ceiling = sMeta.sportCeiling;
+                var gapSize = gapEnd - gapStart;
+                if (gapSize < fillMin) return null;
+
+                // Per-call speculative state — claims pushed onto fieldLedger
+                // and popped on backtrack. usedSports is mutated in place but
+                // tracked here so we can restore on failure.
+                var speculativeAdds = []; // [{field, claim}]
+                var speculativeUsed = []; // sport names added this branch
+
+                function addedAll() {
+                    // Commit final state — already in fieldLedger / usedSports.
+                    speculativeAdds.length = 0;
+                    speculativeUsed.length = 0;
+                }
+                function rollback() {
+                    // Undo every speculative claim and used-sport add.
+                    for (var i = speculativeAdds.length - 1; i >= 0; i--) {
+                        var rec = speculativeAdds[i];
+                        var ledger = fieldLedger[rec.field];
+                        if (!ledger) continue;
+                        var idx = ledger.claims.indexOf(rec.claim);
+                        if (idx !== -1) ledger.claims.splice(idx, 1);
+                    }
+                    for (var j = 0; j < speculativeUsed.length; j++) {
+                        usedSports.delete(speculativeUsed[j]);
+                    }
+                    speculativeAdds.length = 0;
+                    speculativeUsed.length = 0;
+                }
+
+                // List candidates for a given (cursor, dur) window. Reuses the
+                // same scoring as findBestSport but returns ALL passing
+                // candidates (not just the top 1) so we can try alternatives.
+                function listCandidates(cursor, blockEnd) {
+                    var pList = sMeta.priorityList || [];
+                    var out = [];
+                    for (var p = 0; p < pList.length; p++) {
+                        var sport = pList[p];
+                        var fields = sport.fields || [];
+                        for (var f = 0; f < fields.length; f++) {
+                            if (!isFieldAvailable(fields[f], cursor, blockEnd, bunk, grade, sport.name)) continue;
+                            // Cooldown / same-day rules
+                            if (window.SchedulingRules && sMeta.template) {
+                                var ok = window.SchedulingRules.isCandidateAllowed(
+                                    { startMin: cursor, endMin: blockEnd, type: 'sport',
+                                      event: sport.name, field: fields[f] },
+                                    sMeta.template, { mode: 'auto' });
+                                if (!ok) continue;
+                            }
+                            // Score: drafted-unused > unused > reuse, lower
+                            // demand preferred. Same priority as findBestSport.
+                            var isUsed = usedSports.has(sport.name);
+                            var isDrafted = (sMeta.draftSports || []).some(function(ds) { return ds.name === sport.name; });
+                            var ts = Math.floor(cursor / 30) * 30;
+                            var demand = fieldDemand[fields[f] + ':' + ts] || 0;
+                            var score = (isDrafted && !isUsed ? 1000 : (isUsed ? 0 : 500)) - demand * 10;
+                            out.push({ name: sport.name, field: fields[f], score: score });
+                        }
+                    }
+                    out.sort(function(a, b) { return b.score - a.score; });
+                    return out.slice(0, 8); // cap branching factor
+                }
+
+                var bestPartial = null;     // longest contiguous fill if no complete one found
+                var bestPartialCoverage = 0;
+
+                function recurse(cursor, sequence, depth) {
+                    if (cursor >= gapEnd) return sequence; // fully filled — success
+                    if (depth >= 6) return null;
+                    var remaining = gapEnd - cursor;
+                    if (remaining < fillMin) {
+                        // Dead remainder — invalid sequence. Track best partial.
+                        if (sequence.length > 0 && cursor - gapStart > bestPartialCoverage) {
+                            bestPartial = sequence.slice();
+                            bestPartialCoverage = cursor - gapStart;
+                        }
+                        return null;
+                    }
+
+                    // Try durations from "ideal" (large) to "minimum" (small).
+                    var maxDur = Math.min(remaining, ceiling);
+                    for (var dur = maxDur; dur >= fillMin; dur -= 5) {
+                        var blockEnd = cursor + dur;
+                        var leftover = remaining - dur;
+                        // Orphan guard: if the remainder is positive but below
+                        // fillMin, skip this duration — would leave dead time.
+                        if (leftover > 0 && leftover < fillMin) continue;
+
+                        var candidates = listCandidates(cursor, blockEnd);
+                        if (candidates.length === 0) continue;
+
+                        for (var ci = 0; ci < candidates.length; ci++) {
+                            var cand = candidates[ci];
+                            // Speculative claim
+                            var claim = { bunk: bunk, grade: grade, activity: cand.name, startMin: cursor, endMin: blockEnd };
+                            if (!fieldLedger[cand.field]) continue;
+                            fieldLedger[cand.field].claims.push(claim);
+                            speculativeAdds.push({ field: cand.field, claim: claim });
+                            var wasUsed = usedSports.has(cand.name);
+                            if (!wasUsed) {
+                                usedSports.add(cand.name);
+                                speculativeUsed.push(cand.name);
+                            }
+
+                            var sub = recurse(blockEnd, sequence.concat([{
+                                start: cursor, end: blockEnd,
+                                sport: cand.name, field: cand.field
+                            }]), depth + 1);
+                            if (sub) return sub;
+
+                            // Undo this candidate's claim, try next
+                            var idx = fieldLedger[cand.field].claims.indexOf(claim);
+                            if (idx !== -1) fieldLedger[cand.field].claims.splice(idx, 1);
+                            speculativeAdds.pop();
+                            if (!wasUsed) {
+                                usedSports.delete(cand.name);
+                                speculativeUsed.pop();
+                            }
+                        }
+                    }
+
+                    // Track partial coverage even on dead-end branches
+                    if (sequence.length > 0 && cursor - gapStart > bestPartialCoverage) {
+                        bestPartial = sequence.slice();
+                        bestPartialCoverage = cursor - gapStart;
+                    }
+                    return null;
+                }
+
+                var solution = recurse(gapStart, [], 0);
+                if (solution) {
+                    addedAll(); // commit
+                    return { complete: true, blocks: solution };
+                }
+                // No complete fill — undo every speculative claim, then
+                // re-claim the BEST PARTIAL so callers see the longest
+                // contiguous fill we could find. The remaining tail will
+                // be left for downstream phases / surfaced as Free.
+                rollback();
+                if (bestPartial && bestPartial.length > 0) {
+                    bestPartial.forEach(function(b) {
+                        if (claimField(b.field, b.start, b.end, bunk, grade, b.sport)) {
+                            usedSports.add(b.sport);
+                        }
+                    });
+                    return { complete: false, blocks: bestPartial };
+                }
+                return null;
+            }
+
             // ★ v9.5: SHARING-AWARE SPORT ENGINE
             // Phase A: Group same-grade bunks with matching gap times → assign shared fields
             // Phase B: Fill remaining gaps individually
@@ -4254,7 +4425,42 @@
                     var gapSize = gap.end - gap.start;
                     if (gapSize < sMeta.fillMinDur) continue;
 
-                    // Try to fill the entire gap with sport blocks that each have a field
+                    // ★ v15.0: Try whole-gap planner FIRST. It does bounded
+                    //   backtracking — explores alternative (sport, field,
+                    //   duration) sequences when an early commit would
+                    //   starve the tail. If it returns a complete fill,
+                    //   commit those blocks and skip the cursor loop.
+                    //   If it returns a partial fill, those partial blocks
+                    //   are already claimed; we let the cursor below try to
+                    //   fill any remaining sub-gaps. If null, fall through
+                    //   to the cursor entirely.
+                    var solved = solveGapWithBacktracking(sBunk, sMeta.grade, gap.start, gap.end, sMeta, usedSports[sBunk]);
+                    if (solved && solved.blocks.length > 0) {
+                        solved.blocks.forEach(function(b) {
+                            var blk = makeBlock({
+                                startMin: b.start, endMin: b.end,
+                                type: 'sport', event: b.sport,
+                                layer: sMeta.sportLayer, field: b.field,
+                                dMin: sMeta.sportC.dMin, dMax: sMeta.sportCeiling,
+                                _source: 'sport-fill-planned',
+                                _assignedSport: b.sport,
+                                _sportFallbacks: sMeta.priorityList.map(function(s) { return s.name; }),
+                                _final: true
+                            });
+                            if (blk) sMeta.template.push(blk);
+                        });
+                        if (solved.complete) continue; // gap fully filled — done
+                        // Partial fill: cursor below picks up remaining gap(s).
+                        // Recompute remaining gaps in this region.
+                        sMeta.template.sort(function(a, b) { return a.startMin - b.startMin; });
+                        var subGaps = findGaps(sMeta.template, gap.start, gap.end);
+                        if (subGaps.length === 0) continue;
+                        sGaps = sGaps.concat(subGaps);
+                        continue;
+                    }
+
+                    // Fallback: original cursor (preserves prior behavior when
+                    // even partial planning fails — e.g. priorityList empty).
                     var cursor = gap.start;
                     var maxAttempts = 20; // safety limit
 
@@ -7458,7 +7664,49 @@
                     }
                 }
                 tl.forEach(b => { if (b.startMin == null || b.endMin == null || b.endMin <= b.startMin) validationPassed = false; });
-                if (getFreeGaps(bunk, gs, ge).length > 0) warnings.push({ type: 'remaining_gap', bunk, grade });
+                // ★ v15.0: Per-gap reason analysis — for each remaining Free,
+                //   probe the priority list to figure out WHY it stayed unfilled.
+                const remGaps = getFreeGaps(bunk, gs, ge);
+                if (remGaps.length > 0) {
+                    warnings.push({ type: 'remaining_gap', bunk, grade, gaps: remGaps });
+                    const sl = (typeof shoppingLists !== 'undefined') ? shoppingLists[bunk] : null;
+                    const pList = sl?.sports?.priorityList || [];
+                    const fillMin = sl?.sports?.constraints?.dMin || 25;
+                    remGaps.forEach(g => {
+                        const dur = g.end - g.start;
+                        if (dur < fillMin) {
+                            log('[2.6-GAP] ' + bunk + ' (' + grade + ') @ ' + g.start + '-' + g.end +
+                                ' (' + dur + 'min): TOO SMALL for any sport (fillMin=' + fillMin + ')');
+                            return;
+                        }
+                        // Probe: any sport-field combo that COULD have fit?
+                        let anyFieldOK = false, anySportOK = false, blockedByCooldown = 0, blockedByCapacity = 0;
+                        for (const sport of pList) {
+                            anySportOK = true;
+                            for (const f of (sport.fields || [])) {
+                                if (typeof isFieldAvailable === 'function' &&
+                                    isFieldAvailable(f, g.start, g.end, bunk, grade, sport.name)) {
+                                    anyFieldOK = true;
+                                    if (window.SchedulingRules) {
+                                        const ok = window.SchedulingRules.isCandidateAllowed(
+                                            { startMin: g.start, endMin: g.end, type: 'sport', event: sport.name, field: f },
+                                            tl, { mode: 'auto' });
+                                        if (!ok) blockedByCooldown++;
+                                    }
+                                } else {
+                                    blockedByCapacity++;
+                                }
+                            }
+                        }
+                        let reason;
+                        if (!anySportOK) reason = 'no sports in priority list';
+                        else if (!anyFieldOK) reason = 'all ' + blockedByCapacity + ' field-slots at capacity / unavailable';
+                        else if (blockedByCooldown > 0) reason = blockedByCooldown + ' candidate(s) blocked by cooldown / same-day rules';
+                        else reason = 'unknown — backtracker found no valid sequence';
+                        log('[2.6-GAP] ' + bunk + ' (' + grade + ') @ ' + g.start + '-' + g.end +
+                            ' (' + dur + 'min): ' + reason);
+                    });
+                }
             });
         });
         log('[2.6] ' + (validationPassed ? '✅ Passed' : '⚠️ Errors'));
