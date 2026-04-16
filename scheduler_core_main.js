@@ -1154,6 +1154,27 @@
     window.runSkeletonOptimizer = async function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
        console.log("★★★ OPTIMIZER STARTED (v17.12 - SMART TILE CAMP-WIDE BUDGET) ★★★")
+
+        // ★★★ STARTER PLAN: Check schedule day limit BEFORE generating ★★★
+        try {
+            var _client = window.CampistryDB?.getClient?.() || window.supabase;
+            var _campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('campistry_camp_id');
+            var _dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            if (_client && _campId) {
+                var _limitRes = await _client.rpc('check_schedule_limit', { p_camp_id: _campId, p_date_key: _dateKey });
+                if (!_limitRes.error && _limitRes.data && _limitRes.data.allowed === false) {
+                    console.warn('[OPTIMIZER] Blocked by starter plan limit:', _limitRes.data);
+                    alert('Schedule day limit reached (' + _limitRes.data.used + '/' + _limitRes.data.max + ' days used). Upgrade for unlimited scheduling.');
+                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                        detail: { type: 'schedule', used: _limitRes.data.used, max: _limitRes.data.max }
+                    }));
+                    return false;
+                }
+            }
+        } catch (_e) {
+            console.warn('[OPTIMIZER] Schedule limit check failed, proceeding:', _e);
+        }
+
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
             allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
@@ -1170,7 +1191,10 @@
         // Before ANY generation, wipe today's schedule for the divisions being generated.
         // Schedulers only wipe THEIR bunks. Owners/admins wipe everything.
         // This prevents stale data (old leagues, ghost assignments) from bleeding in.
-        {
+        {// ★ AUTO BUILD: Skip wipe — AutoBuildPrep already did a full wipe
+            if (window._skipGenerationWipe) {
+                console.log('[STEP 0] ⏭️ Skipping wipe — AutoBuildPrep already wiped');
+            } else {
             const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             const role = window.AccessControl?.getCurrentRole?.() || 
                         window.CampistryDB?.getRole?.() || 'owner';
@@ -1291,6 +1315,7 @@
             window._preGenClearActive = true;
 
             console.log('[STEP 0] ★ WIPE COMPLETE — generating from clean slate');
+                }
         }
 
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
@@ -1557,6 +1582,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (s.rainyDayAvailable === false || s.availableOnRainyDay === false) return false;
                 }
 
+                // ★ v7.0: Filter out daily-disabled specials
+                if (disabledSpecials && disabledSpecials.length > 0) {
+                    if (disabledSpecials.includes(s.name)) return false;
+                }
+
                 return true;
             });
 
@@ -1578,11 +1608,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
         console.log('[STEP 1] Building division-specific time slots...');
         
-        if (window.DivisionTimesSystem) {
-            window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
-            console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
-        
+       if (window.DivisionTimesSystem) {
+            if (window._autoDivisionTimesBuilt) {
+                console.log('[STEP 1] Skipping rebuild — auto pipeline already built divisionTimes');
+                window._autoDivisionTimesBuilt = false;
+            } else {
+                window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
+                console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
+            }
         } else {
+           
             console.warn('[STEP 1] DivisionTimesSystem not loaded, using legacy grid');
             const timePoints = new Set([540, 960]);
             manualSkeleton.forEach(item => {

@@ -818,20 +818,20 @@
             if (result.verified) {
                 log('✅ Save already verified by ScheduleDB');
                 _lastSaveTime = Date.now();
-                showNotification(`Saved ${bunkCount} bunks`, 'success');
+                if (!options.silent) showNotification(`Saved ${bunkCount} bunks`, 'success');
                 dispatch(CONFIG.EVENTS.SAVED, { dateKey, target: 'cloud-verified', bunkCount });
                 _isSaving = false;
                 return { success: true, target: 'cloud-verified', bunkCount, verified: true };
             }
-            
+
             // ★★★ IMPROVED: Verify with exponential backoff ★★★
             const verification = await verifyCloudSave(dateKey, bunkCount);
-            
+
             if (verification.verified) {
                 log('✅ Save VERIFIED:', verification.cloudBunkCount, 'bunks in cloud');
                 _lastSaveTime = Date.now();
-                
-                showNotification(`Saved ${bunkCount} bunks`, 'success');
+
+                if (!options.silent) showNotification(`Saved ${bunkCount} bunks`, 'success');
                 dispatch(CONFIG.EVENTS.SAVED, { 
                     dateKey, 
                     target: 'cloud-verified',
@@ -1201,7 +1201,7 @@
             if (currentBunks > 0) {
                 log('Auto-saving before date change:', currentBunks, 'bunks');
                 try {
-                    await saveSchedule(oldDateKey, getWindowGlobals(), { immediate: true });
+                    await saveSchedule(oldDateKey, getWindowGlobals(), { immediate: true, silent: true });
                 } catch (e) {
                     logError('Auto-save failed:', e);
                 }
@@ -1359,15 +1359,15 @@
             // Step 1: Save to localStorage FIRST (synchronous, guaranteed)
             setLocalData(dateKey, getWindowGlobals());
             
-            // Step 2: Immediate cloud save with verification
-            const result = await saveSchedule(dateKey, getWindowGlobals(), { immediate: true });
+            // Step 2: Immediate cloud save with verification (silent — user already saw "Schedule Generated!")
+            const result = await saveSchedule(dateKey, getWindowGlobals(), { immediate: true, silent: true });
             if (result?.success) {
                 log('✅ Post-generation save confirmed:', result.target);
             } else {
                 logWarn('⚠️ Post-generation cloud save issue:', result?.error);
                 // Retry once more after a short delay
                 setTimeout(async () => {
-                    await saveSchedule(dateKey, getWindowGlobals(), { immediate: true });
+                    await saveSchedule(dateKey, getWindowGlobals(), { immediate: true, silent: true });
                 }, 2000);
             }
         });

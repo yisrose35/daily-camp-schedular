@@ -1139,13 +1139,32 @@ for (const futureDate of Object.keys(allDailyData)) {
 
                 // ★★★ BUILD POOL - RESPECTS GLOBAL LOCKS ★★★
                 const leagueSports = league.sports || ["General Sport"];
-                const availablePool = buildAvailableFieldSportPool(
+                var availablePool = buildAvailableFieldSportPool(
                     leagueSports,
                     context,
                     leagueDivisions,
                     timeKey,
                     slots
                 );
+                // ★ Multi-game-per-day: exclude sports already used by this
+                // league EARLIER today so games get distinct sports even when
+                // the matchup is identical (e.g., 2-team league).
+                if (todayGameIndex > 0 && availablePool.length > 1) {
+                    var _prevSports = new Set();
+                    (history.teamSports || {});
+                    var _leagueTeamKeys = leagueTeams.map(function(t) { return league.name + '|' + t; });
+                    _leagueTeamKeys.forEach(function(k) {
+                        var hist = history.teamSports[k] || [];
+                        if (hist.length > 0) _prevSports.add(hist[hist.length - 1]);
+                    });
+                    if (_prevSports.size > 0) {
+                        var filtered = availablePool.filter(function(p) { return !_prevSports.has(p.sport); });
+                        if (filtered.length > 0) {
+                            console.log('   ★ Multi-game: excluding sports from earlier game(s): [' + [..._prevSports].join(', ') + ']');
+                            availablePool = filtered;
+                        }
+                    }
+                }
 
                 console.log(`   Available Field/Sport Combinations: ${availablePool.length}`);
                 availablePool.slice(0, 10).forEach(p =>
@@ -1229,13 +1248,14 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
                     // Record matchup for matchup_variety tracking
                     recordMatchup(league.name, a.team1, a.team2, history);
                 });
-
+window._debugLeagueTimeData = timeData;
                 leagueDivisions.forEach(divName => {
                     const blocksForDiv = timeData.byDivision[divName];
                     if (!blocksForDiv) return;
 
                     blocksForDiv.forEach(block => {
-                        const pick = {
+        if (Number(block.startMin) !== Number(timeKey)) return;
+        const pick = {
                             field: `League: ${league.name}`,
                             sport: `Game ${gameNumber}`,
                             _activity: `League: ${league.name}`,

@@ -114,6 +114,7 @@ function createDefaultZone(name, isDefault) {
         isDefault: isDefault || false,
         isOffCampus: false,
         travelTimeMin: 0,
+        travelMode: 'deduct',
         transition: { preMin: 0, postMin: 0 },
         maxConcurrent: 99,
         fields: [],
@@ -153,6 +154,7 @@ function validateZone(zone, zoneName) {
         isDefault: zone.isDefault === true,
         isOffCampus: zone.isOffCampus === true,
         travelTimeMin: parseInt(zone.travelTimeMin) || 0,
+        travelMode: (zone.travelMode === 'extend') ? 'extend' : 'deduct',
         transition: {
             preMin: parseInt(zone.transition?.preMin) || 0,
             postMin: parseInt(zone.transition?.postMin) || 0
@@ -381,18 +383,40 @@ function renderDetailPane() {
         };
 
         travelRow.appendChild(travelInput);
-        travelRow.innerHTML += `<span style="font-size:0.8rem; color:#92400E;">minutes each way</span>`;
+        const travelSuffix = document.createElement("span");
+        travelSuffix.style.cssText = "font-size:0.8rem; color:#92400E;";
+        travelSuffix.textContent = "minutes each way";
+        travelRow.appendChild(travelSuffix);
         offCampusSection.appendChild(travelRow);
+
+        // Travel mode: add-to-slot vs. deduct-from-slot (only meaningful if travel > 0)
+        const modeRow = document.createElement("div");
+        modeRow.style.cssText = "display:flex; flex-direction:column; gap:6px; margin-top:10px; padding:12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px;";
+        const modeLabel = document.createElement("div");
+        modeLabel.style.cssText = "font-size:0.85rem; font-weight:600; color:#92400E;";
+        modeLabel.textContent = "Travel time mode";
+        const modeHint = document.createElement("div");
+        modeHint.style.cssText = "font-size:0.75rem; color:#92400E; margin-bottom:4px;";
+        modeHint.textContent = "Deduct: travel eats into the activity slot. Add: travel extends the slot (pushes later blocks).";
+        const modeSelect = document.createElement("select");
+        modeSelect.style.cssText = "padding:6px 8px; border:1px solid #FCD34D; border-radius:6px; font-size:0.85rem; background:#fff;";
+        modeSelect.innerHTML = `
+            <option value="deduct">Deduct from activity slot</option>
+            <option value="extend">Add to activity slot</option>`;
+        modeSelect.value = (zone.travelMode === 'extend') ? 'extend' : 'deduct';
+        modeSelect.onchange = () => {
+            zone.travelMode = (modeSelect.value === 'extend') ? 'extend' : 'deduct';
+            saveData();
+        };
+        modeRow.appendChild(modeLabel);
+        modeRow.appendChild(modeHint);
+        modeRow.appendChild(modeSelect);
+        offCampusSection.appendChild(modeRow);
     }
 
     detailPaneEl.appendChild(offCampusSection);
 
     // -- ACCORDION SECTIONS --
-    const transTime = zone.transition.preMin || zone.transition.postMin || 0;
-    detailPaneEl.appendChild(section("Transition Time",
-        transTime ? `${transTime} min` : "None",
-        () => renderTransitionSection(zone)));
-
     detailPaneEl.appendChild(section("Assign Facilities",
         countFacilitiesInZone(zone),
         () => renderFacilityAssignment(zone)));
@@ -405,39 +429,6 @@ function renderDetailPane() {
 function countFacilitiesInZone(zone) {
     const total = (zone.fields?.length || 0) + (zone.specialActivities?.length || 0) + Object.keys(zone.locations || {}).length;
     return total === 0 ? "None assigned" : `${total} facilit${total === 1 ? 'y' : 'ies'} assigned`;
-}
-
-// =========================================================================
-// TRANSITION TIMES SECTION
-// =========================================================================
-function renderTransitionSection(zone) {
-    const container = document.createElement("div");
-    const currentVal = zone.transition.preMin || zone.transition.postMin || 0;
-
-    container.innerHTML = `
-        <p style="font-size:0.82rem; color:#6B7280; margin:0 0 12px 0;">
-            Buffer time for activities in this zone (applied before and after each activity).
-        </p>
-        <div style="display:flex; align-items:center; gap:8px;">
-            <label style="font-size:0.85rem; font-weight:500;">Transition time:</label>
-            <input type="number" id="zone-transition-min" min="0" max="30" value="${currentVal}"
-                style="width:60px; padding:6px; border:1px solid #D1D5DB; border-radius:6px; text-align:center;">
-            <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
-        </div>`;
-
-    setTimeout(() => {
-        const input = container.querySelector('#zone-transition-min');
-        if (input) input.onchange = () => {
-            const val = Math.max(0, Math.min(30, parseInt(input.value) || 0));
-            zone.transition.preMin = val;
-            zone.transition.postMin = val;
-            saveData();
-            const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-            if (el) el.textContent = val ? `${val} min` : "None";
-        };
-    }, 0);
-
-    return container;
 }
 
 // =========================================================================
@@ -679,5 +670,242 @@ function makeEditable(el, save) {
 // EXPORTS
 // =========================================================================
 window.initZonesTab = initZonesTab;
+
+// =========================================================================
+// ZONE QUERY FUNCTIONS (migrated from legacy locations.js)
+// =========================================================================
+
+// Get all locations across all zones (for dropdowns in other modules)
+window.getAllLocations = function(){
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    const locations = [];
+    const specialNames = new Set((window.getAllSpecialActivities?.() || []).map(s => s.name));
+    const fieldNames = new Set((window.getFields?.() || []).map(f => f.name));
+    Object.entries(zones).forEach(([zoneName, zone]) => {
+        if (!zone || typeof zone !== 'object') return;
+        Object.keys(zone.locations || {}).forEach(locName => {
+            if (specialNames.has(locName) || fieldNames.has(locName)) return;
+            locations.push({ name: locName, zone: zoneName, displayName: `${locName} (${zoneName})` });
+        });
+    });
+    return locations;
+};
+
+// Get zone for a specific field
+window.getZoneForField = function(fieldName){
+    if (!fieldName) return null;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if(Array.isArray(zone.fields) && zone.fields.includes(fieldName)) return zone;
+    }
+    return null;
+};
+
+// Get zone for a specific special activity
+window.getZoneForSpecialActivity = function(specialName){
+    if (!specialName) return null;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if(Array.isArray(zone.specialActivities) && zone.specialActivities.includes(specialName)) return zone;
+    }
+    return null;
+};
+
+// Get default location for a pinned tile type (e.g., "Lunch" -> "Lunchroom")
+window.getPinnedTileDefaultLocation = function(tileType){
+    if (!tileType) return null;
+    const settings = window.loadGlobalSettings?.() || {};
+    const defaults = settings.pinnedTileDefaults || {};
+    if (defaults[tileType]) return defaults[tileType];
+    const lowerType = tileType.toLowerCase();
+    for (const [key, value] of Object.entries(defaults)) {
+        if (key.toLowerCase() === lowerType) return value;
+    }
+    const ALIASES = {
+        'swim': ['pool', 'swimming', 'aquatics'],
+        'pool': ['swim', 'swimming', 'aquatics'],
+        'lunch': ['lunchroom', 'dining', 'cafeteria'],
+        'snacks': ['snack', 'snacktime'],
+        'dismissal': ['dismiss', 'end']
+    };
+    const aliases = ALIASES[lowerType] || [];
+    for (const alias of aliases) {
+        for (const [key, value] of Object.entries(defaults)) {
+            if (key.toLowerCase() === alias || key.toLowerCase().includes(alias)) return value;
+        }
+    }
+    return null;
+};
+
+// Get all pinned tile defaults
+window.getPinnedTileDefaults = function(){
+    const settings = window.loadGlobalSettings?.() || {};
+    return settings.pinnedTileDefaults || {};
+};
+
+// Set a pinned tile default location
+window.setPinnedTileDefaultLocation = function(tileType, locationName){
+    if (!tileType) return;
+    const settings = window.loadGlobalSettings?.() || {};
+    settings.pinnedTileDefaults = settings.pinnedTileDefaults || {};
+    settings.pinnedTileDefaults[tileType] = locationName || null;
+    window.saveGlobalSettings?.("pinnedTileDefaults", settings.pinnedTileDefaults);
+};
+
+// Get zone for a location name
+window.getZoneForLocation = function(locationName) {
+    if (!locationName) return null;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for(const [zoneName, zone] of Object.entries(zones)){
+        if (!zone || typeof zone !== 'object') continue;
+        if (zone.locations && zone.locations[locationName]) return zone;
+    }
+    return null;
+};
+
+// Unified travel-time lookup (off-campus only). Returns null if not off-campus or no travel.
+// manualMode: true to force 'deduct' (manual builder always deducts)
+window.getTravelForField = function(fieldName, manualMode) {
+    const zone = window.getZoneForField?.(fieldName);
+    if (!zone || !zone.isOffCampus) return null;
+    const mins = parseInt(zone.travelTimeMin) || 0;
+    if (mins <= 0) return null;
+    return {
+        preMin: mins,
+        postMin: mins,
+        mode: manualMode ? 'deduct' : ((zone.travelMode === 'extend') ? 'extend' : 'deduct'),
+        zoneName: zone.name
+    };
+};
+
+window.getTravelForSpecialActivity = function(specialName, manualMode) {
+    const zone = window.getZoneForSpecialActivity?.(specialName);
+    if (!zone || !zone.isOffCampus) return null;
+    const mins = parseInt(zone.travelTimeMin) || 0;
+    if (mins <= 0) return null;
+    return {
+        preMin: mins,
+        postMin: mins,
+        mode: manualMode ? 'deduct' : ((zone.travelMode === 'extend') ? 'extend' : 'deduct'),
+        zoneName: zone.name
+    };
+};
+
+// Get transition times for a field
+window.getTransitionForField = function(fieldName) {
+    const zone = window.getZoneForField?.(fieldName);
+    if (zone && zone.transition) {
+        return { preMin: parseInt(zone.transition.preMin) || 0, postMin: parseInt(zone.transition.postMin) || 0 };
+    }
+    return { preMin: 0, postMin: 0 };
+};
+
+// Get transition times for a special activity
+window.getTransitionForSpecialActivity = function(specialName) {
+    const zone = window.getZoneForSpecialActivity?.(specialName);
+    if (zone && zone.transition) {
+        return { preMin: parseInt(zone.transition.preMin) || 0, postMin: parseInt(zone.transition.postMin) || 0 };
+    }
+    return { preMin: 0, postMin: 0 };
+};
+
+// Get max concurrent activities for a zone
+window.getZoneMaxConcurrent = function(zoneName) {
+    if (!zoneName) return 99;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return parseInt(zone?.maxConcurrent) || 99;
+};
+
+// Check zone capacity
+window.checkZoneCapacity = function(zoneName, slotIndex, currentCount) {
+    const maxConcurrent = window.getZoneMaxConcurrent(zoneName);
+    return (currentCount || 0) < maxConcurrent;
+};
+
+// Get all fields in a zone
+window.getFieldsInZone = function(zoneName) {
+    if (!zoneName) return [];
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return Array.isArray(zone?.fields) ? [...zone.fields] : [];
+};
+
+// Get all special activities in a zone
+window.getSpecialActivitiesInZone = function(zoneName) {
+    if (!zoneName) return [];
+    const settings = window.loadGlobalSettings?.() || {};
+    const zone = settings.locationZones?.[zoneName];
+    return Array.isArray(zone?.specialActivities) ? [...zone.specialActivities] : [];
+};
+
+// Check if a field belongs to any zone
+window.isFieldInAnyZone = function(fieldName) {
+    if (!fieldName) return false;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for (const zone of Object.values(zones)) {
+        if (!zone || typeof zone !== 'object') continue;
+        if (Array.isArray(zone.fields) && zone.fields.includes(fieldName)) return true;
+    }
+    return false;
+};
+
+// Check if a special activity belongs to any zone
+window.isSpecialActivityInAnyZone = function(specialName) {
+    if (!specialName) return false;
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for (const zone of Object.values(zones)) {
+        if (!zone || typeof zone !== 'object') continue;
+        if (Array.isArray(zone.specialActivities) && zone.specialActivities.includes(specialName)) return true;
+    }
+    return false;
+};
+
+// Seam-merge travel annotations: consecutive same-off-campus-zone blocks share no
+// middle travel. Mutates `assignments` in place. Returns count of annotations cleared.
+window.seamMergeTravelTime = function(assignments) {
+    if (!assignments || typeof assignments !== 'object') return 0;
+    let cleared = 0;
+    Object.keys(assignments).forEach(function(bunk) {
+        const slots = assignments[bunk];
+        if (!Array.isArray(slots) || slots.length < 2) return;
+        const sorted = slots.slice().sort(function(a, b) { return (a?.startMin || 0) - (b?.startMin || 0); });
+        for (let i = 0; i < sorted.length - 1; i++) {
+            const cur = sorted[i], nxt = sorted[i + 1];
+            if (!cur || !nxt) continue;
+            if (!cur._travelZone || !nxt._travelZone) continue;
+            if (cur._travelZone !== nxt._travelZone) continue;
+            const gap = (nxt.startMin || 0) - (cur.endMin || 0);
+            if (gap > 5) continue;
+            if (cur._travelPost) { cur._travelPost = 0; cleared++; }
+            if (nxt._travelPre)  { nxt._travelPre  = 0; cleared++; }
+        }
+    });
+    return cleared;
+};
+
+// Batch check multiple fields for zone membership
+window.getZonesForFields = function(fieldNames) {
+    if (!Array.isArray(fieldNames)) return {};
+    const result = {};
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    for (const fieldName of fieldNames) {
+        result[fieldName] = null;
+        for (const [zoneName, zone] of Object.entries(zones)) {
+            if (!zone || typeof zone !== 'object') continue;
+            if (Array.isArray(zone.fields) && zone.fields.includes(fieldName)) { result[fieldName] = zone; break; }
+        }
+    }
+    return result;
+};
 
 })();

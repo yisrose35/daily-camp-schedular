@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deletion &amp; Reset Feature Tests</title>
+    <style>
+        body { font-family: system-ui, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+        h1 { font-size: 1.25rem; margin-bottom: 4px; }
+        h2 { font-size: 1.1rem; margin: 20px 0 8px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+        .test { margin: 4px 0; padding: 6px 12px; border-radius: 6px; font-size: 0.9rem; }
+        .pass { background: #dcfce7; color: #166534; }
+        .fail { background: #fee2e2; color: #991b1b; }
+        #summary { margin-top: 16px; font-weight: 600; font-size: 1rem; padding: 8px 12px; border-radius: 6px; }
+        .section { margin-bottom: 24px; }
+    </style>
+</head>
+<body>
+    <h1>Deletion &amp; Reset Feature Tests</h1>
+    <p>Tests: Delete Only Today's Schedule, Delete All Schedules, Reset Activity History, New Half</p>
+    <div id="results"></div>
+    <div id="summary"></div>
+
+    <script>
+    (async function() {
+        'use strict';
+
+        // ============================
+        // TEST HARNESS
+        // ============================
+        var passed = 0, failed = 0, out = [];
+        var currentSection = '';
+
+        function section(name) {
+            currentSection = name;
+            out.push('<h2>' + name + '</h2>');
+        }
+
+        function assert(condition, name, message) {
+            if (condition) {
+                passed++;
+                out.push('<div class="test pass">PASS: ' + name + '</div>');
+            } else {
+                failed++;
+                out.push('<div class="test fail">FAIL: ' + name + (message ? ' — ' + message : '') + '</div>');
+            }
+        }
+
+        function render() {
+            document.getElementById('results').innerHTML = out.join('');
+            var s = document.getElementById('summary');
+            s.textContent = passed + ' passed, ' + failed + ' failed';
+            s.className = failed ? 'fail' : 'pass';
+        }
+
+        // ============================
+        // STORAGE KEY CONSTANTS (must match calendar.js)
+        // ============================
+        var DAILY_DATA_KEY = 'campDailyData_v1';
+        var ROTATION_HISTORY_KEY = 'campRotationHistory_v1';
+        var SMART_TILE_HISTORY_KEY = 'smartTileHistory_v1';
+        var SMART_TILE_SPECIAL_HISTORY_KEY = 'smartTileSpecialHistory_v1';
+        var LEAGUE_HISTORY_KEY = 'campLeagueHistory_v2';
+        var SPECIALTY_LEAGUE_HISTORY_KEY = 'specialtyLeagueHistory_v1';
+
+        // ============================
+        // MOCK INFRASTRUCTURE
+        // ============================
+        var mockRole = 'owner';
+        var mockEditableDivisions = ['Juniors'];
+        var mockDivisions = {
+            Juniors: { bunks: ['1A', '1B', '1C'] },
+            Seniors: { bunks: ['5A', '5B'] }
+        };
+
+        // Track calls to cloud functions
+        var cloudCalls = { deleteSchedule: [], clearCloudKeys: [], supabaseDeletes: [], supabaseUpdates: [] };
+        var mockCloudRecords = [];
+
+        function resetMocks() {
+            mockRole = 'owner';
+            mockEditableDivisions = ['Juniors'];
+            cloudCalls = { deleteSchedule: [], clearCloudKeys: [], supabaseDeletes: [], supabaseUpdates: [] };
+            mockCloudRecords = [];
+
+            // Clear all localStorage keys used by the features
+            localStorage.removeItem(DAILY_DATA_KEY);
+            localStorage.removeItem(ROTATION_HISTORY_KEY);
+            localStorage.removeItem(SMART_TILE_HISTORY_KEY);
+            localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
+            localStorage.removeItem(LEAGUE_HISTORY_KEY);
+            localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
+
+            // Reset window globals
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+            window.leagueRoundState = {};
+            window.currentScheduleDate = '2026-04-13';
+            window.divisions = mockDivisions;
+        }
+
+        // Mock AccessControl
+        window.AccessControl = {
+            getCurrentRole: function() { return mockRole; },
+            getEditableDivisions: function() { return mockEditableDivisions; },
+            showPermissionDenied: function(action) {
+                console.log('[MOCK] Permission denied for: ' + action);
+            }
+        };
+
+        // Mock CampistryDB
+        window.CampistryDB = {
+            getClient: function() { return mockSupabaseClient; },
+            getCampId: function() { return 'test-camp-123'; },
+            getRole: function() { return mockRole; }
+        };
+
+        // Mock ScheduleDB
+        window.ScheduleDB = {
+            deleteSchedule: function(dateKey) {
+                cloudCalls.deleteSchedule.push(dateKey);
+                return Promise.resolve({ success: true });
+            },
+            loadSchedule: function(dateKey) {
+                // Return whatever records remain after deletion
+                return Promise.resolve({ success: true, data: { scheduleAssignments: {}, leagueAssignments: {} } });
+            }
+        };
+
+        // Mock Supabase client
+        var mockSupabaseClient = {
+            from: function(table) {
+                return {
+                    select: function(cols) {
+                        return {
+                            eq: function(col, val) {
+                                return {
+                                    eq: function(col2, val2) {
+                                        // Return mockCloudRecords
+                                        return Promise.resolve({ data: mockCloudRecords, error: null });
+                                    }
+                                };
+                            }
+                        };
+                    },
+                    delete: function() {
+                        return {
+                            eq: function(col, val) {
+                                return {
+                                    eq: function(col2, val2) {
+                                        cloudCalls.supabaseDeletes.push({ table: 'daily_schedules', col: col, val: val, col2: col2, val2: val2 });
+                                        return Promise.resolve({ error: null });
+                                    }
+                                };
+                            }
+                        };
+                    },
+                    update: function(data) {
+                        return {
+                            eq: function(col, val) {
+                                cloudCalls.supabaseUpdates.push({ data: data, col: col, val: val });
+                                return Promise.resolve({ error: null });
+                            }
+                        };
+                    }
+                };
+            }
+        };
+
+        // Mock clearCloudKeys
+        window.clearCloudKeys = function(keys) {
+            cloudCalls.clearCloudKeys.push(keys);
+            return Promise.resolve();
+        };
+
+        // Mock saveGlobalSettings
+        window.saveGlobalSettings = function(key, val) {
+            console.log('[MOCK] saveGlobalSettings:', key);
+        };
+
+        // Mock forceSyncToCloud
+        window.forceSyncToCloud = function() { return Promise.resolve(); };
+
+        // Mock UI refresh functions
+        window.updateTable = function() {};
+        window.initScheduleSystem = function() {};
+
+        // Prevent actual page reloads and alerts during tests
+        var originalReload = window.location.reload;
+        var reloadCalled = false;
+        // Override reload by redefining it
+        Object.defineProperty(window, '_testReloadCalled', { value: false, writable: true });
+
+        var alertMessages = [];
+        var originalAlert = window.alert;
+        window.alert = function(msg) { alertMessages.push(msg); };
+
+        // Override confirm to auto-accept
+        var confirmResult = true;
+        var originalConfirm = window.confirm;
+        window.confirm = function(msg) { return confirmResult; };
+
+        // Prevent actual reload — override on location
+        var _reloadCount = 0;
+        try {
+            // Can't always override location.reload, so wrap the functions
+        } catch(e) {}
+
+        // ============================
+        // SEED HELPERS
+        // ============================
+        function seedDailyData() {
+            var data = {
+                '2026-04-13': {
+                    scheduleAssignments: {
+                        '1A': ['Baseball', 'Swim'],
+                        '1B': ['Soccer', 'Arts'],
+                        '5A': ['Drama', 'Tennis']
+                    },
+                    leagueAssignments: {
+                        '1A': ['Red Team', 'Game 1'],
+                        '5A': ['Blue Team', 'Game 2']
+                    }
+                },
+                '2026-04-14': {
+                    scheduleAssignments: { '1A': ['Archery'], '5B': ['Swim'] },
+                    leagueAssignments: {}
+                }
+            };
+            localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(data));
+            window.scheduleAssignments = { ...data['2026-04-13'].scheduleAssignments };
+            window.leagueAssignments = { ...data['2026-04-13'].leagueAssignments };
+        }
+
+        function seedHistoryData() {
+            localStorage.setItem(ROTATION_HISTORY_KEY, JSON.stringify({ '1A': { Baseball: 3 } }));
+            localStorage.setItem(SMART_TILE_HISTORY_KEY, JSON.stringify({ tile1: 5 }));
+            localStorage.setItem(SMART_TILE_SPECIAL_HISTORY_KEY, JSON.stringify({ special1: 2 }));
+            localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify({ league1: { game: 4 } }));
+            localStorage.setItem(SPECIALTY_LEAGUE_HISTORY_KEY, JSON.stringify({ spec1: { game: 2 } }));
+        }
+
+        // ============================
+        // LOAD calendar.js
+        // ============================
+        await new Promise(function(resolve, reject) {
+            var script = document.createElement('script');
+            script.src = '../calendar.js';
+            script.onload = resolve;
+            script.onerror = function() { reject(new Error('calendar.js failed to load')); };
+            document.head.appendChild(script);
+        });
+
+        // Patch location.reload after calendar.js loads so it doesn't actually reload
+        var _origReload = window.location.reload.bind(window.location);
+        // We can't easily override location.reload, so we wrap the functions instead
+        var origEraseRotationHistory = window.eraseRotationHistory;
+        var origStartNewHalf = window.startNewHalf;
+        var origEraseAllDailyData = window.eraseAllDailyData;
+        var origEraseCurrentDailyData = window.eraseCurrentDailyData;
+
+        // Wrap to catch reloads
+        window.eraseRotationHistory = async function() {
+            var origRL = window.location.reload;
+            window.location.reload = function() { _reloadCount++; };
+            try { await origEraseRotationHistory(); } finally { window.location.reload = origRL; }
+        };
+        window.startNewHalf = async function() {
+            var origRL = window.location.reload;
+            window.location.reload = function() { _reloadCount++; };
+            try { await origStartNewHalf(); } finally { window.location.reload = origRL; }
+        };
+        window.eraseAllDailyData = async function() {
+            var origRL = window.location.reload;
+            window.location.reload = function() { _reloadCount++; };
+            try { await origEraseAllDailyData(); } finally { window.location.reload = origRL; }
+        };
+        // eraseCurrentDailyData does NOT reload, so no wrapping needed
+
+        // ================================================================
+        // TEST SUITE 1: DELETE ONLY TODAY'S SCHEDULE
+        // ================================================================
+        section("Delete Only Today's Schedule — Owner/Admin");
+
+        // Test 1.1: Owner deletes today's data
+        resetMocks();
+        seedDailyData();
+        mockRole = 'owner';
+        confirmResult = true;
+        await window.eraseCurrentDailyData();
+
+        assert(cloudCalls.deleteSchedule.length === 1, 'Owner: ScheduleDB.deleteSchedule called');
+        assert(cloudCalls.deleteSchedule[0] === '2026-04-13', 'Owner: deleteSchedule called with correct dateKey');
+        assert(Object.keys(window.scheduleAssignments).length === 0, 'Owner: window.scheduleAssignments cleared');
+        assert(Object.keys(window.leagueAssignments).length === 0, 'Owner: window.leagueAssignments cleared');
+
+        // Check localStorage — today's data removed, tomorrow's preserved
+        var allData = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+        assert(!allData['2026-04-13'] || Object.keys(allData['2026-04-13'].scheduleAssignments || {}).length === 0,
+            'Owner: localStorage today\'s data removed');
+        assert(allData['2026-04-14'] && allData['2026-04-14'].scheduleAssignments['5B'],
+            'Owner: localStorage other dates preserved');
+
+        // Test 1.2: Admin deletes today's data
+        resetMocks();
+        seedDailyData();
+        mockRole = 'admin';
+        confirmResult = true;
+        await window.eraseCurrentDailyData();
+
+        assert(cloudCalls.deleteSchedule.length === 1, 'Admin: ScheduleDB.deleteSchedule called');
+        assert(Object.keys(window.scheduleAssignments).length === 0, 'Admin: globals cleared');
+
+        // ----------------------------------------------------------------
+        section("Delete Only Today's Schedule — Scheduler (partial delete)");
+
+        // Test 1.3: Scheduler deletes only their division's bunks
+        resetMocks();
+        seedDailyData();
+        mockRole = 'scheduler';
+        mockEditableDivisions = ['Juniors']; // Juniors has bunks 1A, 1B, 1C
+        confirmResult = true;
+
+        // Setup cloud records that the scheduler's delete function queries
+        mockCloudRecords = [{
+            id: 'rec-1',
+            scheduler_name: 'OwnerUser',
+            schedule_data: {
+                scheduleAssignments: { '1A': ['Baseball'], '1B': ['Soccer'], '5A': ['Drama'] },
+                leagueAssignments: { '1A': ['Red', 'G1'], '5A': ['Blue', 'G2'] }
+            }
+        }];
+
+        await window.eraseCurrentDailyData();
+
+        // Verify cloud update removed Junior bunks but kept Senior bunks
+        assert(cloudCalls.supabaseUpdates.length === 1, 'Scheduler: cloud record updated (not deleted entirely)');
+        var updatedData = cloudCalls.supabaseUpdates[0]?.data?.schedule_data;
+        assert(updatedData && !updatedData.scheduleAssignments['1A'], 'Scheduler: bunk 1A removed from cloud');
+        assert(updatedData && !updatedData.scheduleAssignments['1B'], 'Scheduler: bunk 1B removed from cloud');
+        assert(updatedData && updatedData.scheduleAssignments['5A'], 'Scheduler: bunk 5A preserved in cloud');
+
+        // Check localStorage — Junior bunks removed from today
+        var localData = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+        var todayLocal = localData['2026-04-13'] || {};
+        assert(!todayLocal.scheduleAssignments?.['1A'], 'Scheduler: localStorage 1A removed');
+        assert(!todayLocal.scheduleAssignments?.['1B'], 'Scheduler: localStorage 1B removed');
+
+        // Check window globals — Junior bunks removed
+        assert(!window.scheduleAssignments['1A'], 'Scheduler: global 1A removed');
+        assert(!window.scheduleAssignments['1B'], 'Scheduler: global 1B removed');
+
+        // Test 1.4: Scheduler with empty record → record gets deleted entirely
+        resetMocks();
+        seedDailyData();
+        mockRole = 'scheduler';
+        mockEditableDivisions = ['Juniors'];
+        confirmResult = true;
+        mockCloudRecords = [{
+            id: 'rec-only-juniors',
+            scheduler_name: 'SchedulerUser',
+            schedule_data: {
+                scheduleAssignments: { '1A': ['Baseball'], '1B': ['Soccer'] },
+                leagueAssignments: {}
+            }
+        }];
+
+        await window.eraseCurrentDailyData();
+
+        assert(cloudCalls.supabaseDeletes.length === 1, 'Scheduler: empty record deleted from cloud');
+
+        // ----------------------------------------------------------------
+        section("Delete Only Today's Schedule — Viewer (denied)");
+
+        // Test 1.5: Viewer is denied
+        resetMocks();
+        seedDailyData();
+        mockRole = 'viewer';
+        var savedAssignments = { ...window.scheduleAssignments };
+        await window.eraseCurrentDailyData();
+
+        assert(JSON.stringify(window.scheduleAssignments) === JSON.stringify(savedAssignments),
+            'Viewer: scheduleAssignments unchanged');
+        assert(cloudCalls.deleteSchedule.length === 0, 'Viewer: no cloud delete called');
+
+        // ================================================================
+        // TEST SUITE 2: DELETE ALL SCHEDULES
+        // ================================================================
+        section("Delete All Schedules — Owner/Admin");
+
+        // Test 2.1: Owner deletes all
+        resetMocks();
+        seedDailyData();
+        mockRole = 'owner';
+        confirmResult = true;
+        await window.eraseAllDailyData();
+
+        assert(localStorage.getItem(DAILY_DATA_KEY) === null, 'Owner deleteAll: DAILY_DATA_KEY removed from localStorage');
+        assert(Object.keys(window.scheduleAssignments).length === 0, 'Owner deleteAll: scheduleAssignments cleared');
+        assert(Object.keys(window.leagueAssignments).length === 0, 'Owner deleteAll: leagueAssignments cleared');
+        assert(cloudCalls.supabaseDeletes.length === 1, 'Owner deleteAll: cloud delete called');
+        assert(cloudCalls.clearCloudKeys.length === 1, 'Owner deleteAll: clearCloudKeys called');
+        assert(cloudCalls.clearCloudKeys[0].indexOf('daily_schedules') !== -1, 'Owner deleteAll: daily_schedules in cleared keys');
+
+        // Test 2.2: Admin deletes all
+        resetMocks();
+        seedDailyData();
+        mockRole = 'admin';
+        confirmResult = true;
+        await window.eraseAllDailyData();
+
+        assert(localStorage.getItem(DAILY_DATA_KEY) === null, 'Admin deleteAll: localStorage cleared');
+        assert(cloudCalls.supabaseDeletes.length === 1, 'Admin deleteAll: cloud delete called');
+
+        // ----------------------------------------------------------------
+        section("Delete All Schedules — Denied roles");
+
+        // Test 2.3: Scheduler denied
+        resetMocks();
+        seedDailyData();
+        mockRole = 'scheduler';
+        await window.eraseAllDailyData();
+        assert(localStorage.getItem(DAILY_DATA_KEY) !== null, 'Scheduler: deleteAll denied, data preserved');
+
+        // Test 2.4: Viewer denied
+        resetMocks();
+        seedDailyData();
+        mockRole = 'viewer';
+        await window.eraseAllDailyData();
+        assert(localStorage.getItem(DAILY_DATA_KEY) !== null, 'Viewer: deleteAll denied, data preserved');
+
+        // ================================================================
+        // TEST SUITE 3: RESET ACTIVITY HISTORY
+        // ================================================================
+        section("Reset Activity History — Owner/Admin");
+
+        // Test 3.1: Owner resets activity
+        resetMocks();
+        seedHistoryData();
+        mockRole = 'owner';
+        alertMessages = [];
+        await window.eraseRotationHistory();
+
+        assert(localStorage.getItem(ROTATION_HISTORY_KEY) === null, 'Owner reset: rotation history cleared');
+        assert(localStorage.getItem(SMART_TILE_HISTORY_KEY) === null, 'Owner reset: smart tile history cleared');
+        assert(localStorage.getItem(SMART_TILE_SPECIAL_HISTORY_KEY) === null, 'Owner reset: smart tile special cleared');
+        assert(cloudCalls.clearCloudKeys.length === 1, 'Owner reset: clearCloudKeys called');
+
+        var clearedKeys = cloudCalls.clearCloudKeys[0];
+        assert(clearedKeys.indexOf('manualUsageOffsets') !== -1, 'Owner reset: manualUsageOffsets cleared');
+        assert(clearedKeys.indexOf('historicalCounts') !== -1, 'Owner reset: historicalCounts cleared');
+        assert(clearedKeys.indexOf('smartTileHistory') !== -1, 'Owner reset: smartTileHistory cleared');
+        assert(clearedKeys.indexOf('rotationHistory') !== -1, 'Owner reset: rotationHistory cleared');
+
+        // Test 3.2: Admin resets activity
+        resetMocks();
+        seedHistoryData();
+        mockRole = 'admin';
+        await window.eraseRotationHistory();
+
+        assert(localStorage.getItem(ROTATION_HISTORY_KEY) === null, 'Admin reset: rotation history cleared');
+        assert(cloudCalls.clearCloudKeys.length === 1, 'Admin reset: clearCloudKeys called');
+
+        // Test 3.3: Reset does NOT touch daily schedules
+        resetMocks();
+        seedDailyData();
+        seedHistoryData();
+        mockRole = 'owner';
+        await window.eraseRotationHistory();
+
+        assert(localStorage.getItem(DAILY_DATA_KEY) !== null, 'Reset activity: daily data preserved');
+        assert(localStorage.getItem(LEAGUE_HISTORY_KEY) !== null, 'Reset activity: league history preserved (not part of reset)');
+
+        // ----------------------------------------------------------------
+        section("Reset Activity History — Denied roles");
+
+        // Test 3.4: Scheduler denied
+        resetMocks();
+        seedHistoryData();
+        mockRole = 'scheduler';
+        await window.eraseRotationHistory();
+        assert(localStorage.getItem(ROTATION_HISTORY_KEY) !== null, 'Scheduler: reset denied, history preserved');
+
+        // Test 3.5: Viewer denied
+        resetMocks();
+        seedHistoryData();
+        mockRole = 'viewer';
+        await window.eraseRotationHistory();
+        assert(localStorage.getItem(ROTATION_HISTORY_KEY) !== null, 'Viewer: reset denied, history preserved');
+
+        // ================================================================
+        // TEST SUITE 4: NEW HALF
+        // ================================================================
+        section("New Half — Owner/Admin");
+
+        // Test 4.1: Owner starts new half
+        resetMocks();
+        seedDailyData();
+        seedHistoryData();
+        mockRole = 'owner';
+        confirmResult = true;
+        alertMessages = [];
+        await window.startNewHalf();
+
+        // All history keys cleared
+        assert(localStorage.getItem(ROTATION_HISTORY_KEY) === null, 'Owner newHalf: rotation history cleared');
+        assert(localStorage.getItem(SMART_TILE_HISTORY_KEY) === null, 'Owner newHalf: smart tile history cleared');
+        assert(localStorage.getItem(SMART_TILE_SPECIAL_HISTORY_KEY) === null, 'Owner newHalf: smart tile special cleared');
+        assert(localStorage.getItem(LEAGUE_HISTORY_KEY) === null, 'Owner newHalf: league history cleared');
+        assert(localStorage.getItem(SPECIALTY_LEAGUE_HISTORY_KEY) === null, 'Owner newHalf: specialty league cleared');
+        assert(localStorage.getItem(DAILY_DATA_KEY) === null, 'Owner newHalf: daily data cleared');
+
+        // Cloud keys cleared
+        assert(cloudCalls.clearCloudKeys.length === 1, 'Owner newHalf: clearCloudKeys called');
+        var halfKeys = cloudCalls.clearCloudKeys[0];
+        assert(halfKeys.indexOf('leagueRoundState') !== -1, 'Owner newHalf: leagueRoundState in cleared keys');
+        assert(halfKeys.indexOf('leagueHistory') !== -1, 'Owner newHalf: leagueHistory in cleared keys');
+        assert(halfKeys.indexOf('specialtyLeagueHistory') !== -1, 'Owner newHalf: specialtyLeagueHistory in cleared keys');
+        assert(halfKeys.indexOf('daily_schedules') !== -1, 'Owner newHalf: daily_schedules in cleared keys');
+        assert(halfKeys.indexOf('rotationHistory') !== -1, 'Owner newHalf: rotationHistory in cleared keys');
+
+        // Test 4.2: Admin starts new half
+        resetMocks();
+        seedDailyData();
+        seedHistoryData();
+        mockRole = 'admin';
+        confirmResult = true;
+        await window.startNewHalf();
+
+        assert(localStorage.getItem(ROTATION_HISTORY_KEY) === null, 'Admin newHalf: history cleared');
+        assert(localStorage.getItem(DAILY_DATA_KEY) === null, 'Admin newHalf: daily data cleared');
+        assert(cloudCalls.clearCloudKeys.length === 1, 'Admin newHalf: cloud cleared');
+
+        // Test 4.3: New half confirm canceled — nothing happens
+        resetMocks();
+        seedDailyData();
+        seedHistoryData();
+        mockRole = 'owner';
+        confirmResult = false;
+        await window.startNewHalf();
+
+        assert(localStorage.getItem(ROTATION_HISTORY_KEY) !== null, 'Canceled newHalf: history preserved');
+        assert(localStorage.getItem(DAILY_DATA_KEY) !== null, 'Canceled newHalf: daily data preserved');
+        assert(cloudCalls.clearCloudKeys.length === 0, 'Canceled newHalf: no cloud calls');
+
+        // ----------------------------------------------------------------
+        section("New Half — Denied roles");
+
+        // Test 4.4: Scheduler denied
+        resetMocks();
+        seedDailyData();
+        seedHistoryData();
+        mockRole = 'scheduler';
+        await window.startNewHalf();
+        assert(localStorage.getItem(DAILY_DATA_KEY) !== null, 'Scheduler: newHalf denied, data preserved');
+
+        // Test 4.5: Viewer denied
+        resetMocks();
+        seedDailyData();
+        seedHistoryData();
+        mockRole = 'viewer';
+        await window.startNewHalf();
+        assert(localStorage.getItem(DAILY_DATA_KEY) !== null, 'Viewer: newHalf denied, data preserved');
+
+        // ================================================================
+        // TEST SUITE 5: CROSS-FEATURE ISOLATION
+        // ================================================================
+        section("Cross-Feature Isolation");
+
+        // Test 5.1: Delete today does NOT affect other dates
+        resetMocks();
+        seedDailyData();
+        mockRole = 'owner';
+        confirmResult = true;
+        await window.eraseCurrentDailyData();
+
+        var remaining = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+        assert(remaining['2026-04-14'] !== undefined, 'Delete today: other dates untouched');
+        assert(remaining['2026-04-14'].scheduleAssignments['5B'] !== undefined, 'Delete today: other date data intact');
+
+        // Test 5.2: Reset activity does NOT delete schedules
+        resetMocks();
+        seedDailyData();
+        seedHistoryData();
+        mockRole = 'owner';
+        await window.eraseRotationHistory();
+
+        var schedAfterReset = JSON.parse(localStorage.getItem(DAILY_DATA_KEY) || '{}');
+        assert(schedAfterReset['2026-04-13'] !== undefined, 'Reset activity: schedule data intact');
+        assert(schedAfterReset['2026-04-13'].scheduleAssignments['1A'] !== undefined, 'Reset activity: bunk assignments intact');
+
+        // Test 5.3: New half clears EVERYTHING (schedules + history)
+        resetMocks();
+        seedDailyData();
+        seedHistoryData();
+        mockRole = 'owner';
+        confirmResult = true;
+        await window.startNewHalf();
+
+        assert(localStorage.getItem(DAILY_DATA_KEY) === null, 'New half: schedules cleared');
+        assert(localStorage.getItem(ROTATION_HISTORY_KEY) === null, 'New half: rotation cleared');
+        assert(localStorage.getItem(LEAGUE_HISTORY_KEY) === null, 'New half: leagues cleared');
+        assert(localStorage.getItem(SPECIALTY_LEAGUE_HISTORY_KEY) === null, 'New half: specialty leagues cleared');
+
+        // ================================================================
+        // CLEANUP & RENDER
+        // ================================================================
+        window.confirm = originalConfirm;
+        window.alert = originalAlert;
+        localStorage.removeItem(DAILY_DATA_KEY);
+        localStorage.removeItem(ROTATION_HISTORY_KEY);
+        localStorage.removeItem(SMART_TILE_HISTORY_KEY);
+        localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
+        localStorage.removeItem(LEAGUE_HISTORY_KEY);
+        localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
+
+        render();
+    })();
+    </script>
+</body>
+</html>

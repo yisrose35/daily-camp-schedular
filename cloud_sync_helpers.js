@@ -383,13 +383,22 @@
     if (originalSaveGlobalSettings && !originalSaveGlobalSettings._cloudHelpersHooked) {
         window.saveGlobalSettings = function(key, data) {
             const result = originalSaveGlobalSettings(key, data);
-            
+
             // Log what's being saved
             console.log(`☁️ [${key}] queued for cloud sync`);
-            
+
             return result;
         };
         window.saveGlobalSettings._cloudHelpersHooked = true;
+        // Propagate the authoritative-handler flag from the inner handler.
+        // Callers (e.g. campistry_me.save()) branch on this flag to choose the
+        // fine-grained saveGlobalSettings path over a forceSyncToCloud fallback.
+        // Without it, Me falls through to forceSyncToCloud, which reads stale
+        // _localCache and pushes stale state to cloud with a fresh timestamp —
+        // causing local data (e.g. new campers) to get clobbered on next hydrate.
+        if (originalSaveGlobalSettings._isAuthoritativeHandler) {
+            window.saveGlobalSettings._isAuthoritativeHandler = true;
+        }
     }
 
     // =========================================================================

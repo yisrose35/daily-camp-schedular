@@ -168,6 +168,21 @@
                 return;
             }
 
+            // ── STARTER: feature-limited, no time restriction ──
+            if (_planStatus === 'starter') {
+                console.log('⏱️ [Trial] Plan is starter — feature limits active');
+                removeOverlay();
+                _isExpired = false;
+                // If banner already exists, just refresh the count — don't tear down & rebuild
+                if (document.getElementById('starter-plan-banner')) {
+                    if (window.refreshStarterBanner) window.refreshStarterBanner();
+                } else {
+                    removeBanner();
+                    showStarterBanner(camp.id);
+                }
+                return;
+            }
+
             // ── NO TRIAL DATA (legacy camp): grandfathered in ──
             if (!camp.trial_started_at) {
                 return;
@@ -267,8 +282,269 @@
     function removeBanner() {
         const b = document.getElementById('trial-countdown-banner');
         if (b) b.remove();
+        const sb = document.getElementById('starter-plan-banner');
+        if (sb) sb.remove();
         document.body.classList.remove('trial-banner-active');
         if (_countdownInterval) clearInterval(_countdownInterval);
+    }
+
+    // =========================================================================
+    // UI: STARTER PLAN USAGE BANNER
+    // =========================================================================
+
+    // ── Starter banner state (kept in memory for fast refresh) ──
+    var _starterDaysUsed = -1;  // -1 = not yet loaded
+    var _starterCamperCount = -1;
+    var _starterMaxCampers = 100;
+    var _starterMaxDays = 7;
+
+    function _starterBannerColor() {
+        if (_starterDaysUsed < 0 || _starterCamperCount < 0) return 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
+        var camperPct = _starterCamperCount / _starterMaxCampers;
+        var daysPct = _starterDaysUsed / _starterMaxDays;
+        if (daysPct >= 1 || camperPct >= 1) return 'linear-gradient(135deg, #B91C1C 0%, #DC2626 100%)';
+        if (daysPct >= 0.7 || camperPct >= 0.8) return 'linear-gradient(135deg, #B45309 0%, #D97706 100%)';
+        return 'linear-gradient(135deg, #0F5F6E 0%, #147D91 100%)';
+    }
+
+    function _starterDaysLabel() {
+        if (_starterDaysUsed < 0) return '... of ' + _starterMaxDays + ' days used';
+        return _starterDaysUsed + ' of ' + _starterMaxDays + ' days used';
+    }
+
+    function _starterCamperLabel() {
+        if (_starterCamperCount < 0) return '... of ' + _starterMaxCampers + ' campers';
+        return _starterCamperCount + ' of ' + _starterMaxCampers + ' campers';
+    }
+
+    function _renderStarterBanner() {
+        var banner = document.getElementById('starter-plan-banner');
+        if (!banner) return;
+        banner.style.background = _starterBannerColor();
+        var dLabel = document.getElementById('starter-days-label');
+        var cLabel = document.getElementById('starter-camper-label');
+        if (dLabel) dLabel.textContent = _starterDaysLabel();
+        if (cLabel) cLabel.textContent = _starterCamperLabel();
+    }
+
+    function _saveStarterCache() {
+        try {
+            localStorage.setItem('campistry_starter_cache', JSON.stringify({
+                daysUsed: _starterDaysUsed,
+                camperCount: _starterCamperCount,
+                maxDays: _starterMaxDays,
+                maxCampers: _starterMaxCampers,
+                ts: Date.now()
+            }));
+        } catch (_) {}
+    }
+
+    function _loadStarterCache() {
+        try {
+            var raw = localStorage.getItem('campistry_starter_cache');
+            if (raw) return JSON.parse(raw);
+        } catch (_) {}
+        return null;
+    }
+
+    async function showStarterBanner(campId) {
+        var limits = window.getPlanLimits?.('starter') || { maxScheduleDays: 7, maxCampers: 100 };
+        _starterMaxDays = limits.maxScheduleDays || 7;
+        _starterMaxCampers = limits.maxCampers || 100;
+
+        // ★ Load cached values FIRST so banner renders instantly with last-known counts
+        var cached = _loadStarterCache();
+        if (cached) {
+            _starterDaysUsed = cached.daysUsed || 0;
+            _starterCamperCount = cached.camperCount || 0;
+            if (cached.maxDays) _starterMaxDays = cached.maxDays;
+            if (cached.maxCampers) _starterMaxCampers = cached.maxCampers;
+        } else {
+            _starterDaysUsed = -1;  // show "..." until server responds
+            _starterCamperCount = -1;
+        }
+
+        // Also load local camper roster (instant, may be newer than cache)
+        try {
+            var localData = JSON.parse(
+                localStorage.getItem('campGlobalSettings_v1') ||
+                localStorage.getItem('campistryGlobalSettings') || '{}'
+            );
+            if (localData.app1?.camperRoster) {
+                var localCount = Object.keys(localData.app1.camperRoster).length;
+                if (localCount > _starterCamperCount) _starterCamperCount = localCount;
+            }
+        } catch (_) {}
+
+        // ★ RENDER BANNER IMMEDIATELY with cached/local values
+        var existing = document.getElementById('starter-plan-banner');
+        if (existing) existing.remove();
+
+        if (!document.getElementById('trial-guard-styles')) {
+            var style = document.createElement('style');
+            style.id = 'trial-guard-styles';
+            style.textContent = '@keyframes trialSlideDown { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } } body.trial-banner-active { padding-top: 40px !important; }';
+            document.head.appendChild(style);
+        }
+
+        var banner = document.createElement('div');
+        banner.id = 'starter-plan-banner';
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:' + _starterBannerColor() + ';color:white;text-align:center;padding:8px 16px;font-size:0.85rem;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;display:flex;align-items:center;justify-content:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,0.15);animation:trialSlideDown 0.3s ease-out;';
+
+        banner.innerHTML = '<span style="font-size:1rem;">\u2B50</span>' +
+            '<span>Starter Plan: <strong id="starter-days-label">' + _starterDaysLabel() + '</strong>' +
+            ' \u00B7 <strong id="starter-camper-label">' + _starterCamperLabel() + '</strong></span>' +
+            '<button id="starter-upgrade-btn" style="color:white;background:rgba(255,255,255,0.2);padding:3px 12px;border-radius:4px;border:none;cursor:pointer;font-size:0.8rem;font-weight:600;">Upgrade</button>' +
+            '<button onclick="this.parentElement.remove();document.body.classList.remove(\'trial-banner-active\');" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:1.1rem;padding:0 4px;margin-left:4px;" title="Dismiss">\u00D7</button>';
+
+        document.body.prepend(banner);
+        document.body.classList.add('trial-banner-active');
+        var upgradeBtn = document.getElementById('starter-upgrade-btn');
+        if (upgradeBtn) upgradeBtn.addEventListener('click', openUpgradeEmail);
+
+        // ★ THEN fetch fresh data from server and update in place
+        try {
+            var client = window.supabase || window.CampistryDB?.getClient?.();
+            if (client && campId) {
+                // Days used
+                var gotDays = false;
+                try {
+                    var schedCheck = await client.rpc('check_schedule_limit', {
+                        p_camp_id: campId, p_date_key: '__banner_check__'
+                    });
+                    if (!schedCheck.error && schedCheck.data && schedCheck.data.used !== undefined) {
+                        _starterDaysUsed = schedCheck.data.used;
+                        if (schedCheck.data.max) _starterMaxDays = schedCheck.data.max;
+                        gotDays = true;
+                    }
+                } catch (_) {}
+                if (!gotDays) {
+                    try {
+                        var schedRows = await client.from('daily_schedules').select('date_key').eq('camp_id', campId);
+                        if (schedRows.data) {
+                            _starterDaysUsed = new Set(schedRows.data.map(function(r) { return r.date_key; })).size;
+                        }
+                    } catch (_) {}
+                }
+
+                // Camper count from cloud
+                try {
+                    var stateResult = await client.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
+                    if (stateResult.data?.state?.app1?.camperRoster) {
+                        _starterCamperCount = Object.keys(stateResult.data.state.app1.camperRoster).length;
+                    }
+                } catch (_) {}
+
+                // Update banner + save to cache
+                _renderStarterBanner();
+                _saveStarterCache();
+                console.log('⏱️ [Trial] Banner updated from server:', _starterDaysUsed, '/', _starterMaxDays, 'days,', _starterCamperCount, '/', _starterMaxCampers, 'campers');
+            }
+        } catch (e) {
+            console.warn('⏱️ [Trial] Server fetch failed, using cached values:', e.message);
+        }
+    }
+
+    /**
+     * Refresh the starter banner in real time.
+     * Pass camperCount for instant update, or omit to re-read from local/cloud.
+     */
+    window.refreshStarterBanner = async function(camperCount) {
+        var banner = document.getElementById('starter-plan-banner');
+        if (!banner) return; // banner not showing
+
+        // Update camper count
+        if (camperCount !== undefined) {
+            _starterCamperCount = camperCount;
+        } else {
+            // Try local roster first (instant)
+            try {
+                var localData = JSON.parse(
+                    localStorage.getItem('campGlobalSettings_v1') ||
+                    localStorage.getItem('campistryGlobalSettings') || '{}'
+                );
+                if (localData.app1?.camperRoster) {
+                    _starterCamperCount = Object.keys(localData.app1.camperRoster).length;
+                }
+            } catch (_) {}
+        }
+
+        // Re-check days used from Supabase (only on periodic refresh, not explicit camper updates)
+        if (camperCount === undefined) {
+            try {
+                var client = window.supabase || window.CampistryDB?.getClient?.();
+                var campId = localStorage.getItem('campistry_camp_id') ||
+                             localStorage.getItem('campistry_user_id');
+                if (client && campId) {
+                    var gotDays = false;
+                    try {
+                        var schedCheck = await client.rpc('check_schedule_limit', {
+                            p_camp_id: campId, p_date_key: '__banner_check__'
+                        });
+                        if (!schedCheck.error && schedCheck.data && schedCheck.data.used !== undefined) {
+                            _starterDaysUsed = schedCheck.data.used;
+                            gotDays = true;
+                        }
+                    } catch (_) {}
+                    if (!gotDays) {
+                        var schedRows = await client.from('daily_schedules').select('date_key').eq('camp_id', campId);
+                        if (schedRows.data) {
+                            _starterDaysUsed = new Set(schedRows.data.map(function(r) { return r.date_key; })).size;
+                        }
+                    }
+                }
+            } catch (_) {}
+        }
+
+        _renderStarterBanner();
+        _saveStarterCache();
+    };
+
+    // Refresh banner once the app is fully loaded and Supabase is ready
+    window.addEventListener('campistry-orchestrator-ready', function() {
+        if (document.getElementById('starter-plan-banner') && window.refreshStarterBanner) {
+            window.refreshStarterBanner();
+        }
+    }, { once: true });
+
+    // Listen for plan-limit events from schedule/camper generation
+    window.addEventListener('campistry-plan-limit', function(e) {
+        var detail = e.detail || {};
+        console.log('⏱️ [Trial] Plan limit reached:', detail.type, detail);
+        showPlanLimitPopup(detail);
+    });
+
+    function showPlanLimitPopup(detail) {
+        var existing = document.getElementById('plan-limit-popup');
+        if (existing) existing.remove();
+
+        var msg = '';
+        if (detail.type === 'schedule') {
+            msg = 'You\'ve used all <strong>' + (detail.max || 7) + ' schedule days</strong> included in the Starter Plan.';
+        } else if (detail.type === 'camper') {
+            msg = 'You\'ve reached the <strong>' + (detail.max || 100) + ' camper limit</strong> included in the Starter Plan.';
+        } else {
+            msg = 'You\'ve reached a Starter Plan limit.';
+        }
+
+        var popup = document.createElement('div');
+        popup.id = 'plan-limit-popup';
+        popup.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(15,23,42,0.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;animation:trialFadeIn 0.2s ease-out;';
+        popup.innerHTML = '<div style="background:white;border-radius:16px;padding:40px 36px;max-width:420px;width:90%;text-align:center;box-shadow:0 25px 60px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">' +
+            '<div style="font-size:2.5rem;margin-bottom:12px;">&#x1F6A8;</div>' +
+            '<h2 style="margin:0 0 12px;font-size:1.3rem;color:#1e293b;">Generation Limit Reached</h2>' +
+            '<p style="color:#475569;font-size:0.95rem;line-height:1.5;margin:0 0 20px;">' + msg + '</p>' +
+            '<p style="color:#64748b;font-size:0.85rem;line-height:1.5;margin:0 0 24px;">Contact the Campistry office to upgrade your plan for unlimited access.</p>' +
+            '<div style="display:flex;gap:10px;justify-content:center;">' +
+            '<button id="plan-limit-upgrade-btn" style="background:linear-gradient(135deg,#2563eb,#1d4ed8);color:white;border:none;padding:10px 24px;border-radius:8px;font-size:0.9rem;font-weight:600;cursor:pointer;">Contact Us</button>' +
+            '<button id="plan-limit-close-btn" style="background:#f1f5f9;color:#475569;border:none;padding:10px 24px;border-radius:8px;font-size:0.9rem;font-weight:500;cursor:pointer;">Close</button>' +
+            '</div></div>';
+
+        document.body.appendChild(popup);
+
+        document.getElementById('plan-limit-close-btn').addEventListener('click', function() { popup.remove(); });
+        document.getElementById('plan-limit-upgrade-btn').addEventListener('click', function() { popup.remove(); openUpgradeEmail(); });
+        popup.addEventListener('click', function(ev) { if (ev.target === popup) popup.remove(); });
     }
 
     // =========================================================================

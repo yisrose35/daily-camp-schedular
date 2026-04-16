@@ -95,33 +95,46 @@
      * @param {string} [divisionOrBunk] - Division name or bunk name (NEW: for division-specific lookup)
      * @returns {number[]} Array of slot indices
      */
-    Utils.findSlotsForRange = function (startMin, endMin, divisionOrBunk = null) {
+    Utils.findSlotsForRange = function (startMin, endMin, divisionOrBunk = null, bunkName = null) {
         const slots = [];
         if (startMin == null || endMin == null) return slots;
 
-        // ★★★ NEW: Division-specific lookup ★★★
         if (divisionOrBunk && window.divisionTimes) {
             let divName = String(divisionOrBunk);
 
-            // ★★★ FIX: Check if it's already a DIVISION name FIRST ★★★
             if (!window.divisionTimes[divName]) {
-                // Not a division, check if it's a bunk name
                 const divisions = window.divisions || {};
                 const bunkStr = String(divisionOrBunk);
                 for (const [dName, dData] of Object.entries(divisions)) {
                     if (dData.bunks?.some(b => String(b) === bunkStr)) {
                         divName = dName;
+                        if (!bunkName) bunkName = bunkStr;
                         break;
                     }
                 }
             }
 
-            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+            // ★★★ AUTO MODE ONLY: Per-bunk slots exist only when auto scheduler built them ★★★
+            const hasPerBunkSlots = !!window.divisionTimes[divName]?._perBunkSlots;
+            if (hasPerBunkSlots && bunkName) {
+                const perBunkSlots = window.divisionTimes[divName]._perBunkSlots[String(bunkName)];
+                if (perBunkSlots && perBunkSlots.length > 0) {
+                    for (let i = 0; i < perBunkSlots.length; i++) {
+                        const slot = perBunkSlots[i];
+                        if (!(slot.endMin <= startMin || slot.startMin >= endMin)) {
+                            slots.push(i);
+                        }
+                    }
+                    if (slots.length > 0) return slots;
+                    // If per-bunk found nothing, fall through to division-level
+                }
+            }
+
+            // ★ MANUAL MODE (and auto fallback): Division-level slots — unchanged ★
             const divSlots = window.divisionTimes[divName];
             if (divSlots && divSlots.length > 0) {
                 for (let i = 0; i < divSlots.length; i++) {
                     const slot = divSlots[i];
-                    // Check if slot overlaps with requested range
                     if (!(slot.endMin <= startMin || slot.startMin >= endMin)) {
                         slots.push(i);
                     }
@@ -130,7 +143,6 @@
             }
         }
 
-        // No fallback - division context is required
         if (divisionOrBunk) {
             console.warn(`[findSlotsForRange] No divisionTimes for: ${divisionOrBunk}`);
         }
@@ -514,7 +526,7 @@
     // =================================================================
 
     Utils.isTimeAvailable = function (slotIndex, props) {
-        if (!window.unifiedTimes?.[slotIndex]) return false;
+       if (!window.unifiedTimes?.[slotIndex]) return props.available !== false;
         const slot = window.unifiedTimes[slotIndex];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
         const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
@@ -586,6 +598,16 @@
         if (disabledFields.includes(fieldName)) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - field is DISABLED (rainy day or manual override)`);
             return false;
+        }
+
+        // ★ v6.0: Sport-to-field restriction check
+        if (actName) {
+            const dailyDisabledSports = (window.loadCurrentDailyData?.() || {}).dailyDisabledSportsByField || {};
+            const blockedSports = dailyDisabledSports[fieldName];
+            if (blockedSports && blockedSports.length > 0 && blockedSports.includes(actName)) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sport "${actName}" is disabled on this field today`);
+                return false;
+            }
         }
 
         // Get slots for this block

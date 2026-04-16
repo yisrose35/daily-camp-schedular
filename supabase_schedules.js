@@ -165,7 +165,16 @@
     }
     function setLocalSchedule(dateKey, schedule) {
         const data = getLocalData();
-        data[dateKey] = schedule;
+        // Re-serialize divisionTimes — mergeSchedules returns the deserialized form
+        // (flat arrays with _perBunkSlots as a custom property), and JSON.stringify
+        // strips custom array properties. Wrap back into {_slots, _perBunkSlots} form.
+        let safe = schedule;
+        if (schedule && schedule.divisionTimes && window.DivisionTimesSystem?.serialize) {
+            safe = Object.assign({}, schedule, {
+                divisionTimes: window.DivisionTimesSystem.serialize(schedule.divisionTimes)
+            });
+        }
+        data[dateKey] = safe;
         setLocalData(data);
     }
     function deleteLocalSchedule(dateKey) {
@@ -551,6 +560,9 @@
             return { success: true, target: 'local' };
         }
 
+        // NOTE: Schedule day limit is checked in runSkeletonOptimizer (generation time),
+        // not here — auto-saves and edits to existing dates should never be blocked.
+
         try {
             // ★★★ FIXED FILTERING - Uses AccessControl instead of PermissionsDB ★★★
             let filteredAssignments;
@@ -674,8 +686,11 @@
                 };
             }
 
-            return { 
-                success: true, 
+            // ★ Update starter banner days count after successful save
+            if (window.refreshStarterBanner) window.refreshStarterBanner();
+
+            return {
+                success: true,
                 target: 'cloud',
                 bunks: filteredBunkCount,
                 verified: true

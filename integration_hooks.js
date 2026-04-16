@@ -357,11 +357,17 @@
     function setLocalSettings(data) {
         try {
             _localCache = data;
-            localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
-            
-            // Update legacy keys for backward compatibility
-            localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(data));
-            
+            // Strip large data from Go before writing to shared settings
+            const lite = Object.assign({}, data);
+            if (lite.campistryGo) {
+                lite.campistryGo = Object.assign({}, lite.campistryGo);
+                delete lite.campistryGo.savedRoutes;
+                delete lite.campistryGo.addresses; // stored separately in Go's own key
+            }
+            const json = JSON.stringify(lite);
+            localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
+            localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+
             if (data.divisions || data.bunks) {
                 localStorage.setItem('campGlobalRegistry_v1', JSON.stringify({
                     divisions: data.divisions || {},
@@ -485,6 +491,10 @@
                 throw upsertError;
             }
 
+            // Mark self-write so our own camp_state realtime subscription
+            // ignores the echo and doesn't trigger a redundant re-hydrate.
+            _lastSelfWriteAt = Date.now();
+
             _lastSyncTime = Date.now();
             
             console.log('☁️ Cloud sync complete:', {
@@ -511,7 +521,7 @@
 
     async function forceSyncToCloud() {
         log('Force sync requested');
-        
+
         if (_syncTimeout) {
             clearTimeout(_syncTimeout);
             _syncTimeout = null;
@@ -524,12 +534,19 @@
             return true;
         }
 
+        // Invalidate the in-memory cache so we re-read whatever was most
+        // recently written to localStorage. Callers like campistry_me.save()
+        // write directly via localStorage.setItem before invoking us, which
+        // leaves _localCache stale — pushing that stale snapshot to cloud
+        // (with a fresh timestamp) corrupts subsequent hydrations.
+        _localCache = null;
+
         const localSettings = getLocalSettings();
         const allChanges = { ...localSettings, ..._pendingChanges };
         _pendingChanges = allChanges;
-        
+
         await executeBatchSync();
-        
+
         return true;
     }
 
@@ -624,6 +641,14 @@
         try {
             const result = await window.ScheduleDB.saveSchedule(dateKey, data);
             
+            // ★★★ STARTER PLAN: Do NOT retry plan-limit blocks ★★★
+            if (result?.target === 'plan-limit') {
+                log('[VERIFIED SAVE] Blocked by plan limit:', result.error?.message || result.error);
+                showNotification(result.error?.message || 'Schedule limit reached. Upgrade for unlimited.', 'warning');
+                _saveInProgress = false;
+                return result;
+            }
+
             if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified')) {
                 log('✅ Schedule saved to cloud:', bunkCount, 'bunks');
                 showNotification(`Saved ${bunkCount} bunks`, 'success');
@@ -649,6 +674,12 @@
                 return result;
             }
         } catch (e) {
+            // ★★★ STARTER PLAN: Detect trigger rejection — do NOT retry ★★★
+            if ((e.message && e.message.includes('Starter plan limit')) || e.code === 'P0001') {
+                showNotification('Starter plan limit reached. Upgrade for unlimited access.', 'warning');
+                _saveInProgress = false;
+                return { success: false, error: e.message, target: 'plan-limit' };
+            }
             logError('[VERIFIED SAVE] Exception:', e);
             if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                 await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
@@ -1011,6 +1042,12 @@
                     mergedState = cloudState;
                     log('Using cloud state (newer)');
                 }
+
+                // ★ Preserve app1 settings (builderMode etc.) through hydration
+                // Deep-merge app1 so local-only keys like builderMode survive cloud sync
+                if (localState.app1 || cloudState.app1) {
+                    mergedState.app1 = { ...(cloudState.app1 || {}), ...(localState.app1 || {}) };
+                }
                 
                 setLocalSettings(mergedState);
                 
@@ -1039,6 +1076,76 @@
             window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
         }
     }
+
+    // =========================================================================
+    // ★ LIVE — camp_state realtime subscription
+    // Divisions/grades/bunks/campers come from Campistry Me. When any client
+    // (this tab, another tab, another device) writes camp_state, we re-hydrate
+    // and fire `campistry-cloud-hydrated`. app1/Me/Go all listen for that and
+    // re-render. Self-writes are ignored via _lastSelfWriteAt to prevent echo.
+    // =========================================================================
+
+    let _campStateChannel = null;
+    let _lastSelfWriteAt = 0;
+    let _campStateDebounceTimer = null;
+    let _campStateSubscribed = false;
+
+    async function subscribeToCampState() {
+        if (_campStateSubscribed) return;
+        const client = window.CampistryDB?.getClient?.();
+        const campId = window.CampistryDB?.getCampId?.();
+        if (!client || !campId) {
+            log('camp_state realtime: no client/campId yet, deferring');
+            return;
+        }
+        // Role guard: RLS blocks scheduler/viewer from reading camp_state
+        // changes via realtime too — don't bother subscribing.
+        if (!_canWriteCampState()) {
+            log('camp_state realtime: role cannot read camp_state, skipping subscription');
+            return;
+        }
+        _campStateSubscribed = true;
+        try {
+            const channelName = `camp-state-${campId}-${Date.now()}`;
+            log('camp_state realtime: subscribing on', channelName);
+            _campStateChannel = client.channel(channelName)
+                .on('postgres_changes', {
+                    event: '*',
+                    schema: 'public',
+                    table: 'camp_state',
+                    filter: `camp_id=eq.${campId}`
+                }, function (payload) {
+                    // Self-echo guard: our own UPSERT just fired this event.
+                    if (Date.now() - _lastSelfWriteAt < 3000) {
+                        log('camp_state change ignored (self echo)');
+                        return;
+                    }
+                    // Debounce — bulk edits in Me arrive as a rapid burst.
+                    if (_campStateDebounceTimer) clearTimeout(_campStateDebounceTimer);
+                    _campStateDebounceTimer = setTimeout(async function () {
+                        _campStateDebounceTimer = null;
+                        log('camp_state remote change — re-hydrating');
+                        await hydrateFromCloud();
+                    }, 200);
+                })
+                .subscribe(function (status) {
+                    log('camp_state subscription status:', status);
+                    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        // Reset so a later hydration retry can re-subscribe.
+                        _campStateSubscribed = false;
+                    }
+                });
+        } catch (e) {
+            logError('camp_state subscribe failed:', e);
+            _campStateSubscribed = false;
+        }
+    }
+
+    // Subscribe once the first hydration completes — guarantees CampistryDB
+    // is ready. Subsequent hydrations (realtime, manual) don't re-subscribe.
+    window.addEventListener('campistry-cloud-hydrated', function () {
+        if (!_campStateSubscribed) subscribeToCampState();
+    });
 
     // =========================================================================
     // WAIT FOR ALL SYSTEMS
@@ -1217,7 +1324,9 @@
             try {
                 const DAILY_KEY = 'campDailyData_v1';
                 const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                allData[dateKey] = {
+                // ★★★ FIX: MERGE instead of replace — preserve auto-mode keys (_perBunkSlotsData, _autoGenerated, manualSkeleton) saved by Step 5 ★★★
+                const existing = allData[dateKey] || {};
+                Object.assign(existing, {
                     scheduleAssignments: window.scheduleAssignments || {},
                     leagueAssignments: window.leagueAssignments || {},
                     unifiedTimes: window.unifiedTimes || [],
@@ -1225,7 +1334,8 @@
                     isRainyDay: window.isRainyDay || false,
                     rainyDayStartTime: window.rainyDayStartTime ?? null,
                     _savedAt: Date.now()
-                };
+                });
+                allData[dateKey] = existing;
                 localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
                 console.log('🔗 ✅ Immediate localStorage save:', bunkCount, 'bunks');
             } catch (lsErr) {
@@ -1349,7 +1459,13 @@
                             window.unifiedTimes = result.data.unifiedTimes;
                         }
                         if (result.data.divisionTimes) {
-                            window.divisionTimes = result.data.divisionTimes;
+                            // ★ v7.0: Don't overwrite divisionTimes if local generation is fresh
+                            var localGenTime = window._localGenerationTimestamp || 0;
+                            if (Date.now() - localGenTime > 60000) {
+                                window.divisionTimes = result.data.divisionTimes;
+                            } else {
+                                console.log('🔗 Skipped divisionTimes overwrite — local generation is fresh');
+                            }
                         }
                         
                         // Update localStorage with merged data

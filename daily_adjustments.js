@@ -43,6 +43,9 @@ let smartTileHistory = null;
 let dailyOverrideSkeleton = [];
 let selectedTileId = null;
 
+// ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
+let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
+
 // DOM References
 let skeletonContainer = null;
 let tripsFormContainer = null;
@@ -58,10 +61,28 @@ let _rainyToggleDebounce = false;
 
 // Constants
 const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
-const PIXELS_PER_MINUTE = 2;
+const PIXELS_PER_MINUTE = 2.5;
 const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
-
+ // ★★★ AUTO BUILDER v2: Check if today uses auto layers ★★★
+function checkAutoModeForDay(dateKey) {
+  const g = window.loadGlobalSettings?.() || {};
+  const app1 = g.app1 || {};
+  const assignments = app1.layerAssignments || {};
+  const templates = app1.autoLayerTemplates || {};
+  
+  // Determine day of week
+  const [Y, M, D] = (dateKey || '').split('-').map(Number);
+  if (!Y) return null;
+  const dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayName = dayNames[dow];
+  
+  const templateName = assignments[dayName] || assignments['Default'];
+  if (!templateName || !templates[templateName]) return null;
+  
+  return { templateName, layers: templates[templateName] };
+}
 
 
 // =================================================================
@@ -1448,6 +1469,8 @@ function clearDisplacedTiles() {
 function renderDisplacedTilesPanel() {
   const panel = document.getElementById('da-displaced-tiles-panel');
   if (!panel) return;
+  // Auto mode: displaced tiles don't apply (auto uses layers, not individual tiles)
+  if (window._daBuilderMode === 'auto') { panel.style.display = 'none'; return; }
   if (displacedTiles.length === 0) { panel.style.display = 'none'; return; }
   
   panel.style.display = 'block';
@@ -1565,6 +1588,46 @@ function mapEventNameForOptimizer(name) {
 // RENDER PALETTE
 // =================================================================
 function renderPalette() {
+  // AUTO MODE: render DAW layer palette (same layer types as Master Builder)
+  if (window._daBuilderMode === 'auto') {
+    const paletteEl = document.getElementById('da-palette');
+    if (!paletteEl) return;
+    
+    const DAW_TYPES = window.MasterSchedulerInternal?.DAW_LAYER_TYPES || [
+      { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
+      { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
+      { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
+      { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
+      { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
+      { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+      { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
+      { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
+      { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
+      { type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;' },
+    ];
+    
+    let html = '';
+    html += '<div class="da-tile-label">Floaters</div>';
+    DAW_TYPES.filter(t => !t.anchor).forEach(t => {
+      html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">${t.name}</div>`;
+    });
+    html += '<div class="da-tile-divider"></div>';
+    html += '<div class="da-tile-label">Anchors</div>';
+    DAW_TYPES.filter(t => t.anchor).forEach(t => {
+      html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">${t.name}</div>`;
+    });
+    
+    paletteEl.innerHTML = html;
+    
+    // Wire up drag from palette — uses same data format the DAW grid expects
+    paletteEl.querySelectorAll('.ms-daw-tile').forEach(tile => {
+      tile.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+    });
+    return;
+  }
   const paletteEl = document.getElementById('da-palette');
   if (!paletteEl) return;
   
@@ -1588,7 +1651,8 @@ function renderPalette() {
       if (!tile) return;
       
       const el = document.createElement('div');
-      el.className = 'da-tile';
+      const paletteIsMS = paletteEl.classList.contains('ms-palette');
+      el.className = paletteIsMS ? 'ms-tile' : 'da-tile';
       el.textContent = tile.name;
       el.style.cssText = tile.style;
       el.draggable = true;
@@ -1641,11 +1705,17 @@ function renderPalette() {
 function renderGrid() {
   const gridEl = document.getElementById('da-skeleton-grid');
   if (!gridEl) return;
-  
+
+  // AUTO MODE: render DAW layer timeline instead of stacking grid
+  if (window._daBuilderMode === 'auto') {
+      renderDAWTimeline(gridEl);
+      return;
+  }
+
   const divisions = window.divisions || {};
   const availableDivisions = window.availableDivisions || [];
   if (availableDivisions.length === 0) {
-    gridEl.innerHTML = `<div class="da-empty-state">No divisions found. Please go to Setup to create divisions.</div>`;
+    gridEl.innerHTML = `<div class="da-empty-state">No divisions found.</div>`;
     return;
   }
   
@@ -1675,13 +1745,15 @@ function renderGrid() {
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
   gridEl.dataset.earliestMin = earliestMin;
   
-  let html = `<div class="da-grid" style="grid-template-columns:60px repeat(${availableDivisions.length}, 1fr);">`;
-  
+ const gridEl_isMS = gridEl.closest('.ms-container') !== null;
+  const G = gridEl_isMS ? 'ms' : 'da';
+  let html = `<div class="${G}-grid" style="grid-template-columns:70px repeat(${availableDivisions.length}, 1fr); column-gap:4px;">`;
+
   // Header row
   html += `<div class="da-grid-header da-time-header">Time</div>`;
   availableDivisions.forEach((divName) => {
     const color = divisions[divName]?.color || '#444';
-    html += `<div class="da-grid-header" style="background:${color};color:#fff;">${divName}</div>`;
+    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;">${divName}</div>`;
   });
   
   // Time column
@@ -1729,8 +1801,133 @@ function renderGrid() {
   addResizeListeners(gridEl);
   addRemoveListeners(gridEl);
   applyConflictHighlighting(gridEl);
-  setTimeout(function() { if (typeof renderDoubleHeaderLinker === 'function') renderDoubleHeaderLinker(); }, 50);
 }
+
+// --- AUTO MODE: DAW Layer Timeline ---
+function renderDAWTimeline(gridEl) {
+  if (typeof window.MasterSchedulerInternal?.renderDAWGridWith !== 'function') {
+      gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Master Schedule Builder not loaded.</div>';
+      return;
+  }
+
+  gridEl.style.overflow = 'auto';
+  
+  window.MasterSchedulerInternal.renderDAWGridWith(gridEl, daAutoLayers, {
+   onLayersChanged: function(updatedLayers) {
+      if (updatedLayers && typeof updatedLayers === 'object') {
+        daAutoLayers = updatedLayers;
+      }
+      saveDAAutoLayers();
+    }
+  });
+
+  // ★ Overlay daily trips on the DAW grid — use requestAnimationFrame
+  // to ensure the DOM is painted before looking for track elements
+  overlayTripsOnDAW(gridEl);
+  requestAnimationFrame(function() { overlayTripsOnDAW(gridEl); });
+  setTimeout(function() { overlayTripsOnDAW(gridEl); }, 200);
+}
+
+function overlayTripsOnDAW(gridEl) {
+  // Remove existing trip overlays to prevent duplicates on re-render
+  gridEl.querySelectorAll('.da-trip-overlay, .da-trip-regen-warning').forEach(el => el.remove());
+
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const trips = loadDailyTrips(dateKey);
+  console.log('[TripOverlay] dateKey=' + dateKey + ', trips=' + trips.length + ', tracks=' + gridEl.querySelectorAll('.ms-daw-track').length);
+  if (trips.length === 0) return;
+
+  // Find global start from ruler (same logic as DAW grid)
+  const divisions = window.divisions || {};
+  let globalStart = null;
+  Object.keys(divisions).forEach(d => {
+    if (divisions[d].isParent) return;
+    const s = parseTimeToMinutes(divisions[d]?.startTime);
+    if (s !== null && (globalStart === null || s < globalStart)) globalStart = s;
+  });
+  if (globalStart === null) globalStart = 540;
+  const PX_PER_MIN = 4; // matches DAW_PIXELS_PER_MINUTE in master_schedule_builder
+
+  trips.forEach(trip => {
+    const track = gridEl.querySelector('.ms-daw-track[data-grade="' + trip.division + '"]');
+    console.log('[TripOverlay] trip=' + trip.event + ' div=' + trip.division + ' trackFound=' + !!track);
+    if (!track) return;
+    const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
+    const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
+    if (tStart == null || tEnd == null) return;
+
+    const left = (tStart - globalStart) * PX_PER_MIN;
+    const width = (tEnd - tStart) * PX_PER_MIN;
+
+    const el = document.createElement('div');
+    el.className = 'da-trip-overlay';
+    el.style.cssText = 'position:absolute; left:' + left + 'px; width:' + width + 'px; top:0; bottom:0;' +
+      'background:repeating-linear-gradient(45deg, rgba(239,68,68,0.12), rgba(239,68,68,0.12) 4px, rgba(239,68,68,0.04) 4px, rgba(239,68,68,0.04) 8px);' +
+      'border:2px solid #ef4444; border-radius:4px; z-index:8; pointer-events:none;' +
+      'display:flex; align-items:center; justify-content:center;';
+    el.innerHTML = '<span style="background:#ef4444; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700; pointer-events:none; white-space:nowrap;">' +
+      'Trip: ' + (trip.event || 'Trip') + ' (' + minutesToTime(tStart) + '–' + minutesToTime(tEnd) + ')' +
+      '</span>';
+    track.appendChild(el);
+  });
+
+  // ★ Show regen warning banner above the grid
+  if (trips.length > 0) {
+    const existing = gridEl.querySelector('.da-trip-regen-warning');
+    if (!existing) {
+      const banner = document.createElement('div');
+      banner.className = 'da-trip-regen-warning';
+      banner.style.cssText = 'padding:10px 16px; margin-bottom:8px; background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; font-size:13px; color:#92400e; display:flex; align-items:center; gap:8px;';
+      banner.innerHTML = '<span style="font-size:16px;">⚠️</span> <span><strong>' + trips.length + ' trip' + (trips.length > 1 ? 's' : '') + '</strong> added today. Press <strong>▶ Generate Schedule</strong> to rebuild the day around ' + (trips.length > 1 ? 'them' : 'it') + '.</span>';
+      gridEl.insertBefore(banner, gridEl.firstChild);
+    }
+  }
+}
+function daConvertSkeletonToLayers(skeleton) {
+  var layers = [];
+  var eventTypeMap = {
+      'swim': 'swim', 'lunch': 'lunch', 'snacks': 'snack', 'snack': 'snack',
+      'dismissal': 'dismissal', 'general activity slot': 'activity',
+      'sports slot': 'sports', 'special activity': 'special',
+      'league game': 'league', 'specialty league': 'specialty_league'
+  };
+  var blockTypeMap = {
+      'slot': 'activity', 'sports': 'sports', 'sport': 'sports',
+      'special': 'special', 'pinned': 'custom', 'league': 'league',
+      'smart': 'activity', 'split': 'split', 'elective': 'elective'
+  };
+
+  skeleton.forEach(function(block) {
+      if (!block || !block.startTime || !block.endTime || !block.division) return;
+      var startMin = parseTimeToMinutes(block.startTime);
+      var endMin = parseTimeToMinutes(block.endTime);
+      if (startMin == null || endMin == null || endMin <= startMin) return;
+
+      var layerType = 'activity';
+      var lowerEvent = (block.event || '').toLowerCase().trim();
+      if (eventTypeMap[lowerEvent]) layerType = eventTypeMap[lowerEvent];
+      else if (blockTypeMap[block.type]) layerType = blockTypeMap[block.type];
+
+      var isPinned = block.type === 'pinned' || ['swim','lunch','snack','snacks','dismissal'].indexOf(layerType) >= 0;
+
+      layers.push({
+          id: 'layer_' + Math.random().toString(36).slice(2, 9),
+          type: layerType,
+          event: block.event || layerType,
+          startMin: startMin,
+          endMin: endMin,
+          periodMin: endMin - startMin,
+          operator: isPinned ? '=' : '\u2265',
+          quantity: 1,
+          grade: block.division,
+          pinExact: isPinned
+      });
+  });
+
+  return layers;
+}
+
+
 
 function renderEventTile(ev, top, height) {
   let tile = TILES.find(t => t.name === ev.event);
@@ -1743,7 +1940,7 @@ function renderEventTile(ev, top, height) {
   }
   
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
-  const adjustedHeight = Math.max(height - 2, 18); // Minimum 18px height
+  const adjustedHeight = Math.max(height - 2, 24); // ★ v14.0: raised minimum from 18→24
   
   // Night activity styling
   const isNight = !!ev.isNightActivity;
@@ -1754,16 +1951,16 @@ function renderEventTile(ev, top, height) {
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   const nightClass = isNight ? ' da-night-activity' : '';
   
-  // Better font sizing for small tiles
+  // ★ v14.0: Improved font sizing — shifted breakpoints up for taller tiles (2.5px/min)
   let fontSize, lineHeight, padding;
-  if (adjustedHeight < 24) {
-    fontSize = '9px'; lineHeight = '1.1'; padding = '1px 4px';
-  } else if (adjustedHeight < 35) {
-    fontSize = '10px'; lineHeight = '1.2'; padding = '2px 5px';
-  } else if (adjustedHeight < 50) {
-    fontSize = '11px'; lineHeight = '1.2'; padding = '3px 5px';
+  if (adjustedHeight < 30) {
+    fontSize = '10px'; lineHeight = '1.15'; padding = '2px 5px';
+  } else if (adjustedHeight < 45) {
+    fontSize = '11px'; lineHeight = '1.25'; padding = '3px 6px';
+  } else if (adjustedHeight < 60) {
+    fontSize = '12px'; lineHeight = '1.3'; padding = '4px 7px';
   } else {
-    fontSize = '12px'; lineHeight = '1.3'; padding = '4px 6px';
+    fontSize = '13px'; lineHeight = '1.35'; padding = '5px 8px';
   }
   
   const eventName = ev.event || 'Event';
@@ -1783,11 +1980,9 @@ function renderEventTile(ev, top, height) {
     content = `<strong>${eventName}</strong>`;
     if (isNight) content += ' 🌙';
     content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
+    // ★★★ MULTIPLE LEAGUE SUPPORT: Show league name on tile ★★★
     if (ev.leagueName) {
-      content += `<div style="font-size:9px;opacity:0.8;">${ev.leagueName}</div>`;
-    }
-    if (ev._doubleHeaderPairId) {
-      content += `<div style="font-size:8px;font-weight:700;color:#0F5F6E;background:#E0F2FE;display:inline-block;padding:1px 5px;border-radius:3px;margin-top:2px;letter-spacing:0.5px;">DH</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">🏆 ${ev.leagueName}</div>`;
     }
     // Location display for larger tiles
     if (adjustedHeight > 50) {
@@ -1808,11 +2003,33 @@ function renderEventTile(ev, top, height) {
     }
   }
   
-  return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true" 
+  // Travel strips (off-campus). Prefer stamped values; fall back to live zone lookup (manual = deduct mode).
+  const _travelStrips = (function() {
+    let pre = parseInt(ev._travelPre) || 0;
+    let post = parseInt(ev._travelPost) || 0;
+    let zone = ev._travelZone || '';
+    if (!pre && !post) {
+      const locName = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+      const info = locName ? (window.getTravelForField?.(locName, true) || window.getTravelForSpecialActivity?.(locName, true)) : null;
+      if (info) { pre = info.preMin; post = info.postMin; zone = info.zoneName; }
+    }
+    let html = '';
+    const stripH = adjustedHeight >= 28 ? 8 : 6;
+    if (pre > 0) {
+      html += `<div title="Travel to ${zone}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
+    }
+    if (post > 0) {
+      html += `<div title="Travel from ${zone}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
+    }
+    return html;
+  })();
+
+  return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
           title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
-          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
+          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};position:relative;">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
+          ${_travelStrips}
           <div class="da-resize-handle da-resize-bottom"></div>
           </div>`;
 }
@@ -2536,7 +2753,99 @@ function deselectAllTiles() {
 // =================================================================
 // LOAD/SAVE
 // =================================================================
-function loadDailySkeleton() {
+// =================================================================
+// AUTO MODE: Load layer template for today (independent from MS)
+// =================================================================
+function loadDAAutoLayers() {
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  // Use live API for assignments so we always get the latest data
+  const assignments = window.getSkeletonAssignments?.() || g.app1?.skeletonAssignments || {};
+  
+  const dateStr = window.currentScheduleDate || '';
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0;
+  if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const today = dayNames[dow];
+  
+let tmpl = assignments[today] || assignments['Default'];
+  console.log('[DailyAdj] Auto mode: loading layer template for', today, '→', tmpl || '(none)');
+  
+  // Priority 1: Day-specific saved layers (localStorage)
+  const dateKey = window.currentScheduleDate || '';
+  const dayLayerKey = `campAutoLayers_${dateKey}`;
+  let loaded = false;
+  try {
+    const stored = localStorage.getItem(dayLayerKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && Object.keys(parsed).length > 0) {
+        daAutoLayers = parsed;
+        loaded = true;
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from localStorage for', dateKey);
+      }
+    }
+  } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from localStorage:', e); }
+  
+  // Priority 2: Day-specific saved layers (cloud)
+  if (!loaded) {
+    try {
+      const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+      if (cloudLayers && Object.keys(cloudLayers).length > 0) {
+        daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
+        localStorage.setItem(dayLayerKey, JSON.stringify(daAutoLayers));
+        loaded = true;
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from CLOUD for', dateKey);
+      }
+    } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from cloud:', e); }
+  }
+  
+  // Priority 3: Template fallback
+  if (!loaded) {
+    if (tmpl && autoTemplates[tmpl]) {
+      daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+    } else if (autoTemplates['_current']) {
+      daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+    } else {
+      daAutoLayers = {};
+    }
+    console.log('[DailyAdj] Loaded auto layers from template:', tmpl || '_current');
+  }
+  
+  // If empty, seed with division keys
+  if (Object.keys(daAutoLayers).length === 0) {
+    const divisions = window.divisions || {};
+    Object.keys(divisions).forEach(d => {
+      const div = divisions[d];
+      if (div.isParent) return;
+      daAutoLayers[d] = [];
+    });
+  }
+  
+ console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
+}
+
+function saveDAAutoLayers() {
+  if (!window.AccessControl?.canEdit?.()) {
+    console.warn('[DailyAdj] Save blocked - insufficient permissions');
+    return;
+  }
+  if (!daAutoLayers || typeof daAutoLayers !== 'object') return;
+  const dateKey = window.currentScheduleDate;
+  try {
+    localStorage.setItem(`campAutoLayers_${dateKey}`, JSON.stringify(daAutoLayers));
+  } catch (e) { console.error('[DailyAdj] Failed to save auto layers to localStorage:', e); }
+  try {
+    if (!masterSettings.app1) masterSettings.app1 = {};
+    if (!masterSettings.app1.dailyAutoLayers) masterSettings.app1.dailyAutoLayers = {};
+    masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers || {}));
+    window.saveGlobalSettings?.('app1', masterSettings.app1);
+    window.forceSyncToCloud?.();
+  } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
+}
+
+  function loadDailySkeleton() {
   const dateKey = window.currentScheduleDate;
   console.log('[DailyAdj] loadDailySkeleton called for date:', dateKey);
   
@@ -2581,16 +2890,17 @@ function loadDailySkeleton() {
     return;
   }
   
-  // Priority 4: Template
+  // Priority 4: Template — use LIVE API functions so we always get the latest data
+  // (masterSettings.app1 is a snapshot from init and can be stale)
   console.log('[DailyAdj] No saved skeleton found, loading from template...');
-  const assignments = masterSettings.app1?.skeletonAssignments || {};
-  const skeletons = masterSettings.app1?.savedSkeletons || {};
+  const assignments = window.getSkeletonAssignments?.() || masterSettings.app1?.skeletonAssignments || {};
+  const skeletons = window.getSavedSkeletons?.() || masterSettings.app1?.savedSkeletons || {};
   const [Y, M, D] = dateKey.split('-').map(Number);
   let dow = 0;
   if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
   const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   let tmpl = assignments[dayNames[dow]] || assignments["Default"];
-  console.log('[DailyAdj] Loading template:', tmpl || '(none)');
+  console.log('[DailyAdj] Loading template:', tmpl || '(none)', '| assignments:', JSON.stringify(assignments), '| skeletons available:', Object.keys(skeletons));
   dailyOverrideSkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
 }
@@ -2672,12 +2982,18 @@ function renderToolbar() {
   const names = Object.keys(savedSkeletons).sort();
   const loadOptions = names.map(n => `<option value="${n}">${n}</option>`).join('');
   
+  // ★ In auto mode, show auto layer templates instead of skeleton templates
+  const isAutoMode = window._daBuilderMode === 'auto';
+  const autoTemplates = isAutoMode ? (masterSettings.app1?.autoLayerTemplates || {}) : {};
+  const autoNames = Object.keys(autoTemplates).filter(n => n !== '_current').sort();
+  const autoLoadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
+  
   toolbar.innerHTML = `
     <div class="da-toolbar-group">
       <span class="da-toolbar-label">Template:</span>
       <select id="da-load-select" class="da-select">
         <option value="">Load...</option>
-        ${loadOptions}
+        ${isAutoMode ? autoLoadOptions : loadOptions}
       </select>
     </div>
     
@@ -2694,15 +3010,33 @@ function renderToolbar() {
     </div>
   `;
   
-  document.getElementById('da-load-select').onchange = async function() {
+ document.getElementById('da-load-select').onchange = async function() {
     const name = this.value;
-    if (name && savedSkeletons[name]) {
-      const ok = await daShowConfirm('Load template "' + name + '"?');
-      if (ok) {
-        dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
-        clearDisplacedTiles();
-        saveDailySkeleton();
-        renderGrid();
+    if (!name) return;
+    
+    if (isAutoMode) {
+      // ★ Auto mode: load auto layer template
+      if (autoTemplates[name]) {
+        const ok = await daShowConfirm('Load auto template "' + name + '"?');
+        if (ok) {
+          daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
+          saveDAAutoLayers();
+          console.log('[DailyAdj] Loaded auto template:', name);
+          renderGrid();
+        }
+      }
+    } else {
+      // Manual mode: load skeleton template
+      if (savedSkeletons[name]) {
+        const ok = await daShowConfirm('Load template "' + name + '"?');
+        if (ok) {
+          dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
+          window._autoGeneratedSchedule = false;
+          window._autoBuildTimelines = null;
+          clearDisplacedTiles();
+          saveDailySkeleton();
+          renderGrid();
+        }
       }
     }
     this.value = '';
@@ -2717,11 +3051,17 @@ function renderToolbar() {
   };
 
   document.getElementById('da-clear-btn').onclick = async () => {
-    const ok = await daShowConfirm('Clear all blocks?', { danger: true, confirmText: 'Clear All' });
+    const ok = await daShowConfirm(isAutoMode ? 'Clear all layers?' : 'Clear all blocks?', { danger: true, confirmText: 'Clear All' });
     if (ok) {
-      dailyOverrideSkeleton = [];
-      saveDailySkeleton();
-      renderGrid();
+      if (isAutoMode) {
+        Object.keys(daAutoLayers).forEach(k => { daAutoLayers[k] = []; });
+        saveDAAutoLayers();
+        renderGrid();
+      } else {
+        dailyOverrideSkeleton = [];
+        saveDailySkeleton();
+        renderGrid();
+      }
     }
   };
   
@@ -2743,15 +3083,92 @@ function renderToolbar() {
 async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
-    if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
-    saveDailySkeleton();
 
+   // ★★★ AUTO MODE: Full pipeline via scheduler_core_auto.js ★★★
+    const isAutoMode = window._daBuilderMode === 'auto';
+    if (isAutoMode) {
+        console.log('[Optimizer] AUTO MODE — routing to runAutoScheduler');
+
+        if (!window.runAutoScheduler) { await daShowAlert("Error: scheduler_core_auto.js not loaded."); return; }
+
+       // Reload daAutoLayers if empty — mirror loadDAAutoLayers() fallback chain
+        if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+            try {
+                const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                // Priority 1: date-specific localStorage
+                const stored = localStorage.getItem('campAutoLayers_' + dateKey);
+                if (stored) {
+                    daAutoLayers = JSON.parse(stored);
+                    console.log('[Optimizer] Loaded daAutoLayers from localStorage:', Object.keys(daAutoLayers));
+                }
+                // Priority 2: date-specific cloud
+                if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+                    const g = window.loadGlobalSettings?.() || {};
+                    const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+                    if (cloudLayers && Object.keys(cloudLayers).length > 0) {
+                        daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
+                        console.log('[Optimizer] Loaded daAutoLayers from cloud:', Object.keys(daAutoLayers));
+                    }
+                }
+                // Priority 3: template fallback (skeletonAssignments → autoLayerTemplates)
+                if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+                    const g = window.loadGlobalSettings?.() || {};
+                    const autoTemplates = g.app1?.autoLayerTemplates || {};
+                    const assignments = g.app1?.skeletonAssignments || {};
+                    const [Y, M, D] = dateKey.split('-').map(Number);
+                    const dow = (Y && M && D) ? new Date(Y, M - 1, D).getDay() : 0;
+                    const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                    const tmpl = assignments[dayNames[dow]] || assignments['Default'];
+                    if (tmpl && autoTemplates[tmpl]) {
+                        daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+                        console.log('[Optimizer] Loaded daAutoLayers from template:', tmpl);
+                    } else if (autoTemplates['_current']) {
+                        daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+                        console.log('[Optimizer] Loaded daAutoLayers from _current template');
+                    }
+                }
+            } catch(e) {
+                console.warn('[Optimizer] Failed to load daAutoLayers:', e);
+            }
+        }
+
+        // Flatten grade-keyed layers into a single array
+        const allLayers = [];
+        Object.keys(daAutoLayers).forEach(grade => {
+            (daAutoLayers[grade] || []).forEach(layer => {
+                allLayers.push({ ...layer, grade: grade });
+            });
+        });
+
+        if (allLayers.length === 0) { await daShowAlert("No layers defined. Add layers before generating."); return; }
+
+        try {
+            const success = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
+            if (!success) await daShowAlert("Auto scheduler did not complete successfully.");
+        } catch (e) {
+            console.error('[AutoScheduler] CRASH:', e.message, '\nStack:', e.stack);
+            await daShowAlert("Auto scheduler error: " + e.message);
+        }
+        return; // ← hard return — never reaches runSkeletonOptimizer
+    } else {
+        // Manual mode: original check
+        if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
+    }
+    
+   // Only persist to manual skeleton storage paths in manual mode.
+    // In auto mode the skeleton was already saved via saveCurrentDailyData above.
+    if (window._daBuilderMode !== 'auto') {
+        saveDailySkeleton();
+    }
     if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
         await window.SchedulerCoreUtils.hydrateLocalStorageFromCloud();
     }
 
-  // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
-  const dateKey = window.currentScheduleDate;
+   
+    
+
+    // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
 
   // 1. Clear window globals
@@ -2809,14 +3226,15 @@ async function runOptimizer() {
   window._generationInProgress = true;
 
   console.log('[Optimizer] ★ FULL WIPE COMPLETE. Running optimizer...');
+  
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
-  const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
+  const success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
 
   // ★★★ POST-GENERATION CLEANUP ★★★
   window._preGenClearActive = false;
 
-  if (success) {
+if (success) {
       // Force save the fresh schedule to ALL storage layers immediately
       try {
           const freshData = {
@@ -2827,34 +3245,117 @@ async function runOptimizer() {
               isRainyDay: window.isRainyDay || false,
               rainyDayStartTime: window.rainyDayStartTime ?? null
           };
-
           // Save to BOTH localStorage keys
           const DAILY_KEY = 'campDailyData_v1';
           const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
           allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
           localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-
           const ORCH_KEY = 'campistry_schedule_data';
           const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
           orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
           localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
-
           // Save to cloud
           window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
-
           console.log('[Optimizer] ★ Post-generation save complete:', 
               Object.keys(freshData.scheduleAssignments).length, 'bunks,',
               Object.keys(freshData.leagueAssignments).length, 'league entries');
       } catch (e) {
           console.warn('[Optimizer] Post-generation save failed:', e);
       }
-
       await daShowAlert("✅ Schedule Generated!"); 
       window.showTab?.('schedule');
+      // Force full re-render with clean state
+      const schedEl = document.getElementById('scheduleTable');
+      if (schedEl) schedEl.innerHTML = '';
+      window.renderStaggeredView?.();
   } else { 
       await daShowAlert("❌ Error generating schedule. Check console."); 
   }
-}// =================================================================
+}
+  // =================================================================
+// DAILY TRIPS: Persistent load/save (survives reload + cloud sync)
+// =================================================================
+function loadDailyTrips(dateKey) {
+  if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  let fromLS = null, fromCloud = null;
+
+  // Source 1: dedicated localStorage key (fast, survives cloud overwrites)
+  try {
+    const stored = localStorage.getItem('campDailyTrips_' + dateKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length > 0) fromLS = parsed;
+    }
+  } catch (e) { /* ignore */ }
+
+  // Source 2: dailyData (from cloud — authoritative after sync)
+  try {
+    const allDaily = window.loadAllDailyData?.() || {};
+    const dateData = allDaily[dateKey];
+    if (dateData && Array.isArray(dateData.dailyTrips) && dateData.dailyTrips.length > 0) {
+      fromCloud = dateData.dailyTrips;
+    }
+  } catch (e) { /* ignore */ }
+
+  // Merge: use whichever has more trips (handles partial sync)
+  let result = [];
+  if (fromLS && fromCloud) {
+    result = fromLS.length >= fromCloud.length ? fromLS : fromCloud;
+  } else {
+    result = fromLS || fromCloud || [];
+  }
+
+  // Cross-sync: ensure both sources have the data
+  if (result.length > 0) {
+    if (!fromLS) {
+      try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(result)); } catch (e) { /* ignore */ }
+    }
+    if (!fromCloud) {
+      // Save to dailyData for cloud sync — use direct write to avoid currentScheduleDate dependency
+      try {
+        const allDaily = window.loadAllDailyData?.() || {};
+        if (!allDaily[dateKey]) allDaily[dateKey] = {};
+        allDaily[dateKey].dailyTrips = result;
+        allDaily[dateKey].updated_at = new Date().toISOString();
+        if (typeof window.saveGlobalSettings === 'function') {
+          window.saveGlobalSettings('daily_schedules', allDaily);
+        }
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  return result;
+}
+
+function saveDailyTrips(dateKey, trips) {
+  if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+
+  // 1. Save to dedicated localStorage key (fast, survives cloud overwrites)
+  try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(trips)); } catch (e) { /* ignore */ }
+
+  // 2. Save directly to dailyData using the SPECIFIC dateKey (not currentScheduleDate)
+  // This ensures trips for future dates are saved correctly
+  try {
+    const allDaily = window.loadAllDailyData?.() || {};
+    if (!allDaily[dateKey]) allDaily[dateKey] = {};
+    allDaily[dateKey].dailyTrips = trips;
+    allDaily[dateKey].updated_at = new Date().toISOString();
+    // Save to localStorage
+    const DAILY_DATA_KEY = 'campDailyData_v1';
+    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDaily));
+    // Sync to cloud
+    if (typeof window.saveGlobalSettings === 'function') {
+      window.saveGlobalSettings('daily_schedules', allDaily);
+    }
+  } catch (e) {
+    console.error('[saveDailyTrips] Cloud sync error:', e);
+  }
+}
+
+// Expose globally for other modules
+window.loadDailyTrips = loadDailyTrips;
+window.saveDailyTrips = saveDailyTrips;
+  // =================================================================
 // TRIPS FORM
 // =================================================================
 function renderTripsForm() {
@@ -2863,10 +3364,28 @@ function renderTripsForm() {
   
   const divisions = window.availableDivisions || [];
   
-  container.innerHTML = `
+ // ★ Auto mode: show existing trips list
+ const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const existingTrips = (window._daBuilderMode === 'auto') ? loadDailyTrips(dateKey) : [];
+  const tripsListHTML = existingTrips.length > 0 ? `
+    <div class="da-section" style="margin-bottom:12px;">
+      <h3 class="da-section-title">Today's Trips (${existingTrips.length})</h3>
+      ${existingTrips.map(t => `
+        <div class="da-override-item" style="margin-bottom:6px;">
+          <div>
+            <strong>${t.event || 'Trip'}</strong> — <span style="color:#3b82f6;">${t.division}</span>
+            <div style="font-size:12px;color:#64748b;">${t.startTime} – ${t.endTime}</div>
+          </div>
+          <button class="da-btn da-btn-danger da-btn-sm da-trip-remove-btn" data-trip-id="${t.id}">Remove</button>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+
+  container.innerHTML = tripsListHTML + `
     <div class="da-section">
       <h3 class="da-section-title">Add Trip</h3>
-      <p class="da-section-desc">Add an off-campus trip. Overlapping events will be bumped.</p>
+      <p class="da-section-desc">Add an off-campus trip.${window._daBuilderMode === 'auto' ? ' All bunks in the division will be blocked for this time.' : ' Overlapping events will be bumped.'}</p>
       
       <div class="da-form-grid">
         <div class="da-form-field">
@@ -2900,26 +3419,50 @@ function renderTripsForm() {
     const startTime = document.getElementById("da-trip-start").value.trim();
     const endTime = document.getElementById("da-trip-end").value.trim();
     
-   if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
+  if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
     const startMin = parseTimeToMinutes(startTime);
     const endMin = parseTimeToMinutes(endTime);
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
     
-    loadDailySkeleton();
-    const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
-    eraseOverlappingTiles(newEvent, division);
-    dailyOverrideSkeleton.push(newEvent);
-    saveDailySkeleton();
-    renderGrid();
-    
-    document.querySelector('.da-subtab[data-tab="skeleton"]').click();
-    daShowAlert("✅ Trip added!");
+  if (window._daBuilderMode === 'auto') {
+      // ★ Auto mode: save trips to dedicated localStorage key + dailyData
+      const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+      const trips = loadDailyTrips(dateKey);
+      trips.push({ id: 'trip_' + Date.now(), event: tripName, division, startTime, endTime, startMin, endMin });
+      saveDailyTrips(dateKey, trips);
+      renderTripsForm();
+      renderGrid(); // ★ refresh DAW grid to show trip overlay
+      daShowAlert("✅ Trip added!");
+    } else {
+      loadDailySkeleton();
+      const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
+      eraseOverlappingTiles(newEvent, division);
+      dailyOverrideSkeleton.push(newEvent);
+      saveDailySkeleton();
+      renderGrid();
+      document.querySelector('.da-subtab[data-tab="skeleton"]')?.click();
+      daShowAlert("✅ Trip added!");
+    }
     document.getElementById("da-trip-name").value = "";
     document.getElementById("da-trip-start").value = "";
-    document.getElementById("da-trip-end").value = "";
-  };
+    document.getElementById("da-trip-end").value = "";  };
+
+  // ★ Auto mode: bind remove buttons for existing trips
+  if (window._daBuilderMode === 'auto') {
+    container.querySelectorAll('.da-trip-remove-btn').forEach(btn => {
+      btn.onclick = async () => {
+        const tripId = btn.dataset.tripId;
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        const trips = loadDailyTrips(dateKey).filter(t => t.id !== tripId);
+        saveDailyTrips(dateKey, trips);
+        renderTripsForm();
+        renderGrid(); // ★ refresh DAW grid to remove trip overlay
+      };
+    });
+  }
 }
+
 
 // =================================================================
 // BUNK OVERRIDES UI
@@ -3111,21 +3654,28 @@ function renderBunkOverridesUI() {
     const dailyData = window.loadCurrentDailyData?.() || {};
     const overrides = dailyData.bunkActivityOverrides || [];
     
+    const ovStartMin = parseTimeToMinutes(startEl.value);
+    const ovEndMin = parseTimeToMinutes(endEl.value);
     selectedBunks.forEach(bunk => {
-      overrides.push({ 
-        id: uid(), 
-        bunk, 
-        activity, 
+      overrides.push({
+        id: uid(),
+        bunk,
+        activity,
         location,
-        startTime: startEl.value, 
-        endTime: endEl.value, 
-        type 
+        startTime: startEl.value,
+        endTime: endEl.value,
+        startMin: ovStartMin, endMin: ovEndMin,
+        type
       });
     });
     
+    // Save to both dailyData (cloud sync) AND dedicated localStorage key (survives overwrites)
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
     window.saveCurrentDailyData("bunkActivityOverrides", overrides);
+    try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(overrides)); } catch(e) {}
     currentOverrides.bunkActivityOverrides = overrides;
-    
+    console.log('[BunkOverrides] Saved ' + overrides.length + ' overrides for ' + dateKey);
+
     activityEl.value = "";
     startEl.value = "";
     endEl.value = "";
@@ -3155,7 +3705,9 @@ function renderBunkOverridesUI() {
       el.querySelector('button').onclick = () => {
         let currentList = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
         currentList = currentList.filter(o => o.id !== item.id);
+        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         window.saveCurrentDailyData("bunkActivityOverrides", currentList);
+        try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(currentList)); } catch(e) {}
         currentOverrides.bunkActivityOverrides = currentList;
         renderBunkOverridesUI();
       };
@@ -3200,10 +3752,8 @@ function renderResourceOverridesUI() {
     ${rainyBanner}
     <div class="da-resource-layout">
       <div class="da-resource-list">
-        <h4>Fields</h4>
-        <div id="da-override-fields-list"></div>
-        <h4 style="margin-top:16px;">Special Activities</h4>
-        <div id="da-override-specials-list"></div>
+        <h4>Facilities</h4>
+        <div id="da-override-facilities-list"></div>
         <h4 style="margin-top:16px;">Leagues</h4>
         <div id="da-override-leagues-list"></div>
         <h4 style="margin-top:16px;">Specialty Leagues</h4>
@@ -3219,48 +3769,78 @@ function renderResourceOverridesUI() {
   `;
   
   const saveOverrides = () => {
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const fullOverrides = dailyData.overrides || {};
-    fullOverrides.leagues = currentOverrides.leagues;
-    fullOverrides.disabledFields = currentOverrides.disabledFields;
-    fullOverrides.disabledSpecials = currentOverrides.disabledSpecials;
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    const fullOverrides = {
+      leagues: currentOverrides.leagues || [],
+      disabledFields: currentOverrides.disabledFields || [],
+      disabledSpecials: currentOverrides.disabledSpecials || []
+    };
+    // Save to dailyData (cloud sync)
     window.saveCurrentDailyData("overrides", fullOverrides);
     window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
     window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+    window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+    // ★ v7.0: Also save to dedicated localStorage key (survives cloud overwrites)
+    try {
+      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+        overrides: fullOverrides,
+        dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
+        dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
+        disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+      }));
+    } catch(e) {}
+    console.log('[ResourceOverrides] Saved for ' + dateKey + ': ' +
+      fullOverrides.disabledFields.length + ' disabled fields, ' +
+      fullOverrides.disabledSpecials.length + ' disabled specials, ' +
+      fullOverrides.leagues.length + ' disabled leagues');
   };
   
-  const fields = masterSettings.app1?.fields || [];
-  const fieldsListEl = document.getElementById("da-override-fields-list");
-  
-  fields.forEach(item => {
-    const isDisabled = currentOverrides.disabledFields.includes(item.name);
-    const isOutdoor = item.rainyDayAvailable !== true;
-    const isRainyDisabled = isRainy && isOutdoor;
-    const hasTimeRules = (currentOverrides.dailyFieldAvailability[item.name] || []).length > 0;
-    
+  // Unified Facilities list (reads window.getFacilities() from facilities.js).
+  // Disabling a facility cascades to any special activities hosted at it so
+  // downstream scheduler logic that still consults disabledSpecials stays correct.
+  const facilitiesList = (typeof window.getFacilities === 'function')
+    ? (window.getFacilities() || [])
+    : [];
+  const legacyFields = masterSettings.app1?.fields || [];
+  const legacySpecials = masterSettings.app1?.specialActivities || [];
+
+  // facility name -> list of special-activity names hosted there
+  const specialsByLocation = {};
+  legacySpecials.forEach(s => {
+    if (s && s.location) {
+      (specialsByLocation[s.location] = specialsByLocation[s.location] || []).push(s.name);
+    }
+  });
+
+  const facilitiesListEl = document.getElementById("da-override-facilities-list");
+  facilitiesList.forEach(fac => {
+    const legacy = legacyFields.find(f => f.name === fac.name) || null;
+    const isDisabled = currentOverrides.disabledFields.includes(fac.name);
+    const isSportsFacility = Array.isArray(fac.usedFor) && fac.usedFor.includes('sports');
+    const isOutdoor = legacy ? (legacy.rainyDayAvailable !== true) : false;
+    const isRainyDisabled = isRainy && isOutdoor && isSportsFacility;
+    const hasTimeRules = (currentOverrides.dailyFieldAvailability[fac.name] || []).length > 0;
+
     const onToggle = (isEnabled) => {
-      if (isEnabled) currentOverrides.disabledFields = currentOverrides.disabledFields.filter(n => n !== item.name);
-      else if (!currentOverrides.disabledFields.includes(item.name)) currentOverrides.disabledFields.push(item.name);
+      const specialsHere = specialsByLocation[fac.name] || [];
+      if (isEnabled) {
+        currentOverrides.disabledFields = currentOverrides.disabledFields.filter(n => n !== fac.name);
+        if (specialsHere.length) {
+          currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(s => !specialsHere.includes(s));
+        }
+      } else {
+        if (!currentOverrides.disabledFields.includes(fac.name)) currentOverrides.disabledFields.push(fac.name);
+        specialsHere.forEach(s => {
+          if (!currentOverrides.disabledSpecials.includes(s)) currentOverrides.disabledSpecials.push(s);
+        });
+      }
       saveOverrides();
       renderResourceOverridesUI();
     };
-    
-    fieldsListEl.appendChild(createResourceToggleItem('field', item.name, !isDisabled, onToggle, isOutdoor, isRainyDisabled, false, hasTimeRules));
-  });
-  
-  const specials = masterSettings.app1?.specialActivities || [];
-  const specialsListEl = document.getElementById("da-override-specials-list");
-  specials.forEach(item => {
-    const isDisabled = currentOverrides.disabledSpecials.includes(item.name);
-    const isRainyOnly = item.rainyDayOnly === true;
-    const hasTimeRules = (currentOverrides.dailyFieldAvailability[item.name] || []).length > 0;
-    
-    const onToggle = (isEnabled) => {
-      if (isEnabled) currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(n => n !== item.name);
-      else if (!currentOverrides.disabledSpecials.includes(item.name)) currentOverrides.disabledSpecials.push(item.name);
-      saveOverrides();
-    };
-    specialsListEl.appendChild(createResourceToggleItem('special', item.name, !isDisabled, onToggle, false, false, isRainyOnly, hasTimeRules));
+
+    facilitiesListEl.appendChild(
+      createResourceToggleItem('facility', fac.name, !isDisabled, onToggle, isOutdoor, isRainyDisabled, false, hasTimeRules)
+    );
   });
   
   const leagues = Object.keys(masterSettings.leaguesByName || {});
@@ -3282,7 +3862,7 @@ function renderResourceOverridesUI() {
     const onToggle = (isEnabled) => {
       if (isEnabled) currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== name);
       else if (!currentOverrides.disabledSpecialtyLeagues.includes(name)) currentOverrides.disabledSpecialtyLeagues.push(name);
-      window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+      saveOverrides(); // ★ v7.0: Use unified save (includes dedicated localStorage key)
     };
     specialtyLeaguesListEl.appendChild(createResourceToggleItem('specialty_league', name, !isDisabled, onToggle));
   });
@@ -3334,13 +3914,27 @@ function renderOverrideDetailPane() {
   const [type, ...nameParts] = selectedOverrideId.split('-');
   const name = nameParts.join('-');
   
-  if (type === 'field' || type === 'special') {
-    const item = type === 'field' 
-      ? (masterSettings.app1?.fields || []).find(f => f.name === name)
-      : (masterSettings.app1?.specialActivities || []).find(s => s.name === name);
-    
+  if (type === 'facility' || type === 'field' || type === 'special') {
+    // Unified lookup: facility is the primary; fall back to legacy field/special lookups
+    // for backwards compat with any stored selection ids from the old two-list UI.
+    let item = null;
+    let facility = null;
+    if (type === 'facility') {
+      facility = (typeof window.getFacilityByName === 'function') ? window.getFacilityByName(name) : null;
+      item = (masterSettings.app1?.fields || []).find(f => f.name === name)
+          || (masterSettings.app1?.specialActivities || []).find(s => s.name === name)
+          || { name, timeRules: [], activities: [] };
+    } else if (type === 'field') {
+      item = (masterSettings.app1?.fields || []).find(f => f.name === name);
+    } else {
+      item = (masterSettings.app1?.specialActivities || []).find(s => s.name === name);
+    }
+
     if (!item) { paneEl.innerHTML = '<p style="color:#ef4444;">Item not found.</p>'; return; }
-    
+
+    // Treat 'facility' with sports-capable legacy data as a field for rendering the sports section
+    const isFieldLike = (type === 'field') || (type === 'facility' && facility && Array.isArray(facility.usedFor) && facility.usedFor.includes('sports'));
+
     // Get global rules from setup and daily rules
     const globalRules = item.timeRules || [];
     if (!currentOverrides.dailyFieldAvailability[name]) {
@@ -3349,9 +3943,12 @@ function renderOverrideDetailPane() {
     const dailyRules = currentOverrides.dailyFieldAvailability[name];
     
     paneEl.innerHTML = `
-      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;">
+      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         ${name}
-        ${type === 'field' ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
+        ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
+        ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
+          ? facility.usedFor.map(u => `<span class="da-badge" style="background:#eef2ff;color:#3730a3;">${u}</span>`).join('')
+          : ''}
       </h4>
       
       <div class="da-detail-section">
@@ -3377,7 +3974,7 @@ function renderOverrideDetailPane() {
         </div>
       </div>
       
-      ${type === 'field' ? `
+      ${isFieldLike ? `
       <div class="da-detail-section">
         <h5>🏃 Sports Availability</h5>
         <p class="da-section-desc">Disable specific sports on this field for today.</p>
@@ -3443,8 +4040,8 @@ function renderOverrideDetailPane() {
       renderResourceOverridesUI();
     };
     
-    // Render sports checkboxes for fields
-    if (type === 'field') {
+    // Render sports checkboxes for fields (or sports-capable facilities)
+    if (isFieldLike) {
       const sports = item.activities || [];
       const checkboxesEl = document.getElementById('da-sports-checkboxes');
       if (sports.length === 0) {
@@ -3475,93 +4072,7 @@ function renderOverrideDetailPane() {
     `;
   }
 }
-// =================================================================
-// DOUBLE-HEADER LINKER (Off-Campus)
-// =================================================================
-function renderDoubleHeaderLinker() {
-  var existing = document.getElementById('da-dh-linker');
-  if (existing) existing.remove();
 
-  var gs = window.loadGlobalSettings?.() || {};
-  var lbn = gs.leaguesByName || {};
-  var ocLeagues = Object.values(lbn).filter(function(l) {
-    return l && l.offCampus?.enabled && l.offCampus?.zone && l.offCampus?.teamsPerDay > 0 && l.enabled !== false;
-  });
-  if (ocLeagues.length === 0) return;
-
-  var leagueBlocks = dailyOverrideSkeleton.filter(function(b) {
-    return b.type === 'league' || (b.event && /league/i.test(b.event));
-  });
-  if (leagueBlocks.length < 2) return;
-
-  var grouped = {};
-  leagueBlocks.forEach(function(b) {
-    var key = b.leagueName || 'League Game';
-    var ml = ocLeagues.find(function(l) { return l.name === key; });
-    if (!ml) ml = ocLeagues.find(function(l) { return (l.divisions || []).includes(b.division); });
-    if (!ml) return;
-    if (!grouped[ml.name]) grouped[ml.name] = { league: ml, blocks: [] };
-    grouped[ml.name].blocks.push(b);
-  });
-
-  var linkable = Object.values(grouped).filter(function(g) { return g.blocks.length >= 2; });
-  if (linkable.length === 0) return;
-
-  var panel = document.createElement('div');
-  panel.id = 'da-dh-linker';
-  panel.style.cssText = 'margin:12px 0; padding:12px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px;';
-  var title = document.createElement('div');
-  title.style.cssText = 'font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:8px;';
-  title.textContent = 'Double-Header Links';
-  panel.appendChild(title);
-
-  linkable.forEach(function(group) {
-    var blocks = group.blocks.sort(function(a, b) { return (parseTimeToMinutes(a.startTime)||0) - (parseTimeToMinutes(b.startTime)||0); });
-    var leagueRow = document.createElement('div');
-    leagueRow.style.cssText = 'margin-bottom:8px;';
-    var lbl = document.createElement('div');
-    lbl.style.cssText = 'font-size:0.75rem; color:#6B7280; margin-bottom:4px;';
-    lbl.textContent = group.league.name + ' (' + group.league.offCampus.zone + ')';
-    leagueRow.appendChild(lbl);
-
-    var existingPairId = null;
-    blocks.forEach(function(b) { if (b._doubleHeaderPairId) existingPairId = b._doubleHeaderPairId; });
-    var isLinked = existingPairId && blocks.filter(function(b) { return b._doubleHeaderPairId === existingPairId; }).length >= 2;
-
-    var row = document.createElement('div');
-    row.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
-    blocks.forEach(function(b, idx) {
-      var chip = document.createElement('span');
-      var inPair = isLinked && b._doubleHeaderPairId === existingPairId;
-      chip.style.cssText = 'display:inline-flex; padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:500; ' +
-        (inPair ? 'background:#DBEAFE; color:#1E40AF; border:1px solid #93C5FD;' : 'background:#F1F5F9; color:#475569; border:1px solid #E2E8F0;');
-      chip.textContent = (b.leagueName || b.event) + ' ' + (b.division||'') + ' ' + (b.startTime||'') + '-' + (b.endTime||'');
-      row.appendChild(chip);
-      if (idx < blocks.length - 1) {
-        var arrow = document.createElement('span');
-        arrow.style.cssText = 'color:#9CA3AF; font-size:0.7rem;';
-        arrow.textContent = isLinked ? '\u2194' : '\u00B7\u00B7\u00B7';
-        row.appendChild(arrow);
-      }
-    });
-
-    var btn = document.createElement('button');
-    btn.style.cssText = 'margin-left:8px; padding:4px 10px; border-radius:5px; font-size:0.7rem; font-weight:600; cursor:pointer; ' +
-      (isLinked ? 'background:none; border:1px solid #E2E8F0; color:#9CA3AF;' : 'background:#0F5F6E; border:1px solid #0F5F6E; color:#fff;');
-    btn.textContent = isLinked ? 'Unlink' : 'Link as Double-Header';
-    btn.onclick = function() {
-      if (isLinked) { blocks.forEach(function(b) { delete b._doubleHeaderPairId; }); }
-      else { var pid = 'dh_' + Date.now().toString(36); blocks[0]._doubleHeaderPairId = pid; blocks[1]._doubleHeaderPairId = pid; }
-      saveDailySkeleton(); renderGrid();
-    };
-    row.appendChild(btn);
-    leagueRow.appendChild(row);
-    panel.appendChild(leagueRow);
-  });
-
-  var gridEl = document.getElementById('da-skeleton-grid');
-  if (gridEl && gridEl.parentNode) gridEl.parentNode.insertBefore(panel, gridEl.nextSibling);
-}
 // =================================================================
 // CSS STYLES
 // =================================================================
@@ -3614,19 +4125,20 @@ function getStyles() {
     .da-toolbar-group { display:flex; align-items:center; gap:8px; }
     .da-toolbar-label { font-size:12px; color:var(--da-text2); font-weight:500; }
     
-    /* Grid */
-    .da-grid-wrapper { flex:1; overflow:auto; border:1px solid var(--da-border); border-radius:8px; margin:16px; background:#fff; }
+    /* Grid — v14.0: breathing room overhaul */
+    .da-grid-wrapper { flex:1; overflow:auto; border:1px solid var(--da-border); border-radius:10px; margin:16px; background:#f8fafc; }
     .da-grid { display:grid; min-width:700px; }
-    .da-grid-header { position:sticky; top:0; z-index:10; padding:10px 8px; font-weight:600; font-size:12px; text-align:center; border-bottom:1px solid var(--da-border); background:var(--da-bg); }
-    .da-time-header { background:var(--da-surface); }
+    .da-grid-header { position:sticky; top:0; z-index:10; padding:12px 10px; font-weight:600; font-size:13px; text-align:center; border-bottom:2px solid var(--da-border); background:var(--da-bg); letter-spacing:0.3px; }
+    .da-time-header { background:var(--da-surface); font-size:11px; font-weight:500; color:var(--da-text3); }
     .da-time-column { position:relative; background:var(--da-surface); border-right:1px solid var(--da-border); }
-    .da-time-marker { position:absolute; left:0; width:100%; font-size:9px; padding:2px 4px; color:var(--da-text3); border-top:1px dashed #e2e8f0; }
-    .da-grid-cell { position:relative; border-right:1px solid var(--da-border); background:#fff; }
+    .da-time-marker { position:absolute; left:0; width:100%; font-size:11px; padding:3px 6px; color:var(--da-text3); border-top:1px dashed #e2e8f0; font-weight:500; }
+    .da-grid-cell { position:relative; background:#fff; border-radius:0 0 4px 4px; }
+    .da-grid-cell:nth-child(even) { background:#fafbfc; }
     .da-grid-disabled { position:absolute; width:100%; background:repeating-linear-gradient(-45deg,#f1f5f9,#f1f5f9 5px,#e2e8f0 5px,#e2e8f0 10px); z-index:1; pointer-events:none; }
     .da-grid-night-zone { background:rgba(30,41,59,0.1) !important; }
     
     /* Events */
-    .da-event { position:absolute; width:96%; left:2%; padding:4px 6px; border-radius:4px; cursor:pointer; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; overflow:hidden; z-index:2; transition:box-shadow 0.15s; min-height:18px; }
+    .da-event { position:absolute; width:94%; left:3%; padding:5px 8px; border-radius:6px; cursor:pointer; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; overflow:hidden; z-index:2; transition:box-shadow 0.15s, transform 0.1s; min-height:24px; }
     .da-event:hover { box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:5; }
     .da-event.selected { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.3); z-index:10; }
     .da-event.da-resizing { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.25) !important; z-index:100 !important; }
@@ -3660,7 +4172,7 @@ function getStyles() {
     .da-event:hover .da-resize-handle { opacity:1; background:rgba(59,130,246,0.3); }
     
     /* Drop Preview */
-    .da-drop-preview { display:none; position:absolute; left:2%; width:96%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:4px; pointer-events:none; z-index:5; }
+    .da-drop-preview { display:none; position:absolute; left:3%; width:94%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:6px; pointer-events:none; z-index:5; }
     .da-preview-time { text-align:center; padding:8px; color:var(--da-accent); font-weight:600; font-size:12px; background:rgba(255,255,255,0.9); border-radius:3px; margin:4px; }
     
     /* Tooltips & Ghosts */
@@ -3904,12 +4416,87 @@ function getStyles() {
     .da-modal-cb-item:hover { background:#f1f5f9; }
     .da-modal-cb-item input { margin:0; cursor:pointer; }
     .da-modal-cb-item span { color:#334155; }
-  </style>`;}
+ /* === AUTO MODE: .da-* inside .ms-container inherits MS look === */
+    .ms-container .da-pane { display:none; flex:1; overflow:auto; padding:0; }
+    .ms-container .da-pane.active { display:block; }
+    .ms-container .da-subtabs { display:flex; gap:0; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
+    .ms-container .da-subtab { padding:12px 20px; border:none; background:none; cursor:pointer; font-size:13px; font-weight:500; color:#475569; border-bottom:2px solid transparent; transition:all 0.2s; }
+    .ms-container .da-subtab:hover { color:#0f172a; background:rgba(0,0,0,0.02); }
+    .ms-container .da-subtab.active { color:#3b82f6; border-bottom-color:#3b82f6; background:#fff; }
+    .ms-container #da-rainy-panel { padding:16px 16px 0; }
+    .ms-container #da-displaced-tiles-panel { padding:0 16px; }
+    .ms-container .da-grid-wrapper,
+    .ms-container .ms-grid-wrapper { flex:1; overflow:auto; margin:0; border:none; border-radius:0; }
+    .ms-container #da-skeleton-grid { padding:0; }
+    .ms-container .da-section { margin:16px; }
+    .ms-container .da-resource-layout { padding:16px; }
+    .ms-container #da-trips-container { padding:16px; }
+    .ms-container #da-bunk-overrides-container { padding:16px; }
+    .ms-container #da-resources-container { padding:16px; }
+   
+    #da-skeleton-grid .al-toolbar { display: none !important; }
+    #da-skeleton-grid .al-palette { display: none !important; }
+  </style>`;
+}
 
 // =================================================================
 // MAIN HTML
 // =================================================================
-function getMainHTML() {
+function getMainHTML(useMS) {
+  if (useMS) {
+    return `
+      <div class="ms-container" style="height:calc(100vh - 160px);">
+        <div class="ms-sidebar">
+          <div class="ms-sidebar-header"><h3>Tile Types</h3></div>
+          <div id="da-palette" class="ms-palette"></div>
+        </div>
+        
+        <div class="ms-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <div class="da-subtabs">
+            <button class="da-subtab active" data-tab="skeleton">Schedule</button>
+            <button class="da-subtab" data-tab="trips">Trips</button>
+            <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
+            <button class="da-subtab" data-tab="resources">Resources</button>
+           
+          </div>
+          
+          <div id="da-pane-skeleton" class="da-pane active">
+            <div id="da-rainy-panel"></div>
+            <div id="da-displaced-tiles-panel" style="display:none;"></div>
+            ${window._daBuilderMode === 'auto' ? `
+  <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+  <div id="da-view-auto-layers" style="height:calc(100vh - 300px);overflow:auto;">
+    <div class="ms-grid-wrapper">
+      <div id="da-skeleton-grid"></div>
+    </div>
+  </div>
+` : `
+  <div id="da-view-skeleton">
+    <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+    <div class="ms-grid-wrapper">
+      <div id="da-skeleton-grid"></div>
+    </div>
+  </div>
+`}          </div>
+          
+          <div id="da-pane-trips" class="da-pane">
+            <div id="da-trips-container"></div>
+          </div>
+          
+          <div id="da-pane-bunk-overrides" class="da-pane">
+            <div id="da-bunk-overrides-container"></div>
+          </div>
+          
+          <div id="da-pane-resources" class="da-pane">
+            <div id="da-resources-container"></div>
+          </div>
+          <div id="da-pane-rotation-events" class="da-pane">
+            <div id="da-rotation-events-container"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="da-container">
       <div class="da-sidebar">
@@ -3942,14 +4529,13 @@ function getMainHTML() {
           <div id="da-bunk-overrides-container"></div>
         </div>
         
-        <div id="da-pane-resources" class="da-pane">
+       <div id="da-pane-resources" class="da-pane">
           <div id="da-resources-container"></div>
         </div>
       </div>
     </div>
   `;
 }
-
 // =================================================================
 // SUBTAB NAVIGATION
 // =================================================================
@@ -3966,6 +4552,7 @@ function setupSubTabs() {
       if (pane) pane.classList.add('active');
       
       activeSubTab = tabId;
+      
     };
   });
 }
@@ -3976,11 +4563,14 @@ function setupSubTabs() {
 function setupKeyboardHandler() {
   if (_keyHandler) document.removeEventListener('keydown', _keyHandler);
   
-  _keyHandler = (e) => {
+ _keyHandler = (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
     
+    // Auto mode: don't allow manual skeleton tile deletion via keyboard
+    if (window._daBuilderMode === 'auto') return;
+    
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {
-      e.preventDefault();
+      e.preventDefault();      e.preventDefault();
       (async () => {
         const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
         if (ok) {
@@ -4019,22 +4609,79 @@ function refreshFromCloud() {
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
-  loadDailySkeleton();
+  
+  // Mode-specific data reload — same isolation as init()
+  if (window._daBuilderMode === 'auto') {
+    loadDAAutoLayers();
+  } else {
+    loadDailySkeleton();
+  }
+  
   loadCurrentOverrides();
   renderGrid();
   renderResourceOverridesUI();
 }
 
 function loadCurrentOverrides() {
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const dailyData = window.loadCurrentDailyData?.() || {};
-  const dailyOverrides = dailyData.overrides || {};
+  let dailyOverrides = dailyData.overrides || {};
+
+  // ★ v7.0: Fallback to dedicated localStorage key (survives cloud overwrites)
+  if (!dailyOverrides.disabledFields?.length && !dailyOverrides.disabledSpecials?.length && !dailyOverrides.leagues?.length) {
+    try {
+      const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.overrides) {
+          dailyOverrides = parsed.overrides;
+          // Also restore other override data
+          if (parsed.dailyDisabledSportsByField) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
+          if (parsed.dailyFieldAvailability) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
+          if (parsed.disabledSpecialtyLeagues) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
+          // Sync back to dailyData for cloud
+          window.saveCurrentDailyData?.("overrides", dailyOverrides);
+          console.log('[ResourceOverrides] Restored from localStorage for ' + dateKey);
+        }
+      }
+    } catch(e) {}
+  } else {
+    // Sync to dedicated key for fast reload
+    try {
+      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+        overrides: dailyOverrides,
+        dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
+        dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
+        disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || []
+      }));
+    } catch(e) {}
+  }
+
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
   currentOverrides.leagues = dailyOverrides.leagues || [];
   currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
-  currentOverrides.bunkActivityOverrides = dailyData.bunkActivityOverrides || [];
+  // Load bunk overrides from multiple sources (same pattern as trips)
+  let bunkOv = dailyData.bunkActivityOverrides || [];
+  if (bunkOv.length === 0) {
+    try {
+      const stored = localStorage.getItem('campBunkOverrides_' + dateKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          bunkOv = parsed;
+          // Sync back to dailyData
+          window.saveCurrentDailyData?.("bunkActivityOverrides", bunkOv);
+        }
+      }
+    } catch(e) {}
+  } else {
+    // Sync to dedicated key for fast reload
+    try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(bunkOv)); } catch(e) {}
+  }
+  currentOverrides.bunkActivityOverrides = bunkOv;
 }
 
 // =================================================================
@@ -4043,31 +4690,46 @@ function loadCurrentOverrides() {
 function init() {
   container = document.getElementById("daily-adjustments-content");
   if (!container) { console.error("Daily Adjustments: container not found"); return; }
-  
+
+  // Read the builder mode — stored globally so renderGrid can check it
+  var globalMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
+  window._daBuilderMode = globalMode;
+  console.log('[DailyAdj] Mode:', globalMode);
+
+  // Load settings (same for both modes)
   masterSettings.global = window.loadGlobalSettings?.() || {};
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
   smartTileHistory = loadSmartTileHistory();
-  
+
   loadCurrentOverrides();
-  
-  // Initialize window.isRainyDay from loaded daily data
-  const dailyData = window.loadCurrentDailyData?.() || {};
+
+  var dailyData = window.loadCurrentDailyData?.() || {};
   if (window.isRainyDay === undefined) {
-    // Only set if not already defined (e.g., from another module)
-    window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
+      window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
   }
   console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
-  
+
+  // Render UI (same HTML for both modes)
   container.innerHTML = getStyles() + getMainHTML();
-  
+
   setupSubTabs();
   setupKeyboardHandler();
   setupVisibilityHandler();
-  
-  loadDailySkeleton();
-  
+
+ // ★ Mode-specific data loading — keep auto and manual completely separate
+  if (window._daBuilderMode === 'auto') {
+    // Auto mode: load layer templates, clear manual skeleton to prevent bleed
+    loadDAAutoLayers();
+    dailyOverrideSkeleton = [];
+    window.dailyOverrideSkeleton = [];
+  } else {
+    // Manual mode: load skeleton, clear auto layers to prevent bleed
+    loadDailySkeleton();
+    daAutoLayers = {};
+  }
+
   renderPalette();
   renderRainyDayPanel();
   renderDisplacedTilesPanel();
@@ -4076,8 +4738,41 @@ function init() {
   renderTripsForm();
   renderBunkOverridesUI();
   renderResourceOverridesUI();
-}
+  if (window.RotationEvents?.injectSubtab) window.RotationEvents.injectSubtab();
 
+  // ★ Re-load skeleton/layers if cloud hydration arrives after init with empty data
+  window.addEventListener('campistry-cloud-hydrated', function _daHydrationHandler() {
+    // Only re-load if we got nothing at init time — avoid overwriting user edits
+    if (window._daBuilderMode === 'auto') {
+      if (Object.keys(daAutoLayers).length === 0 || Object.values(daAutoLayers).every(v => !v || v.length === 0)) {
+        console.log('[DailyAdj] Re-loading auto layers after cloud hydration');
+        loadDAAutoLayers();
+        renderGrid();
+      }
+    } else {
+      if (!dailyOverrideSkeleton || dailyOverrideSkeleton.length === 0) {
+        console.log('[DailyAdj] Re-loading skeleton after cloud hydration');
+        masterSettings.global = window.loadGlobalSettings?.() || {};
+        masterSettings.app1 = masterSettings.global.app1 || {};
+        loadDailySkeleton();
+        renderGrid();
+      }
+    }
+  });
+
+  // ★ v7.0: Re-render trips when cloud data syncs (trips may arrive after init)
+  window.addEventListener('campistry-cloud-sync', function() {
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    // Merge: if cloud has trips that localStorage doesn't, sync them in
+    loadDailyTrips(dateKey); // triggers cross-sync
+    renderTripsForm();
+  });
+  // Also listen for schedule-saved events (trips are part of daily_schedules)
+  window.addEventListener('campistry-schedule-saved', function() {
+    renderTripsForm();
+  });
+}
+    
 function cleanup() {
   if (_keyHandler) {
     document.removeEventListener('keydown', _keyHandler);
@@ -4101,6 +4796,9 @@ window.isRainyDayActive = isRainyDayActive;
 window.isMidDayModeActive = isMidDayModeActive;
 window.getMidDayStartTime = getMidDayStartTime;
 window.refreshSkeletonConflicts = function() { renderGrid(); };
+window.daShowModal = daShowModal;
+window.daShowConfirm = daShowConfirm;
+window.daShowAlert = daShowAlert;
 // === ADD THIS near the end of the IIFE, before the closing })(); ===
 
 // Expose internals for mobile touch support
@@ -4110,4 +4808,24 @@ window.DailyAdjustmentsInternal = {
   renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
   bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){}
 };
+ 
+
+
+  // Hook into daily adjustments render to check for auto mode
+const _origRenderDA = window.renderDailyAdjustments || window.initDailyAdjustments;
+if (_origRenderDA) {
+  window._checkAutoModeForDay = checkAutoModeForDay;
+}
+
+// ★ Listen for mode changes from Setup & Config
+window.addEventListener('campistry-builder-mode-changed', (e) => {
+  const newMode = e.detail?.mode;
+  if (newMode && newMode !== window._daBuilderMode) {
+    console.log('[DailyAdj] Mode changed to:', newMode, '— re-initializing');
+    window._daBuilderMode = newMode;
+    cleanup();
+    init();
+  }
+});
+
 })();

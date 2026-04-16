@@ -12,6 +12,8 @@
     <link rel="stylesheet" href="design-system.css" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="mobile-responsive.css" />
+    <link rel="stylesheet" href="auto_schedule_styles.css">
+    <link rel="stylesheet" href="campistry-unified.css">
     
     
     <!-- FIX: Hide app container initially to prevent flash -->
@@ -189,21 +191,24 @@
         <header class="app-header">
             <div class="header-left">
                 <!-- DASHBOARD LINK -->
-                <a href="dashboard.html" style="color:#147D91; text-decoration:none; font-weight:500; margin-right:16px;">&larr; Dashboard</a>
+                <a href="dashboard.html" class="nav-back">&larr; Dashboard</a>
 
                 <!-- Hamburger -->
                 <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
                     <span></span><span></span><span></span>
                 </button>
-                <!-- App Title: Flow Branding -->
-                <div class="app-title">
-                    <img src="Flow_clean.png" alt="Campistry Flow" class="app-logo-full app-logo-flow-img">
+                <!-- Quick-Switch Bar -->
+                <div class="quick-switch-bar">
+                    <div class="quick-switch-active" data-app="flow">
+                        <img src="Flow_clean.png" alt="Campistry Flow">
+                    </div>
+                    <a href="campistry_me.html" class="quick-switch-link" data-app="me" title="Open Campistry Me — Structure &amp; Campers">
+                        <img src="Me_clean.png" alt="Campistry Me">
+                    </a>
+                    <a href="campistry_go.html" class="quick-switch-link" data-app="go" title="Open Campistry Go — Field Map">
+                        <img src="Go_clean.png" alt="Campistry Go">
+                    </a>
                 </div>
-
-                <!-- Quick Link: Campistry Me -->
-                <a href="campistry_me.html" class="header-app-switch" title="Open Campistry Me — Structure &amp; Campers">
-                    <img src="Me_clean.png" alt="Campistry Me" class="app-logo-full app-logo-me-img">
-                </a>
             </div>
             <div class="header-right">
                 <label class="header-date-label" for="calendar-date-picker">
@@ -231,6 +236,9 @@
                     </button>
                     <button class="sidebar-item" data-tab="zones">
                         <span class="sidebar-dot"></span> Zones
+                    </button>
+                    <button class="sidebar-item" data-tab="rules">
+                        <span class="sidebar-dot"></span> Rules
                     </button>
                     <button class="sidebar-item" data-tab="leagues">
                         <span class="sidebar-dot"></span> Leagues
@@ -399,6 +407,7 @@
                             </div>
                         </section>
                     </div>
+                    <div id="schedule-mode-toggle" style="margin-top:20px;"></div>
                 </div>
                 <!-- /setup -->
 
@@ -408,11 +417,11 @@
                 <div id="facilities" class="tab-content"></div>
                 <div id="zones" class="tab-content"></div>
                 <!-- Legacy tabs (hidden, kept for API compatibility) -->
-                <div id="locations" class="tab-content" style="display:none"></div>
                 <div id="fields" class="tab-content" style="display:none"></div>
                 <div id="special_activities" class="tab-content" style="display:none"></div>
                 <div id="leagues" class="tab-content"></div>
-                <div id="specialty-leagues" class="tab-content"></div>
+               <div id="specialty-leagues" class="tab-content"></div>
+                <div id="rules" class="tab-content"></div>
 
                 <div id="master-scheduler" class="tab-content">
                     <!-- MULTI-SCHEDULER: Subdivision Status Panel will be inserted here -->
@@ -627,19 +636,33 @@
 <script src="welcome.js"></script>
 <script src="calendar.js"></script>
 <script src="app1.js"></script>
-<script src="locations.js"></script>
+   <script src="scheduling_constraints.js"></script>
+<script src="scheduling_rules.js"></script>
 <script src="skeleton_sandbox.js"></script>
 <script src="daily_adjustments.js"></script>
+    <script src="rotation_events.js"></script>
 <script src="rainy_day_manager.js"></script>
 <script src="midday_rain_stacker.js"></script>
 <script src="special_activities.js"></script>
 <script src="fields.js"></script>
 <script src="facilities.js"></script>
 <script src="zones.js"></script>
+<script src="rules.js"></script>
 <script src="leagues.js"></script>
 <script src="specialty_leagues.js"></script>
 <script src="master_schedule_builder.js"></script>
-    
+    <script src="auto_field_locks.js"></script>         
+<script src="auto_solver_engine.js"></script>
+    <script src="auto_build_engine.js"></script>
+    <script src="auto_feasibility_check.js"></script>
+    <script src="auto_joint_placer.js"></script>
+    <script src="auto_backtrack_packer.js"></script>
+    <script src="scheduler_core_auto.js"></script>
+<script src="auto_schedule_planner.js"></script>
+    <script src="custom_persistent_tiles.js"></script>
+  
+
+
 <script src="smart_logic_adapter.js"></script>
 
 <!-- PERMISSIONS & VERSIONING SYSTEM -->
@@ -652,8 +675,11 @@
 
 <script src="division_times_system.js"></script>
 <script src="division_times_integration.js"></script>
+<script src="plan_limits.js"></script>
 <script src="trial_guard.js"></script>
 <!-- SCHEDULER CORE -->
+    
+
 <script src="scheduler_core_loader.js"></script>
 <script src="global_field_locks.js"></script>
 <script src="scheduler_core_utils.js"></script>
@@ -666,7 +692,9 @@
 <script src="schedule_orchestrator.js"></script>
 
 <!-- UNIFIED SCHEDULE SYSTEM -->
+    <script src="auto_schedule_grid.js"></script>
 <script src="unified_schedule_system.js"></script>
+    <script src="schedule_calendar_views.js"></script>
 <script src="post_edit_system.js"></script>
 
 <!-- Pinned preservation (must come after scheduler_core_main.js) -->
@@ -676,12 +704,14 @@
 <script src="analytics.js"></script>
 <script src="camper_locator.js"></script>
 <script src="validator.js"></script>
+<script src="auto_validator.js"></script>
 <script src="print_center.js"></script>
 <script src="helper.js"></script>
 <script src="updates.js"></script>
     <script src="rbac_diagnostics.js"></script>
 <script src="campistry_diagnostics.js"></script>
 <script src="mobile_touch_drag.js"></script>
+    
 <!-- TAB NAVIGATION & SIDEBAR HANDLING -->
 <script>
 /* TAB SWITCHING */
@@ -699,6 +729,7 @@ function showTab(id) {
     if (id === "zones") window.initZonesTab?.();
     if (id === "leagues") window.initLeagues?.();
     if (id === "specialty-leagues") window.initSpecialtyLeagues?.();
+    if (id === "rules") window.initRulesTab?.();
     if (id === "master-scheduler") {
         window.initMasterScheduler?.();
         const container = document.getElementById('subdivision-status-container');
