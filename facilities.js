@@ -382,9 +382,10 @@ function deleteFacility(fac) {
     }
 
     if (fac.usedFor.includes('special')) {
-        const allSpecials = window.getAllSpecialActivities?.() || [];
-        const remaining = allSpecials.filter(s => !(fac.specialActivityNames || []).includes(s.name));
-        window.saveGlobalSpecialActivities?.(remaining);
+        // ★ FIX: full purge per special so schedules / zones / activityProperties
+        //   all forget the names. saveGlobalSpecialActivities only updated the
+        //   registry — references elsewhere survived and confused the scheduler.
+        (fac.specialActivityNames || []).forEach(name => cleanupDeletedSpecial(name));
     }
 
     if (fac.usedFor.includes('general')) {
@@ -872,10 +873,11 @@ function renderSpecialConfig(container, fac) {
         saDelBtn.style.cssText = "color:#DC2626; background:none; border:1px solid #FECACA; padding:4px 10px; border-radius:6px; cursor:pointer; font-size:0.75rem;";
         saDelBtn.onclick = () => {
             fac.specialActivityNames = fac.specialActivityNames.filter(n => n !== saName);
-            // Also remove from legacy specials
-            const existing = window.getAllSpecialActivities?.() || [];
-            const remaining = existing.filter(s => s.name !== saName);
-            window.saveGlobalSpecialActivities?.(remaining);
+            // ★ FIX: comprehensive purge across schedules, zones, props, in-memory caches.
+            //   Old behavior only filtered the registry array — leaving stale references
+            //   in scheduleAssignments and zones, which made the scheduler "remember"
+            //   deleted specials.
+            cleanupDeletedSpecial(saName);
             saveData();
             renderDetailPane();
         };
@@ -2232,11 +2234,14 @@ function getComboForField(fieldName) {
 function cleanupDeletedField(fieldName) {
     if (!fieldName) return;
     console.log(`[FACILITIES] Cleaning up deleted field: "${fieldName}"`);
+    const norm = String(fieldName).toLowerCase().trim();
+    const matches = (s) => s && String(s).toLowerCase().trim() === norm;
     try {
         const settings = window.loadGlobalSettings?.() || {};
         const dailySchedules = settings.daily_schedules || {};
         let cleanupCount = 0;
 
+        // ★ SCHEDULE ASSIGNMENTS — null out matching field/location across all dates
         Object.keys(dailySchedules).forEach(dateKey => {
             const dayData = dailySchedules[dateKey];
             if (!dayData?.scheduleAssignments) return;
@@ -2244,20 +2249,238 @@ function cleanupDeletedField(fieldName) {
                 const slots = dayData.scheduleAssignments[bunkKey];
                 if (!Array.isArray(slots)) return;
                 slots.forEach((slot, idx) => {
-                    if (slot?.location === fieldName || slot?.field === fieldName) {
-                        dayData.scheduleAssignments[bunkKey][idx] = { ...slot, location: null, field: null };
+                    if (!slot) return;
+                    if (matches(slot.location) || matches(slot.field) || matches(slot._specialLocation) || matches(slot.claimedField)) {
+                        dayData.scheduleAssignments[bunkKey][idx] = {
+                            ...slot, location: null, field: null,
+                            _specialLocation: matches(slot._specialLocation) ? null : slot._specialLocation,
+                            claimedField: matches(slot.claimedField) ? null : slot.claimedField
+                        };
                         cleanupCount++;
                     }
                 });
             });
+
+            // ★ LEAGUE ASSIGNMENTS — matchups can carry "@ FieldName (sport)" strings
+            if (dayData.leagueAssignments) {
+                Object.values(dayData.leagueAssignments).forEach(divMap => {
+                    if (!divMap || typeof divMap !== 'object') return;
+                    Object.values(divMap).forEach(slotData => {
+                        if (!slotData?.matchups) return;
+                        slotData.matchups = slotData.matchups.filter(m => {
+                            if (typeof m !== 'string') {
+                                if (matches(m?.field) || matches(m?.location)) { cleanupCount++; return false; }
+                                return true;
+                            }
+                            // String form: "TeamA vs TeamB @ FieldName (sport)"
+                            const at = m.split(' @ ')[1] || '';
+                            const fname = at.replace(/\s*\(.+?\)\s*$/, '').trim();
+                            if (matches(fname)) { cleanupCount++; return false; }
+                            return true;
+                        });
+                    });
+                });
+            }
+
+            // ★ MANUAL SKELETON / SKELETON ASSIGNMENTS — purge field references
+            ['manualSkeleton', 'skeletonAssignments'].forEach(key => {
+                const items = dayData[key];
+                if (!items) return;
+                if (Array.isArray(items)) {
+                    items.forEach(item => {
+                        if (matches(item?.field) || matches(item?.location)) { item.field = null; item.location = null; cleanupCount++; }
+                    });
+                }
+            });
         });
 
-        if (cleanupCount > 0) window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+        if (cleanupCount > 0) {
+            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+            console.log(`[FACILITIES]   Cleaned ${cleanupCount} stale references in daily_schedules`);
+        }
+
+        // ★ ACTIVITY PROPERTIES — drop the field entry
         if (window.activityProperties?.[fieldName]) delete window.activityProperties[fieldName];
+
+        // ★ SPORT META DATA — drop entries keyed by this field
+        try {
+            if (sportMetaData && typeof sportMetaData === 'object') {
+                Object.keys(sportMetaData).forEach(k => { if (matches(k)) delete sportMetaData[k]; });
+            }
+        } catch (e) { /* sportMetaData not always defined */ }
+
+        // ★ APP1 STATE — refresh in-memory app1.fields cache and disabledFields list
+        const app1 = settings.app1 || {};
+        app1.fields = (app1.fields || []).filter(f => !matches(f?.name));
+        if (Array.isArray(app1.disabledFields)) {
+            app1.disabledFields = app1.disabledFields.filter(n => !matches(n));
+        }
+        window.saveGlobalSettings?.('app1', app1);
+        // Mirror to root and to window.fields cache so AutoSolver/other readers see it
+        window.saveGlobalSettings?.('fields', app1.fields);
+        if (Array.isArray(window.fields)) {
+            window.fields = window.fields.filter(f => !matches(f?.name));
+        }
+        if (window.app1 && Array.isArray(window.app1.fields)) {
+            window.app1.fields = window.app1.fields.filter(f => !matches(f?.name));
+        }
+
+        // ★ DAILY OVERRIDES — disabledFields per-date
+        Object.values(dailySchedules).forEach(dayData => {
+            if (dayData?.overrides?.disabledFields) {
+                dayData.overrides.disabledFields = dayData.overrides.disabledFields.filter(n => !matches(n));
+            }
+        });
+        window.saveGlobalSettings?.('daily_schedules', dailySchedules);
     } catch (e) {
         console.error('[FACILITIES] Cleanup error:', e);
     }
 }
+
+// ★ NEW: Comprehensive purge for a deleted special activity. Mirrors
+//   cleanupDeletedField for the specials side. Removes references from
+//   schedule assignments, league assignments, zones, activity properties,
+//   pinned-tile defaults, and the in-memory specials cache (which our
+//   earlier saveSpecialData fix established).
+function cleanupDeletedSpecial(specialName) {
+    if (!specialName) return;
+    console.log(`[FACILITIES] Cleaning up deleted special: "${specialName}"`);
+    const norm = String(specialName).toLowerCase().trim();
+    const matches = (s) => s && String(s).toLowerCase().trim() === norm;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        const dailySchedules = settings.daily_schedules || {};
+        let cleanupCount = 0;
+
+        Object.keys(dailySchedules).forEach(dateKey => {
+            const dayData = dailySchedules[dateKey];
+            // Schedule assignments
+            if (dayData?.scheduleAssignments) {
+                Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                    const slots = dayData.scheduleAssignments[bunkKey];
+                    if (!Array.isArray(slots)) return;
+                    slots.forEach((slot, idx) => {
+                        if (!slot) return;
+                        if (matches(slot._activity) || matches(slot.event) || matches(slot._assignedSpecial)) {
+                            dayData.scheduleAssignments[bunkKey][idx] = null;
+                            cleanupCount++;
+                        }
+                    });
+                });
+            }
+            // Manual skeleton / skeleton assignments
+            ['manualSkeleton', 'skeletonAssignments'].forEach(key => {
+                const items = dayData?.[key];
+                if (!Array.isArray(items)) return;
+                for (let i = items.length - 1; i >= 0; i--) {
+                    const it = items[i];
+                    if (matches(it?.event) || matches(it?._activity) || matches(it?._assignedSpecial)) {
+                        items.splice(i, 1); cleanupCount++;
+                    }
+                }
+            });
+        });
+        if (cleanupCount > 0) {
+            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+            console.log(`[FACILITIES]   Cleaned ${cleanupCount} stale references in daily_schedules`);
+        }
+
+        // Zones
+        const zones = window.getLocationZones?.() || settings.locationZones || {};
+        let zonesChanged = false;
+        Object.values(zones).forEach(zone => {
+            if (Array.isArray(zone?.specialActivities)) {
+                const before = zone.specialActivities.length;
+                zone.specialActivities = zone.specialActivities.filter(n => !matches(n));
+                if (zone.specialActivities.length !== before) zonesChanged = true;
+            }
+        });
+        if (zonesChanged) window.saveLocationZones?.(zones);
+
+        // Activity properties
+        if (window.activityProperties) {
+            Object.keys(window.activityProperties).forEach(k => { if (matches(k)) delete window.activityProperties[k]; });
+        }
+
+        // Specials registry — root key, app1 key, and in-memory cache
+        const allSpecials = (window.getAllSpecialActivities?.() || []).filter(s => !matches(s?.name));
+        const app1 = settings.app1 || {};
+        app1.specialActivities = allSpecials;
+        window.saveGlobalSettings?.('app1', app1);
+        window.saveGlobalSettings?.('specialActivities', allSpecials);
+        if (window.specialActivities !== undefined) {
+            window.specialActivities = allSpecials.filter(s => !s.rainyDayExclusive && !s.rainyDayOnly);
+        }
+        if (typeof window.refreshSpecialActivitiesFromStorage === 'function') {
+            window.refreshSpecialActivitiesFromStorage();
+        }
+
+        // Pinned-tile defaults — special activity may have been a pinned tile
+        const pinned = window.getPinnedTileDefaults?.() || {};
+        let pinnedChanged = false;
+        Object.keys(pinned).forEach(k => { if (matches(k)) { delete pinned[k]; pinnedChanged = true; } });
+        if (pinnedChanged) window.savePinnedTileDefaults?.(pinned);
+    } catch (e) {
+        console.error('[FACILITIES] Cleanup error (special):', e);
+    }
+}
+
+// ★ NEW: Sweep for orphaned references — anything in scheduleAssignments
+//   pointing to a field/special that no longer exists in the master lists.
+//   Returns { fields, specials } summary. Pass {dryRun: false} to actually
+//   purge the orphans (otherwise just reports them).
+function sweepOrphanedReferences(opts) {
+    opts = opts || {};
+    const dryRun = opts.dryRun !== false; // default true
+    const settings = window.loadGlobalSettings?.() || {};
+    const fields = new Set((settings.app1?.fields || settings.fields || []).map(f => String(f.name || '').toLowerCase().trim()).filter(Boolean));
+    const specials = new Set((settings.specialActivities || settings.app1?.specialActivities || []).map(s => String(s.name || '').toLowerCase().trim()).filter(Boolean));
+    const orphanFields = new Set();
+    const orphanSpecials = new Set();
+
+    Object.values(settings.daily_schedules || {}).forEach(dayData => {
+        if (!dayData?.scheduleAssignments) return;
+        Object.values(dayData.scheduleAssignments).forEach(slots => {
+            if (!Array.isArray(slots)) return;
+            slots.forEach(slot => {
+                if (!slot) return;
+                const fn = slot.field || slot.location || slot._specialLocation;
+                if (fn && typeof fn === 'string') {
+                    const k = fn.toLowerCase().trim();
+                    if (k && k !== 'free' && !fields.has(k) && !specials.has(k)) orphanFields.add(fn);
+                }
+                const ev = slot._activity || slot.event || slot._assignedSpecial;
+                if (ev && typeof ev === 'string') {
+                    const k = ev.toLowerCase().trim();
+                    // Heuristic: if the event name matches a special-activity-ish entry not in registries
+                    if (k && !specials.has(k) && !fields.has(k) &&
+                        !['free', 'lunch', 'snacks', 'dismissal', 'swim', 'pool', 'league game', 'general activity slot'].includes(k) &&
+                        !/^(sport|activity|slot|league|specialty|game)/i.test(k)) {
+                        orphanSpecials.add(ev);
+                    }
+                }
+            });
+        });
+    });
+
+    const summary = {
+        fields: [...orphanFields],
+        specials: [...orphanSpecials]
+    };
+    console.log('[FACILITIES] Orphan sweep:', summary);
+    if (!dryRun) {
+        summary.fields.forEach(name => cleanupDeletedField(name));
+        summary.specials.forEach(name => cleanupDeletedSpecial(name));
+        console.log('[FACILITIES] Orphan sweep — purged.');
+    }
+    return summary;
+}
+
+// Expose the helpers globally so users (and the auto-builder) can run a
+// clean-up pass from the console or before a build.
+window.cleanupDeletedField = cleanupDeletedField;
+window.cleanupDeletedSpecial = cleanupDeletedSpecial;
+window.sweepOrphanedReferences = sweepOrphanedReferences;
 
 function propagateFieldRename(oldName, newName) {
     if (!oldName || !newName || oldName === newName) return;
