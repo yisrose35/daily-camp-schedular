@@ -238,15 +238,23 @@
                     var leagueName = a._leagueName || '';
                     var sport = a.sport || '';
 
+                    // ★ FIX: leagueAssignments is keyed by slotIdx (per fillBlock in
+                    // scheduler_core_main.js:367). Previously this used
+                    // Object.values(divEntry)[0] which always returned the FIRST
+                    // stored game — so when a grade has 2+ games per day, every
+                    // league row in the grid rendered Game #1's matchups. Now we
+                    // look up by the current slot's index (or startMin fallback).
                     var la = window.leagueAssignments || {};
                     var divEntry = la[divName];
                     if (divEntry) {
-                        var first = Object.values(divEntry)[0];
-                        if (first) {
-                            if (first.matchups && first.matchups.length) matchups = first.matchups;
-                            gameLabel  = first.gameLabel  || gameLabel;
-                            leagueName = first.leagueName || leagueName;
-                            sport      = first.sport      || sport;
+                        // Try slot index first (primary storage key), then startMin
+                        // as a fallback for legacy data stored by startMin.
+                        var entry = divEntry[idx] || divEntry[slot.startMin] || null;
+                        if (entry) {
+                            if (entry.matchups && entry.matchups.length) matchups = entry.matchups;
+                            gameLabel  = entry.gameLabel  || gameLabel;
+                            leagueName = entry.leagueName || leagueName;
+                            sport      = entry.sport      || sport;
                         }
                     }
 
