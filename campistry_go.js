@@ -401,6 +401,135 @@
     }
 
     /**
+     * fetchHereTourPlan(stops, buses, camp, opts)
+     * Uses HERE Tour Planning API v3 — professional VRP solver.
+     * Objectives (in priority order):
+     *   1. minimize-unassigned (don't drop any kids)
+     *   2. balance-max-load (MINIMIZE MAX ROUTE TIME — minimax)
+     *   3. minimize-duration (reduce total fleet time)
+     *
+     * Returns: { routes: [{ vehicleIdx, stopIndices: [...] }], unassigned: [...] }
+     * or null if the API fails.
+     */
+    async function fetchHereTourPlan(stops, buses, camp, opts) {
+        const apiKey = getHereKey();
+        if (!apiKey || !stops.length || !buses.length) return null;
+
+        opts = opts || {};
+        const isArrival = opts.isArrival || false;
+        const serviceTimeSec = opts.serviceTimeSec || 120; // 2 min per stop
+        const baseTime = '2024-01-15T07:00:00Z'; // HERE requires ISO timestamps
+        const endTime = '2024-01-15T12:00:00Z';
+
+        // Build fleet — one vehicle type per bus so we preserve bus identity + capacity
+        const fleetTypes = buses.map(function(b, i) {
+            return {
+                id: 'bus_' + i,
+                profile: 'bus',
+                costs: { fixed: 0, distance: 0, time: 1 },
+                shifts: [{
+                    start: {
+                        time: isArrival ? new Date(new Date(baseTime).getTime() - 90*60000).toISOString() : baseTime,
+                        location: isArrival ? { lat: stops[0].lat, lng: stops[0].lng } : { lat: camp.lat, lng: camp.lng }
+                    },
+                    end: {
+                        time: endTime,
+                        location: { lat: camp.lat, lng: camp.lng }
+                    }
+                }],
+                capacity: [b.capacity || 44],
+                amount: 1,
+                limits: { maxDuration: 7200 } // 2 hours max route
+            };
+        });
+
+        // Build jobs — one per stop, with demand = # kids
+        const jobs = stops.map(function(s, i) {
+            return {
+                id: 'stop_' + i,
+                tasks: {
+                    deliveries: [{
+                        places: [{ location: { lat: s.lat, lng: s.lng }, duration: serviceTimeSec }],
+                        demand: [s.campers.length]
+                    }]
+                }
+            };
+        });
+
+        // Use bus profile with driving fallback
+        const request = {
+            fleet: {
+                types: fleetTypes,
+                profiles: [{ name: 'bus', type: 'car' }]
+            },
+            plan: { jobs: jobs },
+            objectives: [
+                [{ type: 'minimize-unassigned' }],
+                [{ type: 'balance-max-load' }],    // ★ minimax — minimize slowest route
+                [{ type: 'minimize-duration' }]
+            ]
+        };
+
+        try {
+            console.log('[Go] HERE Tour Planning: ' + stops.length + ' stops, ' + buses.length + ' buses...');
+            const t0 = Date.now();
+            const resp = await fetch('https://tourplanning.hereapi.com/v3/problems?apikey=' + encodeURIComponent(apiKey), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request)
+            });
+
+            if (!resp.ok) {
+                const errText = await resp.text();
+                console.warn('[Go] HERE Tour Planning HTTP ' + resp.status + ': ' + errText.substring(0, 500));
+                return null;
+            }
+
+            const result = await resp.json();
+            console.log('[Go] HERE Tour Planning: solved in ' + ((Date.now()-t0)/1000).toFixed(1) + 's, ' +
+                (result.tours?.length || 0) + ' tours, ' + (result.unassigned?.length || 0) + ' unassigned');
+
+            if (!result.tours?.length) return null;
+
+            // Parse tours → our route format
+            const parsedRoutes = result.tours.map(function(tour) {
+                // vehicleId like "bus_0" → extract index
+                const busIdxMatch = tour.vehicleId.match(/bus_(\d+)/);
+                const busIdx = busIdxMatch ? parseInt(busIdxMatch[1]) : 0;
+
+                const stopIndices = [];
+                tour.stops.forEach(function(ts) {
+                    if (ts.activities) {
+                        ts.activities.forEach(function(act) {
+                            if (act.jobId && act.type === 'delivery') {
+                                const m = act.jobId.match(/stop_(\d+)/);
+                                if (m) stopIndices.push(parseInt(m[1]));
+                            }
+                        });
+                    }
+                });
+
+                return {
+                    vehicleIdx: busIdx,
+                    stopIndices: stopIndices,
+                    statistic: tour.statistic || null
+                };
+            });
+
+            return {
+                routes: parsedRoutes,
+                unassigned: (result.unassigned || []).map(function(u) {
+                    const m = u.jobId.match(/stop_(\d+)/);
+                    return m ? parseInt(m[1]) : -1;
+                }).filter(function(i) { return i >= 0; })
+            };
+        } catch (e) {
+            console.warn('[Go] HERE Tour Planning failed:', e.message);
+            return null;
+        }
+    }
+
+    /**
      * fetchLargeMatrixBatched(coords)
      * Handles >25 coords by pivot-row batching.
      * Always includes coord[0] (typically camp) in every batch for consistent anchoring.
@@ -4285,10 +4414,74 @@
             const serviceTime = (D.setup.avgStopTime || 2) * 60;
             const key = getApiKey();
 
-            // ── Step 3: Build zones ──
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': building zones...', pctBase + 30);
-            const greedyZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
-            toast(greedyZones.length + ' bus zones created — optimizing routes...');
+            // ══════════════════════════════════════════════════════════════
+            // PRIMARY: HERE Tour Planning — professional minimax VRP solver
+            // ══════════════════════════════════════════════════════════════
+            let greedyZones = null;
+            let hereTourSuccess = false;
+            if (getHereKey() && allStops.length > 0 && shiftVehicles.length > 0) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': HERE Tour Planning (minimax solver)...', pctBase + 25);
+                toast('Solving with HERE Tour Planning...');
+                const tpResult = await fetchHereTourPlan(allStops, shiftVehicles, { lat: campLat, lng: campLng }, {
+                    isArrival: isArrival,
+                    serviceTimeSec: serviceTime
+                });
+                if (tpResult && tpResult.routes.length) {
+                    // Convert HERE Tour Planning output into our zone format
+                    greedyZones = tpResult.routes.map(function(tr) {
+                        const v = shiftVehicles[tr.vehicleIdx];
+                        if (!v) return null;
+                        const busObj = shiftBuses.find(function(b) { return b.id === v.busId; });
+                        return {
+                            busIdx: tr.vehicleIdx,
+                            busId: v.busId,
+                            busName: v.name,
+                            busColor: v.color,
+                            stopIndices: tr.stopIndices,
+                            camperCount: tr.stopIndices.reduce(function(s, si) { return s + allStops[si].campers.length; }, 0),
+                            capacity: v.capacity,
+                            centroidLat: tr.stopIndices.length ? tr.stopIndices.reduce(function(s, si) { return s + allStops[si].lat; }, 0) / tr.stopIndices.length : campLat,
+                            centroidLng: tr.stopIndices.length ? tr.stopIndices.reduce(function(s, si) { return s + allStops[si].lng; }, 0) / tr.stopIndices.length : campLng,
+                            _medoid: tr.stopIndices[0] || 0,
+                            _hereSolved: true
+                        };
+                    }).filter(function(z) { return z && z.stopIndices.length > 0; });
+
+                    // Handle unassigned stops — insert into closest zone with capacity
+                    if (tpResult.unassigned && tpResult.unassigned.length) {
+                        console.warn('[Go] HERE Tour Planning: ' + tpResult.unassigned.length + ' unassigned — inserting');
+                        tpResult.unassigned.forEach(function(si) {
+                            const stop = allStops[si];
+                            if (!stop) return;
+                            let bestZi = 0, bestD = Infinity;
+                            greedyZones.forEach(function(z, zi) {
+                                if (z.camperCount + stop.campers.length > z.capacity) return;
+                                const d = haversineMi(stop.lat, stop.lng, z.centroidLat, z.centroidLng);
+                                if (d < bestD) { bestD = d; bestZi = zi; }
+                            });
+                            if (greedyZones[bestZi]) {
+                                greedyZones[bestZi].stopIndices.push(si);
+                                greedyZones[bestZi].camperCount += stop.campers.length;
+                            }
+                        });
+                    }
+
+                    hereTourSuccess = true;
+                    console.log('[Go] HERE Tour Planning: ' + greedyZones.length + ' optimized zones');
+                    greedyZones.forEach(function(z) {
+                        console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' + z.stopIndices.length + ' stops');
+                    });
+                    toast(greedyZones.length + ' zones from HERE Tour Planning — routing...');
+                }
+            }
+
+            // ── Step 3: FALLBACK — Clarke-Wright zone builder ──
+            if (!hereTourSuccess) {
+                console.log('[Go] Falling back to Clarke-Wright Savings');
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': building zones (Clarke-Wright)...', pctBase + 30);
+                greedyZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
+                toast(greedyZones.length + ' bus zones created — optimizing routes...');
+            }
 
             // ── Step 4: Route each zone (VROOM TSP → directional sort) ──
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing routes...', pctBase + 50);
