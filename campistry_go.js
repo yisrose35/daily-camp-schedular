@@ -1601,6 +1601,8 @@
         const addrRoster = {};
         Object.keys(D.addresses).forEach(name => {
             const a = D.addresses[name];
+            // Skip staff — they're tracked in D.monitors/D.counselors, not the camper roster
+            if (a._isStaff) return;
             addrRoster[name] = {
                 camperId: a._camperId || 0,
                 division: a._division || '',
@@ -3339,6 +3341,7 @@
         Object.keys(roster).forEach(name => {
             const a = D.addresses[name];
             if (!a?.geocoded || !a.lat || !a.lng) return;
+            if (a._isStaff) return; // Staff are post-gen suggestions, not campers
             if (a.transport === 'pickup') return;
             if (a[modeKey] === false) return;
             allCampers.push({
@@ -4878,6 +4881,7 @@
             Object.keys(roster).forEach(name => {
                 const c = roster[name]; const a = D.addresses[name];
                 if (!c || !a?.geocoded || !a.lat || !a.lng) return;
+                if (a._isStaff) return; // Staff are post-gen suggestions, not campers
                 if (a.transport === 'pickup') return;
                 // Filter by arrival/dismissal mode flag
                 const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
@@ -7684,7 +7688,11 @@
             const longest = routes.length ? Math.max(...routes.map(r => r.totalDuration), 0) : 0;
             html += '<details class="collapsible-card" open><summary class="collapsible-header"><span style="display:flex;align-items:center;gap:.5rem;"><span class="shift-num">' + (si + 1) + '</span>' + esc(shift.label || 'Shift ' + (si + 1)) + '</span><span style="font-size:.75rem;font-weight:400;color:var(--text-muted);">' + totalCampers + ' campers · ' + totalStops + ' stops · ' + longest + ' min</span></summary>';
             html += '<div class="collapsible-body" style="padding:.75rem;"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;">';
-            routes.filter(r => r.stops.length > 0).forEach(r => {
+            routes
+                .filter(r => r.stops.length > 0)
+                .slice()
+                .sort((a, b) => (a.busName || '').localeCompare(b.busName || '', undefined, { numeric: true, sensitivity: 'base' }))
+                .forEach(r => {
                 html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
                 r.stops.forEach(st => {
                     const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) : st.isCounselor ? '👤 ' + esc(st.counselorName) : st.campers.map(c => '<span style="display:inline-flex;align-items:center;gap:2px;">' + esc(c.name) + ' <button onclick="CampistryGo.openMoveModal(\'' + esc(c.name.replace(/'/g, "\\'")) + '\',\'' + r.busId + '\',' + si + ')" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);font-size:10px;" title="Move">↔</button></span>').join(', ');
@@ -7809,6 +7817,8 @@
         const tabsEl = document.getElementById('mapBusTabs');
         const uniqueBuses = []; const seen = new Set();
         allRoutes.forEach(r => { if (!seen.has(r.busId)) { seen.add(r.busId); uniqueBuses.push({ busId: r.busId, busName: r.busName, busColor: r.busColor }); } });
+        // Natural sort: Bus 1, 2, ..., 9, 10, 11, 12, 13 (not 1, 10, 11, 12, 13, 2, ..., 9)
+        uniqueBuses.sort((a, b) => (a.busName || '').localeCompare(b.busName || '', undefined, { numeric: true, sensitivity: 'base' }));
         tabsEl.innerHTML = '<button class="bus-tab all-tab' + (isAllBuses() ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'all\')">All Buses</button>' +
             uniqueBuses.map(b => '<button class="bus-tab' + (_activeMapBuses.has(b.busId) ? ' active' : '') + '" onclick="CampistryGo.toggleMapBus(\'' + b.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(b.busColor) + '"></span>' + esc(b.busName) + '</button>').join('') +
             '<span style="margin-left:auto;display:flex;gap:4px;align-items:center;">' +
