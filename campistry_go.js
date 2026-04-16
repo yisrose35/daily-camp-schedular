@@ -4248,6 +4248,94 @@
         console.log('[Go] K-Medoids: ' + lbMoves + ' load-balance moves (target=' + targetPerCluster + ', min=' + minLoad + ')');
 
         // =====================================================================
+        // Stage D++ — TIME BALANCE (soft)
+        //
+        // Goal: equalize estimated ROUTE TIME across buses, not kid count.
+        // A close-by bus can have 40 kids in 40min, a far bus 20 kids in 40min.
+        // Both arrive in the same time.
+        //
+        // Algorithm:
+        //   1. Estimate route time for each cluster (camp → stops sorted by
+        //      distance-from-camp → camp, plus stop-service times)
+        //   2. If the slowest cluster's time is >TIME_GAP_MIN higher than
+        //      the fastest, try moving a stop from slow → fast
+        //   3. Accept move only if:
+        //      - reduces max(slow_time, fast_time_after_move)
+        //      - the moved stop is geographically reasonable for fast cluster
+        //      - fast cluster isn't over capacity
+        // =====================================================================
+        function _routeTimeEst(stopIndices) {
+            if (!stopIndices.length) return 0;
+            var sorted = stopIndices.slice().sort(function(a, b) {
+                return haversineMi(campLat, campLng, stops[a].lat, stops[a].lng) -
+                       haversineMi(campLat, campLng, stops[b].lat, stops[b].lng);
+            });
+            var t = drivingDist(campLat, campLng, stops[sorted[0]].lat, stops[sorted[0]].lng) + AVG_STOP_SEC;
+            for (var ti = 1; ti < sorted.length; ti++) {
+                t += drivingDist(stops[sorted[ti - 1]].lat, stops[sorted[ti - 1]].lng,
+                                  stops[sorted[ti]].lat, stops[sorted[ti]].lng) + AVG_STOP_SEC;
+            }
+            return t;
+        }
+
+        var TIME_GAP_THRESHOLD_SEC = 15 * 60; // consider rebalancing if max-min > 15min
+        var tbMoves = 0;
+        for (var tbPass = 0; tbPass < 50; tbPass++) {
+            var times = clusters.map(_routeTimeEst);
+            var slowT = -Infinity, fastT = Infinity, slowI = -1, fastI = -1;
+            for (var ti = 0; ti < times.length; ti++) {
+                if (clusters[ti].length === 0) continue;
+                if (times[ti] > slowT) { slowT = times[ti]; slowI = ti; }
+                if (times[ti] < fastT) { fastT = times[ti]; fastI = ti; }
+            }
+            if (slowI < 0 || fastI < 0 || slowI === fastI) break;
+            if (slowT - fastT < TIME_GAP_THRESHOLD_SEC) break; // close enough
+
+            // Try moving each stop from slow to fast
+            var bestMove = null;
+            var bestNewMax = slowT;
+
+            for (var mi = 0; mi < clusters[slowI].length; mi++) {
+                var cand = clusters[slowI][mi];
+                // Capacity check
+                if (clusterKids[fastI] + kidCount[cand] > maxClusterCap) continue;
+                // Compactness check: stop must be within 1.5× as close to fast's medoid
+                var dFast = sd(cand, seeds[fastI]);
+                var dSlow = sd(cand, seeds[slowI]);
+                if (dFast > dSlow * 1.5) continue; // too far from fast cluster
+
+                // Estimate new times
+                var newSlowStops = clusters[slowI].filter(function(_, idx) { return idx !== mi; });
+                var newFastStops = clusters[fastI].concat([cand]);
+                var newSlowT = _routeTimeEst(newSlowStops);
+                var newFastT = _routeTimeEst(newFastStops);
+                var newMaxPair = Math.max(newSlowT, newFastT);
+
+                if (newMaxPair < bestNewMax) {
+                    bestNewMax = newMaxPair;
+                    bestMove = { mi: mi, cand: cand };
+                }
+            }
+
+            if (!bestMove) break;
+
+            // Execute the move
+            clusters[slowI].splice(bestMove.mi, 1);
+            clusterKids[slowI] -= kidCount[bestMove.cand];
+            clusters[fastI].push(bestMove.cand);
+            clusterKids[fastI] += kidCount[bestMove.cand];
+            tbMoves++;
+
+            // Re-medoid affected clusters
+            seeds[slowI] = recomputeMedoid(clusters[slowI]) || seeds[slowI];
+            seeds[fastI] = recomputeMedoid(clusters[fastI]) || seeds[fastI];
+        }
+        var finalTimesTmp = clusters.map(_routeTimeEst);
+        var finalMax = Math.max.apply(null, finalTimesTmp);
+        var finalMin = Math.min.apply(null, finalTimesTmp.filter(function(t) { return t > 0; }));
+        console.log('[Go] K-Medoids: ' + tbMoves + ' time-balance moves (gap: ' + (finalMax/60).toFixed(0) + 'min max → ' + (finalMin/60).toFixed(0) + 'min min)');
+
+        // =====================================================================
         // Stage E — Bus Assignment
         //
         // Sort clusters by kid count descending, buses by capacity descending.
