@@ -205,8 +205,14 @@
         } else {
             if (overlapping.length >= cap) return false;
         }
-        // 4. Exact time match: bunks sharing a field must start and end together
-        if (overlapping.length > 0 && cap > 1) {
+        // 4. Exact time match — OPT-IN via field's strictTiming flag.
+        //    Previously hard-coded ON, which silently defeated sharing for
+        //    same-grade bunks whose gap edges weren't perfectly aligned.
+        //    Now defaults to OFF: capacity check above already prevents
+        //    over-subscription. Camps that want strict alignment can set
+        //    strictTiming: true on the field.
+        const fLedger = window.AutoFieldLocks?.getFieldLedger?.(fieldName) || {};
+        if (fLedger.strictTiming === true && overlapping.length > 0 && cap > 1) {
             const sameGradeOverlaps = overlapping.filter(e => e.grade === grade);
             if (sameGradeOverlaps.length > 0) {
                 if (sameGradeOverlaps.some(e => e.startMin !== startMin || e.endMin !== endMin)) {
@@ -704,8 +710,8 @@
                         if (!blocked && overlapping.filter(e => e.grade === grade).length >= cap) blocked = true;
                     } else if (overlapping.length >= cap) blocked = true;
 
-                    // Exact time match
-                    if (!blocked && overlapping.length > 0 && cap > 1) {
+                    // Exact time match — opt-in via cand.strictTiming flag
+                    if (!blocked && cand.strictTiming === true && overlapping.length > 0 && cap > 1) {
                         const sameGrade = overlapping.filter(e => e.grade === grade);
                         if (sameGrade.length > 0 && sameGrade.some(e => e.startMin !== startMin || e.endMin !== endMin)) blocked = true;
                     }

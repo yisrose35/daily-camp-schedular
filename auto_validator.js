@@ -330,6 +330,11 @@
             const sharing = sharingMap.get(fieldNorm) || { type: 'not_sharable', capacity: 1 };
             if (sharing.capacity <= 1) return; // Single-use field, no sharing to check
 
+            // ★ Strict timing is now opt-in. If the field is NOT marked
+            //   strictTiming:true, staggered sharing is acceptable as long
+            //   as capacity isn't exceeded (Check B handles capacity).
+            if (sharing.strictTiming !== true) return;
+
             // Only check sport entries
             const sportUsages = usages.filter(u => !u.flags._league && !u.flags._autoSpecial);
             if (sportUsages.length < 2) return;

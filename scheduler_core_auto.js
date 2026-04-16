@@ -997,11 +997,16 @@
                 }
             }
 
-            // ★ EXACT TIME MATCH: Bunks sharing a field must start and end together.
-            // No mid-game joins or early departures. If any same-grade claim exists
-            // on this field with overlapping time, it must have identical start/end.
-            // Skip this for special locations — bunks rotate through independently.
-            if (overlapping.length > 0 && ledger.capacity > 1 && !ledger._isSpecialLocation) {
+            // ★ EXACT TIME MATCH (now OPT-IN): Some camps require that bunks
+            //   sharing a field arrive and leave together — no mid-game joins.
+            //   Previously this was hard-coded for ALL multi-capacity fields,
+            //   which silently defeated sharing in every typical case (bunks
+            //   rarely have perfectly aligned gap edges after pinned items
+            //   land at slightly different minutes). Now opt-in via the
+            //   field's `strictTiming: true` flag. Default behavior is the
+            //   intuitive one: as long as capacity is respected, overlapping
+            //   same-grade claims are allowed regardless of exact alignment.
+            if (ledger.strictTiming === true && overlapping.length > 0 && ledger.capacity > 1 && !ledger._isSpecialLocation) {
                 const sameGradeOverlaps = overlapping.filter(c => c.grade === grade);
                 if (sameGradeOverlaps.length > 0) {
                     if (sameGradeOverlaps.some(c => c.startMin !== startMin || c.endMin !== endMin)) {
