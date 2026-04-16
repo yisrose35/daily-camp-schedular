@@ -1956,7 +1956,16 @@
     // =========================================================================
     // STAFF (Monitors + Counselors)
     // =========================================================================
-    function renderStaff() { renderMonitors(); renderCounselors(); document.getElementById('staffCount').textContent = (D.monitors.length + D.counselors.length) + ' staff'; }
+    function renderStaff() {
+        renderMonitors(); renderCounselors();
+        document.getElementById('staffCount').textContent = (D.monitors.length + D.counselors.length) + ' staff';
+        // Show "Accept All" button only when there are pending suggestions
+        const pending = [...D.monitors, ...D.counselors].some(s =>
+            s._suggestedBusId && s._assignStatus !== 'accepted' && s._assignStatus !== 'denied'
+        );
+        const btn = document.getElementById('acceptAllStaffBtn');
+        if (btn) btn.style.display = pending ? '' : 'none';
+    }
     // ── Staff suggestion status badges ──
     function _staffStatusBadge(staff) {
         if (staff._assignStatus === 'accepted') {
@@ -2028,7 +2037,7 @@
             const bus = D.buses.find(b => b.id === c.assignedBus);
             const mode = c.assignMode || (c.needsStop === 'yes' ? 'stop' : c.assignedBus ? 'manual' : 'auto');
             const modeBadge = mode === 'stop' ? '<span class="badge badge-warning">Own Stop</span>' : mode === 'auto' ? '<span class="badge badge-neutral">Auto-assign</span>' : bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '<span class="badge badge-neutral">Manual (unset)</span>';
-            const suggestionHtml = (mode !== 'stop') ? _staffSuggestionHtml(c, 'counselor') : '';
+            const suggestionHtml = _staffSuggestionHtml(c, 'counselor');
             const idCol = c._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + c._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
             const geoBadge = _staffGeoBadge(c);
             return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">' + idCol + '<td>' + esc(c.lastName || '') + '</td><td style="font-weight:600">' + esc(c.firstName || c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + geoBadge + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestionHtml + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
@@ -2036,6 +2045,28 @@
     }
 
     // ── Staff assignment actions ──
+    function acceptAllStaffSuggestions() {
+        let accepted = 0;
+        const all = [
+            ...D.monitors.map(m => ({ staff: m, type: 'monitor' })),
+            ...D.counselors.map(c => ({ staff: c, type: 'counselor' }))
+        ];
+        for (const { staff } of all) {
+            if (!staff._suggestedBusId) continue;
+            if (staff._assignStatus === 'accepted' || staff._assignStatus === 'denied') continue;
+            staff._assignStatus = 'accepted';
+            staff._acceptedBus = staff._suggestedBus;
+            staff._acceptedBusId = staff._suggestedBusId;
+            staff._acceptedStop = staff._suggestedStop;
+            staff._acceptedStopNum = staff._suggestedStopNum;
+            staff.assignedBus = staff._suggestedBusId;
+            accepted++;
+        }
+        if (!accepted) { toast('No pending suggestions to accept'); return; }
+        save(); renderStaff();
+        toast('Accepted ' + accepted + ' staff suggestion' + (accepted > 1 ? 's' : ''));
+    }
+
     function acceptStaffAssign(staffId, type) {
         const staff = type === 'monitor' ? D.monitors.find(m => m.id === staffId) : D.counselors.find(c => c.id === staffId);
         if (!staff || !staff._suggestedBusId) return;
@@ -2259,7 +2290,14 @@
             else if (sc === 'last') { av = a.last.toLowerCase(); bv = b.last.toLowerCase(); }
             else if (sc === 'division') { av = a.division.toLowerCase(); bv = b.division.toLowerCase(); }
             else if (sc === 'grade') { av = a.grade.toLowerCase(); bv = b.grade.toLowerCase(); }
-            else if (sc === 'bunk') { av = a.bunk.toLowerCase(); bv = b.bunk.toLowerCase(); }
+            else if (sc === 'bunk') {
+                var ai = parseInt(a.bunk, 10), bi = parseInt(b.bunk, 10);
+                av = isNaN(ai) ? (a.bunk || '').toLowerCase() : ai;
+                bv = isNaN(bi) ? (b.bunk || '').toLowerCase() : bi;
+                if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+                if (typeof av === 'number') return -1 * dir;
+                if (typeof bv === 'number') return 1 * dir;
+            }
             else if (sc === 'address') { av = a.street.toLowerCase(); bv = b.street.toLowerCase(); }
             else if (sc === 'status') { av = a.geocoded ? 1 : a.hasAddr ? 0 : -1; bv = b.geocoded ? 1 : b.hasAddr ? 0 : -1; return (av - bv) * dir; }
             else { av = a.last.toLowerCase(); bv = b.last.toLowerCase(); }
@@ -4849,12 +4887,11 @@
                 }
             });
 
-            // ── Step 1b: Geocode staff + inject "needs stop" staff as campers ──
-            // Staff with needsStop='yes' are treated identically to campers for
-            // stop creation — they get included in clustering and assigned a stop.
-            // Staff with needsStop='no' (or monitors) are handled post-generation.
+            // ── Step 1b: Geocode staff — ALL counselors/monitors are post-gen ──
+            // Routes are generated for campers only. After generation, each staff
+            // member gets a suggested nearest stop. Far staff (>10 min walk) get
+            // an option to add a dedicated stop on their nearest bus.
             const noStopStaff = []; // [{name, address, lat, lng, busId, role}] — suggested after routes
-            const staffWithStops = []; // names injected as campers
 
             for (const counselor of D.counselors) {
                 if (!counselor.address) continue;
@@ -4874,22 +4911,12 @@
                 // Skip if no coords found (already geocoded by auto-geocode step above)
                 if (!staffCoords) continue;
 
-                if (counselor.needsStop === 'yes') {
-                    // Inject as camper — will get a stop like any kid
-                    allCampers.push({
-                        name: '⚐ ' + counselor.name, division: counselor.bunk || 'Staff',
-                        bunk: 'Staff', lat: staffCoords.lat, lng: staffCoords.lng,
-                        address: counselor.address, _isStaff: true, _staffId: counselor.id
-                    });
-                    staffWithStops.push(counselor.name);
-                } else {
-                    // No stop — will suggest closest stop post-generation
-                    noStopStaff.push({
-                        name: counselor.name, address: counselor.address,
-                        lat: staffCoords.lat, lng: staffCoords.lng,
-                        busId: counselor.assignedBus || null, role: 'counselor', id: counselor.id
-                    });
-                }
+                // All counselors are post-gen — will suggest closest stop after routing
+                noStopStaff.push({
+                    name: counselor.name, address: counselor.address,
+                    lat: staffCoords.lat, lng: staffCoords.lng,
+                    busId: counselor.assignedBus || null, role: 'counselor', id: counselor.id
+                });
             }
 
             for (const monitor of D.monitors) {
@@ -4915,8 +4942,7 @@
                 });
             }
 
-            if (staffWithStops.length) console.log('[Go] Staff with stops: ' + staffWithStops.join(', '));
-            if (noStopStaff.length) console.log('[Go] Staff without stops (will suggest): ' + noStopStaff.map(s => s.name).join(', '));
+            if (noStopStaff.length) console.log('[Go] Staff for post-gen stop suggestions: ' + noStopStaff.length);
 
             if (!allCampers.length || !shiftVehicles.length) {
                 if (!allCampers.length) console.error('[Go] Shift "' + (shift.label || shift.id) + '": 0 campers matched — skipping');
@@ -6584,7 +6610,8 @@
         const counselorsToAssign = D.counselors.filter(c => c.address);
         if (counselorsToAssign.length && allStops.length) {
             console.log('[Go] ═══ COUNSELOR ASSIGNMENT ═══');
-            const OUTLIER_WALK_FT = 1850;
+            // 10 min walk at ~3 mph ≈ 2640 ft
+            const OUTLIER_WALK_FT = 2640;
             const outliers = [];
 
             for (const c of counselorsToAssign) {
@@ -6703,7 +6730,7 @@
         modal.innerHTML = '<div style="background:var(--bg-primary);border-radius:12px;max-width:800px;width:95%;max-height:80vh;overflow:auto;padding:1.5rem;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
             + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem"><h3 style="margin:0;font-size:1.1rem">⚠️ Counselors Far From Any Stop</h3>'
             + '<button onclick="document.getElementById(\'counselorOutlierModal\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--text-muted)">×</button></div>'
-            + '<p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem">These counselors live more than a 7-minute walk from the nearest bus stop. You can ignore this or add a dedicated stop for them (routes will regenerate).</p>'
+            + '<p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem">These counselors live more than a 10-minute walk from the nearest bus stop. You can ignore this or add a dedicated stop on their nearest bus (that one bus will be re-optimized).</p>'
             + '<table style="width:100%;border-collapse:collapse;font-size:.85rem"><thead><tr style="border-bottom:2px solid var(--border-primary)">'
             + '<th style="text-align:left;padding:8px">Name</th><th style="text-align:left;padding:8px">Home Address</th><th style="text-align:left;padding:8px">Nearest Stop</th><th style="text-align:center;padding:8px">Walk</th><th style="text-align:center;padding:8px">Action</th></tr></thead>'
             + '<tbody>' + rows + '</tbody></table>'
@@ -6719,52 +6746,76 @@
             toast('Counselor assignments kept as-is');
         });
 
-        document.getElementById('counselorOutlierApply').addEventListener('click', () => {
+        document.getElementById('counselorOutlierApply').addEventListener('click', async () => {
             const selects = modal.querySelectorAll('.counselor-outlier-action');
             let added = 0;
+            // Track which (busId, shiftIdx) pairs got a new stop so we can re-TSP each once
+            const busesToReoptimize = new Map(); // key = busId + ':' + shiftIdx
 
-            selects.forEach(sel => {
+            for (const sel of selects) {
                 const idx = parseInt(sel.dataset.idx);
                 const action = sel.value;
                 const c = outliers[idx];
-                if (action === 'add-stop' && c._lat && c._lng) {
-                    // Find the bus whose route centroid is closest
-                    let bestRoute = null, bestDist = Infinity;
-                    const routes = D.savedRoutes?.[0]?.routes || [];
-                    for (const r of routes) {
+                if (action !== 'add-stop' || !c._lat || !c._lng) continue;
+
+                // Find the bus whose route passes closest across all shifts
+                let bestRoute = null, bestShiftIdx = 0, bestDist = Infinity;
+                (D.savedRoutes || []).forEach((sr, shiftIdx) => {
+                    for (const r of sr.routes) {
                         if (!r.stops.length) continue;
                         for (const st of r.stops) {
                             if (!st.lat) continue;
                             const d = haversineMi(c._lat, c._lng, st.lat, st.lng);
-                            if (d < bestDist) { bestDist = d; bestRoute = r; }
+                            if (d < bestDist) { bestDist = d; bestRoute = r; bestShiftIdx = shiftIdx; }
                         }
                     }
-                    if (bestRoute) {
-                        const newStop = {
-                            stopNum: 0, campers: [],
-                            address: c.address,
-                            lat: c._lat, lng: c._lng,
-                            isCounselor: true, counselorName: c.name,
-                            _counselors: [{ name: c.name, walkFt: 0, address: c.address, id: c.id }]
-                        };
-                        cheapestInsert(bestRoute.stops, newStop);
-                        bestRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                        c._assignedBus = bestRoute.busId;
-                        c._assignedBusName = bestRoute.busName;
-                        c._assignedStop = c.address;
-                        c._walkFt = 0;
-                        added++;
-                        console.log('[Go] Added dedicated stop for ' + c.name + ' on ' + bestRoute.busName);
-                    }
+                });
+                if (!bestRoute) continue;
+
+                const newStop = {
+                    stopNum: 0, campers: [],
+                    address: c.address,
+                    lat: c._lat, lng: c._lng,
+                    isCounselor: true, counselorName: c.name,
+                    _counselors: [{ name: c.name, walkFt: 0, address: c.address, id: c.id }]
+                };
+                // Append — reOptimizeBus will run TSP and place it optimally
+                bestRoute.stops.push(newStop);
+                bestRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
+
+                c._assignedBus = bestRoute.busId;
+                c._assignedBusName = bestRoute.busName;
+                c._assignedStop = c.address;
+                c._walkFt = 0;
+                // Update the persisted counselor record
+                const cc = D.counselors.find(x => x.id === c.id);
+                if (cc) {
+                    cc._assignStatus = 'accepted';
+                    cc.assignedBus = bestRoute.busId;
+                    cc._acceptedBus = bestRoute.busName;
+                    cc._acceptedBusId = bestRoute.busId;
+                    cc._acceptedStop = c.address;
+                    cc._acceptedStopNum = newStop.stopNum;
+                    cc._walkFt = 0;
                 }
-            });
+                busesToReoptimize.set(bestRoute.busId + ':' + bestShiftIdx, { busId: bestRoute.busId, shiftIdx: bestShiftIdx });
+                added++;
+                console.log('[Go] Added dedicated stop for ' + c.name + ' on ' + bestRoute.busName + ' (shift ' + bestShiftIdx + ')');
+            }
 
             modal.remove();
 
             if (added) {
                 save();
                 _generatedRoutes = D.savedRoutes;
+                // Re-optimize each affected bus (single-bus TSP rerun)
+                toast('Re-optimizing ' + busesToReoptimize.size + ' route' + (busesToReoptimize.size > 1 ? 's' : '') + '...');
+                for (const { busId, shiftIdx } of busesToReoptimize.values()) {
+                    try { await reOptimizeBus(busId, shiftIdx); }
+                    catch (e) { console.error('[Go] reOptimizeBus failed for ' + busId, e); }
+                }
                 renderRouteResults(applyOverrides(D.savedRoutes));
+                if (typeof renderStaff === 'function') renderStaff();
                 toast(added + ' dedicated counselor stop' + (added > 1 ? 's' : '') + ' added');
             } else {
                 toast('Counselor assignments kept as-is');
@@ -6790,8 +6841,11 @@
         if (!campLat || !campLng) { toast('No camp coordinates', 'error'); return; }
 
         toast('Re-optimizing ' + route.busName + '...');
-        const stops = route.stops.filter(s => !s.isMonitor && !s.isCounselor);
-        const specialStops = route.stops.filter(s => s.isMonitor || s.isCounselor);
+        // Counselor stops with real coordinates ARE included in TSP so they get
+        // properly placed in the sequence. Monitor-only stops have no location
+        // and remain as tail-end metadata.
+        const stops = route.stops.filter(s => !s.isMonitor && s.lat && s.lng);
+        const specialStops = route.stops.filter(s => s.isMonitor || !s.lat || !s.lng);
         const nn = stops.length; if (nn < 2) { toast('Not enough stops'); return; }
 
         // ── Route optimization: local TSP with directional bias ──
@@ -8347,7 +8401,7 @@
         toggleShiftGrade, setShiftGradeMode, toggleShiftBus, setAllShiftBuses,
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
-        acceptStaffAssign, denyStaffAssign, manualStaffAssign,
+        acceptStaffAssign, denyStaffAssign, manualStaffAssign, acceptAllStaffSuggestions,
         editAddress, saveAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck,
