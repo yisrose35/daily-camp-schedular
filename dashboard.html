@@ -269,6 +269,13 @@
     <!-- ========================================= -->
     <script src="offline_data.js" onerror=""></script>
     <script src="demo_mode.js"></script>
+    <script>
+        (function() {
+            if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+                document.write('<script src="config.local.js"><\/script>');
+            }
+        })();
+    </script>
     <script src="config.js"></script>
     <script>
 if (window.location.protocol === 'file:') {

@@ -389,6 +389,14 @@
         </div>
     </div>
     
+    <script>
+        // Audit mode: if we're on local host, load local Supabase config first.
+        (function() {
+            if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+                document.write('<script src="config.local.js"><\/script>');
+            }
+        })();
+    </script>
     <script src="config.js"></script>
     <!-- Supabase SDK -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>

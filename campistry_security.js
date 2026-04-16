@@ -858,6 +858,17 @@
     function injectCSP() {
         // Only inject if not already present
         if (document.querySelector('meta[http-equiv="Content-Security-Policy"]')) return;
+
+        // Audit mode: skip CSP injection on localhost/127.0.0.1
+        // so local Supabase endpoints are not blocked during testing.
+        const isLocalAudit =
+            location.hostname === 'localhost' ||
+            location.hostname === '127.0.0.1';
+
+        if (isLocalAudit) {
+            console.warn('🛡️ [SECURITY] CSP injection skipped for local audit mode');
+            return;
+        }
         
         const csp = [
             "default-src 'self'",
