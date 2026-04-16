@@ -4390,22 +4390,17 @@
         var shInitialScore = computeScore(shTimes);
         console.log('[Go] K-Medoids: self-healing starting — mean=' + (shMean/60).toFixed(0) + 'min, score=' + shInitialScore);
 
-        var shMoves = 0;
+        var shMoves = 0, shSwaps = 0;
         var shNoImprove = 0;
         for (var shPass = 0; shPass < 500; shPass++) {
             var curTimes = clusters.map(_routeTimeEst);
             var curScore = computeScore(curTimes);
 
-            // Find best improving move across ALL pairs
-            var bestMove = null;
+            var bestAction = null; // {type: 'move'|'swap', ...details...}
             var bestNewScore = curScore;
 
-            // Only try moves from clusters above mean → clusters below mean
-            // (this is the natural direction for variance minimization)
-            var localMean = curTimes.filter(function(t){return t>0;}).reduce(function(s,t){return s+t;}, 0) / curTimes.filter(function(t){return t>0;}).length;
-
+            // --- TRY 1: simple moves (any cluster → any other cluster) ---
             for (var fromI = 0; fromI < clusters.length; fromI++) {
-                if (curTimes[fromI] < localMean) continue; // only move FROM above-mean clusters
                 if (clusters[fromI].length <= 1) continue;
 
                 for (var si = 0; si < clusters[fromI].length; si++) {
@@ -4413,10 +4408,8 @@
 
                     for (var toI = 0; toI < clusters.length; toI++) {
                         if (toI === fromI) continue;
-                        if (curTimes[toI] > localMean + 5*60) continue; // don't push into already-above-mean clusters
                         if (clusterKids[toI] + kidCount[cand] > maxClusterCap) continue;
 
-                        // Simulate move
                         var tempCluster_from = clusters[fromI].filter(function(_, idx) { return idx !== si; });
                         var tempCluster_to = clusters[toI].concat([cand]);
                         var newFromT = _routeTimeEst(tempCluster_from);
@@ -4429,36 +4422,92 @@
 
                         if (newScore > bestNewScore) {
                             bestNewScore = newScore;
-                            bestMove = { fromI: fromI, toI: toI, si: si, cand: cand };
+                            bestAction = { type: 'move', fromI: fromI, toI: toI, si: si, cand: cand };
                         }
                     }
                 }
             }
 
-            if (!bestMove) {
+            // --- TRY 2: swaps (exchange stops between capped clusters) ---
+            // This catches the "Bus 1 full but fast" case: swap a close-stop
+            // out of Bus 1 for a far-stop from a slow bus. Both move toward mean.
+            for (var ia = 0; ia < clusters.length; ia++) {
+                if (clusters[ia].length <= 1) continue;
+                for (var ib = ia + 1; ib < clusters.length; ib++) {
+                    if (clusters[ib].length <= 1) continue;
+                    // Only consider swaps between clusters with >5min time gap
+                    if (Math.abs(curTimes[ia] - curTimes[ib]) < 5 * 60) continue;
+
+                    // Limit to top 8 candidate stops on each side by kid count to keep O manageable
+                    var aSortedByKids = clusters[ia].slice().sort(function(x,y){return kidCount[y]-kidCount[x];}).slice(0, 8);
+                    var bSortedByKids = clusters[ib].slice().sort(function(x,y){return kidCount[y]-kidCount[x];}).slice(0, 8);
+
+                    for (var pa = 0; pa < aSortedByKids.length; pa++) {
+                        var stopA = aSortedByKids[pa];
+                        for (var pb = 0; pb < bSortedByKids.length; pb++) {
+                            var stopB = bSortedByKids[pb];
+
+                            // Capacity check after swap
+                            var newKidsA = clusterKids[ia] - kidCount[stopA] + kidCount[stopB];
+                            var newKidsB = clusterKids[ib] - kidCount[stopB] + kidCount[stopA];
+                            if (newKidsA > maxClusterCap) continue;
+                            if (newKidsB > maxClusterCap) continue;
+
+                            // Simulate swap
+                            var aAfter = clusters[ia].filter(function(s){return s !== stopA;}).concat([stopB]);
+                            var bAfter = clusters[ib].filter(function(s){return s !== stopB;}).concat([stopA]);
+                            var newAT = _routeTimeEst(aAfter);
+                            var newBT = _routeTimeEst(bAfter);
+
+                            var swapTimes = curTimes.slice();
+                            swapTimes[ia] = newAT;
+                            swapTimes[ib] = newBT;
+                            var swapScore = computeScore(swapTimes);
+
+                            if (swapScore > bestNewScore) {
+                                bestNewScore = swapScore;
+                                bestAction = { type: 'swap', ia: ia, ib: ib, stopA: stopA, stopB: stopB };
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!bestAction) {
                 shNoImprove++;
-                if (shNoImprove > 2) break; // give up
+                if (shNoImprove > 2) break;
                 continue;
             }
             shNoImprove = 0;
 
-            // Execute the move
-            clusters[bestMove.fromI].splice(bestMove.si, 1);
-            clusterKids[bestMove.fromI] -= kidCount[bestMove.cand];
-            clusters[bestMove.toI].push(bestMove.cand);
-            clusterKids[bestMove.toI] += kidCount[bestMove.cand];
-            shMoves++;
-
-            // Re-medoid affected
-            seeds[bestMove.fromI] = recomputeMedoid(clusters[bestMove.fromI]) || seeds[bestMove.fromI];
-            seeds[bestMove.toI] = recomputeMedoid(clusters[bestMove.toI]) || seeds[bestMove.toI];
+            // Execute the action
+            if (bestAction.type === 'move') {
+                clusters[bestAction.fromI].splice(bestAction.si, 1);
+                clusterKids[bestAction.fromI] -= kidCount[bestAction.cand];
+                clusters[bestAction.toI].push(bestAction.cand);
+                clusterKids[bestAction.toI] += kidCount[bestAction.cand];
+                shMoves++;
+                seeds[bestAction.fromI] = recomputeMedoid(clusters[bestAction.fromI]) || seeds[bestAction.fromI];
+                seeds[bestAction.toI] = recomputeMedoid(clusters[bestAction.toI]) || seeds[bestAction.toI];
+            } else { // swap
+                // Remove stopA from ia, stopB from ib; add stopA to ib, stopB to ia
+                clusters[bestAction.ia] = clusters[bestAction.ia].filter(function(s){return s !== bestAction.stopA;});
+                clusters[bestAction.ia].push(bestAction.stopB);
+                clusterKids[bestAction.ia] += kidCount[bestAction.stopB] - kidCount[bestAction.stopA];
+                clusters[bestAction.ib] = clusters[bestAction.ib].filter(function(s){return s !== bestAction.stopB;});
+                clusters[bestAction.ib].push(bestAction.stopA);
+                clusterKids[bestAction.ib] += kidCount[bestAction.stopA] - kidCount[bestAction.stopB];
+                shSwaps++;
+                seeds[bestAction.ia] = recomputeMedoid(clusters[bestAction.ia]) || seeds[bestAction.ia];
+                seeds[bestAction.ib] = recomputeMedoid(clusters[bestAction.ib]) || seeds[bestAction.ib];
+            }
         }
 
         var shFinalTimes = clusters.map(_routeTimeEst);
         var shFinalScore = computeScore(shFinalTimes);
         var shFinalMax = Math.max.apply(null, shFinalTimes);
         var shFinalMin = Math.min.apply(null, shFinalTimes.filter(function(t) { return t > 0; }));
-        console.log('[Go] K-Medoids: self-healing ' + shMoves + ' moves, score ' + shInitialScore + ' → ' + shFinalScore +
+        console.log('[Go] K-Medoids: self-healing ' + shMoves + ' moves + ' + shSwaps + ' swaps, score ' + shInitialScore + ' → ' + shFinalScore +
             ' (gap: ' + (shFinalMax/60).toFixed(0) + 'min max → ' + (shFinalMin/60).toFixed(0) + 'min min)');
 
         // =====================================================================
