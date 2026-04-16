@@ -3991,11 +3991,22 @@
         function sd(a, b) { return drivingDist(stops[a].lat, stops[a].lng, stops[b].lat, stops[b].lng); }
 
         // =====================================================================
-        // Stage A — K-means++ Seeding
+        // Stage A — Anchor Selection
+        //
+        // Pick K "anchor" stops to serve as route endpoints. Each anchor
+        // becomes one bus's natural destination. A good anchor set is:
+        //   - FAR from camp (anchors represent the outer reaches of routes)
+        //   - FAR FROM EACH OTHER (anchors cover different directions)
+        //
+        // We combine both criteria via a weighted score:
+        //   score(stop) = distFromCamp + 2 × minDistFromOtherAnchors
+        //
+        // First anchor: farthest stop from camp.
+        // Subsequent: highest-score stop that isn't already an anchor.
         // =====================================================================
-        var seeds = []; // array of stop indices serving as initial medoids
+        var seeds = []; // "seeds" in our pipeline terminology = anchors here
 
-        // First seed: stop FARTHEST from camp (covers the far-edge area)
+        // First anchor: stop farthest from camp
         var farthest = 0, farthestD = 0;
         for (var si1 = 0; si1 < numStops; si1++) {
             var dc = drivingDist(stops[si1].lat, stops[si1].lng, campLat, campLng);
@@ -4003,61 +4014,95 @@
         }
         seeds.push(farthest);
 
-        // Remaining seeds: weighted probabilistic by squared distance to nearest existing seed
-        // (K-means++ — spreads seeds based on data density)
+        // Precompute distances from camp for all stops
+        var distsFromCamp = new Array(numStops);
+        for (var dci = 0; dci < numStops; dci++) {
+            distsFromCamp[dci] = drivingDist(stops[dci].lat, stops[dci].lng, campLat, campLng);
+        }
+
+        // Remaining anchors: maximize (distFromCamp + 2 × minDistFromOtherAnchors)
         while (seeds.length < K && seeds.length < numStops) {
-            var minDist2 = new Array(numStops);
-            var totalWeight = 0;
+            var bestIdx = -1, bestScore = -Infinity;
             for (var si2 = 0; si2 < numStops; si2++) {
-                if (seeds.indexOf(si2) >= 0) { minDist2[si2] = 0; continue; }
-                var best = Infinity;
+                if (seeds.indexOf(si2) >= 0) continue;
+                // Distance to closest existing anchor
+                var minAnchorDist = Infinity;
                 for (var sj = 0; sj < seeds.length; sj++) {
                     var d = sd(si2, seeds[sj]);
-                    if (d < best) best = d;
+                    if (d < minAnchorDist) minAnchorDist = d;
                 }
-                minDist2[si2] = best * best;
-                totalWeight += minDist2[si2];
+                // Weighted score: far from camp AND far from existing anchors
+                var score = distsFromCamp[si2] + 2 * minAnchorDist;
+                if (score > bestScore) { bestScore = score; bestIdx = si2; }
             }
-            if (totalWeight <= 0) break;
-            // Weighted random pick: walk cumulative weights
-            var pick = Math.random() * totalWeight;
-            var cum = 0, chosen = -1;
-            for (var si3 = 0; si3 < numStops; si3++) {
-                cum += minDist2[si3];
-                if (cum >= pick && minDist2[si3] > 0) { chosen = si3; break; }
-            }
-            if (chosen < 0) break;
-            seeds.push(chosen);
+            if (bestIdx < 0) break;
+            seeds.push(bestIdx);
         }
-        console.log('[Go] K-Medoids: ' + seeds.length + ' seeds placed via K-means++');
+        console.log('[Go] Anchor+Corridor: ' + seeds.length + ' anchors selected (far from camp + spread)');
 
         // =====================================================================
-        // Stage B — Capacitated Assignment
+        // Stage B — Corridor Assignment
         //
-        // Sort stops by distance to their nearest seed (closest-to-any-seed first).
-        // For each stop, try nearest seed, 2nd nearest, ... until one has capacity.
-        // Guarantees no capacity violation during growth.
+        // For each anchor, the "corridor" is the line segment from camp → anchor.
+        // A stop's corridor distance = perpendicular distance to that line segment
+        // (clamped so stops past the anchor use distance-to-anchor instead).
         //
-        // Capacity per cluster = max bus capacity (all buses get same cap for now).
+        // A stop "on the way" to an anchor has a tiny corridor distance.
+        // A stop perpendicular to the corridor has a large distance.
+        // A stop past the anchor effectively measures distance to the anchor itself.
+        //
+        // Each stop is assigned to the corridor with smallest distance-to-line.
+        // Capacity is enforced during growth.
         // =====================================================================
         var sortedCaps = busCaps.slice().sort(function(a, b) { return b - a; });
         var maxClusterCap = sortedCaps[0] || 46;
 
+        // Distance from point P to line segment from A to B.
+        // Uses simple Euclidean on lat/lng scaled by rough meters-per-degree,
+        // which is fine for compact regions like one county.
+        function distToCorridor(stopIdx, anchorIdx) {
+            var S = stops[stopIdx];
+            var A = stops[anchorIdx];
+            // Convert lat/lng to approximate meters (flat-earth approximation)
+            var latScale = 111000; // ~meters per degree of latitude
+            var lngScale = 111000 * Math.cos(campLat * Math.PI / 180);
+
+            var ax = (campLng) * lngScale, ay = (campLat) * latScale; // camp
+            var bx = (A.lng) * lngScale, by = (A.lat) * latScale;     // anchor
+            var px = (S.lng) * lngScale, py = (S.lat) * latScale;     // stop
+
+            var dx = bx - ax, dy = by - ay;
+            var lenSq = dx * dx + dy * dy;
+            if (lenSq < 1) {
+                // anchor == camp (degenerate): just use distance to anchor
+                var mx = px - ax, my = py - ay;
+                return Math.sqrt(mx * mx + my * my);
+            }
+            // Project stop onto the corridor line: t = 0 at camp, 1 at anchor
+            var t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+            // Clamp to segment: [0, 1]
+            if (t < 0) t = 0;
+            if (t > 1) t = 1;
+            // Closest point on segment
+            var cx = ax + t * dx, cy = ay + t * dy;
+            var dxp = px - cx, dyp = py - cy;
+            return Math.sqrt(dxp * dxp + dyp * dyp);
+        }
+
         function assignAll() {
-            // For each stop, compute distances to all seeds, sort
+            // For each stop, compute corridor distance to every anchor, sort
             var stopPrefs = [];
             for (var si = 0; si < numStops; si++) {
                 var distances = [];
                 for (var ki = 0; ki < seeds.length; ki++) {
-                    distances.push({ k: ki, d: sd(si, seeds[ki]) });
+                    distances.push({ k: ki, d: distToCorridor(si, seeds[ki]) });
                 }
                 distances.sort(function(a, b) { return a.d - b.d; });
                 stopPrefs.push({ stop: si, prefs: distances, nearestDist: distances[0].d });
             }
-            // Sort by nearest-seed distance ascending (strongest preferences go first)
+            // Sort by strongest preference first (stops with clear corridor commitment go first)
             stopPrefs.sort(function(a, b) { return a.nearestDist - b.nearestDist; });
 
-            // Assign
             var clusters = [];
             var clusterKids = [];
             for (var c = 0; c < seeds.length; c++) { clusters.push([]); clusterKids.push(0); }
@@ -4065,6 +4110,7 @@
             for (var ps = 0; ps < stopPrefs.length; ps++) {
                 var pref = stopPrefs[ps];
                 var placed = false;
+                // Try corridors in order of closeness
                 for (var p = 0; p < pref.prefs.length; p++) {
                     var ci = pref.prefs[p].k;
                     if (clusterKids[ci] + kidCount[pref.stop] <= maxClusterCap) {
@@ -4075,7 +4121,7 @@
                     }
                 }
                 if (!placed) {
-                    // All clusters full — place in cluster with most remaining room
+                    // All corridors full — place in cluster with most remaining room
                     var best = 0, bestRoom = -Infinity;
                     for (var ci2 = 0; ci2 < clusters.length; ci2++) {
                         var room = maxClusterCap - clusterKids[ci2];
@@ -4129,7 +4175,7 @@
             if (stable) break;
             prevSeeds = seeds.slice();
         }
-        console.log('[Go] K-Medoids: converged in ' + (iter + 1) + ' iterations');
+        console.log('[Go] Anchor+Corridor: Lloyd\'s converged in ' + (iter + 1) + ' iterations');
 
         // =====================================================================
         // Stage D — Compactness Polish
