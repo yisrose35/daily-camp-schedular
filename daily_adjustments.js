@@ -2026,7 +2026,7 @@ function renderEventTile(ev, top, height) {
 
   return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
           title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
-          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};position:relative;">
+          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
           ${_travelStrips}
