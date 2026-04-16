@@ -473,16 +473,18 @@
                 profiles: [{ name: 'bus', type: 'car' }]
             },
             plan: { jobs: jobs },
+            // Objectives must be FLAT array (not nested arrays)
             objectives: [
-                [{ type: 'minimize-unassigned' }],
-                [{ type: 'minimize-cost' }]
+                { type: 'minimize-unassigned' },
+                { type: 'minimize-cost' }
             ]
         };
 
         try {
             console.log('[Go] HERE Tour Planning: ' + stops.length + ' stops, ' + buses.length + ' buses...');
             const t0 = Date.now();
-            const resp = await fetch('https://tourplanning.hereapi.com/v3/problems?apikey=' + encodeURIComponent(apiKey), {
+            // HERE Tour Planning expects apiKey as camelCase query param
+            const resp = await fetch('https://tourplanning.hereapi.com/v3/problems?apiKey=' + encodeURIComponent(apiKey), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(request)
