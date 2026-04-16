@@ -4391,34 +4391,39 @@
         console.log('[Go] K-Medoids: self-healing starting — mean=' + (shMean/60).toFixed(0) + 'min, score=' + shInitialScore);
 
         // --- Service-area check: is stopIdx geographically reasonable for clusterIdx? ---
-        // Returns true if the stop is (a) within cluster's current area (with small buffer)
-        // or (b) on the way from camp to the cluster (angle-cone + closer to camp than medoid).
-        // This keeps buses in their zones — no Bus 1 detouring to the far south just to
-        // balance time. Swaps/moves must pass this check.
+        // Returns true if the stop is (a) within cluster's current area (capped) or (b)
+        // on the way from camp to the cluster (narrow angle-cone + closer to camp).
+        // Hard cap on expansion prevents chain-stretching where each move widens the
+        // cluster and each subsequent move passes using the new (wider) bound.
+        var HARD_RADIUS_CAP_SEC = 8 * 60; // never allow >8min driving from medoid
+        var CONE_DEGREES = 20;            // narrow wedge for "on the way"
+        var AREA_BUFFER = 1.15;           // tight buffer around cluster area
         function stopInServiceArea(stopIdx, clusterIdx) {
             if (!clusters[clusterIdx].length) return true; // empty cluster — anything OK
             var sLat = stops[stopIdx].lat, sLng = stops[stopIdx].lng;
             var medLat = stops[seeds[clusterIdx]].lat, medLng = stops[seeds[clusterIdx]].lng;
 
-            // (a) Within cluster's area: distance to medoid ≤ 1.3× cluster's max member distance
+            // (a) Within cluster's area — capped at 8min driving from medoid
             var maxRadius = 0;
             for (var i = 0; i < clusters[clusterIdx].length; i++) {
                 var d = sd(clusters[clusterIdx][i], seeds[clusterIdx]);
                 if (d > maxRadius) maxRadius = d;
             }
+            // Cap the effective radius so cluster can't grow unboundedly
+            var effectiveRadius = Math.min(maxRadius, HARD_RADIUS_CAP_SEC);
             var distToMedoid = sd(stopIdx, seeds[clusterIdx]);
-            if (distToMedoid <= maxRadius * 1.3) return true;
+            if (distToMedoid <= effectiveRadius * AREA_BUFFER) return true;
 
-            // (b) On the way: stop is between camp and cluster, within a 30° cone
+            // (b) On the way: stop between camp and cluster, in narrow cone
             var distCampToStop = haversineMi(campLat, campLng, sLat, sLng);
             var distCampToMed = haversineMi(campLat, campLng, medLat, medLng);
-            if (distCampToStop >= distCampToMed) return false; // stop is farther than cluster — not "on the way"
+            if (distCampToStop >= distCampToMed) return false;
 
             var angToStop = Math.atan2(sLng - campLng, sLat - campLat) * 180 / Math.PI;
             var angToMed = Math.atan2(medLng - campLng, medLat - campLat) * 180 / Math.PI;
             var angDiff = Math.abs(angToStop - angToMed);
             if (angDiff > 180) angDiff = 360 - angDiff;
-            return angDiff <= 30; // within 30° cone from camp
+            return angDiff <= CONE_DEGREES;
         }
 
         var shMoves = 0, shSwaps = 0;
@@ -4548,6 +4553,70 @@
         var shFinalMin = Math.min.apply(null, shFinalTimes.filter(function(t) { return t > 0; }));
         console.log('[Go] K-Medoids: self-healing ' + shMoves + ' moves + ' + shSwaps + ' swaps, score ' + shInitialScore + ' → ' + shFinalScore +
             ' (gap: ' + (shFinalMax/60).toFixed(0) + 'min max → ' + (shFinalMin/60).toFixed(0) + 'min min)');
+
+        // =====================================================================
+        // Stage D++++ — COMPACTNESS AUDIT
+        //
+        // After all balancing, identify clusters that have become stretched
+        // (spread > 10 min from medoid). For each such cluster, evict its
+        // farthest stop and reassign it to the geographically-most-appropriate
+        // other cluster with capacity.
+        //
+        // This catches the "Bus 9 has east + south stops" problem that emerges
+        // when chained moves/swaps pass the guard individually but collectively
+        // stretch the cluster.
+        // =====================================================================
+        var MAX_CLUSTER_SPREAD_SEC = 10 * 60; // 10 min driving from medoid
+        var auditEvictions = 0;
+        for (var auditPass = 0; auditPass < 50; auditPass++) {
+            // Find the most stretched cluster
+            var worstSpread = 0, worstCluster = -1, worstStop = -1;
+            for (var ac = 0; ac < clusters.length; ac++) {
+                if (clusters[ac].length <= 1) continue;
+                for (var aStop = 0; aStop < clusters[ac].length; aStop++) {
+                    var d = sd(clusters[ac][aStop], seeds[ac]);
+                    if (d > worstSpread) {
+                        worstSpread = d; worstCluster = ac; worstStop = clusters[ac][aStop];
+                    }
+                }
+            }
+            if (worstSpread <= MAX_CLUSTER_SPREAD_SEC) break; // all clusters within bounds
+
+            // Find the best receiving cluster for this outlier
+            var bestRecv = -1, bestRecvDist = Infinity;
+            for (var rc = 0; rc < clusters.length; rc++) {
+                if (rc === worstCluster) continue;
+                if (clusterKids[rc] + kidCount[worstStop] > maxClusterCap) continue;
+                // Must be a geographically reasonable home for this stop
+                if (!stopInServiceArea(worstStop, rc)) continue;
+                var dr = sd(worstStop, seeds[rc]);
+                if (dr < bestRecvDist) { bestRecvDist = dr; bestRecv = rc; }
+            }
+
+            if (bestRecv < 0) {
+                // No valid receiver — just tolerate this outlier and stop auditing
+                break;
+            }
+
+            // Evict from worst cluster, add to best receiver
+            var idx = clusters[worstCluster].indexOf(worstStop);
+            if (idx >= 0) {
+                clusters[worstCluster].splice(idx, 1);
+                clusterKids[worstCluster] -= kidCount[worstStop];
+                clusters[bestRecv].push(worstStop);
+                clusterKids[bestRecv] += kidCount[worstStop];
+                seeds[worstCluster] = recomputeMedoid(clusters[worstCluster]) || seeds[worstCluster];
+                seeds[bestRecv] = recomputeMedoid(clusters[bestRecv]) || seeds[bestRecv];
+                auditEvictions++;
+            }
+        }
+        if (auditEvictions > 0) {
+            var auditTimes = clusters.map(_routeTimeEst);
+            var auditScore = computeScore(auditTimes);
+            console.log('[Go] K-Medoids: compactness audit evicted ' + auditEvictions + ' outliers, score now ' + auditScore);
+        } else {
+            console.log('[Go] K-Medoids: compactness audit passed — all clusters within 10min spread');
+        }
 
         // =====================================================================
         // Stage E — Bus Assignment
