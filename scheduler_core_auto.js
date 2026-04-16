@@ -2381,10 +2381,12 @@
                             const bunk = queue[0];
                             const sl = shoppingLists[bunk];
                             const result = draftResults[bunk];
-                            // ★ FIX op semantics: stop adding bunks to round-robin only
-                            //   when they hit cap (Infinity for >=). Floor was preventing
-                            //   >= layers from getting more than the floor amount.
-                            if (!sl || result.specials.length >= (sl.specials?.cap ?? sl.specials?.required ?? 0)) {
+                            // ★ FIX op semantics: cross-grade pre-pass uses FLOOR (not cap).
+                            //   For >= ops cap is Infinity → using cap would round-robin
+                            //   forever. Use floor so each bunk leaves the queue once it
+                            //   has the minimum, leaving the rest for Phase 3's time-sweep
+                            //   filler to fill with the user's preferred activity (sports).
+                            if (!sl || result.specials.length >= (sl.specials?.required || 0)) {
                                 queue.shift();
                                 continue;
                             }
@@ -2712,19 +2714,23 @@
                     if (!sl) return;
                     const result = draftResults[bunk];
 
-                    // ★ FIX op semantics: floor=required (drives "more wanted"), cap (terminates).
-                    //   For >=: cap=Infinity → loop runs while priorityList + time allow.
-                    //   For =:  cap=floor → loop stops at exactly that count.
-                    //   For <=: floor=0, cap=N → only enters if room, never exceeds N.
-                    const _specialsCap = sl.specials?.cap ?? sl.specials?.required ?? 0;
+                    // ★ FIX op semantics: per-bunk backfill drives off FLOOR only.
+                    //   - For >=N: place N here (the minimum). Phase 3 / time-sweep filler
+                    //     decides what fills any remaining gaps (typically sports). If we
+                    //     used cap=Infinity here, specials would greedily eat every free
+                    //     slot and Phase 3 would have nothing left for sports.
+                    //   - For =N: floor=N → place exactly N (same as before).
+                    //   - For <=N: floor=0 → never enter (correct: no minimum to backfill).
+                    //   The CAP is still enforced in places where over-cap would actually
+                    //   break invariants (round-robin pre-pass, deficit windows).
                     const _specialsFloor = sl.specials?.required || 0;
-                    if (result.specials.length < _specialsCap) {
+                    if (result.specials.length < _specialsFloor) {
                         // ★ DIAG: track why a needed special couldn't be placed so users
                         //   can see exactly which constraint is blocking qty>1 layers.
                         var _dbgPriorityLen = (sl.specials?.priorityList || []).length;
                         var _dbgSkipUsed = 0, _dbgSkipNoTime = 0, _dbgSkipShareCap = 0, _dbgPlaced = 0;
                         for (const special of (sl.specials?.priorityList || [])) {
-                            if (result.specials.length >= _specialsCap) break;
+                            if (result.specials.length >= _specialsFloor) break;
                             if (result.usedActivities.has(special.name)) { _dbgSkipUsed++; continue; }
 
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
@@ -2741,7 +2747,6 @@
                             result.usedActivities.add(special.name);
                             _dbgPlaced++;
                         }
-                        // Log only when the bunk is below the FLOOR — exceeding floor is fine for >=.
                         if (result.specials.length < _specialsFloor) {
                             log(GP + ' [SHORTFALL] ' + bunk + '(g' + grade + '): need ' + _specialsFloor +
                                 ', got ' + result.specials.length +
@@ -2753,11 +2758,14 @@
                         }
                     }
 
-                    // ★ FIX op semantics for sports: same pattern as specials.
-                    const _sportsCap = sl.sports?.cap ?? sl.sports?.required ?? 0;
-                    if (result.sports.length < _sportsCap) {
+                    // ★ FIX op semantics for sports: same pattern — backfill to FLOOR only.
+                    //   Phase 3's time-sweep filler picks up remaining gaps with sports
+                    //   anyway. Capping per-bunk backfill at floor avoids overlap and
+                    //   keeps allocation balanced.
+                    const _sportsFloor = sl.sports?.required || 0;
+                    if (result.sports.length < _sportsFloor) {
                         for (const sport of (sl.sports?.priorityList || [])) {
-                            if (result.sports.length >= _sportsCap) break;
+                            if (result.sports.length >= _sportsFloor) break;
                             if (result.usedActivities.has(sport.name)) continue;
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             for (const field of (sport.fields || [])) {
@@ -2818,7 +2826,10 @@
                     const sl = shoppingLists[bunk];
                     if (!sl) continue;
                     const result = draftResults[bunk];
-                    if (result.sports.length >= (sl.sports?.cap ?? sl.sports?.required ?? 0)) continue;
+                    // ★ Use FLOOR not cap. Phase 3's time-sweep filler picks up extra
+                    //   gaps with sports anyway; over-allocating here would starve other
+                    //   bunks that need their floor met first.
+                    if (result.sports.length >= (sl.sports?.required || 0)) continue;
 
                     const done = bunkDoneToday[bunk] || new Set();
 
@@ -2853,8 +2864,10 @@
                     const sl = shoppingLists[bunk];
                     if (!sl) continue;
                     const result = draftResults[bunk];
-                    // Don't give extra specials beyond cap (cap drives termination, not floor)
-                    if (result.specials.length >= (sl.specials?.cap ?? sl.specials?.required ?? 1)) continue;
+                    // ★ Use FLOOR not cap so deficit-window allocation doesn't gobble
+                    //   every gap with specials when op is >= (cap=Infinity). The
+                    //   priority-list-driven loop below would over-place otherwise.
+                    if (result.specials.length >= (sl.specials?.required || 1)) continue;
                     const done = bunkDoneToday[bunk] || new Set();
 
                     for (const special of (sl.specials?.priorityList || [])) {
@@ -2880,8 +2893,11 @@
 
             // ─── Helper: Simple draft for single-bunk grades ─────────
             function simpleDraftForBunk(bunk, grade, sl, result) {
+                // ★ Use FLOOR (required) not cap. Phase 3's time-sweep filler will
+                //   pick up the rest with sports. Using cap=Infinity here would
+                //   eat all gaps with specials, leaving no room for sports.
                 for (const special of (sl.specials?.priorityList || [])) {
-                    if (result.specials.length >= (sl.specials?.cap ?? sl.specials?.required ?? 0)) break;
+                    if (result.specials.length >= (sl.specials?.required || 0)) break;
                     if (result.usedActivities.has(special.name)) continue;
 
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
@@ -2898,8 +2914,9 @@
                     result.usedActivities.add(special.name);
                 }
 
+                // ★ Use FLOOR (required). Same reasoning as specials above.
                 for (const sport of (sl.sports?.priorityList || [])) {
-                    if (result.sports.length >= (sl.sports?.cap ?? sl.sports?.required ?? 0)) break;
+                    if (result.sports.length >= (sl.sports?.required || 0)) break;
                     if (result.usedActivities.has(sport.name)) continue;
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     for (const field of (sport.fields || [])) {
