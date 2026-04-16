@@ -3022,11 +3022,22 @@
             // Pass 2: Remove zero/negative duration blocks
             tl = tl.filter(function(b) { return b.endMin > b.startMin; });
 
-            // Pass 3: Enforce dMin/dMax and window for non-fixed blocks
+            // Pass 3: Enforce dMin/dMax and window for ALL blocks.
+            //
+            // ★ HARD DURATION RULE: every block — fixed or not — must satisfy
+            //   its declared dMin/dMax. Previously _fixed blocks were skipped,
+            //   which let pinned lunches/leagues/specials drift to whatever the
+            //   layer window was. They are now trimmed to dMax (always) and
+            //   extended to dMin (only when an adjacent gap exists; otherwise
+            //   left as-is and surfaced via _durationViolation so the post-build
+            //   sweep can catch it).
             for (var j = 0; j < tl.length; j++) {
                 var blk = tl[j];
-                if (blk._fixed) continue;
                 var bt = (blk.type || '').toLowerCase();
+
+                // Transition pads (pre/post travel) intentionally short — never enforce.
+                if (blk._isTransition) continue;
+
                 var dur = blk.endMin - blk.startMin;
 
                 // Resolve constraints
@@ -3036,7 +3047,7 @@
                 blk.dMin = dMin;
                 blk.dMax = dMax;
 
-                // Enforce layer window
+                // Enforce layer window (still skip for sport/slot — they fill any gap)
                 if (blk.layer && !['sport', 'slot'].includes(bt)) {
                     if (blk.layer.startMin != null && blk.startMin < blk.layer.startMin) {
                         blk.startMin = blk.layer.startMin;
@@ -3048,14 +3059,15 @@
                     if (dur <= 0) { tl.splice(j, 1); j--; continue; }
                 }
 
-                // Enforce dMax
+                // ★ Enforce dMax — applies to fixed blocks too (trim is always safe).
                 if (dur > dMax) {
                     blk.endMin = blk.startMin + dMax;
                     blk.endMin = Math.round(blk.endMin / 5) * 5;
                     dur = blk.endMin - blk.startMin;
                 }
 
-                // Enforce dMin — try extending into adjacent gap
+                // Enforce dMin — try extending into adjacent gap. For fixed blocks
+                // we only extend if a gap is available (don't push neighbors).
                 if (dur < dMin) {
                     var nextS = (j < tl.length - 1) ? tl[j+1].startMin : 1440;
                     var availR = nextS - blk.endMin;
@@ -3068,6 +3080,10 @@
                         if (dur + availL >= dMin) {
                             blk.startMin = blk.endMin - Math.min(dMin, dMax);
                             blk.startMin = Math.round(blk.startMin / 5) * 5;
+                        } else {
+                            // Can't extend — flag for the post-build sweep so the
+                            // user sees a warning instead of a silent sub-dMin block.
+                            blk._durationViolation = 'underflow:' + dur + '<' + dMin;
                         }
                     }
                 }
@@ -7370,6 +7386,50 @@
         // STEP 2.6 — VALIDATE
         // =====================================================================
         log('\n[STEP 2.6] Validating...');
+
+        // ★ STRICT DURATION ENFORCEMENT — final pass before formalize.
+        //   Iterates every bunk's timeline, runs ensureTimelineIntegrity (which
+        //   now enforces dMin/dMax for fixed blocks too), then collects any
+        //   remaining _durationViolation flags so the user sees them.
+        //   Run twice: a single pass can leave new overlaps after extending
+        //   under-dMin blocks, which the second pass cleans up.
+        let durationViolations = [];
+        allGrades.forEach(grade => {
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                ensureTimelineIntegrity(bunk);
+                ensureTimelineIntegrity(bunk);
+                (bunkTimelines[bunk] || []).forEach(blk => {
+                    const bt = (blk.type || '').toLowerCase();
+                    if (blk._isTransition) return;
+                    const c = resolveConstraints(blk.layer, bt, blk);
+                    const d = blk.endMin - blk.startMin;
+                    if (d > c.dMax) {
+                        durationViolations.push({ bunk, grade, type: bt, event: blk.event, dur: d, dMax: c.dMax, kind: 'OVER' });
+                    } else if (d < c.dMin) {
+                        durationViolations.push({ bunk, grade, type: bt, event: blk.event, dur: d, dMin: c.dMin, kind: 'UNDER' });
+                    }
+                });
+            });
+        });
+        if (durationViolations.length > 0) {
+            warn('[2.6] ★ ' + durationViolations.length + ' duration violation(s) remain after enforcement:');
+            // Group by event/type for readability
+            const grouped = {};
+            durationViolations.forEach(v => {
+                const key = (v.event || v.type) + ' (' + v.type + ')';
+                if (!grouped[key]) grouped[key] = [];
+                grouped[key].push(v);
+            });
+            Object.entries(grouped).forEach(([key, list]) => {
+                const sample = list[0];
+                const limit = sample.kind === 'OVER' ? ('dMax=' + sample.dMax) : ('dMin=' + sample.dMin);
+                warn('  • ' + key + ': ' + list.length + ' block(s) ' + sample.kind + ' (' + limit + ', e.g. ' + sample.bunk + ' got ' + sample.dur + 'min)');
+            });
+            warnings.push({ type: 'duration_violation', count: durationViolations.length, details: durationViolations });
+        } else {
+            log('[2.6] ✅ All durations within dMin/dMax');
+        }
+
         let validationPassed = true;
         allGrades.forEach(grade => {
             const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
