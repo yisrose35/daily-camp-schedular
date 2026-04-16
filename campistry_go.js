@@ -6490,7 +6490,11 @@
                     // Use GET to avoid CORS preflight (POST with custom content-type triggers it)
                     const getUrl = url + '?data=' + encodeURIComponent(query);
                     console.log('[Go] Overpass ' + label + ': trying ' + url.split('//')[1].split('/')[0] + '...');
-                    const resp = await fetch(getUrl);
+                    // Fail fast after 15 seconds — don't let a slow Overpass mirror block routing
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(function() { controller.abort(); }, 15000);
+                    const resp = await fetch(getUrl, { signal: controller.signal });
+                    clearTimeout(timeoutId);
                     if (resp.status === 504 || resp.status === 429 || resp.status === 503) {
                         console.warn('[Go] Overpass ' + label + ' ' + resp.status + ' at ' + url + ', trying next mirror...');
                         continue;
@@ -6507,6 +6511,7 @@
                     continue;
                 }
             }
+            console.warn('[Go] Overpass ' + label + ': all mirrors failed — proceeding without street data');
             return null;
         }
 
