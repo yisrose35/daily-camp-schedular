@@ -6709,8 +6709,18 @@
                     bunkOrder.forEach(bunk => {
                         const draft = draftResults[bunk];
                         if (!draft || !draft.specials || !draft.specials.length) return;
-                        const special = draft.specials[0];
-                        if (!special || !special.claimedTime) return;
+                        // ★ FIX: place EVERY drafted special as a wall, not just [0].
+                        //   Previously only `draft.specials[0]` was pre-placed, so when a
+                        //   layer's qty was >1 (planner correctly drafted 2+ specials per
+                        //   bunk into draft.specials[]), entries beyond index 0 were
+                        //   silently dropped — Phase 3 then back-filled the intended
+                        //   second-special gap with a sport. Loop here so each draft
+                        //   entry becomes its own wall, recomputing existingWalls /
+                        //   allGapsForBunk each iteration so subsequent placements see
+                        //   prior ones.
+                        for (var _sIdx = 0; _sIdx < draft.specials.length; _sIdx++) {
+                        const special = draft.specials[_sIdx];
+                        if (!special || !special.claimedTime) continue;
                         // ★ v14.0: Always use configured duration from special_activities config.
                         // Draft duration may be wrong; getSpecialDuration() is authoritative.
                         const configuredDur = getSpecialDuration(special.name || special.event || '', activityProperties, globalSettings);
@@ -6854,7 +6864,7 @@
                                 warn('[Phase2.5] Cannot pre-place ' + special.name + ' (' + specialDur + 'min) for bunk ' + bunk + ' in ' + grade +
                                     ' — gaps: [' + gapSummary + '] | blocked: RT=' + _sp25_rtBlockCount + ' layers=' + _sp25_layerBlockCount + ' gapTooSmall=' + _sp25_gapTooSmall);
                             }
-                            return; // defer to CSP
+                            continue; // defer to CSP — skip this special, try next drafted one
                         }
 
                         // ★ HARD CONSTRAINT: Special durations are honored exactly as
@@ -6920,6 +6930,7 @@
                         ensureTimelineIntegrity(bunk);
                         preplacedCount++;
                         preplacedByGrade[grade]++;
+                        } // ← end for(_sIdx) — multi-special placement loop (★ FIX)
                     });
                 });
                 log('[Phase2.5] ★ PRE-PLACED ' + preplacedCount + ' specials as walls across ALL bunks');
