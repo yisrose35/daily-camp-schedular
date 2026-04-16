@@ -4837,6 +4837,84 @@
                             }
                         }
 
+                        // ★ v15.1: Strategy 2.5 — WALL SHRINK NEGOTIATION
+                        //   Before falling through to a placeholder slot, try to
+                        //   shrink adjacent non-fixed sport/slot walls down toward
+                        //   their dMin so the gap grows wide enough to host a real
+                        //   (sport, field) placement. Then re-run the backtracker.
+                        //
+                        //   Constraints:
+                        //   - Never shrink _fixed blocks (lunch / dismissal / custom-pinned)
+                        //   - Never shrink leagues/specialty_leagues (grade-wide invariants
+                        //     would have to propagate — out of scope for this pass)
+                        //   - Never shrink specials (hard configured duration)
+                        //   - Never shrink swim/snack — those have user-anchored dMin
+                        if (!filled && vGapDur < vMeta.fillMinDur) {
+                            var SHRINKABLE = { sport: 1, sports: 1, slot: 1, activity: 1 };
+                            var lWall = null, rWall = null;
+                            for (var lwI = 0; lwI < vTmpl.length; lwI++) {
+                                if (vTmpl[lwI].endMin === vGap.start) lWall = vTmpl[lwI];
+                                if (vTmpl[lwI].startMin === vGap.end) rWall = vTmpl[lwI];
+                            }
+                            function _shrinkRoom(w) {
+                                if (!w || w._fixed) return 0;
+                                if (!SHRINKABLE[(w.type || '').toLowerCase()]) return 0;
+                                var wDur = w.endMin - w.startMin;
+                                var wDmin = w.dMin || vMeta.fillMinDur || 25;
+                                return Math.max(0, wDur - wDmin);
+                            }
+                            var lAvail = _shrinkRoom(lWall), rAvail = _shrinkRoom(rWall);
+                            var needGrow = vMeta.fillMinDur - vGapDur;
+                            if (lAvail + rAvail >= needGrow) {
+                                // Shrink — prefer the side with more headroom first
+                                var lReduce = 0, rReduce = 0;
+                                if (lAvail >= needGrow) lReduce = needGrow;
+                                else if (rAvail >= needGrow) rReduce = needGrow;
+                                else { lReduce = lAvail; rReduce = needGrow - lAvail; }
+                                // Snap to 5 to keep aligned
+                                lReduce = Math.round(lReduce / 5) * 5;
+                                rReduce = Math.round(rReduce / 5) * 5;
+                                if (lReduce + rReduce < needGrow) {
+                                    var slack = needGrow - lReduce - rReduce;
+                                    if (lAvail - lReduce >= slack) lReduce += slack;
+                                    else if (rAvail - rReduce >= slack) rReduce += slack;
+                                }
+                                if (lReduce + rReduce >= needGrow) {
+                                    var newGapStart = vGap.start - lReduce;
+                                    var newGapEnd = vGap.end + rReduce;
+                                    var lOldEnd = lWall ? lWall.endMin : null;
+                                    var rOldStart = rWall ? rWall.startMin : null;
+                                    if (lReduce > 0 && lWall) lWall.endMin = newGapStart;
+                                    if (rReduce > 0 && rWall) rWall.startMin = newGapEnd;
+                                    var negSolved = solveGapWithBacktracking(vBunk, vMeta.grade, newGapStart, newGapEnd, vMeta, usedSports[vBunk]);
+                                    if (negSolved && negSolved.complete) {
+                                        for (var nbi = 0; nbi < negSolved.blocks.length; nbi++) {
+                                            var nb = negSolved.blocks[nbi];
+                                            var nblk = makeBlock({
+                                                startMin: nb.start, endMin: nb.end,
+                                                type: 'sport', event: nb.sport,
+                                                layer: vMeta.sportLayer, field: nb.field,
+                                                dMin: vMeta.sportC.dMin, dMax: vMeta.sportCeiling,
+                                                _source: 'sport-fill-negotiated',
+                                                _assignedSport: nb.sport,
+                                                _sportFallbacks: vMeta.priorityList ? vMeta.priorityList.map(function(s) { return s.name; }) : [],
+                                                _final: true
+                                            });
+                                            if (nblk) vTmpl.push(nblk);
+                                        }
+                                        log('[NEG] ' + vBunk + ' gap @ ' + vGap.start + '-' + vGap.end +
+                                            ' (' + vGapDur + 'min): shrunk L' + lReduce + '+R' + rReduce +
+                                            ' → placed [' + negSolved.blocks.map(function(b){return b.sport;}).join(',') + ']');
+                                        filled = true;
+                                    } else {
+                                        // Revert wall shrinks — couldn't place
+                                        if (lOldEnd != null && lWall) lWall.endMin = lOldEnd;
+                                        if (rOldStart != null && rWall) rWall.startMin = rOldStart;
+                                    }
+                                }
+                            }
+                        }
+
                         // Strategy 3: Create a new sport block to fill the gap (even if short)
                         if (!filled) {
                             addSportBlocks(vTmpl, vGap.start, vGap.end, {
