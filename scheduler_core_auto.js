@@ -1436,21 +1436,47 @@
             nonPinnedLayers.forEach(layer => {
                 if ((layer.grade || layer.division) !== grade) return;
                 const t = (layer.type || '').toLowerCase();
-                const required = layer.qty || layer.quantity || 1;
-                const op = layer.op || layer.operator || '>=';
+                const qty = parseInt(layer.qty || layer.quantity || 1, 10) || 1;
+                const opRaw = (layer.op || layer.operator || '>=').toString();
+                // Normalize: '≥'→'>=', '≤'→'<='
+                const op = opRaw === '≥' ? '>=' : opRaw === '≤' ? '<=' : opRaw;
+
                 if (t === 'league' || t === 'specialty_league') {
                     if (timeline.some(b => (b.type || '').toLowerCase() === t)) return;
                 }
+
+                // ★ FIX: Operator semantics — separate FLOOR (drives planner to schedule
+                //   more) from CAP (terminates scheduling). Previously every op behaved
+                //   like '=' because all downstream loops compared against `required`,
+                //   the same value used to drive scheduling. Now:
+                //     >= N → floor=N, cap=Infinity (place at least N, no upper limit)
+                //     =  N → floor=N, cap=N        (place exactly N)
+                //     <= N → floor=0, cap=N        (place at most N, no minimum)
+                let floor, cap;
+                if (op === '<=') { floor = 0; cap = qty; }
+                else if (op === '=') { floor = qty; cap = qty; }
+                else { floor = qty; cap = Infinity; } // '>=' (default)
+
                 const alreadyPlaced = placedTypes[t] || 0;
-                const stillNeeded = Math.max(0, required - alreadyPlaced);
-                if (stillNeeded <= 0 && op !== '<=' && op !== '≤') return;
-                if (op === '<=' || op === '≤') return;
-                remainingNeeds.push({ layer, type: t, count: stillNeeded, op });
+                const stillNeeded = Math.max(0, floor - alreadyPlaced);
+                const stillAllowed = cap === Infinity ? Infinity : Math.max(0, cap - alreadyPlaced);
+                // For '=' or '<=' with stillAllowed=0: already at/over cap → skip entirely.
+                // For '>=' with stillNeeded=0: floor is met but we still want to allow MORE,
+                //   so emit with count=0, cap=Infinity. Downstream loops will keep going
+                //   while priorityList + free time allow.
+                if (stillAllowed === 0) return;
+
+                remainingNeeds.push({ layer, type: t, count: stillNeeded, cap: stillAllowed, op });
             });
 
             // Sport priority list
             const sportNeeds = remainingNeeds.filter(n => n.type === 'sport' || n.type === 'sports');
-            const sportCount = sportNeeds.reduce((s, n) => s + n.count, 0);
+            const sportCount = sportNeeds.reduce((s, n) => s + n.count, 0); // floor (drives scheduling)
+            // ★ FIX: when no sport layers, sportCap=0 (no sports scheduled). When ANY layer
+            //   has cap=Infinity (>= op), the whole-grade cap is Infinity. Otherwise sum caps.
+            const sportCap = sportNeeds.length === 0 ? 0
+                : (sportNeeds.some(n => n.cap === Infinity) ? Infinity
+                   : sportNeeds.reduce((s, n) => s + n.cap, 0));
             const sportLayer = sportNeeds[0]?.layer || null;
             const sportConstraints = sportLayer ? resolveConstraints(sportLayer, 'sport') : { dMin: 25, dMax: 60, dIdeal: 40 };
 
@@ -1512,7 +1538,10 @@
 
             // Special priority list
             const specialNeeds = remainingNeeds.filter(n => n.type === 'special');
-            const specialCount = specialNeeds.reduce((s, n) => s + n.count, 0);
+            const specialCount = specialNeeds.reduce((s, n) => s + n.count, 0); // floor
+            const specialCap = specialNeeds.length === 0 ? 0
+                : (specialNeeds.some(n => n.cap === Infinity) ? Infinity
+                   : specialNeeds.reduce((s, n) => s + n.cap, 0));
             const specialLayer = specialNeeds[0]?.layer || null;
             const specialConstraints = specialLayer ? resolveConstraints(specialLayer, 'special') : { dMin: 20, dMax: 60, dIdeal: 35 };
 
@@ -1593,8 +1622,8 @@
 
             return {
                 bunk, grade, bunkSize, freeWindows, totalFree: freeWindows.reduce((s, w) => s + w.duration, 0),
-                sports: { required: sportCount, priorityList: sportPriorityList, layer: sportLayer, constraints: sportConstraints },
-                specials: { required: specialCount, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints },
+                sports: { required: sportCount, cap: sportCap, priorityList: sportPriorityList, layer: sportLayer, constraints: sportConstraints },
+                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints },
                 snack: snackOptions, elective: electiveInfo, genericNeeds, adjacentBunk
             };
         }
@@ -1833,7 +1862,10 @@
                             var sl = shoppingLists[bunk];
                             var result = draftResults[bunk];
 
-                            if (result.specials.length >= (sl.specials && sl.specials.required ? sl.specials.required : 0)) {
+                            // ★ FIX op semantics: terminate at cap, not floor.
+                            //   For >= ops cap is Infinity → planner keeps placing while
+                            //   priorityList + free time allow.
+                            if (result.specials.length >= (sl.specials?.cap ?? sl.specials?.required ?? 0)) {
                                 queue.shift(); continue;
                             }
                             if (result.usedActivities.has(specialInfo.name)) {
@@ -1891,12 +1923,13 @@
                 var bunk = list.bunk, grade = list.grade;
                 var result = draftResults[bunk];
                 var sl = shoppingLists[bunk];
-                var required = sl.specials && sl.specials.required ? sl.specials.required : 0;
-                if (result.specials.length >= required) return;
+                // ★ FIX op semantics: cap drives termination, required (= floor) is unused here.
+                var cap = sl.specials && sl.specials.cap != null ? sl.specials.cap : (sl.specials?.required || 0);
+                if (result.specials.length >= cap) return;
 
                 var priorityList = sl.specials && sl.specials.priorityList ? sl.specials.priorityList : [];
                 for (var i = 0; i < priorityList.length; i++) {
-                    if (result.specials.length >= required) break;
+                    if (result.specials.length >= cap) break;
                     var special = priorityList[i];
                     if (result.usedActivities.has(special.name)) continue;
 
@@ -1961,8 +1994,9 @@
                     var list = allBunkList[bi];
                     var result = draftResults[list.bunk];
                     var sl = shoppingLists[list.bunk];
-                    var sportsRequired = sl.sports && sl.sports.required ? sl.sports.required : 0;
-                    if (result.sports.length >= sportsRequired) continue;
+                    // ★ FIX op semantics: cap drives termination.
+                    var sportsCap = sl.sports && sl.sports.cap != null ? sl.sports.cap : (sl.sports?.required || 0);
+                    if (result.sports.length >= sportsCap) continue;
                     var fw = getUpdatedFreeWindowsForBunk(list.bunk, sl, result);
                     var fits = fw.some(function(w) { return w.start <= slotStart && w.end >= slotEnd; });
                     if (!fits) continue;
@@ -1984,7 +2018,7 @@
                     var bunk = bunkInfo.bunk, grade = bunkInfo.grade;
                     var result = draftResults[bunk];
                     var sl = shoppingLists[bunk];
-                    if (result.sports.length >= (sl.sports && sl.sports.required ? sl.sports.required : 0)) continue;
+                    if (result.sports.length >= (sl.sports?.cap ?? sl.sports?.required ?? 0)) continue;
 
                     var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
                     for (var spi = 0; spi < sportList.length; spi++) {
@@ -2019,12 +2053,13 @@
                 var bunk = list.bunk, grade = list.grade;
                 var result = draftResults[bunk];
                 var sl = shoppingLists[bunk];
-                var required = sl.sports && sl.sports.required ? sl.sports.required : 0;
-                if (result.sports.length >= required) return;
+                // ★ FIX op semantics: cap drives termination.
+                var cap = sl.sports && sl.sports.cap != null ? sl.sports.cap : (sl.sports?.required || 0);
+                if (result.sports.length >= cap) return;
 
                 var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
                 for (var i = 0; i < sportList.length; i++) {
-                    if (result.sports.length >= required) break;
+                    if (result.sports.length >= cap) break;
                     var sport = sportList[i];
                     if (result.usedActivities.has(sport.name)) continue;
                     var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
@@ -2346,7 +2381,10 @@
                             const bunk = queue[0];
                             const sl = shoppingLists[bunk];
                             const result = draftResults[bunk];
-                            if (!sl || result.specials.length >= (sl.specials?.required || 0)) {
+                            // ★ FIX op semantics: stop adding bunks to round-robin only
+                            //   when they hit cap (Infinity for >=). Floor was preventing
+                            //   >= layers from getting more than the floor amount.
+                            if (!sl || result.specials.length >= (sl.specials?.cap ?? sl.specials?.required ?? 0)) {
                                 queue.shift();
                                 continue;
                             }
@@ -2674,31 +2712,52 @@
                     if (!sl) return;
                     const result = draftResults[bunk];
 
-                    const neededSpecials = Math.max(0, (sl.specials?.required || 0) - result.specials.length);
-                    if (neededSpecials > 0) {
+                    // ★ FIX op semantics: floor=required (drives "more wanted"), cap (terminates).
+                    //   For >=: cap=Infinity → loop runs while priorityList + time allow.
+                    //   For =:  cap=floor → loop stops at exactly that count.
+                    //   For <=: floor=0, cap=N → only enters if room, never exceeds N.
+                    const _specialsCap = sl.specials?.cap ?? sl.specials?.required ?? 0;
+                    const _specialsFloor = sl.specials?.required || 0;
+                    if (result.specials.length < _specialsCap) {
+                        // ★ DIAG: track why a needed special couldn't be placed so users
+                        //   can see exactly which constraint is blocking qty>1 layers.
+                        var _dbgPriorityLen = (sl.specials?.priorityList || []).length;
+                        var _dbgSkipUsed = 0, _dbgSkipNoTime = 0, _dbgSkipShareCap = 0, _dbgPlaced = 0;
                         for (const special of (sl.specials?.priorityList || [])) {
-                            if (result.specials.length >= sl.specials.required) break;
-                            if (result.usedActivities.has(special.name)) continue;
+                            if (result.specials.length >= _specialsCap) break;
+                            if (result.usedActivities.has(special.name)) { _dbgSkipUsed++; continue; }
 
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             const dur = special.totalDuration || special.dMin || 30;
                             const time = special.location
                                 ? findTimeForFieldGP(special.location, bunk, grade, dur, fw)
                                 : findAnyWindowGP(fw, dur);
-                            if (!time) continue;
-                            if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) continue;
+                            if (!time) { _dbgSkipNoTime++; continue; }
+                            if (!canAssignSpecialToGrade(special.name, grade, time.startMin, time.endMin)) { _dbgSkipShareCap++; continue; }
 
                             if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
                             registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
                             result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
                             result.usedActivities.add(special.name);
+                            _dbgPlaced++;
+                        }
+                        // Log only when the bunk is below the FLOOR — exceeding floor is fine for >=.
+                        if (result.specials.length < _specialsFloor) {
+                            log(GP + ' [SHORTFALL] ' + bunk + '(g' + grade + '): need ' + _specialsFloor +
+                                ', got ' + result.specials.length +
+                                ' | priorityList=' + _dbgPriorityLen +
+                                ' | placed=' + _dbgPlaced +
+                                ' | skipped: dedup=' + _dbgSkipUsed +
+                                ', no-time-or-field=' + _dbgSkipNoTime +
+                                ', sharing-cap=' + _dbgSkipShareCap);
                         }
                     }
 
-                    const neededSports = Math.max(0, (sl.sports?.required || 0) - result.sports.length);
-                    if (neededSports > 0) {
+                    // ★ FIX op semantics for sports: same pattern as specials.
+                    const _sportsCap = sl.sports?.cap ?? sl.sports?.required ?? 0;
+                    if (result.sports.length < _sportsCap) {
                         for (const sport of (sl.sports?.priorityList || [])) {
-                            if (result.sports.length >= sl.sports.required) break;
+                            if (result.sports.length >= _sportsCap) break;
                             if (result.usedActivities.has(sport.name)) continue;
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             for (const field of (sport.fields || [])) {
@@ -2759,7 +2818,7 @@
                     const sl = shoppingLists[bunk];
                     if (!sl) continue;
                     const result = draftResults[bunk];
-                    if (result.sports.length >= (sl.sports?.required || 0)) continue;
+                    if (result.sports.length >= (sl.sports?.cap ?? sl.sports?.required ?? 0)) continue;
 
                     const done = bunkDoneToday[bunk] || new Set();
 
@@ -2794,8 +2853,8 @@
                     const sl = shoppingLists[bunk];
                     if (!sl) continue;
                     const result = draftResults[bunk];
-                    // Don't give extra specials beyond what's required
-                    if (result.specials.length >= (sl.specials?.required || 1)) continue;
+                    // Don't give extra specials beyond cap (cap drives termination, not floor)
+                    if (result.specials.length >= (sl.specials?.cap ?? sl.specials?.required ?? 1)) continue;
                     const done = bunkDoneToday[bunk] || new Set();
 
                     for (const special of (sl.specials?.priorityList || [])) {
@@ -2822,7 +2881,7 @@
             // ─── Helper: Simple draft for single-bunk grades ─────────
             function simpleDraftForBunk(bunk, grade, sl, result) {
                 for (const special of (sl.specials?.priorityList || [])) {
-                    if (result.specials.length >= (sl.specials?.required || 0)) break;
+                    if (result.specials.length >= (sl.specials?.cap ?? sl.specials?.required ?? 0)) break;
                     if (result.usedActivities.has(special.name)) continue;
 
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
@@ -2840,7 +2899,7 @@
                 }
 
                 for (const sport of (sl.sports?.priorityList || [])) {
-                    if (result.sports.length >= (sl.sports?.required || 0)) break;
+                    if (result.sports.length >= (sl.sports?.cap ?? sl.sports?.required ?? 0)) break;
                     if (result.usedActivities.has(sport.name)) continue;
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     for (const field of (sport.fields || [])) {
