@@ -1623,6 +1623,24 @@ function saveSpecialData(saData) {
     if (idx >= 0) allSpecials[idx] = saData;
     else allSpecials.push(saData);
     window.saveGlobalSpecialActivities?.(allSpecials);
+
+    // ★ FIX: saveGlobalSpecialActivities writes to localStorage but does NOT
+    //   update special_activities.js's in-memory cache. getAllSpecialActivities
+    //   only re-reads from storage when both in-memory arrays are empty
+    //   (special_activities.js:1683), so freshly-added activities or fresh
+    //   default objects never enter the cache. The next render then falls
+    //   back to a new default and any setting just saved (duration, etc.)
+    //   appears to vanish. Sync the in-memory cache so subsequent reads see
+    //   the saved values.
+    if (window.specialActivities !== undefined) {
+        window.specialActivities = allSpecials.filter(s => !s.rainyDayExclusive && !s.rainyDayOnly);
+    }
+    if (typeof window.refreshSpecialActivitiesFromStorage === 'function') {
+        // Also fire the official refresh — when the Special Activities tab
+        // has been initialized, this re-renders its own UI in case it's open.
+        window.refreshSpecialActivitiesFromStorage();
+    }
+
     saveFacilitiesMetadata();
 }
 
