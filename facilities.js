@@ -891,6 +891,9 @@ function renderSpecialConfig(container, fac) {
         saBody.appendChild(section("Grade Access", summarySpecialAccess(saData),
             () => renderSpecialAccess(saData)));
 
+        saBody.appendChild(section("Duration", summarySpecialDuration(saData),
+            () => renderSpecialDuration(saData)));
+
         saBody.appendChild(section("Time Availability", summarySpecialTime(saData),
             () => renderSpecialTimeRules(saData)));
 
@@ -1601,6 +1604,13 @@ function summarySpecialUsage(s) {
     if (!s.maxUsage) return "No limit";
     return `Max ${s.maxUsage} per ${s.maxUsagePeriod || 'half'}`;
 }
+function summarySpecialDuration(s) {
+    const d = parseInt(s.duration) || 0;
+    if (d <= 0) return "Uses block size";
+    const prep = parseInt(s.prepDuration) || 0;
+    if (prep > 0) return `${d} min (+${prep} prep = ${d + prep} total)`;
+    return `${d} minutes`;
+}
 function summarySpecialPrep(s) { return s.prepDuration ? `${s.prepDuration} min` : "None"; }
 function summarySpecialMultiPart(s) {
     if (!s.multiPart?.enabled) return "Single session";
@@ -1613,6 +1623,24 @@ function saveSpecialData(saData) {
     if (idx >= 0) allSpecials[idx] = saData;
     else allSpecials.push(saData);
     window.saveGlobalSpecialActivities?.(allSpecials);
+
+    // ★ FIX: saveGlobalSpecialActivities writes to localStorage but does NOT
+    //   update special_activities.js's in-memory cache. getAllSpecialActivities
+    //   only re-reads from storage when both in-memory arrays are empty
+    //   (special_activities.js:1683), so freshly-added activities or fresh
+    //   default objects never enter the cache. The next render then falls
+    //   back to a new default and any setting just saved (duration, etc.)
+    //   appears to vanish. Sync the in-memory cache so subsequent reads see
+    //   the saved values.
+    if (window.specialActivities !== undefined) {
+        window.specialActivities = allSpecials.filter(s => !s.rainyDayExclusive && !s.rainyDayOnly);
+    }
+    if (typeof window.refreshSpecialActivitiesFromStorage === 'function') {
+        // Also fire the official refresh — when the Special Activities tab
+        // has been initialized, this re-renders its own UI in case it's open.
+        window.refreshSpecialActivitiesFromStorage();
+    }
+
     saveFacilitiesMetadata();
 }
 
@@ -1884,6 +1912,53 @@ function renderSpecialUsage(saData) {
 }
 
 // -- Prep Duration --
+function renderSpecialDuration(saData) {
+    const container = document.createElement("div");
+    const updateSummary = () => {
+        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summarySpecialDuration(saData);
+    };
+
+    const renderContent = () => {
+        const hasDur = (parseInt(saData.duration) || 0) > 0;
+        const cur = parseInt(saData.duration) || 30;
+        container.innerHTML = `
+            <p style="font-size:0.85rem; color:#6B7280; margin:0 0 10px 0;">
+                Set a fixed duration for this activity. The auto-scheduler will use this instead of the layer's default block size.
+            </p>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:${hasDur ? '10px' : '0'};">
+                <span style="font-size:0.85rem; color:#374151; flex:1;">
+                    ${hasDur ? `<strong>${cur} minutes</strong>` : 'Not set — uses skeleton block size'}
+                </span>
+                <label class="switch">
+                    <input type="checkbox" id="fac-sa-dur-toggle" ${hasDur ? 'checked' : ''}>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div id="fac-sa-dur-config" style="display:${hasDur ? 'flex' : 'none'}; align-items:center; gap:8px;">
+                <span style="font-size:0.85rem;">Duration:</span>
+                <input type="number" id="fac-sa-dur-input" min="5" max="180" step="5" value="${cur}"
+                    style="width:70px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
+                <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
+            </div>`;
+
+        const tog = container.querySelector('#fac-sa-dur-toggle');
+        if (tog) tog.onchange = () => {
+            saData.duration = tog.checked ? (parseInt(saData.duration) > 0 ? parseInt(saData.duration) : 30) : null;
+            saveSpecialData(saData); updateSummary(); renderContent();
+        };
+        const input = container.querySelector('#fac-sa-dur-input');
+        if (input) input.onchange = () => {
+            const v = Math.max(5, Math.min(180, parseInt(input.value) || 30));
+            saData.duration = v;
+            saveSpecialData(saData); updateSummary();
+        };
+    };
+
+    renderContent();
+    return container;
+}
+
 function renderSpecialPrep(saData) {
     const container = document.createElement("div");
     const updateSummary = () => {
