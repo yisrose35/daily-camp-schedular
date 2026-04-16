@@ -4390,6 +4390,37 @@
         var shInitialScore = computeScore(shTimes);
         console.log('[Go] K-Medoids: self-healing starting — mean=' + (shMean/60).toFixed(0) + 'min, score=' + shInitialScore);
 
+        // --- Service-area check: is stopIdx geographically reasonable for clusterIdx? ---
+        // Returns true if the stop is (a) within cluster's current area (with small buffer)
+        // or (b) on the way from camp to the cluster (angle-cone + closer to camp than medoid).
+        // This keeps buses in their zones — no Bus 1 detouring to the far south just to
+        // balance time. Swaps/moves must pass this check.
+        function stopInServiceArea(stopIdx, clusterIdx) {
+            if (!clusters[clusterIdx].length) return true; // empty cluster — anything OK
+            var sLat = stops[stopIdx].lat, sLng = stops[stopIdx].lng;
+            var medLat = stops[seeds[clusterIdx]].lat, medLng = stops[seeds[clusterIdx]].lng;
+
+            // (a) Within cluster's area: distance to medoid ≤ 1.3× cluster's max member distance
+            var maxRadius = 0;
+            for (var i = 0; i < clusters[clusterIdx].length; i++) {
+                var d = sd(clusters[clusterIdx][i], seeds[clusterIdx]);
+                if (d > maxRadius) maxRadius = d;
+            }
+            var distToMedoid = sd(stopIdx, seeds[clusterIdx]);
+            if (distToMedoid <= maxRadius * 1.3) return true;
+
+            // (b) On the way: stop is between camp and cluster, within a 30° cone
+            var distCampToStop = haversineMi(campLat, campLng, sLat, sLng);
+            var distCampToMed = haversineMi(campLat, campLng, medLat, medLng);
+            if (distCampToStop >= distCampToMed) return false; // stop is farther than cluster — not "on the way"
+
+            var angToStop = Math.atan2(sLng - campLng, sLat - campLat) * 180 / Math.PI;
+            var angToMed = Math.atan2(medLng - campLng, medLat - campLat) * 180 / Math.PI;
+            var angDiff = Math.abs(angToStop - angToMed);
+            if (angDiff > 180) angDiff = 360 - angDiff;
+            return angDiff <= 30; // within 30° cone from camp
+        }
+
         var shMoves = 0, shSwaps = 0;
         var shNoImprove = 0;
         for (var shPass = 0; shPass < 500; shPass++) {
@@ -4409,6 +4440,8 @@
                     for (var toI = 0; toI < clusters.length; toI++) {
                         if (toI === fromI) continue;
                         if (clusterKids[toI] + kidCount[cand] > maxClusterCap) continue;
+                        // GEOGRAPHY GUARD: stop must be in target's area or on the way from camp
+                        if (!stopInServiceArea(cand, toI)) continue;
 
                         var tempCluster_from = clusters[fromI].filter(function(_, idx) { return idx !== si; });
                         var tempCluster_to = clusters[toI].concat([cand]);
@@ -4452,6 +4485,12 @@
                             var newKidsB = clusterKids[ib] - kidCount[stopB] + kidCount[stopA];
                             if (newKidsA > maxClusterCap) continue;
                             if (newKidsB > maxClusterCap) continue;
+
+                            // GEOGRAPHY GUARD: each received stop must be in target's
+                            // service area or on the way from camp. Keeps swaps sensible
+                            // — no Bus 1 picking up a far south stop just for time balance.
+                            if (!stopInServiceArea(stopB, ia)) continue;
+                            if (!stopInServiceArea(stopA, ib)) continue;
 
                             // Simulate swap
                             var aAfter = clusters[ia].filter(function(s){return s !== stopA;}).concat([stopB]);
