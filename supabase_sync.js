@@ -223,16 +223,6 @@
                 const timeSinceGen = Date.now() - localGenTime;
                 if (timeSinceGen > 60000 || !window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
                     window.divisionTimes = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
-                    // Reattach _perBunkSlots from sidecar — JSON.stringify strips custom
-                    // array properties, so per-bunk data is stored separately.
-                    if (dateData._perBunkSlotsData) {
-                        Object.keys(dateData._perBunkSlotsData).forEach(function(g) {
-                            if (window.divisionTimes[g]) {
-                                window.divisionTimes[g]._isPerBunk = true;
-                                window.divisionTimes[g]._perBunkSlots = dateData._perBunkSlotsData[g];
-                            }
-                        });
-                    }
                     log('✅ Hydrated divisionTimes from cloud');
                 } else {
                     log('⏭️ Skipped divisionTimes hydration — local generation is fresh (' + Math.round(timeSinceGen / 1000) + 's ago)');
@@ -297,16 +287,12 @@
                 if (cloudResult?.success && cloudResult.data) {
                     const DAILY_KEY = 'campDailyData_v1';
                     const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                    // cloudResult.data.divisionTimes is deserialized — flat arrays with
-                    // _perBunkSlots as a custom array property. JSON.stringify strips
-                    // those props, so extract into a sidecar _perBunkSlotsData field
-                    // (same convention as scheduler_core_auto.js save).
+                    // cloudResult.data.divisionTimes is the deserialized form (flat arrays
+                    // with _perBunkSlots as a custom property). JSON.stringify would strip
+                    // those custom props — re-serialize before stashing in localStorage.
                     var _cloudDT = cloudResult.data.divisionTimes;
-                    var _cloudPbs = {};
-                    if (_cloudDT && typeof _cloudDT === 'object') {
-                        Object.keys(_cloudDT).forEach(function(g) {
-                            if (_cloudDT[g] && _cloudDT[g]._perBunkSlots) _cloudPbs[g] = _cloudDT[g]._perBunkSlots;
-                        });
+                    if (_cloudDT && window.DivisionTimesSystem?.serialize) {
+                        _cloudDT = window.DivisionTimesSystem.serialize(_cloudDT);
                     }
                     allData[dateKey] = {
                         ...allData[dateKey],
@@ -315,9 +301,6 @@
                         unifiedTimes: cloudResult.data.unifiedTimes || allData[dateKey]?.unifiedTimes || [],
                         divisionTimes: _cloudDT || allData[dateKey]?.divisionTimes || {}
                     };
-                    if (Object.keys(_cloudPbs).length > 0) {
-                        allData[dateKey]._perBunkSlotsData = _cloudPbs;
-                    }
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
                     log('☁️ Updated localStorage from cloud:', 
                         Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks');

@@ -165,19 +165,14 @@
     }
     function setLocalSchedule(dateKey, schedule) {
         const data = getLocalData();
-        // Sidecar _perBunkSlotsData — _perBunkSlots is a custom array property that
-        // JSON.stringify strips. Extract it into a sibling field so it survives the
-        // round-trip, matching the convention used by scheduler_core_auto.js save.
+        // Re-serialize divisionTimes — mergeSchedules returns the deserialized form
+        // (flat arrays with _perBunkSlots as a custom property), and JSON.stringify
+        // strips custom array properties. Wrap back into {_slots, _perBunkSlots} form.
         let safe = schedule;
-        if (schedule && schedule.divisionTimes) {
-            const spbs = {};
-            Object.keys(schedule.divisionTimes).forEach(g => {
-                const dt = schedule.divisionTimes[g];
-                if (dt && dt._perBunkSlots) spbs[g] = dt._perBunkSlots;
+        if (schedule && schedule.divisionTimes && window.DivisionTimesSystem?.serialize) {
+            safe = Object.assign({}, schedule, {
+                divisionTimes: window.DivisionTimesSystem.serialize(schedule.divisionTimes)
             });
-            if (Object.keys(spbs).length > 0) {
-                safe = Object.assign({}, schedule, { _perBunkSlotsData: spbs });
-            }
         }
         data[dateKey] = safe;
         setLocalData(data);
