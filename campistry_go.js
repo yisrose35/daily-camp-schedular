@@ -3645,147 +3645,168 @@
         console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, ' + numStops + ' stops, totalCap: ' + totalCap);
 
         // =====================================================================
-        // PIZZA-SLICE ZONES — geometric zone creation:
+        // CLARKE-WRIGHT SAVINGS ALGORITHM (1964)
         //
-        // 1. Draw a circle from camp with radius = distance to farthest stop
-        // 2. Compute bearing from camp to every stop (0-360°)
-        // 3. Cut the circle into equal-angle slices — one per bus
-        // 4. Assign each stop to the slice it falls in
-        // 5. Rebalance: shift slice boundaries to even out kid counts
-        // 6. Within each slice, stops are ordered near→far = the route
+        // The industry-standard algorithm used by Routefinder, OR-Tools,
+        // and most commercial bus routing systems. It simultaneously builds
+        // zones AND routes through a savings-based merging process.
         //
-        // Why this works: each bus drives outward from camp through its
-        // slice, dropping kids along the way.  No backtracking, no overlap.
+        // 1. Start: every stop is its own "route" (camp→stop→camp)
+        // 2. Compute savings for every pair of stops:
+        //    savings(i,j) = dist(i,camp) + dist(camp,j) - dist(i,j)
+        //    High savings = stops are close together AND far from camp
+        // 3. Sort savings descending
+        // 4. For each savings pair, merge their routes if:
+        //    a) They're in different routes
+        //    b) Both are at the END of their respective routes (adjacent to camp)
+        //    c) Combined route doesn't exceed bus capacity
+        //    d) We haven't exceeded the bus count limit
+        // 5. The result is naturally compact, capacity-respecting zones
         // =====================================================================
-        // =====================================================================
 
-        // ── Step 1: Compute bearing + distance from camp for each stop ──
-        var stopInfo = [];
-        for (var _si = 0; _si < numStops; _si++) {
-            var _s = stops[_si];
-            var _dLat = _s.lat - campLat;
-            var _dLng = (_s.lng - campLng) * Math.cos(campLat * Math.PI / 180);
-            var _angle = Math.atan2(_dLng, _dLat) * 180 / Math.PI;
-            if (_angle < 0) _angle += 360;
-            var _dist = haversineMi(campLat, campLng, _s.lat, _s.lng);
-            stopInfo.push({ idx: _si, angle: _angle, dist: _dist, kids: kidCount[_si] });
-        }
-
-        // ── Step 2: Sort by angle, create equal-angle pizza slices ──
-        stopInfo.sort(function(a, b) { return a.angle - b.angle; });
-
-        var sliceWidth = 360 / numBuses; // degrees per slice
         var AVG_STOP_SEC = (D.setup.avgStopTime || 2) * 60;
 
-        // Assign each stop to its slice based on angle
-        var slices = [];
-        for (var sb = 0; sb < numBuses; sb++) {
-            slices.push({ busIdx: sb, stopIndices: [], kids: 0 });
+        // ── Step 1: Initialize — every stop is its own route ──
+        // Each route is an array of stop indices, implicitly starting/ending at camp
+        var cwRoutes = [];
+        for (var ri = 0; ri < numStops; ri++) {
+            cwRoutes.push({ stopIndices: [ri], kids: kidCount[ri] });
         }
-        for (var si2 = 0; si2 < stopInfo.length; si2++) {
-            var sliceIdx = Math.floor(stopInfo[si2].angle / sliceWidth);
-            if (sliceIdx >= numBuses) sliceIdx = numBuses - 1;
-            slices[sliceIdx].stopIndices.push(stopInfo[si2].idx);
-            slices[sliceIdx].kids += stopInfo[si2].kids;
-        }
+        // Track which route each stop belongs to (for fast lookup)
+        var stopToRoute = new Array(numStops);
+        for (var sr = 0; sr < numStops; sr++) stopToRoute[sr] = sr;
 
-        console.log('[Go] Pizza slices: ' + slices.map(function(s) { return s.kids; }).join(', ') + ' kids');
-
-        // ── Step 3: Rebalance slices by shifting boundaries ──
-        // If a slice has too many kids, shift its boundary to give stops
-        // to the neighboring slice. Iterate until balanced within capacity.
-        for (var rbPass = 0; rbPass < 100; rbPass++) {
-            var moved = false;
-            for (var si3 = 0; si3 < slices.length; si3++) {
-                if (slices[si3].kids <= busCaps[si3]) continue; // within capacity
-                // Over capacity — try to give farthest-angle stop to next slice
-                var nextSi = (si3 + 1) % slices.length;
-                if (slices[si3].stopIndices.length <= 1) continue;
-                if (slices[nextSi].kids >= busCaps[nextSi]) continue; // neighbor also full
-
-                // Find the stop closest to the boundary with next slice
-                var borderAngle = (si3 + 1) * sliceWidth;
-                var bestBorderLi = -1, bestBorderDiff = Infinity;
-                for (var bli = 0; bli < slices[si3].stopIndices.length; bli++) {
-                    var bsi = slices[si3].stopIndices[bli];
-                    var bInfo = stopInfo.find(function(s) { return s.idx === bsi; });
-                    if (!bInfo) continue;
-                    var diff = Math.abs(bInfo.angle - borderAngle);
-                    if (diff > 180) diff = 360 - diff;
-                    if (diff < bestBorderDiff && slices[nextSi].kids + bInfo.kids <= busCaps[nextSi]) {
-                        bestBorderDiff = diff; bestBorderLi = bli;
-                    }
-                }
-                if (bestBorderLi >= 0) {
-                    var movedIdx = slices[si3].stopIndices.splice(bestBorderLi, 1)[0];
-                    var movedKids = kidCount[movedIdx];
-                    slices[si3].kids -= movedKids;
-                    slices[nextSi].stopIndices.push(movedIdx);
-                    slices[nextSi].kids += movedKids;
-                    moved = true;
-                }
-            }
-            if (!moved) break;
-        }
-
-        // ── Step 4: Handle empty slices — steal from heaviest neighbor ──
-        for (var es = 0; es < slices.length; es++) {
-            if (slices[es].kids > 0) continue;
-            // Find heaviest adjacent slice
-            var prev = (es - 1 + slices.length) % slices.length;
-            var next = (es + 1) % slices.length;
-            var donor = slices[prev].kids >= slices[next].kids ? prev : next;
-            if (slices[donor].stopIndices.length <= 1) continue;
-            // Move the stop closest to this empty slice's center angle
-            var emptyCenter = (es + 0.5) * sliceWidth;
-            var bestDli = -1, bestDdiff = Infinity;
-            for (var dli = 0; dli < slices[donor].stopIndices.length; dli++) {
-                var dsi = slices[donor].stopIndices[dli];
-                var dInfo = stopInfo.find(function(s) { return s.idx === dsi; });
-                if (!dInfo) continue;
-                var dd = Math.abs(dInfo.angle - emptyCenter);
-                if (dd > 180) dd = 360 - dd;
-                if (dd < bestDdiff) { bestDdiff = dd; bestDli = dli; }
-            }
-            if (bestDli >= 0) {
-                var stealIdx = slices[donor].stopIndices.splice(bestDli, 1)[0];
-                slices[donor].kids -= kidCount[stealIdx];
-                slices[es].stopIndices.push(stealIdx);
-                slices[es].kids += kidCount[stealIdx];
+        // ── Step 2: Compute savings for all pairs ──
+        console.log('[Go] Clarke-Wright: computing savings for ' + numStops + ' stops...');
+        var savings = [];
+        for (var i = 0; i < numStops; i++) {
+            var diCamp = drivingDist(stops[i].lat, stops[i].lng, campLat, campLng);
+            for (var j = i + 1; j < numStops; j++) {
+                var djCamp = drivingDist(stops[j].lat, stops[j].lng, campLat, campLng);
+                var dij = drivingDist(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                var sav = diCamp + djCamp - dij;
+                if (sav > 0) savings.push({ i: i, j: j, sav: sav });
             }
         }
 
-        // ── Step 5: Assign buses to slices (biggest bus → heaviest slice) ──
+        // ── Step 3: Sort savings descending ──
+        savings.sort(function(a, b) { return b.sav - a.sav; });
+        console.log('[Go] Clarke-Wright: ' + savings.length + ' savings pairs computed');
+
+        // ── Step 4: Merge routes greedily ──
+        // Sort bus capacities descending — we'll assign biggest buses to biggest routes
+        var sortedCaps = busCaps.slice().sort(function(a, b) { return b - a; });
+        // Maximum capacity we'll allow per route (use the largest bus)
+        var maxRouteCap = sortedCaps[0] || 46;
+
+        var mergeCount = 0;
+        for (var si4 = 0; si4 < savings.length; si4++) {
+            var sv = savings[si4];
+            var ri1 = stopToRoute[sv.i];
+            var ri2 = stopToRoute[sv.j];
+
+            // CHECK 1: Must be in different routes
+            if (ri1 === ri2) continue;
+
+            var route1 = cwRoutes[ri1];
+            var route2 = cwRoutes[ri2];
+            if (!route1 || !route2) continue;
+
+            // CHECK 2: Both stops must be at the ENDS of their routes
+            // (adjacent to the depot = first or last stop in the route)
+            var iAtEnd = (route1.stopIndices[0] === sv.i || route1.stopIndices[route1.stopIndices.length - 1] === sv.i);
+            var jAtEnd = (route2.stopIndices[0] === sv.j || route2.stopIndices[route2.stopIndices.length - 1] === sv.j);
+            if (!iAtEnd || !jAtEnd) continue;
+
+            // CHECK 3: Combined capacity must not exceed max bus capacity
+            if (route1.kids + route2.kids > maxRouteCap) continue;
+
+            // CHECK 4: Don't merge if we'd end up with fewer routes than buses
+            // (we want to use all buses)
+            var activeRoutes = 0;
+            for (var cr = 0; cr < cwRoutes.length; cr++) {
+                if (cwRoutes[cr] && cwRoutes[cr].stopIndices.length > 0) activeRoutes++;
+            }
+            if (activeRoutes <= numBuses) break; // already at target bus count
+
+            // MERGE: Connect the routes at the i-j junction
+            // Orient so i is at the end of route1 and j is at the start of route2
+            var merged;
+            if (route1.stopIndices[route1.stopIndices.length - 1] === sv.i && route2.stopIndices[0] === sv.j) {
+                merged = route1.stopIndices.concat(route2.stopIndices);
+            } else if (route1.stopIndices[0] === sv.i && route2.stopIndices[route2.stopIndices.length - 1] === sv.j) {
+                merged = route2.stopIndices.concat(route1.stopIndices);
+            } else if (route1.stopIndices[route1.stopIndices.length - 1] === sv.i && route2.stopIndices[route2.stopIndices.length - 1] === sv.j) {
+                merged = route1.stopIndices.concat(route2.stopIndices.slice().reverse());
+            } else {
+                merged = route1.stopIndices.slice().reverse().concat(route2.stopIndices);
+            }
+
+            // Apply merge
+            route1.stopIndices = merged;
+            route1.kids = route1.kids + route2.kids;
+
+            // Update stop-to-route mapping for all stops in route2
+            for (var um = 0; um < route2.stopIndices.length; um++) {
+                stopToRoute[route2.stopIndices[um]] = ri1;
+            }
+
+            // Nullify route2
+            cwRoutes[ri2] = null;
+            mergeCount++;
+        }
+
+        // ── Step 5: Collect active routes, assign buses ──
+        var activeRoutesList = [];
+        for (var ar = 0; ar < cwRoutes.length; ar++) {
+            if (cwRoutes[ar] && cwRoutes[ar].stopIndices.length > 0) {
+                activeRoutesList.push(cwRoutes[ar]);
+            }
+        }
+
+        // Sort routes by kid count descending, assign biggest bus to biggest route
+        activeRoutesList.sort(function(a, b) { return b.kids - a.kids; });
         var busOrder = busCaps.map(function(cap, i) { return { i: i, cap: cap }; });
         busOrder.sort(function(a, b) { return b.cap - a.cap; });
-        var sliceOrder = slices.map(function(s, i) { return { i: i, kids: s.kids }; });
-        sliceOrder.sort(function(a, b) { return b.kids - a.kids; });
-        var sliceToBus = {};
-        for (var sb2 = 0; sb2 < Math.min(sliceOrder.length, busOrder.length); sb2++) {
-            sliceToBus[sliceOrder[sb2].i] = busOrder[sb2].i;
-        }
+
+        console.log('[Go] Clarke-Wright: ' + mergeCount + ' merges → ' + activeRoutesList.length + ' routes');
 
         // ── Step 6: Build zone objects ──
         var zones = [];
-        for (var zi = 0; zi < slices.length; zi++) {
-            var sl = slices[zi];
-            if (!sl.stopIndices.length) continue;
-            var bi = sliceToBus[zi] !== undefined ? sliceToBus[zi] : zi;
-            var cLat = sl.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / sl.stopIndices.length;
-            var cLng = sl.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / sl.stopIndices.length;
-            var med = sl.stopIndices[0], medD = Infinity;
-            sl.stopIndices.forEach(function(si) { var d = haversineMi(cLat, cLng, stops[si].lat, stops[si].lng); if (d < medD) { medD = d; med = si; } });
+        for (var zi = 0; zi < activeRoutesList.length && zi < busOrder.length; zi++) {
+            var route = activeRoutesList[zi];
+            var bi = busOrder[zi].i;
+            var cLat = route.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / route.stopIndices.length;
+            var cLng = route.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / route.stopIndices.length;
+            var med = route.stopIndices[0], medD = Infinity;
+            route.stopIndices.forEach(function(si) {
+                var d = haversineMi(cLat, cLng, stops[si].lat, stops[si].lng);
+                if (d < medD) { medD = d; med = si; }
+            });
             zones.push({
                 busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
-                busColor: buses[bi].color, stopIndices: sl.stopIndices,
-                camperCount: sl.kids, capacity: busCaps[bi],
+                busColor: buses[bi].color, stopIndices: route.stopIndices,
+                camperCount: route.kids, capacity: busCaps[bi],
                 centroidLat: cLat, centroidLng: cLng, _medoid: med
             });
         }
 
-        console.log('[Go] Pizza zones: ' + zones.length + ' slices');
+        // If there are more routes than buses, absorb extras into nearest zone
+        for (var ex = busOrder.length; ex < activeRoutesList.length; ex++) {
+            var extra = activeRoutesList[ex];
+            // Find nearest zone with capacity
+            var bestZi = 0, bestZd = Infinity;
+            for (var ezi = 0; ezi < zones.length; ezi++) {
+                if (zones[ezi].camperCount + extra.kids > zones[ezi].capacity) continue;
+                var ed = drivingDist(stops[extra.stopIndices[0]].lat, stops[extra.stopIndices[0]].lng,
+                    zones[ezi].centroidLat, zones[ezi].centroidLng);
+                if (ed < bestZd) { bestZd = ed; bestZi = ezi; }
+            }
+            extra.stopIndices.forEach(function(si) { zones[bestZi].stopIndices.push(si); });
+            zones[bestZi].camperCount += extra.kids;
+        }
 
-        // ── Step 7: Time-aware balancing (minimize max route time) ──
+        // ── Step 7: Cross-route minimax time balancing ──
         function estimateRouteTime(idxArr) {
             if (!idxArr.length) return 0;
             var sorted = idxArr.slice().sort(function(a, b) {
@@ -3793,15 +3814,14 @@
                        haversineMi(campLat, campLng, stops[b].lat, stops[b].lng);
             });
             var t = drivingDist(campLat, campLng, stops[sorted[0]].lat, stops[sorted[0]].lng) + AVG_STOP_SEC;
-            for (var i = 1; i < sorted.length; i++) {
-                t += drivingDist(stops[sorted[i - 1]].lat, stops[sorted[i - 1]].lng,
-                                  stops[sorted[i]].lat, stops[sorted[i]].lng) + AVG_STOP_SEC;
+            for (var rti = 1; rti < sorted.length; rti++) {
+                t += drivingDist(stops[sorted[rti - 1]].lat, stops[sorted[rti - 1]].lng,
+                                  stops[sorted[rti]].lat, stops[sorted[rti]].lng) + AVG_STOP_SEC;
             }
             return t;
         }
 
-        // Minimax: move stops from slowest zone to any zone that reduces global max time
-        for (var tp = 0; tp < 200; tp++) {
+        for (var tp = 0; tp < 150; tp++) {
             var zTimes = zones.map(function(z) { return estimateRouteTime(z.stopIndices); });
             var gMax = Math.max.apply(null, zTimes);
             var slowZi = zTimes.indexOf(gMax);
@@ -3813,7 +3833,7 @@
                 for (var mti = 0; mti < zones.length; mti++) {
                     if (mti === slowZi) continue;
                     if (zones[mti].camperCount + kidCount[msi] > zones[mti].capacity) continue;
-                    var dStops = zones[slowZi].stopIndices.filter(function(_, i) { return i !== mli; });
+                    var dStops = zones[slowZi].stopIndices.filter(function(_, idx) { return idx !== mli; });
                     var rStops = zones[mti].stopIndices.concat([msi]);
                     var newMax = Math.max(estimateRouteTime(dStops), estimateRouteTime(rStops));
                     for (var oi = 0; oi < zTimes.length; oi++) { if (oi !== slowZi && oi !== mti && zTimes[oi] > newMax) newMax = zTimes[oi]; }
@@ -3827,10 +3847,8 @@
             zones[bestMv.to].camperCount += kidCount[bestMv.si];
         }
 
-        // Remove empty zones
+        // Remove empty zones, update medoids
         var finalZones = zones.filter(function(z) { return z.stopIndices.length > 0; });
-
-        // Update medoids + centroids
         finalZones.forEach(function(z) {
             z.centroidLat = z.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / z.stopIndices.length;
             z.centroidLng = z.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / z.stopIndices.length;
@@ -3841,7 +3859,7 @@
 
         // Log summary
         var finalTimes = finalZones.map(function(z) { return estimateRouteTime(z.stopIndices); });
-        console.log('[Go] Zones: ' + finalZones.length + ' pizza slices, ' + totalKids + ' kids, ' + numStops + ' stops');
+        console.log('[Go] Clarke-Wright: ' + finalZones.length + ' zones, ' + totalKids + ' kids, ' + numStops + ' stops');
         finalZones.forEach(function(z, i) {
             var tm = (finalTimes[i] / 60).toFixed(0);
             var fill = Math.round(z.camperCount / z.capacity * 100);
