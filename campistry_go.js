@@ -4278,42 +4278,62 @@
             return t;
         }
 
-        var TIME_GAP_THRESHOLD_SEC = 15 * 60; // consider rebalancing if max-min > 15min
+        // Strategy: aggressive minimax — for each pass, find the slowest
+        // cluster, try moving every one of its stops to EVERY OTHER cluster.
+        // Accept the move that produces the lowest new max time (across all
+        // clusters). The minimax itself guards against bad moves — no need
+        // for rigid compactness checks.
+        //
+        // "On the way" is implicit: moving a stop to a cluster naturally
+        // looks at the full route time AFTER the move. If a stop is truly
+        // on-the-way for the receiving cluster, adding it barely increases
+        // that cluster's time (small detour cost), so the move gets accepted.
+        var TIME_GAP_THRESHOLD_SEC = 8 * 60; // tighter threshold — 8min gap
         var tbMoves = 0;
-        for (var tbPass = 0; tbPass < 50; tbPass++) {
+        for (var tbPass = 0; tbPass < 200; tbPass++) {
             var times = clusters.map(_routeTimeEst);
-            var slowT = -Infinity, fastT = Infinity, slowI = -1, fastI = -1;
+            var gMax = -Infinity, gMin = Infinity;
             for (var ti = 0; ti < times.length; ti++) {
                 if (clusters[ti].length === 0) continue;
-                if (times[ti] > slowT) { slowT = times[ti]; slowI = ti; }
-                if (times[ti] < fastT) { fastT = times[ti]; fastI = ti; }
+                if (times[ti] > gMax) gMax = times[ti];
+                if (times[ti] < gMin) gMin = times[ti];
             }
-            if (slowI < 0 || fastI < 0 || slowI === fastI) break;
-            if (slowT - fastT < TIME_GAP_THRESHOLD_SEC) break; // close enough
+            if (gMax - gMin < TIME_GAP_THRESHOLD_SEC) break; // close enough
 
-            // Try moving each stop from slow to fast
+            // Find the slowest cluster
+            var slowI = times.indexOf(gMax);
+            if (clusters[slowI].length <= 1) break;
+
+            // Try moving each stop from slow to ANY OTHER cluster (not just fastest)
             var bestMove = null;
-            var bestNewMax = slowT;
+            var bestNewMax = gMax;
 
             for (var mi = 0; mi < clusters[slowI].length; mi++) {
                 var cand = clusters[slowI][mi];
-                // Capacity check
-                if (clusterKids[fastI] + kidCount[cand] > maxClusterCap) continue;
-                // Compactness check: stop must be within 1.5× as close to fast's medoid
-                var dFast = sd(cand, seeds[fastI]);
-                var dSlow = sd(cand, seeds[slowI]);
-                if (dFast > dSlow * 1.5) continue; // too far from fast cluster
 
-                // Estimate new times
-                var newSlowStops = clusters[slowI].filter(function(_, idx) { return idx !== mi; });
-                var newFastStops = clusters[fastI].concat([cand]);
-                var newSlowT = _routeTimeEst(newSlowStops);
-                var newFastT = _routeTimeEst(newFastStops);
-                var newMaxPair = Math.max(newSlowT, newFastT);
+                for (var tgt = 0; tgt < clusters.length; tgt++) {
+                    if (tgt === slowI) continue;
+                    if (clusters[tgt].length === 0) continue;
+                    // Capacity check
+                    if (clusterKids[tgt] + kidCount[cand] > maxClusterCap) continue;
 
-                if (newMaxPair < bestNewMax) {
-                    bestNewMax = newMaxPair;
-                    bestMove = { mi: mi, cand: cand };
+                    // Estimate new times for donor and receiver
+                    var newSlowStops = clusters[slowI].filter(function(_, idx) { return idx !== mi; });
+                    var newTgtStops = clusters[tgt].concat([cand]);
+                    var newSlowT = _routeTimeEst(newSlowStops);
+                    var newTgtT = _routeTimeEst(newTgtStops);
+
+                    // Compute new global max — donor and receiver change, others stay
+                    var newMaxPair = Math.max(newSlowT, newTgtT);
+                    for (var oi = 0; oi < times.length; oi++) {
+                        if (oi !== slowI && oi !== tgt && times[oi] > newMaxPair) newMaxPair = times[oi];
+                    }
+
+                    // Accept only if new global max is lower than current global max
+                    if (newMaxPair < bestNewMax) {
+                        bestNewMax = newMaxPair;
+                        bestMove = { mi: mi, cand: cand, tgt: tgt };
+                    }
                 }
             }
 
@@ -4322,18 +4342,18 @@
             // Execute the move
             clusters[slowI].splice(bestMove.mi, 1);
             clusterKids[slowI] -= kidCount[bestMove.cand];
-            clusters[fastI].push(bestMove.cand);
-            clusterKids[fastI] += kidCount[bestMove.cand];
+            clusters[bestMove.tgt].push(bestMove.cand);
+            clusterKids[bestMove.tgt] += kidCount[bestMove.cand];
             tbMoves++;
 
             // Re-medoid affected clusters
             seeds[slowI] = recomputeMedoid(clusters[slowI]) || seeds[slowI];
-            seeds[fastI] = recomputeMedoid(clusters[fastI]) || seeds[fastI];
+            seeds[bestMove.tgt] = recomputeMedoid(clusters[bestMove.tgt]) || seeds[bestMove.tgt];
         }
         var finalTimesTmp = clusters.map(_routeTimeEst);
         var finalMax = Math.max.apply(null, finalTimesTmp);
         var finalMin = Math.min.apply(null, finalTimesTmp.filter(function(t) { return t > 0; }));
-        console.log('[Go] K-Medoids: ' + tbMoves + ' time-balance moves (gap: ' + (finalMax/60).toFixed(0) + 'min max → ' + (finalMin/60).toFixed(0) + 'min min)');
+        console.log('[Go] K-Medoids: ' + tbMoves + ' time-balance moves (gap: ' + (finalMax/60).toFixed(0) + 'min max → ' + (finalMin/60).toFixed(0) + 'min min, threshold 8min)');
 
         // =====================================================================
         // Stage E — Bus Assignment
