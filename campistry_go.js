@@ -473,10 +473,10 @@
                 profiles: [{ name: 'bus', type: 'car' }]
             },
             plan: { jobs: jobs },
-            // Objectives must be FLAT array (not nested arrays)
+            // Objectives must be FLAT array with camelCase type names
             objectives: [
-                { type: 'minimize-unassigned' },
-                { type: 'minimize-cost' }
+                { type: 'minimizeUnassigned' },
+                { type: 'minimizeDuration' }
             ]
         };
 
