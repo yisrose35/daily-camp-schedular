@@ -57,6 +57,14 @@
 
     function uid() { return 'ac_' + Math.random().toString(36).slice(2, 9); }
 
+    // Unified scheduling-rules check. Every phase that places or extends a
+    // block should call this before committing. Returns true if placement is
+    // OK (no rule loaded, or candidate passes all active cooldown rules).
+    function rulesAllow(candidate, template) {
+        if (!window.SchedulingRules) return true;
+        return window.SchedulingRules.isCandidateAllowed(candidate, template, { mode: 'auto' });
+    }
+
     function parseTimeToMinutes(str) {
         if (str == null) return null;
         if (typeof str === 'number') return str;
@@ -2365,6 +2373,7 @@
                                     for (let t = win.start; t + dur <= win.end; t += 5) {
                                         if (special.location && !isFieldAvailable(special.location, t, t + dur, bunk, grade)) continue;
                                         if (!canAssignSpecialToGrade(special.name, grade, t, t + dur)) continue;
+                                        if (!rulesAllow({ startMin: t, endMin: t + dur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: special.location }, bunkTimelines[bunk] || [])) continue;
                                         // Score: left + right remainders within this window
                                         const leftRem = t - win.start;
                                         const rightRem = win.end - (t + dur);
@@ -4637,13 +4646,17 @@
                         // ★ v11.1: Clamp placement to layer window
                         var hPlaceStart = Math.max(hVictim.startMin, hWinStart);
                         var hNewEnd = Math.min(hPlaceStart + (hlc.dMax || hNeedDMin), hVictim.endMin, hWinEnd);
+                        var hEventName = hlt === 'special' ? hSpecialName : (hll.event || hlt);
+                        // Scheduling rules check before committing self-heal
+                        if (!rulesAllow({ startMin: hPlaceStart, endMin: hNewEnd, type: hlt, event: hEventName }, hTmpl)) {
+                            continue; // rule violation — skip this layer for this bunk
+                        }
                         var hRemainStart = hNewEnd;
                         var hRemainEnd = hVictim.endMin;
                         // Also fill the gap before the clamped start
                         var hPreGap = hPlaceStart - hVictim.startMin;
 
                         // Replace with the required layer
-                        var hEventName = hlt === 'special' ? hSpecialName : (hll.event || hlt);
                         hTmpl[hBestIdx] = makeBlock({
                             startMin: hPlaceStart, endMin: hNewEnd,
                             type: hlt === 'snacks' ? 'snacks' : hlt,
@@ -4842,6 +4855,12 @@
                         var gLayerWinEnd = gll.endMin || gMeta.gradeEnd;
                         var gPlaceStart = Math.max(gVictim.startMin, gLayerWinStart);
                         var gLayerEnd = Math.min(gPlaceStart + gNeedDMax, gVictim.endMin, gLayerWinEnd);
+
+                        // Scheduling rules check before committing guarantee
+                        if (!rulesAllow({ startMin: gPlaceStart, endMin: gLayerEnd, type: glt, event: gll.event || glt }, gTmpl)) {
+                            continue; // rule violation — try next sport block
+                        }
+
                         var gRemainStart = gLayerEnd;
                         var gRemainEnd = gVictim.endMin;
                         var gPreGap = gPlaceStart - gVictim.startMin;
@@ -5306,12 +5325,18 @@
                                 var steal = Math.min(rbDeficit, donorSurplus);
                                 steal = Math.round(steal / 5) * 5;
                                 if (steal >= 5) {
+                                    // Apply tentatively, verify rules
                                     donor.endMin -= steal;
                                     rbBlk.startMin -= steal;
-                                    rbChanged = true;
-                                    rebalanceTotal++;
-                                    log('[REBAL] ' + rbType + ' bunk=' + rbBunk + ' +' + steal + 'min from prev ' + (donor.type || '') + ' (' + (donorDur) + '→' + (donor.endMin - donor.startMin) + ')');
-                                    continue;
+                                    if (!rulesAllow({ startMin: rbBlk.startMin, endMin: rbBlk.endMin, type: rbType, event: rbBlk.event, field: rbBlk.field }, rbTmpl)
+                                     || !rulesAllow({ startMin: donor.startMin, endMin: donor.endMin, type: donor.type, event: donor.event, field: donor.field }, rbTmpl)) {
+                                        donor.endMin += steal; rbBlk.startMin += steal; // revert
+                                    } else {
+                                        rbChanged = true;
+                                        rebalanceTotal++;
+                                        log('[REBAL] ' + rbType + ' bunk=' + rbBunk + ' +' + steal + 'min from prev ' + (donor.type || '') + ' (' + (donorDur) + '→' + (donor.endMin - donor.startMin) + ')');
+                                        continue;
+                                    }
                                 }
                             }
                         }
@@ -5328,12 +5353,18 @@
                                 var steal2 = Math.min(rbDeficit, donor2Surplus);
                                 steal2 = Math.round(steal2 / 5) * 5;
                                 if (steal2 >= 5) {
+                                    // Apply tentatively, verify rules
                                     donor2.startMin += steal2;
                                     rbBlk.endMin += steal2;
-                                    rbChanged = true;
-                                    rebalanceTotal++;
-                                    log('[REBAL] ' + rbType + ' bunk=' + rbBunk + ' +' + steal2 + 'min from next ' + (donor2.type || '') + ' (' + (donor2Dur) + '→' + (donor2.endMin - donor2.startMin) + ')');
-                                    continue;
+                                    if (!rulesAllow({ startMin: rbBlk.startMin, endMin: rbBlk.endMin, type: rbType, event: rbBlk.event, field: rbBlk.field }, rbTmpl)
+                                     || !rulesAllow({ startMin: donor2.startMin, endMin: donor2.endMin, type: donor2.type, event: donor2.event, field: donor2.field }, rbTmpl)) {
+                                        donor2.startMin -= steal2; rbBlk.endMin -= steal2; // revert
+                                    } else {
+                                        rbChanged = true;
+                                        rebalanceTotal++;
+                                        log('[REBAL] ' + rbType + ' bunk=' + rbBunk + ' +' + steal2 + 'min from next ' + (donor2.type || '') + ' (' + (donor2Dur) + '→' + (donor2.endMin - donor2.startMin) + ')');
+                                        continue;
+                                    }
                                 }
                             }
                         }
@@ -6704,6 +6735,8 @@
                             for (var pos = gap.s; pos + specialDur <= gap.e; pos += 5) {
                                 // Resource check: can this special run at this time?
                                 if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) { _sp25_rtBlockCount++; continue; }
+                                // Scheduling rules check (cooldowns, etc.)
+                                if (!rulesAllow({ startMin: pos, endMin: pos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) continue;
 
                                 // Simulate adding special at this position
                                 var withSpecial = existingWalls.concat([{ s: pos, e: pos + specialDur }]);
@@ -6762,7 +6795,8 @@
                             // Also try end-aligned position (may not be on 5-min boundary)
                             var endPos = gap.e - specialDur;
                             if (endPos >= gap.s && endPos !== gap.s && endPos % 5 !== 0) {
-                                if (canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)) {
+                                if (canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)
+                                    && rulesAllow({ startMin: endPos, endMin: endPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) {
                                     var withSpecialEnd = existingWalls.concat([{ s: endPos, e: endPos + specialDur }]);
                                     var gapsAfterEnd = spComputeGaps(withSpecialEnd, gradeStart, gradeEnd);
                                     var layersFitEnd = true;
