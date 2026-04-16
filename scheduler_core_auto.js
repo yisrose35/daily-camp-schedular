@@ -7658,7 +7658,19 @@
                     const league = mla.find(l => l.name === leagueName);
                     const covDivs = (league?.divisions || [leagueName]).filter(d => autoSkeleton.some(b => b.division === d && b.type === 'league'));
                     (covDivs.length > 0 ? covDivs : [divName]).forEach(div => {
-                        const lb = autoSkeleton.find(b => b.division === div && b.type === 'league');
+                        // ★ FIX: Use the slot index to find the CORRECT league block,
+                        // not .find() which always returns the first one. When a grade
+                        // has 2+ games per day, .find() caused Game 2 to overwrite
+                        // Game 1's data at the same startMin key.
+                        var slotIdx = slots && slots.length > 0 ? slots[0] : null;
+                        var lb = null;
+                        if (slotIdx != null) {
+                            var dt = window.divisionTimes?.[div];
+                            var bunkSlotArr = dt?._perBunkSlots ? dt._perBunkSlots[Object.keys(dt._perBunkSlots)[0]] : (Array.isArray(dt) ? dt : []);
+                            var slotStartMin = bunkSlotArr[slotIdx]?.startMin;
+                            if (slotStartMin != null) lb = autoSkeleton.find(b => b.division === div && b.type === 'league' && b.startMin === slotStartMin);
+                        }
+                        if (!lb) lb = autoSkeleton.find(b => b.division === div && b.type === 'league');
                         if (!lb) return;
                         if (!window.leagueAssignments[div]) window.leagueAssignments[div] = {};
                         window.leagueAssignments[div][lb.startMin] = { matchups: matchups || [], gameLabel: gameLabel || '', sport: sport || '', leagueName: leagueName || '' };
