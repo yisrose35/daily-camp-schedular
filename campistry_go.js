@@ -426,6 +426,9 @@
             return {
                 id: 'bus_' + i,
                 profile: 'bus',
+                // Cost = time only. No fixed or distance cost so the solver
+                // optimizes purely for minimizing total time (and with
+                // maxDuration cap, that means balanced short routes).
                 costs: { fixed: 0, distance: 0, time: 1 },
                 shifts: [{
                     start: {
@@ -438,8 +441,10 @@
                     }
                 }],
                 capacity: [b.capacity || 44],
-                amount: 1,
-                limits: { maxDuration: 7200 } // 2 hours max route
+                amount: 1
+                // Route duration cap is enforced by shift start/end times above.
+                // HERE v3 fleet.types[].limits only supports maxDistance (meters),
+                // not maxDuration, so we rely on shift time window instead.
             };
         });
 
@@ -457,6 +462,11 @@
         });
 
         // Use bus profile with driving fallback
+        // Objective priorities (ordered, each is a "level"):
+        //   1. minimize-unassigned — serve every kid
+        //   2. minimize-tours — fewer buses if possible
+        //   3. minimize-cost — with time-weighted cost function below, this minimizes total time
+        // Combined with `limits.maxDuration: 3600`, no route will exceed 60min.
         const request = {
             fleet: {
                 types: fleetTypes,
@@ -465,8 +475,7 @@
             plan: { jobs: jobs },
             objectives: [
                 [{ type: 'minimize-unassigned' }],
-                [{ type: 'balance-max-load' }],    // ★ minimax — minimize slowest route
-                [{ type: 'minimize-duration' }]
+                [{ type: 'minimize-cost' }]
             ]
         };
 
