@@ -4356,6 +4356,112 @@
         console.log('[Go] K-Medoids: ' + tbMoves + ' time-balance moves (gap: ' + (finalMax/60).toFixed(0) + 'min max → ' + (finalMin/60).toFixed(0) + 'min min, threshold 8min)');
 
         // =====================================================================
+        // Stage D+++ — SELF-HEALING VARIANCE MINIMIZATION
+        //
+        // Goal: pull every route's time toward the MEAN route time.
+        // Slower routes shed stops; faster routes pick them up.
+        //
+        // Scoring: for each route, penalty = -1 per 5min of deviation from mean.
+        //   Route at mean+0min  = 0 penalty
+        //   Route at mean+10min = -2 penalty
+        //   Route at mean-10min = -2 penalty
+        // Total score = sum of all route penalties (negative number; 0 = perfect).
+        //
+        // Each iteration: find the move (any stop, any pair of clusters) that
+        // most improves total score, respecting capacity. Stop when no move
+        // improves.  This is aggressive — allow up to 500 iterations since
+        // the user explicitly accepted the trade-off of longer generation time.
+        // =====================================================================
+        function computeScore(times) {
+            var active = times.filter(function(t) { return t > 0; });
+            if (!active.length) return 0;
+            var mean = active.reduce(function(s, t) { return s + t; }, 0) / active.length;
+            var penalty = 0;
+            for (var i = 0; i < times.length; i++) {
+                if (times[i] <= 0) continue;
+                var devMin = Math.abs(times[i] - mean) / 60;
+                penalty -= Math.floor(devMin / 5);
+            }
+            return penalty;
+        }
+
+        var shTimes = clusters.map(_routeTimeEst);
+        var shMean = shTimes.filter(function(t){return t>0;}).reduce(function(s,t){return s+t;}, 0) / shTimes.filter(function(t){return t>0;}).length;
+        var shInitialScore = computeScore(shTimes);
+        console.log('[Go] K-Medoids: self-healing starting — mean=' + (shMean/60).toFixed(0) + 'min, score=' + shInitialScore);
+
+        var shMoves = 0;
+        var shNoImprove = 0;
+        for (var shPass = 0; shPass < 500; shPass++) {
+            var curTimes = clusters.map(_routeTimeEst);
+            var curScore = computeScore(curTimes);
+
+            // Find best improving move across ALL pairs
+            var bestMove = null;
+            var bestNewScore = curScore;
+
+            // Only try moves from clusters above mean → clusters below mean
+            // (this is the natural direction for variance minimization)
+            var localMean = curTimes.filter(function(t){return t>0;}).reduce(function(s,t){return s+t;}, 0) / curTimes.filter(function(t){return t>0;}).length;
+
+            for (var fromI = 0; fromI < clusters.length; fromI++) {
+                if (curTimes[fromI] < localMean) continue; // only move FROM above-mean clusters
+                if (clusters[fromI].length <= 1) continue;
+
+                for (var si = 0; si < clusters[fromI].length; si++) {
+                    var cand = clusters[fromI][si];
+
+                    for (var toI = 0; toI < clusters.length; toI++) {
+                        if (toI === fromI) continue;
+                        if (curTimes[toI] > localMean + 5*60) continue; // don't push into already-above-mean clusters
+                        if (clusterKids[toI] + kidCount[cand] > maxClusterCap) continue;
+
+                        // Simulate move
+                        var tempCluster_from = clusters[fromI].filter(function(_, idx) { return idx !== si; });
+                        var tempCluster_to = clusters[toI].concat([cand]);
+                        var newFromT = _routeTimeEst(tempCluster_from);
+                        var newToT = _routeTimeEst(tempCluster_to);
+
+                        var newTimes = curTimes.slice();
+                        newTimes[fromI] = newFromT;
+                        newTimes[toI] = newToT;
+                        var newScore = computeScore(newTimes);
+
+                        if (newScore > bestNewScore) {
+                            bestNewScore = newScore;
+                            bestMove = { fromI: fromI, toI: toI, si: si, cand: cand };
+                        }
+                    }
+                }
+            }
+
+            if (!bestMove) {
+                shNoImprove++;
+                if (shNoImprove > 2) break; // give up
+                continue;
+            }
+            shNoImprove = 0;
+
+            // Execute the move
+            clusters[bestMove.fromI].splice(bestMove.si, 1);
+            clusterKids[bestMove.fromI] -= kidCount[bestMove.cand];
+            clusters[bestMove.toI].push(bestMove.cand);
+            clusterKids[bestMove.toI] += kidCount[bestMove.cand];
+            shMoves++;
+
+            // Re-medoid affected
+            seeds[bestMove.fromI] = recomputeMedoid(clusters[bestMove.fromI]) || seeds[bestMove.fromI];
+            seeds[bestMove.toI] = recomputeMedoid(clusters[bestMove.toI]) || seeds[bestMove.toI];
+        }
+
+        var shFinalTimes = clusters.map(_routeTimeEst);
+        var shFinalScore = computeScore(shFinalTimes);
+        var shFinalMax = Math.max.apply(null, shFinalTimes);
+        var shFinalMin = Math.min.apply(null, shFinalTimes.filter(function(t) { return t > 0; }));
+        console.log('[Go] K-Medoids: self-healing ' + shMoves + ' moves, score ' + shInitialScore + ' → ' + shFinalScore +
+            ' (gap: ' + (shFinalMax/60).toFixed(0) + 'min max → ' + (shFinalMin/60).toFixed(0) + 'min min)');
+
+        // =====================================================================
         // Stage E — Bus Assignment
         //
         // Sort clusters by kid count descending, buses by capacity descending.
