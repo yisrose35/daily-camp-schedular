@@ -7742,14 +7742,16 @@
                                     var gSize = gapsAfter[ag].e - gapsAfter[ag].s;
                                     if (gSize <= 0) continue;
                                     gapSizes.push(gSize);
-                                    // Dead-gap penalty raised from -500 to -2500 to reflect the
-                                    // true downstream cost: an unfillable remainder becomes
-                                    // either a capped dead gap (~1200) or a sub-dMin sport
-                                    // fill (~1100). At -500 the primary signal was drowned by
-                                    // wall-alignment bonuses when multiple positions tied on
-                                    // deadGapCount — engine picked the bad gap over a slightly
-                                    // less-tidy but cleanly-fillable alternative.
-                                    if (gSize < sportFillMin) { deadGapCount++; score -= 2500; }
+                                    // Dead-gap penalty — three tiers:
+                                    //   < 5min    : truly unrecoverable (not even a micro-slot fits)
+                                    //              → deadGapCount++ (PLACEMENT-STUCK) + -2500
+                                    //   5-fillMin : micro-slot fillable but sport can't use it
+                                    //              → -2500 score penalty (same pressure) but
+                                    //                deadGapCount NOT incremented — post-gap closer
+                                    //                will create a General Activity Slot here
+                                    //   >= fillMin: sports can fill it → +50 bonus
+                                    if (gSize < 5) { deadGapCount++; score -= 2500; }
+                                    else if (gSize < sportFillMin) { score -= 2500; }
                                     else { score += 50; } // fillable gap bonus
                                 }
 
@@ -7792,7 +7794,9 @@
                                         var endDeadGaps = 0;
                                         for (var eg = 0; eg < gapsAfterEnd.length; eg++) {
                                             var egSize = gapsAfterEnd[eg].e - gapsAfterEnd[eg].s;
-                                            if (egSize > 0 && egSize < sportFillMin) { endDeadGaps++; endScore -= 2500; }
+                                            // Same three-tier logic as main loop above
+                                            if (egSize > 0 && egSize < 5) { endDeadGaps++; endScore -= 2500; }
+                                            else if (egSize > 0 && egSize < sportFillMin) { endScore -= 2500; }
                                             else if (egSize > 0) endScore += 50;
                                         }
                                         if (endPos === draftStart) endScore += 200;
@@ -7842,16 +7846,15 @@
                         });
                         var best = candidatePositions[0];
 
-                        // PLACEMENT-STUCK diagnostic — if the best placement still has
-                        // a dead remainder, log it. Special duration is a hard constraint,
-                        // so the user needs to resolve this by adjusting adjacent walls
-                        // (lunch, league, custom) — not by shortening the special.
+                        // PLACEMENT-STUCK diagnostic — fires only when ALL positions leave a
+                        // remainder < 5min that even the micro-slot post-gap closer can't fill.
+                        // Gaps 5-sportFillMin are handled by General Activity Slot micro-blocks
+                        // and don't trigger this warning.
                         if (best.deadGapCount > 0 && totalIters < 1) {
                             var _psGapSummary = allGapsForBunk.map(function(g) { return (g.e - g.s) + 'min'; }).join(', ');
                             warn('[Phase2.5] [PLACEMENT-STUCK] ' + special.name + ' ' + specialDur + 'min for bunk ' + bunk +
-                                ' — all ' + candidatePositions.length + ' candidate positions create dead gaps. ' +
-                                'Gaps: [' + _psGapSummary + '] | sport dMin: ' + sportFillMin + '. ' +
-                                'Duration is a hard constraint; adjust adjacent pinned walls to create a clean-fit region.');
+                                ' — all ' + candidatePositions.length + ' positions leave a <5min remainder that cannot be filled.' +
+                                ' Gaps: [' + _psGapSummary + ']. Adjust adjacent pinned walls to avoid sub-5min remainders.');
                         }
 
                         // Place the special at the best position (configured duration — never shortened)
