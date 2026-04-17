@@ -5784,6 +5784,33 @@
                         // If window gives us nothing, fall back to raw gap (don't ignore window entirely)
                         if (placeDur < 5) { placeStart = iaBestGap.start; placeDur = Math.min(iac.dMin, iaBestGap.end - iaBestGap.start); }
                         var placeEnd = placeStart + placeDur;
+
+                        // ★ v15.4: Right-align against fixed blocks to prevent trailing dead zones.
+                        // When a fixed block (league, lunch) immediately follows the gap, placing the
+                        // need at the gap START leaves a trailing dead zone that can never be absorbed
+                        // (the league can't move and the special can't grow). Placing the need
+                        // right-aligned against the fixed block turns the dead zone into a leading gap
+                        // that sport blocks CAN absorb via LNS / extension.
+                        if (iat === 'special' || iat === 'swim') {
+                            var _iaFixedAfterGap = false;
+                            for (var _iafg = 0; _iafg < iaTl.length; _iafg++) {
+                                if (iaTl[_iafg].startMin === iaBestGap.end && isPhase0(iaTl[_iafg])) {
+                                    _iaFixedAfterGap = true; break;
+                                }
+                            }
+                            if (_iaFixedAfterGap) {
+                                var _raEnd = Math.min(iaBestGap.end, iaWinE > 0 ? iaWinE : iaBestGap.end);
+                                var _raStart = _raEnd - placeDur;
+                                _raStart = Math.round(_raStart / 5) * 5;
+                                _raEnd   = Math.round(_raEnd   / 5) * 5;
+                                if (_raStart >= Math.max(iaBestGap.start, iaWinS > 0 ? iaWinS : iaBestGap.start)) {
+                                    placeStart = _raStart;
+                                    placeEnd   = _raEnd;
+                                    log('[Phase3-RA] ' + iaBunk + ': right-aligning ' + iat + ' to ' + placeStart + '-' + placeEnd + ' (fixed block ahead)');
+                                }
+                            }
+                        }
+
                         placeEnd = Math.round(placeEnd / 5) * 5;
                         if (placeEnd <= placeStart) placeEnd = placeStart + 5;
 
@@ -5915,10 +5942,21 @@
                     // blocks. An empty gap is honest signal that the wall config
                     // can't produce a smooth schedule here.
                     if (fgDur >= fcMeta.fillMinDur) {
+                        // ★ v15.4: Don't pass the sport layer if the gap falls outside
+                        // the layer's configured time window — makeBlock would clamp the
+                        // block to zero length and return null, leaving the gap unfilled.
+                        // This happens for end-of-day gaps when the sport layer ends at,
+                        // e.g., 960 but a 25min gap remains at 965-990.
+                        var _fcPassCLayer = fcMeta.sportLayer;
+                        if (_fcPassCLayer && _fcPassCLayer.startMin != null && _fcPassCLayer.endMin != null) {
+                            if (fgGap.start < _fcPassCLayer.startMin || fgGap.end > _fcPassCLayer.endMin) {
+                                _fcPassCLayer = null; // gap is outside sport layer window
+                            }
+                        }
                         fcTl.push({
                             startMin: fgGap.start, endMin: fgGap.end,
                             type: 'slot', event: 'General Activity Slot',
-                            layer: fcMeta.sportLayer, field: null,
+                            layer: _fcPassCLayer, field: null,
                             dMin: fcMeta.fillMinDur, dMax: fcMeta.sportCeiling || 60,
                             _source: 'gap-fill', _final: true,
                             _sportFallbacks: fcMeta.priorityList ? fcMeta.priorityList.map(function(s) { return s.name; }) : []
@@ -5995,6 +6033,49 @@
                             zgDur = zgGap.end - zgGap.start;
                             if (zgDur <= 0) continue;
                         }
+                    }
+
+                    // ★ v15.4: Strategy 1b — Snack/slot extension into sub-fillMin gaps
+                    // ─────────────────────────────────────────────────────────────────
+                    // Strategies 1 & 2 skip _activityLocked blocks.  But snack blocks
+                    // have a dMax of 30min while their dMin is only 15min — so if the
+                    // snack is currently at dMin and the dead gap is small enough to
+                    // stay within dMax, we can safely absorb the gap by growing the
+                    // snack.  This specifically handles 10-15min dead zones that appear
+                    // between a snack block and the next activity.
+                    if (zgDur > 0 && zgDur < zgMeta.fillMinDur) {
+                        var _s1bDone = false;
+                        // Check previous block: if it's an _activityLocked snack, try extending it forward
+                        for (var _s1bp = zgTmpl.length - 1; _s1bp >= 0 && !_s1bDone; _s1bp--) {
+                            var _s1bPBlk = zgTmpl[_s1bp];
+                            var _s1bPType = (_s1bPBlk.type || '').toLowerCase();
+                            if (_s1bPBlk.endMin === zgGap.start && _s1bPBlk._activityLocked &&
+                                (_s1bPType === 'snack' || _s1bPType === 'snacks')) {
+                                var _s1bPCur = _s1bPBlk.endMin - _s1bPBlk.startMin;
+                                var _s1bPMax = _s1bPBlk.dMax || TYPE_CEILINGS[_s1bPType] || 30;
+                                if (_s1bPCur + zgDur <= _s1bPMax) {
+                                    _s1bPBlk.endMin = zgGap.end;
+                                    _s1bDone = true;
+                                    log('[ZGF-1b] ' + zgBunk + ': snack @ ' + _s1bPBlk.startMin + '-' + _s1bPBlk.endMin + ' absorbed ' + zgDur + 'min dead zone (prev)');
+                                }
+                            }
+                        }
+                        // Check next block: if it's an _activityLocked snack, try pulling it backward
+                        for (var _s1bn = 0; _s1bn < zgTmpl.length && !_s1bDone; _s1bn++) {
+                            var _s1bNBlk = zgTmpl[_s1bn];
+                            var _s1bNType = (_s1bNBlk.type || '').toLowerCase();
+                            if (_s1bNBlk.startMin === zgGap.end && _s1bNBlk._activityLocked &&
+                                (_s1bNType === 'snack' || _s1bNType === 'snacks')) {
+                                var _s1bNCur = _s1bNBlk.endMin - _s1bNBlk.startMin;
+                                var _s1bNMax = _s1bNBlk.dMax || TYPE_CEILINGS[_s1bNType] || 30;
+                                if (_s1bNCur + zgDur <= _s1bNMax) {
+                                    _s1bNBlk.startMin = zgGap.start;
+                                    _s1bDone = true;
+                                    log('[ZGF-1b] ' + zgBunk + ': snack @ ' + _s1bNBlk.startMin + '-' + _s1bNBlk.endMin + ' absorbed ' + zgDur + 'min dead zone (next)');
+                                }
+                            }
+                        }
+                        if (_s1bDone) continue;
                     }
 
                     // Strategy 2.5: LNS wider-neighbourhood absorber
@@ -6090,15 +6171,58 @@
                     // ONLY if the gap is large enough to host a valid sport block.
                     // Sub-fillMinDur gaps stay empty (Free time). makeBlock's strict
                     // guard will also reject sub-dMin sport/slot blocks as a backstop.
+                    //
+                    // ★ v15.4: Also don't constrain with the sport layer if the gap is
+                    // outside the layer's time window — makeBlock would clamp it to zero
+                    // and return null, causing end-of-day gaps to persist as warnings
+                    // even though they are large enough for a valid slot.
                     if (zgDur >= zgMeta.fillMinDur) {
+                        var _zgS3Layer = zgMeta.sportLayer;
+                        if (_zgS3Layer && _zgS3Layer.startMin != null && _zgS3Layer.endMin != null) {
+                            if (zgGap.start < _zgS3Layer.startMin || zgGap.end > _zgS3Layer.endMin) {
+                                _zgS3Layer = null; // gap is outside configured sport window
+                            }
+                        }
                         var zgBlk = makeBlock({
                             startMin: zgGap.start, endMin: zgGap.end,
                             type: 'slot', event: 'General Activity Slot',
-                            layer: zgMeta.sportLayer, field: null,
+                            layer: _zgS3Layer, field: null,
                             dMin: zgMeta.fillMinDur, dMax: zgMeta.sportCeiling || 60,
                             _source: 'zero-gap', _final: true
                         });
                         if (zgBlk) zgTmpl.push(zgBlk);
+                    } else if (zgDur >= 5) {
+                        // ★ v15.4: Micro-slot strategy — for sub-fillMin gaps that are
+                        // completely trapped between two immovable blocks (both _fixed or
+                        // _activityLocked, or at the schedule boundary).  Strategies 1, 1b,
+                        // 2, and 2.5 all failed, meaning neither side can give any time.
+                        // Creating a micro General Activity Slot is the only way to close
+                        // the gap.  We mark it _microSlot so the UI can render it as
+                        // "Free Play / Buffer" rather than a full sport slot.
+                        var _zgPrevImmov = (zgGap.start <= zgMeta.gradeStart);
+                        var _zgNextImmov = (zgGap.end >= zgMeta.gradeEnd);
+                        for (var _zgScan = 0; _zgScan < zgTmpl.length; _zgScan++) {
+                            if (zgTmpl[_zgScan].endMin === zgGap.start) {
+                                _zgPrevImmov = isPhase0(zgTmpl[_zgScan]) || !!zgTmpl[_zgScan]._activityLocked;
+                            }
+                            if (zgTmpl[_zgScan].startMin === zgGap.end) {
+                                _zgNextImmov = isPhase0(zgTmpl[_zgScan]) || !!zgTmpl[_zgScan]._activityLocked;
+                            }
+                        }
+                        if (_zgPrevImmov && _zgNextImmov) {
+                            var zgMicroBlk = makeBlock({
+                                startMin: zgGap.start, endMin: zgGap.end,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: null, field: null,
+                                dMin: zgDur, dMax: zgDur,
+                                _source: 'micro-gap', _final: true, _microSlot: true,
+                                _activityLocked: true  // prevent rebalancer from resizing
+                            });
+                            if (zgMicroBlk) {
+                                log('[ZGF-MICRO] ' + zgBunk + ' @ ' + zgGap.start + '-' + zgGap.end + ' (' + zgDur + 'min): micro-slot between two immovable blocks');
+                                zgTmpl.push(zgMicroBlk);
+                            }
+                        }
                     }
                 }
                 zgTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
