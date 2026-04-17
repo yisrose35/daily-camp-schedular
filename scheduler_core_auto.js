@@ -5611,8 +5611,9 @@
                     }
 
                     var iac = resolveConstraints(ial, iat);
-                    var iaWinS = ial.startMin || iaMeta.gradeStart;
-                    var iaWinE = ial.endMin || iaMeta.gradeEnd;
+                    // ★ v15.1: Use != null so startMin=0 is not treated as falsy
+                    var iaWinS = ial.startMin != null ? ial.startMin : (iaMeta.gradeStart || 0);
+                    var iaWinE = ial.endMin   != null ? ial.endMin   : (iaMeta.gradeEnd   || 1440);
                     var iaEvent = iat === 'special' ? draftResults[iaBunk].specials[0].name : (ial.event || iat);
 
                     // Find the best gap for this need
@@ -5624,16 +5625,19 @@
                         var gap = iaGaps[ig];
                         var gapDur = gap.end - gap.start;
                         if (gapDur < iac.dMin) continue;
-                        // Prefer gaps within the need's time window
+                        // ★ v15.1: Only consider gaps that overlap the layer window
                         var oS = Math.max(gap.start, iaWinS), oE = Math.min(gap.end, iaWinE);
                         var overlap = oE - oS;
-                        var score = overlap >= iac.dMin ? overlap * 10 : gapDur;
+                        if (overlap < iac.dMin) continue;  // gap doesn't fit inside the window — skip it
+                        var score = overlap * 10;
                         if (score > iaBestScore) { iaBestScore = score; iaBestGap = gap; }
                     }
-                    // Fallback: any gap at all
+                    // Fallback: any gap that overlaps the window at all (relaxed size check)
                     if (!iaBestGap) {
                         for (var ig2 = 0; ig2 < iaGaps.length; ig2++) {
-                            if (iaGaps[ig2].end - iaGaps[ig2].start >= 5) { iaBestGap = iaGaps[ig2]; break; }
+                            var ig2gap = iaGaps[ig2];
+                            var ig2oS = Math.max(ig2gap.start, iaWinS), ig2oE = Math.min(ig2gap.end, iaWinE);
+                            if (ig2oE - ig2oS >= 5) { iaBestGap = ig2gap; break; }
                         }
                     }
 
@@ -5647,8 +5651,13 @@
                             if (fsBlk._fixed || isPhase0(fsBlk)) continue;
                             var fsBt = (fsBlk.type || '').toLowerCase();
                             if (!['sport', 'slot'].includes(fsBt)) continue;
-                            var fsDur = fsBlk.endMin - fsBlk.startMin;
-                            // Sport must be big enough that splitting leaves both halves >= 5min
+                            // ★ v15.1: Victim must overlap the layer window
+                            if (fsBlk.endMin <= iaWinS || fsBlk.startMin >= iaWinE) continue;
+                            // Use the overlap duration (not full block) for the size check
+                            var fsOverlapStart = Math.max(fsBlk.startMin, iaWinS);
+                            var fsOverlapEnd   = Math.min(fsBlk.endMin,   iaWinE);
+                            var fsDur = fsOverlapEnd - fsOverlapStart;
+                            // Overlap must be big enough that splitting leaves both halves >= 5min
                             if (fsDur >= iac.dMin + 5 && fsDur > fsBestDur) {
                                 fsBestDur = fsDur;
                                 fsBestIdx = fsi;
@@ -5657,9 +5666,10 @@
                         if (fsBestIdx >= 0) {
                             // Create a synthetic gap by shrinking this sport block
                             var fsSport = iaTl[fsBestIdx];
+                            // ★ v15.1: Place within the intersection of victim block and layer window
                             var fsPlaceStart = Math.max(fsSport.startMin, iaWinS);
                             var fsPlaceEnd = fsPlaceStart + iac.dMin;
-                            fsPlaceEnd = Math.min(fsPlaceEnd, fsSport.endMin);
+                            fsPlaceEnd = Math.min(fsPlaceEnd, fsSport.endMin, iaWinE);
                             fsPlaceEnd = Math.round(fsPlaceEnd / 5) * 5;
 
                             // Shrink the sport block
@@ -5697,8 +5707,11 @@
 
                     if (iaBestGap) {
                         // Place the need: take dMin from the gap, let rebalancer adjust later
+                        // ★ v15.1: clamp placement to the intersection of gap and layer window
                         var placeStart = Math.max(iaBestGap.start, iaWinS);
-                        var placeDur = Math.min(iac.dMin, iaBestGap.end - placeStart);
+                        var placeEnd_max = Math.min(iaBestGap.end, iaWinE);
+                        var placeDur = Math.min(iac.dMin, placeEnd_max - placeStart);
+                        // If window gives us nothing, fall back to raw gap (don't ignore window entirely)
                         if (placeDur < 5) { placeStart = iaBestGap.start; placeDur = Math.min(iac.dMin, iaBestGap.end - iaBestGap.start); }
                         var placeEnd = placeStart + placeDur;
                         placeEnd = Math.round(placeEnd / 5) * 5;
