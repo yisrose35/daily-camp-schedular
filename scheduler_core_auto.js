@@ -9595,6 +9595,19 @@
                 return true;
             }
 
+            // ★ FIX v10.3: Calculate the resulting duration of extending a sport
+            // block that contains anchorIdx to also cover freeIdx.
+            // Walks back through continuations to find the true block start, then
+            // sums all slot durations from blockStart → max(anchorIdx, freeIdx).
+            function perfExtendedDur(slots, pbs, anchorIdx, freeIdx) {
+                var bStart = anchorIdx;
+                while (bStart > 0 && slots[bStart] && slots[bStart].continuation === true) { bStart--; }
+                var lo = Math.min(bStart, freeIdx), hi = Math.max(anchorIdx, freeIdx);
+                var total = 0;
+                for (var k = lo; k <= hi; k++) { var s = pbs[k]; if (s) total += (s.endMin - s.startMin); }
+                return total;
+            }
+
             Object.entries(perfSA).forEach(function(entry) {
                 var bunk = entry[0], slots = entry[1];
                 if (!Array.isArray(slots)) return;
@@ -9612,33 +9625,39 @@
 
                     // Strategy 1: Extend previous SPORT slot to absorb this Free
                     if (idx > 0 && perfCanExtend(slots[idx - 1])) {
-                        slots[idx] = {
-                            field: slots[idx - 1].field,
-                            sport: slots[idx - 1].sport,
-                            _activity: slots[idx - 1]._activity || slots[idx - 1].sport,
-                            _autoMode: true, _autoSolved: true, _perfectionExtend: true,
-                            continuation: true
-                        };
-                        perfFixedCount++;
-                        return;
+                        // ★ dMax guard: don't push the block past GAP_MAX_DUR
+                        if (perfExtendedDur(slots, pbs, idx - 1, idx) <= GAP_MAX_DUR) {
+                            slots[idx] = {
+                                field: slots[idx - 1].field,
+                                sport: slots[idx - 1].sport,
+                                _activity: slots[idx - 1]._activity || slots[idx - 1].sport,
+                                _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                                continuation: true
+                            };
+                            perfFixedCount++;
+                            return;
+                        }
                     }
 
                     // Strategy 2: Pull next SPORT slot backward to absorb this Free
                     if (idx < slots.length - 1 && perfCanExtend(slots[idx + 1])) {
-                        slots[idx] = {
-                            field: slots[idx + 1].field,
-                            sport: slots[idx + 1].sport,
-                            _activity: slots[idx + 1]._activity || slots[idx + 1].sport,
-                            _autoMode: true, _autoSolved: true, _perfectionExtend: true,
-                            continuation: true
-                        };
-                        perfFixedCount++;
-                        return;
+                        if (perfExtendedDur(slots, pbs, idx + 1, idx) <= GAP_MAX_DUR) {
+                            slots[idx] = {
+                                field: slots[idx + 1].field,
+                                sport: slots[idx + 1].sport,
+                                _activity: slots[idx + 1]._activity || slots[idx + 1].sport,
+                                _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                                continuation: true
+                            };
+                            perfFixedCount++;
+                            return;
+                        }
                     }
 
                     // Strategy 3: Search further for ANY sport slot to extend
                     for (var si = idx - 2; si >= 0; si--) {
                         if (perfCanExtend(slots[si])) {
+                            if (perfExtendedDur(slots, pbs, si, idx) > GAP_MAX_DUR) continue; // dMax guard
                             // Mark all slots between si and idx as continuation of that sport
                             for (var fi = si + 1; fi <= idx; fi++) {
                                 if (!slots[fi] || slots[fi].field === 'Free' || slots[fi].continuation) {
@@ -9656,6 +9675,7 @@
                     }
                     for (var si2 = idx + 2; si2 < slots.length; si2++) {
                         if (perfCanExtend(slots[si2])) {
+                            if (perfExtendedDur(slots, pbs, si2, idx) > GAP_MAX_DUR) continue; // dMax guard
                             for (var fi2 = si2 - 1; fi2 >= idx; fi2--) {
                                 if (!slots[fi2] || slots[fi2].field === 'Free' || slots[fi2].continuation) {
                                     slots[fi2] = {

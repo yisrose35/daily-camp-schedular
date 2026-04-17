@@ -989,6 +989,16 @@
                 }
 
                 if (victimNewCand) {
+                    // ★ FIX: Verify FB can actually use the now-vacated field.
+                    // Even with the victim removed, other remaining entries on
+                    // cand.field (e.g. a cross-grade bunk) might still block FB.
+                    // The fieldIndex at this point has the victim already removed
+                    // from fn, so isFieldAvailableByTime gives the correct answer.
+                    if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) {
+                        fieldIndex.set(fn, origEntries); // restore — swap not valid
+                        continue;
+                    }
+
                     // ── Commit the swap ──────────────────────────────────────
                     // 1. Move victim to its new field/sport
                     sa[victim.bunk][victim.slotIdx] = {
