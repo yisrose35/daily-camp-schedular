@@ -3359,10 +3359,13 @@
                 var maxN = Math.floor(G / fillMin);
                 if (minN > maxN) return null; // Inherently unfillable
 
-                // Choose N that gives the most even distribution
-                var idealDur = Math.round((fillMin + ceiling) / 2 / 5) * 5;
-                var bestN = Math.round(G / idealDur);
-                bestN = Math.max(minN, Math.min(maxN, bestN));
+                // ★ Maximize layer length: always start from the fewest blocks possible
+                // so each block is as long as possible (up to ceiling).
+                // dMin / fillMin is the emergency floor the system CAN go down to if
+                // truly needed — it is NOT the target duration.  Prefer one long activity
+                // over two short ones; this leaves more unique-sport slots available for
+                // other bunks and reduces back-to-back repetition caused by overfilling.
+                var bestN = minN; // fewest blocks = largest individual durations
 
                 // Base duration snapped down to nearest 5
                 var base = Math.floor(G / bestN / 5) * 5;
