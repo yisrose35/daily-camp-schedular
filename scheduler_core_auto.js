@@ -5633,8 +5633,103 @@
                         }
                         var zgCanTake2 = zgNextMax - zgNextDur;
                         if (zgCanTake2 >= 5) {
+                            // ★ LNS fix: partial absorb from the right — update gap bounds
+                            // and fall through to Strategy 2.5/3 rather than continuing.
+                            // Previously this did `continue`, abandoning the remaining
+                            // sub-gap without giving later strategies a chance to close it.
                             zgNext.startMin -= zgCanTake2;
-                            continue;
+                            zgGap.end = zgNext.startMin;
+                            zgDur = zgGap.end - zgGap.start;
+                            if (zgDur <= 0) continue;
+                        }
+                    }
+
+                    // Strategy 2.5: LNS wider-neighbourhood absorber
+                    // ─────────────────────────────────────────────────────────
+                    // Strategies 1 & 2 only look at the immediately adjacent
+                    // blocks.  If both are maxed out (or don't exist) but there
+                    // is surplus elsewhere in the near neighbourhood, we can
+                    // still close the gap by redistributing time across up to
+                    // LOOK_AROUND blocks on each side.
+                    //
+                    // CP-SAT analogy: this is a 1-neighbourhood LNS pass —
+                    // we temporarily "unlock" nearby blocks, move time toward
+                    // the gap, and re-lock once the gap is gone.  We only
+                    // commit if the result is strictly better (gap closed or
+                    // gap shrunk enough for Strategy 3 to create a valid slot).
+                    if (zgDur > 0 && zgDur < zgMeta.fillMinDur) {
+                        var LOOK_AROUND = 2;
+                        var ZG_SHRINKABLE = { sport: 1, sports: 1, slot: 1, activity: 1 };
+                        var zgSorted = zgTmpl.slice().sort(function(a, b) { return a.startMin - b.startMin; });
+
+                        // Collect shrinkable neighbours on each side (up to LOOK_AROUND deep)
+                        var zgLeftN = [], zgRightN = [];
+                        var foundLeft = false, foundRight = false;
+                        for (var ni = 0; ni < zgSorted.length; ni++) {
+                            if (zgSorted[ni].endMin <= zgGap.start) {
+                                if (!zgSorted[ni]._fixed && ZG_SHRINKABLE[(zgSorted[ni].type || '').toLowerCase()]) {
+                                    var lSurplus = (zgSorted[ni].endMin - zgSorted[ni].startMin) -
+                                        (zgSorted[ni].dMin || zgMeta.fillMinDur || 25);
+                                    if (lSurplus >= 5) zgLeftN.push({ blk: zgSorted[ni], surplus: Math.floor(lSurplus / 5) * 5 });
+                                }
+                            }
+                            if (zgSorted[ni].startMin >= zgGap.end) {
+                                if (!zgSorted[ni]._fixed && ZG_SHRINKABLE[(zgSorted[ni].type || '').toLowerCase()]) {
+                                    var rSurplus = (zgSorted[ni].endMin - zgSorted[ni].startMin) -
+                                        (zgSorted[ni].dMin || zgMeta.fillMinDur || 25);
+                                    if (rSurplus >= 5) zgRightN.push({ blk: zgSorted[ni], surplus: Math.floor(rSurplus / 5) * 5 });
+                                }
+                                if (zgRightN.length >= LOOK_AROUND) break;
+                            }
+                        }
+                        // Keep only the LOOK_AROUND closest on the left (rightmost first)
+                        zgLeftN = zgLeftN.slice(-LOOK_AROUND);
+
+                        var zgTotalSurplus = 0;
+                        for (var li = 0; li < zgLeftN.length; li++) zgTotalSurplus += zgLeftN[li].surplus;
+                        for (var ri = 0; ri < zgRightN.length; ri++) zgTotalSurplus += zgRightN[ri].surplus;
+
+                        if (zgTotalSurplus >= zgDur) {
+                            // Enough surplus exists — shrink neighbours toward the gap
+                            // and absorb it entirely.
+                            var zgNeed = zgDur;
+                            var zgOldEnds = [], zgOldStarts = [];
+
+                            // Shrink left neighbours (push their right edge left → gap grows left)
+                            for (var lni = zgLeftN.length - 1; lni >= 0 && zgNeed > 0; lni--) {
+                                var lnb = zgLeftN[lni];
+                                var lnTake = Math.min(lnb.surplus, zgNeed);
+                                lnTake = Math.floor(lnTake / 5) * 5;
+                                if (lnTake <= 0) continue;
+                                zgOldEnds.push({ blk: lnb.blk, val: lnb.blk.endMin });
+                                lnb.blk.endMin -= lnTake;
+                                zgGap.start -= lnTake;
+                                zgNeed -= lnTake;
+                            }
+                            // Shrink right neighbours (push their left edge right → gap grows right)
+                            for (var rni = 0; rni < zgRightN.length && zgNeed > 0; rni++) {
+                                var rnb = zgRightN[rni];
+                                var rnTake = Math.min(rnb.surplus, zgNeed);
+                                rnTake = Math.floor(rnTake / 5) * 5;
+                                if (rnTake <= 0) continue;
+                                zgOldStarts.push({ blk: rnb.blk, val: rnb.blk.startMin });
+                                rnb.blk.startMin += rnTake;
+                                zgGap.end += rnTake;
+                                zgNeed -= rnTake;
+                            }
+
+                            zgDur = zgGap.end - zgGap.start;
+
+                            if (zgDur >= zgMeta.fillMinDur) {
+                                // Gap is now large enough for a real slot — Strategy 3 will handle it
+                                log('[LNS] ' + zgBunk + ' gap @ ' + zgGap.start + '-' + zgGap.end +
+                                    ' absorbed via wider-neighbourhood shrink (' + zgTotalSurplus + 'min surplus)');
+                            } else {
+                                // Didn't grow enough — revert all neighbour changes
+                                for (var ri2 = 0; ri2 < zgOldEnds.length; ri2++) zgOldEnds[ri2].blk.endMin = zgOldEnds[ri2].val;
+                                for (var ri3 = 0; ri3 < zgOldStarts.length; ri3++) zgOldStarts[ri3].blk.startMin = zgOldStarts[ri3].val;
+                                zgGap.start = zgGap.end - zgDur; // restore
+                            }
                         }
                     }
 
