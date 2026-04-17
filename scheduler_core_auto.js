@@ -9831,6 +9831,72 @@
             }
         }
 
+        // ★ v9.5 BACK-TO-BACK SPORT REPAIR — direct scheduleAssignments pass
+        // Runs after all healing so changes are NOT overwritten by bunkTimeline re-sync.
+        // The patched fallbackSweep skips adjacent same-sport candidates, so cleared slots
+        // will be filled with a genuinely different sport.
+        (function() {
+            var bbSA  = window.scheduleAssignments || {};
+            var bbDT  = window.divisionTimes       || {};
+            var bbDiv = window.divisions           || {};
+            var cleared = 0;
+
+            // Build bunk→grade map
+            var bbBunkGrade = {};
+            Object.entries(bbDiv).forEach(function(de) {
+                (de[1].bunks || []).forEach(function(b) { bbBunkGrade[String(b)] = de[0]; });
+            });
+
+            // Scan every bunk for consecutive slots with the same sport
+            Object.entries(bbSA).forEach(function(e) {
+                var bk = e[0], slots = e[1];
+                if (!Array.isArray(slots)) return;
+                var gr   = bbBunkGrade[String(bk)] || '';
+                var pbs  = (bbDT[gr] || {})._perBunkSlots?.[bk] || bbDT[gr] || [];
+
+                var lastSport = null; // normalized name of last real sport seen
+                for (var si = 0; si < slots.length; si++) {
+                    var s = slots[si];
+                    if (!s || s.continuation) continue;
+
+                    var sp = (s.sport || s._activity || '').toLowerCase().trim();
+                    if (!sp || s.field === 'Free' || sp === 'free') { lastSport = null; continue; }
+
+                    // Non-sport fixed activities break the consecutive chain
+                    var isFixed = s._fixed || s._pinned || s._league || s._autoSpecial;
+                    var isSportType = !['swim','pool','lunch','snack','snacks','dismissal',
+                                        'canteen','special','rotation_event','custom','trip',
+                                        'general activity slot'].some(function(k){ return sp.indexOf(k) >= 0; });
+
+                    if (!isSportType) { lastSport = null; continue; }
+                    if (isFixed)      { lastSport = sp;   continue; }
+
+                    if (lastSport && lastSport === sp) {
+                        // Consecutive same-sport — free this slot so fallbackSweep can replace it
+                        slots[si] = { field: 'Free', sport: null, _activity: 'Free',
+                                      _autoMode: true, _autoSolved: true, _bbCleared: true,
+                                      continuation: false };
+                        cleared++;
+                        lastSport = null; // reset: if next is same sport again it gets cleared too
+                    } else {
+                        lastSport = sp;
+                    }
+                }
+            });
+
+            if (cleared > 0) {
+                log('[BB-REPAIR] Cleared ' + cleared + ' back-to-back slot(s) — re-filling...');
+                if (window.AutoSolverEngine && window.AutoSolverEngine.fallbackSweep) {
+                    try {
+                        var bbFilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
+                        log('[BB-REPAIR] ✅ Re-filled ' + bbFilled + ' / ' + cleared + ' slot(s) with different sports');
+                    } catch(e3) { log('[BB-REPAIR] fallbackSweep error: ' + e3.message); }
+                }
+            } else {
+                log('[BB-REPAIR] ✅ No back-to-back sports detected');
+            }
+        })();
+
         log('═══════════════════════════════════════════════════════════');
 
         // ★ v7.0: Mark local generation time — prevents cloud sync from overwriting fresh results

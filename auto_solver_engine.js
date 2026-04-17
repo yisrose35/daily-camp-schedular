@@ -512,11 +512,39 @@
             // Get this bunk's activities so far
             const doneToday = bunkActivities.get(bunk) || new Set();
 
+            // ★ Adjacent-slot back-to-back prevention — find the nearest filled sport
+            //   in each direction for this bunk so we can skip same-sport candidates.
+            let prevAdjacentSport = null, nextAdjacentSport = null;
+            {
+                const bunkSlotsAdj = window.scheduleAssignments?.[bunk];
+                if (bunkSlotsAdj && slotIdx != null) {
+                    for (let pi = slotIdx - 1; pi >= 0; pi--) {
+                        const ps = bunkSlotsAdj[pi];
+                        if (!ps || ps.continuation) continue;
+                        if (ps.field === 'Free') break;
+                        if (ps.sport || ps._activity) { prevAdjacentSport = normName(ps.sport || ps._activity); }
+                        break;
+                    }
+                    for (let ni = slotIdx + 1; ni < bunkSlotsAdj.length; ni++) {
+                        const ns = bunkSlotsAdj[ni];
+                        if (!ns || ns.continuation) continue;
+                        if (ns.field === 'Free') break;
+                        if (ns.sport || ns._activity) { nextAdjacentSport = normName(ns.sport || ns._activity); }
+                        break;
+                    }
+                }
+            }
+
             // Score all candidates for this block
             const scored = [];
             for (const cand of candidates) {
                 // Same-day repeat check (HARD rule)
                 if (doneToday.has(cand.sportNorm)) continue;
+
+                // ★ Back-to-back consecutive sport skip — prevents placing the same sport
+                //   as the immediately adjacent filled slot in this bunk.
+                if ((prevAdjacentSport && prevAdjacentSport === cand.sportNorm) ||
+                    (nextAdjacentSport && nextAdjacentSport === cand.sportNorm)) continue;
 
                 // Field availability (time-based)
                 if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) continue;
@@ -746,11 +774,32 @@
                 if (!slot) return;
                 const startMin = slot.startMin, endMin = slot.endMin;
 
+                // ★ Adjacent-slot back-to-back prevention for fallback
+                let prevFbSport = null, nextFbSport = null;
+                for (let pi = idx - 1; pi >= 0; pi--) {
+                    const ps = slots[pi];
+                    if (!ps || ps.continuation) continue;
+                    if (ps.field === 'Free') break;
+                    if (ps.sport || ps._activity) { prevFbSport = normName(ps.sport || ps._activity); }
+                    break;
+                }
+                for (let ni = idx + 1; ni < slots.length; ni++) {
+                    const ns = slots[ni];
+                    if (!ns || ns.continuation) continue;
+                    if (ns.field === 'Free') break;
+                    if (ns.sport || ns._activity) { nextFbSport = normName(ns.sport || ns._activity); }
+                    break;
+                }
+
                 // ★ v7.0: Relaxed field check — skip GlobalFieldLocks in fallback
                 // League locks protect against cross-grade interference, but the fallback
                 // is filling within the SAME grade. A Free block is worse than any sport.
                 for (const cand of candidates) {
                     if (window.isRainyDay && !cand.isIndoor) continue;
+
+                    // ★ Back-to-back consecutive sport skip for fallback
+                    if ((prevFbSport && prevFbSport === cand.sportNorm) ||
+                        (nextFbSport && nextFbSport === cand.sportNorm)) continue;
 
                     // Simplified availability check (no GlobalFieldLocks)
                     const fn = normName(cand.field);
