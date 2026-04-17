@@ -3246,6 +3246,46 @@
                 } catch (e) { console.warn('[Phase3] rotation quota computation failed:', e); }
             }
 
+            // ── Pre-register Phase-0 placed blocks into fieldLedger ──────────────────
+            // Capacity-checked sport blocks and pinned field blocks placed by Phase 0/2
+            // live in bunkTimelines before Phase 3 starts but may not have been passed
+            // through claimField().  Register them now so isFieldAvailable() sees them
+            // as taken and Phase 3's time-sweep filler doesn't double-book.
+            (function preRegisterFieldClaims() {
+                var preRegistered = 0;
+                allGrades.forEach(function(grade) {
+                    var gBunks = getBunksForGrade(grade, divisions);
+                    gBunks.forEach(function(bunk) {
+                        (bunkTimelines[bunk] || []).forEach(function(blk) {
+                            if (!blk || !blk.field || blk.field === 'Free') return;
+                            var blkType = (blk.type || '').toLowerCase();
+                            // Skip league/specialty fields — they're tracked separately
+                            if (blkType === 'league' || blkType === 'specialty_league') return;
+                            // Only process field-carrying blocks that were pre-placed
+                            if (!(blk._classification === 'pinned' || blk._fixed ||
+                                  blk._source === 'capacity_checked' || blk._capacityChecked)) return;
+                            var fn = blk.field;
+                            if (!fieldLedger[fn]) return; // not a tracked field (e.g. swim pool)
+                            // Avoid double-registration
+                            var alreadyClaimed = fieldLedger[fn].claims.some(function(c) {
+                                return c.bunk === bunk &&
+                                       Math.abs(c.startMin - blk.startMin) < 2 &&
+                                       Math.abs(c.endMin - blk.endMin) < 2;
+                            });
+                            if (!alreadyClaimed) {
+                                fieldLedger[fn].claims.push({
+                                    bunk: bunk, grade: grade,
+                                    activity: blk._assignedSport || blk.event || 'blocked',
+                                    startMin: blk.startMin, endMin: blk.endMin
+                                });
+                                preRegistered++;
+                            }
+                        });
+                    });
+                });
+                if (preRegistered > 0) log('[Phase3] Pre-registered ' + preRegistered + ' Phase-0 field claims into fieldLedger');
+            })();
+
             // ── Helper: build a template block with all required fields ──
             // ★ v9.6: Hard guard — snap to 5min, enforce dMin/dMax, reject invalid blocks
             function makeBlock(opts) {
@@ -4291,7 +4331,7 @@
 
             // Find best sport + field with CROSS-BUNK AWARENESS
             // Prefers fields with LOW global demand (leaves scarce fields for others)
-            function findBestSport(bunk, grade, startMin, endMin, meta, used) {
+            function findBestSport(bunk, grade, startMin, endMin, meta, used, adjSports) {
                 var pList = meta.priorityList;
                 var timeSlot = Math.floor(startMin / 30) * 30;
                 var candidates = [];
@@ -4310,6 +4350,10 @@
                         else if (!isUsed) score += 500;            // good: not used
                         // else: reuse, score stays 0
                         score -= demand * 10;                      // prefer LOW demand fields
+                        // ★ Back-to-back prevention: heavy penalty for repeating an adjacent sport
+                        if (adjSports && adjSports.has(sport.name.toLowerCase().trim())) {
+                            score -= 2000; // strong deterrent; still allows as last resort
+                        }
                         // ★ v11.0: Multi-day awareness in sport selection
                         if (weekActivityHistory) {
                             var _bh = weekActivityHistory[String(bunk)] || {};
@@ -4856,8 +4900,18 @@
                         var blockEnd = cursor + dur;
                         var result = null;
 
+                        // ★ Back-to-back guard: find sports in adjacent template blocks
+                        var _adjSports = new Set();
+                        (sMeta.template || []).forEach(function(_tb) {
+                            if (!_tb._assignedSport && !_tb.event) return;
+                            var _tbn = (_tb._assignedSport || _tb.event || '').toLowerCase().trim();
+                            if (!_tbn || _tbn === 'free' || _tbn === 'general activity slot') return;
+                            // Block ends exactly where cursor starts, OR starts exactly where blockEnd is
+                            if (_tb.endMin === cursor || _tb.startMin === blockEnd) _adjSports.add(_tbn);
+                        });
+
                         // Strategy 1: full duration from cursor
-                        result = findBestSport(sBunk, sMeta.grade, cursor, blockEnd, sMeta, usedSports[sBunk]);
+                        result = findBestSport(sBunk, sMeta.grade, cursor, blockEnd, sMeta, usedSports[sBunk], _adjSports);
 
                         // Strategy 2: try shorter durations (scan from fillMinDur up)
                         // Orphan guard: skip any tryDur that would leave a remainder
@@ -4867,7 +4921,7 @@
                             for (var tryDur = sMeta.fillMinDur; tryDur <= dur; tryDur += 5) {
                                 var _rem2 = remaining - tryDur;
                                 if (_rem2 > 0 && _rem2 < sMeta.fillMinDur) continue;
-                                result = findBestSport(sBunk, sMeta.grade, cursor, cursor + tryDur, sMeta, usedSports[sBunk]);
+                                result = findBestSport(sBunk, sMeta.grade, cursor, cursor + tryDur, sMeta, usedSports[sBunk], _adjSports);
                                 if (result) { blockEnd = cursor + tryDur; break; }
                             }
                         }
@@ -4883,7 +4937,7 @@
                                 var tryStart = Math.max(cursor, tryEnd - sMeta.sportCeiling);
                                 var _orphan = tryStart - cursor;
                                 if (_orphan > 0 && _orphan < sMeta.fillMinDur) continue;
-                                result = findBestSport(sBunk, sMeta.grade, tryStart, tryEnd, sMeta, usedSports[sBunk]);
+                                result = findBestSport(sBunk, sMeta.grade, tryStart, tryEnd, sMeta, usedSports[sBunk], _adjSports);
                                 if (result) { cursor = tryStart; blockEnd = tryEnd; break; }
                             }
                         }
@@ -4926,7 +4980,13 @@
 
                     if (gapSize >= fMeta.fillMinDur) {
                         // Use addSportBlocks — it auto-splits if gap exceeds ceiling
-                        var rResult = findBestSport(fBunk, fMeta.grade, rgap.start, rgap.end, fMeta, usedSports[fBunk]);
+                        var _rAdjSports = new Set();
+                        (tmpl || []).forEach(function(_rtb) {
+                            var _rtn = (_rtb._assignedSport || _rtb.event || '').toLowerCase().trim();
+                            if (!_rtn || _rtn === 'free' || _rtn === 'general activity slot') return;
+                            if (_rtb.endMin === rgap.start || _rtb.startMin === rgap.end) _rAdjSports.add(_rtn);
+                        });
+                        var rResult = findBestSport(fBunk, fMeta.grade, rgap.start, rgap.end, fMeta, usedSports[fBunk], _rAdjSports);
                         if (rResult) {
                             claimField(rResult.field, rgap.start, rgap.end, fBunk, fMeta.grade, rResult.name);
                             usedSports[fBunk].add(rResult.name);
@@ -8723,7 +8783,8 @@
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: fn, sport: null, _activity: block._assignedSpecial,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
-                        _autoSpecial: true, _autoMode: true, continuation: false
+                        _autoSpecial: true, _autoMode: true, continuation: false,
+                        _startMin: block.startMin, _endMin: block.endMin
                     };
                     registerSpecialFieldUsage([idx], fn, String(bunk), block._assignedSpecial, grade, fieldUsageBySlot);
                     // ★ v4.0: Write to BOTH lock systems — AutoFieldLocks for the solver,
@@ -8762,7 +8823,8 @@
                         _rotationEventId: block._rotationEventId || null,
                         _rotationEventColor: block._rotationEventColor || null,
                         _autoMode: true,
-                        continuation: false
+                        continuation: false,
+                        _startMin: block.startMin, _endMin: block.endMin
                     };
                     rotationEventWriteCount++;                });
             });
@@ -8850,7 +8912,8 @@
                             _bunkOverride: true, _activityLocked: isCustom || false,
                             _customActivity: block._customActivity || null,
                             _customField: block._customField || null,
-                            _autoMode: true, continuation: false
+                            _autoMode: true, continuation: false,
+                            _startMin: block.startMin, _endMin: block.endMin
                         };
 
                         // Lock the resolved court so other writers/solvers can't double-book it
@@ -8892,7 +8955,8 @@
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: block.field, sport: block._assignedSport,
                         _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
-                        _activityLocked: false, _autoMode: true, _capacityChecked: true, continuation: false
+                        _activityLocked: false, _autoMode: true, _capacityChecked: true, continuation: false,
+                        _startMin: block.startMin, _endMin: block.endMin
                     };
                     if (!fieldUsageBySlot[idx]) fieldUsageBySlot[idx] = {};
                     if (!fieldUsageBySlot[idx][block.field]) fieldUsageBySlot[idx][block.field] = { count: 0, bunks: {} };
@@ -8916,7 +8980,8 @@
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: block.event, sport: null, _activity: block.event,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
-                        _autoMode: true, continuation: false
+                        _autoMode: true, continuation: false,
+                        _startMin: block.startMin, _endMin: block.endMin
                     };
                     anchorWriteCount++;
                 });

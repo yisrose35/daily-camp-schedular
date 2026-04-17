@@ -912,7 +912,8 @@
 
             sa[fb.bunk][fb.slotIdx] = {
                 field: cand.field, sport: cand.sport, _activity: cand.sport,
-                _autoMode: true, _autoSolved: true, _lnsRepaired: true, continuation: false
+                _autoMode: true, _autoSolved: true, _lnsRepaired: true, continuation: false,
+                _startMin: fb.startMin, _endMin: fb.endMin
             };
             const fn = normName(cand.field);
             if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
@@ -993,7 +994,8 @@
                     sa[victim.bunk][victim.slotIdx] = {
                         field: victimNewCand.field, sport: victimNewCand.sport,
                         _activity: victimNewCand.sport,
-                        _autoMode: true, _autoSolved: true, _lnsSwapped: true, continuation: false
+                        _autoMode: true, _autoSolved: true, _lnsSwapped: true, continuation: false,
+                        _startMin: victim.startMin, _endMin: victim.endMin
                     };
                     const vcFn = normName(victimNewCand.field);
                     if (!fieldIndex.has(vcFn)) fieldIndex.set(vcFn, []);
@@ -1006,7 +1008,8 @@
                     // 2. Place FB in the now-vacated spot on cand's field
                     sa[fb.bunk][fb.slotIdx] = {
                         field: cand.field, sport: cand.sport, _activity: cand.sport,
-                        _autoMode: true, _autoSolved: true, _lnsRepaired: true, continuation: false
+                        _autoMode: true, _autoSolved: true, _lnsRepaired: true, continuation: false,
+                        _startMin: fb.startMin, _endMin: fb.endMin
                     };
                     if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
                     fieldIndex.get(fn).push({
@@ -1222,7 +1225,8 @@
             if (sa[victim.bunk]) {
                 sa[victim.bunk][victim.slotIdx] = {
                     field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
-                    _autoMode: true, _autoSolved: true, _ejected: true, continuation: false
+                    _autoMode: true, _autoSolved: true, _ejected: true, continuation: false,
+                    _startMin: victim.startMin, _endMin: victim.endMin
                 };
             }
 
@@ -1247,7 +1251,8 @@
         if (sa[fb.bunk]) {
             sa[fb.bunk][fb.slotIdx] = {
                 field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
-                _autoMode: true, _autoSolved: true, _ejectionChainFilled: true, continuation: false
+                _autoMode: true, _autoSolved: true, _ejectionChainFilled: true, continuation: false,
+                _startMin: fb.startMin, _endMin: fb.endMin
             };
         }
         const fbFn = fbCand.fieldNorm;
@@ -1260,27 +1265,41 @@
     }
 
     // ── Post-chain validity check ─────────────────────────────────────────
-    // Returns true if every field touched by the chain satisfies capacity
-    // and cross-grade constraints.  Called after executeChain; if false,
-    // the caller rolls back scheduleAssignments and fieldIndex.
+    // Checks only the NEW entries added by executeChain against pre-existing
+    // entries on those fields.  The old pairwise approach incorrectly rolled
+    // back valid chains because pre-existing Phase-3 violations on touched
+    // fields triggered false positives — those are the constraint sweep's job.
+    // This targeted version only asks: "did THIS chain create a new violation?"
     function isChainValid(chain, fb, fbCand, fieldIndex, candidates) {
-        const fieldsTouched = new Set([fbCand.fieldNorm, ...chain.map(m => normName(m.newCand.field))]);
-        for (const fn of fieldsTouched) {
-            const entries = fieldIndex.get(fn) || [];
-            const cand = candidates.find(c => c.fieldNorm === fn);
-            if (!cand) continue;
+        // The new placements created by executeChain
+        const newPlacements = [
+            {
+                fn: fbCand.fieldNorm,
+                startMin: fb.startMin, endMin: fb.endMin,
+                bunk: fb.bunk, grade: fb.grade
+            },
+            ...chain.map(m => ({
+                fn: normName(m.newCand.field),
+                startMin: m.victim.startMin, endMin: m.victim.endMin,
+                bunk: m.victim.bunk, grade: m.victim.grade
+            }))
+        ];
+
+        for (const np of newPlacements) {
+            const cand = candidates.find(c => c.fieldNorm === np.fn);
+            if (!cand) continue; // field not in solver candidates; trust Phase-3 validation
             const cap = cand.capacity || 2;
             const st = cand.shareType || 'same_division';
-            for (let i = 0; i < entries.length; i++) {
-                const e = entries[i];
-                const overlapping = entries.filter((o, j) =>
-                    j !== i && o.bunk !== e.bunk &&
-                    o.startMin < e.endMin && o.endMin > e.startMin
-                );
-                if (overlapping.length >= cap) return false;
-                if ((st === 'same_division' || st === 'not_sharable') &&
-                    overlapping.some(o => o.grade !== e.grade)) return false;
-            }
+            const entries = fieldIndex.get(np.fn) || [];
+            // Only entries that time-overlap with this new placement and are a different bunk
+            // (the new entry itself is already in fieldIndex after executeChain)
+            const overlapping = entries.filter(e =>
+                e.bunk !== np.bunk &&
+                e.startMin < np.endMin && e.endMin > np.startMin
+            );
+            if (overlapping.length >= cap) return false;
+            if ((st === 'same_division' || st === 'not_sharable') &&
+                overlapping.some(o => o.grade !== np.grade)) return false;
         }
         return true;
     }
