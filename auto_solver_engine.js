@@ -600,15 +600,20 @@
         const lnsFixed = lnsRepair(config);
         free = Math.max(0, free - lnsFixed);
 
+        // ── Ejection chains: multi-hop repair for blocks LNS couldn't fix ──
+        const ejectionFixed = ejectionChainRepair(config);
+        free = Math.max(0, free - ejectionFixed);
+
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
         log('╔═══════════════════════════════════════════════════════════╗');
         log('║  SOLVE COMPLETE in ' + elapsed + 's');
         log('║  ' + blocks.length + ' blocks, ' + filled + ' filled, ' + free + ' Free');
-        if (dupFixes > 0) log('║  ' + dupFixes + ' same-day duplicates fixed');
-        if (lnsFixed > 0) log('║  ' + lnsFixed + ' Free blocks recovered by LNS repair');
+        if (dupFixes > 0)      log('║  ' + dupFixes + ' same-day duplicates fixed');
+        if (lnsFixed > 0)      log('║  ' + lnsFixed + ' Free blocks recovered by LNS');
+        if (ejectionFixed > 0) log('║  ' + ejectionFixed + ' Free blocks recovered by ejection chains');
         log('╚═══════════════════════════════════════════════════════════╝');
 
-        return { filled, free, elapsed, dupFixes, lnsFixed };
+        return { filled, free, elapsed, dupFixes, lnsFixed, ejectionFixed };
     }
 
 
@@ -999,6 +1004,272 @@
 
 
     // =========================================================================
+    // EJECTION CHAINS + TABU SEARCH  (Educational Timetabling pattern)
+    // =========================================================================
+    // Single-swap LNS (trySwapFill) fails when a victim has nowhere to go
+    // directly — but WOULD have somewhere to go if another assignment moved
+    // first.  Ejection chains follow that dependency recursively:
+    //
+    //   FB needs field F (at capacity, blocked by V1)
+    //   → V1 needs field G (at capacity, blocked by V2)
+    //   → V2 CAN move to field H  ← chain terminates here
+    //   Execute: V2→H, V1→G, FB→F  (all atomically, deepest-first)
+    //
+    // Tabu list prevents oscillation between iterations:
+    //   After moving V1 off field F, mark (V1.bunk, F) as tabu.
+    //   Subsequent passes won't immediately move V1 back to F.
+    //   Tabu entries decay by half between passes (soft expiry).
+    //
+    // Key design: the DFS search uses a "virtual eviction set" — a Set of
+    // bunk|slotIdx strings treated as absent from the field index — so we
+    // never mutate fieldIndex during search, only during commit.
+
+    // ── Virtual field index ───────────────────────────────────────────────
+    // Wraps the real fieldIndex but silently drops entries that are in the
+    // evictedSet.  Pass this to isFieldAvailableByTime during chain search.
+    function makeVirtualIndex(fieldIndex, evictedSet) {
+        return {
+            get: function(fn) {
+                const raw = fieldIndex.get(fn) || [];
+                if (evictedSet.size === 0) return raw;
+                return raw.filter(e => !evictedSet.has(e.bunk + '|' + e.slotIdx));
+            },
+            has: function(fn) { return fieldIndex.has(fn); },
+            // Write-through so callers that mutate the index still work
+            set: function(fn, v) { return fieldIndex.set(fn, v); }
+        };
+    }
+
+    // ── Chain search (DFS) ────────────────────────────────────────────────
+    function findEjectionChain(fb, fbCand, candidates, fieldIndex, tabuSet, maxDepth) {
+        const sa = window.scheduleAssignments || {};
+        const fbFn = fbCand.fieldNorm;
+        const fbCap = fbCand.capacity || 2;
+
+        // Only attempt when field is exactly at capacity (single-eviction chains)
+        const initialOverlap = (fieldIndex.get(fbFn) || []).filter(e =>
+            e.startMin < fb.endMin && e.endMin > fb.startMin && e.bunk !== fb.bunk
+        );
+        if (initialOverlap.length !== fbCap) return null;
+
+        // evictedSet: bunk|slotIdx pairs virtually removed from the field index
+        const evictedSet = new Set();
+        // visitedFields: fields already in the chain — prevents cycles
+        const visitedFields = new Set([fbFn]);
+        // chain: [{victim, newCand, sourceFn}] built up during DFS
+        const chain = [];
+
+        function getBunkDoneToday(bunk, excludeSlotIdx, extraSports) {
+            const done = new Set();
+            (sa[bunk] || []).forEach((e, i) => {
+                if (i === excludeSlotIdx || !e || e.continuation) return;
+                const act = normName(e._activity || e.sport || e.field);
+                if (act && act !== 'free' && act !== 'free play') done.add(act);
+            });
+            if (extraSports) extraSports.forEach(s => done.add(s));
+            return done;
+        }
+
+        function dfs(targetFn, overlapOnTarget, depth) {
+            if (depth > maxDepth) return false;
+
+            // Find evictable blockers on targetFn
+            const evictable = overlapOnTarget.filter(e => {
+                if (evictedSet.has(e.bunk + '|' + e.slotIdx)) return false;
+                const entry = (sa[e.bunk] || [])[e.slotIdx];
+                if (!entry || entry._fixed || entry._pinned || entry._league) return false;
+                if (!entry._autoSolved && !entry._autoMode) return false;
+                // Tabu: don't move a bunk back onto a field it was recently evicted from
+                if (tabuSet.has(e.bunk + '|' + targetFn)) return false;
+                return true;
+            });
+
+            for (const victim of evictable) {
+                const victimKey = victim.bunk + '|' + victim.slotIdx;
+
+                // Sports already committed for this bunk in the current chain
+                const chainSports = chain
+                    .filter(m => m.victim.bunk === victim.bunk)
+                    .map(m => normName(m.newCand.sport));
+
+                const victimDone = getBunkDoneToday(victim.bunk, victim.slotIdx, chainSports);
+
+                // Virtually evict this victim so subsequent isFieldAvailableByTime
+                // calls don't count it against field capacity
+                evictedSet.add(victimKey);
+                const vIdx = makeVirtualIndex(fieldIndex, evictedSet);
+
+                let foundMove = false;
+                for (const vc of candidates) {
+                    if (normName(vc.field) === targetFn) continue; // Must vacate targetFn
+                    if (window.isRainyDay && !vc.isIndoor) continue;
+                    if (victimDone.has(vc.sportNorm)) continue;
+
+                    const vcFn = normName(vc.field);
+
+                    // Can victim go directly to vc.field?
+                    if (isFieldAvailableByTime(vc.field, victim.startMin, victim.endMin,
+                            victim.bunk, victim.grade, vIdx, vc)) {
+                        chain.push({ victim, newCand: vc, sourceFn: targetFn });
+                        foundMove = true;
+                        break;
+                    }
+
+                    // Can't go directly — try ejecting from vc.field (recurse)
+                    if (visitedFields.has(vcFn)) continue;
+
+                    const vcOverlap = (fieldIndex.get(vcFn) || []).filter(e =>
+                        e.startMin < victim.endMin && e.endMin > victim.startMin &&
+                        e.bunk !== victim.bunk &&
+                        !evictedSet.has(e.bunk + '|' + e.slotIdx)
+                    );
+                    const vcCap = vc.capacity || 2;
+                    if (vcOverlap.length !== vcCap) continue; // Must be exactly at capacity
+
+                    visitedFields.add(vcFn);
+                    chain.push({ victim, newCand: vc, sourceFn: targetFn });
+
+                    if (dfs(vcFn, vcOverlap, depth + 1)) {
+                        foundMove = true;
+                        break;
+                    }
+
+                    // Backtrack
+                    chain.pop();
+                    visitedFields.delete(vcFn);
+                }
+
+                if (foundMove) return true;
+
+                // This victim couldn't be moved — un-evict and try next
+                evictedSet.delete(victimKey);
+            }
+
+            return false;
+        }
+
+        const success = dfs(fbFn, initialOverlap, 0);
+        return success ? chain : null;
+    }
+
+    // ── Atomic chain commit ───────────────────────────────────────────────
+    // Executes a chain deepest-first so each move sees the field freed by
+    // the one before it.
+    function executeChain(chain, fb, fbCand, fieldIndex) {
+        const sa = window.scheduleAssignments || {};
+
+        for (let i = chain.length - 1; i >= 0; i--) {
+            const { victim, newCand, sourceFn } = chain[i];
+
+            if (sa[victim.bunk]) {
+                sa[victim.bunk][victim.slotIdx] = {
+                    field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
+                    _autoMode: true, _autoSolved: true, _ejected: true, continuation: false
+                };
+            }
+
+            // Remove victim from source field in index
+            if (fieldIndex.has(sourceFn)) {
+                fieldIndex.set(sourceFn, fieldIndex.get(sourceFn).filter(e =>
+                    !(e.bunk === victim.bunk && e.slotIdx === victim.slotIdx)
+                ));
+            }
+
+            // Add victim to destination field in index
+            const dstFn = normName(newCand.field);
+            if (!fieldIndex.has(dstFn)) fieldIndex.set(dstFn, []);
+            fieldIndex.get(dstFn).push({
+                startMin: victim.startMin, endMin: victim.endMin,
+                bunk: victim.bunk, grade: victim.grade, slotIdx: victim.slotIdx,
+                activity: normName(newCand.sport)
+            });
+        }
+
+        // Place FB in the now-vacated field
+        if (sa[fb.bunk]) {
+            sa[fb.bunk][fb.slotIdx] = {
+                field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
+                _autoMode: true, _autoSolved: true, _ejectionChainFilled: true, continuation: false
+            };
+        }
+        const fbFn = fbCand.fieldNorm;
+        if (!fieldIndex.has(fbFn)) fieldIndex.set(fbFn, []);
+        fieldIndex.get(fbFn).push({
+            startMin: fb.startMin, endMin: fb.endMin,
+            bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx,
+            activity: fbCand.sportNorm
+        });
+    }
+
+    // ── Main ejection chain repair pass ──────────────────────────────────
+    function ejectionChainRepair(config) {
+        config = config || {};
+        const { candidates } = buildCandidates(config);
+        if (candidates.length === 0) return 0;
+
+        const CHAIN_DEPTH = 3;  // Max hops per chain (8^3 = 512 worst-case branches)
+        const MAX_PASSES  = 2;  // Iterations over the Free block list
+        const tabuSet = new Set(); // bunk|fieldNorm — recently evicted, don't move back
+        let totalImproved = 0;
+
+        for (let pass = 0; pass < MAX_PASSES; pass++) {
+            const freeBlocks = collectFreeBlocks();
+            if (freeBlocks.length === 0) break;
+
+            const fieldIndex = buildFieldTimeIndex();
+            let passImproved = 0;
+
+            for (const fb of freeBlocks) {
+                // Build what FB's bunk already has today
+                const sa = window.scheduleAssignments || {};
+                const fbDone = new Set();
+                (sa[fb.bunk] || []).forEach((e, i) => {
+                    if (i === fb.slotIdx || !e || e.continuation) return;
+                    const act = normName(e._activity || e.sport || e.field);
+                    if (act && act !== 'free' && act !== 'free play') fbDone.add(act);
+                });
+
+                let filled = false;
+                for (const fbCand of candidates) {
+                    if (window.isRainyDay && !fbCand.isIndoor) continue;
+                    if (fbDone.has(fbCand.sportNorm)) continue;
+
+                    const chain = findEjectionChain(fb, fbCand, candidates, fieldIndex, tabuSet, CHAIN_DEPTH);
+                    if (!chain || chain.length === 0) continue;
+
+                    executeChain(chain, fb, fbCand, fieldIndex);
+
+                    // Register evicted victims in tabu — don't immediately move them back
+                    chain.forEach(({ victim, sourceFn }) => {
+                        tabuSet.add(victim.bunk + '|' + sourceFn);
+                    });
+
+                    log('EjectionChain: bunk ' + fb.bunk + ' ← ' + chain.length +
+                        '-hop [' + chain.map(m => m.victim.bunk + '→' + m.newCand.sport).join(', ') + ']');
+
+                    passImproved++;
+                    filled = true;
+                    break;
+                }
+            }
+
+            totalImproved += passImproved;
+            if (passImproved === 0) break; // Converged
+
+            // Soft tabu decay between passes — expire the oldest half so the
+            // next pass can explore moves that were recently blocked
+            if (tabuSet.size > 0) {
+                const keys = Array.from(tabuSet);
+                keys.slice(0, Math.floor(keys.length / 2)).forEach(k => tabuSet.delete(k));
+            }
+        }
+
+        if (totalImproved > 0) log('Ejection chains recovered ' + totalImproved + ' Free blocks');
+        return totalImproved;
+    }
+
+
+    // =========================================================================
     // DIAGNOSTICS
     // =========================================================================
 
@@ -1048,7 +1319,8 @@
         solve,
         fallbackSweep,
         sameDayDuplicateSweep,
-        lnsRepair,          // CP-SAT: large neighbourhood search repair pass
+        lnsRepair,               // CP-SAT: large neighbourhood search (single-swap)
+        ejectionChainRepair,     // Timetabling: multi-hop ejection chains + tabu
         report,
         // Expose for scheduler_core_auto.js to call
         solveSchedule: function(activityBlocks, config) {

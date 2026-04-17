@@ -3257,29 +3257,106 @@
             // ── Helper: add sport/slot blocks, auto-splitting if over dMax ──
             // This is the ONLY way sport/slot blocks should be created.
             // Guarantees no block exceeds ceiling and no split is below fillMin.
+            // ═══════════════════════════════════════════════════════
+            // BUDGET-FIRST: WATER-FILL GAP SPLITTER
+            // ═══════════════════════════════════════════════════════
+            // Core idea: instead of "last block takes remainder",
+            // find exact integer durations that sum to the gap size
+            // with every block in [fillMin, ceiling].
+            //
+            // A gap G is "clean" if there exists an integer N such
+            // that ceil(G/ceiling) ≤ N ≤ floor(G/fillMin).
+            // If clean, water-fill distributes G evenly across N
+            // blocks with no sub-fillMin leftovers.
+            //
+            // Returns an array of durations (all ≥ fillMin, all ≤
+            // ceiling, summing exactly to G), or null if infeasible.
+
+            function isCleanGap(G, fillMin, ceiling) {
+                if (G < fillMin) return false;
+                if (G <= ceiling) return true; // One block covers it
+                var minN = Math.ceil(G / ceiling);
+                var maxN = Math.floor(G / fillMin);
+                return minN <= maxN;
+            }
+
+            function waterFillGap(G, fillMin, ceiling) {
+                if (G < fillMin) return null;
+                if (G <= ceiling) return [G]; // One block
+
+                var minN = Math.ceil(G / ceiling);
+                var maxN = Math.floor(G / fillMin);
+                if (minN > maxN) return null; // Inherently unfillable
+
+                // Choose N that gives the most even distribution
+                var idealDur = Math.round((fillMin + ceiling) / 2 / 5) * 5;
+                var bestN = Math.round(G / idealDur);
+                bestN = Math.max(minN, Math.min(maxN, bestN));
+
+                // Base duration snapped down to nearest 5
+                var base = Math.floor(G / bestN / 5) * 5;
+                var rem  = G - bestN * base;
+
+                // rem must be divisible by 5 (it is, since G and base×N are)
+                var extras = rem / 5; // how many blocks get +5
+
+                var durs = [];
+                for (var i = 0; i < bestN; i++) {
+                    durs.push(base + (i < extras ? 5 : 0));
+                }
+
+                // Validate every block is within bounds
+                for (var v = 0; v < durs.length; v++) {
+                    if (durs[v] < fillMin || durs[v] > ceiling) return null;
+                }
+
+                // Final sum check
+                var sum = 0;
+                for (var s = 0; s < durs.length; s++) sum += durs[s];
+                if (sum !== G) return null;
+
+                return durs;
+            }
+
             function addSportBlocks(targetArray, startMin, endMin, opts, ceiling, fillMin) {
                 var totalDur = endMin - startMin;
+
+                // ── Budget-first: water-fill exact durations ─────────
+                var durs = waterFillGap(totalDur, fillMin || 25, ceiling || 60);
+                if (durs) {
+                    var cursor = startMin;
+                    for (var i = 0; i < durs.length; i++) {
+                        var blockOpts = {};
+                        for (var k in opts) blockOpts[k] = opts[k];
+                        blockOpts.startMin = cursor;
+                        blockOpts.endMin   = cursor + durs[i];
+                        var _bw = makeBlock(blockOpts);
+                        if (_bw) targetArray.push(_bw);
+                        cursor += durs[i];
+                    }
+                    return;
+                }
+
+                // ── Fallback: original naive split ───────────────────
                 if (totalDur <= ceiling) {
-                    // Fits in one block
                     opts.startMin = startMin;
                     opts.endMin = endMin;
                     var _b = makeBlock(opts); if (_b) targetArray.push(_b);
                     return;
                 }
-                // Split into evenly-sized blocks
                 var numBlocks = Math.ceil(totalDur / ceiling);
                 while (numBlocks > 1 && Math.floor(totalDur / numBlocks) < fillMin) numBlocks--;
-                var blockDur = Math.round(totalDur / numBlocks / 5) * 5; // snap to 5
+                var blockDur = Math.round(totalDur / numBlocks / 5) * 5;
                 if (blockDur < fillMin) blockDur = Math.floor(totalDur / numBlocks);
-                var cursor = startMin;
-                for (var i = 0; i < numBlocks; i++) {
-                    var dur = (i === numBlocks - 1) ? (endMin - cursor) : blockDur;
-                    var blockOpts = {};
-                    for (var k in opts) blockOpts[k] = opts[k];
-                    blockOpts.startMin = cursor;
-                    blockOpts.endMin = cursor + dur;
-                    var _b2 = makeBlock(blockOpts); if (_b2) targetArray.push(_b2);
-                    cursor += dur;
+                var cur = startMin;
+                for (var j = 0; j < numBlocks; j++) {
+                    var dur = (j === numBlocks - 1) ? (endMin - cur) : blockDur;
+                    var bOpts = {};
+                    for (var m in opts) bOpts[m] = opts[m];
+                    bOpts.startMin = cur;
+                    bOpts.endMin   = cur + dur;
+                    var _b2 = makeBlock(bOpts); if (_b2) targetArray.push(_b2);
+                    cur += dur;
                 }
             }
 
@@ -3622,27 +3699,26 @@
 
                         // 2. Gap quality: simulate how well sports would fill the remaining gaps
                         var gaps = findGaps(simTmpl, gs, ge);
-                        var perfectGaps = 0, deadGaps = 0, totalGapTime = 0;
+                        var perfectGaps = 0, deadGaps = 0, dirtyGaps = 0, totalGapTime = 0;
                         for (var g = 0; g < gaps.length; g++) {
                             var gSize = gaps[g].end - gaps[g].start;
                             totalGapTime += gSize;
                             if (gSize < fMin) {
-                                deadGaps++; // unfillable — bad
-                            } else if (gSize <= sCeiling) {
-                                perfectGaps++; // one sport fills it perfectly
-                            } else if (gSize % sCeiling === 0 || (gSize / Math.ceil(gSize / sCeiling)) >= fMin) {
-                                perfectGaps++; // evenly splittable — good
+                                deadGaps++;  // sub-fillMin — completely unfillable
+                            } else if (isCleanGap(gSize, fMin, sCeiling)) {
+                                perfectGaps++; // water-fill can cover this exactly
+                            } else {
+                                dirtyGaps++; // fillable but produces sub-fillMin remainder
                             }
                         }
-                        // Calibrated to match Phase 2.5's weights so CSP-placed needs
-                        // (swim, snack, custom, rotation, second-special) avoid dead
-                        // gaps with the same aggression as Phase 2.5's pre-placed
-                        // specials. Previously: -500/-200, which was 5× weaker than
-                        // Phase 2.5's -2500 and let CSP-phase placements drop sub-dMin
-                        // remainders that Phase 2.5 would have refused.
-                        score += perfectGaps * 50;   // reward fillable gaps
-                        score -= deadGaps * 2500;    // heavily penalize dead gaps
-                        score -= pos.deadGaps * 1000; // penalize dead gaps from this placement
+                        // Budget-first gap scoring:
+                        //   dead gaps  = completely unfillable → worst
+                        //   dirty gaps = fillable but leave remainder → bad
+                        //   perfect gaps = water-fill covers exactly → good
+                        score += perfectGaps * 50;
+                        score -= deadGaps  * 2500;  // unfillable — heaviest penalty
+                        score -= dirtyGaps * 1200;  // dirty — medium penalty (budget-first)
+                        score -= pos.deadGaps * 1000;
 
                         // 2b. ★ v11.4: Neighbor starvation check — would remaining needs
                         // still fit at their dMin in the leftover gaps?
@@ -4159,21 +4235,29 @@
                 if (gapSize < fillMin) return []; // too small
                 if (gapSize <= ceiling) return [{ start: gapStart, end: gapEnd }]; // one block
 
-                // Compute ideal number of blocks where each is in [fillMin, ceiling]
-                var numBlocks = Math.ceil(gapSize / ceiling);
-                // Ensure each block >= fillMin
-                while (numBlocks > 1 && Math.floor(gapSize / numBlocks) < fillMin) numBlocks--;
-                var blockDur = Math.round(gapSize / numBlocks / 5) * 5; // snap to 5
-                if (blockDur < fillMin) blockDur = Math.floor(gapSize / numBlocks);
-
-                var plan = [];
-                var cursor = gapStart;
-                for (var i = 0; i < numBlocks; i++) {
-                    var dur = (i === numBlocks - 1) ? (gapEnd - cursor) : blockDur;
-                    plan.push({ start: cursor, end: cursor + dur });
-                    cursor += dur;
+                // ── Budget-first: water-fill exact durations ─────────
+                var durs = waterFillGap(gapSize, fillMin || 25, ceiling || 60);
+                if (durs) {
+                    var plan = [], cursor = gapStart;
+                    for (var wi = 0; wi < durs.length; wi++) {
+                        plan.push({ start: cursor, end: cursor + durs[wi] });
+                        cursor += durs[wi];
+                    }
+                    return plan;
                 }
-                return plan;
+
+                // ── Fallback: original naive split ───────────────────
+                var numBlocks = Math.ceil(gapSize / ceiling);
+                while (numBlocks > 1 && Math.floor(gapSize / numBlocks) < fillMin) numBlocks--;
+                var blockDur = Math.round(gapSize / numBlocks / 5) * 5;
+                if (blockDur < fillMin) blockDur = Math.floor(gapSize / numBlocks);
+                var fallbackPlan = [], cur = gapStart;
+                for (var i = 0; i < numBlocks; i++) {
+                    var dur = (i === numBlocks - 1) ? (gapEnd - cur) : blockDur;
+                    fallbackPlan.push({ start: cur, end: cur + dur });
+                    cur += dur;
+                }
+                return fallbackPlan;
             }
 
             // ★ v15.0: WHOLE-GAP PLANNER WITH BOUNDED BACKTRACKING
@@ -6297,6 +6381,67 @@
             if (specialFixCount > 0) log('[Phase3] ★ SPECIAL-ENFORCE: fixed ' + specialFixCount + ' special duration(s) to configured values');
 
             if (enforceFixCount > 0) log('[Phase3] ★ ENFORCE: fixed ' + enforceFixCount + ' constraint violations in final sweep');
+
+            // ══════════════════════════════════════════════════════════════════════
+            // ★ COMPONENT 3 — COVERAGE VALIDATION (budget-first assertion)
+            // After ALL repair passes, every bunk's block durations must sum exactly
+            // to (gradeEnd - gradeStart).  Any gap here is a true scheduling hole —
+            // visible in the console to make debugging deterministic.
+            // ══════════════════════════════════════════════════════════════════════
+            var coverageErrors = 0;
+            for (var cv_i = 0; cv_i < allBunkIds.length; cv_i++) {
+                var cv_bunk  = allBunkIds[cv_i];
+                var cv_meta  = bunkMeta[cv_bunk];
+                if (!cv_meta) continue;
+                var cv_start = cv_meta.gradeStart;
+                var cv_end   = cv_meta.gradeEnd;
+                if (cv_start == null || cv_end == null) continue;
+                var cv_expected = cv_end - cv_start;
+                if (cv_expected <= 0) continue;
+
+                var cv_tmpl = (bunkTimelines[cv_bunk] || allTemplates[cv_bunk] || []).slice();
+                cv_tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                // Walk the sorted timeline and record every gap
+                var cv_actual   = 0;
+                var cv_gaps     = [];
+                var cv_cursor   = cv_start;
+
+                for (var cv_j = 0; cv_j < cv_tmpl.length; cv_j++) {
+                    var cv_blk = cv_tmpl[cv_j];
+                    // Clamp block to grade window so pinned blocks outside don't skew counts
+                    var cv_bs = Math.max(cv_blk.startMin, cv_start);
+                    var cv_be = Math.min(cv_blk.endMin,   cv_end);
+                    if (cv_be <= cv_bs) continue;
+
+                    // Gap before this block?
+                    if (cv_bs > cv_cursor) {
+                        cv_gaps.push({ start: cv_cursor, end: cv_bs, dur: cv_bs - cv_cursor });
+                    }
+                    cv_actual += (cv_be - cv_bs);
+                    cv_cursor = Math.max(cv_cursor, cv_be);
+                }
+                // Trailing gap after last block?
+                if (cv_cursor < cv_end) {
+                    cv_gaps.push({ start: cv_cursor, end: cv_end, dur: cv_end - cv_cursor });
+                }
+
+                if (cv_gaps.length > 0) {
+                    coverageErrors++;
+                    var cv_gapStr = cv_gaps.map(function(g) {
+                        return g.dur + 'min@' + g.start + '-' + g.end;
+                    }).join(', ');
+                    warn('[COVERAGE] bunk=' + cv_bunk +
+                         ' expected=' + cv_expected + 'min' +
+                         ' actual=' + cv_actual + 'min' +
+                         ' gaps=[' + cv_gapStr + ']');
+                }
+            }
+            if (coverageErrors === 0) {
+                log('[COVERAGE] ✓ All ' + allBunkIds.length + ' bunks fully covered — zero scheduling gaps');
+            } else {
+                warn('[COVERAGE] ✗ ' + coverageErrors + ' bunk(s) have unresolved gaps (see COVERAGE warnings above)');
+            }
 
             log('[Phase3] ★ timeSweepFillAll complete: ' + Object.keys(allTemplates).length + ' bunks, ' + totalWarnings + ' warnings');
             return allTemplates;
