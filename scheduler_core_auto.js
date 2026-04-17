@@ -3617,9 +3617,14 @@
                             var we = Math.min(gap.end, need.windowEnd || ge);
                             if (we - ws < need.dMin) continue;
                             // ★ v11.4: Negotiate duration instead of greedily taking dMax
+                            // ★ v15.2: Snack/swim are fixed-duration — always use dMin, never stretch to dMax
+                            var _needType15 = (need.type || '').toLowerCase();
+                            var _isFixedDurNeed = (_needType15 === 'snacks' || _needType15 === 'snack' || _needType15 === 'swim');
                             var gapSize = gap.end - gap.start;
                             var dur;
-                            if (otherNeeds && otherNeeds.length > 0) {
+                            if (_isFixedDurNeed) {
+                                dur = need.dMin; // snack/swim: never stretch beyond their required minimum
+                            } else if (otherNeeds && otherNeeds.length > 0) {
                                 dur = negotiateDuration(need, otherNeeds, gapSize, fMin);
                                 dur = Math.min(dur, we - ws); // can't exceed available window
                             } else {
@@ -5819,7 +5824,8 @@
                     // Try extending previous block
                     var extended = false;
                     for (var fe = fcTl.length - 1; fe >= 0; fe--) {
-                        if (fcTl[fe].endMin === fgGap.start && !isPhase0(fcTl[fe])) {
+                        // ★ v15.2: Never extend _activityLocked blocks (snack/swim/special)
+                        if (fcTl[fe].endMin === fgGap.start && !isPhase0(fcTl[fe]) && !fcTl[fe]._activityLocked) {
                             var feMax = fcTl[fe].dMax || (TYPE_CEILINGS[(fcTl[fe].type || '').toLowerCase()] || 60);
                             if ((fcTl[fe].endMin - fcTl[fe].startMin) + fgDur <= feMax) {
                                 fcTl[fe].endMin = fgGap.end; extended = true; break;
@@ -5829,7 +5835,8 @@
                     if (extended) continue;
                     // Try extending next block
                     for (var fn = 0; fn < fcTl.length; fn++) {
-                        if (fcTl[fn].startMin === fgGap.end && !isPhase0(fcTl[fn])) {
+                        // ★ v15.2: Never extend _activityLocked blocks (snack/swim/special)
+                        if (fcTl[fn].startMin === fgGap.end && !isPhase0(fcTl[fn]) && !fcTl[fn]._activityLocked) {
                             var fnMax = fcTl[fn].dMax || (TYPE_CEILINGS[(fcTl[fn].type || '').toLowerCase()] || 60);
                             if ((fcTl[fn].endMin - fcTl[fn].startMin) + fgDur <= fnMax) {
                                 fcTl[fn].startMin = fgGap.start; extended = true; break;
@@ -5876,9 +5883,10 @@
                     if (zgDur <= 0) continue;
 
                     // Strategy 1: Extend previous non-fixed block to cover gap
+                    // ★ v15.2: Skip _activityLocked blocks (snack/swim/special — must not grow)
                     var zgPrev = null;
                     for (var zp = zgTmpl.length - 1; zp >= 0; zp--) {
-                        if (zgTmpl[zp].endMin === zgGap.start && !zgTmpl[zp]._fixed) { zgPrev = zgTmpl[zp]; break; }
+                        if (zgTmpl[zp].endMin === zgGap.start && !zgTmpl[zp]._fixed && !zgTmpl[zp]._activityLocked) { zgPrev = zgTmpl[zp]; break; }
                     }
                     if (zgPrev) {
                         var zgPrevDur = zgPrev.endMin - zgPrev.startMin;
@@ -5899,9 +5907,10 @@
                     }
 
                     // Strategy 2: Pull next non-fixed block backward
+                    // ★ v15.2: Skip _activityLocked blocks (snack/swim/special — must not grow)
                     var zgNext = null;
                     for (var zn = 0; zn < zgTmpl.length; zn++) {
-                        if (zgTmpl[zn].startMin === zgGap.end && !zgTmpl[zn]._fixed) { zgNext = zgTmpl[zn]; break; }
+                        if (zgTmpl[zn].startMin === zgGap.end && !zgTmpl[zn]._fixed && !zgTmpl[zn]._activityLocked) { zgNext = zgTmpl[zn]; break; }
                     }
                     if (zgNext) {
                         var zgNextDur = zgNext.endMin - zgNext.startMin;
