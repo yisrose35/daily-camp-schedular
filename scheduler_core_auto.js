@@ -6505,15 +6505,28 @@
                             }
                         }
 
-                        // Strategy 4: create a new General Activity Slot for large enough gaps
-                        if (!pg_fixed && pg_dur >= (pg_meta.fillMinDur || 25)) {
+                        // Strategy 4: create a forced mini-slot for ANY gap >= 5min.
+                        // Previous threshold was pg_meta.fillMinDur (e.g. 45 for grade 4),
+                        // which silently abandoned structural gaps smaller than that value
+                        // (25min@800-825 for grade 4, 15min@955-970 for grade 1, etc.).
+                        //
+                        // Fix: always create a slot if gap >= 5min.  Use dMin = pg_dur so
+                        // makeBlock's strict dMin guard (blockDur < dMin → return null) cannot
+                        // reject the block — the block IS exactly dMin in size.  dMax is set to
+                        // the larger of pg_dur and the grade's sport ceiling so the auto-solver
+                        // can extend it if a larger assignment happens to fit.
+                        //
+                        // These "micro-slots" cover structural holes trapped between two Phase-0
+                        // walls (e.g. a guaranteed-swim block with dMin=dMax=30 and a dismissal).
+                        // The auto-solver will label them General Activity Slot if no sport fits.
+                        if (!pg_fixed && pg_dur >= 5) {
                             var pg_blk = makeBlock({
                                 startMin: pg_gap.start, endMin: pg_gap.end,
                                 type: 'slot', event: 'General Activity Slot',
                                 layer: pg_meta.sportLayer, field: null,
-                                dMin: pg_meta.fillMinDur || 25,
-                                dMax: pg_meta.sportCeiling || 60,
-                                _source: 'post-gap', _final: true
+                                dMin: pg_dur,                                // exact-fit: always passes makeBlock guard
+                                dMax: Math.max(pg_dur, pg_meta.sportCeiling || 60),
+                                _source: 'post-gap-forced', _final: true
                             });
                             if (pg_blk) {
                                 pg_tmpl.push(pg_blk);
@@ -6521,8 +6534,9 @@
                                 pgClosed++;
                                 pg_changed = true;
                                 pg_fixed   = true;
-                                log('[POST-GAP] bunk=' + pg_bunk + ' created ' + pg_dur +
-                                    'min slot @' + pg_gap.start + '-' + pg_gap.end);
+                                log('[POST-GAP] bunk=' + pg_bunk + ' forced ' + pg_dur +
+                                    'min slot @' + pg_gap.start + '-' + pg_gap.end +
+                                    (pg_dur < (pg_meta.fillMinDur || 25) ? ' [micro-slot]' : ''));
                             }
                         }
 
