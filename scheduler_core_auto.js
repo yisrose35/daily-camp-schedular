@@ -4220,19 +4220,35 @@
                 if (candidates.length === 0) return null;
                 // Pick the highest-scoring candidate
                 candidates.sort(function(a, b) { return b.score - a.score; });
+                // ★ Variety guard: if any unused sport is available, skip already-used
+                // ones before checking cooldowns. This prevents back-to-back same sport
+                // in multi-block gaps (e.g. 150min → two 60min blocks).
+                var unusedCandidates = candidates.filter(function(c) { return !used.has(c.name); });
+                var candidatePool = unusedCandidates.length > 0 ? unusedCandidates : candidates;
                 // ★ Cooldown rule filter — walk candidates in score order, skip blocked
                 if (window.SchedulingRules && meta && meta.template) {
-                    for (var ci = 0; ci < candidates.length; ci++) {
-                        var cand = candidates[ci];
+                    for (var ci = 0; ci < candidatePool.length; ci++) {
+                        var cand = candidatePool[ci];
                         var ok = window.SchedulingRules.isCandidateAllowed(
                             { startMin: startMin, endMin: endMin, type: 'sport',
                               event: cand.name, field: cand.field },
                             meta.template, { mode: "auto" });
                         if (ok) return { name: cand.name, field: cand.field };
                     }
+                    // All unused candidates blocked by cooldown — try used as last resort
+                    if (unusedCandidates.length > 0) {
+                        for (var ci2 = 0; ci2 < candidates.length; ci2++) {
+                            var cand2 = candidates[ci2];
+                            var ok2 = window.SchedulingRules.isCandidateAllowed(
+                                { startMin: startMin, endMin: endMin, type: 'sport',
+                                  event: cand2.name, field: cand2.field },
+                                meta.template, { mode: "auto" });
+                            if (ok2) return { name: cand2.name, field: cand2.field };
+                        }
+                    }
                     return null; // all candidates blocked by cooldown
                 }
-                return { name: candidates[0].name, field: candidates[0].field };
+                return { name: candidatePool[0].name, field: candidatePool[0].field };
             }
 
             // Compute optimal split plan for a gap — returns array of {start, end}
