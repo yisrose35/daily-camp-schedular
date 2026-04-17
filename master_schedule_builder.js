@@ -2523,7 +2523,19 @@ function addDropListeners(selector) {
             { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
           );
         }
-        
+        // Grade Mode toggle for swim / lunch / snacks
+        if (['swim', 'lunch', 'snacks'].includes(tileData.type)) {
+          swimModalFields.push({
+            name: 'gradeMode',
+            label: 'Grade Mode',
+            type: 'select',
+            options: [
+              { value: 'stagger', label: 'Staggered — bunks at different times' },
+              { value: 'fullgrade', label: 'Full Grade — all bunks at the same time (like a league)' }
+            ]
+          });
+        }
+
         const result = await showModal({
           title: name,
           description: tileData.type === 'swim' ? 'Change time is carved from the total block. e.g. 3–4 with 10min changes → Change 3:00–3:10, Swim 3:10–3:50, Change 3:50–4:00' : undefined,
@@ -2560,6 +2572,7 @@ function addDropListeners(selector) {
         }
         
         // Swim tile — narrowed to exclude change time
+        const _swimFullGrade = result.gradeMode === 'fullgrade';
         newEvent = {
           id: Date.now().toString(),
           type: 'pinned',
@@ -2570,7 +2583,8 @@ function addDropListeners(selector) {
           reservedFields: reservedFields,
           location: location,
           _preChangeMin: msPreChange || undefined,
-          _postChangeMin: msPostChange || undefined
+          _postChangeMin: msPostChange || undefined,
+          fullGrade: _swimFullGrade || undefined
         };
         
         // Post-Change carved from end of block

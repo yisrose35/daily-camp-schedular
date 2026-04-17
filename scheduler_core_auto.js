@@ -489,12 +489,23 @@
             layersByGrade[grade].push(layer);
         });
 
+        const FULL_GRADE_TYPES = new Set(['swim', 'lunch', 'snacks', 'snack']);
+
         const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
+            const lt = (layer.type || '').toLowerCase();
             let classification;
-            if (ratio >= 1) classification = 'pinned';
-            else if (ratio >= 0.10) classification = 'windowed';
-            else classification = 'open';
+            // ★ fullGrade swim/lunch/snacks → always pinned so Phase 0 places them
+            //   grade-wide at the same time for every bunk (like a league).
+            if (layer.fullGrade === true && FULL_GRADE_TYPES.has(lt)) {
+                classification = 'pinned';
+            } else if (ratio >= 1) {
+                classification = 'pinned';
+            } else if (ratio >= 0.10) {
+                classification = 'windowed';
+            } else {
+                classification = 'open';
+            }
             return Object.assign({}, layer, { _classification: classification, _ratio: ratio });
         });
 
@@ -759,6 +770,8 @@
             allGrades.forEach(grade => {
                 const swimLayer = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'swim');
                 if (!swimLayer) return;
+                // ★ fullGrade swim is already placed grade-wide in Phase 0 — skip MRC staggering
+                if (swimLayer.fullGrade === true) return;
                 if (computeRatio(swimLayer) >= 1) return;
                 const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
                 const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
@@ -1212,6 +1225,7 @@
 
                 const t = (layer.type || '').toLowerCase();
                 const isGradeWide = t === 'league' || t === 'specialty_league' ||
+                    layer.fullGrade === true ||
                     (activityProperties[layer.event]?.fullGrade) || (activityProperties[layer.name]?.fullGrade);
                 const isCustom = t === 'custom';
                 const targetBunks = (isCustom && layer.customBunks && layer.customBunks.length > 0)
@@ -1219,15 +1233,32 @@
                     : allBunks;
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
 
+                // ★ fullGrade windowed layers: compute a proper block time within the window.
+                //   When the window is wider than the activity duration (e.g. swim window 9am-2pm,
+                //   duration 45min), pick the center of the window rather than filling the whole span.
+                let blockStart = layer.startMin;
+                let blockEnd = layer.endMin;
+                if (layer.fullGrade === true && FULL_GRADE_TYPES.has(t)) {
+                    const fgC = resolveConstraints(layer, t);
+                    const dur = layer.periodMin || fgC.dMin || 30;
+                    const win = layer.endMin - layer.startMin;
+                    if (win > dur) {
+                        const center = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
+                        blockStart = Math.max(layer.startMin, Math.min(layer.endMin - dur, center - Math.round(dur / 2 / 5) * 5));
+                        blockStart = Math.round(blockStart / 5) * 5;
+                        blockEnd = blockStart + dur;
+                    }
+                }
+
                 // ★ v4.0: Cross-division check for pinned specials
-                if (t === 'special' && !canUseSpecialAtTime(eventName, grade, layer.startMin, layer.endMin)) return;
+                if (t === 'special' && !canUseSpecialAtTime(eventName, grade, blockStart, blockEnd)) return;
 
                 // ★ v4.0: Pool exclusivity for pinned swim
-                if (t === 'swim' && !canUsePoolAtTime(grade, layer.startMin, layer.endMin)) return;
+                if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
 
                 targetBunks.forEach(bunk => {
                     bunkTimelines[bunk].push({
-                        startMin: layer.startMin, endMin: layer.endMin,
+                        startMin: blockStart, endMin: blockEnd,
                         type: isCustom ? 'custom' : (layer.type || 'pinned'),
                         event: eventName, layer,
                         _classification: 'pinned', _committed: true, _fixed: true,
@@ -1240,8 +1271,8 @@
                     count++;
                 });
 
-                if (t === 'special') registerSpecialUsage(eventName, grade, layer.startMin, layer.endMin);
-                if (t === 'swim') registerPoolUsage(grade, layer.startMin, layer.endMin);
+                if (t === 'special') registerSpecialUsage(eventName, grade, blockStart, blockEnd);
+                if (t === 'swim') registerPoolUsage(grade, blockStart, blockEnd);
                 if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
             // ★ v11.3: Validate all timelines after pinned layer placement

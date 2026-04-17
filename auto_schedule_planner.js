@@ -788,6 +788,24 @@ function openPopover(layerId, bandEl) {
     '</div>';
   html += '<div class="al-popover-hint">Target number of days per week each bunk should get this activity. The system tracks history and picks bunks that need it most.<br><b>Example:</b> Set \u2265 2 \u2192 every bunk gets this at least 2 days per week.</div>';
 
+  // ── Section 3: Grade Mode (swim / lunch / snacks only) ──
+  var isGradeModetype = ['swim', 'lunch', 'snack', 'snacks'].indexOf(layer.type) >= 0;
+  if (isGradeModetype) {
+    var isFullGrade = layer.fullGrade === true;
+    html += '<div class="al-popover-divider"></div>';
+    html += '<div class="al-popover-section-title">Grade Mode</div>';
+    html += '<div class="al-popover-row">' +
+      '<label>Scheduling</label>' +
+      '<div style="display:flex;gap:6px;">' +
+      '<button class="al-pop-grademode' + (!isFullGrade ? ' active' : '') + '" data-gmode="stagger" style="padding:4px 10px;border-radius:6px;border:1px solid #cbd5e1;background:' + (!isFullGrade ? '#3b82f6' : '#f8fafc') + ';color:' + (!isFullGrade ? '#fff' : '#475569') + ';font-size:11px;cursor:pointer;">Staggered</button>' +
+      '<button class="al-pop-grademode' + (isFullGrade ? ' active' : '') + '" data-gmode="fullgrade" style="padding:4px 10px;border-radius:6px;border:1px solid #cbd5e1;background:' + (isFullGrade ? '#3b82f6' : '#f8fafc') + ';color:' + (isFullGrade ? '#fff' : '#475569') + ';font-size:11px;cursor:pointer;">Full Grade</button>' +
+      '</div>' +
+      '</div>';
+    html += '<div class="al-popover-hint">' +
+      '<b>Full Grade:</b> every bunk does this at the same time — like a league. ' +
+      '<b>Staggered:</b> bunks are spread across the time window.</div>';
+  }
+
   // ── Actions ──
   html += '<div class="al-popover-actions">' +
     '<button class="al-btn al-btn-danger al-btn-sm" id="al-pop-delete">Delete</button>' +
@@ -812,6 +830,20 @@ function openPopover(layerId, bandEl) {
     btn.onclick = function() {
       popoverEl.querySelectorAll('.al-pop-op[data-wop]').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
+    };
+  });
+
+  // Grade Mode toggle (swim / lunch / snacks)
+  popoverEl.querySelectorAll('.al-pop-grademode[data-gmode]').forEach(function(btn) {
+    btn.onclick = function() {
+      popoverEl.querySelectorAll('.al-pop-grademode[data-gmode]').forEach(function(b) {
+        b.classList.remove('active');
+        b.style.background = '#f8fafc';
+        b.style.color = '#475569';
+      });
+      btn.classList.add('active');
+      btn.style.background = '#3b82f6';
+      btn.style.color = '#fff';
     };
   });
 
@@ -853,6 +885,12 @@ function openPopover(layerId, bandEl) {
     layer.timesPerWeek = weekQtyVal;
     layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
     layer.bunksPerDay = bpdVal;
+
+    // Grade Mode (swim / lunch / snacks)
+    var activeGmode = popoverEl.querySelector('.al-pop-grademode[data-gmode].active');
+    if (activeGmode) {
+      layer.fullGrade = activeGmode.dataset.gmode === 'fullgrade';
+    }
 
     hasChanges = true; saveDraftLayers(); closePopover(); render();
   };
