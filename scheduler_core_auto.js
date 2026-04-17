@@ -3690,6 +3690,133 @@
                         return true;
                     }
 
+                    // ══════════════════════════════════════════════════
+                    // DURATION PRE-SOLVER
+                    // ══════════════════════════════════════════════════
+                    // The core insight: if we know EXACTLY how long each
+                    // flexible block should be before placement starts,
+                    // the CSP only has to solve for positions (start
+                    // times), not durations AND positions simultaneously.
+                    //
+                    // Math (per bunk, before any block is placed):
+                    //
+                    //   freeTime   = sum of gap minutes in template
+                    //   reserved   = sum of dMin for typed needs
+                    //                (swim, special, snack — have their
+                    //                own placement windows)
+                    //   target     = freeTime - reserved
+                    //
+                    //   For each sport/slot/activity need:
+                    //     share  = target × (flex_i / totalFlex)
+                    //     dur    = dMin + round5(share)
+                    //
+                    //   Rounding remainder absorbed by most-flexible need.
+                    //   Result: every flexible need has dMin = dMax = dur,
+                    //   so their sum is guaranteed = target.
+                    //
+                    // If pre-solve is infeasible (totalMin > target or
+                    // totalMax < target), or if the narrowed CSP fails,
+                    // we revert and run the original variable-duration CSP.
+
+                    var PRESOLVABLE = { sport: 1, sports: 1, activity: 1, slot: 1 };
+
+                    function preSolveDurations(needsList, tmpl, gs, ge, fMin) {
+                        // Step 1 — compute total free time from current template gaps
+                        var gaps = findGaps(tmpl, gs, ge);
+                        var freeTime = 0;
+                        for (var gi = 0; gi < gaps.length; gi++) freeTime += gaps[gi].end - gaps[gi].start;
+                        if (freeTime <= 0) return false;
+
+                        // Step 2 — split into pre-solvable vs typed/windowed needs
+                        var flex = [], other = [];
+                        for (var i = 0; i < needsList.length; i++) {
+                            var n = needsList[i];
+                            var tp = (n.type || '').toLowerCase();
+                            if (!n._pinned && !n._fixed && PRESOLVABLE[tp]) flex.push(n);
+                            else other.push(n);
+                        }
+                        if (flex.length === 0) return false;
+
+                        // Step 3 — reserve space for typed needs (use dMin as estimate)
+                        var reserved = 0;
+                        for (var j = 0; j < other.length; j++) reserved += other[j].dMin || fMin || 25;
+                        var target = freeTime - reserved;
+                        if (target <= 0) return false;
+
+                        // Step 4 — feasibility gate
+                        var totalMin = 0, totalMax = 0;
+                        for (var k = 0; k < flex.length; k++) {
+                            totalMin += flex[k].dMin || fMin || 25;
+                            totalMax += flex[k].dMax || 60;
+                        }
+                        if (totalMin > target || totalMax < target) return false;
+
+                        // Step 5 — proportional distribution
+                        var slack = target - totalMin;
+                        var totalFlex = totalMax - totalMin;
+                        var assigned = [];
+                        for (var m = 0; m < flex.length; m++) {
+                            var nMin = flex[m].dMin || fMin || 25;
+                            var nMax = flex[m].dMax || 60;
+                            var flexRoom = nMax - nMin;
+                            var rawAdd = totalFlex > 0 ? slack * flexRoom / totalFlex : slack / flex.length;
+                            var snapped = Math.round(rawAdd / 5) * 5;
+                            assigned.push(nMin + Math.max(0, Math.min(flexRoom, snapped)));
+                        }
+
+                        // Step 6 — absorb rounding remainder
+                        var actualSum = 0;
+                        for (var s = 0; s < assigned.length; s++) actualSum += assigned[s];
+                        var rem = target - actualSum;
+                        if (rem !== 0) {
+                            var step5 = rem > 0 ? 5 : -5;
+                            var attempts = 0;
+                            while (rem !== 0 && attempts < flex.length * 4) {
+                                var idx = attempts % flex.length;
+                                var lo = flex[idx].dMin || fMin || 25;
+                                var hi = flex[idx].dMax || 60;
+                                if (step5 > 0 && assigned[idx] + 5 <= hi)  { assigned[idx] += 5; rem -= 5; }
+                                if (step5 < 0 && assigned[idx] - 5 >= lo)  { assigned[idx] -= 5; rem += 5; }
+                                attempts++;
+                            }
+                            if (rem !== 0) return false; // Cannot resolve rounding
+                        }
+
+                        // Step 7 — bounds check and apply
+                        var finalSum = 0;
+                        for (var v = 0; v < flex.length; v++) {
+                            var dur = assigned[v];
+                            finalSum += dur;
+                            if (dur < (flex[v].dMin || fMin || 25) || dur > (flex[v].dMax || 60)) return false;
+                        }
+                        if (finalSum !== target) return false;
+
+                        // Narrow each flexible need to its exact pre-solved duration
+                        for (var a = 0; a < flex.length; a++) {
+                            flex[a]._origDMin = flex[a].dMin;
+                            flex[a]._origDMax = flex[a].dMax;
+                            flex[a].dMin = assigned[a];
+                            flex[a].dMax = assigned[a];
+                            flex[a]._preSolved = true;
+                        }
+
+                        log('[PreSolve] ' + flex.length + ' blocks — target=' + target +
+                            'min, assigned=[' + assigned.join(',') + '], freeTime=' + freeTime);
+                        return true;
+                    }
+
+                    function revertPreSolvedDurations(needsList) {
+                        for (var i = 0; i < needsList.length; i++) {
+                            if (needsList[i]._preSolved) {
+                                needsList[i].dMin = needsList[i]._origDMin;
+                                needsList[i].dMax = needsList[i]._origDMax;
+                                delete needsList[i]._preSolved;
+                                delete needsList[i]._origDMin;
+                                delete needsList[i]._origDMax;
+                            }
+                        }
+                    }
+
                     // Main solver: MCV + LCV + AC-3 + backtracking
                     function solveCSP(needsList, tmpl, gs, ge, fMin, depth, nogoods) {
                         if (needsList.length === 0) return [];
@@ -3759,9 +3886,27 @@
                         return null;
                     }
 
+                    // ── Duration pre-solver ──────────────────────────────
+                    // Assigns exact durations proportionally so all flexible
+                    // blocks sum to available free time before the CSP runs.
+                    // The CSP then only solves for start-time positions,
+                    // which is much simpler and gap-free by construction.
+                    var preSolved = preSolveDurations(needs, template, gradeStart, gradeEnd, fillMinDur);
+
                     // Run the intelligent solver
                     var nogoods = {}; // learned failures
                     var solution = solveCSP(needs, template, gradeStart, gradeEnd, fillMinDur, 0, nogoods);
+
+                    // If the pre-solved durations made placement infeasible,
+                    // revert to the original variable ranges and retry.
+                    if (!solution && preSolved) {
+                        log('[PreSolve] Narrowed CSP failed — reverting to variable durations');
+                        revertPreSolvedDurations(needs);
+                        nogoods = {};
+                        solution = solveCSP(needs, template, gradeStart, gradeEnd, fillMinDur, 0, nogoods);
+                    } else if (preSolved) {
+                        revertPreSolvedDurations(needs); // Restore ranges for any downstream use
+                    }
 
                     if (solution) {
                         for (var si = 0; si < solution.length; si++) {
