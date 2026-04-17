@@ -1103,6 +1103,7 @@
 
         // evictedSet: bunk|slotIdx pairs virtually removed from the field index
         const evictedSet = new Set();
+        const claimedDestinations = new Set(); // ★ NEW: destinations already committed in this chain
         // visitedFields: fields already in the chain — prevents cycles
         const visitedFields = new Set([fbFn]);
         // chain: [{victim, newCand, sourceFn}] built up during DFS
@@ -1157,8 +1158,10 @@
                     const vcFn = normName(vc.field);
 
                     // Can victim go directly to vc.field?
+                    if (claimedDestinations.has(vcFn)) continue; // already claimed in this chain
                     if (isFieldAvailableByTime(vc.field, victim.startMin, victim.endMin,
                             victim.bunk, victim.grade, vIdx, vc)) {
+                        claimedDestinations.add(vcFn);
                         chain.push({ victim, newCand: vc, sourceFn: targetFn });
                         foundMove = true;
                         break;
@@ -1250,6 +1253,32 @@
         });
     }
 
+    // ── Post-chain validity check ─────────────────────────────────────────
+    // Returns true if every field touched by the chain satisfies capacity
+    // and cross-grade constraints.  Called after executeChain; if false,
+    // the caller rolls back scheduleAssignments and fieldIndex.
+    function isChainValid(chain, fb, fbCand, fieldIndex, candidates) {
+        const fieldsTouched = new Set([fbCand.fieldNorm, ...chain.map(m => normName(m.newCand.field))]);
+        for (const fn of fieldsTouched) {
+            const entries = fieldIndex.get(fn) || [];
+            const cand = candidates.find(c => c.fieldNorm === fn);
+            if (!cand) continue;
+            const cap = cand.capacity || 2;
+            const st = cand.shareType || 'same_division';
+            for (let i = 0; i < entries.length; i++) {
+                const e = entries[i];
+                const overlapping = entries.filter((o, j) =>
+                    j !== i && o.bunk !== e.bunk &&
+                    o.startMin < e.endMin && o.endMin > e.startMin
+                );
+                if (overlapping.length >= cap) return false;
+                if ((st === 'same_division' || st === 'not_sharable') &&
+                    overlapping.some(o => o.grade !== e.grade)) return false;
+            }
+        }
+        return true;
+    }
+
     // ── Main ejection chain repair pass ──────────────────────────────────
     function ejectionChainRepair(config) {
         config = config || {};
@@ -1286,7 +1315,28 @@
                     const chain = findEjectionChain(fb, fbCand, candidates, fieldIndex, tabuSet, CHAIN_DEPTH);
                     if (!chain || chain.length === 0) continue;
 
+                    // Snapshot state before commit so we can roll back if validation fails
+                    const saSnapshot = {};
+                    const allBunksInChain = [fb, ...chain.map(m => m.victim)];
+                    allBunksInChain.forEach(({bunk, slotIdx}) => {
+                        saSnapshot[bunk + '|' + slotIdx] = (window.scheduleAssignments[bunk] || [])[slotIdx];
+                    });
+                    const fieldsTouched = new Set([fbCand.fieldNorm, ...chain.map(m => normName(m.newCand.field)), ...chain.map(m => m.sourceFn)]);
+                    const fiSnapshot = {};
+                    fieldsTouched.forEach(fn => { fiSnapshot[fn] = (fieldIndex.get(fn) || []).slice(); });
+
                     executeChain(chain, fb, fbCand, fieldIndex);
+
+                    // Validate — roll back if any capacity or cross-grade violation
+                    if (!isChainValid(chain, fb, fbCand, fieldIndex, candidates)) {
+                        allBunksInChain.forEach(({bunk, slotIdx}) => {
+                            if (window.scheduleAssignments[bunk]) {
+                                window.scheduleAssignments[bunk][slotIdx] = saSnapshot[bunk + '|' + slotIdx];
+                            }
+                        });
+                        fieldsTouched.forEach(fn => { fieldIndex.set(fn, fiSnapshot[fn]); });
+                        continue; // try next candidate for this FB
+                    }
 
                     // Register evicted victims in tabu — don't immediately move them back
                     chain.forEach(({ victim, sourceFn }) => {

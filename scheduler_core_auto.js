@@ -3830,6 +3830,22 @@
                         score -= dirtyGaps * 1200;  // dirty — medium penalty (budget-first)
                         score -= pos.deadGaps * 1000;
 
+                        // ★ Fix 3: Dead gap forward-check — penalize placements that leave
+                        // an unfillable remainder in the gap containing this block.
+                        // remAfter = gap_right_edge - block_end; if 0 < remAfter < fMin,
+                        // the tail of this gap becomes a dead zone.
+                        var _prePlacedGaps = findGaps(tmpl, gs, ge);
+                        for (var _pg = 0; _pg < _prePlacedGaps.length; _pg++) {
+                            var _g = _prePlacedGaps[_pg];
+                            if (pos.start >= _g.start && pos.start < _g.end) {
+                                var remAfter = _g.end - (pos.start + pos.dur);
+                                if (remAfter > 0 && remAfter < fMin) {
+                                    score -= 5000; // heavily penalize — prefer placements that leave no gap or a fillable gap
+                                }
+                                break;
+                            }
+                        }
+
                         // 2b. ★ v11.4: Neighbor starvation check — would remaining needs
                         // still fit at their dMin in the leftover gaps?
                         // Raised from 300 → 1000 per starved minute to match the
