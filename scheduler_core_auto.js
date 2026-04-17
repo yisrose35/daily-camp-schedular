@@ -9367,9 +9367,14 @@
                     const fn = entry.field.toLowerCase().trim();
                     if (CSWEEP_IGNORE_FIELDS.has(fn) || isLeagueField(fn)) return;
                     const slot = pbs[idx];
-                    if (!slot || slot.startMin == null || slot.endMin == null) return;
+                    // ★ FIX: fall back to _startMin/_endMin written by the solver when
+                    //   _perBunkSlots isn't available — prevents assignments on grades 5/6
+                    //   (and any bunk with missing pbs) from being invisible to the sweep.
+                    const sMin = slot?.startMin ?? entry._startMin;
+                    const eMin = slot?.endMin   ?? entry._endMin;
+                    if (sMin == null || eMin == null) return;
                     if (!fieldMap.has(fn)) fieldMap.set(fn, []);
-                    fieldMap.get(fn).push({ startMin: slot.startMin, endMin: slot.endMin, bunk, grade, idx, field: entry.field });
+                    fieldMap.get(fn).push({ startMin: sMin, endMin: eMin, bunk, grade, idx, field: entry.field });
                     totalIndexed++;
                 });
             });

@@ -147,12 +147,18 @@
                 if (!entry || !entry.field || entry.field === 'Free') return;
                 if (entry.continuation) return;
                 const slot = pbs[idx];
-                if (!slot || slot.startMin == null || slot.endMin == null) return;
+                // ★ FIX: fall back to _startMin/_endMin written by the solver when
+                //   _perBunkSlots is absent (grades 5/6 or any bunk with sparse pbs).
+                //   Without this fallback those assignments are invisible to the field
+                //   index, letting cross-grade bunks claim the same field.
+                const sMin = slot?.startMin ?? entry._startMin;
+                const eMin = slot?.endMin   ?? entry._endMin;
+                if (sMin == null || eMin == null) return;
 
                 const fn = normName(entry.field);
                 if (!index.has(fn)) index.set(fn, []);
                 index.get(fn).push({
-                    startMin: slot.startMin, endMin: slot.endMin,
+                    startMin: sMin, endMin: eMin,
                     bunk, grade, slotIdx: idx,
                     activity: normName(entry._activity || entry.sport || entry.field)
                 });
