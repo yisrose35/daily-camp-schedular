@@ -1669,7 +1669,18 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <input type="number" id="daw-pop-week-qty" value="${layer.timesPerWeek != null ? layer.timesPerWeek : ''}" min="1" max="7" style="width:50px;" placeholder="Any">
       <span style="font-size:10px;color:#94a3b8;">days/wk</span>
     </div>
-    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">Target days per week each bunk gets this. System picks bunks that need it most.</span>    
+    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">Target days per week each bunk gets this. System picks bunks that need it most.</span>
+    ${['swim','lunch','snacks','snack'].includes(layer.type) ? `
+    <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
+    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Grade Mode</label>
+    <div class="ms-daw-pop-row" style="gap:6px;margin-top:4px;">
+      <button class="ms-daw-grademode ${!layer.fullGrade ? 'active' : ''}" data-gmode="stagger"
+        style="padding:4px 10px;border-radius:6px;border:1px solid #cbd5e1;background:${!layer.fullGrade ? '#3b82f6' : '#f8fafc'};color:${!layer.fullGrade ? '#fff' : '#475569'};font-size:11px;cursor:pointer;">Staggered</button>
+      <button class="ms-daw-grademode ${layer.fullGrade ? 'active' : ''}" data-gmode="fullgrade"
+        style="padding:4px 10px;border-radius:6px;border:1px solid #cbd5e1;background:${layer.fullGrade ? '#3b82f6' : '#f8fafc'};color:${layer.fullGrade ? '#fff' : '#475569'};font-size:11px;cursor:pointer;">Full Grade</button>
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin-top:4px;"><b>Full Grade:</b> every bunk does this at the same time — like a league. <b>Staggered:</b> bunks are spread across the window.</span>
+    ` : ''}
     ${layer.type === 'custom' ? `
     <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
     <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Custom Activity</label>
@@ -1737,6 +1748,20 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     };
   });
   
+  // Grade Mode toggle (swim / lunch / snacks)
+  popover.querySelectorAll('.ms-daw-grademode[data-gmode]').forEach(btn => {
+    btn.onclick = () => {
+      popover.querySelectorAll('.ms-daw-grademode[data-gmode]').forEach(b => {
+        b.classList.remove('active');
+        b.style.background = '#f8fafc';
+        b.style.color = '#475569';
+      });
+      btn.classList.add('active');
+      btn.style.background = '#3b82f6';
+      btn.style.color = '#fff';
+    };
+  });
+
   // Custom layer: field dropdown toggle + bunk select/deselect
   const customFieldSelect = popover.querySelector('#daw-pop-custom-field');
   if (customFieldSelect) {
@@ -1785,6 +1810,12 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     const weekQtyVal = weekQtyRaw !== '' ? Math.max(1, Math.min(7, parseInt(weekQtyRaw) || 1)) : null;
     layer.timesPerWeek = weekQtyVal;
     layer.weeklyOp = weekQtyVal != null && activeWop ? activeWop.dataset.wop : '>=';
+
+    // Grade Mode: save fullGrade for swim / lunch / snacks
+    const activeGmode = popover.querySelector('.ms-daw-grademode[data-gmode].active');
+    if (activeGmode) {
+      layer.fullGrade = activeGmode.dataset.gmode === 'fullgrade';
+    }
 
     // Custom layer: save activity name, field, and bunks
     if (layer.type === 'custom') {
