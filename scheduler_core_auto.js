@@ -6383,6 +6383,159 @@
             if (enforceFixCount > 0) log('[Phase3] ★ ENFORCE: fixed ' + enforceFixCount + ' constraint violations in final sweep');
 
             // ══════════════════════════════════════════════════════════════════════
+            // ★ POST-ENFORCEMENT GAP CLOSER
+            // The rebalancer and enforcement sweeps run AFTER the zero-gap finalizer
+            // and can open new gaps (e.g. enforcement shrinks a block that was
+            // touching a fixed boundary).  This lightweight pass finds and closes
+            // every remaining gap using three strategies in priority order:
+            //   1. Extend the block immediately before the gap (if dMax allows)
+            //   2. Extend the block immediately after the gap (if dMax allows)
+            //   3. Split the gap between both neighbors proportionally
+            //   4. Create a new General Activity Slot if gap >= fillMinDur
+            // ══════════════════════════════════════════════════════════════════════
+            var pgClosed = 0;
+            for (var pg_i = 0; pg_i < allBunkIds.length; pg_i++) {
+                var pg_bunk = allBunkIds[pg_i];
+                var pg_meta = bunkMeta[pg_bunk];
+                if (!pg_meta) continue;
+                var pg_gs   = pg_meta.gradeStart;
+                var pg_ge   = pg_meta.gradeEnd;
+                if (pg_gs == null || pg_ge == null || pg_ge <= pg_gs) continue;
+
+                var pg_tmpl = bunkTimelines[pg_bunk] || allTemplates[pg_bunk] || [];
+                pg_tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                // Iterate until no gaps remain (re-scan after each fix)
+                var pg_pass = 0;
+                var pg_changed = true;
+                while (pg_changed && pg_pass < 10) {
+                    pg_changed = false;
+                    pg_pass++;
+
+                    // Build gap list inside the grade window
+                    var pg_gaps   = [];
+                    var pg_cursor = pg_gs;
+                    for (var pg_j = 0; pg_j < pg_tmpl.length; pg_j++) {
+                        var pg_bs = Math.max(pg_tmpl[pg_j].startMin, pg_gs);
+                        var pg_be = Math.min(pg_tmpl[pg_j].endMin,   pg_ge);
+                        if (pg_be <= pg_bs) continue;
+                        if (pg_bs > pg_cursor) pg_gaps.push({ start: pg_cursor, end: pg_bs });
+                        pg_cursor = Math.max(pg_cursor, pg_be);
+                    }
+                    if (pg_cursor < pg_ge) pg_gaps.push({ start: pg_cursor, end: pg_ge });
+                    if (pg_gaps.length === 0) break;
+
+                    for (var pg_gi = 0; pg_gi < pg_gaps.length; pg_gi++) {
+                        var pg_gap = pg_gaps[pg_gi];
+                        var pg_dur = pg_gap.end - pg_gap.start;
+                        if (pg_dur <= 0) continue;
+
+                        // Find the block immediately before the gap
+                        var pg_prev = null;
+                        for (var pg_p = pg_tmpl.length - 1; pg_p >= 0; pg_p--) {
+                            if (pg_tmpl[pg_p].endMin <= pg_gap.start) { pg_prev = pg_tmpl[pg_p]; break; }
+                        }
+                        // Find the block immediately after the gap
+                        var pg_next = null;
+                        for (var pg_n = 0; pg_n < pg_tmpl.length; pg_n++) {
+                            if (pg_tmpl[pg_n].startMin >= pg_gap.end) { pg_next = pg_tmpl[pg_n]; break; }
+                        }
+
+                        var pg_fixed = false;
+
+                        // Strategy 1: extend prev block rightward into the gap
+                        if (!pg_fixed && pg_prev && !isPhase0(pg_prev)) {
+                            var pg_prevDur = pg_prev.endMin - pg_prev.startMin;
+                            var pg_prevC   = resolveConstraints(pg_prev.layer, (pg_prev.type || '').toLowerCase(), pg_prev);
+                            var pg_prevRoom = pg_prevC.dMax - pg_prevDur;
+                            if (pg_prevRoom >= pg_dur) {
+                                pg_prev.endMin += pg_dur;
+                                pgClosed++;
+                                pg_changed = true;
+                                pg_fixed   = true;
+                                log('[POST-GAP] bunk=' + pg_bunk + ' extended prev ' +
+                                    (pg_prev.type || '') + ' +' + pg_dur + 'min into gap @' + pg_gap.start + '-' + pg_gap.end);
+                            }
+                        }
+
+                        // Strategy 2: extend next block leftward into the gap
+                        if (!pg_fixed && pg_next && !isPhase0(pg_next)) {
+                            var pg_nextDur  = pg_next.endMin - pg_next.startMin;
+                            var pg_nextC    = resolveConstraints(pg_next.layer, (pg_next.type || '').toLowerCase(), pg_next);
+                            var pg_nextRoom  = pg_nextC.dMax - pg_nextDur;
+                            if (pg_nextRoom >= pg_dur) {
+                                pg_next.startMin -= pg_dur;
+                                pgClosed++;
+                                pg_changed = true;
+                                pg_fixed   = true;
+                                log('[POST-GAP] bunk=' + pg_bunk + ' extended next ' +
+                                    (pg_next.type || '') + ' -' + pg_dur + 'min into gap @' + pg_gap.start + '-' + pg_gap.end);
+                            }
+                        }
+
+                        // Strategy 3: split the gap between both neighbors proportionally
+                        if (!pg_fixed && pg_prev && pg_next && !isPhase0(pg_prev) && !isPhase0(pg_next)) {
+                            var pg_prevDur2  = pg_prev.endMin - pg_prev.startMin;
+                            var pg_prevC2    = resolveConstraints(pg_prev.layer, (pg_prev.type || '').toLowerCase(), pg_prev);
+                            var pg_nextDur2  = pg_next.endMin - pg_next.startMin;
+                            var pg_nextC2    = resolveConstraints(pg_next.layer, (pg_next.type || '').toLowerCase(), pg_next);
+                            var pg_prevAvail = Math.floor((pg_prevC2.dMax - pg_prevDur2) / 5) * 5;
+                            var pg_nextAvail = Math.floor((pg_nextC2.dMax - pg_nextDur2) / 5) * 5;
+
+                            if (pg_prevAvail + pg_nextAvail >= pg_dur) {
+                                // Give as much as possible to prev first, remainder to next
+                                var pg_givePrev = Math.min(pg_prevAvail, pg_dur);
+                                pg_givePrev = Math.floor(pg_givePrev / 5) * 5;
+                                var pg_giveNext = pg_dur - pg_givePrev;
+                                if (pg_giveNext > pg_nextAvail) {
+                                    // Prev can't cover it alone — pull more from prev if next has it
+                                    pg_giveNext = Math.min(pg_nextAvail, pg_dur);
+                                    pg_giveNext = Math.floor(pg_giveNext / 5) * 5;
+                                    pg_givePrev = pg_dur - pg_giveNext;
+                                }
+                                if (pg_givePrev + pg_giveNext === pg_dur && pg_givePrev <= pg_prevAvail && pg_giveNext <= pg_nextAvail) {
+                                    if (pg_givePrev > 0) pg_prev.endMin   += pg_givePrev;
+                                    if (pg_giveNext > 0) pg_next.startMin -= pg_giveNext;
+                                    pgClosed++;
+                                    pg_changed = true;
+                                    pg_fixed   = true;
+                                    log('[POST-GAP] bunk=' + pg_bunk + ' split gap ' + pg_dur + 'min @' +
+                                        pg_gap.start + ' (' + pg_givePrev + ' prev / ' + pg_giveNext + ' next)');
+                                }
+                            }
+                        }
+
+                        // Strategy 4: create a new General Activity Slot for large enough gaps
+                        if (!pg_fixed && pg_dur >= (pg_meta.fillMinDur || 25)) {
+                            var pg_blk = makeBlock({
+                                startMin: pg_gap.start, endMin: pg_gap.end,
+                                type: 'slot', event: 'General Activity Slot',
+                                layer: pg_meta.sportLayer, field: null,
+                                dMin: pg_meta.fillMinDur || 25,
+                                dMax: pg_meta.sportCeiling || 60,
+                                _source: 'post-gap', _final: true
+                            });
+                            if (pg_blk) {
+                                pg_tmpl.push(pg_blk);
+                                pg_tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                                pgClosed++;
+                                pg_changed = true;
+                                pg_fixed   = true;
+                                log('[POST-GAP] bunk=' + pg_bunk + ' created ' + pg_dur +
+                                    'min slot @' + pg_gap.start + '-' + pg_gap.end);
+                            }
+                        }
+
+                        if (pg_changed) break; // re-scan gap list after any fix
+                    }
+                }
+
+                bunkTimelines[pg_bunk] = pg_tmpl;
+                allTemplates[pg_bunk]  = pg_tmpl;
+            }
+            if (pgClosed > 0) log('[POST-GAP] ★ closed ' + pgClosed + ' post-enforcement gap(s)');
+
+            // ══════════════════════════════════════════════════════════════════════
             // ★ COMPONENT 3 — COVERAGE VALIDATION (budget-first assertion)
             // After ALL repair passes, every bunk's block durations must sum exactly
             // to (gradeEnd - gradeStart).  Any gap here is a true scheduling hole —
