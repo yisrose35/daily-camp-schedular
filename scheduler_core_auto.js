@@ -1382,6 +1382,71 @@
                         score += bunksWithNoRoom * 5000;
                     }
                 }
+
+                // ★ v15.3: SNACK-WINDOW PROTECTION
+                // If the league overlaps the grade's mandatory snack window and
+                // leaves < snack.dMin free minutes, snacks become impossible for
+                // the entire grade.  Treat this as near-fatal (prefer ANY other slot).
+                var _snackLayerLP = (layersByGrade[grade] || []).find(function(l) {
+                    var lt = (l.type || '').toLowerCase();
+                    return lt === 'snacks' || lt === 'snack';
+                });
+                if (_snackLayerLP && _snackLayerLP.startMin != null && _snackLayerLP.endMin != null) {
+                    var _snkS = _snackLayerLP.startMin, _snkE = _snackLayerLP.endMin;
+                    var _lgOvS = Math.max(ts, _snkS), _lgOvE = Math.min(leagueEnd, _snkE);
+                    if (_lgOvE > _lgOvS) {
+                        var _snkWindowDur = _snkE - _snkS;
+                        var _snkOverlap   = _lgOvE - _lgOvS;
+                        var _snkFree      = _snkWindowDur - _snkOverlap;
+                        var _snkDMin      = resolveConstraints(_snackLayerLP, 'snacks').dMin || 15;
+                        if (_snkFree < _snkDMin) {
+                            // League would leave NO room for snacks — near-fatal penalty
+                            score += 80000;
+                        } else {
+                            // Partial overlap: proportional penalty
+                            score += Math.round((_snkOverlap / _snkWindowDur) * 20000);
+                        }
+                    }
+                }
+
+                // ★ v15.3: STACKING DEAD-ZONE PENALTY
+                // For each gap adjacent to this league, simulate the grade's typed
+                // needs (snack, swim, special) consuming time.  If the leftover is
+                // in (0, fillMinDur) it becomes an unfillable dead zone — penalize.
+                var _lp_gradeLayers = layersByGrade[grade] || [];
+                var _lp_fixedNeedDurs = [];
+                _lp_gradeLayers.forEach(function(l) {
+                    var lt = (l.type || '').toLowerCase();
+                    if (lt === 'special')                   _lp_fixedNeedDurs.push(resolveConstraints(l, 'special').dMin || 30);
+                    else if (lt === 'swim')                 _lp_fixedNeedDurs.push(resolveConstraints(l, 'swim').dMin || 30);
+                    else if (lt === 'snacks' || lt === 'snack') _lp_fixedNeedDurs.push(resolveConstraints(l, 'snacks').dMin || 15);
+                });
+                if (_lp_fixedNeedDurs.length > 0) {
+                    bunks.forEach(function(bk) {
+                        var tl = bunkTimelines[bk] || [];
+                        var gs3 = parseTimeToMinutes(divisions[grade] && divisions[grade].startTime) || 540;
+                        var ge3 = parseTimeToMinutes(divisions[grade] && divisions[grade].endTime) || 960;
+                        // Gap before the proposed league
+                        var prevEnd = gs3;
+                        tl.forEach(function(b) { if (b.endMin <= ts && b.endMin > prevEnd) prevEnd = b.endMin; });
+                        var gBefore = ts - prevEnd;
+                        if (gBefore > 0) {
+                            var rem = gBefore;
+                            _lp_fixedNeedDurs.forEach(function(nd) { if (rem >= nd) rem -= nd; });
+                            if (rem > 0 && rem < _minFill) score += 4000; // dead zone likely after typed needs fill
+                        }
+                        // Gap after the proposed league
+                        var nextStart = ge3;
+                        tl.forEach(function(b) { if (b.startMin >= leagueEnd && b.startMin < nextStart) nextStart = b.startMin; });
+                        var gAfter = nextStart - leagueEnd;
+                        if (gAfter > 0) {
+                            var rem2 = gAfter;
+                            _lp_fixedNeedDurs.forEach(function(nd) { if (rem2 >= nd) rem2 -= nd; });
+                            if (rem2 > 0 && rem2 < _minFill) score += 4000;
+                        }
+                    });
+                }
+
                 leagueCandidates.push({ start: ts, score: score });
             }
             // Sort by score, keep top 4 distinct positions
