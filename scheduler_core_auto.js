@@ -5456,16 +5456,28 @@
                     var gNeedDMin = glc.dMin || (glt === 'swim' ? 30 : 15);
                     var gNeedDMax = glc.dMax || gNeedDMin;
 
-                    // Find the largest non-fixed sport/slot block anywhere in the day
+                    // ★ v15.0: Compute layer window BEFORE victim search so we can
+                    // filter candidates to blocks that actually overlap the window.
+                    // Use != null (not ||) so startMin=0 is treated as a real value.
+                    var gLayerWinStart = gll.startMin != null ? gll.startMin : (gMeta.gradeStart || 0);
+                    var gLayerWinEnd   = gll.endMin   != null ? gll.endMin   : (gMeta.gradeEnd  || 1440);
+
+                    // Find the largest non-fixed sport/slot block that OVERLAPS the window.
+                    // Using the overlap portion for the duration check ensures the usable
+                    // space inside the window is actually >= dMin.
                     var gBestIdx = -1, gBestDur = 0;
                     for (var gsi = 0; gsi < gTmpl.length; gsi++) {
                         var gblk = gTmpl[gsi];
                         if (gblk._fixed) continue;
                         var gbt = (gblk.type || '').toLowerCase();
                         if (gbt !== 'sport' && gbt !== 'slot') continue;
-                        var gblkDur = gblk.endMin - gblk.startMin;
-                        if (gblkDur >= gNeedDMin && gblkDur > gBestDur) {
-                            gBestDur = gblkDur;
+                        // ★ Must overlap the layer window
+                        if (gblk.endMin <= gLayerWinStart || gblk.startMin >= gLayerWinEnd) continue;
+                        var gblkOverlapStart = Math.max(gblk.startMin, gLayerWinStart);
+                        var gblkOverlapEnd   = Math.min(gblk.endMin,   gLayerWinEnd);
+                        var gblkOverlapDur   = gblkOverlapEnd - gblkOverlapStart;
+                        if (gblkOverlapDur >= gNeedDMin && gblkOverlapDur > gBestDur) {
+                            gBestDur = gblkOverlapDur;
                             gBestIdx = gsi;
                         }
                     }
@@ -5481,13 +5493,18 @@
                             if (!['sport', 'slot'].includes(gm1t) || !['sport', 'slot'].includes(gm2t)) continue;
                             // Must be adjacent (no gap between them)
                             if (gm1.endMin !== gm2.startMin) continue;
+                            // ★ Combined block must overlap the layer window
+                            if (gm2.endMin <= gLayerWinStart || gm1.startMin >= gLayerWinEnd) continue;
                             var gCombinedDur = gm2.endMin - gm1.startMin;
-                            if (gCombinedDur >= gNeedDMin) {
+                            var gMergeOverlapStart = Math.max(gm1.startMin, gLayerWinStart);
+                            var gMergeOverlapEnd   = Math.min(gm2.endMin,   gLayerWinEnd);
+                            var gMergeOverlapDur   = gMergeOverlapEnd - gMergeOverlapStart;
+                            if (gMergeOverlapDur >= gNeedDMin) {
                                 // Merge: extend first block to cover both, remove second
                                 gm1.endMin = gm2.endMin;
                                 gTmpl.splice(gmi + 1, 1);
                                 gBestIdx = gmi;
-                                gBestDur = gCombinedDur;
+                                gBestDur = gMergeOverlapDur;
                                 log('[Phase3] ⚡ Merged 2 adjacent sport blocks for ' + glt + ' guarantee (bunk ' + gBunk + ')');
                                 break;
                             }
@@ -5496,9 +5513,7 @@
 
                     if (gBestIdx >= 0) {
                         var gVictim = gTmpl[gBestIdx];
-                        // ★ v11.1: Clamp to layer window AND dMax
-                        var gLayerWinStart = gll.startMin || gMeta.gradeStart;
-                        var gLayerWinEnd = gll.endMin || gMeta.gradeEnd;
+                        // gLayerWinStart / gLayerWinEnd already computed above
                         var gPlaceStart = Math.max(gVictim.startMin, gLayerWinStart);
                         var gLayerEnd = Math.min(gPlaceStart + gNeedDMax, gVictim.endMin, gLayerWinEnd);
 
@@ -6287,7 +6302,11 @@
                         var eLayerEnd = eBlk.layer.endMin;
                         if (eLayerStart != null && eBlk.startMin < eLayerStart) {
                             log('[Phase3] ENFORCE: clamped ' + eType + '/' + (eBlk.event || '') + ' for bunk ' + eBunk + ' start from ' + eBlk.startMin + ' to ' + eLayerStart + ' (window)');
+                            // ★ v15.0: Shift endMin by the same amount to preserve duration;
+                            // avoids creating an inverted (negative-duration) block.
+                            var eStartShift = eLayerStart - eBlk.startMin;
                             eBlk.startMin = eLayerStart;
+                            eBlk.endMin  += eStartShift;
                             enforceFixCount++;
                         }
                         if (eLayerEnd != null && eBlk.endMin > eLayerEnd) {
