@@ -128,7 +128,7 @@
 
     // Build a time index from current scheduleAssignments for field capacity checking
     function buildFieldTimeIndex() {
-        const index = new Map(); // fieldNorm → [{ startMin, endMin, bunk, grade, activity }]
+        const index = new Map(); // fieldNorm → [{ startMin, endMin, bunk, grade, slotIdx, activity }]
         const sa = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
         const dt = window.divisionTimes || {};
@@ -153,7 +153,7 @@
                 if (!index.has(fn)) index.set(fn, []);
                 index.get(fn).push({
                     startMin: slot.startMin, endMin: slot.endMin,
-                    bunk, grade,
+                    bunk, grade, slotIdx: idx,
                     activity: normName(entry._activity || entry.sport || entry.field)
                 });
             });
@@ -272,6 +272,48 @@
             return score === Infinity ? 999999 : score;
         }
         return 0;
+    }
+
+
+    // =========================================================================
+    // DYNAMIC DOMAIN TRACKING  (CP-SAT: forward checking)
+    // =========================================================================
+    // After each assignment we recount how many candidates each grade can still
+    // reach in the affected time window.  getScarcityPenalty() reads from
+    // gradeFieldOptions, so keeping that map live means later blocks are scored
+    // with accurate, post-assignment scarcity data rather than the stale
+    // snapshot built before the loop started.
+    //
+    // Cost: O(grades_in_window × candidates) per assignment — typically < 500
+    // operations, negligible compared to the scoring loop itself.
+
+    function updateDomainSizes(fieldIndex, startMin, endMin, candidates, gradeFieldOptions, windowBlocks) {
+        const wKey = startMin + '-' + endMin;
+        const wBlocks = windowBlocks.get(wKey) || [];
+        if (wBlocks.length === 0) return;
+
+        // Collect the unique grades that have blocks in this window
+        const gradesInWindow = new Set(wBlocks.map(b => b.grade));
+
+        for (const grade of gradesInWindow) {
+            let reachable = 0;
+            for (const c of candidates) {
+                const fn = c.fieldNorm;
+                const entries = fieldIndex.get(fn) || [];
+                const ov = entries.filter(e => e.startMin < endMin && e.endMin > startMin);
+                const crossGrade = ov.filter(e => e.grade !== grade);
+                const st = c.shareType || 'same_division';
+                if (st === 'same_division' && crossGrade.length > 0) continue;
+                if (st === 'not_sharable' && ov.length > 0) continue;
+                if (st === 'custom') {
+                    const allowed = c.allowedDivisions || [];
+                    if (allowed.length > 0 && crossGrade.some(e => !allowed.includes(e.grade))) continue;
+                }
+                if (ov.length >= (c.capacity || 2)) continue;
+                reachable++;
+            }
+            gradeFieldOptions.set(grade + '|' + wKey, reachable);
+        }
     }
 
 
@@ -532,7 +574,11 @@
             // Update field index so subsequent blocks see this assignment
             const fn = pick.fieldNorm;
             if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
-            fieldIndex.get(fn).push({ startMin, endMin, bunk, grade, activity: pick.sportNorm });
+            fieldIndex.get(fn).push({ startMin, endMin, bunk, grade, slotIdx, activity: pick.sportNorm });
+
+            // Forward checking: refresh gradeFieldOptions for this time window so
+            // scarcity penalties for remaining blocks reflect the new assignment.
+            updateDomainSizes(fieldIndex, startMin, endMin, candidates, gradeFieldOptions, windowBlocks);
 
             // Register in AutoFieldLocks if available
             if (window.AutoFieldLocks?.claimField) {
@@ -550,14 +596,19 @@
         // ── Same-day duplicate sweep (safety net) ────────────────────
         const dupFixes = sameDayDuplicateSweep();
 
+        // ── LNS repair: recover Free blocks via single-swap neighbourhood ──
+        const lnsFixed = lnsRepair(config);
+        free = Math.max(0, free - lnsFixed);
+
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
         log('╔═══════════════════════════════════════════════════════════╗');
         log('║  SOLVE COMPLETE in ' + elapsed + 's');
         log('║  ' + blocks.length + ' blocks, ' + filled + ' filled, ' + free + ' Free');
         if (dupFixes > 0) log('║  ' + dupFixes + ' same-day duplicates fixed');
+        if (lnsFixed > 0) log('║  ' + lnsFixed + ' Free blocks recovered by LNS repair');
         log('╚═══════════════════════════════════════════════════════════╝');
 
-        return { filled, free, elapsed, dupFixes };
+        return { filled, free, elapsed, dupFixes, lnsFixed };
     }
 
 
@@ -737,6 +788,217 @@
 
 
     // =========================================================================
+    // LNS REPAIR  (CP-SAT: Large Neighbourhood Search)
+    // =========================================================================
+    // After the greedy solve there are often Free blocks whose only problem is
+    // ordering: a different solve sequence would have filled them.  LNS fixes
+    // this without a full backtracking rewrite.
+    //
+    // Algorithm (single-swap, up to MAX_ITER passes):
+    //   For each remaining Free block FB:
+    //     1. tryDirectFill  — maybe something freed up since the main solve
+    //     2. trySwapFill    — find an auto-solved assignment that sits on the
+    //                         only field FB could use, move it to a different
+    //                         field, then place FB in the vacated spot.
+    //                         Only commits the swap if the victim can actually
+    //                         be re-assigned (net improvement guaranteed).
+    //
+    // Exposed as AutoSolverEngine.lnsRepair(config) so the orchestrator can
+    // also call it standalone after manual edits.
+
+    function collectFreeBlocks() {
+        const sa = window.scheduleAssignments || {};
+        const divisions = window.divisions || {};
+        const dt = window.divisionTimes || {};
+        const result = [];
+
+        Object.entries(sa).forEach(([bunk, slots]) => {
+            if (!Array.isArray(slots)) return;
+            let grade = '';
+            for (const [g, d] of Object.entries(divisions)) {
+                if ((d.bunks || []).map(String).includes(String(bunk))) { grade = g; break; }
+            }
+            const pbs = dt[grade]?._perBunkSlots?.[bunk] || (Array.isArray(dt[grade]) ? dt[grade] : []);
+
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.field !== 'Free') return;
+                if (entry._fixed || entry._pinned || entry._league) return;
+                const slot = pbs[idx];
+                if (!slot || slot.startMin == null || slot.endMin == null) return;
+                result.push({ bunk, slotIdx: idx, grade, startMin: slot.startMin, endMin: slot.endMin });
+            });
+        });
+
+        return result;
+    }
+
+    function tryDirectFill(fb, candidates, fieldIndex) {
+        // Try to fill without evicting anyone — covers edge cases where something
+        // freed up between the main solve and now.
+        const sa = window.scheduleAssignments || {};
+
+        // Build what this bunk has today (excluding its own Free slot)
+        const doneToday = new Set();
+        (sa[fb.bunk] || []).forEach((e, i) => {
+            if (i === fb.slotIdx || !e || e.continuation) return;
+            const act = normName(e._activity || e.sport || e.field);
+            if (act && act !== 'free' && act !== 'free play') doneToday.add(act);
+        });
+
+        for (const cand of candidates) {
+            if (window.isRainyDay && !cand.isIndoor) continue;
+            if (doneToday.has(cand.sportNorm)) continue;
+            if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
+
+            sa[fb.bunk][fb.slotIdx] = {
+                field: cand.field, sport: cand.sport, _activity: cand.sport,
+                _autoMode: true, _autoSolved: true, _lnsRepaired: true, continuation: false
+            };
+            const fn = normName(cand.field);
+            if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
+            fieldIndex.get(fn).push({
+                startMin: fb.startMin, endMin: fb.endMin,
+                bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx,
+                activity: cand.sportNorm
+            });
+            return true;
+        }
+        return false;
+    }
+
+    function trySwapFill(fb, candidates, fieldIndex) {
+        // For each candidate that FB wants, check if the field is exactly at
+        // capacity (overage of exactly 1).  If so, try evicting one auto-solved
+        // assignment to a different field, then place FB in the vacated spot.
+        const sa = window.scheduleAssignments || {};
+
+        // What does FB's bunk have today?
+        const fbDoneToday = new Set();
+        (sa[fb.bunk] || []).forEach((e, i) => {
+            if (i === fb.slotIdx || !e || e.continuation) return;
+            const act = normName(e._activity || e.sport || e.field);
+            if (act && act !== 'free' && act !== 'free play') fbDoneToday.add(act);
+        });
+
+        for (const cand of candidates) {
+            if (window.isRainyDay && !cand.isIndoor) continue;
+            if (fbDoneToday.has(cand.sportNorm)) continue;
+
+            const fn = cand.fieldNorm;
+            const cap = cand.capacity || 2;
+            const overlap = (fieldIndex.get(fn) || []).filter(e =>
+                e.startMin < fb.endMin && e.endMin > fb.startMin && e.bunk !== fb.bunk
+            );
+
+            // Only attempt single-eviction swaps
+            if (overlap.length !== cap) continue;
+
+            for (const victim of overlap) {
+                // Must be auto-solved and not locked
+                if (victim.slotIdx == null) continue;
+                const victimEntry = (sa[victim.bunk] || [])[victim.slotIdx];
+                if (!victimEntry || victimEntry._fixed || victimEntry._pinned || victimEntry._league) continue;
+                if (!victimEntry._autoSolved && !victimEntry._autoMode) continue;
+
+                // Build victim's doneToday (excluding its own current slot)
+                const victimDoneToday = new Set();
+                (sa[victim.bunk] || []).forEach((e, i) => {
+                    if (i === victim.slotIdx || !e || e.continuation) return;
+                    const act = normName(e._activity || e.sport || e.field);
+                    if (act && act !== 'free' && act !== 'free play') victimDoneToday.add(act);
+                });
+
+                // Temporarily remove the victim from the field index so we can
+                // search for its alternative without false capacity blocks.
+                const origEntries = (fieldIndex.get(fn) || []).slice();
+                fieldIndex.set(fn, origEntries.filter(e =>
+                    !(e.bunk === victim.bunk && e.startMin === victim.startMin && e.slotIdx === victim.slotIdx)
+                ));
+
+                // Can the victim go somewhere else?
+                let victimNewCand = null;
+                for (const vc of candidates) {
+                    if (vc.field === cand.field) continue; // Must move to a different field
+                    if (window.isRainyDay && !vc.isIndoor) continue;
+                    if (victimDoneToday.has(vc.sportNorm)) continue;
+                    if (isFieldAvailableByTime(vc.field, victim.startMin, victim.endMin, victim.bunk, victim.grade, fieldIndex, vc)) {
+                        victimNewCand = vc;
+                        break;
+                    }
+                }
+
+                if (victimNewCand) {
+                    // ── Commit the swap ──────────────────────────────────────
+                    // 1. Move victim to its new field/sport
+                    sa[victim.bunk][victim.slotIdx] = {
+                        field: victimNewCand.field, sport: victimNewCand.sport,
+                        _activity: victimNewCand.sport,
+                        _autoMode: true, _autoSolved: true, _lnsSwapped: true, continuation: false
+                    };
+                    const vcFn = normName(victimNewCand.field);
+                    if (!fieldIndex.has(vcFn)) fieldIndex.set(vcFn, []);
+                    fieldIndex.get(vcFn).push({
+                        startMin: victim.startMin, endMin: victim.endMin,
+                        bunk: victim.bunk, grade: victim.grade, slotIdx: victim.slotIdx,
+                        activity: victimNewCand.sportNorm
+                    });
+
+                    // 2. Place FB in the now-vacated spot on cand's field
+                    sa[fb.bunk][fb.slotIdx] = {
+                        field: cand.field, sport: cand.sport, _activity: cand.sport,
+                        _autoMode: true, _autoSolved: true, _lnsRepaired: true, continuation: false
+                    };
+                    if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
+                    fieldIndex.get(fn).push({
+                        startMin: fb.startMin, endMin: fb.endMin,
+                        bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx,
+                        activity: cand.sportNorm
+                    });
+
+                    log('LNS swap: bunk ' + victim.bunk + ' "' + victim.activity + '" → "' + victimNewCand.sport + '" freed field for bunk ' + fb.bunk);
+                    return true;
+
+                } else {
+                    // Restore field index — swap not possible
+                    fieldIndex.set(fn, origEntries);
+                }
+            }
+        }
+        return false;
+    }
+
+    function lnsRepair(config) {
+        config = config || {};
+        const { candidates } = buildCandidates(config);
+        if (candidates.length === 0) return 0;
+
+        const MAX_ITER = 3;
+        let totalImproved = 0;
+
+        for (let iter = 0; iter < MAX_ITER; iter++) {
+            const freeBlocks = collectFreeBlocks();
+            if (freeBlocks.length === 0) break;
+
+            // Rebuild a fresh field index at the start of each iteration so
+            // committed swaps from the previous pass are visible.
+            const fieldIndex = buildFieldTimeIndex();
+
+            let iterImproved = 0;
+            for (const fb of freeBlocks) {
+                if (tryDirectFill(fb, candidates, fieldIndex)) { iterImproved++; continue; }
+                if (trySwapFill(fb, candidates, fieldIndex))   { iterImproved++; }
+            }
+
+            totalImproved += iterImproved;
+            if (iterImproved === 0) break; // Converged — no further improvement possible
+        }
+
+        if (totalImproved > 0) log('LNS repaired ' + totalImproved + ' Free blocks across ' + MAX_ITER + ' iterations');
+        return totalImproved;
+    }
+
+
+    // =========================================================================
     // DIAGNOSTICS
     // =========================================================================
 
@@ -786,6 +1048,7 @@
         solve,
         fallbackSweep,
         sameDayDuplicateSweep,
+        lnsRepair,          // CP-SAT: large neighbourhood search repair pass
         report,
         // Expose for scheduler_core_auto.js to call
         solveSchedule: function(activityBlocks, config) {
