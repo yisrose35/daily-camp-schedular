@@ -774,7 +774,7 @@ function openPopover(layerId, bandEl) {
   var html = '';
 
   // Dark header
-  html += '<div class="al-pop-header" style="--pop-accent:' + color.border + ';background:linear-gradient(135deg,' + color.border + 'dd,' + color.border + '99);">' +
+  html += '<div class="al-pop-header" style="--pop-accent:' + color.border + ';background:' + color.border + '12;border-bottom:2px solid ' + color.border + '22;">' +
     '<span class="al-pop-header-dot" style="background:' + color.dot + ';"></span>' +
     '<div class="al-pop-header-info">' +
       '<div class="al-pop-header-name">' + (layer.event || layer.type) + '</div>' +
@@ -1211,22 +1211,22 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   s.id = 'al-v5-styles';
   s.textContent = `
 /* ============================================================
-   AUTO SCHEDULE PLANNER v5.0 — Design System
+   AUTO SCHEDULE PLANNER v5.0 — Light & Airy Design System
    ============================================================ */
 
 /* ── Layout ── */
 .al-container {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: calc(100vh - 78px);
   min-height: 500px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   font-size: 13px;
   color: #1e293b;
-  background: #f8fafc;
+  background: #fff;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.06);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.05);
 }
 
 .al-body {
@@ -1241,9 +1241,9 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   align-items: center;
   gap: 8px;
   padding: 0 16px;
-  height: 46px;
-  background: #0f172a;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  height: 44px;
+  background: #fff;
+  border-bottom: 1px solid #eef0f3;
   flex-shrink: 0;
   user-select: none;
 }
@@ -1252,7 +1252,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 160px;
+  min-width: 140px;
 }
 
 .al-statusbar-center {
@@ -1267,13 +1267,13 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 160px;
+  min-width: 140px;
   justify-content: flex-end;
 }
 
 .al-status-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
   transition: background 0.3s, box-shadow 0.3s;
@@ -1282,7 +1282,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 .al-statusbar-name {
   font-size: 12px;
   font-weight: 600;
-  color: #e2e8f0;
+  color: #1e293b;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1293,16 +1293,15 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   height: 28px;
   padding: 0 8px;
   border-radius: 6px;
-  border: 1px solid rgba(255,255,255,0.15);
-  background: rgba(255,255,255,0.07);
-  color: #cbd5e1;
+  border: 1px solid #e2e8f0;
+  background: #f9fafb;
+  color: #374151;
   font-size: 12px;
   cursor: pointer;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color 0.15s;
 }
-.al-status-select:hover { border-color: rgba(255,255,255,0.3); }
-.al-status-select option { background: #1e293b; color: #e2e8f0; }
+.al-status-select:hover { border-color: #cbd5e1; }
 
 .al-sb-btn {
   height: 28px;
@@ -1320,74 +1319,74 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 }
 
 .al-sb-btn-ghost {
-  background: rgba(255,255,255,0.08);
-  color: #94a3b8;
-  border: 1px solid rgba(255,255,255,0.12);
+  background: #f9fafb;
+  color: #475569;
+  border: 1px solid #e2e8f0;
 }
-.al-sb-btn-ghost:hover { background: rgba(255,255,255,0.14); color: #e2e8f0; border-color: rgba(255,255,255,0.2); }
+.al-sb-btn-ghost:hover { background: #f1f5f9; color: #1e293b; border-color: #cbd5e1; }
 
 .al-sb-btn-accent {
-  background: #3b82f6;
+  background: #6366f1;
   color: #fff;
 }
-.al-sb-btn-accent:hover { background: #2563eb; }
+.al-sb-btn-accent:hover { background: #4f46e5; }
 
 .al-sb-btn-danger {
-  background: rgba(239,68,68,0.15);
-  color: #fca5a5;
-  border: 1px solid rgba(239,68,68,0.25);
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
 }
-.al-sb-btn-danger:hover { background: rgba(239,68,68,0.25); color: #fecaca; }
+.al-sb-btn-danger:hover { background: #fee2e2; }
 
 .al-sb-btn-generate {
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 2px 8px rgba(99,102,241,0.4);
+  box-shadow: 0 2px 8px rgba(99,102,241,0.25);
 }
 .al-sb-btn-generate:hover {
   background: linear-gradient(135deg, #4f46e5, #7c3aed);
-  box-shadow: 0 2px 12px rgba(99,102,241,0.6);
+  box-shadow: 0 2px 12px rgba(99,102,241,0.4);
   transform: translateY(-1px);
 }
 
 .al-sb-div {
   width: 1px;
-  height: 18px;
-  background: rgba(255,255,255,0.12);
+  height: 16px;
+  background: #e2e8f0;
   margin: 0 2px;
 }
 
 /* ── Sidebar Palette ── */
 .al-palette {
-  width: 180px;
-  min-width: 180px;
-  background: #0f172a;
-  border-right: 1px solid rgba(255,255,255,0.06);
+  width: 172px;
+  min-width: 172px;
+  background: #fff;
+  border-right: 1px solid #eef0f3;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px 0 8px;
+  padding: 10px 0 8px;
   flex-shrink: 0;
 }
 
 .al-palette-brand {
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #475569;
-  padding: 0 12px 10px;
+  color: #94a3b8;
+  padding: 0 12px 8px;
 }
 
 .al-palette-section-label {
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #334155;
-  padding: 0 12px 6px;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  padding: 0 12px 5px;
 }
 
 .al-tile {
@@ -1396,13 +1395,12 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   gap: 8px;
   padding: 7px 12px;
   cursor: grab;
-  transition: background 0.15s;
-  border-radius: 0;
+  transition: background 0.12s;
   user-select: none;
 }
-.al-tile:hover { background: rgba(255,255,255,0.06); }
+.al-tile:hover { background: #f8fafc; }
 .al-tile:active { cursor: grabbing; }
-.al-tile.al-tile-dragging { opacity: 0.5; }
+.al-tile.al-tile-dragging { opacity: 0.4; }
 
 .al-tile-dot {
   width: 8px;
@@ -1414,31 +1412,30 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 .al-tile-name {
   font-size: 12px;
   font-weight: 500;
-  color: #94a3b8;
+  color: #374151;
   flex: 1;
-  transition: color 0.15s;
+  transition: color 0.12s;
 }
-.al-tile:hover .al-tile-name { color: #e2e8f0; }
+.al-tile:hover .al-tile-name { color: #111827; }
 
 .al-tile-badge {
   font-size: 9px;
   font-weight: 700;
-  color: #64748b;
-  background: rgba(255,255,255,0.06);
+  color: #94a3b8;
+  background: #f1f5f9;
   border-radius: 3px;
   padding: 1px 4px;
-  letter-spacing: 0.05em;
 }
 
 .al-palette-footer {
   margin-top: auto;
-  padding: 12px;
-  border-top: 1px solid rgba(255,255,255,0.06);
+  padding: 10px 12px;
+  border-top: 1px solid #eef0f3;
 }
 
 .al-palette-hint {
   font-size: 10px;
-  color: #334155;
+  color: #94a3b8;
   line-height: 1.5;
 }
 
@@ -1446,7 +1443,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 .al-timeline-area {
   flex: 1;
   overflow: auto;
-  background: #f8fafc;
+  background: #fafbfc;
   position: relative;
 }
 
@@ -1458,20 +1455,20 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 .al-time-header {
   display: flex;
   align-items: stretch;
-  height: 32px;
+  height: 30px;
   background: #fff;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid #eef0f3;
   position: sticky;
   top: 0;
   z-index: 10;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  box-shadow: 0 1px 0 #eef0f3;
 }
 
 .al-time-header-gutter {
   width: 90px;
   min-width: 90px;
-  border-right: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-right: 1px solid #eef0f3;
+  background: #fff;
 }
 
 .al-time-header-track {
@@ -1499,13 +1496,13 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 .al-grade-row {
   display: flex;
   align-items: stretch;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid #f0f2f5;
   background: #fff;
-  transition: background 0.1s;
+  min-height: 56px;
 }
-.al-grade-row:hover { background: #fafbfc; }
-.al-grade-row-alt { background: #f8fafc; }
-.al-grade-row-alt:hover { background: #f1f5f9; }
+.al-grade-row:hover { background: #fdfeff; }
+.al-grade-row-alt { background: #fafbfc; }
+.al-grade-row-alt:hover { background: #f6f8fa; }
 
 .al-grade-label {
   width: 90px;
@@ -1513,19 +1510,19 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   display: flex;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid #e2e8f0;
+  border-right: 1px solid #eef0f3;
   padding: 4px;
-  background: #fff;
+  background: inherit;
 }
 
 .al-grade-tag {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: #f1f5f9;
+  color: #334155;
   font-size: 11px;
   font-weight: 700;
   border-radius: 6px;
   padding: 3px 10px;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
 }
 
 .al-grade-timeline {
@@ -1536,8 +1533,8 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 }
 
 .al-grade-timeline.al-drop-hover {
-  background: rgba(99,102,241,0.06);
-  outline: 2px dashed #818cf8;
+  background: rgba(99,102,241,0.04);
+  outline: 2px dashed #a5b4fc;
   outline-offset: -2px;
 }
 
@@ -1550,7 +1547,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   pointer-events: none;
 }
 .al-grid-line-hour {
-  background: rgba(0,0,0,0.1);
+  background: rgba(0,0,0,0.08);
 }
 
 /* ── Unused Zones ── */
@@ -1560,9 +1557,9 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   background: repeating-linear-gradient(
     45deg,
     transparent,
-    transparent 4px,
-    rgba(0,0,0,0.025) 4px,
-    rgba(0,0,0,0.025) 8px
+    transparent 5px,
+    rgba(0,0,0,0.02) 5px,
+    rgba(0,0,0,0.02) 10px
   );
   pointer-events: none;
   z-index: 0;
@@ -1579,37 +1576,28 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   padding: 0 22px 0 8px;
   overflow: hidden;
   z-index: 2;
-  box-shadow:
-    0 1px 3px rgba(0,0,0,0.12),
-    0 0 0 1.5px rgba(0,0,0,0.08) inset;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.05) inset;
   transition: box-shadow 0.15s, transform 0.1s;
   user-select: none;
   border: none;
 }
 .al-band:hover {
-  box-shadow:
-    0 4px 12px rgba(0,0,0,0.18),
-    0 0 0 1.5px rgba(0,0,0,0.12) inset;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06) inset;
   transform: translateY(-1px);
   z-index: 3;
 }
 .al-band:active { cursor: grabbing; }
 
-/* Pinned bands: solid left accent */
 .al-band-pinned {
-  box-shadow:
-    0 1px 3px rgba(0,0,0,0.12),
-    inset 3px 0 0 rgba(0,0,0,0.25),
-    0 0 0 1.5px rgba(0,0,0,0.08) inset;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08), inset 3px 0 0 rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05) inset;
 }
 
-/* Selected band: glow ring */
 .al-band-selected {
   z-index: 4;
   box-shadow:
     0 0 0 2px #fff,
-    0 0 0 4px var(--al-band-border, #3b82f6),
-    0 4px 16px rgba(0,0,0,0.2) !important;
+    0 0 0 4px var(--al-band-border, #6366f1),
+    0 4px 12px rgba(0,0,0,0.1) !important;
   transform: translateY(-2px) !important;
 }
 
@@ -1694,11 +1682,10 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   position: fixed;
   pointer-events: none;
   z-index: 9999;
-  padding: 8px 14px;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
-  min-width: 140px;
-  backdrop-filter: blur(8px);
+  padding: 7px 12px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  min-width: 120px;
 }
 .al-ghost-name {
   font-size: 12px;
@@ -1714,8 +1701,8 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 .al-popover-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15,23,42,0.5);
-  backdrop-filter: blur(4px);
+  background: rgba(15,23,42,0.3);
+  backdrop-filter: blur(3px);
   z-index: 9990;
   animation: al-fade-in 0.15s ease;
 }
@@ -1736,9 +1723,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   z-index: 9991;
   background: #fff;
   border-radius: 14px;
-  box-shadow:
-    0 20px 60px rgba(0,0,0,0.25),
-    0 0 0 1px rgba(0,0,0,0.08);
+  box-shadow: 0 8px 40px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06);
   opacity: 0;
   transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), opacity 0.15s ease;
   display: flex;
@@ -1756,7 +1741,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   gap: 10px;
   padding: 14px 16px;
   border-radius: 14px 14px 0 0;
-  color: #fff;
+  color: #1e293b;
   flex-shrink: 0;
 }
 
@@ -1765,7 +1750,6 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
-  box-shadow: 0 0 6px currentColor;
 }
 
 .al-pop-header-info { flex: 1; min-width: 0; }
@@ -1773,6 +1757,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 .al-pop-header-name {
   font-size: 14px;
   font-weight: 700;
+  color: #0f172a;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1780,15 +1765,15 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 
 .al-pop-header-type {
   font-size: 11px;
-  opacity: 0.8;
+  color: #64748b;
   margin-top: 1px;
   text-transform: capitalize;
 }
 
 .al-pop-close {
-  background: rgba(255,255,255,0.2);
+  background: rgba(0,0,0,0.06);
   border: none;
-  color: #fff;
+  color: #64748b;
   width: 26px;
   height: 26px;
   border-radius: 50%;
@@ -1801,7 +1786,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   flex-shrink: 0;
   transition: background 0.15s;
 }
-.al-pop-close:hover { background: rgba(255,255,255,0.35); }
+.al-pop-close:hover { background: rgba(0,0,0,0.1); color: #1e293b; }
 
 .al-pop-body {
   padding: 16px;
@@ -1857,7 +1842,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   padding: 0 10px;
   border-radius: 7px;
   border: 1.5px solid #e2e8f0;
-  background: #f8fafc;
+  background: #f9fafb;
   font-size: 12px;
   color: #1e293b;
   outline: none;
@@ -1866,7 +1851,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 }
 .al-pop-input:focus {
   border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
   background: #fff;
 }
 
@@ -1875,11 +1860,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   width: 80px;
 }
 
-.al-pop-arrow {
-  color: #94a3b8;
-  font-size: 14px;
-  flex-shrink: 0;
-}
+.al-pop-arrow { color: #cbd5e1; font-size: 14px; flex-shrink: 0; }
 
 .al-pop-unit {
   font-size: 11px;
@@ -1899,7 +1880,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   padding: 0 10px;
   height: 32px;
   border: none;
-  background: #f8fafc;
+  background: #f9fafb;
   color: #64748b;
   font-size: 13px;
   cursor: pointer;
@@ -1921,12 +1902,12 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   padding: 0 14px;
   height: 32px;
   border: none;
-  background: #f8fafc;
+  background: #f9fafb;
   color: #64748b;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.12s;
   border-right: 1px solid #e2e8f0;
 }
 .al-pop-toggle:last-child { border-right: none; }
@@ -1941,18 +1922,14 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   padding: 0 12px;
   border-radius: 7px;
   border: 1.5px solid #e2e8f0;
-  background: #f8fafc;
+  background: #f9fafb;
   color: #64748b;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
-.al-pin-toggle:hover { border-color: #cbd5e1; background: #f1f5f9; }
-.al-pin-toggle.active {
-  background: #fffbeb;
-  border-color: #fcd34d;
-  color: #92400e;
-}
+.al-pin-toggle:hover { border-color: #cbd5e1; }
+.al-pin-toggle.active { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
 
 .al-pop-divider {
   height: 1px;
@@ -1981,7 +1958,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid #f1f5f9;
-  background: #f8fafc;
+  background: #fafbfc;
   border-radius: 0 0 14px 14px;
   flex-shrink: 0;
 }
@@ -2003,25 +1980,25 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   color: #dc2626;
   border: 1.5px solid #fecaca;
 }
-.al-pop-action-delete:hover { background: #fee2e2; border-color: #fca5a5; }
+.al-pop-action-delete:hover { background: #fee2e2; }
 
 .al-pop-action-done {
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   color: #fff;
-  box-shadow: 0 2px 8px rgba(99,102,241,0.35);
+  box-shadow: 0 2px 8px rgba(99,102,241,0.25);
 }
 .al-pop-action-done:hover {
   background: linear-gradient(135deg, #4f46e5, #7c3aed);
-  box-shadow: 0 4px 12px rgba(99,102,241,0.5);
+  box-shadow: 0 4px 12px rgba(99,102,241,0.35);
   transform: translateY(-1px);
 }
 
-/* ── Copy/Modal ── */
+/* ── Copy Modal ── */
 .al-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15,23,42,0.5);
-  backdrop-filter: blur(4px);
+  background: rgba(15,23,42,0.3);
+  backdrop-filter: blur(3px);
   z-index: 9995;
   display: flex;
   align-items: center;
@@ -2035,7 +2012,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   padding: 20px;
   min-width: 280px;
   max-width: 380px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,0,0,0.08);
+  box-shadow: 0 8px 40px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.05);
   animation: al-slide-up 0.2s cubic-bezier(0.34,1.56,0.64,1);
 }
 
@@ -2044,18 +2021,8 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   to   { transform: translateY(0) scale(1); opacity: 1; }
 }
 
-.al-modal-header {
-  font-size: 14px;
-  font-weight: 700;
-  color: #1e293b;
-  margin-bottom: 6px;
-}
-
-.al-modal-sub {
-  font-size: 11px;
-  color: #64748b;
-  margin-bottom: 14px;
-}
+.al-modal-header { font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 6px; }
+.al-modal-sub { font-size: 11px; color: #64748b; margin-bottom: 14px; }
 
 .al-modal-check-row {
   padding: 6px 0;
@@ -2083,11 +2050,11 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   bottom: 24px;
   right: 24px;
   z-index: 10000;
-  padding: 10px 18px;
+  padding: 10px 16px;
   border-radius: 10px;
   font-size: 12px;
   font-weight: 600;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
   animation: al-notif-in 0.25s cubic-bezier(0.34,1.56,0.64,1);
   transition: opacity 0.4s;
 }
@@ -2097,10 +2064,10 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   to   { transform: translateY(0) scale(1); opacity: 1; }
 }
 
-.al-notification-success { background: #052e16; color: #86efac; border: 1px solid #166534; }
-.al-notification-error   { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
-.al-notification-info    { background: #0c1a3a; color: #93c5fd; border: 1px solid #1e3a6e; }
-.al-notification-warning { background: #1c0d00; color: #fcd34d; border: 1px solid #78350f; }
+.al-notification-success { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+.al-notification-error   { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+.al-notification-info    { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.al-notification-warning { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
 
 /* ── Empty State ── */
 .al-empty-state {
@@ -2112,7 +2079,7 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
   color: #94a3b8;
   gap: 8px;
 }
-.al-empty-icon { font-size: 36px; opacity: 0.4; }
+.al-empty-icon { font-size: 36px; opacity: 0.3; }
 .al-empty-state p { font-size: 14px; font-weight: 600; margin: 0; }
 .al-empty-sub { font-size: 12px; color: #cbd5e1; }
 `;
