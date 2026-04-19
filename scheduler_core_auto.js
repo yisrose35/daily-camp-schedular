@@ -112,11 +112,14 @@
 
     function getGlobalSettings() { return window.loadGlobalSettings ? window.loadGlobalSettings() : {}; }
     function getSpecialActivitiesList(gs) {
-        // Merge ALL known sources so the scheduler sees every configured special,
-        // not just the 11 that happen to be in app1.specialActivities.
+        // Cache on the gs object so the three external calls happen ONCE per
+        // scheduler run, not once per getSpecialConfig call (which is called
+        // thousands of times and would flood the console / trigger side-effects).
+        if (gs && gs._cachedSpecialsList) return gs._cachedSpecialsList;
+
+        // Merge ALL known sources so the scheduler sees every configured special.
         // Priority (last write wins): getAll → global → app1
-        // This means app1-configured settings override, but specials only in
-        // facilities/global are still discovered.
+        // app1-configured settings win; specials only in facilities/global are discovered.
         const fromApp1   = (gs && gs.app1 && gs.app1.specialActivities) || [];
         const fromGlobal = window.getGlobalSpecialActivities ? window.getGlobalSpecialActivities() : [];
         const fromGetAll = window.getAllSpecialActivities   ? window.getAllSpecialActivities()   : [];
@@ -124,7 +127,9 @@
         [...fromGetAll, ...fromGlobal, ...fromApp1].forEach(function(s) {
             if (s && s.name) merged.set(s.name, s);
         });
-        return Array.from(merged.values());
+        const result = Array.from(merged.values());
+        if (gs) gs._cachedSpecialsList = result;
+        return result;
     }
 
     function getSpecialConfig(specialName, gs) {
