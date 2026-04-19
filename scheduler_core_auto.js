@@ -1291,18 +1291,62 @@
                 // ★ v4.0: Pool exclusivity for pinned swim
                 if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
 
+                // ── Swim change-time expansion ────────────────────────────
+                // If the swim layer has preChangeMin / postChangeMin, split
+                // the block into three consecutive sub-blocks:
+                //   [Change] → [Swim] → [Change]
+                // The outer window (blockStart…blockEnd) covers all three.
+                // Pool usage is registered for the entire outer window so
+                // no other grade can overlap.
+                const _preChange  = (t === 'swim' && layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
+                const _postChange = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                const _swimStart  = blockStart + _preChange;
+                const _swimEnd    = blockEnd   - _postChange;
+
                 targetBunks.forEach(bunk => {
-                    bunkTimelines[bunk].push({
-                        startMin: blockStart, endMin: blockEnd,
-                        type: isCustom ? 'custom' : (layer.type || 'pinned'),
-                        event: eventName, layer,
-                        _classification: 'pinned', _committed: true, _fixed: true,
-                        _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
-                        _noBacktrack: isGradeWide,
-                        _customActivity: isCustom ? layer.customActivity : null,
-                        _customField: isCustom ? layer.customField : null,
-                        _customBunks: isCustom ? layer.customBunks : null
-                    });
+                    if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
+                        // Pre-change block
+                        if (_preChange > 0) {
+                            bunkTimelines[bunk].push({
+                                startMin: blockStart, endMin: _swimStart,
+                                type: 'pre-change', event: 'Change',
+                                layer, _classification: 'pinned', _committed: true,
+                                _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                                _activityLocked: true, _noBacktrack: isGradeWide
+                            });
+                        }
+                        // Swim block
+                        bunkTimelines[bunk].push({
+                            startMin: _swimStart, endMin: _swimEnd,
+                            type: 'swim', event: eventName,
+                            layer, _classification: 'pinned', _committed: true,
+                            _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                            _activityLocked: true, _noBacktrack: isGradeWide
+                        });
+                        // Post-change block
+                        if (_postChange > 0) {
+                            bunkTimelines[bunk].push({
+                                startMin: _swimEnd, endMin: blockEnd,
+                                type: 'post-change', event: 'Change',
+                                layer, _classification: 'pinned', _committed: true,
+                                _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                                _activityLocked: true, _noBacktrack: isGradeWide
+                            });
+                        }
+                    } else {
+                        // No change time — single block as before
+                        bunkTimelines[bunk].push({
+                            startMin: blockStart, endMin: blockEnd,
+                            type: isCustom ? 'custom' : (layer.type || 'pinned'),
+                            event: eventName, layer,
+                            _classification: 'pinned', _committed: true, _fixed: true,
+                            _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
+                            _noBacktrack: isGradeWide,
+                            _customActivity: isCustom ? layer.customActivity : null,
+                            _customField: isCustom ? layer.customField : null,
+                            _customBunks: isCustom ? layer.customBunks : null
+                        });
+                    }
                     count++;
                 });
 

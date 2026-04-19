@@ -457,6 +457,13 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
   var borderStyle = isPinned ? 'solid' : 'dashed';
   var selClass = isSelected ? ' al-band-selected' : '';
   var durText = layer.periodMin ? layer.periodMin + 'm' : '';
+  // Swim: append change time to duration label
+  if (layer.type === 'swim' && (layer.preChangeMin || layer.postChangeMin)) {
+    var pre  = layer.preChangeMin  || 0;
+    var post = layer.postChangeMin || 0;
+    var swimOnly = layer.periodMin || ((layer.endMin - layer.startMin) - pre - post);
+    durText = pre + '+' + swimOnly + '+' + post + 'm';
+  }
   var timeText = fmtShort(layer.startMin) + '\u2013' + fmtShort(layer.endMin);
   var badge = (layer.operator || '\u2265') + (layer.quantity || 1);
   var pinHtml = isPinned ? '<span class="al-band-pin">PIN</span>' : '';
@@ -806,6 +813,25 @@ function openPopover(layerId, bandEl) {
       '<b>Staggered:</b> bunks are spread across the time window.</div>';
   }
 
+  // ── Section 4: Change Time (swim only) ──
+  if (layer.type === 'swim') {
+    html += '<div class="al-popover-divider"></div>';
+    html += '<div class="al-popover-section-title">Change Time</div>';
+    html += '<div class="al-popover-row">' +
+      '<label>Pre-Change</label>' +
+      '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-pre-change"' +
+      ' value="' + (layer.preChangeMin != null ? layer.preChangeMin : '') + '"' +
+      ' min="0" max="60" step="5" placeholder="min">' +
+      '</div>';
+    html += '<div class="al-popover-row">' +
+      '<label>Post-Change</label>' +
+      '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-post-change"' +
+      ' value="' + (layer.postChangeMin != null ? layer.postChangeMin : '') + '"' +
+      ' min="0" max="60" step="5" placeholder="min">' +
+      '</div>';
+    html += '<div class="al-popover-hint">Change time is added to the swim block. E.g. 5 min pre + 45 min swim + 10 min post = <b>60 min total</b>. The band width should cover the full 60 min.</div>';
+  }
+
   // ── Actions ──
   html += '<div class="al-popover-actions">' +
     '<button class="al-btn al-btn-danger al-btn-sm" id="al-pop-delete">Delete</button>' +
@@ -890,6 +916,14 @@ function openPopover(layerId, bandEl) {
     var activeGmode = popoverEl.querySelector('.al-pop-grademode[data-gmode].active');
     if (activeGmode) {
       layer.fullGrade = activeGmode.dataset.gmode === 'fullgrade';
+    }
+
+    // Change Time (swim only)
+    if (layer.type === 'swim') {
+      var preEl  = popoverEl.querySelector('#al-pop-pre-change');
+      var postEl = popoverEl.querySelector('#al-pop-post-change');
+      layer.preChangeMin  = preEl  && preEl.value.trim()  !== '' ? Math.max(0, parseInt(preEl.value)  || 0) : null;
+      layer.postChangeMin = postEl && postEl.value.trim() !== '' ? Math.max(0, parseInt(postEl.value) || 0) : null;
     }
 
     hasChanges = true; saveDraftLayers(); closePopover(); render();
