@@ -141,7 +141,10 @@
                 if ((d.bunks || []).map(String).includes(String(bunk))) { grade = g; break; }
             }
             // Get per-bunk slots for time resolution
-            const pbs = dt[grade]?._perBunkSlots?.[bunk] || (Array.isArray(dt[grade]) ? dt[grade] : []);
+            // ★ v10.5: Use window._perBunkSlots as primary (survives DivisionTimesSystem rebuilds)
+            const pbs = window._perBunkSlots?.[grade]?.[bunk]
+                || dt[grade]?._perBunkSlots?.[bunk]
+                || (Array.isArray(dt[grade]) ? dt[grade] : []);
 
             slots.forEach((entry, idx) => {
                 if (!entry || !entry.field || entry.field === 'Free') return;
@@ -475,8 +478,13 @@
 
       log('Scarcity map: ' + scarcityMap.size + ' fields, ' + windowBlocks.size + ' time windows');
 
-        // ── Sort blocks: most constrained first ──────────────────────
-        // Grades with fewer field options at their time window solve first
+        // ── Sort blocks: TIME-SWEEP + MRV within each time window ────
+        // ★ CP v10.5: Sort by start time first (time-sweep interleaving) so ALL
+        // grades compete simultaneously at each point on the timeline rather than
+        // one grade monopolising all fields before the next grade touches them.
+        // Within the same time window, break ties by fewest field options (MRV —
+        // most constrained grade goes first, preserving flexibility for others).
+        // Draft-hinted blocks always lead (they have a fixed answer already).
         blocks.sort((a, b) => {
             const aHint = a._draftActivity ? -1 : 0;
             const bHint = b._draftActivity ? -1 : 0;
@@ -486,10 +494,16 @@
             const bGrade = b.divName || '';
             const aSM = parseTime(a.startTime), aEM = parseTime(a.endTime);
             const bSM = parseTime(b.startTime), bEM = parseTime(b.endTime);
+
+            // Primary: earlier start time first (time-sweep across all grades)
+            if (aSM !== bSM) return (aSM || 0) - (bSM || 0);
+
+            // Secondary: within same start time, MRV — fewest field options first
             const aOptions = gradeFieldOptions.get(aGrade + '|' + aSM + '-' + aEM) || 999;
             const bOptions = gradeFieldOptions.get(bGrade + '|' + bSM + '-' + bEM) || 999;
             if (aOptions !== bOptions) return aOptions - bOptions;
 
+            // Tertiary: shorter duration first (tighter constraints)
             const aDur = (aSM != null && aEM != null) ? aEM - aSM : 0;
             const bDur = (bSM != null && bEM != null) ? bEM - bSM : 0;
             return aDur - bDur;
@@ -772,7 +786,10 @@
             for (const [g, d] of Object.entries(divisions)) {
                 if ((d.bunks || []).map(String).includes(String(bunk))) { grade = g; break; }
             }
-            const pbs = dt[grade]?._perBunkSlots?.[bunk] || [];
+            // ★ v10.5: Use window._perBunkSlots as primary (survives DivisionTimesSystem rebuilds)
+            const pbs = window._perBunkSlots?.[grade]?.[bunk]
+                || dt[grade]?._perBunkSlots?.[bunk]
+                || [];
 
             slots.forEach((entry, idx) => {
                 if (!entry || entry.field !== 'Free') return;
@@ -878,7 +895,10 @@
             for (const [g, d] of Object.entries(divisions)) {
                 if ((d.bunks || []).map(String).includes(String(bunk))) { grade = g; break; }
             }
-            const pbs = dt[grade]?._perBunkSlots?.[bunk] || (Array.isArray(dt[grade]) ? dt[grade] : []);
+            // ★ v10.5: Use window._perBunkSlots as primary (survives DivisionTimesSystem rebuilds)
+            const pbs = window._perBunkSlots?.[grade]?.[bunk]
+                || dt[grade]?._perBunkSlots?.[bunk]
+                || (Array.isArray(dt[grade]) ? dt[grade] : []);
 
             slots.forEach((entry, idx) => {
                 if (!entry || entry.field !== 'Free') return;

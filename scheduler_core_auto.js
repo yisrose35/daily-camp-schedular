@@ -9332,6 +9332,19 @@
                     if (swept === 0) break; // no progress
                 }
                 if (totalFallbackFilled > 0) log('[4] Fallback sweeps filled ' + totalFallbackFilled + ' more');
+
+                // ★ v10.5: Second-round LNS + ejection chain repair.
+                // After fallbackSweep fills some slots, new swap opportunities open up
+                // (e.g., a field that was at capacity now has a vacancy on the fringe).
+                // Run lnsRepair + ejectionChainRepair once more to exploit these.
+                if (totalFallbackFilled > 0 && window.AutoSolverEngine) {
+                    try {
+                        const lns2 = window.AutoSolverEngine.lnsRepair(solverConfig);
+                        if (lns2 > 0) log('[4] 2nd-round LNS recovered ' + lns2 + ' more slots');
+                        const ej2 = window.AutoSolverEngine.ejectionChainRepair(solverConfig);
+                        if (ej2 > 0) log('[4] 2nd-round ejection chains recovered ' + ej2 + ' more slots');
+                    } catch(e2) { /* non-fatal */ }
+                }
             } catch (e) {
                 err('[4] AutoSolver error: ' + e.message);
                 console.error(e);
@@ -9492,8 +9505,11 @@
                     ev.push([iv.startMin, 1]);
                     ev.push([iv.endMin, -1]);
                 });
-                // Sort: earlier time first; among ties, starts (+1) before ends (-1)
-                ev.sort(function(a, b) { return a[0] !== b[0] ? a[0] - b[0] : b[1] - a[1]; });
+                // Sort: earlier time first; among ties, ends (-1) before starts (+1)
+                // This implements [start, end) half-open semantics: when bunk A ends at
+                // time T and bunk B starts at T they are NOT simultaneous — process the
+                // end event first so the count drops before the new start is counted.
+                ev.sort(function(a, b) { return a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]; });
                 let cnt = 0, peak = 0;
                 ev.forEach(function(e) { cnt += e[1]; if (cnt > peak) peak = cnt; });
                 return peak;
@@ -9620,13 +9636,51 @@
                 'specialty_league', 'custom', 'rotation_event'];
             function perfCanExtend(slotEntry) {
                 if (!slotEntry || slotEntry.field === 'Free') return false;
-                if (slotEntry._fixed || slotEntry._pinned || slotEntry._league || slotEntry._autoSpecial || slotEntry._isRotationEvent) return false;
+                // ★ FIX v10.5: do NOT reject on _fixed alone — capacity-checked sport blocks
+                // written by scheduler_core_auto are _fixed:true but perfectly extendable.
+                // Only reject if user-pinned, activity-locked (swim/snacks/etc.), or league.
+                if (slotEntry._pinned || slotEntry._league || slotEntry._autoSpecial || slotEntry._isRotationEvent) return false;
+                if (slotEntry._activityLocked) return false;
                 var act = (slotEntry._activity || slotEntry.sport || slotEntry.field || '').toLowerCase();
                 for (var i = 0; i < PERF_NO_EXTEND.length; i++) {
                     if (act.indexOf(PERF_NO_EXTEND[i]) !== -1) return false;
                 }
                 return true;
             }
+
+            // ★ v10.5: Check no other bunk is using the same field during the Free slot's time.
+            // Prevents Step 4.9 from creating new capacity violations.
+            function perfFieldFreeAt(field, freeIdx, ownerBunk, pbs) {
+                if (!field || field === 'Free') return true;
+                var freeSlot = pbs[freeIdx];
+                if (!freeSlot) return true; // can't verify — allow
+                var fn = (field || '').toLowerCase().trim();
+                var perfAllSA = window.scheduleAssignments || {};
+                for (var ob in perfAllSA) {
+                    if (String(ob) === String(ownerBunk)) continue;
+                    var otherSlots = perfAllSA[ob];
+                    if (!Array.isArray(otherSlots)) continue;
+                    for (var oi = 0; oi < otherSlots.length; oi++) {
+                        var oe = otherSlots[oi];
+                        if (!oe || oe.field === 'Free' || oe.continuation) continue;
+                        var of_ = (oe.field || '').toLowerCase().trim();
+                        if (of_ !== fn) continue;
+                        // Need timing of the other slot — use window._perBunkSlots
+                        var og = perfBunkGrade[String(ob)] || '';
+                        var opbs = window._perBunkSlots?.[og]?.[ob] || [];
+                        var os = opbs[oi];
+                        if (!os) continue;
+                        if (os.startMin < freeSlot.endMin && os.endMin > freeSlot.startMin) return false;
+                    }
+                }
+                return true;
+            }
+
+            // Build bunk→grade lookup for perfFieldFreeAt
+            var perfBunkGrade = {};
+            Object.entries(perfDivisions).forEach(function(de) {
+                (de[1].bunks || []).forEach(function(b) { perfBunkGrade[String(b)] = de[0]; });
+            });
 
             // ★ FIX v10.3: Calculate the resulting duration of extending a sport
             // block that contains anchorIdx to also cover freeIdx.
@@ -9665,10 +9719,12 @@
 
                     // Strategy 1: Extend previous SPORT slot to absorb this Free
                     if (idx > 0 && perfCanExtend(slots[idx - 1])) {
-                        // ★ dMax guard: don't push the block past GAP_MAX_DUR
-                        if (perfExtendedDur(slots, pbs, idx - 1, idx) <= GAP_MAX_DUR) {
+                        var prevField = slots[idx - 1].field;
+                        // ★ dMax guard + field-conflict guard
+                        if (perfExtendedDur(slots, pbs, idx - 1, idx) <= GAP_MAX_DUR &&
+                            perfFieldFreeAt(prevField, idx, bunk, pbs)) {
                             slots[idx] = {
-                                field: slots[idx - 1].field,
+                                field: prevField,
                                 sport: slots[idx - 1].sport,
                                 _activity: slots[idx - 1]._activity || slots[idx - 1].sport,
                                 _autoMode: true, _autoSolved: true, _perfectionExtend: true,
@@ -9681,9 +9737,11 @@
 
                     // Strategy 2: Pull next SPORT slot backward to absorb this Free
                     if (idx < slots.length - 1 && perfCanExtend(slots[idx + 1])) {
-                        if (perfExtendedDur(slots, pbs, idx + 1, idx) <= GAP_MAX_DUR) {
+                        var nextField = slots[idx + 1].field;
+                        if (perfExtendedDur(slots, pbs, idx + 1, idx) <= GAP_MAX_DUR &&
+                            perfFieldFreeAt(nextField, idx, bunk, pbs)) {
                             slots[idx] = {
-                                field: slots[idx + 1].field,
+                                field: nextField,
                                 sport: slots[idx + 1].sport,
                                 _activity: slots[idx + 1]._activity || slots[idx + 1].sport,
                                 _autoMode: true, _autoSolved: true, _perfectionExtend: true,
@@ -9694,47 +9752,75 @@
                         }
                     }
 
-                    // Strategy 3: Search further for ANY sport slot to extend
+                    // Strategy 3: Search further for ANY sport slot to extend (backward)
                     for (var si = idx - 2; si >= 0; si--) {
-                        if (perfCanExtend(slots[si])) {
-                            if (perfExtendedDur(slots, pbs, si, idx) > GAP_MAX_DUR) continue; // dMax guard
-                            // Mark all slots between si and idx as continuation of that sport
-                            for (var fi = si + 1; fi <= idx; fi++) {
-                                if (!slots[fi] || slots[fi].field === 'Free' || slots[fi].continuation) {
-                                    slots[fi] = {
-                                        field: slots[si].field, sport: slots[si].sport,
-                                        _activity: slots[si]._activity || slots[si].sport,
-                                        _autoMode: true, _autoSolved: true, _perfectionExtend: true,
-                                        continuation: true
-                                    };
-                                } else break; // don't overwrite non-Free slots
-                            }
-                            perfFixedCount++;
-                            return;
+                        if (!perfCanExtend(slots[si])) continue;
+                        if (perfExtendedDur(slots, pbs, si, idx) > GAP_MAX_DUR) continue;
+                        // All intermediate slots must be Free/continuation AND field must be free at each
+                        var s3field = slots[si].field;
+                        var canBridge = true;
+                        for (var ci = si + 1; ci <= idx; ci++) {
+                            var cs = slots[ci];
+                            if (cs && cs.field !== 'Free' && !cs.continuation) { canBridge = false; break; }
+                            if (!perfFieldFreeAt(s3field, ci, bunk, pbs)) { canBridge = false; break; }
                         }
+                        if (!canBridge) continue;
+                        for (var fi = si + 1; fi <= idx; fi++) {
+                            slots[fi] = {
+                                field: s3field, sport: slots[si].sport,
+                                _activity: slots[si]._activity || slots[si].sport,
+                                _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                                continuation: true
+                            };
+                        }
+                        perfFixedCount++;
+                        return;
                     }
+                    // Strategy 3b: Search further forward
                     for (var si2 = idx + 2; si2 < slots.length; si2++) {
-                        if (perfCanExtend(slots[si2])) {
-                            if (perfExtendedDur(slots, pbs, si2, idx) > GAP_MAX_DUR) continue; // dMax guard
-                            for (var fi2 = si2 - 1; fi2 >= idx; fi2--) {
-                                if (!slots[fi2] || slots[fi2].field === 'Free' || slots[fi2].continuation) {
-                                    slots[fi2] = {
-                                        field: slots[si2].field, sport: slots[si2].sport,
-                                        _activity: slots[si2]._activity || slots[si2].sport,
-                                        _autoMode: true, _autoSolved: true, _perfectionExtend: true,
-                                        continuation: true
-                                    };
-                                } else break;
-                            }
-                            perfFixedCount++;
-                            return;
+                        if (!perfCanExtend(slots[si2])) continue;
+                        if (perfExtendedDur(slots, pbs, si2, idx) > GAP_MAX_DUR) continue;
+                        var s3bfield = slots[si2].field;
+                        var canBridge2 = true;
+                        for (var ci2 = idx; ci2 < si2; ci2++) {
+                            var cs2 = slots[ci2];
+                            if (cs2 && cs2.field !== 'Free' && !cs2.continuation) { canBridge2 = false; break; }
+                            if (!perfFieldFreeAt(s3bfield, ci2, bunk, pbs)) { canBridge2 = false; break; }
                         }
+                        if (!canBridge2) continue;
+                        for (var fi2 = idx; fi2 < si2; fi2++) {
+                            slots[fi2] = {
+                                field: s3bfield, sport: slots[si2].sport,
+                                _activity: slots[si2]._activity || slots[si2].sport,
+                                _autoMode: true, _autoSolved: true, _perfectionExtend: true,
+                                continuation: true
+                            };
+                        }
+                        perfFixedCount++;
+                        return;
                     }
                 });
             });
 
             if (perfFreeCount > 0) {
-                log('\n[STEP 4.9] Perfection pass: ' + perfFreeCount + ' Frees found, ' + perfFixedCount + ' fixed by extending sport neighbors');
+                var perfSkipped = perfFreeCount - perfFixedCount;
+                log('\n[STEP 4.9] Perfection pass: ' + perfFreeCount + ' Frees found, ' +
+                    perfFixedCount + ' absorbed by extension' +
+                    (perfSkipped > 0 ? ', ' + perfSkipped + ' structural (no extendable neighbor)' : ''));
+
+                // ★ v10.5: Final fallback for structural Frees that couldn't be extended.
+                // Run LNS + ejection chain once more — after extensions, new swap
+                // opportunities may have opened (e.g. field now at cap-1 instead of cap).
+                if (perfSkipped > 0 && window.AutoSolverEngine) {
+                    try {
+                        var p49sweep = window.AutoSolverEngine.fallbackSweep(solverConfig);
+                        if (p49sweep > 0) log('[STEP 4.9] Final fallback filled ' + p49sweep + ' more structural Frees');
+                        if (p49sweep > 0) {
+                            var p49lns = window.AutoSolverEngine.lnsRepair(solverConfig);
+                            if (p49lns > 0) log('[STEP 4.9] Final LNS recovered ' + p49lns + ' more');
+                        }
+                    } catch(e49) { /* non-fatal */ }
+                }
             }
         }
 
