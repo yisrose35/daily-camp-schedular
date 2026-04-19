@@ -2631,32 +2631,65 @@
                 if (prePassFailed.length > 0) log(GP + '   Failed bunks: ' + prePassFailed.join(', '));
             }
 
-            // ─── EXTRA SPECIALS PASS ──────────────────────────────────
-            // Pre-pass guarantees every bunk hits its floor (≥N → floor=N).
-            // For layers with cap=Infinity (operator ≥) there may be more
-            // specials available than the floor. This pass fills remaining
-            // free windows with additional specials before handing time to
-            // sports, so "1> special" means "at least 1, as many as fit".
+            // ─── EXTRA SPECIALS PASS (balanced) ───────────────────────
+            // Pre-pass guaranteed every bunk's floor. For ≥ layers (cap=∞)
+            // we want MORE specials, but NOT at the expense of sports.
+            //
+            // Balance rule:
+            //   • Both sports AND specials are open-ended (≥):
+            //       Split available slots ~50/50. targetSpecials ≈ half of
+            //       all the activity slots that can fit in the free time.
+            //   • Only specials are open-ended (sports has a fixed cap):
+            //       Fill freely — sports will get their fixed count later.
+            //   • Specials have a fixed cap (= or ≤):
+            //       Fill up to that cap exactly.
             {
                 allBunkList.forEach(list => {
                     const { bunk, grade } = list;
                     const sl = shoppingLists[bunk];
                     const result = draftResults[bunk];
                     if (!sl || !sl.specials) return;
-                    const cap = sl.specials.cap != null ? sl.specials.cap : (sl.specials.required || 0);
-                    if (cap === 0) return;
-                    if (result.specials.length >= cap) return; // already satisfied
+
+                    const specialCap  = sl.specials.cap  != null ? sl.specials.cap  : (sl.specials.required  || 0);
+                    const sportsCap   = sl.sports?.cap   != null ? sl.sports.cap    : (sl.sports?.required   || 0);
+                    if (specialCap === 0) return;
+                    if (result.specials.length >= specialCap) return;
 
                     _gpCurrentGrade = grade;
 
+                    // ── Compute how many extra specials are allowed ───────
+                    let targetTotal; // total specials we want on this bunk's day
+                    if (specialCap === Infinity && sportsCap === Infinity) {
+                        // Both open-ended: estimate slots and split 50 / 50.
+                        const fw0 = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                        const totalFree = fw0.reduce((s, w) => s + w.duration, 0);
+                        const avgSpecDur = (sl.specials.priorityList || []).length > 0
+                            ? (sl.specials.priorityList.reduce((s, sp) => s + (sp.totalDuration || sp.dMin || 30), 0)
+                               / sl.specials.priorityList.length)
+                            : 30;
+                        const avgSportDur = sl.sports?.constraints?.dIdeal
+                            || sl.sports?.constraints?.dMin || 35;
+                        const avgSlotDur = (avgSpecDur + avgSportDur) / 2;
+                        const totalSlots  = Math.max(1, Math.floor(totalFree / avgSlotDur));
+                        // Half the slots go to specials (round up so specials
+                        // don't lose out when totalSlots is odd).
+                        targetTotal = Math.ceil(totalSlots / 2);
+                        // Always honour the floor already placed.
+                        targetTotal = Math.max(targetTotal, sl.specials.required || 1);
+                    } else {
+                        // Fixed cap (= or ≤) or only specials are open-ended.
+                        targetTotal = specialCap === Infinity
+                            ? (sl.specials.priorityList || []).length  // fill all available
+                            : specialCap;
+                    }
+
                     for (const special of (sl.specials.priorityList || [])) {
-                        if (result.specials.length >= cap) break;
+                        if (result.specials.length >= targetTotal) break;
                         if (result.usedActivities.has(special.name)) continue;
 
                         const dur = special.totalDuration || special.dMin || 30;
-                        const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                        const fw  = getUpdatedFreeWindowsForBunk(bunk, sl, result);
 
-                        // Scan free windows for a valid placement
                         let time = null;
                         for (const win of fw) {
                             if (win.duration < dur) continue;
@@ -2674,9 +2707,6 @@
                         registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
                         result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
                         result.usedActivities.add(special.name);
-                        log(GP + ' [ExtraSpecials] ' + bunk + '(g' + grade + '): placed ' + special.name +
-                            ' @ ' + time.startMin + '-' + time.endMin +
-                            ' (' + result.specials.length + ' specials total)');
                     }
                 });
 
@@ -2686,7 +2716,7 @@
                     const r = draftResults[list.bunk];
                     if (r && r.specials.length > 1) extraCount += r.specials.length - 1;
                 });
-                if (extraCount > 0) log(GP + ' Extra specials pass: placed ' + extraCount + ' additional specials');
+                if (extraCount > 0) log(GP + ' Extra specials pass: placed ' + extraCount + ' additional specials (balanced with sports)');
             }
 
             // ─── Process each grade ──────────────────────────────────
