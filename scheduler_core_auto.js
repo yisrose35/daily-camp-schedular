@@ -111,7 +111,21 @@
     // =========================================================================
 
     function getGlobalSettings() { return window.loadGlobalSettings ? window.loadGlobalSettings() : {}; }
-    function getSpecialActivitiesList(gs) { return (gs.app1 && gs.app1.specialActivities) || []; }
+    function getSpecialActivitiesList(gs) {
+        // Merge ALL known sources so the scheduler sees every configured special,
+        // not just the 11 that happen to be in app1.specialActivities.
+        // Priority (last write wins): getAll → global → app1
+        // This means app1-configured settings override, but specials only in
+        // facilities/global are still discovered.
+        const fromApp1   = (gs && gs.app1 && gs.app1.specialActivities) || [];
+        const fromGlobal = window.getGlobalSpecialActivities ? window.getGlobalSpecialActivities() : [];
+        const fromGetAll = window.getAllSpecialActivities   ? window.getAllSpecialActivities()   : [];
+        const merged = new Map();
+        [...fromGetAll, ...fromGlobal, ...fromApp1].forEach(function(s) {
+            if (s && s.name) merged.set(s.name, s);
+        });
+        return Array.from(merged.values());
+    }
 
     function getSpecialConfig(specialName, gs) {
         const specials = getSpecialActivitiesList(gs);
@@ -2612,6 +2626,64 @@
                 if (prePassFailed.length > 0) log(GP + '   Failed bunks: ' + prePassFailed.join(', '));
             }
 
+            // ─── EXTRA SPECIALS PASS ──────────────────────────────────
+            // Pre-pass guarantees every bunk hits its floor (≥N → floor=N).
+            // For layers with cap=Infinity (operator ≥) there may be more
+            // specials available than the floor. This pass fills remaining
+            // free windows with additional specials before handing time to
+            // sports, so "1> special" means "at least 1, as many as fit".
+            {
+                allBunkList.forEach(list => {
+                    const { bunk, grade } = list;
+                    const sl = shoppingLists[bunk];
+                    const result = draftResults[bunk];
+                    if (!sl || !sl.specials) return;
+                    const cap = sl.specials.cap != null ? sl.specials.cap : (sl.specials.required || 0);
+                    if (cap === 0) return;
+                    if (result.specials.length >= cap) return; // already satisfied
+
+                    _gpCurrentGrade = grade;
+
+                    for (const special of (sl.specials.priorityList || [])) {
+                        if (result.specials.length >= cap) break;
+                        if (result.usedActivities.has(special.name)) continue;
+
+                        const dur = special.totalDuration || special.dMin || 30;
+                        const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+
+                        // Scan free windows for a valid placement
+                        let time = null;
+                        for (const win of fw) {
+                            if (win.duration < dur) continue;
+                            for (let t = win.start; t + dur <= win.end; t += 5) {
+                                if (special.location && !isFieldAvailable(special.location, t, t + dur, bunk, grade)) continue;
+                                if (!canAssignSpecialToGrade(special.name, grade, t, t + dur)) continue;
+                                time = { startMin: t, endMin: t + dur };
+                                break;
+                            }
+                            if (time) break;
+                        }
+                        if (!time) continue;
+
+                        if (special.location) claimFieldForPlanner(special.location, time.startMin, time.endMin, bunk, special.name);
+                        registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
+                        result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
+                        result.usedActivities.add(special.name);
+                        log(GP + ' [ExtraSpecials] ' + bunk + '(g' + grade + '): placed ' + special.name +
+                            ' @ ' + time.startMin + '-' + time.endMin +
+                            ' (' + result.specials.length + ' specials total)');
+                    }
+                });
+
+                // Log extra specials results
+                let extraCount = 0;
+                allBunkList.forEach(list => {
+                    const r = draftResults[list.bunk];
+                    if (r && r.specials.length > 1) extraCount += r.specials.length - 1;
+                });
+                if (extraCount > 0) log(GP + ' Extra specials pass: placed ' + extraCount + ' additional specials');
+            }
+
             // ─── Process each grade ──────────────────────────────────
             allGrades.forEach(grade => {
                 _gpCurrentGrade = grade;
@@ -3031,11 +3103,12 @@
 
             // ─── Helper: Simple draft for single-bunk grades ─────────
             function simpleDraftForBunk(bunk, grade, sl, result) {
-                // ★ Use FLOOR (required) not cap. Phase 3's time-sweep filler will
-                //   pick up the rest with sports. Using cap=Infinity here would
-                //   eat all gaps with specials, leaving no room for sports.
+                // Use CAP (not floor) so ≥N layers keep placing until all specials
+                // from the priority list have been tried. Sports still get their
+                // share because the time-sweep filler runs after this.
+                const _singleCap = sl.specials?.cap != null ? sl.specials.cap : (sl.specials?.required || 0);
                 for (const special of (sl.specials?.priorityList || [])) {
-                    if (result.specials.length >= (sl.specials?.required || 0)) break;
+                    if (result.specials.length >= _singleCap) break;
                     if (result.usedActivities.has(special.name)) continue;
 
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
