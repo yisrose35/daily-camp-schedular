@@ -4965,7 +4965,7 @@
                         var blk = makeBlock({
                             startMin: cursor, endMin: blockEnd,
                             type: result ? 'sport' : 'slot',
-                            event: result ? result.name : (pickFillActivity(blockEnd - cursor, sMeta.grade) || 'Free Time'),
+                            event: result ? result.name : (pickFillActivity(blockEnd - cursor, sMeta.grade) || 'Free'),
                             layer: sMeta.sportLayer, field: result ? result.field : null,
                             dMin: sMeta.sportC.dMin, dMax: sMeta.sportCeiling,
                             _source: 'sport-fill',
@@ -5009,7 +5009,7 @@
                         }
                         addSportBlocks(tmpl, rgap.start, rgap.end, {
                             type: rResult ? 'sport' : 'slot',
-                            event: rResult ? rResult.name : (pickFillActivity(gapSize, fMeta.grade) || 'Free Time'),
+                            event: rResult ? rResult.name : (pickFillActivity(gapSize, fMeta.grade) || 'Free'),
                             layer: fMeta.sportLayer, field: rResult ? rResult.field : null,
                             dMin: fMeta.sportC.dMin, dMax: fMeta.sportCeiling,
                             _source: 'filler',
@@ -5040,7 +5040,7 @@
                             // Can't absorb — create slot only if >= dMin
                             var _lastResort = makeBlock({
                                 startMin: rgap.start, endMin: rgap.end,
-                                type: 'slot', event: pickFillActivity(gapSize, fMeta.grade) || 'Free Time',
+                                type: 'slot', event: pickFillActivity(gapSize, fMeta.grade) || 'Free',
                                 layer: fMeta.sportLayer, field: null,
                                 dMin: fMeta.fillMinDur, dMax: fMeta.sportCeiling,
                                 _source: 'filler', _final: true
@@ -5365,7 +5365,7 @@
                         // Strategy 3: Create a new sport block to fill the gap (even if short)
                         if (!filled) {
                             addSportBlocks(vTmpl, vGap.start, vGap.end, {
-                                type: 'slot', event: pickFillActivity(vGapDur, vMeta.grade) || 'Free Time',
+                                type: 'slot', event: pickFillActivity(vGapDur, vMeta.grade) || 'Free',
                                 layer: vMeta.sportLayer, field: null,
                                 dMin: Math.min(vGapDur, vMeta.fillMinDur), dMax: vMeta.sportCeiling,
                                 _source: 'perfection-fill',
@@ -5513,7 +5513,7 @@
                         // ★ v11.1: Fill the pre-gap (victim start to clamped start) with sport
                         if (hPreGap >= 10) {
                             addSportBlocks(hTmpl, hVictim.startMin, hPlaceStart, {
-                                type: 'slot', event: pickFillActivity(hPreGap, hMeta.grade) || 'Free Time',
+                                type: 'slot', event: pickFillActivity(hPreGap, hMeta.grade) || 'Free',
                                 layer: hMeta.sportLayer, field: null,
                                 dMin: Math.min(hPreGap, hMeta.fillMinDur || 20), dMax: hMeta.sportCeiling,
                                 _source: 'self-heal-pregap', _final: true
@@ -5524,7 +5524,7 @@
                         var hRemainDur = hRemainEnd - hRemainStart;
                         if (hRemainDur >= 10) {
                             addSportBlocks(hTmpl, hRemainStart, hRemainEnd, {
-                                type: 'slot', event: pickFillActivity(hRemainDur, hMeta.grade) || 'Free Time',
+                                type: 'slot', event: pickFillActivity(hRemainDur, hMeta.grade) || 'Free',
                                 layer: hMeta.sportLayer, field: null,
                                 dMin: Math.min(hRemainDur, hMeta.fillMinDur),
                                 dMax: hMeta.sportCeiling,
@@ -5600,7 +5600,7 @@
                                 // Fill remainder with sport slot
                                 if (rhRemainEnd - rhRemainStart >= rhMeta.fillMinDur) {
                                     addSportBlocks(rhTmpl, rhRemainStart, rhRemainEnd, {
-                                        type: 'slot', event: pickFillActivity(rhRemainEnd - rhRemainStart, rhMeta.grade) || 'Free Time',
+                                        type: 'slot', event: pickFillActivity(rhRemainEnd - rhRemainStart, rhMeta.grade) || 'Free',
                                         layer: rhMeta.sportLayer, field: null,
                                         dMin: rhMeta.sportC.dMin, dMax: rhMeta.sportCeiling,
                                         _source: 'self-heal',
@@ -5732,7 +5732,7 @@
 
                         // ★ v11.1: Fill pre-gap from clamping
                         if (gPreGap >= 10) {
-                            var gPreFillName = pickFillActivity(gPreGap, gMeta.grade) || 'Free Time';
+                            var gPreFillName = pickFillActivity(gPreGap, gMeta.grade) || 'Free';
                             addSportBlocks(gTmpl, gVictim.startMin, gPlaceStart, {
                                 type: 'slot', event: gPreFillName,
                                 layer: gMeta.sportLayer, field: null,
@@ -5743,7 +5743,7 @@
                         // Fill remainder with sport — NEVER extend the layer past dMax
                         var gRemainDur = gRemainEnd - gRemainStart;
                         if (gRemainDur >= 10) {
-                            var gRemFillName = pickFillActivity(gRemainDur, gMeta.grade) || 'Free Time';
+                            var gRemFillName = pickFillActivity(gRemainDur, gMeta.grade) || 'Free';
                             addSportBlocks(gTmpl, gRemainStart, gRemainEnd, {
                                 type: 'slot', event: gRemFillName,
                                 layer: gMeta.sportLayer, field: null,
@@ -6083,7 +6083,7 @@
                         }
                         fcTl.push({
                             startMin: fgGap.start, endMin: fgGap.end,
-                            type: 'slot', event: pickFillActivity(fgDur, fcMeta.grade) || 'Free Time',
+                            type: 'slot', event: pickFillActivity(fgDur, fcMeta.grade) || 'Free',
                             layer: _fcPassCLayer, field: null,
                             dMin: fcMeta.fillMinDur, dMax: fcMeta.sportCeiling || 60,
                             _source: 'gap-fill', _final: true,
@@ -6313,7 +6313,7 @@
                         }
                         var zgBlk = makeBlock({
                             startMin: zgGap.start, endMin: zgGap.end,
-                            type: 'slot', event: pickFillActivity(zgDur, zgMeta.grade) || 'Free Time',
+                            type: 'slot', event: pickFillActivity(zgDur, zgMeta.grade) || 'Free',
                             layer: _zgS3Layer, field: null,
                             dMin: zgMeta.fillMinDur, dMax: zgMeta.sportCeiling || 60,
                             _source: 'zero-gap', _final: true
@@ -6340,7 +6340,7 @@
                         if (_zgPrevImmov && _zgNextImmov) {
                             var zgMicroBlk = makeBlock({
                                 startMin: zgGap.start, endMin: zgGap.end,
-                                type: 'slot', event: 'Free Time',
+                                type: 'slot', event: 'Free',
                                 layer: null, field: null,
                                 dMin: zgDur, dMax: zgDur,
                                 _source: 'micro-gap', _final: true, _microSlot: true,
@@ -6624,7 +6624,7 @@
                         if (eRemain >= eMeta.fillMinDur) {
                             var eRemBlk = makeBlock({
                                 startMin: eBlk.endMin, endMin: eOrigEnd,
-                                type: 'slot', event: pickFillActivity(eRemain, eMeta.grade) || 'Free Time',
+                                type: 'slot', event: pickFillActivity(eRemain, eMeta.grade) || 'Free',
                                 layer: eMeta.sportLayer, field: null,
                                 dMin: eMeta.sportC.dMin, dMax: eMeta.sportCeiling,
                                 _source: 'enforce-split', _final: true
@@ -6900,7 +6900,7 @@
                         // walls (e.g. a guaranteed-swim block with dMin=dMax=30 and a dismissal).
                         // The auto-solver will label them General Activity Slot if no sport fits.
                         if (!pg_fixed && pg_dur >= 5) {
-                            var pg_fillName = pickFillActivity(pg_dur, pg_meta.grade) || 'Free Time';
+                            var pg_fillName = pickFillActivity(pg_dur, pg_meta.grade) || 'Free';
                             var pg_blk = makeBlock({
                                 startMin: pg_gap.start, endMin: pg_gap.end,
                                 type: 'slot', event: pg_fillName,
@@ -6990,6 +6990,39 @@
             } else {
                 warn('[COVERAGE] ✗ ' + coverageErrors + ' bunk(s) have unresolved gaps (see COVERAGE warnings above)');
             }
+
+            // ─── Tag every 'Free' block with a short reason ───────────────────────
+            // These blocks are genuine scheduling impossibilities — attach _gapReason
+            // so the UI can show the user exactly why the slot could not be filled.
+            Object.keys(bunkTimelines).forEach(function(_tagBunk) {
+                var _tagTl   = bunkTimelines[_tagBunk] || [];
+                var _tagMeta = bunkMeta[_tagBunk];
+                var _tagFillMin = (_tagMeta && _tagMeta.fillMinDur) ? _tagMeta.fillMinDur : 25;
+                var _tagGrade   = (_tagMeta && _tagMeta.grade) ? _tagMeta.grade : '';
+                _tagTl.forEach(function(_tagBlk) {
+                    if ((_tagBlk.event || '').toLowerCase().trim() !== 'free') return;
+                    if (_tagBlk._gapReason) return; // already tagged upstream
+                    var _tagDur    = _tagBlk.endMin - _tagBlk.startMin;
+                    var _tagBefore = _tagTl.find(function(b) { return b.endMin   === _tagBlk.startMin; });
+                    var _tagAfter  = _tagTl.find(function(b) { return b.startMin === _tagBlk.endMin;   });
+                    var _tagBName  = _tagBefore ? (_tagBefore.event || _tagBefore.type) : null;
+                    var _tagAName  = _tagAfter  ? (_tagAfter.event  || _tagAfter.type)  : null;
+                    if (_tagDur < _tagFillMin) {
+                        _tagBlk._gapReason = _tagDur + 'min gap' +
+                            (_tagBName ? ' after "' + _tagBName + '"' : '') +
+                            (_tagAName ? ' before "' + _tagAName + '"' : '') +
+                            ' — too small for any activity (min ' + _tagFillMin + 'min). ' +
+                            'Adjust the adjacent layer windows to close this gap.';
+                    } else {
+                        _tagBlk._gapReason = _tagDur + 'min slot — no sport field available for ' +
+                            (_tagGrade || 'this grade') + ' at this time. ' +
+                            'Add field capacity or widen sport availability.';
+                    }
+                });
+            });
+
+            // Expose bunkMeta so post-generation reports outside this function can read it
+            window._autoSchedulerBunkMeta = bunkMeta;
 
             log('[Phase3] ★ timeSweepFillAll complete: ' + Object.keys(allTemplates).length + ' bunks, ' + totalWarnings + ' warnings');
             return allTemplates;
@@ -8831,7 +8864,7 @@
                         startMin: block.startMin, endMin: block.endMin,
                         event: (block.event && block.event !== 'General Activity Slot')
                             ? block.event
-                            : (pickFillActivity(block.endMin - block.startMin, grade) || 'Free Time'),
+                            : (pickFillActivity(block.endMin - block.startMin, grade) || 'Free'),
                         type: block.type || 'slot',
                         _autoGenerated: true, _classification: block._classification,
                         _suggestedActivity: block._assignedSpecial || block._assignedSport || null,
@@ -9124,11 +9157,11 @@
                     if (skipTypes.includes((block.type || '').toLowerCase())) return;
                     const timelineBlock = (bunkTimelines[bunk] || []).find(b => b.startMin === block.startMin && b.endMin === block.endMin);
                     // Preserve any real activity name assigned during timeline building.
-                    // Fall back to pickFillActivity, then 'Free Time' — never 'General Activity Slot'.
+                    // Fall back to pickFillActivity, then 'Free' — never 'General Activity Slot'.
                     const _slotDur = block.endMin - block.startMin;
                     const _slotEvent = block.event && block.event !== 'General Activity Slot'
                         ? block.event
-                        : (pickFillActivity(_slotDur, grade) || 'Free Time');
+                        : (pickFillActivity(_slotDur, grade) || 'Free');
                     schedulableSlotBlocks.push({
                         divName: grade, bunk: String(bunk),
                         event: _slotEvent, type: 'slot',
@@ -9426,7 +9459,7 @@
             bunk: b.bunk, divName: b.divName, slots: b.slots,
             startTime: b.startTime, endTime: b.endTime,
             type: b.type || 'slot',
-            event: (b.event && b.event !== 'General Activity Slot') ? b.event : 'Free Time',
+            event: (b.event && b.event !== 'General Activity Slot') ? b.event : 'Free',
             _autoGenerated: true, _autoMode: true,
             _draftActivity: b._draftActivity, _draftField: b._draftField
         }));
@@ -10229,7 +10262,7 @@
                             // If there's remaining space, create a sport slot for it
                             if (remainderEnd - remainderStart >= 25) {
                                 var _rhDur = remainderEnd - remainderStart;
-                                var _rhName = pickFillActivity(_rhDur, grade) || 'Free Time';
+                                var _rhName = pickFillActivity(_rhDur, grade) || 'Free';
                                 sorted.push({
                                     startMin: remainderStart, endMin: remainderEnd,
                                     type: 'slot', event: _rhName,
@@ -10376,7 +10409,7 @@
                 if (!Array.isArray(_slots)) return;
                 const _grade = _bunkGrade[String(_bunk)];
                 const _pbs = _dt[_grade]?._perBunkSlots?.[_bunk] || [];
-                const _meta = bunkMeta[_bunk];
+                const _meta = (window._autoSchedulerBunkMeta || {})[_bunk];
 
                 _slots.forEach((_s, _i) => {
                     if (!_s || _s.continuation || _s.field !== 'Free') return;
@@ -10405,7 +10438,10 @@
                 });
             });
 
-            if (_impossibilities.length === 0) return;
+            if (_impossibilities.length === 0) {
+                log('\n✅ No unfilled slots — schedule is complete.');
+                return;
+            }
 
             // Console log
             log('\n⚠️  SCHEDULING IMPOSSIBILITIES — ' + _impossibilities.length + ' slot(s) could not be filled:');
@@ -10413,18 +10449,131 @@
                 log('  ' + (idx + 1) + '. Bunk ' + item.bunk + ' (' + (item.grade || '?') + '): ' + item.reason);
             });
 
-            // Toast UI notification
-            const _summary = _impossibilities.length === 1
-                ? 'Bunk ' + _impossibilities[0].bunk + ': ' + _impossibilities[0].reason
-                : _impossibilities.length + ' slots could not be filled. See console for details.';
-            if (typeof window.showToast === 'function') {
-                window.showToast('⚠️ Schedule incomplete: ' + _summary, 'warning');
-            }
-
-            // Custom event so the UI can show a modal or banner
+            // Custom event — the gap panel (below) listens for this
             window.dispatchEvent(new CustomEvent('campistry-schedule-impossibilities', {
                 detail: { count: _impossibilities.length, items: _impossibilities }
             }));
+        })();
+
+        // ─── Gap Report Panel ─────────────────────────────────────────────────
+        // Collects every 'Free' block across all timelines and renders a
+        // dismissible floating panel listing each gap with its short reason.
+        // The user can collapse or X it out.
+        (function() {
+            if (typeof document === 'undefined') return; // non-browser env
+
+            // Collect all Free blocks with reasons from bunkTimelines
+            var _gapItems = [];
+            var _btRef = bunkTimelines; // closure over bunkTimelines
+            var _bunkGradeRef = {};
+            allGrades.forEach(function(g) {
+                getBunksForGrade(g, divisions).forEach(function(b) { _bunkGradeRef[String(b)] = g; });
+            });
+
+            Object.keys(_btRef).forEach(function(_gpBunk) {
+                var _gpGrade = _bunkGradeRef[String(_gpBunk)] || '';
+                (_btRef[_gpBunk] || []).forEach(function(_gpBlk) {
+                    if ((_gpBlk.event || '').toLowerCase().trim() !== 'free') return;
+                    var _gpDur = _gpBlk.endMin - _gpBlk.startMin;
+                    _gapItems.push({
+                        bunk:   _gpBunk,
+                        grade:  _gpGrade,
+                        start:  _gpBlk.startMin,
+                        end:    _gpBlk.endMin,
+                        dur:    _gpDur,
+                        reason: _gpBlk._gapReason || (_gpDur + 'min free slot — reason unknown')
+                    });
+                });
+            });
+
+            if (_gapItems.length === 0) return; // nothing to report
+
+            // Sort: by grade, then bunk, then time
+            _gapItems.sort(function(a, b) {
+                return (a.grade < b.grade ? -1 : a.grade > b.grade ? 1 : 0) ||
+                       (Number(a.bunk) - Number(b.bunk)) ||
+                       (a.start - b.start);
+            });
+
+            // Remove any previous panel
+            var _prevPanel = document.getElementById('campistry-gap-report-panel');
+            if (_prevPanel) _prevPanel.remove();
+
+            // Build the panel HTML
+            var _panelEl = document.createElement('div');
+            _panelEl.id = 'campistry-gap-report-panel';
+            _panelEl.style.cssText = [
+                'position:fixed', 'bottom:20px', 'right:20px', 'z-index:99999',
+                'width:380px', 'max-height:480px',
+                'background:#fff', 'border:1.5px solid #F59E0B',
+                'border-radius:12px', 'box-shadow:0 8px 32px rgba(0,0,0,0.18)',
+                'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+                'font-size:13px', 'overflow:hidden',
+                'display:flex', 'flex-direction:column'
+            ].join(';');
+
+            var _headerEl = document.createElement('div');
+            _headerEl.style.cssText = [
+                'display:flex', 'align-items:center', 'justify-content:space-between',
+                'padding:10px 14px', 'background:#FEF3C7',
+                'border-bottom:1px solid #F59E0B', 'cursor:pointer', 'user-select:none'
+            ].join(';');
+            _headerEl.innerHTML = '<span style="font-weight:700;color:#92400E;">⚠️ ' + _gapItems.length + ' gap' + (_gapItems.length > 1 ? 's' : '') + ' in today\'s schedule</span>' +
+                '<div style="display:flex;gap:8px;align-items:center">' +
+                  '<button id="cgr-toggle" title="Collapse" style="background:none;border:none;cursor:pointer;font-size:16px;color:#92400E;padding:0 2px;line-height:1;">▾</button>' +
+                  '<button id="cgr-close"  title="Dismiss"  style="background:none;border:none;cursor:pointer;font-size:18px;color:#92400E;padding:0 2px;line-height:1;">×</button>' +
+                '</div>';
+
+            var _bodyEl = document.createElement('div');
+            _bodyEl.id = 'cgr-body';
+            _bodyEl.style.cssText = 'overflow-y:auto;max-height:400px;padding:10px 14px;';
+
+            // Group by grade for readability
+            var _byGrade = {};
+            _gapItems.forEach(function(item) {
+                var _k = item.grade || 'Unknown';
+                if (!_byGrade[_k]) _byGrade[_k] = [];
+                _byGrade[_k].push(item);
+            });
+
+            var _bodyHtml = '';
+            Object.keys(_byGrade).sort().forEach(function(_gk) {
+                _bodyHtml += '<div style="font-weight:700;color:#1E40AF;margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;">' + _gk + '</div>';
+                _byGrade[_gk].forEach(function(item) {
+                    var _timeStr = minutesToTimeLabel(item.start) + ' – ' + minutesToTimeLabel(item.end);
+                    _bodyHtml += '<div style="padding:6px 0;border-bottom:1px solid #F3F4F6;">' +
+                        '<span style="font-weight:600;color:#374151;">Bunk ' + item.bunk + '</span> ' +
+                        '<span style="color:#6B7280;font-size:12px;">' + _timeStr + ' (' + item.dur + 'min)</span>' +
+                        '<div style="color:#6B7280;margin-top:2px;font-size:12px;line-height:1.4;">' + item.reason + '</div>' +
+                    '</div>';
+                });
+            });
+
+            _bodyEl.innerHTML = _bodyHtml;
+
+            _panelEl.appendChild(_headerEl);
+            _panelEl.appendChild(_bodyEl);
+            document.body.appendChild(_panelEl);
+
+            // Toggle collapse
+            var _collapsed = false;
+            document.getElementById('cgr-toggle').addEventListener('click', function(e) {
+                e.stopPropagation();
+                _collapsed = !_collapsed;
+                _bodyEl.style.display = _collapsed ? 'none' : '';
+                document.getElementById('cgr-toggle').textContent = _collapsed ? '▸' : '▾';
+            });
+            _headerEl.addEventListener('click', function() {
+                _collapsed = !_collapsed;
+                _bodyEl.style.display = _collapsed ? 'none' : '';
+                document.getElementById('cgr-toggle').textContent = _collapsed ? '▸' : '▾';
+            });
+
+            // Close
+            document.getElementById('cgr-close').addEventListener('click', function(e) {
+                e.stopPropagation();
+                _panelEl.remove();
+            });
         })();
 
         // =====================================================================
