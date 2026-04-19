@@ -1564,13 +1564,60 @@
     // The BFS finds the shortest sequence of moves that opens FB's slot.
     // =========================================================================
 
+    // ── BFS field-compatibility helper ───────────────────────────────────────
+    // Returns true if fb (grade, startMin, endMin) can be placed on cand's field
+    // given the CURRENT fieldIndex entries MINUS any bunks in evictedBunks.
+    function bfsCanPlace(fb, cand, fieldIndex, evictedBunks) {
+        const fn = cand.fieldNorm;
+        const entries = (fieldIndex.get(fn) || []).filter(e =>
+            e.bunk !== fb.bunk &&
+            !evictedBunks.has(e.bunk) &&
+            e.startMin < fb.endMin && e.endMin > fb.startMin
+        );
+        const cap = cand.capacity || 2;
+        const st = cand.shareType || 'same_division';
+        if (st === 'not_sharable') return entries.length === 0;
+        if (st === 'same_division') {
+            if (entries.some(e => e.grade !== fb.grade)) return false; // cross-grade blocks it
+            return entries.filter(e => e.grade === fb.grade).length < cap;
+        }
+        // custom / all / other sharable
+        return entries.length < cap;
+    }
+
+    // Returns true if victim can move to newCand's field (cross-grade + cap check)
+    function bfsCanMoveTo(victim, newCand, fieldIndex, evictedBunks) {
+        const nfn = newCand.fieldNorm;
+        const entries = (fieldIndex.get(nfn) || []).filter(e =>
+            e.bunk !== victim.bunk &&
+            !evictedBunks.has(e.bunk) &&
+            e.startMin < victim.endMin && e.endMin > victim.startMin
+        );
+        const ncap = newCand.capacity || 2;
+        const nst = newCand.shareType || 'same_division';
+        if (nst === 'not_sharable') return entries.length === 0;
+        if (nst === 'same_division') {
+            if (entries.some(e => e.grade !== victim.grade)) return false;
+            return entries.filter(e => e.grade === victim.grade).length < ncap;
+        }
+        return entries.length < ncap;
+    }
+
     function bfsAugmentingRepair(config) {
         config = config || {};
         const { candidates } = buildCandidates(config);
         if (candidates.length === 0) return 0;
 
-        const MAX_BFS_DEPTH = 6; // Max path length (deeper than DFS ejection chains)
-        const MAX_BFS_PASSES = 2;
+        // ★ v11.0 REWRITE: BFS with correct cross-grade validation at every step.
+        // Root cause of v11.0 violations: the original BFS executed victim evictions
+        // without re-checking whether FB could actually occupy the freed field
+        // (remaining same_division occupants from other grades still blocked it).
+        //
+        // Fix: bfsCanPlace() uses a virtual "evicted set" so we see the post-eviction
+        // state before committing any writes.  Only execute when the full check passes.
+
+        const MAX_BFS_DEPTH = 4; // Kept moderate — deep paths have high rollback risk
+        const MAX_BFS_PASSES = 3;
         let totalImproved = 0;
 
         for (let pass = 0; pass < MAX_BFS_PASSES; pass++) {
@@ -1583,6 +1630,8 @@
 
             for (const fb of freeBlocks) {
                 const sa = window.scheduleAssignments || {};
+
+                // Build what FB's bunk has already done today
                 const fbDone = new Set();
                 (sa[fb.bunk] || []).forEach((e, i) => {
                     if (i === fb.slotIdx || !e || e.continuation) return;
@@ -1590,80 +1639,86 @@
                     if (act && act !== 'free' && act !== 'free play') fbDone.add(act);
                 });
 
-                // BFS: find shortest path to fill FB
-                // State: { bunk, slotIdx, startMin, endMin, grade, field, moves[] }
-                // where moves[] = list of { victim, newCand } to execute
                 let found = false;
 
-                // Try direct fill first (depth 0)
+                // ── Depth 0: direct fill (no eviction needed) ──────────────────
                 for (const cand of candidates) {
                     if (window.isRainyDay && !cand.isIndoor) continue;
                     if (fbDone.has(cand.sportNorm)) continue;
-                    const fn = cand.fieldNorm;
-                    if (tabuSet.has(fb.bunk + '|' + fn)) continue;
-                    const entries = fieldIndex.get(fn) || [];
-                    const overlapping = entries.filter(e =>
-                        e.bunk !== fb.bunk &&
-                        e.startMin < fb.endMin && e.endMin > fb.startMin
-                    );
-                    const cap = cand.capacity || 2;
-                    const st = cand.shareType || 'same_division';
-                    let canPlace = false;
-                    if (st === 'not_sharable' && overlapping.length === 0) canPlace = true;
-                    else if (st === 'same_division' && !overlapping.some(o => o.grade !== fb.grade) && overlapping.filter(o => o.grade === fb.grade).length < cap) canPlace = true;
-                    else if (st !== 'not_sharable' && st !== 'same_division' && overlapping.length < cap) canPlace = true;
+                    if (tabuSet.has(fb.bunk + '|' + cand.fieldNorm)) continue;
+                    if (!bfsCanPlace(fb, cand, fieldIndex, new Set())) continue;
 
-                    if (canPlace) {
-                        // Apply direct fill
-                        if (!window.scheduleAssignments[fb.bunk]) window.scheduleAssignments[fb.bunk] = [];
-                        window.scheduleAssignments[fb.bunk][fb.slotIdx] = {
-                            field: cand.field, sport: cand.sport, _activity: cand.sport,
-                            _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
-                            _startMin: fb.startMin, _endMin: fb.endMin
-                        };
-                        if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
-                        fieldIndex.get(fn).push({ startMin: fb.startMin, endMin: fb.endMin, bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx, activity: cand.sportNorm });
-                        passImproved++;
-                        found = true;
-                        log('BFS direct fill: bunk ' + fb.bunk + ' ← ' + cand.sport);
-                        break;
-                    }
+                    // Commit
+                    if (!sa[fb.bunk]) sa[fb.bunk] = [];
+                    sa[fb.bunk][fb.slotIdx] = {
+                        field: cand.field, sport: cand.sport, _activity: cand.sport,
+                        _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
+                        _startMin: fb.startMin, _endMin: fb.endMin
+                    };
+                    const fn = cand.fieldNorm;
+                    if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
+                    fieldIndex.get(fn).push({ startMin: fb.startMin, endMin: fb.endMin, bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx, activity: cand.sportNorm });
+                    log('BFS direct fill: bunk ' + fb.bunk + ' ← ' + cand.sport);
+                    passImproved++;
+                    found = true;
+                    break;
                 }
                 if (found) continue;
 
-                // BFS search for augmenting path
-                // Queue entry: { fbCand, path: [{victim, newCand}], stateKey }
-                const visited = new Set();
-                const queue = [];
+                // ── Depth 1+: BFS augmenting path search ───────────────────────
+                // Each queue entry describes a planned sequence of evictions.
+                // We simulate them virtually (via evictedBunks set) before committing.
+                // path = [{ victim, sourceFn, newCand }]
 
-                // Seed queue with candidates that partially free the slot
+                const visited = new Set();
+                const queue = []; // { fbCand, path[], depth }
+
+                // Seed: for each candidate field FB could go on IF we evict some occupant
                 for (const cand of candidates) {
                     if (window.isRainyDay && !cand.isIndoor) continue;
                     if (fbDone.has(cand.sportNorm)) continue;
                     const fn = cand.fieldNorm;
-                    const entries = (fieldIndex.get(fn) || []).filter(e =>
+                    const blocking = (fieldIndex.get(fn) || []).filter(e =>
                         e.bunk !== fb.bunk && e.startMin < fb.endMin && e.endMin > fb.startMin
                     );
-                    if (entries.length === 0) continue; // already handled above
-                    // We need to evict one or more occupants
-                    for (const occ of entries) {
-                        const stateKey = occ.bunk + '|' + fn;
-                        if (visited.has(stateKey) || tabuSet.has(stateKey)) continue;
+                    if (blocking.length === 0) continue; // handled above
+
+                    for (const occ of blocking) {
+                        if (tabuSet.has(occ.bunk + '|' + fn)) continue;
+                        const stateKey = fn + '|' + occ.bunk;
+                        if (visited.has(stateKey)) continue;
+
+                        // ★ PRE-FILTER: After evicting just this occ, would the
+                        // remaining blocking entries still prevent FB from going here?
+                        // If yes, don't seed this path — it can never succeed at depth 1.
+                        // (Deeper BFS can still fix multi-eviction cases.)
+                        const remainingAfterEvict = blocking.filter(e => e.bunk !== occ.bunk);
+                        const fbSt = cand.shareType || 'same_division';
+                        const fbCap = cand.capacity || 2;
+                        let wouldHelp = false;
+                        if (fbSt === 'not_sharable') wouldHelp = remainingAfterEvict.length === 0;
+                        else if (fbSt === 'same_division') wouldHelp = !remainingAfterEvict.some(e => e.grade !== fb.grade) && remainingAfterEvict.filter(e => e.grade === fb.grade).length < fbCap;
+                        else wouldHelp = remainingAfterEvict.length < fbCap;
+
                         visited.add(stateKey);
-                        queue.push({ fbCand: cand, path: [{ victim: occ, sourceFn: fn }], depth: 1 });
+                        queue.push({ fbCand: cand, path: [{ victim: occ, sourceFn: fn }], depth: 1, wouldHelp });
                     }
                 }
 
                 // BFS expansion
                 for (let qi = 0; qi < queue.length && !found; qi++) {
-                    const { fbCand, path, depth } = queue[qi];
+                    const { fbCand, path, depth, wouldHelp } = queue[qi];
                     if (depth > MAX_BFS_DEPTH) continue;
 
-                    const lastVictim = path[path.length - 1].victim;
-                    const victimSA = (window.scheduleAssignments[lastVictim.bunk] || []);
-                    const victimEntry = victimSA[lastVictim.slotIdx];
-                    if (!victimEntry) continue;
+                    const lastStep = path[path.length - 1];
+                    const lastVictim = lastStep.victim;
 
+                    // Build the set of bunks being evicted in this path (virtual state)
+                    const evictedBunks = new Set(path.map(p => p.victim.bunk));
+
+                    // Build what the last victim has done today (for same-day dedup)
+                    const victimSA = (sa[lastVictim.bunk] || []);
+                    if (!victimSA[lastVictim.slotIdx]) continue;
                     const victimDone = new Set();
                     victimSA.forEach((e, i) => {
                         if (i === lastVictim.slotIdx || !e || e.continuation) return;
@@ -1671,73 +1726,109 @@
                         if (act && act !== 'free' && act !== 'free play') victimDone.add(act);
                     });
 
-                    // Try to find a new field for the victim
+                    // Try every candidate the last victim could move to
                     for (const newCand of candidates) {
                         if (window.isRainyDay && !newCand.isIndoor) continue;
                         if (victimDone.has(newCand.sportNorm)) continue;
-                        if (normName(newCand.field) === path[path.length - 1].sourceFn) continue; // can't stay
-                        const nfn = newCand.fieldNorm;
-                        const nEntries = (fieldIndex.get(nfn) || []).filter(e =>
-                            e.bunk !== lastVictim.bunk &&
-                            e.startMin < lastVictim.endMin && e.endMin > lastVictim.startMin
-                        );
-                        const ncap = newCand.capacity || 2;
-                        const nst = newCand.shareType || 'same_division';
-                        let canMoveTo = false;
-                        if (nst === 'not_sharable' && nEntries.length === 0) canMoveTo = true;
-                        else if (nst === 'same_division' && !nEntries.some(o => o.grade !== lastVictim.grade) && nEntries.filter(o => o.grade === lastVictim.grade).length < ncap) canMoveTo = true;
-                        else if (nst !== 'not_sharable' && nst !== 'same_division' && nEntries.length < ncap) canMoveTo = true;
+                        if (newCand.fieldNorm === lastStep.sourceFn) continue; // must actually move
+                        if (!bfsCanMoveTo(lastVictim, newCand, fieldIndex, evictedBunks)) continue;
 
-                        if (canMoveTo) {
-                            // Full path found — execute it
-                            const fullPath = path.map(p => ({
-                                victim: p.victim,
-                                newCand: candidates.find(c => c.fieldNorm === (queue[qi].fbCand?.fieldNorm || p.sourceFn)) || newCand,
-                                sourceFn: p.sourceFn
-                            }));
-                            // Simple execution: move victim to newCand, fill FB with fbCand
-                            // (Simplified — just handle depth-1 paths for safety)
-                            if (path.length === 1) {
-                                const victim = path[0].victim;
-                                const sa = window.scheduleAssignments;
-                                // Move victim to newCand
-                                if (sa[victim.bunk]) {
-                                    sa[victim.bunk][victim.slotIdx] = {
-                                        field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
-                                        _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
-                                        _startMin: victim.startMin, _endMin: victim.endMin
-                                    };
+                        // Victim CAN move to newCand. Now check: can FB go to fbCand after
+                        // all evictions in this path? (This is the critical cross-grade gate.)
+                        if (wouldHelp) {
+                            // ★ EXECUTION GATE: simulate all evictions, then re-check FB placement
+                            const allEvicted = new Set(evictedBunks);
+                            if (!bfsCanPlace(fb, fbCand, fieldIndex, allEvicted)) {
+                                // Still can't place FB — continue searching (might be fixable at depth+1)
+                                if (depth < MAX_BFS_DEPTH) {
+                                    // Push the victim's destination conflict as next frontier
+                                    const nfn = newCand.fieldNorm;
+                                    const nBlocking = (fieldIndex.get(nfn) || []).filter(e =>
+                                        e.bunk !== lastVictim.bunk && !evictedBunks.has(e.bunk) &&
+                                        e.startMin < lastVictim.endMin && e.endMin > lastVictim.startMin
+                                    );
+                                    for (const nocc of nBlocking) {
+                                        if (tabuSet.has(nocc.bunk + '|' + nfn)) continue;
+                                        const nsk = nfn + '|' + nocc.bunk;
+                                        if (visited.has(nsk)) continue;
+                                        visited.add(nsk);
+                                        queue.push({ fbCand, path: [...path, { victim: nocc, sourceFn: nfn }], depth: depth + 1, wouldHelp: true });
+                                    }
                                 }
-                                // Update field index
-                                const oldFn = path[0].sourceFn;
-                                fieldIndex.set(oldFn, (fieldIndex.get(oldFn) || []).filter(e => !(e.bunk === victim.bunk && e.slotIdx === victim.slotIdx)));
-                                if (!fieldIndex.has(nfn)) fieldIndex.set(nfn, []);
-                                fieldIndex.get(nfn).push({ startMin: victim.startMin, endMin: victim.endMin, bunk: victim.bunk, grade: victim.grade, slotIdx: victim.slotIdx, activity: newCand.sportNorm });
-                                tabuSet.add(victim.bunk + '|' + oldFn);
-
-                                // Fill FB with fbCand
-                                if (!sa[fb.bunk]) sa[fb.bunk] = [];
-                                sa[fb.bunk][fb.slotIdx] = {
-                                    field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
-                                    _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
-                                    _startMin: fb.startMin, _endMin: fb.endMin
-                                };
-                                const fbFn = fbCand.fieldNorm;
-                                if (!fieldIndex.has(fbFn)) fieldIndex.set(fbFn, []);
-                                fieldIndex.get(fbFn).push({ startMin: fb.startMin, endMin: fb.endMin, bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx, activity: fbCand.sportNorm });
-
-                                log('BFS augmenting: bunk ' + fb.bunk + ' ← ' + fbCand.sport + ' (victim ' + victim.bunk + ' → ' + newCand.sport + ')');
-                                passImproved++;
-                                found = true;
+                                continue;
                             }
+
+                            // ✅ Both FB placement AND victim move are valid — commit the chain
+                            // (For depth-1: move the one victim to newCand, then fill FB with fbCand)
+                            const victim = path[0].victim;
+                            const oldFn = path[0].sourceFn;
+                            const nfn2 = newCand.fieldNorm;
+
+                            // Snapshot victim's original assignment BEFORE overwriting
+                            const victimOriginal = sa[victim.bunk] ? { ...sa[victim.bunk][victim.slotIdx] } : null;
+
+                            // Move victim to newCand
+                            if (sa[victim.bunk]) {
+                                sa[victim.bunk][victim.slotIdx] = {
+                                    field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
+                                    _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
+                                    _startMin: victim.startMin, _endMin: victim.endMin
+                                };
+                            }
+
+                            // Update field index: remove victim from old field, add to new
+                            fieldIndex.set(oldFn, (fieldIndex.get(oldFn) || []).filter(e =>
+                                !(e.bunk === victim.bunk && e.slotIdx === victim.slotIdx)
+                            ));
+                            if (!fieldIndex.has(nfn2)) fieldIndex.set(nfn2, []);
+                            fieldIndex.get(nfn2).push({ startMin: victim.startMin, endMin: victim.endMin, bunk: victim.bunk, grade: victim.grade, slotIdx: victim.slotIdx, activity: newCand.sportNorm });
+                            tabuSet.add(victim.bunk + '|' + oldFn);
+
+                            // ★ FINAL VALIDATION: confirm FB can go on fbCand after the commit
+                            // (cross-grade check on the now-live fieldIndex)
+                            if (!bfsCanPlace(fb, fbCand, fieldIndex, new Set())) {
+                                // Rollback — restore victim's original slot and field index
+                                if (sa[victim.bunk] && victimOriginal) {
+                                    sa[victim.bunk][victim.slotIdx] = victimOriginal;
+                                }
+                                fieldIndex.set(oldFn, (fieldIndex.get(oldFn) || []).concat([
+                                    { startMin: victim.startMin, endMin: victim.endMin, bunk: victim.bunk, grade: victim.grade, slotIdx: victim.slotIdx, activity: victimOriginal?.sport || '' }
+                                ]));
+                                fieldIndex.set(nfn2, (fieldIndex.get(nfn2) || []).filter(e =>
+                                    !(e.bunk === victim.bunk && e.slotIdx === victim.slotIdx)
+                                ));
+                                tabuSet.delete(victim.bunk + '|' + oldFn);
+                                continue;
+                            }
+
+                            // Fill FB
+                            if (!sa[fb.bunk]) sa[fb.bunk] = [];
+                            sa[fb.bunk][fb.slotIdx] = {
+                                field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
+                                _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
+                                _startMin: fb.startMin, _endMin: fb.endMin
+                            };
+                            const fbFn = fbCand.fieldNorm;
+                            if (!fieldIndex.has(fbFn)) fieldIndex.set(fbFn, []);
+                            fieldIndex.get(fbFn).push({ startMin: fb.startMin, endMin: fb.endMin, bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx, activity: fbCand.sportNorm });
+
+                            log('BFS augmenting: bunk ' + fb.bunk + ' ← ' + fbCand.sport + ' (victim ' + victim.bunk + ' → ' + newCand.sport + ')');
+                            passImproved++;
+                            found = true;
                             break;
                         } else if (depth < MAX_BFS_DEPTH) {
-                            // Not there yet — push new frontier states
-                            for (const nocc of nEntries) {
-                                const nStateKey = nocc.bunk + '|' + nfn;
-                                if (visited.has(nStateKey) || tabuSet.has(nStateKey)) continue;
-                                visited.add(nStateKey);
-                                queue.push({ fbCand, path: [...path, { victim: nocc, sourceFn: nfn }], depth: depth + 1 });
+                            // This eviction alone doesn't help FB — but maybe a deeper chain will
+                            const nfn3 = newCand.fieldNorm;
+                            const nBlocking2 = (fieldIndex.get(nfn3) || []).filter(e =>
+                                e.bunk !== lastVictim.bunk && !evictedBunks.has(e.bunk) &&
+                                e.startMin < lastVictim.endMin && e.endMin > lastVictim.startMin
+                            );
+                            for (const nocc of nBlocking2) {
+                                if (tabuSet.has(nocc.bunk + '|' + nfn3)) continue;
+                                const nsk = nfn3 + '|' + nocc.bunk;
+                                if (visited.has(nsk)) continue;
+                                visited.add(nsk);
+                                queue.push({ fbCand, path: [...path, { victim: nocc, sourceFn: nfn3 }], depth: depth + 1, wouldHelp: false });
                             }
                         }
                     }
