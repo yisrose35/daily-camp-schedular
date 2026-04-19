@@ -217,19 +217,13 @@
         } else {
             if (overlapping.length >= cap) return false;
         }
-        // 4. Exact time match — OPT-IN via field's strictTiming flag.
-        //    Previously hard-coded ON, which silently defeated sharing for
-        //    same-grade bunks whose gap edges weren't perfectly aligned.
-        //    Now defaults to OFF: capacity check above already prevents
-        //    over-subscription. Camps that want strict alignment can set
-        //    strictTiming: true on the field.
-        const fLedger = window.AutoFieldLocks?.getFieldLedger?.(fieldName) || {};
-        if (fLedger.strictTiming === true && overlapping.length > 0 && cap > 1) {
-            const sameGradeOverlaps = overlapping.filter(e => e.grade === grade);
-            if (sameGradeOverlaps.length > 0) {
-                if (sameGradeOverlaps.some(e => e.startMin !== startMin || e.endMin !== endMin)) {
-                    return false;
-                }
+        // 4. Exact time alignment — MANDATORY for shared slots.
+        //    When two or more bunks use the same field at the same time (sharing),
+        //    their start AND end must be identical. Partial-overlap sharing is not
+        //    supported: counselors can only run one group from one time to another.
+        if (overlapping.length > 0) {
+            if (overlapping.some(e => e.startMin !== startMin || e.endMin !== endMin)) {
+                return false; // misaligned occupant — cannot share this field
             }
         }
         // 5. Combined field mutual exclusion
@@ -1235,11 +1229,12 @@
         let fixed = 0;
         for (const fb of freeBlocks) {
             let placed = false;
-            // Walk every field that has at least one occupant overlapping fb's window
+            // Walk every field that has at least one occupant with EXACTLY the same time window
+            // (user requirement: shared bunks must have identical start AND end — no partial overlap)
             for (const [fn, entries] of fieldIndex) {
                 if (placed) break;
                 const overlapping = entries.filter(e =>
-                    e.startMin < fb.endMin && e.endMin > fb.startMin && e.bunk !== fb.bunk
+                    e.startMin === fb.startMin && e.endMin === fb.endMin && e.bunk !== fb.bunk
                 );
                 if (overlapping.length === 0) continue;
 

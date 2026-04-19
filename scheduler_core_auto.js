@@ -4965,7 +4965,7 @@
                         var blk = makeBlock({
                             startMin: cursor, endMin: blockEnd,
                             type: result ? 'sport' : 'slot',
-                            event: result ? result.name : 'General Activity Slot',
+                            event: result ? result.name : (pickFillActivity(blockEnd - cursor, sMeta.grade) || 'Free Time'),
                             layer: sMeta.sportLayer, field: result ? result.field : null,
                             dMin: sMeta.sportC.dMin, dMax: sMeta.sportCeiling,
                             _source: 'sport-fill',
@@ -5009,7 +5009,7 @@
                         }
                         addSportBlocks(tmpl, rgap.start, rgap.end, {
                             type: rResult ? 'sport' : 'slot',
-                            event: rResult ? rResult.name : 'General Activity Slot',
+                            event: rResult ? rResult.name : (pickFillActivity(gapSize, fMeta.grade) || 'Free Time'),
                             layer: fMeta.sportLayer, field: rResult ? rResult.field : null,
                             dMin: fMeta.sportC.dMin, dMax: fMeta.sportCeiling,
                             _source: 'filler',
@@ -5040,7 +5040,7 @@
                             // Can't absorb — create slot only if >= dMin
                             var _lastResort = makeBlock({
                                 startMin: rgap.start, endMin: rgap.end,
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: pickFillActivity(gapSize, fMeta.grade) || 'Free Time',
                                 layer: fMeta.sportLayer, field: null,
                                 dMin: fMeta.fillMinDur, dMax: fMeta.sportCeiling,
                                 _source: 'filler', _final: true
@@ -5365,7 +5365,7 @@
                         // Strategy 3: Create a new sport block to fill the gap (even if short)
                         if (!filled) {
                             addSportBlocks(vTmpl, vGap.start, vGap.end, {
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: pickFillActivity(vGapDur, vMeta.grade) || 'Free Time',
                                 layer: vMeta.sportLayer, field: null,
                                 dMin: Math.min(vGapDur, vMeta.fillMinDur), dMax: vMeta.sportCeiling,
                                 _source: 'perfection-fill',
@@ -5513,7 +5513,7 @@
                         // ★ v11.1: Fill the pre-gap (victim start to clamped start) with sport
                         if (hPreGap >= 10) {
                             addSportBlocks(hTmpl, hVictim.startMin, hPlaceStart, {
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: pickFillActivity(hPreGap, hMeta.grade) || 'Free Time',
                                 layer: hMeta.sportLayer, field: null,
                                 dMin: Math.min(hPreGap, hMeta.fillMinDur || 20), dMax: hMeta.sportCeiling,
                                 _source: 'self-heal-pregap', _final: true
@@ -5524,7 +5524,7 @@
                         var hRemainDur = hRemainEnd - hRemainStart;
                         if (hRemainDur >= 10) {
                             addSportBlocks(hTmpl, hRemainStart, hRemainEnd, {
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: pickFillActivity(hRemainDur, hMeta.grade) || 'Free Time',
                                 layer: hMeta.sportLayer, field: null,
                                 dMin: Math.min(hRemainDur, hMeta.fillMinDur),
                                 dMax: hMeta.sportCeiling,
@@ -5600,7 +5600,7 @@
                                 // Fill remainder with sport slot
                                 if (rhRemainEnd - rhRemainStart >= rhMeta.fillMinDur) {
                                     addSportBlocks(rhTmpl, rhRemainStart, rhRemainEnd, {
-                                        type: 'slot', event: 'General Activity Slot',
+                                        type: 'slot', event: pickFillActivity(rhRemainEnd - rhRemainStart, rhMeta.grade) || 'Free Time',
                                         layer: rhMeta.sportLayer, field: null,
                                         dMin: rhMeta.sportC.dMin, dMax: rhMeta.sportCeiling,
                                         _source: 'self-heal',
@@ -6083,7 +6083,7 @@
                         }
                         fcTl.push({
                             startMin: fgGap.start, endMin: fgGap.end,
-                            type: 'slot', event: 'General Activity Slot',
+                            type: 'slot', event: pickFillActivity(fgDur, fcMeta.grade) || 'Free Time',
                             layer: _fcPassCLayer, field: null,
                             dMin: fcMeta.fillMinDur, dMax: fcMeta.sportCeiling || 60,
                             _source: 'gap-fill', _final: true,
@@ -6313,7 +6313,7 @@
                         }
                         var zgBlk = makeBlock({
                             startMin: zgGap.start, endMin: zgGap.end,
-                            type: 'slot', event: 'General Activity Slot',
+                            type: 'slot', event: pickFillActivity(zgDur, zgMeta.grade) || 'Free Time',
                             layer: _zgS3Layer, field: null,
                             dMin: zgMeta.fillMinDur, dMax: zgMeta.sportCeiling || 60,
                             _source: 'zero-gap', _final: true
@@ -6340,7 +6340,7 @@
                         if (_zgPrevImmov && _zgNextImmov) {
                             var zgMicroBlk = makeBlock({
                                 startMin: zgGap.start, endMin: zgGap.end,
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: 'Free Time',
                                 layer: null, field: null,
                                 dMin: zgDur, dMax: zgDur,
                                 _source: 'micro-gap', _final: true, _microSlot: true,
@@ -6624,7 +6624,7 @@
                         if (eRemain >= eMeta.fillMinDur) {
                             var eRemBlk = makeBlock({
                                 startMin: eBlk.endMin, endMin: eOrigEnd,
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: pickFillActivity(eRemain, eMeta.grade) || 'Free Time',
                                 layer: eMeta.sportLayer, field: null,
                                 dMin: eMeta.sportC.dMin, dMax: eMeta.sportCeiling,
                                 _source: 'enforce-split', _final: true
@@ -10361,6 +10361,71 @@
 
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 
+        // ─── Impossibility Report ─────────────────────────────────────────────
+        // After all healing passes, any remaining Free blocks are true scheduling
+        // impossibilities. Surface them to the user with a concise explanation.
+        (function() {
+            const _sa = window.scheduleAssignments || {};
+            const _dt = window.divisionTimes || {};
+            const _impossibilities = [];
+
+            const _bunkGrade = {};
+            allGrades.forEach(g => getBunksForGrade(g, divisions).forEach(b => { _bunkGrade[String(b)] = g; }));
+
+            Object.entries(_sa).forEach(([_bunk, _slots]) => {
+                if (!Array.isArray(_slots)) return;
+                const _grade = _bunkGrade[String(_bunk)];
+                const _pbs = _dt[_grade]?._perBunkSlots?.[_bunk] || [];
+                const _meta = bunkMeta[_bunk];
+
+                _slots.forEach((_s, _i) => {
+                    if (!_s || _s.continuation || _s.field !== 'Free') return;
+                    const _slotInfo = Array.isArray(_pbs) ? _pbs[_i] : null;
+                    const _start = _slotInfo?.startMin ?? _s._startMin;
+                    const _end   = _slotInfo?.endMin   ?? _s._endMin;
+                    const _dur   = (_start != null && _end != null) ? (_end - _start) : null;
+
+                    let _reason = '';
+                    const _fillMin = _meta?.fillMinDur || 25;
+                    if (_dur != null && _dur < _fillMin) {
+                        // Micro-gap trapped between immovable blocks
+                        const _tl = bunkTimelines[_bunk] || [];
+                        const _before = _tl.find(bl => bl.endMin === _start);
+                        const _after  = _tl.find(bl => bl.startMin === _end);
+                        const _bName  = _before ? (_before.event || _before.type) : 'day start';
+                        const _aName  = _after  ? (_after.event  || _after.type)  : 'day end';
+                        _reason = _dur + '-min gap between "' + _bName + '" and "' + _aName + '" — minimum activity is ' + _fillMin + 'min. Widen or shift one of the adjacent layer windows to close this gap.';
+                    } else if (_dur != null) {
+                        _reason = _dur + '-min slot had no available field. Add field capacity or widen sport availability for ' + (_grade || 'this grade') + '.';
+                    } else {
+                        _reason = 'slot unfilled — check field availability and sport configuration.';
+                    }
+
+                    _impossibilities.push({ bunk: _bunk, grade: _grade, reason: _reason });
+                });
+            });
+
+            if (_impossibilities.length === 0) return;
+
+            // Console log
+            log('\n⚠️  SCHEDULING IMPOSSIBILITIES — ' + _impossibilities.length + ' slot(s) could not be filled:');
+            _impossibilities.forEach(function(item, idx) {
+                log('  ' + (idx + 1) + '. Bunk ' + item.bunk + ' (' + (item.grade || '?') + '): ' + item.reason);
+            });
+
+            // Toast UI notification
+            const _summary = _impossibilities.length === 1
+                ? 'Bunk ' + _impossibilities[0].bunk + ': ' + _impossibilities[0].reason
+                : _impossibilities.length + ' slots could not be filled. See console for details.';
+            if (typeof window.showToast === 'function') {
+                window.showToast('⚠️ Schedule incomplete: ' + _summary, 'warning');
+            }
+
+            // Custom event so the UI can show a modal or banner
+            window.dispatchEvent(new CustomEvent('campistry-schedule-impossibilities', {
+                detail: { count: _impossibilities.length, items: _impossibilities }
+            }));
+        })();
 
         // =====================================================================
         // POST-GEN DIAGNOSTICS (callable, not inline)
