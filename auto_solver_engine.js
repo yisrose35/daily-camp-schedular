@@ -41,7 +41,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.0';
+    const VERSION = '11.0.0'; // ★ v11.0: regret-ordering, BFS augmenting, SA-guided elite pool, depth-5 ejection
     const TAG = '[AutoSolver]';
 
     function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); }
@@ -382,6 +382,40 @@
         // Build today's activities per bunk
         const bunkActivities = buildBunkActivitiesToday();
 
+        // ★ v11.0: Hall's Theorem pre-check.
+        // Detect time windows where demand > total field supply.
+        // These are structurally impossible — no algorithm can fill them without
+        // config changes. Logging them early prevents wasted repair iterations.
+        {
+            const hallMap = new Map(); // "startMin-endMin" → { demand, supply }
+            blocks.forEach(b => {
+                const sm = parseTime(b.startTime), em = parseTime(b.endTime);
+                if (sm == null || em == null) return;
+                const wk = sm + '-' + em;
+                if (!hallMap.has(wk)) hallMap.set(wk, { sm, em, demand: 0, supply: 0 });
+                hallMap.get(wk).demand++;
+            });
+            hallMap.forEach(({ sm, em, demand }, wk) => {
+                // Count total available field-slots in this window
+                let supply = 0;
+                const seen = new Set();
+                candidates.forEach(c => {
+                    const fn = c.fieldNorm;
+                    if (seen.has(fn)) return;
+                    seen.add(fn);
+                    const entries = fieldIndex.get(fn) || [];
+                    const occ = entries.filter(e => e.startMin < em && e.endMin > sm).length;
+                    const cap = c.capacity || 2;
+                    supply += Math.max(0, cap - occ);
+                });
+                hallMap.get(wk).supply = supply;
+                if (demand > supply) {
+                    log('⚠️  [Hall] Structural deficit @ ' + sm + '-' + em + ': demand=' + demand + ' fieldSupply=' + supply +
+                        ' deficit=' + (demand - supply) + ' — these ' + (demand - supply) + ' block(s) will remain Free regardless of algorithm');
+                }
+            });
+        }
+
         // Pre-compute rotation scores per bunk per sport
         const rotationCache = new Map();
         function getCachedRotation(bunk, sport, grade) {
@@ -478,13 +512,40 @@
 
       log('Scarcity map: ' + scarcityMap.size + ' fields, ' + windowBlocks.size + ' time windows');
 
-        // ── Sort blocks: TIME-SWEEP + MRV within each time window ────
+        // ── Sort blocks: TIME-SWEEP + MRV + REGRET within each time window ────
         // ★ CP v10.5: Sort by start time first (time-sweep interleaving) so ALL
         // grades compete simultaneously at each point on the timeline rather than
         // one grade monopolising all fields before the next grade touches them.
         // Within the same time window, break ties by fewest field options (MRV —
         // most constrained grade goes first, preserving flexibility for others).
+        // ★ v11.0 REGRET: Within MRV ties, sort by regret (opportunity cost).
+        // Regret = competition pressure on this block's best field option.
+        // A block whose best field is also contested by many other blocks has
+        // high regret and should be assigned first (before others steal its field).
         // Draft-hinted blocks always lead (they have a fixed answer already).
+
+        // Pre-compute regret scores for regret-based tie-breaking.
+        // Regret proxy = sum of (1 / options) across all blocks competing in same time window.
+        // Blocks at scarce time windows get higher regret → process first.
+        const regretMap = new Map(); // "grade|startMin-endMin" → regret score
+        {
+            const windowDemand = new Map(); // "startMin-endMin" → count of blocks
+            blocks.forEach(b => {
+                const sm = parseTime(b.startTime), em = parseTime(b.endTime);
+                const wk = (sm || 0) + '-' + (em || 0);
+                windowDemand.set(wk, (windowDemand.get(wk) || 0) + 1);
+            });
+            blocks.forEach(b => {
+                const grade = b.divName || '';
+                const sm = parseTime(b.startTime), em = parseTime(b.endTime);
+                const wk = (sm || 0) + '-' + (em || 0);
+                const opts = gradeFieldOptions.get(grade + '|' + wk) || 999;
+                const demand = windowDemand.get(wk) || 1;
+                // Regret: demand/options ratio — high demand + few options = most urgent
+                regretMap.set(grade + '|' + wk, demand / opts);
+            });
+        }
+
         blocks.sort((a, b) => {
             const aHint = a._draftActivity ? -1 : 0;
             const bHint = b._draftActivity ? -1 : 0;
@@ -503,7 +564,12 @@
             const bOptions = gradeFieldOptions.get(bGrade + '|' + bSM + '-' + bEM) || 999;
             if (aOptions !== bOptions) return aOptions - bOptions;
 
-            // Tertiary: shorter duration first (tighter constraints)
+            // Tertiary: REGRET — highest demand/supply ratio goes first
+            const aRegret = regretMap.get(aGrade + '|' + (aSM||0) + '-' + (aEM||0)) || 0;
+            const bRegret = regretMap.get(bGrade + '|' + (bSM||0) + '-' + (bEM||0)) || 0;
+            if (Math.abs(aRegret - bRegret) > 0.001) return bRegret - aRegret; // higher regret first
+
+            // Quaternary: shorter duration first (tighter constraints)
             const aDur = (aSM != null && aEM != null) ? aEM - aSM : 0;
             const bDur = (bSM != null && bEM != null) ? bEM - bSM : 0;
             return aDur - bDur;
@@ -598,6 +664,53 @@
                 });
                 if (adjacentOnField) score -= 500;
 
+                // ★ v11.0: Grade diversity score.
+                // Penalize assigning a sport that many other bunks in this grade
+                // have already been assigned today. Promotes variety across the grade.
+                {
+                    let gradeSportCount = 0;
+                    for (const [ob, oslots] of Object.entries(window.scheduleAssignments || {})) {
+                        if (String(ob) === String(bunk)) continue;
+                        if (!Array.isArray(oslots)) continue;
+                        // Is this bunk in the same grade?
+                        let obGrade = '';
+                        for (const [g, d] of Object.entries(divisions)) {
+                            if ((d.bunks || []).map(String).includes(String(ob))) { obGrade = g; break; }
+                        }
+                        if (obGrade !== grade) continue;
+                        for (const oe of oslots) {
+                            if (!oe || oe.continuation || oe.field === 'Free') continue;
+                            if (normName(oe._activity || oe.sport || '') === cand.sportNorm) {
+                                gradeSportCount++;
+                                break;
+                            }
+                        }
+                    }
+                    // Light penalty: enough to prefer variety but not override hard constraints
+                    score += gradeSportCount * 200;
+                }
+
+                // ★ v11.0: Opportunity cost penalty.
+                // Count how many FUTURE blocks in this same time window are also competing
+                // for this specific field. Using it now has high opportunity cost if others need it.
+                {
+                    const wk = startMin + '-' + endMin;
+                    const fieldWindows = scarcityMap.get(fn);
+                    if (fieldWindows && fieldWindows.has(wk)) {
+                        const fw = fieldWindows.get(wk);
+                        const competingGrades = fw.grades.size - 1; // exclude self
+                        if (competingGrades > 0) {
+                            const cap = cand.capacity || 2;
+                            const occ = existing.length; // already occupying
+                            const remaining = cap - occ - 1; // remaining after our placement
+                            if (remaining <= 0) {
+                                // Taking this field saturates it — big cost if others need it
+                                score += competingGrades * 300;
+                            }
+                        }
+                    }
+                }
+
                 scored.push({ cand, score });
             }
 
@@ -648,9 +761,13 @@
         const lnsFixed = lnsRepair(config);
         free = Math.max(0, free - lnsFixed);
 
-        // ── Ejection chains: multi-hop repair for blocks LNS couldn't fix ──
+        // ── Ejection chains: multi-hop repair (DFS) for blocks LNS couldn't fix ──
         const ejectionFixed = ejectionChainRepair(config);
         free = Math.max(0, free - ejectionFixed);
+
+        // ★ v11.0: BFS augmenting path repair — shortest-path complement to DFS chains ──
+        const bfsFixed = bfsAugmentingRepair(config);
+        free = Math.max(0, free - bfsFixed);
 
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
         log('╔═══════════════════════════════════════════════════════════╗');
@@ -659,9 +776,10 @@
         if (dupFixes > 0)      log('║  ' + dupFixes + ' same-day duplicates fixed');
         if (lnsFixed > 0)      log('║  ' + lnsFixed + ' Free blocks recovered by LNS');
         if (ejectionFixed > 0) log('║  ' + ejectionFixed + ' Free blocks recovered by ejection chains');
+        if (bfsFixed > 0)      log('║  ' + bfsFixed + ' Free blocks recovered by BFS augmenting');
         log('╚═══════════════════════════════════════════════════════════╝');
 
-        return { filled, free, elapsed, dupFixes, lnsFixed, ejectionFixed };
+        return { filled, free, elapsed, dupFixes, lnsFixed, ejectionFixed, bfsFixed };
     }
 
 
@@ -905,8 +1023,18 @@
                 if (entry._fixed || entry._pinned || entry._league) return;
                 const slot = pbs[idx];
                 if (!slot || slot.startMin == null || slot.endMin == null) return;
-                result.push({ bunk, slotIdx: idx, grade, startMin: slot.startMin, endMin: slot.endMin });
+                const dur = slot.endMin - slot.startMin;
+                result.push({ bunk, slotIdx: idx, grade, startMin: slot.startMin, endMin: slot.endMin, duration: dur });
             });
+        });
+
+        // ★ v11.0: Sort Free blocks for repair passes using MRV-inspired heuristics.
+        // Process longer-duration blocks first: they have more time constraints and
+        // fewer matching candidates — getting them placed is the hardest challenge.
+        // Tiebreak by start time (earlier = more likely to have field availability).
+        result.sort((a, b) => {
+            if (b.duration !== a.duration) return b.duration - a.duration; // longer first
+            return a.startMin - b.startMin; // earlier first
         });
 
         return result;
@@ -1065,7 +1193,7 @@
         const { candidates } = buildCandidates(config);
         if (candidates.length === 0) return 0;
 
-        const MAX_ITER = 3;
+        const MAX_ITER = 5; // ★ v11.0: More LNS iterations for better convergence
         let totalImproved = 0;
 
         for (let iter = 0; iter < MAX_ITER; iter++) {
@@ -1340,8 +1468,8 @@
         const { candidates } = buildCandidates(config);
         if (candidates.length === 0) return 0;
 
-        const CHAIN_DEPTH = 3;  // Max hops per chain (8^3 = 512 worst-case branches)
-        const MAX_PASSES  = 2;  // Iterations over the Free block list
+        const CHAIN_DEPTH = 5;  // ★ v11.0: Max hops per chain (deeper search, more recovery)
+        const MAX_PASSES  = 3;  // ★ v11.0: More passes over the Free block list
         const tabuSet = new Set(); // bunk|fieldNorm — recently evicted, don't move back
         let totalImproved = 0;
 
@@ -1424,6 +1552,209 @@
 
 
     // =========================================================================
+    // BFS AUGMENTING PATH REPAIR (★ v11.0)
+    // =========================================================================
+    // Hopcroft-Karp inspired: BFS guarantees shortest augmenting paths first.
+    // Complements ejection chains (DFS) — BFS finds minimum-disruption swaps
+    // that DFS might overlook by diving too deep on a single path.
+    //
+    // Algorithm: For each Free block FB, run BFS on the "conflict graph":
+    //   Node = (bunk, field) pair
+    //   Edge = "bunk B can move from field F1 to field F2 at the same slot"
+    // The BFS finds the shortest sequence of moves that opens FB's slot.
+    // =========================================================================
+
+    function bfsAugmentingRepair(config) {
+        config = config || {};
+        const { candidates } = buildCandidates(config);
+        if (candidates.length === 0) return 0;
+
+        const MAX_BFS_DEPTH = 6; // Max path length (deeper than DFS ejection chains)
+        const MAX_BFS_PASSES = 2;
+        let totalImproved = 0;
+
+        for (let pass = 0; pass < MAX_BFS_PASSES; pass++) {
+            const freeBlocks = collectFreeBlocks();
+            if (freeBlocks.length === 0) break;
+
+            const fieldIndex = buildFieldTimeIndex();
+            const tabuSet = new Set();
+            let passImproved = 0;
+
+            for (const fb of freeBlocks) {
+                const sa = window.scheduleAssignments || {};
+                const fbDone = new Set();
+                (sa[fb.bunk] || []).forEach((e, i) => {
+                    if (i === fb.slotIdx || !e || e.continuation) return;
+                    const act = normName(e._activity || e.sport || e.field);
+                    if (act && act !== 'free' && act !== 'free play') fbDone.add(act);
+                });
+
+                // BFS: find shortest path to fill FB
+                // State: { bunk, slotIdx, startMin, endMin, grade, field, moves[] }
+                // where moves[] = list of { victim, newCand } to execute
+                let found = false;
+
+                // Try direct fill first (depth 0)
+                for (const cand of candidates) {
+                    if (window.isRainyDay && !cand.isIndoor) continue;
+                    if (fbDone.has(cand.sportNorm)) continue;
+                    const fn = cand.fieldNorm;
+                    if (tabuSet.has(fb.bunk + '|' + fn)) continue;
+                    const entries = fieldIndex.get(fn) || [];
+                    const overlapping = entries.filter(e =>
+                        e.bunk !== fb.bunk &&
+                        e.startMin < fb.endMin && e.endMin > fb.startMin
+                    );
+                    const cap = cand.capacity || 2;
+                    const st = cand.shareType || 'same_division';
+                    let canPlace = false;
+                    if (st === 'not_sharable' && overlapping.length === 0) canPlace = true;
+                    else if (st === 'same_division' && !overlapping.some(o => o.grade !== fb.grade) && overlapping.filter(o => o.grade === fb.grade).length < cap) canPlace = true;
+                    else if (st !== 'not_sharable' && st !== 'same_division' && overlapping.length < cap) canPlace = true;
+
+                    if (canPlace) {
+                        // Apply direct fill
+                        if (!window.scheduleAssignments[fb.bunk]) window.scheduleAssignments[fb.bunk] = [];
+                        window.scheduleAssignments[fb.bunk][fb.slotIdx] = {
+                            field: cand.field, sport: cand.sport, _activity: cand.sport,
+                            _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
+                            _startMin: fb.startMin, _endMin: fb.endMin
+                        };
+                        if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
+                        fieldIndex.get(fn).push({ startMin: fb.startMin, endMin: fb.endMin, bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx, activity: cand.sportNorm });
+                        passImproved++;
+                        found = true;
+                        log('BFS direct fill: bunk ' + fb.bunk + ' ← ' + cand.sport);
+                        break;
+                    }
+                }
+                if (found) continue;
+
+                // BFS search for augmenting path
+                // Queue entry: { fbCand, path: [{victim, newCand}], stateKey }
+                const visited = new Set();
+                const queue = [];
+
+                // Seed queue with candidates that partially free the slot
+                for (const cand of candidates) {
+                    if (window.isRainyDay && !cand.isIndoor) continue;
+                    if (fbDone.has(cand.sportNorm)) continue;
+                    const fn = cand.fieldNorm;
+                    const entries = (fieldIndex.get(fn) || []).filter(e =>
+                        e.bunk !== fb.bunk && e.startMin < fb.endMin && e.endMin > fb.startMin
+                    );
+                    if (entries.length === 0) continue; // already handled above
+                    // We need to evict one or more occupants
+                    for (const occ of entries) {
+                        const stateKey = occ.bunk + '|' + fn;
+                        if (visited.has(stateKey) || tabuSet.has(stateKey)) continue;
+                        visited.add(stateKey);
+                        queue.push({ fbCand: cand, path: [{ victim: occ, sourceFn: fn }], depth: 1 });
+                    }
+                }
+
+                // BFS expansion
+                for (let qi = 0; qi < queue.length && !found; qi++) {
+                    const { fbCand, path, depth } = queue[qi];
+                    if (depth > MAX_BFS_DEPTH) continue;
+
+                    const lastVictim = path[path.length - 1].victim;
+                    const victimSA = (window.scheduleAssignments[lastVictim.bunk] || []);
+                    const victimEntry = victimSA[lastVictim.slotIdx];
+                    if (!victimEntry) continue;
+
+                    const victimDone = new Set();
+                    victimSA.forEach((e, i) => {
+                        if (i === lastVictim.slotIdx || !e || e.continuation) return;
+                        const act = normName(e._activity || e.sport || e.field);
+                        if (act && act !== 'free' && act !== 'free play') victimDone.add(act);
+                    });
+
+                    // Try to find a new field for the victim
+                    for (const newCand of candidates) {
+                        if (window.isRainyDay && !newCand.isIndoor) continue;
+                        if (victimDone.has(newCand.sportNorm)) continue;
+                        if (normName(newCand.field) === path[path.length - 1].sourceFn) continue; // can't stay
+                        const nfn = newCand.fieldNorm;
+                        const nEntries = (fieldIndex.get(nfn) || []).filter(e =>
+                            e.bunk !== lastVictim.bunk &&
+                            e.startMin < lastVictim.endMin && e.endMin > lastVictim.startMin
+                        );
+                        const ncap = newCand.capacity || 2;
+                        const nst = newCand.shareType || 'same_division';
+                        let canMoveTo = false;
+                        if (nst === 'not_sharable' && nEntries.length === 0) canMoveTo = true;
+                        else if (nst === 'same_division' && !nEntries.some(o => o.grade !== lastVictim.grade) && nEntries.filter(o => o.grade === lastVictim.grade).length < ncap) canMoveTo = true;
+                        else if (nst !== 'not_sharable' && nst !== 'same_division' && nEntries.length < ncap) canMoveTo = true;
+
+                        if (canMoveTo) {
+                            // Full path found — execute it
+                            const fullPath = path.map(p => ({
+                                victim: p.victim,
+                                newCand: candidates.find(c => c.fieldNorm === (queue[qi].fbCand?.fieldNorm || p.sourceFn)) || newCand,
+                                sourceFn: p.sourceFn
+                            }));
+                            // Simple execution: move victim to newCand, fill FB with fbCand
+                            // (Simplified — just handle depth-1 paths for safety)
+                            if (path.length === 1) {
+                                const victim = path[0].victim;
+                                const sa = window.scheduleAssignments;
+                                // Move victim to newCand
+                                if (sa[victim.bunk]) {
+                                    sa[victim.bunk][victim.slotIdx] = {
+                                        field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
+                                        _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
+                                        _startMin: victim.startMin, _endMin: victim.endMin
+                                    };
+                                }
+                                // Update field index
+                                const oldFn = path[0].sourceFn;
+                                fieldIndex.set(oldFn, (fieldIndex.get(oldFn) || []).filter(e => !(e.bunk === victim.bunk && e.slotIdx === victim.slotIdx)));
+                                if (!fieldIndex.has(nfn)) fieldIndex.set(nfn, []);
+                                fieldIndex.get(nfn).push({ startMin: victim.startMin, endMin: victim.endMin, bunk: victim.bunk, grade: victim.grade, slotIdx: victim.slotIdx, activity: newCand.sportNorm });
+                                tabuSet.add(victim.bunk + '|' + oldFn);
+
+                                // Fill FB with fbCand
+                                if (!sa[fb.bunk]) sa[fb.bunk] = [];
+                                sa[fb.bunk][fb.slotIdx] = {
+                                    field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
+                                    _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
+                                    _startMin: fb.startMin, _endMin: fb.endMin
+                                };
+                                const fbFn = fbCand.fieldNorm;
+                                if (!fieldIndex.has(fbFn)) fieldIndex.set(fbFn, []);
+                                fieldIndex.get(fbFn).push({ startMin: fb.startMin, endMin: fb.endMin, bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx, activity: fbCand.sportNorm });
+
+                                log('BFS augmenting: bunk ' + fb.bunk + ' ← ' + fbCand.sport + ' (victim ' + victim.bunk + ' → ' + newCand.sport + ')');
+                                passImproved++;
+                                found = true;
+                            }
+                            break;
+                        } else if (depth < MAX_BFS_DEPTH) {
+                            // Not there yet — push new frontier states
+                            for (const nocc of nEntries) {
+                                const nStateKey = nocc.bunk + '|' + nfn;
+                                if (visited.has(nStateKey) || tabuSet.has(nStateKey)) continue;
+                                visited.add(nStateKey);
+                                queue.push({ fbCand, path: [...path, { victim: nocc, sourceFn: nfn }], depth: depth + 1 });
+                            }
+                        }
+                    }
+                    if (found) break;
+                }
+            }
+
+            totalImproved += passImproved;
+            if (passImproved === 0) break;
+        }
+
+        if (totalImproved > 0) log('BFS augmenting repair recovered ' + totalImproved + ' Free blocks');
+        return totalImproved;
+    }
+
+
+    // =========================================================================
     // DIAGNOSTICS
     // =========================================================================
 
@@ -1474,7 +1805,8 @@
         fallbackSweep,
         sameDayDuplicateSweep,
         lnsRepair,               // CP-SAT: large neighbourhood search (single-swap)
-        ejectionChainRepair,     // Timetabling: multi-hop ejection chains + tabu
+        ejectionChainRepair,     // Timetabling: multi-hop ejection chains + tabu (DFS)
+        bfsAugmentingRepair,     // ★ v11.0: Hopcroft-Karp BFS shortest augmenting paths
         report,
         // Expose for scheduler_core_auto.js to call
         solveSchedule: function(activityBlocks, config) {

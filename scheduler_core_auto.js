@@ -7025,8 +7025,8 @@
         // SCORING ENGINE
         // =====================================================================
 
-        const MAX_ITERATIONS = 25;  // ★ v14.0: raised slightly — elite breeding may find improvements late
-        const BASE_STALE_STOP = 8;
+        const MAX_ITERATIONS = 35;  // ★ v11.0: more iterations for deeper SA-style exploration
+        const BASE_STALE_STOP = 10; // ★ v11.0: more patience before stopping
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
 
@@ -7035,7 +7035,7 @@
         // Prevents wasting iterations revisiting configurations that failed.
         // Each entry: { seed, score, reasons[], forbidUntilIter }
         // =====================================================================
-        const TABU_TENURE = 5; // How many iterations to remember a bad seed
+        const TABU_TENURE = 7; // ★ v11.0: longer tabu memory prevents revisiting bad seeds
         const tabuList = new Map(); // seed → { score, reasons, forbidUntilIter }
 
         function recordTabuSeed(seed, score, reasons) {
@@ -7066,7 +7066,7 @@
         // Instead of only tracking the single best, we keep a pool of elite
         // results and use their seeds as starting points for future iterations.
         // =====================================================================
-        const ELITE_SIZE = 5;
+        const ELITE_SIZE = 7; // ★ v11.0: larger elite pool for more diversity
         const elitePool = []; // { score, seed, timelines, warnings, freeEstimate }
 
         function updateElitePool(score, seed, timelines, iterWarnings, freeEst) {
@@ -7095,11 +7095,26 @@
 
         function getEliteBreedSeed() {
             if (elitePool.length === 0) return null;
-            // Pick a random elite and mutate its seed slightly
-            const idx = totalIters % elitePool.length;
+            // ★ v11.0: SA-style temperature-guided mutation.
+            // Early iterations: large mutations (explore widely).
+            // Late iterations: small mutations (exploit good solutions).
+            // Temperature decays from 1.0 → 0.1 over MAX_ITERATIONS.
+            const temperature = Math.max(0.1, 1.0 - (totalIters / MAX_ITERATIONS) * 0.9);
+            const maxMutation = Math.max(1, Math.round(temperature * 20)); // 1 to 20
+
+            // Biased selection: earlier iterations prefer exploring less-visited elites;
+            // later iterations prefer the best elite (exploitation).
+            let idx;
+            if (temperature > 0.5) {
+                // Exploration: pick uniformly from elite pool
+                idx = (totalIters * 7 + 13) % elitePool.length;
+            } else {
+                // Exploitation: weight toward best (idx=0) with exponential decay
+                const r = (totalIters * 31 + 17) % 100;
+                idx = r < 50 ? 0 : r < 80 ? 1 % elitePool.length : (totalIters % elitePool.length);
+            }
             const elite = elitePool[idx];
-            // Mutate: +1 to +5 from elite seed (always positive to prevent negative modulo bugs)
-            const mutation = ((totalIters * 7 + 3) % 5) + 1; // 1 to 5
+            const mutation = ((totalIters * 7 + 3) % maxMutation) + 1;
             return Math.abs(elite.seed + mutation);
         }
 
@@ -9333,16 +9348,20 @@
                 }
                 if (totalFallbackFilled > 0) log('[4] Fallback sweeps filled ' + totalFallbackFilled + ' more');
 
-                // ★ v10.5: Second-round LNS + ejection chain repair.
-                // After fallbackSweep fills some slots, new swap opportunities open up
-                // (e.g., a field that was at capacity now has a vacancy on the fringe).
-                // Run lnsRepair + ejectionChainRepair once more to exploit these.
+                // ★ v10.5 / v11.0: Multi-round repair after fallbackSweep fills slots.
+                // After fallbackSweep fills some slots, new swap opportunities open up.
+                // Order: LNS (fast) → ejection chains (DFS multi-hop) → BFS augmenting (shortest path).
                 if (totalFallbackFilled > 0 && window.AutoSolverEngine) {
                     try {
                         const lns2 = window.AutoSolverEngine.lnsRepair(solverConfig);
                         if (lns2 > 0) log('[4] 2nd-round LNS recovered ' + lns2 + ' more slots');
                         const ej2 = window.AutoSolverEngine.ejectionChainRepair(solverConfig);
                         if (ej2 > 0) log('[4] 2nd-round ejection chains recovered ' + ej2 + ' more slots');
+                        // ★ v11.0: BFS augmenting path repair — finds shortest-path swaps DFS misses
+                        if (window.AutoSolverEngine.bfsAugmentingRepair) {
+                            const bfs2 = window.AutoSolverEngine.bfsAugmentingRepair(solverConfig);
+                            if (bfs2 > 0) log('[4] BFS augmenting recovered ' + bfs2 + ' more slots');
+                        }
                     } catch(e2) { /* non-fatal */ }
                 }
             } catch (e) {
@@ -9493,25 +9512,31 @@
             // entry.field (e.g. "Lineup", "Elbow Tag", "Trench") are not physical
             // fields — they have no sharing config and produce spurious violations.
             //
-            // ★ v10.4 FIX A2: Use EVENT-SWEEP peak simultaneous occupancy instead of
-            // raw overlapping.length.  Two bunks using the same field on a rolling
-            // (non-overlapping) schedule would both "overlap" a third bunk's window
-            // in the loose sense, yielding overlapping.length = 2 = cap even though
-            // the actual peak is only 2 simultaneously (which is valid).
-            // Algorithm: collect interval start/end events, sort, sweep — O(n log n).
+            // ★ v11.0: SAMPLE-POINT peak simultaneous occupancy.
+            // Replaces the sort-based event sweep which had a tiebreaker ambiguity
+            // when start and end events fall at the same minute.
+            //
+            // Theorem (step-function maximum): the count function
+            //   f(t) = |{ i : intervals[i].startMin ≤ t < intervals[i].endMin }|
+            // is a right-continuous step function that can only INCREASE at a
+            // start event.  Therefore the global maximum is achieved immediately
+            // after (i.e., AT) some start time.  Checking f at every startMin
+            // in the interval set is both necessary and sufficient.
+            //
+            // [start, end) half-open semantics: bunk A ending at T and bunk B
+            // starting at T are NOT simultaneous — B only enters the count AFTER
+            // A has left.  The sample-point check iv.endMin > t (strict >) captures
+            // this exactly without any sort-order dependency.  O(n²) but n ≤ 20.
             function csweepPeakSimultaneous(intervals) {
-                const ev = [];
-                intervals.forEach(function(iv) {
-                    ev.push([iv.startMin, 1]);
-                    ev.push([iv.endMin, -1]);
-                });
-                // Sort: earlier time first; among ties, ends (-1) before starts (+1)
-                // This implements [start, end) half-open semantics: when bunk A ends at
-                // time T and bunk B starts at T they are NOT simultaneous — process the
-                // end event first so the count drops before the new start is counted.
-                ev.sort(function(a, b) { return a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]; });
-                let cnt = 0, peak = 0;
-                ev.forEach(function(e) { cnt += e[1]; if (cnt > peak) peak = cnt; });
+                var peak = 0;
+                for (var k = 0; k < intervals.length; k++) {
+                    var t = intervals[k].startMin;
+                    var cnt = 0;
+                    for (var j = 0; j < intervals.length; j++) {
+                        if (intervals[j].startMin <= t && intervals[j].endMin > t) cnt++;
+                    }
+                    if (cnt > peak) peak = cnt;
+                }
                 return peak;
             }
 
@@ -9596,7 +9621,7 @@
         // ── Loop until clean ──
         let totalConstraintFixes = 0;
         let sweepPass = 0;
-        while (sweepPass < 5) {
+        while (sweepPass < 8) { // ★ v11.0: 8 passes (was 5) for thorough convergence
             sweepPass++;
             const fixes = runConstraintSweep();
             totalConstraintFixes += fixes;
@@ -9604,14 +9629,25 @@
             log('[4.5] Pass ' + sweepPass + ': demoted ' + fixes);
         }
 
-        // ── Re-fill demoted slots ──
-        if (totalConstraintFixes > 0 && window.AutoSolverEngine?.fallbackSweep) {
+        // ── Re-fill demoted slots using full repair suite ──
+        if (totalConstraintFixes > 0 && window.AutoSolverEngine) {
             const refilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
             if (refilled > 0) log('[4.5] Re-filled ' + refilled + ' demoted slots');
-            // Final validation after fallback
+
+            // ★ v11.0: Apply full repair suite after re-fill for maximum recovery
+            if (refilled > 0) {
+                const r45lns = window.AutoSolverEngine.lnsRepair?.(solverConfig) || 0;
+                if (r45lns > 0) log('[4.5] LNS recovered ' + r45lns + ' more');
+                const r45ej = window.AutoSolverEngine.ejectionChainRepair?.(solverConfig) || 0;
+                if (r45ej > 0) log('[4.5] Ejection chains recovered ' + r45ej + ' more');
+                const r45bfs = window.AutoSolverEngine.bfsAugmentingRepair?.(solverConfig) || 0;
+                if (r45bfs > 0) log('[4.5] BFS augmenting recovered ' + r45bfs + ' more');
+            }
+
+            // Final validation after all repair attempts
             const postFallbackFixes = runConstraintSweep();
             totalConstraintFixes += postFallbackFixes;
-            if (postFallbackFixes > 0) log('[4.5] Post-fallback: demoted ' + postFallbackFixes + ' more');
+            if (postFallbackFixes > 0) log('[4.5] Post-repair: demoted ' + postFallbackFixes + ' more');
         }
 
         if (totalConstraintFixes > 0) {
@@ -9648,13 +9684,33 @@
                 return true;
             }
 
-            // ★ v10.5: Check no other bunk is using the same field during the Free slot's time.
-            // Prevents Step 4.9 from creating new capacity violations.
+            // ★ v11.0: Capacity-aware field check for Step 4.9.
+            // Counts how many other bunks concurrently use the field during the Free slot.
+            // Only blocks extension if conflictCount + 1 > fieldCap (respects shared capacity).
             function perfFieldFreeAt(field, freeIdx, ownerBunk, pbs) {
                 if (!field || field === 'Free') return true;
                 var freeSlot = pbs[freeIdx];
                 if (!freeSlot) return true; // can't verify — allow
                 var fn = (field || '').toLowerCase().trim();
+
+                // Look up this field's capacity from globalSettings
+                var _perfGS = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+                var _perfFields = _perfGS.app1?.fields || _perfGS.fields || [];
+                var fieldCap = 1;
+                var fieldShareType = 'not_sharable';
+                for (var fi = 0; fi < _perfFields.length; fi++) {
+                    var pf = _perfFields[fi];
+                    if (!pf || !pf.name) continue;
+                    if (pf.name.toLowerCase().trim() === fn) {
+                        var sw = pf.sharableWith || {};
+                        fieldShareType = sw.type || 'not_sharable';
+                        fieldCap = parseInt(sw.capacity) || (fieldShareType === 'not_sharable' ? 1 : 2);
+                        break;
+                    }
+                }
+
+                var conflictCount = 0;
+                var ownerGrade = perfBunkGrade[String(ownerBunk)] || '';
                 var perfAllSA = window.scheduleAssignments || {};
                 for (var ob in perfAllSA) {
                     if (String(ob) === String(ownerBunk)) continue;
@@ -9670,7 +9726,14 @@
                         var opbs = window._perBunkSlots?.[og]?.[ob] || [];
                         var os = opbs[oi];
                         if (!os) continue;
-                        if (os.startMin < freeSlot.endMin && os.endMin > freeSlot.startMin) return false;
+                        // [start, end) half-open interval overlap check
+                        if (os.startMin < freeSlot.endMin && os.endMin > freeSlot.startMin) {
+                            // Cross-grade check: not_sharable and same_division block cross-grade sharing
+                            if (fieldShareType === 'not_sharable') return false;
+                            if (fieldShareType === 'same_division' && og !== ownerGrade) return false;
+                            conflictCount++;
+                            if (conflictCount + 1 > fieldCap) return false;
+                        }
                     }
                 }
                 return true;
@@ -9809,8 +9872,9 @@
                     (perfSkipped > 0 ? ', ' + perfSkipped + ' structural (no extendable neighbor)' : ''));
 
                 // ★ v10.5: Final fallback for structural Frees that couldn't be extended.
-                // Run LNS + ejection chain once more — after extensions, new swap
-                // opportunities may have opened (e.g. field now at cap-1 instead of cap).
+                // ★ v11.0: Run full repair suite after Step 4.9 extensions.
+                // After extensions fill adjacent Free slots, new swap opportunities open.
+                // Run: fallbackSweep → LNS → ejection chains → BFS augmenting paths.
                 if (perfSkipped > 0 && window.AutoSolverEngine) {
                     try {
                         var p49sweep = window.AutoSolverEngine.fallbackSweep(solverConfig);
@@ -9818,6 +9882,13 @@
                         if (p49sweep > 0) {
                             var p49lns = window.AutoSolverEngine.lnsRepair(solverConfig);
                             if (p49lns > 0) log('[STEP 4.9] Final LNS recovered ' + p49lns + ' more');
+                            var p49ej = window.AutoSolverEngine.ejectionChainRepair(solverConfig);
+                            if (p49ej > 0) log('[STEP 4.9] Final ejection chains recovered ' + p49ej + ' more');
+                        }
+                        // BFS augmenting paths: run unconditionally — finds swaps even without new fills
+                        if (window.AutoSolverEngine.bfsAugmentingRepair) {
+                            var p49bfs = window.AutoSolverEngine.bfsAugmentingRepair(solverConfig);
+                            if (p49bfs > 0) log('[STEP 4.9] BFS augmenting recovered ' + p49bfs + ' more');
                         }
                     } catch(e49) { /* non-fatal */ }
                 }
@@ -9957,10 +10028,22 @@
                     }
                 }
 
-                // Check for back-to-back same sport
-                for (let i = 0; i < sorted.length - 1; i++) {
-                    if (sorted[i]._assignedSport && sorted[i]._assignedSport === sorted[i+1]._assignedSport) {
-                        diagnoses.push('Bunk ' + bunk + ' has ' + sorted[i]._assignedSport + ' back-to-back. FIX: add more sport variety to the rotation.');
+                // ★ v11.0: Check for back-to-back same sport using scheduleAssignments (solver output).
+                // bunkTimelines._assignedSport is Phase 3 skeleton data; scheduleAssignments is ground truth.
+                {
+                    var bbSA = (window.scheduleAssignments || {})[bunk];
+                    if (Array.isArray(bbSA)) {
+                        var bbPrev = null;
+                        for (var bbi = 0; bbi < bbSA.length; bbi++) {
+                            var bbe = bbSA[bbi];
+                            if (!bbe || bbe.continuation) continue;
+                            var bbAct = (bbe.sport || bbe._activity || '').toLowerCase().trim();
+                            if (!bbAct || bbAct === 'free' || bbAct === 'free play') { bbPrev = null; continue; }
+                            if (bbPrev && bbPrev === bbAct) {
+                                diagnoses.push('Bunk ' + bunk + ' has ' + bbAct + ' back-to-back (solver output). FIX: add more sport variety to the rotation.');
+                            }
+                            bbPrev = bbAct;
+                        }
                     }
                 }
             });
