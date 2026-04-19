@@ -1,16 +1,20 @@
 // =================================================================
-// auto_schedule_planner.js (v4.0 - LAYER-BASED AUTO BUILDER)
+// auto_schedule_planner.js (v5.0 - PREMIUM DAW UI)
 // =================================================================
+// v5.0 CHANGES:
+//  - Complete premium UI/UX redesign
+//  - Dark sidebar with categorized layer palette
+//  - Gradient band pills with shadows and glow selection
+//  - Centered modal popover with backdrop blur
+//  - Status bar replacing cluttered toolbar
+//  - Sticky time header, alternating grade rows
+//  - Full --al-* CSS design system
+//
 // v4.0 CHANGES:
 //  - bunksPerDay + timesPerWeek on ALL layer types (not just swim)
 //  - Improved popover with clear section headers and help text
 //  - "Rotation" section shows bunks/day + times/week for every layer
 //  - Better field labels: "Time Window", "Block Duration", etc.
-//
-// v3.0 CHANGES:
-//  - Wired to AutoBuildEngine
-//  - Engine produces skeleton + bunk overrides + bunk timelines
-//  - Gantt/timeline renderer for auto-generated schedules
 //
 // LAYER → ENGINE FIELD MAP:
 //   layer.pinExact    → pinned
@@ -47,23 +51,23 @@ const SNAP_MINUTES = 5;
 let dragState = null;
 
 // =================================================================
-// LAYER COLORS
+// LAYER COLORS — rich gradients for premium band pills
 // =================================================================
 const LAYER_COLORS = {
-  sport:            { bg: 'rgba(134,239,172,0.55)', border: '#22c55e', text: '#14532d' },
-  sports:           { bg: 'rgba(134,239,172,0.55)', border: '#22c55e', text: '#14532d' },
-  special:          { bg: 'rgba(196,181,253,0.55)', border: '#8b5cf6', text: '#3b1f6b' },
-  activity:         { bg: 'rgba(147,197,253,0.55)', border: '#3b82f6', text: '#1e3a5f' },
-  lunch:            { bg: 'rgba(253,186,116,0.70)', border: '#f97316', text: '#7c2d12' },
-  swim:             { bg: 'rgba(103,232,249,0.55)', border: '#06b6d4', text: '#164e63' },
-  snack:            { bg: 'rgba(253,230,138,0.65)', border: '#eab308', text: '#78350f' },
-  snacks:           { bg: 'rgba(253,230,138,0.65)', border: '#eab308', text: '#78350f' },
-  dismissal:        { bg: 'rgba(249,168,212,0.55)', border: '#ec4899', text: '#831843' },
-  league:           { bg: 'rgba(252,165,165,0.55)', border: '#ef4444', text: '#7f1d1d' },
-  specialty_league: { bg: 'rgba(253,164,175,0.55)', border: '#f43f5e', text: '#881337' },
-  elective:         { bg: 'rgba(240,171,252,0.55)', border: '#d946ef', text: '#701a75' },
-  split:            { bg: 'rgba(253,186,116,0.55)', border: '#f97316', text: '#7c2d12' },
-  custom:           { bg: 'rgba(209,213,219,0.55)', border: '#6b7280', text: '#374151' }
+  sport:            { gradient: 'linear-gradient(135deg,#bbf7d0,#4ade80)', border: '#16a34a', text: '#14532d', dot: '#22c55e' },
+  sports:           { gradient: 'linear-gradient(135deg,#bbf7d0,#4ade80)', border: '#16a34a', text: '#14532d', dot: '#22c55e' },
+  special:          { gradient: 'linear-gradient(135deg,#ddd6fe,#a78bfa)', border: '#7c3aed', text: '#3b0764', dot: '#8b5cf6' },
+  activity:         { gradient: 'linear-gradient(135deg,#bfdbfe,#60a5fa)', border: '#2563eb', text: '#1e3a5f', dot: '#3b82f6' },
+  lunch:            { gradient: 'linear-gradient(135deg,#fed7aa,#fb923c)', border: '#ea580c', text: '#7c2d12', dot: '#f97316' },
+  swim:             { gradient: 'linear-gradient(135deg,#a5f3fc,#22d3ee)', border: '#0891b2', text: '#164e63', dot: '#06b6d4' },
+  snack:            { gradient: 'linear-gradient(135deg,#fef08a,#fcd34d)', border: '#d97706', text: '#78350f', dot: '#eab308' },
+  snacks:           { gradient: 'linear-gradient(135deg,#fef08a,#fcd34d)', border: '#d97706', text: '#78350f', dot: '#eab308' },
+  dismissal:        { gradient: 'linear-gradient(135deg,#fbcfe8,#f472b6)', border: '#db2777', text: '#831843', dot: '#ec4899' },
+  league:           { gradient: 'linear-gradient(135deg,#fecaca,#f87171)', border: '#dc2626', text: '#7f1d1d', dot: '#ef4444' },
+  specialty_league: { gradient: 'linear-gradient(135deg,#fecdd3,#fb7185)', border: '#e11d48', text: '#881337', dot: '#f43f5e' },
+  elective:         { gradient: 'linear-gradient(135deg,#f5d0fe,#e879f9)', border: '#c026d3', text: '#701a75', dot: '#d946ef' },
+  split:            { gradient: 'linear-gradient(135deg,#fed7aa,#fb923c)', border: '#ea580c', text: '#7c2d12', dot: '#f97316' },
+  custom:           { gradient: 'linear-gradient(135deg,#e2e8f0,#94a3b8)', border: '#475569', text: '#1e293b', dot: '#64748b' }
 };
 
 // Palette tile definitions
@@ -75,7 +79,7 @@ const PALETTE_TILES = [
   { type: 'swim',      name: 'Swim',              defaultDuration: 40, defaultOp: '=',      defaultQty: 1, fixed: true },
   { type: 'snacks',    name: 'Snack',             defaultDuration: 15, defaultOp: '=',      defaultQty: 1, fixed: true },
   { type: 'dismissal', name: 'Dismissal',         defaultDuration: 15, defaultOp: '=',      defaultQty: 1, fixed: true },
-  { type: 'league',    name: 'League Game',        defaultDuration: 50, defaultOp: '\u2264', defaultQty: 1, fixed: false },
+  { type: 'league',    name: 'League Game',       defaultDuration: 50, defaultOp: '\u2264', defaultQty: 1, fixed: false },
   { type: 'elective',  name: 'Elective',          defaultDuration: 40, defaultOp: '\u2265', defaultQty: 1, fixed: false },
   { type: 'split',     name: 'Split Activity',    defaultDuration: 40, defaultOp: '\u2265', defaultQty: 1, fixed: false },
   { type: 'custom',    name: 'Custom',            defaultDuration: 30, defaultOp: '=',      defaultQty: 1, fixed: false }
@@ -248,7 +252,7 @@ function init(containerEl) {
   }
   render();
   setupGlobalListeners();
-  console.log('[AutoPlanner] v4.0 init \u2014', layers.length, 'layers');
+  console.log('[AutoPlanner] v5.0 init \u2014', layers.length, 'layers');
 }
 
 function destroy() {
@@ -317,18 +321,18 @@ function render() {
   const totalWidth = (dayEnd - dayStart) * MIN_WIDTH;
 
   if (grades.length === 0) {
-    layerContainer.innerHTML = '<div class="al-container" style="padding:40px;text-align:center;color:#6b7280;"><p>No grades/divisions configured.</p><p style="font-size:0.9rem;">Go to Setup to create divisions first.</p></div>';
+    layerContainer.innerHTML = '<div class="al-container"><div class="al-empty-state"><div class="al-empty-icon">&#9680;</div><p>No grades configured</p><p class="al-empty-sub">Go to Setup to create divisions first.</p></div></div>';
     return;
   }
 
   let html = '<div class="al-container">';
-  html += renderToolbar();
+  html += renderStatusBar();
   html += '<div class="al-body">';
   html += renderPalette();
   html += '<div class="al-timeline-area">';
   html += '<div class="al-timeline-scroll" style="width:' + (totalWidth + 90) + 'px;">';
   html += renderTimeHeader(dayStart, dayEnd);
-  grades.forEach(g => { html += renderGradeRow(g, dayStart, dayEnd, totalWidth); });
+  grades.forEach((g, i) => { html += renderGradeRow(g, dayStart, dayEnd, totalWidth, i); });
   html += '</div></div></div></div>';
 
   layerContainer.innerHTML = html;
@@ -339,39 +343,70 @@ function render() {
 }
 
 // =================================================================
-// RENDER: TOOLBAR
+// RENDER: STATUS BAR (premium top bar)
 // =================================================================
-function renderToolbar() {
+function renderStatusBar() {
   const tpl = getTemplateNames();
   const opts = tpl.map(n => '<option value="' + n + '"' + (n === currentTemplate ? ' selected' : '') + '>' + n + '</option>').join('');
-  const statusText = currentTemplate ? (hasChanges ? currentTemplate + ' (modified)' : currentTemplate) : (layers.length > 0 ? 'Unsaved layers' : 'No layers');
-  const statusColor = hasChanges ? '#f59e0b' : (currentTemplate ? '#10b981' : '#94a3b8');
 
-  return '<div class="al-toolbar">' +
-    '<div class="al-toolbar-group"><span style="font-size:11px;font-weight:600;color:' + statusColor + ';">\u25CF ' + statusText + '</span></div>' +
-    '<div class="al-toolbar-sep"></div>' +
-    '<div class="al-toolbar-group"><select id="al-load-select" class="al-select"><option value="">Load Template\u2026</option>' + opts + '</select>' +
-    '<button id="al-load-btn" class="al-btn al-btn-ghost al-btn-sm">Load</button></div>' +
-    '<div class="al-toolbar-group"><button id="al-save-btn" class="al-btn al-btn-primary al-btn-sm">Save</button>' +
-    '<button id="al-save-as-btn" class="al-btn al-btn-ghost al-btn-sm">Save As\u2026</button></div>' +
-    '<div class="al-toolbar-sep"></div>' +
-    '<div class="al-toolbar-group"><button id="al-copy-grade-btn" class="al-btn al-btn-ghost al-btn-sm">Copy Grade</button>' +
-    '<button id="al-import-skeleton-btn" class="al-btn al-btn-ghost al-btn-sm">Reload from Template</button>' +
-    '<button id="al-clear-btn" class="al-btn al-btn-danger al-btn-sm">Clear All</button></div>' +
-    '<div class="al-toolbar-sep"></div>' +
-    '<div class="al-toolbar-group"><button id="al-preview-btn" class="al-btn al-btn-success al-btn-sm">Preview</button>' +
-    '<button id="al-generate-btn" class="al-btn al-btn-primary">\u26A1 Generate Schedule</button></div>' +
+  const statusDot = hasChanges ? '#f59e0b' : (currentTemplate ? '#22c55e' : '#475569');
+  const statusLabel = hasChanges
+    ? (currentTemplate ? currentTemplate + ' \u2014 unsaved' : 'Unsaved')
+    : (currentTemplate ? currentTemplate : 'No template');
+
+  return '<div class="al-statusbar">' +
+    '<div class="al-statusbar-left">' +
+      '<span class="al-status-dot" style="background:' + statusDot + ';box-shadow:0 0 6px ' + statusDot + ';"></span>' +
+      '<span class="al-statusbar-name">' + statusLabel + '</span>' +
+    '</div>' +
+    '<div class="al-statusbar-center">' +
+      '<select id="al-load-select" class="al-status-select"><option value="">Load template\u2026</option>' + opts + '</select>' +
+      '<button id="al-load-btn" class="al-sb-btn al-sb-btn-ghost">Load</button>' +
+      '<div class="al-sb-div"></div>' +
+      '<button id="al-save-btn" class="al-sb-btn al-sb-btn-accent">Save</button>' +
+      '<button id="al-save-as-btn" class="al-sb-btn al-sb-btn-ghost">Save As\u2026</button>' +
+    '</div>' +
+    '<div class="al-statusbar-right">' +
+      '<button id="al-copy-grade-btn" class="al-sb-btn al-sb-btn-ghost">Copy Grade</button>' +
+      '<button id="al-import-skeleton-btn" class="al-sb-btn al-sb-btn-ghost">Import</button>' +
+      '<button id="al-clear-btn" class="al-sb-btn al-sb-btn-danger">Clear</button>' +
+      '<div class="al-sb-div"></div>' +
+      '<button id="al-preview-btn" class="al-sb-btn al-sb-btn-ghost">Preview</button>' +
+      '<button id="al-generate-btn" class="al-sb-btn al-sb-btn-generate">\u26A1 Generate</button>' +
+    '</div>' +
     '</div>';
 }
 
 // =================================================================
-// RENDER: PALETTE
+// RENDER: PALETTE (dark sidebar)
 // =================================================================
 function renderPalette() {
-  var html = '<div class="al-palette"><div class="al-palette-title">Layer Types</div>';
-  PALETTE_TILES.forEach(function(tile) {
-    html += '<div class="al-tile al-tile-' + tile.type + '" draggable="true" data-tile=\'' + JSON.stringify(tile).replace(/'/g, '&#39;') + '\'>' + tile.name + '</div>';
+  const anchored = PALETTE_TILES.filter(t => t.fixed);
+  const flexible = PALETTE_TILES.filter(t => !t.fixed);
+
+  let html = '<div class="al-palette">';
+  html += '<div class="al-palette-brand">Layers</div>';
+
+  html += '<div class="al-palette-section-label">Anchored</div>';
+  anchored.forEach(tile => {
+    const c = getColor(tile.type);
+    html += '<div class="al-tile al-tile-' + tile.type + '" draggable="true" data-tile=\'' + JSON.stringify(tile).replace(/'/g, '&#39;') + '\'>' +
+      '<span class="al-tile-dot" style="background:' + c.dot + ';"></span>' +
+      '<span class="al-tile-name">' + tile.name + '</span>' +
+      '<span class="al-tile-badge">PIN</span>' +
+      '</div>';
   });
+
+  html += '<div class="al-palette-section-label" style="margin-top:12px;">Flexible</div>';
+  flexible.forEach(tile => {
+    const c = getColor(tile.type);
+    html += '<div class="al-tile al-tile-' + tile.type + '" draggable="true" data-tile=\'' + JSON.stringify(tile).replace(/'/g, '&#39;') + '\'>' +
+      '<span class="al-tile-dot" style="background:' + c.dot + ';"></span>' +
+      '<span class="al-tile-name">' + tile.name + '</span>' +
+      '</div>';
+  });
+
+  html += '<div class="al-palette-footer"><div class="al-palette-hint">Drag a layer onto a grade row to place it.<br>Double-click a band to edit.</div></div>';
   html += '</div>';
   return html;
 }
@@ -381,36 +416,42 @@ function renderPalette() {
 // =================================================================
 function renderTimeHeader(dayStart, dayEnd) {
   var html = '<div class="al-time-header" style="width:' + ((dayEnd - dayStart) * MIN_WIDTH + 90) + 'px;">';
+  html += '<div class="al-time-header-gutter"></div>';
+  html += '<div class="al-time-header-track">';
   for (var m = dayStart; m <= dayEnd; m += 30) {
-    var left = 90 + (m - dayStart) * MIN_WIDTH;
+    var left = (m - dayStart) * MIN_WIDTH;
     var isHour = m % 60 === 0;
-    html += '<div class="al-time-mark" style="left:' + left + 'px;' + (isHour ? 'font-weight:600;color:#334155;' : '') + '">' + fmtShort(m) + '</div>';
+    html += '<div class="al-time-mark' + (isHour ? ' al-time-mark-hour' : '') + '" style="left:' + left + 'px;">' + fmtShort(m) + '</div>';
   }
-  html += '</div>';
+  html += '</div></div>';
   return html;
 }
 
 // =================================================================
 // RENDER: GRADE ROW
 // =================================================================
-function renderGradeRow(grade, dayStart, dayEnd, totalWidth) {
+function renderGradeRow(grade, dayStart, dayEnd, totalWidth, rowIndex) {
   var gradeTime = getGradeTime(grade);
   var gradeLayers = layers.filter(function(l) { return l.grade === grade; });
   var stacking = calcStacking(gradeLayers);
-  var rowHeight = Math.max(48, stacking.maxStack * 28 + 12);
+  var rowHeight = Math.max(52, stacking.maxStack * 32 + 16);
+  var isEven = rowIndex % 2 === 0;
 
-  var html = '<div class="al-grade-row" style="height:' + rowHeight + 'px;">';
-  html += '<div class="al-grade-label">' + grade + '</div>';
+  var html = '<div class="al-grade-row' + (isEven ? '' : ' al-grade-row-alt') + '" style="height:' + rowHeight + 'px;">';
+  html += '<div class="al-grade-label"><span class="al-grade-tag">' + grade + '</span></div>';
   html += '<div class="al-grade-timeline" data-grade="' + grade + '" style="width:' + totalWidth + 'px;height:' + rowHeight + 'px;">';
 
+  // Grid lines
   for (var m = dayStart; m <= dayEnd; m += 30) {
     var left = (m - dayStart) * MIN_WIDTH;
     html += '<div class="al-grid-line' + (m % 60 === 0 ? ' al-grid-line-hour' : '') + '" style="left:' + left + 'px;"></div>';
   }
 
+  // Unused zone — before grade starts
   if (gradeTime.start > dayStart) {
     html += '<div class="al-unused-zone" style="left:0;width:' + ((gradeTime.start - dayStart) * MIN_WIDTH) + 'px;"></div>';
   }
+  // Unused zone — after grade ends
   if (gradeTime.end < dayEnd) {
     var zLeft = (gradeTime.end - dayStart) * MIN_WIDTH;
     html += '<div class="al-unused-zone" style="left:' + zLeft + 'px;width:' + ((dayEnd - gradeTime.end) * MIN_WIDTH) + 'px;"></div>';
@@ -443,7 +484,7 @@ function calcStacking(gradeLayers) {
 }
 
 // =================================================================
-// RENDER: BAND
+// RENDER: BAND (gradient pill)
 // =================================================================
 function renderBand(layer, dayStart, stackIdx, maxStack) {
   var color = getColor(layer.type);
@@ -451,35 +492,46 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
   var width = (layer.endMin - layer.startMin) * MIN_WIDTH;
   var isPinned = layer.pinExact === true;
   var isSelected = layer.id === selectedLayerId;
+
   var topCss, heightCss;
-  if (stackIdx === 'solo') { topCss = '4px'; heightCss = 'calc(100% - 8px)'; }
-  else { var pct = 100 / maxStack; topCss = (stackIdx * pct) + '%'; heightCss = 'calc(' + pct + '% - 4px)'; }
-  var borderStyle = isPinned ? 'solid' : 'dashed';
+  if (stackIdx === 'solo') {
+    topCss = '5px'; heightCss = 'calc(100% - 10px)';
+  } else {
+    var pct = 100 / maxStack;
+    topCss = (stackIdx * pct + 1) + '%';
+    heightCss = 'calc(' + pct + '% - 4px)';
+  }
+
   var selClass = isSelected ? ' al-band-selected' : '';
+  var pinClass = isPinned ? ' al-band-pinned' : ' al-band-flex';
+
+  // Duration label
   var durText = layer.periodMin ? layer.periodMin + 'm' : '';
-  // Swim: append change time to duration label
   if (layer.type === 'swim' && (layer.preChangeMin || layer.postChangeMin)) {
     var pre  = layer.preChangeMin  || 0;
     var post = layer.postChangeMin || 0;
     var swimOnly = layer.periodMin || ((layer.endMin - layer.startMin) - pre - post);
     durText = pre + '+' + swimOnly + '+' + post + 'm';
   }
+
   var timeText = fmtShort(layer.startMin) + '\u2013' + fmtShort(layer.endMin);
   var badge = (layer.operator || '\u2265') + (layer.quantity || 1);
-  var pinHtml = isPinned ? '<span class="al-band-pin">PIN</span>' : '';
+  var pinMarkup = isPinned ? '<span class="al-band-pin">&#128205;</span>' : '';
 
-  // Weekly badge
   var weeklyBadgeHtml = (layer.timesPerWeek != null)
-    ? '<span class="al-band-week-badge">' + (layer.weeklyOp || '\u2265') + layer.timesPerWeek + 'x/wk</span>'
+    ? '<span class="al-band-chip al-band-chip-week">' + (layer.weeklyOp || '\u2265') + layer.timesPerWeek + '/wk</span>'
     : '';
-  // Bunks per day badge
   var bpdBadgeHtml = (layer.bunksPerDay != null)
-    ? '<span class="al-band-week-badge" style="background:rgba(6,182,212,0.15);color:#164e63;border-color:rgba(6,182,212,0.3);">' + layer.bunksPerDay + '/day</span>'
+    ? '<span class="al-band-chip al-band-chip-bpd">' + layer.bunksPerDay + '/day</span>'
     : '';
 
-  return '<div class="al-band' + selClass + '" data-layer-id="' + layer.id + '" style="left:' + left + 'px;width:' + width + 'px;top:' + topCss + ';height:' + heightCss + ';background:' + color.bg + ';border:2px ' + borderStyle + ' ' + color.border + ';color:' + color.text + ';">' +
+  return '<div class="al-band' + selClass + pinClass + '" data-layer-id="' + layer.id + '" style="' +
+    'left:' + left + 'px;width:' + width + 'px;top:' + topCss + ';height:' + heightCss + ';' +
+    'background:' + color.gradient + ';' +
+    '--al-band-border:' + color.border + ';' +
+    'color:' + color.text + ';">' +
     '<div class="al-band-resize al-band-resize-left"></div>' +
-    pinHtml +
+    pinMarkup +
     '<span class="al-band-label">' + (layer.event || layer.type) + '</span>' +
     '<span class="al-band-dur">' + durText + '</span>' +
     '<span class="al-band-badge">' + badge + '</span>' +
@@ -498,7 +550,9 @@ function setupPaletteDrag() {
     tile.ondragstart = function(e) {
       e.dataTransfer.setData('application/layer-tile', tile.dataset.tile);
       e.dataTransfer.effectAllowed = 'copy';
+      tile.classList.add('al-tile-dragging');
     };
+    tile.ondragend = function() { tile.classList.remove('al-tile-dragging'); };
   });
 }
 
@@ -617,14 +671,18 @@ function showDragGhost(layer) {
   removeDragGhost();
   ghostEl = document.createElement('div');
   ghostEl.className = 'al-drag-ghost';
-  ghostEl.innerHTML = '<div>' + (layer.event || layer.type) + '</div><div class="al-drag-ghost-time" id="al-ghost-time">' + fmtTime(layer.startMin) + ' \u2013 ' + fmtTime(layer.endMin) + '</div>';
+  var c = getColor(layer.type);
+  ghostEl.style.background = c.gradient;
+  ghostEl.style.color = c.text;
+  ghostEl.innerHTML = '<div class="al-ghost-name">' + (layer.event || layer.type) + '</div>' +
+    '<div class="al-ghost-time" id="al-ghost-time">' + fmtTime(layer.startMin) + ' \u2013 ' + fmtTime(layer.endMin) + '</div>';
   document.body.appendChild(ghostEl);
 }
 
 function updateDragGhost(x, y, layer) {
   if (!ghostEl) return;
-  ghostEl.style.left = (x + 15) + 'px';
-  ghostEl.style.top = (y - 10) + 'px';
+  ghostEl.style.left = (x + 16) + 'px';
+  ghostEl.style.top = (y - 12) + 'px';
   var t = ghostEl.querySelector('#al-ghost-time');
   if (t && layer) t.textContent = fmtTime(layer.startMin) + ' \u2013 ' + fmtTime(layer.endMin);
 }
@@ -692,7 +750,7 @@ function deleteLayer(id) {
 }
 
 // =================================================================
-// POPOVER EDITOR — v4.0 with improved labels and rotation section
+// POPOVER EDITOR — v5.0 centered modal with dark header
 // =================================================================
 var popoverEl = null;
 
@@ -700,10 +758,10 @@ function openPopover(layerId, bandEl) {
   closePopover();
   var layer = layers.find(function(l) { return l.id === layerId; });
   if (!layer) return;
-  var rect = bandEl.getBoundingClientRect();
   var color = getColor(layer.type);
   var isPinned = layer.pinExact === true;
 
+  // Backdrop overlay
   var overlay = document.createElement('div');
   overlay.className = 'al-popover-overlay';
   overlay.onclick = function() { closePopover(); };
@@ -711,137 +769,159 @@ function openPopover(layerId, bandEl) {
 
   popoverEl = document.createElement('div');
   popoverEl.className = 'al-popover';
-  var top = rect.bottom + 8, left = rect.left;
-  if (top + 480 > window.innerHeight) top = rect.top - 480;
-  if (left + 380 > window.innerWidth) left = window.innerWidth - 400;
-  popoverEl.style.top = Math.max(10, top) + 'px';
-  popoverEl.style.left = Math.max(10, left) + 'px';
 
   // ── Build popover HTML ──
   var html = '';
 
-  // Title
-  html += '<div class="al-popover-title"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:' + color.border + ';"></span> ' + (layer.event || layer.type) + '</div>';
+  // Dark header
+  html += '<div class="al-pop-header" style="--pop-accent:' + color.border + ';background:linear-gradient(135deg,' + color.border + 'dd,' + color.border + '99);">' +
+    '<span class="al-pop-header-dot" style="background:' + color.dot + ';"></span>' +
+    '<div class="al-pop-header-info">' +
+      '<div class="al-pop-header-name">' + (layer.event || layer.type) + '</div>' +
+      '<div class="al-pop-header-type">' + layer.type.replace(/_/g, ' ') + ' \u00B7 ' + fmtTime(layer.startMin) + '\u2013' + fmtTime(layer.endMin) + '</div>' +
+    '</div>' +
+    '<button class="al-pop-close" id="al-pop-close-btn">\u00D7</button>' +
+    '</div>';
+
+  html += '<div class="al-pop-body">';
 
   // ── Section 1: Scheduling ──
-  html += '<div class="al-popover-section-title">Scheduling</div>';
+  html += '<div class="al-pop-section-label">Scheduling</div>';
 
-  // Time Window
-  html += '<div class="al-popover-row">' +
-    '<label>Time Window</label>' +
-    '<input type="text" class="al-pop-input" id="al-pop-start" value="' + fmtTime(layer.startMin) + '" placeholder="Start">' +
-    '<span style="color:#94a3b8;margin:0 4px;"> \u2192 </span>' +
-    '<input type="text" class="al-pop-input" id="al-pop-end" value="' + fmtTime(layer.endMin) + '" placeholder="End">' +
-    '</div>';
-  html += '<div class="al-popover-hint">The earliest and latest this activity can be placed in the day</div>';
-
-  // Block Duration
-  html += '<div class="al-popover-row">' +
-    '<label>Block Duration</label>' +
-    '<input type="number" class="al-pop-input al-pop-dur" id="al-pop-dur" value="' + (layer.periodMin || '') + '" min="5" step="5" placeholder="min">' +
-    '<span style="font-size:10px;color:#94a3b8;">minutes</span>' +
-    '</div>';
-  html += '<div class="al-popover-hint">How long each block of this activity lasts</div>';
-
-  // Daily Quantity
-  html += '<div class="al-popover-row">' +
-    '<label>Blocks Per Day</label>' +
-    '<div class="al-pop-ops">' +
-    '<button class="al-pop-op' + (layer.operator === '\u2265' ? ' active' : '') + '" data-op="\u2265">\u2265</button>' +
-    '<button class="al-pop-op' + (layer.operator === '\u2264' ? ' active' : '') + '" data-op="\u2264">\u2264</button>' +
-    '<button class="al-pop-op' + (layer.operator === '=' ? ' active' : '') + '" data-op="=">=</button>' +
+  html += '<div class="al-pop-field">' +
+    '<label class="al-pop-label">Time Window</label>' +
+    '<div class="al-pop-row">' +
+      '<input type="text" class="al-pop-input" id="al-pop-start" value="' + fmtTime(layer.startMin) + '" placeholder="Start">' +
+      '<span class="al-pop-arrow">\u2192</span>' +
+      '<input type="text" class="al-pop-input" id="al-pop-end" value="' + fmtTime(layer.endMin) + '" placeholder="End">' +
     '</div>' +
-    '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-qty" value="' + (layer.quantity || 1) + '" min="1" max="10">' +
+    '<div class="al-pop-hint">Earliest and latest this can be placed in the day</div>' +
     '</div>';
-  html += '<div class="al-popover-hint">How many times per day each bunk gets this activity (\u2265 = at least, \u2264 = at most, = exactly)</div>';
 
-  // Pin Time
-  html += '<div class="al-popover-row">' +
-    '<label>Pin Time</label>' +
-    '<button class="al-pin-toggle' + (isPinned ? ' active' : '') + '" id="al-pop-pin">' +
-    '<span class="al-pin-icon">PIN</span>' +
-    '<span id="al-pin-label">' + (isPinned ? 'Exact Time' : 'Flexible') + '</span>' +
-    '</button>' +
+  html += '<div class="al-pop-field">' +
+    '<label class="al-pop-label">Block Duration</label>' +
+    '<div class="al-pop-row">' +
+      '<input type="number" class="al-pop-input al-pop-input-sm" id="al-pop-dur" value="' + (layer.periodMin || '') + '" min="5" step="5" placeholder="min">' +
+      '<span class="al-pop-unit">minutes</span>' +
+    '</div>' +
+    '<div class="al-pop-hint">How long each block lasts</div>' +
     '</div>';
-  if (isPinned) {
-    html += '<div style="font-size:10px;color:#92400e;background:#fffbeb;border-radius:6px;padding:6px 10px;margin:0 0 8px 78px;">' +
-      'Locked to exactly <b>' + fmtTime(layer.startMin) + '\u2013' + fmtTime(layer.endMin) + '</b></div>';
-  }
+
+  html += '<div class="al-pop-field">' +
+    '<label class="al-pop-label">Blocks Per Day</label>' +
+    '<div class="al-pop-row">' +
+      '<div class="al-pop-ops" id="al-pop-ops-daily">' +
+        '<button class="al-pop-op' + (layer.operator === '\u2265' ? ' active' : '') + '" data-op="\u2265">\u2265</button>' +
+        '<button class="al-pop-op' + (layer.operator === '\u2264' ? ' active' : '') + '" data-op="\u2264">\u2264</button>' +
+        '<button class="al-pop-op' + (layer.operator === '=' ? ' active' : '') + '" data-op="=">=</button>' +
+      '</div>' +
+      '<input type="number" class="al-pop-input al-pop-input-sm" id="al-pop-qty" value="' + (layer.quantity || 1) + '" min="1" max="10">' +
+    '</div>' +
+    '<div class="al-pop-hint">\u2265 at least \u00B7 \u2264 at most \u00B7 = exactly this many per day</div>' +
+    '</div>';
+
+  html += '<div class="al-pop-field">' +
+    '<label class="al-pop-label">Pin Time</label>' +
+    '<div class="al-pop-row">' +
+      '<button class="al-pin-toggle' + (isPinned ? ' active' : '') + '" id="al-pop-pin">' +
+        '<span class="al-pin-icon">&#128205;</span>' +
+        '<span id="al-pin-label">' + (isPinned ? 'Pinned \u2014 Exact Time' : 'Flexible \u2014 Scheduler Places') + '</span>' +
+      '</button>' +
+    '</div>' +
+    (isPinned ? '<div class="al-pop-hint al-pop-hint-warn">Locked to exactly <b>' + fmtTime(layer.startMin) + '\u2013' + fmtTime(layer.endMin) + '</b></div>' : '') +
+    '</div>';
 
   // ── Section 2: Rotation ──
-  html += '<div class="al-popover-divider"></div>';
-  html += '<div class="al-popover-section-title">Rotation <span style="font-weight:400;font-size:10px;color:#94a3b8;">(optional \u2014 leave blank for no limits)</span></div>';
+  html += '<div class="al-pop-divider"></div>';
+  html += '<div class="al-pop-section-label">Rotation <span class="al-pop-section-sub">optional \u2014 leave blank for no limits</span></div>';
 
-  // Bunks Per Day
-  html += '<div class="al-popover-row">' +
-    '<label>Bunks / Day</label>' +
-    '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-bpd"' +
-    ' value="' + (layer.bunksPerDay != null ? layer.bunksPerDay : '') + '"' +
-    ' min="1" max="99" placeholder="All">' +
-    '</div>';
-  html += '<div class="al-popover-hint">Max bunks that do this activity each day in this grade. The system rotates who gets it so everyone is covered.<br><b>Example:</b> Set to 4 \u2192 only 4 of 8 bunks swim today, the other 4 swim tomorrow.</div>';
-
-  // Times Per Week
-  html += '<div class="al-popover-row">' +
-    '<label>Times / Week</label>' +
-    '<div class="al-pop-ops">' +
-    '<button class="al-pop-op' + ((layer.weeklyOp || '\u2265') === '\u2265' ? ' active' : '') + '" data-wop="\u2265">\u2265</button>' +
-    '<button class="al-pop-op' + ((layer.weeklyOp) === '\u2264' ? ' active' : '') + '" data-wop="\u2264">\u2264</button>' +
-    '<button class="al-pop-op' + ((layer.weeklyOp) === '=' ? ' active' : '') + '" data-wop="=">=</button>' +
+  html += '<div class="al-pop-field">' +
+    '<label class="al-pop-label">Bunks / Day</label>' +
+    '<div class="al-pop-row">' +
+      '<input type="number" class="al-pop-input al-pop-input-sm" id="al-pop-bpd"' +
+      ' value="' + (layer.bunksPerDay != null ? layer.bunksPerDay : '') + '"' +
+      ' min="1" max="99" placeholder="All">' +
+      '<span class="al-pop-unit">bunks</span>' +
     '</div>' +
-    '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-week-qty"' +
-    ' value="' + (layer.timesPerWeek != null ? layer.timesPerWeek : '') + '"' +
-    ' min="1" max="7" placeholder="Any">' +
+    '<div class="al-pop-hint">Max bunks per day. The rest get it on a rotating basis.</div>' +
     '</div>';
-  html += '<div class="al-popover-hint">Target number of days per week each bunk should get this activity. The system tracks history and picks bunks that need it most.<br><b>Example:</b> Set \u2265 2 \u2192 every bunk gets this at least 2 days per week.</div>';
+
+  html += '<div class="al-pop-field">' +
+    '<label class="al-pop-label">Times / Week</label>' +
+    '<div class="al-pop-row">' +
+      '<div class="al-pop-ops" id="al-pop-ops-weekly">' +
+        '<button class="al-pop-op' + ((layer.weeklyOp || '\u2265') === '\u2265' ? ' active' : '') + '" data-wop="\u2265">\u2265</button>' +
+        '<button class="al-pop-op' + ((layer.weeklyOp) === '\u2264' ? ' active' : '') + '" data-wop="\u2264">\u2264</button>' +
+        '<button class="al-pop-op' + ((layer.weeklyOp) === '=' ? ' active' : '') + '" data-wop="=">=</button>' +
+      '</div>' +
+      '<input type="number" class="al-pop-input al-pop-input-sm" id="al-pop-week-qty"' +
+      ' value="' + (layer.timesPerWeek != null ? layer.timesPerWeek : '') + '"' +
+      ' min="1" max="7" placeholder="Any">' +
+      '<span class="al-pop-unit">days</span>' +
+    '</div>' +
+    '<div class="al-pop-hint">How many days per week each bunk should get this.</div>' +
+    '</div>';
 
   // ── Section 3: Grade Mode (swim / lunch / snacks only) ──
   var isGradeModetype = ['swim', 'lunch', 'snack', 'snacks'].indexOf(layer.type) >= 0;
   if (isGradeModetype) {
     var isFullGrade = layer.fullGrade === true;
-    html += '<div class="al-popover-divider"></div>';
-    html += '<div class="al-popover-section-title">Grade Mode</div>';
-    html += '<div class="al-popover-row">' +
-      '<label>Scheduling</label>' +
-      '<div style="display:flex;gap:6px;">' +
-      '<button class="al-pop-grademode' + (!isFullGrade ? ' active' : '') + '" data-gmode="stagger" style="padding:4px 10px;border-radius:6px;border:1px solid #cbd5e1;background:' + (!isFullGrade ? '#3b82f6' : '#f8fafc') + ';color:' + (!isFullGrade ? '#fff' : '#475569') + ';font-size:11px;cursor:pointer;">Staggered</button>' +
-      '<button class="al-pop-grademode' + (isFullGrade ? ' active' : '') + '" data-gmode="fullgrade" style="padding:4px 10px;border-radius:6px;border:1px solid #cbd5e1;background:' + (isFullGrade ? '#3b82f6' : '#f8fafc') + ';color:' + (isFullGrade ? '#fff' : '#475569') + ';font-size:11px;cursor:pointer;">Full Grade</button>' +
+    html += '<div class="al-pop-divider"></div>';
+    html += '<div class="al-pop-section-label">Grade Mode</div>';
+    html += '<div class="al-pop-field">' +
+      '<label class="al-pop-label">Scheduling</label>' +
+      '<div class="al-pop-row">' +
+        '<div class="al-pop-toggle-group">' +
+          '<button class="al-pop-toggle' + (!isFullGrade ? ' active' : '') + '" data-gmode="stagger">Staggered</button>' +
+          '<button class="al-pop-toggle' + (isFullGrade ? ' active' : '') + '" data-gmode="fullgrade">Full Grade</button>' +
+        '</div>' +
       '</div>' +
+      '<div class="al-pop-hint"><b>Full Grade:</b> all bunks at once (like a league). <b>Staggered:</b> spread across window.</div>' +
       '</div>';
-    html += '<div class="al-popover-hint">' +
-      '<b>Full Grade:</b> every bunk does this at the same time — like a league. ' +
-      '<b>Staggered:</b> bunks are spread across the time window.</div>';
   }
 
   // ── Section 4: Change Time (swim only) ──
   if (layer.type === 'swim') {
-    html += '<div class="al-popover-divider"></div>';
-    html += '<div class="al-popover-section-title">Change Time</div>';
-    html += '<div class="al-popover-row">' +
-      '<label>Pre-Change</label>' +
-      '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-pre-change"' +
-      ' value="' + (layer.preChangeMin != null ? layer.preChangeMin : '') + '"' +
-      ' min="0" max="60" step="5" placeholder="min">' +
+    html += '<div class="al-pop-divider"></div>';
+    html += '<div class="al-pop-section-label">Change Time</div>';
+    html += '<div class="al-pop-field">' +
+      '<label class="al-pop-label">Pre-Change</label>' +
+      '<div class="al-pop-row">' +
+        '<input type="number" class="al-pop-input al-pop-input-sm" id="al-pop-pre-change"' +
+        ' value="' + (layer.preChangeMin != null ? layer.preChangeMin : '') + '"' +
+        ' min="0" max="60" step="5" placeholder="0">' +
+        '<span class="al-pop-unit">minutes</span>' +
+      '</div>' +
       '</div>';
-    html += '<div class="al-popover-row">' +
-      '<label>Post-Change</label>' +
-      '<input type="number" class="al-pop-input al-pop-qty" id="al-pop-post-change"' +
-      ' value="' + (layer.postChangeMin != null ? layer.postChangeMin : '') + '"' +
-      ' min="0" max="60" step="5" placeholder="min">' +
+    html += '<div class="al-pop-field">' +
+      '<label class="al-pop-label">Post-Change</label>' +
+      '<div class="al-pop-row">' +
+        '<input type="number" class="al-pop-input al-pop-input-sm" id="al-pop-post-change"' +
+        ' value="' + (layer.postChangeMin != null ? layer.postChangeMin : '') + '"' +
+        ' min="0" max="60" step="5" placeholder="0">' +
+        '<span class="al-pop-unit">minutes</span>' +
+      '</div>' +
+      '<div class="al-pop-hint">Total block = pre + swim + post. E.g. 5 + 45 + 10 = <b>60 min</b>. Set band width to cover all.</div>' +
       '</div>';
-    html += '<div class="al-popover-hint">Change time is added to the swim block. E.g. 5 min pre + 45 min swim + 10 min post = <b>60 min total</b>. The band width should cover the full 60 min.</div>';
   }
 
+  html += '</div>'; // al-pop-body
+
   // ── Actions ──
-  html += '<div class="al-popover-actions">' +
-    '<button class="al-btn al-btn-danger al-btn-sm" id="al-pop-delete">Delete</button>' +
-    '<button class="al-btn al-btn-primary al-btn-sm" id="al-pop-done">\u2713 Done</button>' +
+  html += '<div class="al-pop-actions">' +
+    '<button class="al-pop-action-btn al-pop-action-delete" id="al-pop-delete">Delete Layer</button>' +
+    '<button class="al-pop-action-btn al-pop-action-done" id="al-pop-done">\u2713 Apply</button>' +
     '</div>';
 
   popoverEl.innerHTML = html;
   document.body.appendChild(popoverEl);
 
+  // Animate in
+  requestAnimationFrame(function() { popoverEl.classList.add('al-popover-visible'); });
+
   // ── Wire up buttons ──
+
+  popoverEl.querySelector('#al-pop-close-btn').onclick = function() { closePopover(); };
 
   // Daily quantity operator buttons
   popoverEl.querySelectorAll('.al-pop-op[data-op]').forEach(function(btn) {
@@ -859,24 +939,20 @@ function openPopover(layerId, bandEl) {
     };
   });
 
-  // Grade Mode toggle (swim / lunch / snacks)
-  popoverEl.querySelectorAll('.al-pop-grademode[data-gmode]').forEach(function(btn) {
+  // Grade Mode toggle
+  popoverEl.querySelectorAll('.al-pop-toggle[data-gmode]').forEach(function(btn) {
     btn.onclick = function() {
-      popoverEl.querySelectorAll('.al-pop-grademode[data-gmode]').forEach(function(b) {
-        b.classList.remove('active');
-        b.style.background = '#f8fafc';
-        b.style.color = '#475569';
-      });
+      popoverEl.querySelectorAll('.al-pop-toggle[data-gmode]').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
-      btn.style.background = '#3b82f6';
-      btn.style.color = '#fff';
     };
   });
 
   // Pin toggle
-  popoverEl.querySelector('#al-pop-pin').onclick = function() {
+  var pinBtn = popoverEl.querySelector('#al-pop-pin');
+  if (pinBtn) pinBtn.onclick = function() {
     this.classList.toggle('active');
-    this.querySelector('#al-pin-label').textContent = this.classList.contains('active') ? 'Exact Time' : 'Flexible';
+    this.querySelector('#al-pin-label').textContent = this.classList.contains('active')
+      ? 'Pinned \u2014 Exact Time' : 'Flexible \u2014 Scheduler Places';
   };
 
   // Delete
@@ -912,8 +988,8 @@ function openPopover(layerId, bandEl) {
     layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
     layer.bunksPerDay = bpdVal;
 
-    // Grade Mode (swim / lunch / snacks)
-    var activeGmode = popoverEl.querySelector('.al-pop-grademode[data-gmode].active');
+    // Grade Mode
+    var activeGmode = popoverEl.querySelector('.al-pop-toggle[data-gmode].active');
     if (activeGmode) {
       layer.fullGrade = activeGmode.dataset.gmode === 'fullgrade';
     }
@@ -1059,16 +1135,16 @@ function openCopyGradeModal() {
   modal.className = 'al-copy-modal';
   modal.onclick = function(e) { e.stopPropagation(); };
 
-  var html = '<div style="font-size:14px;font-weight:600;margin-bottom:12px;">Copy Layers from ' + sourceGrade + '</div>' +
-    '<div style="font-size:11px;color:#64748b;margin-bottom:12px;">Select target grades:</div>';
+  var html = '<div class="al-modal-header">Copy Layers from Grade ' + sourceGrade + '</div>' +
+    '<div class="al-modal-sub">Select target grades to copy to:</div>';
   grades.filter(function(g) { return g !== sourceGrade; }).forEach(function(g) {
     var has = layers.some(function(l) { return l.grade === g; });
-    html += '<div class="al-copy-grade-row"><label><input type="checkbox" value="' + g + '" checked> ' + g +
-      (has ? ' <span style="color:#f59e0b;font-size:10px;">(will replace)</span>' : '') + '</label></div>';
+    html += '<div class="al-modal-check-row"><label><input type="checkbox" value="' + g + '" checked> Grade ' + g +
+      (has ? ' <span class="al-modal-warn">(replaces existing)</span>' : '') + '</label></div>';
   });
-  html += '<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end;">' +
-    '<button class="al-btn al-btn-ghost al-btn-sm" id="al-copy-cancel">Cancel</button>' +
-    '<button class="al-btn al-btn-primary al-btn-sm" id="al-copy-confirm">Copy</button></div>';
+  html += '<div class="al-modal-actions">' +
+    '<button class="al-pop-action-btn al-pop-action-delete" id="al-copy-cancel">Cancel</button>' +
+    '<button class="al-pop-action-btn al-pop-action-done" id="al-copy-confirm">Copy Layers</button></div>';
 
   modal.innerHTML = html;
   overlay.appendChild(modal);
@@ -1108,6 +1184,7 @@ function notify(msg, type) {
   n.className = 'al-notification al-notification-' + (type || 'info');
   n.textContent = msg;
   document.body.appendChild(n);
+  setTimeout(function() { n.style.opacity = '0'; }, 2600);
   setTimeout(function() { n.remove(); }, 3000);
 }
 
@@ -1123,39 +1200,923 @@ window.AutoSchedulePlanner = {
   PALETTE_TILES: PALETTE_TILES, LAYER_COLORS: LAYER_COLORS
 };
 
-console.log('[AutoSchedulePlanner] v4.0 loaded \u2014 rotation on all layers');
+console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 
-// Inject popover hint styles
+// =================================================================
+// CSS DESIGN SYSTEM INJECTION
+// =================================================================
 (function() {
-  if (document.getElementById('al-v4-hint-styles')) return;
+  if (document.getElementById('al-v5-styles')) return;
   var s = document.createElement('style');
-  s.id = 'al-v4-hint-styles';
-  s.textContent = [
-    '.al-popover-hint {',
-    '  font-size: 10px;',
-    '  color: #94a3b8;',
-    '  line-height: 1.4;',
-    '  margin: -2px 0 8px 78px;',
-    '  padding: 0;',
-    '}',
-    '.al-popover-hint b { color: #64748b; }',
-    '.al-popover-divider {',
-    '  height: 1px;',
-    '  background: #e5e7eb;',
-    '  margin: 10px 0;',
-    '}',
-    '.al-popover-section-title {',
-    '  font-size: 11px;',
-    '  font-weight: 700;',
-    '  color: #374151;',
-    '  margin: 0 0 8px 0;',
-    '  padding: 0 0 4px 0;',
-    '  border-bottom: 1px solid #f3f4f6;',
-    '  display: flex;',
-    '  align-items: center;',
-    '  gap: 6px;',
-    '}'
-  ].join('\n');
+  s.id = 'al-v5-styles';
+  s.textContent = `
+/* ============================================================
+   AUTO SCHEDULE PLANNER v5.0 — Design System
+   ============================================================ */
+
+/* ── Layout ── */
+.al-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 500px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  color: #1e293b;
+  background: #f8fafc;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.06);
+}
+
+.al-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Status Bar ── */
+.al-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  height: 46px;
+  background: #0f172a;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.al-statusbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 160px;
+}
+
+.al-statusbar-center {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+}
+
+.al-statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 160px;
+  justify-content: flex-end;
+}
+
+.al-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.al-statusbar-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.al-status-select {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.07);
+  color: #cbd5e1;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.al-status-select:hover { border-color: rgba(255,255,255,0.3); }
+.al-status-select option { background: #1e293b; color: #e2e8f0; }
+
+.al-sb-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.al-sb-btn-ghost {
+  background: rgba(255,255,255,0.08);
+  color: #94a3b8;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.al-sb-btn-ghost:hover { background: rgba(255,255,255,0.14); color: #e2e8f0; border-color: rgba(255,255,255,0.2); }
+
+.al-sb-btn-accent {
+  background: #3b82f6;
+  color: #fff;
+}
+.al-sb-btn-accent:hover { background: #2563eb; }
+
+.al-sb-btn-danger {
+  background: rgba(239,68,68,0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239,68,68,0.25);
+}
+.al-sb-btn-danger:hover { background: rgba(239,68,68,0.25); color: #fecaca; }
+
+.al-sb-btn-generate {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.4);
+}
+.al-sb-btn-generate:hover {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  box-shadow: 0 2px 12px rgba(99,102,241,0.6);
+  transform: translateY(-1px);
+}
+
+.al-sb-div {
+  width: 1px;
+  height: 18px;
+  background: rgba(255,255,255,0.12);
+  margin: 0 2px;
+}
+
+/* ── Sidebar Palette ── */
+.al-palette {
+  width: 180px;
+  min-width: 180px;
+  background: #0f172a;
+  border-right: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 0 8px;
+  flex-shrink: 0;
+}
+
+.al-palette-brand {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #475569;
+  padding: 0 12px 10px;
+}
+
+.al-palette-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #334155;
+  padding: 0 12px 6px;
+}
+
+.al-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: grab;
+  transition: background 0.15s;
+  border-radius: 0;
+  user-select: none;
+}
+.al-tile:hover { background: rgba(255,255,255,0.06); }
+.al-tile:active { cursor: grabbing; }
+.al-tile.al-tile-dragging { opacity: 0.5; }
+
+.al-tile-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.al-tile-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #94a3b8;
+  flex: 1;
+  transition: color 0.15s;
+}
+.al-tile:hover .al-tile-name { color: #e2e8f0; }
+
+.al-tile-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  padding: 1px 4px;
+  letter-spacing: 0.05em;
+}
+
+.al-palette-footer {
+  margin-top: auto;
+  padding: 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.al-palette-hint {
+  font-size: 10px;
+  color: #334155;
+  line-height: 1.5;
+}
+
+/* ── Timeline Area ── */
+.al-timeline-area {
+  flex: 1;
+  overflow: auto;
+  background: #f8fafc;
+  position: relative;
+}
+
+.al-timeline-scroll {
+  min-width: 100%;
+}
+
+/* ── Time Header ── */
+.al-time-header {
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.al-time-header-gutter {
+  width: 90px;
+  min-width: 90px;
+  border-right: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.al-time-header-track {
+  position: relative;
+  flex: 1;
+}
+
+.al-time-mark {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 10px;
+  font-weight: 500;
+  color: #94a3b8;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.al-time-mark-hour {
+  font-weight: 700;
+  color: #475569;
+}
+
+/* ── Grade Rows ── */
+.al-grade-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid #e9ecef;
+  background: #fff;
+  transition: background 0.1s;
+}
+.al-grade-row:hover { background: #fafbfc; }
+.al-grade-row-alt { background: #f8fafc; }
+.al-grade-row-alt:hover { background: #f1f5f9; }
+
+.al-grade-label {
+  width: 90px;
+  min-width: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid #e2e8f0;
+  padding: 4px;
+  background: #fff;
+}
+
+.al-grade-tag {
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 3px 10px;
+  letter-spacing: 0.03em;
+}
+
+.al-grade-timeline {
+  position: relative;
+  cursor: crosshair;
+  flex: 1;
+  overflow: hidden;
+}
+
+.al-grade-timeline.al-drop-hover {
+  background: rgba(99,102,241,0.06);
+  outline: 2px dashed #818cf8;
+  outline-offset: -2px;
+}
+
+/* ── Grid Lines ── */
+.al-grid-line {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 1px;
+  background: rgba(0,0,0,0.04);
+  pointer-events: none;
+}
+.al-grid-line-hour {
+  background: rgba(0,0,0,0.1);
+}
+
+/* ── Unused Zones ── */
+.al-unused-zone {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    rgba(0,0,0,0.025) 4px,
+    rgba(0,0,0,0.025) 8px
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Band Pills ── */
+.al-band {
+  position: absolute;
+  border-radius: 8px;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 22px 0 8px;
+  overflow: hidden;
+  z-index: 2;
+  box-shadow:
+    0 1px 3px rgba(0,0,0,0.12),
+    0 0 0 1.5px rgba(0,0,0,0.08) inset;
+  transition: box-shadow 0.15s, transform 0.1s;
+  user-select: none;
+  border: none;
+}
+.al-band:hover {
+  box-shadow:
+    0 4px 12px rgba(0,0,0,0.18),
+    0 0 0 1.5px rgba(0,0,0,0.12) inset;
+  transform: translateY(-1px);
+  z-index: 3;
+}
+.al-band:active { cursor: grabbing; }
+
+/* Pinned bands: solid left accent */
+.al-band-pinned {
+  box-shadow:
+    0 1px 3px rgba(0,0,0,0.12),
+    inset 3px 0 0 rgba(0,0,0,0.25),
+    0 0 0 1.5px rgba(0,0,0,0.08) inset;
+}
+
+/* Selected band: glow ring */
+.al-band-selected {
+  z-index: 4;
+  box-shadow:
+    0 0 0 2px #fff,
+    0 0 0 4px var(--al-band-border, #3b82f6),
+    0 4px 16px rgba(0,0,0,0.2) !important;
+  transform: translateY(-2px) !important;
+}
+
+.al-band-label {
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.al-band-dur {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.75;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.al-band-badge {
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(0,0,0,0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.al-band-chip {
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: rgba(0,0,0,0.1);
+}
+
+.al-band-time {
+  font-size: 9px;
+  opacity: 0.7;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.al-band-pin {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+/* Resize handles */
+.al-band-resize {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.al-band:hover .al-band-resize { opacity: 1; }
+.al-band-resize-left { left: 0; border-radius: 8px 0 0 8px; }
+.al-band-resize-right { right: 0; border-radius: 0 8px 8px 0; }
+.al-band-resize::after {
+  content: '';
+  display: block;
+  width: 3px;
+  height: 14px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 2px;
+}
+
+/* ── Drag Ghost ── */
+.al-drag-ghost {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9999;
+  padding: 8px 14px;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  min-width: 140px;
+  backdrop-filter: blur(8px);
+}
+.al-ghost-name {
+  font-size: 12px;
+  font-weight: 700;
+}
+.al-ghost-time {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+/* ── Popover Modal ── */
+.al-popover-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,0.5);
+  backdrop-filter: blur(4px);
+  z-index: 9990;
+  animation: al-fade-in 0.15s ease;
+}
+
+@keyframes al-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.al-popover {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -44%) scale(0.97);
+  width: 400px;
+  max-height: 90vh;
+  overflow-y: auto;
+  z-index: 9991;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.25),
+    0 0 0 1px rgba(0,0,0,0.08);
+  opacity: 0;
+  transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), opacity 0.15s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.al-popover.al-popover-visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.al-pop-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 14px 14px 0 0;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.al-pop-header-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.al-pop-header-info { flex: 1; min-width: 0; }
+
+.al-pop-header-name {
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.al-pop-header-type {
+  font-size: 11px;
+  opacity: 0.8;
+  margin-top: 1px;
+  text-transform: capitalize;
+}
+
+.al-pop-close {
+  background: rgba(255,255,255,0.2);
+  border: none;
+  color: #fff;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.al-pop-close:hover { background: rgba(255,255,255,0.35); }
+
+.al-pop-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.al-pop-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+  margin: 8px 0 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.al-pop-section-sub {
+  font-weight: 400;
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #cbd5e1;
+}
+
+.al-pop-field {
+  margin-bottom: 10px;
+}
+
+.al-pop-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 5px;
+}
+
+.al-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.al-pop-input {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1.5px solid #e2e8f0;
+  background: #f8fafc;
+  font-size: 12px;
+  color: #1e293b;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  flex: 1;
+}
+.al-pop-input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+  background: #fff;
+}
+
+.al-pop-input-sm {
+  flex: none;
+  width: 80px;
+}
+
+.al-pop-arrow {
+  color: #94a3b8;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.al-pop-unit {
+  font-size: 11px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.al-pop-ops {
+  display: flex;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 7px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.al-pop-op {
+  padding: 0 10px;
+  height: 32px;
+  border: none;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  border-right: 1px solid #e2e8f0;
+}
+.al-pop-op:last-child { border-right: none; }
+.al-pop-op:hover { background: #f1f5f9; }
+.al-pop-op.active { background: #6366f1; color: #fff; }
+
+.al-pop-toggle-group {
+  display: flex;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.al-pop-toggle {
+  padding: 0 14px;
+  height: 32px;
+  border: none;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  border-right: 1px solid #e2e8f0;
+}
+.al-pop-toggle:last-child { border-right: none; }
+.al-pop-toggle:hover { background: #f1f5f9; }
+.al-pop-toggle.active { background: #6366f1; color: #fff; font-weight: 600; }
+
+.al-pin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1.5px solid #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.al-pin-toggle:hover { border-color: #cbd5e1; background: #f1f5f9; }
+.al-pin-toggle.active {
+  background: #fffbeb;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+.al-pop-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 8px 0;
+}
+
+.al-pop-hint {
+  font-size: 10px;
+  color: #94a3b8;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.al-pop-hint b { color: #64748b; }
+
+.al-pop-hint-warn {
+  background: #fffbeb;
+  color: #92400e;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.al-pop-hint-warn b { color: #78350f; }
+
+.al-pop-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #f1f5f9;
+  background: #f8fafc;
+  border-radius: 0 0 14px 14px;
+  flex-shrink: 0;
+}
+
+.al-pop-action-btn {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex: 1;
+}
+
+.al-pop-action-delete {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1.5px solid #fecaca;
+}
+.al-pop-action-delete:hover { background: #fee2e2; border-color: #fca5a5; }
+
+.al-pop-action-done {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.35);
+}
+.al-pop-action-done:hover {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  box-shadow: 0 4px 12px rgba(99,102,241,0.5);
+  transform: translateY(-1px);
+}
+
+/* ── Copy/Modal ── */
+.al-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,0.5);
+  backdrop-filter: blur(4px);
+  z-index: 9995;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: al-fade-in 0.15s ease;
+}
+
+.al-copy-modal {
+  background: #fff;
+  border-radius: 14px;
+  padding: 20px;
+  min-width: 280px;
+  max-width: 380px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,0,0,0.08);
+  animation: al-slide-up 0.2s cubic-bezier(0.34,1.56,0.64,1);
+}
+
+@keyframes al-slide-up {
+  from { transform: translateY(12px) scale(0.97); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.al-modal-header {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 6px;
+}
+
+.al-modal-sub {
+  font-size: 11px;
+  color: #64748b;
+  margin-bottom: 14px;
+}
+
+.al-modal-check-row {
+  padding: 6px 0;
+  font-size: 12px;
+  color: #334155;
+  border-bottom: 1px solid #f8fafc;
+}
+.al-modal-check-row input { margin-right: 6px; }
+
+.al-modal-warn {
+  color: #d97706;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.al-modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* ── Notifications ── */
+.al-notification {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 10000;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  animation: al-notif-in 0.25s cubic-bezier(0.34,1.56,0.64,1);
+  transition: opacity 0.4s;
+}
+
+@keyframes al-notif-in {
+  from { transform: translateY(12px) scale(0.96); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.al-notification-success { background: #052e16; color: #86efac; border: 1px solid #166534; }
+.al-notification-error   { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+.al-notification-info    { background: #0c1a3a; color: #93c5fd; border: 1px solid #1e3a6e; }
+.al-notification-warning { background: #1c0d00; color: #fcd34d; border: 1px solid #78350f; }
+
+/* ── Empty State ── */
+.al-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: #94a3b8;
+  gap: 8px;
+}
+.al-empty-icon { font-size: 36px; opacity: 0.4; }
+.al-empty-state p { font-size: 14px; font-weight: 600; margin: 0; }
+.al-empty-sub { font-size: 12px; color: #cbd5e1; }
+`;
   document.head.appendChild(s);
 })();
+
 })();
