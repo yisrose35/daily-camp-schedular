@@ -624,9 +624,7 @@ function init(targetElement = null){
     <div class="ms-container" id="ms-manual-container" style="border-radius:0 0 12px 12px;">
       <!-- Left Sidebar -->
       <div class="ms-sidebar">
-        <div class="ms-sidebar-header">
-          <h3>Tile Types</h3>
-        </div>
+        <div class="ms-sidebar-brand">Tiles</div>
         <div id="scheduler-palette" class="ms-palette"></div>
       </div>
       
@@ -644,9 +642,7 @@ function init(targetElement = null){
     <div id="ms-auto-container" class="ms-container" style="display:none; border-radius:0 0 12px 12px; background:#fff;">
       <!-- DAW Sidebar -->
       <div class="ms-daw-sidebar">
-        <div class="ms-daw-sidebar-header">
-          <h3>Layer Types</h3>
-        </div>
+        <div class="ms-daw-sidebar-brand">Layers</div>
         <div id="daw-palette" class="ms-daw-palette"></div>
       </div>
       
@@ -1003,32 +999,44 @@ function saveDAWLayers(forceTemplateName = null) {
 function renderDAWPalette() {
   const pal = document.getElementById('daw-palette');
   if (!pal) return;
-  
- let html = '';
-  html += '<div class="ms-daw-tile-label">Floaters</div>';
+
+  const DAW_DOTS = {
+    sport: '#22c55e', special: '#8b5cf6', activity: '#3b82f6',
+    swim: '#06b6d4', lunch: '#f97316', snacks: '#eab308',
+    dismissal: '#ec4899', custom: '#64748b', league: '#ef4444', elective: '#d946ef'
+  };
+
+  let html = '';
+  html += '<div class="ms-daw-tile-label">Flexible</div>';
   DAW_LAYER_TYPES.filter(t => !t.anchor).forEach(t => {
-    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">
-      ${t.name}
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
+      <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
+      <span class="ms-daw-tile-name">${t.name}</span>
     </div>`;
   });
-  
+
   html += '<div class="ms-daw-tile-divider"></div>';
-  html += '<div class="ms-daw-tile-label">Anchors</div>';
+  html += '<div class="ms-daw-tile-label">Anchored</div>';
   DAW_LAYER_TYPES.filter(t => t.anchor).forEach(t => {
-    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}" style="${t.style}">
-      ${t.name}
+    html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
+      <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
+      <span class="ms-daw-tile-name">${t.name}</span>
+      <span class="ms-daw-tile-badge">PIN</span>
     </div>`;
   });
-  
+
+  html += '<div class="ms-daw-tile-footer"><div class="ms-daw-tile-hint">Drag a layer onto a grade row to place it. Click a band to edit.</div></div>';
   pal.innerHTML = html;
-  
+
   // Drag from palette
   pal.querySelectorAll('.ms-daw-tile').forEach(tile => {
     tile.addEventListener('dragstart', (e) => {
       dawDragData = { source: 'palette', type: tile.dataset.type };
       e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
       e.dataTransfer.effectAllowed = 'copy';
+      tile.classList.add('ms-daw-tile-dragging');
     });
+    tile.addEventListener('dragend', () => tile.classList.remove('ms-daw-tile-dragging'));
   });
 }
 
@@ -1064,46 +1072,34 @@ function renderDAWToolbar() {
     statusText = 'No Template';
   }
   
+  toolbar.className = 'ms-daw-statusbar';
+
+  const statusDot = hasUnsavedChanges ? '#f59e0b' : (currentLoadedTemplate ? '#22c55e' : '#475569');
+
   toolbar.innerHTML = `
-    <div class="ms-toolbar-group status">
-      <span class="ms-status-label">Current:</span>
-      <span class="ms-status-name">${statusText}</span>${statusSubtext}
+    <div class="ms-daw-sb-left">
+      <span class="ms-daw-status-dot" style="background:${statusDot};box-shadow:0 0 6px ${statusDot};"></span>
+      <span class="ms-daw-sb-name">${statusText}${statusSubtext}</span>
     </div>
-    <button id="daw-update-btn" class="ms-btn ms-btn-success" ${!canUpdate ? 'disabled' : ''}>
-      Update
-    </button>
-    
-    <div class="ms-toolbar-group">
-      <span class="ms-toolbar-label">Load:</span>
-      <select id="daw-load-select" class="ms-select">
-        <option value="">Select...</option>
+    <div class="ms-daw-sb-center">
+      <select id="daw-load-select" class="ms-daw-sb-select">
+        <option value="">Load template…</option>
         ${loadOptions}
       </select>
+      <div class="ms-daw-sb-div"></div>
+      <button id="daw-update-btn" class="ms-daw-sb-btn ms-daw-sb-accent" ${!canUpdate ? 'disabled' : ''}>Save</button>
+      <input type="text" id="daw-save-name" class="ms-daw-sb-input" placeholder="New template name…">
+      <button id="daw-save-btn" class="ms-daw-sb-btn ms-daw-sb-accent">Save As</button>
     </div>
-    
-    <div class="ms-toolbar-group">
-      <span class="ms-toolbar-label">New:</span>
-      <input type="text" id="daw-save-name" class="ms-input" placeholder="Template name...">
-      <button id="daw-save-btn" class="ms-btn ms-btn-primary">Save</button>
-    </div>
-    
-    <div class="ms-toolbar-group">
-      <button id="daw-copy-btn" class="ms-btn ms-btn-ghost" title="Copy layers to other grades">📋 Copy To...</button>
-    </div>
-    
-    <button id="daw-clear-btn" class="ms-btn ms-btn-warning ms-btn-icon" title="Clear Grid">
-      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-      Clear
-    </button>
-    
-    <div class="ms-toolbar-group" style="border-right:none;">
-      <select id="daw-delete-select" class="ms-select" style="min-width:110px;">
-        <option value="">Delete...</option>
+    <div class="ms-daw-sb-right">
+      <button id="daw-copy-btn" class="ms-daw-sb-btn ms-daw-sb-ghost">Copy To…</button>
+      <button id="daw-clear-btn" class="ms-daw-sb-btn ms-daw-sb-danger">Clear</button>
+      <div class="ms-daw-sb-div"></div>
+      <select id="daw-delete-select" class="ms-daw-sb-select">
+        <option value="">Delete…</option>
         ${loadOptions}
       </select>
-      <button id="daw-delete-btn" class="ms-btn ms-btn-danger ms-btn-icon" title="Delete Template">
-        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-      </button>
+      <button id="daw-delete-btn" class="ms-daw-sb-btn ms-daw-sb-danger">Delete</button>
     </div>
   `;
   
@@ -1293,7 +1289,8 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   html += `<div class="ms-daw-ruler" style="width:${totalWidth}px;">`;
   for (let m = globalStart; m < globalEnd; m += 30) {
     const left = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
-    html += `<div class="ms-daw-ruler-tick" style="position:absolute;left:${left}px;">${minutesToTime(m)}</div>`;
+    const isMajor = m % 60 === 0;
+    html += `<div class="ms-daw-ruler-tick${isMajor ? ' major-tick' : ''}" style="position:absolute;left:${left}px;">${minutesToTime(m)}</div>`;
   }
   html += '</div>';
   
@@ -1316,8 +1313,8 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     // Grade label
     const bunkCount = (div?.bunks || []).length;
     html += `<div class="ms-daw-grade-label">
-      <div class="ms-daw-grade-name">${gradeKey}</div>
-      <div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''} · ${minutesToTime(divStart)}–${minutesToTime(divEnd)}</div>
+      <span class="ms-daw-grade-tag">${gradeKey}</span>
+      <div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''}</div>
       <div class="ms-daw-grade-actions">
         <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+ Add</button>
         <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
@@ -1337,12 +1334,12 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     // Inactive zones (before div start, after div end)
     if (divStart > globalStart) {
       const w = (divStart - globalStart) * DAW_PIXELS_PER_MINUTE;
-      html += `<div style="position:absolute;top:0;left:0;width:${w}px;height:100%;background:rgba(0,0,0,0.3);z-index:1;pointer-events:none;"></div>`;
+      html += `<div class="ms-daw-inactive-zone" style="left:0;width:${w}px;"></div>`;
     }
     if (divEnd < globalEnd) {
       const left = (divEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
       const w = (globalEnd - divEnd) * DAW_PIXELS_PER_MINUTE;
-      html += `<div style="position:absolute;top:0;left:${left}px;width:${w}px;height:100%;background:rgba(0,0,0,0.3);z-index:1;pointer-events:none;"></div>`;
+      html += `<div class="ms-daw-inactive-zone" style="left:${left}px;width:${w}px;"></div>`;
     }
     
     // Render bands
@@ -1630,137 +1627,182 @@ function showDAWPopover(bandEl, layer, grade, opts) {
   
   // Remove existing
   document.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
-  
+  // Remove existing overlays too
+  document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
+
   const typeName = DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type;
   
   const popover = document.createElement('div');
   popover.className = 'ms-daw-popover';
+
+  const DAW_POP_COLORS = {
+    sport: { border: '#16a34a', dot: '#22c55e' },
+    special: { border: '#7c3aed', dot: '#8b5cf6' },
+    activity: { border: '#2563eb', dot: '#3b82f6' },
+    swim: { border: '#0891b2', dot: '#06b6d4' },
+    lunch: { border: '#ea580c', dot: '#f97316' },
+    snacks: { border: '#d97706', dot: '#eab308' },
+    dismissal: { border: '#db2777', dot: '#ec4899' },
+    custom: { border: '#475569', dot: '#64748b' },
+    league: { border: '#dc2626', dot: '#ef4444' },
+    elective: { border: '#c026d3', dot: '#d946ef' }
+  };
+  const pColor = DAW_POP_COLORS[layer.type] || DAW_POP_COLORS.custom;
+
   popover.innerHTML = `
-    <h4>${typeName}</h4>
-    <label>Time Window</label>
-    <div class="ms-daw-pop-row">
-      <input type="text" id="daw-pop-start" value="${minutesToTime(layer.startMin)}" style="width:45%;">
-      <span style="color:#8888aa;">→</span>
-      <input type="text" id="daw-pop-end" value="${minutesToTime(layer.endMin)}" style="width:45%;">
-    </div>
-   <label>Activity Duration (min)</label>
-    <div class="ms-daw-pop-row">
-      <input type="number" id="daw-pop-dur-min" value="${layer.durationMin || layer.periodMin || 30}" min="5" max="180" step="5" style="width:60px;" placeholder="Min">
-      <span style="color:#8888aa;">to</span>
-      <input type="number" id="daw-pop-dur-max" value="${layer.durationMax || layer.periodMin || 50}" min="5" max="180" step="5" style="width:60px;" placeholder="Max">
-      <span style="color:#94a3b8;font-size:10px;">min</span>
-    </div>
-    <label>Quantity</label>
-    <div class="ms-daw-pop-row">
-      <button class="ms-daw-pop-op ${layer.op === '>=' ? 'active' : ''}" data-op=">=">≥</button>
-      <button class="ms-daw-pop-op ${layer.op === '=' ? 'active' : ''}" data-op="=">=</button>
-      <button class="ms-daw-pop-op ${layer.op === '<=' ? 'active' : ''}" data-op="<=">≤</button>
-      <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:50px;">
-    </div>
-  <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
-    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Rotation</label>
-    <span style="font-size:9px;color:#94a3b8;display:block;margin:-2px 0 6px;">Leave blank for no limits</span>
-
-    <label>Bunks / Day</label>
-    <div class="ms-daw-pop-row">
-      <input type="number" id="daw-pop-bpd" value="${layer.bunksPerDay != null ? layer.bunksPerDay : ''}" min="1" max="99" style="width:50px;" placeholder="All">
-      <span style="font-size:10px;color:#94a3b8;">per grade</span>
-    </div>
-    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">How many bunks do this activity each day. Others get it on a different day.</span>
-
-    <label>Times / Week</label>
-    <div class="ms-daw-pop-row">
-      <button class="ms-daw-pop-op ms-daw-wop ${(layer.weeklyOp || '>=') === '>=' ? 'active' : ''}" data-wop=">=">≥</button>
-      <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '=' ? 'active' : ''}" data-wop="=">=</button>
-      <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '<=' ? 'active' : ''}" data-wop="<=">≤</button>
-      <input type="number" id="daw-pop-week-qty" value="${layer.timesPerWeek != null ? layer.timesPerWeek : ''}" min="1" max="7" style="width:50px;" placeholder="Any">
-      <span style="font-size:10px;color:#94a3b8;">days/wk</span>
-    </div>
-    <span style="font-size:9px;color:#94a3b8;display:block;margin:-4px 0 6px;">Target days per week each bunk gets this. System picks bunks that need it most.</span>
-    ${['swim','lunch','snacks','snack'].includes(layer.type) ? `
-    <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
-    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Grade Mode</label>
-    <div class="ms-daw-pop-row" style="gap:6px;margin-top:4px;">
-      <button class="ms-daw-grademode ${!layer.fullGrade ? 'active' : ''}" data-gmode="stagger"
-        style="padding:4px 10px;border-radius:6px;border:1px solid #cbd5e1;background:${!layer.fullGrade ? '#3b82f6' : '#f8fafc'};color:${!layer.fullGrade ? '#fff' : '#475569'};font-size:11px;cursor:pointer;">Staggered</button>
-      <button class="ms-daw-grademode ${layer.fullGrade ? 'active' : ''}" data-gmode="fullgrade"
-        style="padding:4px 10px;border-radius:6px;border:1px solid #cbd5e1;background:${layer.fullGrade ? '#3b82f6' : '#f8fafc'};color:${layer.fullGrade ? '#fff' : '#475569'};font-size:11px;cursor:pointer;">Full Grade</button>
-    </div>
-    <span style="font-size:9px;color:#94a3b8;display:block;margin-top:4px;"><b>Full Grade:</b> every bunk does this at the same time — like a league. <b>Staggered:</b> bunks are spread across the window.</span>
-    ` : ''}
-    ${layer.type === 'swim' ? `
-    <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
-    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Change Time</label>
-    <div class="ms-daw-pop-row" style="gap:6px;margin-top:4px;">
-      <label style="font-size:11px;color:#475569;min-width:80px;">Pre-Change</label>
-      <input type="number" id="daw-pop-pre-change" value="${layer.preChangeMin != null ? layer.preChangeMin : ''}" min="0" max="60" step="5" placeholder="min" style="width:60px;">
-      <span style="font-size:11px;color:#94a3b8;">min</span>
-    </div>
-    <div class="ms-daw-pop-row" style="gap:6px;margin-top:4px;">
-      <label style="font-size:11px;color:#475569;min-width:80px;">Post-Change</label>
-      <input type="number" id="daw-pop-post-change" value="${layer.postChangeMin != null ? layer.postChangeMin : ''}" min="0" max="60" step="5" placeholder="min" style="width:60px;">
-      <span style="font-size:11px;color:#94a3b8;">min</span>
-    </div>
-    <span style="font-size:9px;color:#94a3b8;display:block;margin-top:4px;">Added to the swim block. e.g. 5 pre + 45 swim + 10 post = <b>60 min total</b>. Make the band width cover the full 60 min.</span>
-    ` : ''}
-    ${layer.type === 'custom' ? `
-    <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
-    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Custom Activity</label>
-    
-    <label>Activity Name</label>
-    <div class="ms-daw-pop-row">
-      <input type="text" id="daw-pop-custom-name" value="${layer.customActivity || ''}" placeholder="e.g. Home Run Derby" style="width:100%;">
-    </div>
-
-    <label>Field / Location</label>
-    <div class="ms-daw-pop-row">
-      <select id="daw-pop-custom-field" style="width:100%;">
-        <option value="">-- Select field --</option>
-        ${(() => {
-          const gs = window.loadGlobalSettings?.() || {};
-          const fields = gs.app1?.fields || gs.fields || window.fields || [];
-          const specialLocs = (gs.app1?.specialActivities || []).map(s => s.location).filter(Boolean);
-          const allLocs = [...new Set([...fields.map(f => f.name), ...specialLocs])].sort();
-          return allLocs.map(f => '<option value="' + f + '"' + (f === (layer.customField || '') ? ' selected' : '') + '>' + f + '</option>').join('');
-        })()}
-        <option value="_custom" ${layer.customField && !(() => { const gs = window.loadGlobalSettings?.() || {}; const fields = gs.app1?.fields || []; return fields.some(f => f.name === layer.customField); })() ? 'selected' : ''}>-- Custom location --</option>
-      </select>
-    </div>
-    <div id="daw-pop-custom-field-text-wrap" style="display:${layer.customField && !(() => { const gs = window.loadGlobalSettings?.() || {}; const fields = gs.app1?.fields || []; return fields.some(f => f.name === layer.customField); })() ? 'block' : 'none'};">
-      <div class="ms-daw-pop-row" style="margin-top:4px;">
-        <input type="text" id="daw-pop-custom-field-text" value="${layer.customField || ''}" placeholder="Type location name" style="width:100%;">
+    <div class="ms-daw-pop-header" style="background:linear-gradient(135deg,${pColor.border}dd,${pColor.border}99);">
+      <span class="ms-daw-pop-header-dot" style="background:${pColor.dot};"></span>
+      <div class="ms-daw-pop-header-info">
+        <div class="ms-daw-pop-header-name">${typeName}</div>
+        <div class="ms-daw-pop-header-type">${layer.type.replace(/_/g,' ')} · ${minutesToTime(layer.startMin)}–${minutesToTime(layer.endMin)}</div>
       </div>
+      <button class="ms-daw-pop-close" id="daw-pop-close-x">×</button>
     </div>
-
-    <label>Bunks</label>
-    <div class="ms-daw-pop-row" style="flex-wrap:wrap;gap:4px;">
-      <button id="daw-pop-bunk-all" style="font-size:10px;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#f1f5f9;cursor:pointer;font-weight:600;">All</button>
-      <button id="daw-pop-bunk-none" style="font-size:10px;padding:3px 8px;border:1px solid #e2e8f0;border-radius:4px;background:#f1f5f9;cursor:pointer;font-weight:600;">None</button>
+    <div class="ms-daw-pop-body">
+      <div class="ms-daw-pop-section">Scheduling</div>
+      <div class="ms-daw-pop-field">
+        <label>Time Window</label>
+        <div class="ms-daw-pop-row">
+          <input type="text" id="daw-pop-start" value="${minutesToTime(layer.startMin)}" style="flex:1;">
+          <span style="color:#94a3b8;">→</span>
+          <input type="text" id="daw-pop-end" value="${minutesToTime(layer.endMin)}" style="flex:1;">
+        </div>
+      </div>
+      <div class="ms-daw-pop-field">
+        <label>Activity Duration (min)</label>
+        <div class="ms-daw-pop-row">
+          <input type="number" id="daw-pop-dur-min" value="${layer.durationMin || layer.periodMin || 30}" min="5" max="180" step="5" style="width:70px;">
+          <span style="color:#94a3b8;font-size:11px;">to</span>
+          <input type="number" id="daw-pop-dur-max" value="${layer.durationMax || layer.periodMin || 50}" min="5" max="180" step="5" style="width:70px;">
+          <span style="font-size:11px;color:#94a3b8;">min</span>
+        </div>
+      </div>
+      <div class="ms-daw-pop-field">
+        <label>Quantity</label>
+        <div class="ms-daw-pop-row">
+          <div style="display:flex;">
+            <button class="ms-daw-pop-op ${layer.op === '>=' ? 'active' : ''}" data-op=">=">≥</button>
+            <button class="ms-daw-pop-op ${layer.op === '=' ? 'active' : ''}" data-op="=">=</button>
+            <button class="ms-daw-pop-op ${layer.op === '<=' ? 'active' : ''}" data-op="<=">≤</button>
+          </div>
+          <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:60px;">
+        </div>
+      </div>
+      <div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">Rotation <span style="font-weight:400;font-size:10px;letter-spacing:0;text-transform:none;color:#cbd5e1;">optional</span></div>
+      <div class="ms-daw-pop-field">
+        <label>Bunks / Day</label>
+        <div class="ms-daw-pop-row">
+          <input type="number" id="daw-pop-bpd" value="${layer.bunksPerDay != null ? layer.bunksPerDay : ''}" min="1" max="99" style="width:70px;" placeholder="All">
+          <span style="font-size:11px;color:#94a3b8;">per grade</span>
+        </div>
+        <div class="ms-daw-pop-hint">Max bunks per day — others get it on a different day.</div>
+      </div>
+      <div class="ms-daw-pop-field">
+        <label>Times / Week</label>
+        <div class="ms-daw-pop-row">
+          <div style="display:flex;">
+            <button class="ms-daw-pop-op ms-daw-wop ${(layer.weeklyOp || '>=') === '>=' ? 'active' : ''}" data-wop=">=">≥</button>
+            <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '=' ? 'active' : ''}" data-wop="=">=</button>
+            <button class="ms-daw-pop-op ms-daw-wop ${layer.weeklyOp === '<=' ? 'active' : ''}" data-wop="<=">≤</button>
+          </div>
+          <input type="number" id="daw-pop-week-qty" value="${layer.timesPerWeek != null ? layer.timesPerWeek : ''}" min="1" max="7" style="width:60px;" placeholder="Any">
+          <span style="font-size:11px;color:#94a3b8;">days/wk</span>
+        </div>
+        <div class="ms-daw-pop-hint">Target days per week each bunk gets this.</div>
+      </div>
+      ${['swim','lunch','snacks','snack'].includes(layer.type) ? `
+      <div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">Grade Mode</div>
+      <div class="ms-daw-pop-field">
+        <label>Scheduling</label>
+        <div class="ms-daw-pop-toggle-group">
+          <button class="ms-daw-grademode ${!layer.fullGrade ? 'active' : ''}" data-gmode="stagger">Staggered</button>
+          <button class="ms-daw-grademode ${layer.fullGrade ? 'active' : ''}" data-gmode="fullgrade">Full Grade</button>
+        </div>
+        <div class="ms-daw-pop-hint"><b>Full Grade:</b> all bunks at once. <b>Staggered:</b> spread across window.</div>
+      </div>
+      ` : ''}
+      ${layer.type === 'swim' ? `
+      <div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">Change Time</div>
+      <div class="ms-daw-pop-field">
+        <label>Pre-Change</label>
+        <div class="ms-daw-pop-row">
+          <input type="number" id="daw-pop-pre-change" value="${layer.preChangeMin != null ? layer.preChangeMin : ''}" min="0" max="60" step="5" style="width:70px;" placeholder="0">
+          <span style="font-size:11px;color:#94a3b8;">min</span>
+        </div>
+      </div>
+      <div class="ms-daw-pop-field">
+        <label>Post-Change</label>
+        <div class="ms-daw-pop-row">
+          <input type="number" id="daw-pop-post-change" value="${layer.postChangeMin != null ? layer.postChangeMin : ''}" min="0" max="60" step="5" style="width:70px;" placeholder="0">
+          <span style="font-size:11px;color:#94a3b8;">min</span>
+        </div>
+        <div class="ms-daw-pop-hint">Total = pre + swim + post. Make band width cover all.</div>
+      </div>
+      ` : ''}
+      ${layer.type === 'custom' ? `
+      <div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">Custom Activity</div>
+      <div class="ms-daw-pop-field">
+        <label>Activity Name</label>
+        <div class="ms-daw-pop-row">
+          <input type="text" id="daw-pop-custom-name" value="${layer.customActivity || ''}" placeholder="e.g. Home Run Derby" style="flex:1;">
+        </div>
+      </div>
+      <div class="ms-daw-pop-field">
+        <label>Field / Location</label>
+        <div class="ms-daw-pop-row">
+          <select id="daw-pop-custom-field" style="flex:1;">
+            <option value="">-- Select field --</option>
+            ${(() => {
+              const gs = window.loadGlobalSettings?.() || {};
+              const fields = gs.app1?.fields || gs.fields || window.fields || [];
+              const specialLocs = (gs.app1?.specialActivities || []).map(s => s.location).filter(Boolean);
+              const allLocs = [...new Set([...fields.map(f => f.name), ...specialLocs])].sort();
+              return allLocs.map(f => '<option value="' + f + '"' + (f === (layer.customField || '') ? ' selected' : '') + '>' + f + '</option>').join('');
+            })()}
+            <option value="_custom" ${layer.customField && !(() => { const gs = window.loadGlobalSettings?.() || {}; const fields = gs.app1?.fields || []; return fields.some(f => f.name === layer.customField); })() ? 'selected' : ''}>-- Custom location --</option>
+          </select>
+        </div>
+      </div>
+      <div id="daw-pop-custom-field-text-wrap" style="display:${layer.customField && !(() => { const gs = window.loadGlobalSettings?.() || {}; const fields = gs.app1?.fields || []; return fields.some(f => f.name === layer.customField); })() ? 'block' : 'none'};">
+        <div class="ms-daw-pop-row">
+          <input type="text" id="daw-pop-custom-field-text" value="${layer.customField || ''}" placeholder="Type location name" style="flex:1;">
+        </div>
+      </div>
+      <div class="ms-daw-pop-field">
+        <label>Bunks</label>
+        <div class="ms-daw-pop-row" style="flex-wrap:wrap;gap:4px;">
+          <button id="daw-pop-bunk-all" style="font-size:10px;padding:3px 8px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:rgba(255,255,255,0.08);color:#94a3b8;cursor:pointer;font-weight:600;">All</button>
+          <button id="daw-pop-bunk-none" style="font-size:10px;padding:3px 8px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:rgba(255,255,255,0.08);color:#94a3b8;cursor:pointer;font-weight:600;">None</button>
+        </div>
+        <div id="daw-pop-bunk-grid" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">
+          ${(() => {
+            const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+            const bunks = (divs[grade]?.bunks || []).map(String);
+            const selected = layer.customBunks || bunks;
+            return bunks.map(b => '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (selected.includes(b) ? '#dbeafe' : '#fff') + ';color:#334155;"><input type="checkbox" class="daw-bunk-cb" value="' + b + '"' + (selected.includes(b) ? ' checked' : '') + ' style="width:13px;height:13px;">' + b + '</label>').join('');
+          })()}
+        </div>
+      </div>
+      ` : ''}
     </div>
-    <div id="daw-pop-bunk-grid" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">
-      ${(() => {
-        const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
-        const bunks = (divs[grade]?.bunks || []).map(String);
-        const selected = layer.customBunks || bunks;
-        return bunks.map(b => '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (selected.includes(b) ? '#dbeafe' : '#fff') + ';"><input type="checkbox" class="daw-bunk-cb" value="' + b + '"' + (selected.includes(b) ? ' checked' : '') + ' style="width:13px;height:13px;">' + b + '</label>').join('');
-      })()}
-    </div>
-    <span style="font-size:9px;color:#94a3b8;display:block;margin-top:4px;">Select which bunks participate. Others get regular activities.</span>
-    ` : ''}
-    <div class="ms-daw-pop-actions">      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">Save</button>
-      <button class="ms-daw-pop-btn ms-daw-pop-btn-del">Delete</button>
+    <div class="ms-daw-pop-actions">
+      <button class="ms-daw-pop-btn ms-daw-pop-btn-del">Delete Layer</button>
+      <button class="ms-daw-pop-btn ms-daw-pop-btn-save">✓ Apply</button>
       <button class="ms-daw-pop-btn ms-daw-pop-btn-cancel">Close</button>
     </div>
-    </div>
   `;
-  
-  // Position below the band
-  const bandRect = bandEl.getBoundingClientRect();
-  const trackRect = bandEl.closest('.ms-daw-track').getBoundingClientRect();
-  popover.style.left = (bandRect.left - trackRect.left) + 'px';
-  popover.style.top = (bandRect.bottom - trackRect.top + 4) + 'px';
-  
-  bandEl.closest('.ms-daw-track').appendChild(popover);
+
+  // Centered modal: append overlay + popover to body
+  const overlay = document.createElement('div');
+  overlay.className = 'ms-daw-popover-overlay';
+  overlay.onclick = () => { overlay.remove(); popover.remove(); dawSelectedBand = null; document.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected')); };
+  document.body.appendChild(overlay);
+  document.body.appendChild(popover);
+  requestAnimationFrame(() => popover.classList.add('ms-daw-pop-visible'));
   
   // Operator buttons
   popover.querySelectorAll('.ms-daw-pop-op').forEach(btn => {
@@ -1773,16 +1815,19 @@ function showDAWPopover(bandEl, layer, grade, opts) {
   // Grade Mode toggle (swim / lunch / snacks)
   popover.querySelectorAll('.ms-daw-grademode[data-gmode]').forEach(btn => {
     btn.onclick = () => {
-      popover.querySelectorAll('.ms-daw-grademode[data-gmode]').forEach(b => {
-        b.classList.remove('active');
-        b.style.background = '#f8fafc';
-        b.style.color = '#475569';
-      });
+      popover.querySelectorAll('.ms-daw-grademode[data-gmode]').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      btn.style.background = '#3b82f6';
-      btn.style.color = '#fff';
     };
   });
+
+  // Close X button
+  const closeXBtn = popover.querySelector('#daw-pop-close-x');
+  if (closeXBtn) closeXBtn.onclick = () => {
+    popover.remove();
+    document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
+    dawSelectedBand = null;
+    document.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
+  };
 
   // Custom layer: field dropdown toggle + bunk select/deselect
   const customFieldSelect = popover.querySelector('#daw-pop-custom-field');
@@ -1864,15 +1909,19 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       const allBunks = (divs[grade]?.bunks || []).map(String);
       layer.customBunks = checkedBunks.length === allBunks.length ? null : checkedBunks; // null = all
     }
+    document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
+    popover.remove();
     onSave();
     onRender();
   };
-  
+
   // Delete
- popover.querySelector('.ms-daw-pop-btn-del').onclick = () => {
+  popover.querySelector('.ms-daw-pop-btn-del').onclick = () => {
     const src = opts?.layerSource || dawLayers;
     src[grade] = (src[grade] || []).filter(l => l.id !== layer.id);
     dawSelectedBand = null;
+    document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
+    popover.remove();
     onSave();
     onRender();
   };
@@ -1880,6 +1929,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
   // Close
   popover.querySelector('.ms-daw-pop-btn-cancel').onclick = () => {
     popover.remove();
+    document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
     dawSelectedBand = null;
     document.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
   };
@@ -2060,10 +2110,19 @@ function renderPalette() {
       
       const el = document.createElement('div');
       el.className = 'ms-tile';
-      el.textContent = tile.name;
-      el.style.cssText = tile.style;
       el.draggable = true;
       el.title = tile.description || '';
+
+      const dot = document.createElement('span');
+      dot.className = 'ms-tile-dot';
+      const bgMatch = (tile.style || '').match(/background:([^;]+)/);
+      dot.style.background = bgMatch ? bgMatch[1].trim() : '#64748b';
+      el.appendChild(dot);
+
+      const name = document.createElement('span');
+      name.className = 'ms-tile-name';
+      name.textContent = tile.name;
+      el.appendChild(name);
       
       el.onclick = (e) => {
         if (e.detail === 1) {
