@@ -1351,9 +1351,16 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
       const top = 6 + idx * 26;
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
-      const durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
+      let durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
         ? `${layer.durationMin}-${layer.durationMax}m`
         : `${layer.durationMin || layer.periodMin || (layer.endMin - layer.startMin)}m`;
+      // Swim: show pre+swim+post breakdown on the chip
+      if (layer.type === 'swim' && (layer.preChangeMin || layer.postChangeMin)) {
+        const pre  = layer.preChangeMin  || 0;
+        const post = layer.postChangeMin || 0;
+        const swimOnly = layer.durationMin || layer.periodMin || ((layer.endMin - layer.startMin) - pre - post);
+        durLabel = `${pre}+${swimOnly}+${post}m`;
+      }
       html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}" 
         data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
         style="left:${left}px; width:${width}px; top:${top}px;"
@@ -1681,6 +1688,21 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     </div>
     <span style="font-size:9px;color:#94a3b8;display:block;margin-top:4px;"><b>Full Grade:</b> every bunk does this at the same time — like a league. <b>Staggered:</b> bunks are spread across the window.</span>
     ` : ''}
+    ${layer.type === 'swim' ? `
+    <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
+    <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Change Time</label>
+    <div class="ms-daw-pop-row" style="gap:6px;margin-top:4px;">
+      <label style="font-size:11px;color:#475569;min-width:80px;">Pre-Change</label>
+      <input type="number" id="daw-pop-pre-change" value="${layer.preChangeMin != null ? layer.preChangeMin : ''}" min="0" max="60" step="5" placeholder="min" style="width:60px;">
+      <span style="font-size:11px;color:#94a3b8;">min</span>
+    </div>
+    <div class="ms-daw-pop-row" style="gap:6px;margin-top:4px;">
+      <label style="font-size:11px;color:#475569;min-width:80px;">Post-Change</label>
+      <input type="number" id="daw-pop-post-change" value="${layer.postChangeMin != null ? layer.postChangeMin : ''}" min="0" max="60" step="5" placeholder="min" style="width:60px;">
+      <span style="font-size:11px;color:#94a3b8;">min</span>
+    </div>
+    <span style="font-size:9px;color:#94a3b8;display:block;margin-top:4px;">Added to the swim block. e.g. 5 pre + 45 swim + 10 post = <b>60 min total</b>. Make the band width cover the full 60 min.</span>
+    ` : ''}
     ${layer.type === 'custom' ? `
     <div style="border-top:1px solid #e5e7eb;margin:10px 0 8px;"></div>
     <label style="font-size:11px;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.05em;">Custom Activity</label>
@@ -1815,6 +1837,14 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     const activeGmode = popover.querySelector('.ms-daw-grademode[data-gmode].active');
     if (activeGmode) {
       layer.fullGrade = activeGmode.dataset.gmode === 'fullgrade';
+    }
+
+    // Change Time: save preChangeMin / postChangeMin for swim
+    if (layer.type === 'swim') {
+      const preEl  = popover.querySelector('#daw-pop-pre-change');
+      const postEl = popover.querySelector('#daw-pop-post-change');
+      layer.preChangeMin  = preEl  && preEl.value.trim()  !== '' ? Math.max(0, parseInt(preEl.value)  || 0) : null;
+      layer.postChangeMin = postEl && postEl.value.trim() !== '' ? Math.max(0, parseInt(postEl.value) || 0) : null;
     }
 
     // Custom layer: save activity name, field, and bunks
