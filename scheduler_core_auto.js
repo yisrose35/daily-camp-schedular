@@ -475,6 +475,22 @@
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
         log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
 
+        // ★ pickFillActivity — choose the longest real special that fits inside a gap.
+        // Used everywhere "General Activity Slot" was previously hard-coded.
+        // Returns the special's name, or null if nothing fits (caller falls back gracefully).
+        function pickFillActivity(gapDur, grade) {
+            var best = null, bestDur = 0;
+            for (var _pfi = 0; _pfi < todaysSpecials.length; _pfi++) {
+                var _s = todaysSpecials[_pfi];
+                if (grade && !isSpecialAvailableForDivision(_s.name, grade, globalSettings)) continue;
+                var _dur = getSpecialDuration(_s.name, activityProperties, globalSettings) ||
+                           _s.defaultDuration || _s.duration || _s.durationMin || _s.periodMin || 0;
+                if (_dur <= 0 || _dur > gapDur) continue;
+                if (_dur > bestDur) { best = _s.name; bestDur = _dur; }
+            }
+            return best;
+        }
+
         const fieldUsageBySlot = window.fieldUsageBySlot;
 
         // =====================================================================
@@ -5716,8 +5732,9 @@
 
                         // ★ v11.1: Fill pre-gap from clamping
                         if (gPreGap >= 10) {
+                            var gPreFillName = pickFillActivity(gPreGap, gMeta.grade) || 'Free Time';
                             addSportBlocks(gTmpl, gVictim.startMin, gPlaceStart, {
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: gPreFillName,
                                 layer: gMeta.sportLayer, field: null,
                                 dMin: Math.min(gPreGap, gMeta.fillMinDur || 20), dMax: gMeta.sportCeiling || 60,
                                 _source: 'guarantee-pregap', _final: true
@@ -5726,8 +5743,9 @@
                         // Fill remainder with sport — NEVER extend the layer past dMax
                         var gRemainDur = gRemainEnd - gRemainStart;
                         if (gRemainDur >= 10) {
+                            var gRemFillName = pickFillActivity(gRemainDur, gMeta.grade) || 'Free Time';
                             addSportBlocks(gTmpl, gRemainStart, gRemainEnd, {
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: gRemFillName,
                                 layer: gMeta.sportLayer, field: null,
                                 dMin: Math.min(gRemainDur, gMeta.fillMinDur || 20),
                                 dMax: gMeta.sportCeiling || 60,
@@ -6882,9 +6900,10 @@
                         // walls (e.g. a guaranteed-swim block with dMin=dMax=30 and a dismissal).
                         // The auto-solver will label them General Activity Slot if no sport fits.
                         if (!pg_fixed && pg_dur >= 5) {
+                            var pg_fillName = pickFillActivity(pg_dur, pg_meta.grade) || 'Free Time';
                             var pg_blk = makeBlock({
                                 startMin: pg_gap.start, endMin: pg_gap.end,
-                                type: 'slot', event: 'General Activity Slot',
+                                type: 'slot', event: pg_fillName,
                                 layer: pg_meta.sportLayer, field: null,
                                 dMin: pg_dur,                                // exact-fit: always passes makeBlock guard
                                 dMax: Math.max(pg_dur, pg_meta.sportCeiling || 60),
@@ -6897,7 +6916,7 @@
                                 pg_changed = true;
                                 pg_fixed   = true;
                                 log('[POST-GAP] bunk=' + pg_bunk + ' forced ' + pg_dur +
-                                    'min slot @' + pg_gap.start + '-' + pg_gap.end +
+                                    'min slot "' + pg_fillName + '" @' + pg_gap.start + '-' + pg_gap.end +
                                     (pg_dur < (pg_meta.fillMinDur || 25) ? ' [micro-slot]' : ''));
                             }
                         }
@@ -7596,28 +7615,37 @@
         // to find the best rotation arrangement.
         // =====================================================================
 
-        function buildRotationMatrix(grades, seed) {
-            // ★ v4.2: Only stagger OFF-FIELD types. Sport is never in the matrix.
-            // The matrix answers: "When should this grade do its off-field activities?"
-            // Sport fills whatever time remains — no band needed.
+        function buildRotationMatrix(grades, seed, typeOrderSeed) {
+            // ★ v5.0: Variable-width bands + type-order permutation.
             //
-            // Off-field types (take bunks OFF fields, relieving contention):
-            //   swim    — exclusive pool
-            //   league  — on fields BUT all bunks together (concentrated, not spread)
-            //   special — usually indoor/location-based
-            //   snack   — off-field break
+            // Previous versions divided the day into EQUAL-WIDTH bands regardless of
+            // how long each activity actually takes (swim ≈ 40 min vs league ≈ 82 min).
+            // This caused the scheduler to hunt for swim inside a 82-min window and
+            // league inside a 40-min window, producing structurally poor skeletons.
             //
-            // Each grade gets a rotated subset of these based on what layers it has.
-            // The day is divided into bands equal to the MAXIMUM off-field count
-            // across all grades. Grades with fewer off-field types leave some bands
-            // empty (no preference = sport fills naturally).
+            // v5.0 changes:
+            //   1. Band widths are proportional to each type's expected duration.
+            //   2. A typeOrderSeed permutes the ORDER of off-field types per iteration,
+            //      so the tabu search explores "swim early + league late" AND
+            //      "league early + swim late" as genuinely different structures.
+            //
+            // Only stagger OFF-FIELD types — sport fills remaining time.
 
-            // Seeded shuffle
-            const shuffled = [...grades];
-            for (let i = shuffled.length - 1; i > 0; i--) {
-                const j = ((seed * 2654435761 + i * 1597) >>> 0) % (i + 1);
-                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            // Expected duration (minutes) for each off-field activity type.
+            // These are soft hints — the actual blocks may be shorter or longer.
+            const TYPE_EXPECTED_MINS = { swim: 40, league: 82, special: 50, snack: 15 };
+
+            // Seeded Fisher-Yates shuffle
+            function seededShuffle(arr, s) {
+                const r = [...arr];
+                for (let i = r.length - 1; i > 0; i--) {
+                    const j = ((s * 2654435761 + i * 1597) >>> 0) % (i + 1);
+                    [r[i], r[j]] = [r[j], r[i]];
+                }
+                return r;
             }
+
+            const shuffled = seededShuffle(grades, seed);
 
             // Determine which off-field types each grade has
             const gradeInfo = {};
@@ -7644,23 +7672,50 @@
                 return plan;
             }
 
-            // Divide the day into bands — one per off-field slot (max across grades)
-            // Minimum 3 bands so off-field activities spread across early/mid/late
             const bandCount = Math.max(3, maxOffField);
 
             const plan = {};
             shuffled.forEach((grade, idx) => {
                 const info = gradeInfo[grade];
-                const bandDur = Math.floor(info.duration / bandCount);
 
-                // Assign this grade's off-field types to rotated band positions
-                // Band position = (original_position + grade_offset) % bandCount
+                // ★ v5.0a — Permute the ORDER of off-field types using typeOrderSeed.
+                // Different orderings produce genuinely different structural skeletons:
+                //   iter 0:  [swim, league, special, snack]  → swim early, league mid
+                //   iter 3:  [league, swim, special, snack]  → league early, swim mid
+                // Each combination is a new structural hypothesis the tabu search can score.
+                const permutedOffField = typeOrderSeed
+                    ? seededShuffle(info.offField, (typeOrderSeed || 0) + idx * 97)
+                    : info.offField;
+
+                // ★ v5.0b — Variable-width bands.
+                // Compute band widths proportional to expected activity durations so that
+                // swim (40 min) gets a ~40-min search window and league (82 min) gets ~82 min.
+                // Any extra bands (bandCount > permutedOffField.length) are given sport weight (40 min).
+                const expectedMins = [];
+                for (let bi = 0; bi < bandCount; bi++) {
+                    const t = permutedOffField[bi];
+                    expectedMins.push(t ? (TYPE_EXPECTED_MINS[t] || 40) : 40);
+                }
+                const totalExpected = expectedMins.reduce((a, b) => a + b, 0);
+                // Scale to fill the grade's day duration exactly
+                const bandWidths = expectedMins.map(e => Math.round(e / totalExpected * info.duration));
+                // Fix rounding drift so bands sum exactly to info.duration
+                const drift = info.duration - bandWidths.reduce((a, b) => a + b, 0);
+                bandWidths[bandWidths.length - 1] += drift;
+
+                // Cumulative start positions for each band
+                const bandStarts = [info.start];
+                for (let bi = 0; bi < bandCount - 1; bi++) {
+                    bandStarts.push(bandStarts[bi] + bandWidths[bi]);
+                }
+
+                // Assign off-field types to rotated band positions (Latin-square rotation)
                 const typeBands = {};
                 const sequence = [];
-                info.offField.forEach((type, typeIdx) => {
+                permutedOffField.forEach((type, typeIdx) => {
                     const bandPos = (typeIdx + idx) % bandCount;
-                    const bandStart = info.start + bandPos * bandDur;
-                    const bandEnd = (bandPos === bandCount - 1) ? info.end : (bandStart + bandDur);
+                    const bandStart = bandStarts[bandPos];
+                    const bandEnd = bandPos === bandCount - 1 ? info.end : bandStarts[bandPos + 1];
                     typeBands[type] = { start: bandStart, end: bandEnd };
                     sequence.push(type);
                 });
@@ -7677,7 +7732,7 @@
 
             // Log the matrix
             if (totalIters < 1) {
-                log('[ROTATION MATRIX] Off-field activity bands (sport fills remaining time):');
+                log('[ROTATION MATRIX v5] Off-field bands (variable-width, type-order permuted, seed=' + (typeOrderSeed || 0) + '):');
                 shuffled.forEach(grade => {
                     const p = plan[grade];
                     if (p.sequence.length === 0) {
@@ -7719,7 +7774,11 @@
         let todaysSwimmers = {};
 
         do {
-            staggerPlan = buildRotationMatrix(allGrades, _iterSeed);
+            // ★ v5.0: typeOrderSeed changes every 3 iterations so the tabu search
+            // explores genuinely different structural orderings (e.g. swim-early vs
+            // swim-late) rather than just reshuffling which grade fills which band.
+            const _typeOrderSeed = Math.floor(totalIters / 3) * 7919 + 1;
+            staggerPlan = buildRotationMatrix(allGrades, _iterSeed, _typeOrderSeed);
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
 
             // Init field ledger for this iteration
@@ -8741,7 +8800,10 @@
                         division: grade, _bunk: bunk,
                         startTime: minutesToTimeLabel(block.startMin), endTime: minutesToTimeLabel(block.endMin),
                         startMin: block.startMin, endMin: block.endMin,
-                        event: block.event || 'General Activity Slot', type: block.type || 'slot',
+                        event: (block.event && block.event !== 'General Activity Slot')
+                            ? block.event
+                            : (pickFillActivity(block.endMin - block.startMin, grade) || 'Free Time'),
+                        type: block.type || 'slot',
                         _autoGenerated: true, _classification: block._classification,
                         _suggestedActivity: block._assignedSpecial || block._assignedSport || null,
                         _activityLocked: block._activityLocked || false,
@@ -9032,9 +9094,15 @@
                     const skipTypes = ['swim', 'snacks', 'lunch', 'dismissal', 'pinned', 'league', 'specialty_league', 'rotation_event'];
                     if (skipTypes.includes((block.type || '').toLowerCase())) return;
                     const timelineBlock = (bunkTimelines[bunk] || []).find(b => b.startMin === block.startMin && b.endMin === block.endMin);
+                    // Preserve any real activity name assigned during timeline building.
+                    // Fall back to pickFillActivity, then 'Free Time' — never 'General Activity Slot'.
+                    const _slotDur = block.endMin - block.startMin;
+                    const _slotEvent = block.event && block.event !== 'General Activity Slot'
+                        ? block.event
+                        : (pickFillActivity(_slotDur, grade) || 'Free Time');
                     schedulableSlotBlocks.push({
                         divName: grade, bunk: String(bunk),
-                        event: 'General Activity Slot', type: 'slot',
+                        event: _slotEvent, type: 'slot',
                         startTime: minutesToTimeLabel(block.startMin), endTime: minutesToTimeLabel(block.endMin),
                         slots: [idx], _durationStrict: false, _autoGenerated: true,
                         _draftActivity: timelineBlock?._draftActivity || null,
@@ -9328,7 +9396,8 @@
         const solverInputBlocks = solverBlocks.map(b => ({
             bunk: b.bunk, divName: b.divName, slots: b.slots,
             startTime: b.startTime, endTime: b.endTime,
-            type: b.type || 'slot', event: b.event || 'General Activity Slot',
+            type: b.type || 'slot',
+            event: (b.event && b.event !== 'General Activity Slot') ? b.event : 'Free Time',
             _autoGenerated: true, _autoMode: true,
             _draftActivity: b._draftActivity, _draftField: b._draftField
         }));
@@ -10130,9 +10199,11 @@
 
                             // If there's remaining space, create a sport slot for it
                             if (remainderEnd - remainderStart >= 25) {
+                                var _rhDur = remainderEnd - remainderStart;
+                                var _rhName = pickFillActivity(_rhDur, grade) || 'Free Time';
                                 sorted.push({
                                     startMin: remainderStart, endMin: remainderEnd,
-                                    type: 'slot', event: 'General Activity Slot',
+                                    type: 'slot', event: _rhName,
                                     layer: null, _classification: 'gap', _committed: true,
                                     _autoGenerated: true, _fixed: false, _source: 'self-heal',
                                     _sportFallbacks: null, _bunkOverride: true
