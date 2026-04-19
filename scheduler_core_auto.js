@@ -1553,26 +1553,47 @@
             nonPinnedLayers.forEach(layer => {
                 if ((layer.grade || layer.division) !== grade) return;
                 const t = (layer.type || '').toLowerCase();
-                const qty = parseInt(layer.qty || layer.quantity || 1, 10) || 1;
-                const opRaw = (layer.op || layer.operator || '>=').toString();
-                // Normalize: '≥'→'>=', '≤'→'<='
-                const op = opRaw === '≥' ? '>=' : opRaw === '≤' ? '<=' : opRaw;
+
+                // ── Operator + quantity parsing ───────────────────────────────────
+                // Accepts ALL of the following formats (separate OR combined fields):
+                //   Separate : layer.qty=2 + layer.op=">="  OR  layer.quantity=2 + layer.operator="≥"
+                //   Combined : layer.qty="1>" OR layer.op="2<" OR layer.operator="=1"
+                //   Shorthand: "1>" = at least 1  |  "=1" = exactly 1  |  "2<" = at most 2
+                //   Strict   : ">" treated as ">=" | "<" treated as "<="
+                const _qRaw = String(layer.qty  != null ? layer.qty  : (layer.quantity != null ? layer.quantity : ''));
+                const _oRaw = String(layer.op   != null ? layer.op   : (layer.operator != null ? layer.operator : ''));
+                const _combined = (_qRaw + _oRaw).trim();
+
+                // Extract operator and number from whatever combination was provided.
+                // Regex captures: (leading digits)(operator)(trailing digits)
+                // Handles: "1>", ">=2", "2<=", "≥1", "=1", "1=", ">", "<", "≤2", etc.
+                let qty, op;
+                const _m = _combined.match(/^(\d*)\s*(>=|<=|≥|≤|>|<|=)\s*(\d*)$/);
+                if (_m) {
+                    const _nb = _m[1], _opToken = _m[2], _na = _m[3];
+                    qty = parseInt(_nb || _na || '1', 10) || 1;
+                    // Normalize: Unicode and strict forms → ASCII >=/<=/=
+                    op  = (_opToken === '≥' || _opToken === '>') ? '>='
+                        : (_opToken === '≤' || _opToken === '<') ? '<='
+                        : _opToken; // '>=', '<=', '=' pass through unchanged
+                } else {
+                    // Fallback: plain number field + no recognizable operator → default >=
+                    qty = parseInt(_qRaw, 10) || 1;
+                    op  = '>=';
+                }
 
                 if (t === 'league' || t === 'specialty_league') {
                     if (timeline.some(b => (b.type || '').toLowerCase() === t)) return;
                 }
 
-                // ★ FIX: Operator semantics — separate FLOOR (drives planner to schedule
-                //   more) from CAP (terminates scheduling). Previously every op behaved
-                //   like '=' because all downstream loops compared against `required`,
-                //   the same value used to drive scheduling. Now:
-                //     >= N → floor=N, cap=Infinity (place at least N, no upper limit)
-                //     =  N → floor=N, cap=N        (place exactly N)
-                //     <= N → floor=0, cap=N        (place at most N, no minimum)
+                // ── Floor / cap semantics ─────────────────────────────────────────
+                //   N>  / ≥N / >=N  →  at least N  →  floor=N, cap=∞
+                //   =N              →  exactly   N  →  floor=N, cap=N
+                //   N<  / ≤N / <=N  →  at most  N  →  floor=0, cap=N
                 let floor, cap;
                 if (op === '<=') { floor = 0; cap = qty; }
                 else if (op === '=') { floor = qty; cap = qty; }
-                else { floor = qty; cap = Infinity; } // '>=' (default)
+                else { floor = qty; cap = Infinity; } // '>=' — at least N, no upper limit
 
                 const alreadyPlaced = placedTypes[t] || 0;
                 const stillNeeded = Math.max(0, floor - alreadyPlaced);
