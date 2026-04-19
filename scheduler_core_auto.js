@@ -7744,9 +7744,21 @@
                 //   iter 0:  [swim, league, special, snack]  → swim early, league mid
                 //   iter 3:  [league, swim, special, snack]  → league early, swim mid
                 // Each combination is a new structural hypothesis the tabu search can score.
-                const permutedOffField = typeOrderSeed
-                    ? seededShuffle(info.offField, (typeOrderSeed || 0) + idx * 97)
-                    : info.offField;
+                //
+                // ★ Oracle-guided first iteration: on iteration 0, use the utilization-optimal
+                // type ordering computed by FeasibilityOracle.optimizeTypeOrders(). This seeds
+                // the tabu search with the mathematically best starting structure instead of
+                // a random one, saving many wasted iterations exploring dominated orderings.
+                // Subsequent iterations use seeded permutation for diversity as normal.
+                var permutedOffField;
+                if (totalIters === 0 && _oracleTypeOrders && _oracleTypeOrders[grade] && _oracleTypeOrders[grade].length > 0) {
+                    // Use oracle-optimal ordering for the first iteration
+                    permutedOffField = _oracleTypeOrders[grade];
+                } else {
+                    permutedOffField = typeOrderSeed
+                        ? seededShuffle(info.offField, (typeOrderSeed || 0) + idx * 97)
+                        : info.offField;
+                }
 
                 // ★ v5.0b — Variable-width bands.
                 // Compute band widths proportional to expected activity durations so that
@@ -7824,6 +7836,46 @@
             initFieldLedger();
         }
 
+
+        // =====================================================================
+        // FEASIBILITY ORACLE — runs once before the iteration loop.
+        // Uses Hall's Marriage Theorem + Edmonds-Karp max-flow to determine
+        // in milliseconds whether a perfect schedule is mathematically possible.
+        // Also computes utilization heatmap used to guide the rotation matrix.
+        // =====================================================================
+        var _oracleResult = null;
+        var _oracleTypeOrders = {}; // grade → preferred off-field type ordering
+        if (typeof window.FeasibilityOracle !== 'undefined') {
+            try {
+                _oracleResult = window.FeasibilityOracle.check({
+                    allGrades:     allGrades,
+                    divisions:     divisions,
+                    layersByGrade: layersByGrade,
+                    globalSettings: globalSettings
+                });
+                window.FeasibilityOracle.report(_oracleResult);
+                // Pre-compute the utilization-optimal type ordering for each grade
+                if (_oracleResult && !_oracleResult.skipped) {
+                    _oracleTypeOrders = window.FeasibilityOracle.optimizeTypeOrders(
+                        allGrades, divisions, layersByGrade,
+                        _oracleResult.utilization, globalSettings
+                    );
+                    if (Object.keys(_oracleTypeOrders).length > 0) {
+                        log('[Oracle] Utilization-optimal type orders:');
+                        allGrades.forEach(function(g) {
+                            if (_oracleTypeOrders[g] && _oracleTypeOrders[g].length > 0)
+                                log('  ' + g + ': [' + _oracleTypeOrders[g].join(' → ') + ']');
+                        });
+                    }
+                    // Surface impossibility in a single clean warning line
+                    if (!_oracleResult.feasible) {
+                        warn('[Oracle] ⚠️  IMPOSSIBLE: schedule cannot be fully filled with current field config (' + _oracleResult.deficit + ' bunk-min short). See console for details.');
+                    }
+                }
+            } catch (_oe) {
+                warn('[Oracle] Error: ' + _oe.message + ' — skipping pre-solve analysis');
+            }
+        }
 
         // =====================================================================
         // ITERATION LOOP
