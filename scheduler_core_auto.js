@@ -9444,15 +9444,14 @@
                 });
             });
             console.log('[4.5-DBG] Indexed ' + totalIndexed + ' entries across ' + fieldMap.size + ' fields');
-            // Targeted dump for fields the validator flags but sweep misses
+            // Informational field-usage dump (silently skips fields unused today)
             ['outdoor court', 'field e', 'field d'].forEach(fname => {
                 const entries = fieldMap.get(fname);
                 if (entries && entries.length > 0) {
                     const detail = entries.map(e => e.bunk + '(' + e.grade + ')s' + e.idx + '@' + e.startMin + '-' + e.endMin).join(' | ');
                     console.log('[4.5-DUMP] "' + fname + '": ' + entries.length + ' entries → ' + detail);
-                } else {
-                    console.warn('[4.5-DUMP] "' + fname + '": NOT IN FIELDMAP');
                 }
+                // Not-in-fieldmap is expected when a field is simply unused today.
             });
 
            // ── Build field sharing lookup from globalSettings (authoritative source) ──
@@ -9475,8 +9474,36 @@
             });
 
         // ── A) Cross-division + capacity enforcement ──
+            //
+            // ★ v10.4 FIX A1: Only sweep entries where fieldNorm is a KNOWN PHYSICAL
+            // FIELD (present in _csweepFieldMap).  Sport names accidentally stored in
+            // entry.field (e.g. "Lineup", "Elbow Tag", "Trench") are not physical
+            // fields — they have no sharing config and produce spurious violations.
+            //
+            // ★ v10.4 FIX A2: Use EVENT-SWEEP peak simultaneous occupancy instead of
+            // raw overlapping.length.  Two bunks using the same field on a rolling
+            // (non-overlapping) schedule would both "overlap" a third bunk's window
+            // in the loose sense, yielding overlapping.length = 2 = cap even though
+            // the actual peak is only 2 simultaneously (which is valid).
+            // Algorithm: collect interval start/end events, sort, sweep — O(n log n).
+            function csweepPeakSimultaneous(intervals) {
+                const ev = [];
+                intervals.forEach(function(iv) {
+                    ev.push([iv.startMin, 1]);
+                    ev.push([iv.endMin, -1]);
+                });
+                // Sort: earlier time first; among ties, starts (+1) before ends (-1)
+                ev.sort(function(a, b) { return a[0] !== b[0] ? a[0] - b[0] : b[1] - a[1]; });
+                let cnt = 0, peak = 0;
+                ev.forEach(function(e) { cnt += e[1]; if (cnt > peak) peak = cnt; });
+                return peak;
+            }
+
             fieldMap.forEach((usages, fieldNorm) => {
-                const fieldSharing = _csweepFieldMap.get(fieldNorm) || {};
+                // ★ FIX A1: skip if not a known physical field
+                if (!_csweepFieldMap.has(fieldNorm)) return;
+
+                const fieldSharing = _csweepFieldMap.get(fieldNorm);
                 const shareType = fieldSharing.type || 'not_sharable';
                 const cap = fieldSharing.capacity || (shareType === 'not_sharable' ? 1 : 2);
                 for (let i = 0; i < usages.length; i++) {
@@ -9490,24 +9517,30 @@
                         o.startMin < u.endMin && o.endMin > u.startMin &&
                         postSolveSA[o.bunk]?.[o.idx]?.field !== 'Free'
                     );
+                    if (overlapping.length === 0) continue;
+
+                    // ★ FIX A2: peak simultaneous occupancy via event sweep
+                    const allIntervals = overlapping.map(o => ({ startMin: o.startMin, endMin: o.endMin }));
+                    allIntervals.push({ startMin: u.startMin, endMin: u.endMin });
+                    const peakCount = csweepPeakSimultaneous(allIntervals);
 
                     let violation = false;
-                    if (overlapping.length >= cap) violation = true;
+                    if (peakCount > cap) violation = true;
+                    // Cross-division check is independent of capacity
                     if (!violation && (shareType === 'not_sharable' || shareType === 'same_division') &&
                         overlapping.some(o => o.grade !== u.grade)) violation = true;
-                   if (!violation && shareType === 'custom') {
+                    if (!violation && shareType === 'custom') {
                         const allowed = fieldSharing.divisions || [];
                         if (allowed.length > 0) {
                             if (overlapping.some(o => o.grade !== u.grade && !allowed.includes(o.grade))) violation = true;
                             if (!violation && overlapping.length > 0 && !allowed.includes(u.grade)) violation = true;
                         } else {
-                            // Empty allowed list = treat as same_division
                             if (overlapping.some(o => o.grade !== u.grade)) violation = true;
                         }
                     }
                     if (violation) {
                         console.log('[4.5-VIOLATION] ' + fieldNorm + ': bunk ' + u.bunk + ' (' + u.grade + ') @ ' + u.startMin + '-' + u.endMin +
-                            ' | shareType=' + shareType + ' cap=' + cap +
+                            ' | shareType=' + shareType + ' cap=' + cap + ' peak=' + peakCount +
                             ' | overlaps=' + overlapping.map(o => o.bunk + '(' + o.grade + ')@' + o.startMin + '-' + o.endMin).join(', ') +
                             ' | sa._fixed=' + !!sa._fixed + ' _pinned=' + !!sa._pinned + ' _league=' + !!sa._league + ' _autoSpecial=' + !!sa._autoSpecial);
                         postSolveSA[u.bunk][u.idx] = {
@@ -9615,7 +9648,14 @@
                 for (var g in perfDivisions) {
                     if ((perfDivisions[g].bunks || []).map(String).includes(String(bunk))) { grade = g; break; }
                 }
-                var pbs = perfDT[grade]?._perBunkSlots?.[bunk] || perfDT[grade] || [];
+                // ★ FIX v10.4 Bug-C: DivisionTimesSystem.build() (Step 2.7 final) overwrites
+                // window.divisionTimes without preserving _perBunkSlots, so
+                // perfDT[grade]._perBunkSlots is undefined here.  The optimizer-loop
+                // Step 2.7 populated window._perBunkSlots[grade][bunk] and that global
+                // survives.  Use it as primary source; fall back to perfDT if present.
+                var pbs = window._perBunkSlots?.[grade]?.[bunk]
+                    || perfDT[grade]?._perBunkSlots?.[bunk]
+                    || [];
 
                 slots.forEach(function(slotEntry, idx) {
                     if (!slotEntry || slotEntry.field !== 'Free') return;
