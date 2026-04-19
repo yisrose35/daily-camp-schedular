@@ -87,10 +87,13 @@
                 if (!fieldsBySport[sportName]) fieldsBySport[sportName] = [];
                 const rawType = f.sharableWith?.type || 'same_division';
                 const divs = f.sharableWith?.divisions || [];
-                // Normalize: custom with empty divisions = same_division
+                // Normalize: custom with empty divisions = same_division.
+                // ★ v12.1: 'all' was incorrectly collapsed to 'same_division', which
+                // silently blocked cross-grade sharing even when the field was configured
+                // to allow it.  Keep 'all' as-is so the capacity check at line ~214
+                // applies without the cross-grade block at line ~202.
                 let shareType = rawType;
                 if (shareType === 'custom' && divs.length === 0) shareType = 'same_division';
-                if (shareType === 'all') shareType = 'same_division';
                 fieldsBySport[sportName].push({
                     name: f.name,
                     capacity: parseInt(f.sharableWith?.capacity) || parseInt(f.capacity) || 2,
@@ -769,6 +772,11 @@
         const bfsFixed = bfsAugmentingRepair(config);
         free = Math.max(0, free - bfsFixed);
 
+        // ★ v12.1: Colocate pass — aggressive sharing for any blocks still Free ──
+        const { candidates: colocCands } = buildCandidates(config);
+        const colocFixed = colocateFreeBlocks(colocCands);
+        free = Math.max(0, free - colocFixed);
+
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
         log('╔═══════════════════════════════════════════════════════════╗');
         log('║  SOLVE COMPLETE in ' + elapsed + 's');
@@ -777,6 +785,7 @@
         if (lnsFixed > 0)      log('║  ' + lnsFixed + ' Free blocks recovered by LNS');
         if (ejectionFixed > 0) log('║  ' + ejectionFixed + ' Free blocks recovered by ejection chains');
         if (bfsFixed > 0)      log('║  ' + bfsFixed + ' Free blocks recovered by BFS augmenting');
+        if (colocFixed > 0)    log('║  ' + colocFixed + ' Free blocks recovered by colocate (sharing)');
         log('╚═══════════════════════════════════════════════════════════╝');
 
         return { filled, free, elapsed, dupFixes, lnsFixed, ejectionFixed, bfsFixed };
@@ -1186,6 +1195,87 @@
             }
         }
         return false;
+    }
+
+    // =========================================================================
+    // ★ v12.1: COLOCATE PASS — Aggressive sharing
+    // =========================================================================
+    // After the primary solve, some blocks remain Free because every candidate
+    // field was at capacity or unavailable for that bunk.  However, many fields
+    // have spare capacity (cap > 1) that the solver never exploited because it
+    // assigns bunks independently.
+    //
+    // This pass reverses the logic: instead of asking "which field can I get?",
+    // it asks "who is already on a field with remaining capacity, and can I join?"
+    //
+    // Algorithm:
+    //   1. Build a map of (field, timeWindow) → [current occupants + capacity]
+    //   2. For each Free block, check every occupied field-time that overlaps
+    //      the block's time, in the same or compatible grade
+    //   3. If capacity remains and sharing rules allow, assign this bunk to
+    //      the same field/sport as the existing occupant
+    //
+    // This is intentionally MORE aggressive than tryDirectFill, which only looks
+    // at the candidate list (fields pre-filtered for the sport type). Here we
+    // look at everything that is already placed.
+    // =========================================================================
+    function colocateFreeBlocks(candidates) {
+        const sa = window.scheduleAssignments || {};
+        const freeBlocks = collectFreeBlocks();
+        if (freeBlocks.length === 0) return 0;
+
+        const fieldIndex = buildFieldTimeIndex();
+
+        // Build a quick lookup: field → candidate config (for shareType/capacity)
+        const candByField = {};
+        candidates.forEach(c => {
+            if (!candByField[normName(c.field)]) candByField[normName(c.field)] = c;
+        });
+
+        let fixed = 0;
+        for (const fb of freeBlocks) {
+            let placed = false;
+            // Walk every field that has at least one occupant overlapping fb's window
+            for (const [fn, entries] of fieldIndex) {
+                if (placed) break;
+                const overlapping = entries.filter(e =>
+                    e.startMin < fb.endMin && e.endMin > fb.startMin && e.bunk !== fb.bunk
+                );
+                if (overlapping.length === 0) continue;
+
+                const cand = candByField[fn];
+                if (!cand) continue; // field not in candidate list for any known sport
+
+                // Check sharing rules and capacity
+                if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
+
+                // Don't repeat same activity this bunk already has today
+                const doneToday = new Set();
+                (sa[fb.bunk] || []).forEach((e, i) => {
+                    if (i === fb.slotIdx || !e || e.continuation) return;
+                    const act = normName(e._activity || e.sport || e.field);
+                    if (act && act !== 'free' && act !== 'free play') doneToday.add(act);
+                });
+                if (doneToday.has(cand.sportNorm)) continue;
+
+                // Place it — co-locate with the existing occupant(s)
+                sa[fb.bunk][fb.slotIdx] = {
+                    field: cand.field, sport: cand.sport, _activity: cand.sport,
+                    _autoMode: true, _autoSolved: true, _colocated: true, continuation: false,
+                    _startMin: fb.startMin, _endMin: fb.endMin
+                };
+                if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
+                fieldIndex.get(fn).push({
+                    startMin: fb.startMin, endMin: fb.endMin,
+                    bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx,
+                    activity: cand.sportNorm
+                });
+                fixed++;
+                placed = true;
+            }
+        }
+        if (fixed > 0) log('Colocate pass: ' + fixed + ' Free block(s) filled via aggressive sharing');
+        return fixed;
     }
 
     function lnsRepair(config) {
@@ -1898,6 +1988,7 @@
         lnsRepair,               // CP-SAT: large neighbourhood search (single-swap)
         ejectionChainRepair,     // Timetabling: multi-hop ejection chains + tabu (DFS)
         bfsAugmentingRepair,     // ★ v11.0: Hopcroft-Karp BFS shortest augmenting paths
+        colocateFreeBlocks,      // ★ v12.1: Aggressive sharing — piggyback on placed fields
         report,
         // Expose for scheduler_core_auto.js to call
         solveSchedule: function(activityBlocks, config) {

@@ -553,7 +553,7 @@
         // CEL — CONSTRAINT ENFORCEMENT LAYER
         // =====================================================================
         const GAP_MIN_DUR = 20;
-        const GAP_MAX_DUR = 60;
+        const GAP_MAX_DUR = 90;  // ★ v12.1: raised from 60 → 90 to prefer fewer, longer sport blocks
         const CONTENTION_SLICE = 10;
 
         const TYPE_FLOORS = {
@@ -7146,6 +7146,13 @@
             // Base threshold
             var threshold = BASE_STALE_STOP;
 
+            // ★ v12.1: In early iterations (<15) every run has a brand-new structural
+            // ordering (typeOrderSeed = iter * 7919), so stale patience should be higher —
+            // a 'stale' iteration may simply be exploring a valid but different structure.
+            if (totalIters < 15) {
+                threshold = Math.min(MAX_ITERATIONS, threshold + 3);
+            }
+
             // If we have elites and the best is very good, be less patient
             if (elitePool.length >= 3) {
                 var bestElite = elitePool[0].score;
@@ -7161,7 +7168,7 @@
 
             // If recent improvement rate is high, be more patient
             if (totalIters > 5 && staleCount === 0) {
-                threshold = Math.min(12, threshold + 2);
+                threshold = Math.min(14, threshold + 2);
             }
 
             return threshold;
@@ -7399,6 +7406,27 @@
                             }
                         });
                     }
+                }
+            });
+
+            // ★ v12.1: FRAGMENTATION PENALTY
+            // Penalize bunks that have many small sport/slot blocks where a single
+            // larger block could have covered the same time.  Each extra block beyond
+            // what is needed (totalSportMin / GAP_MAX_DUR, rounded up) costs 200 pts.
+            // This steers the tabu search toward solutions with fewer, longer activities
+            // and preserves more unique-sport variety for later in the day.
+            Object.entries(timelines).forEach(([bunk, timeline]) => {
+                const sportBlocks = timeline.filter(b => {
+                    const t = (b.type || '').toLowerCase();
+                    return t === 'sport' || t === 'slot';
+                });
+                if (sportBlocks.length < 2) return;
+                const totalSportMin = sportBlocks.reduce((s, b) => s + (b.endMin - b.startMin), 0);
+                const idealBlockCount = Math.ceil(totalSportMin / GAP_MAX_DUR);
+                const extraBlocks = sportBlocks.length - idealBlockCount;
+                if (extraBlocks > 0) {
+                    var _fp = extraBlocks * 200;
+                    score += _fp; bd.sportVariety += _fp;
                 }
             });
 
@@ -7774,10 +7802,11 @@
         let todaysSwimmers = {};
 
         do {
-            // ★ v5.0: typeOrderSeed changes every 3 iterations so the tabu search
-            // explores genuinely different structural orderings (e.g. swim-early vs
-            // swim-late) rather than just reshuffling which grade fills which band.
-            const _typeOrderSeed = Math.floor(totalIters / 3) * 7919 + 1;
+            // ★ v12.1: Every iteration gets a unique type-order seed so the tabu search
+            // explores a structurally different day layout each time — not just a reshuffled
+            // grade assignment within the same ordering.  Using a large prime stride ensures
+            // no two iterations within 35 repeats accidentally pick the same permutation.
+            const _typeOrderSeed = totalIters * 7919 + 1;
             staggerPlan = buildRotationMatrix(allGrades, _iterSeed, _typeOrderSeed);
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
 
