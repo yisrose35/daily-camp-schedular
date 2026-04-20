@@ -3,17 +3,22 @@
 // =============================================================================
 //
 // Globally-optimal multi-vehicle VRP using Geoapify's Route Planner API.
-// Handles all buses + all stops in ONE request — far better than any
-// per-zone greedy approach.
 //
 // API:   https://api.geoapify.com/v1/routeplanner
 // Docs:  https://apidocs.geoapify.com/docs/route-optimization/
 //
 // Auth:  API key (works directly from browser — no OAuth needed)
-// Limit: async mode supports up to 1,000 locations per request
-// Cost:  ~2,990 credits for a 580-stop / 18-bus run (≈ free tier limit of 3,000/day)
 //
-// Async flow:
+// Free-tier limits:
+//   • 300 total coordinates per request (stops + buses)
+//   • 300,000,000 meters estimated sum distance
+//
+// Large runs are handled via geographic pre-splitting:
+//   Stops are sorted by bearing from camp and divided into wedge-shaped groups,
+//   each under the 300-coord and 300M-meter limits.  Each group is optimized
+//   independently with a proportional share of buses, then results are merged.
+//
+// Async flow (used when totalLocations > 200):
 //   1. POST request → 202 Accepted, body contains { id, status, url }
 //   2. Poll GET {url} every 2s until status === "finished"
 //   3. Parse GeoJSON FeatureCollection → routes in app format
@@ -27,6 +32,10 @@ window.GoGeoapifyOptimizer = (function () {
     const ENDPOINT = 'https://api.geoapify.com/v1/routeplanner';
     const POLL_MS  = 2000;   // 2s between status polls
     const MAX_WAIT = 180000; // 3 minutes max wait
+
+    // Free-tier hard limits.  Leave headroom so we never hit the wall.
+    const MAX_STOPS_PER_REQUEST = 120; // 120 stops + up to 20 buses = 140 coords, ~120M sum dist
+    const MAX_COORDS_PER_REQUEST = 280; // absolute location count cap (stops + buses)
 
     // -------------------------------------------------------------------------
     // isConfigured() — true if API key is present
@@ -56,22 +65,110 @@ window.GoGeoapifyOptimizer = (function () {
         if (!stops.length)       { console.warn('[Geoapify] No stops');           return null; }
         if (!vehicles.length)    { console.warn('[Geoapify] No vehicles');        return null; }
 
+        // ── Geographic pre-split when too many stops for free-tier limits ──
+        // The free plan caps at 300 coords AND ~300M meters sum distance.
+        // 281 stops / 18 buses = 299 coords and ~558M meters → always fails.
+        // Solution: divide stops into wedge-shaped angular groups from camp,
+        // optimize each group with a proportional share of buses, then merge.
+        if (stops.length > MAX_STOPS_PER_REQUEST || stops.length + vehicles.length > MAX_COORDS_PER_REQUEST) {
+            return await _splitAndOptimize(options);
+        }
+
+        return await _singleRequest(options);
+    }
+
+    // -------------------------------------------------------------------------
+    // _splitAndOptimize — divide stops into geographic groups, optimize each
+    // -------------------------------------------------------------------------
+    async function _splitAndOptimize(options) {
+        const { stops, vehicles, campLat, campLng, apiKey } = options;
+
+        // Number of groups needed to keep each group under MAX_STOPS_PER_REQUEST
+        const numGroups = Math.ceil(stops.length / MAX_STOPS_PER_REQUEST);
+        console.log('[Geoapify] ' + stops.length + ' stops exceed single-request limit — ' +
+            'splitting into ' + numGroups + ' geographic groups');
+
+        // Sort stops by bearing from camp so each group is a contiguous wedge
+        const sorted = stops.slice().sort(function (a, b) {
+            const bA = Math.atan2(a.lng - campLng, a.lat - campLat);
+            const bB = Math.atan2(b.lng - campLng, b.lat - campLat);
+            return bA - bB;
+        });
+
+        // Divide stops evenly across groups
+        const chunkSize = Math.ceil(sorted.length / numGroups);
+        const stopGroups = [];
+        for (let i = 0; i < sorted.length; i += chunkSize) {
+            stopGroups.push(sorted.slice(i, i + chunkSize));
+        }
+
+        // Allocate buses proportionally by camper count in each group
+        const vehicleGroups = _allocateVehicles(vehicles, stopGroups);
+
+        // Optimize each group sequentially (API rate-limit friendly)
+        const allRoutes = [];
+        for (let i = 0; i < stopGroups.length; i++) {
+            const gStops = stopGroups[i];
+            const gVehs  = vehicleGroups[i];
+            console.log('[Geoapify] Group ' + (i + 1) + '/' + numGroups +
+                ': ' + gStops.length + ' stops, ' + gVehs.length + ' buses (' +
+                (gStops.length + gVehs.length) + ' coords)');
+            const groupRoutes = await _singleRequest(Object.assign({}, options, {
+                stops:    gStops,
+                vehicles: gVehs
+            }));
+            if (groupRoutes && groupRoutes.length) {
+                allRoutes.push.apply(allRoutes, groupRoutes);
+            } else {
+                console.warn('[Geoapify] Group ' + (i + 1) + ' returned no routes');
+            }
+        }
+
+        console.log('[Geoapify] Split-optimize complete: ' + allRoutes.length + ' total routes');
+        return allRoutes.length ? allRoutes : null;
+    }
+
+    // -------------------------------------------------------------------------
+    // _allocateVehicles — split vehicle array proportionally by camper count
+    // -------------------------------------------------------------------------
+    function _allocateVehicles(vehicles, stopGroups) {
+        const groupCampers = stopGroups.map(function (g) {
+            return g.reduce(function (s, st) { return s + st.campers.length; }, 0);
+        });
+        const totalCampers = groupCampers.reduce(function (s, n) { return s + n; }, 0);
+        const result = stopGroups.map(function () { return []; });
+        let vIdx = 0;
+
+        for (let g = 0; g < stopGroups.length; g++) {
+            const isLast  = g === stopGroups.length - 1;
+            const frac    = totalCampers > 0 ? groupCampers[g] / totalCampers : 1 / stopGroups.length;
+            const count   = isLast
+                ? vehicles.length - vIdx
+                : Math.max(1, Math.round(vehicles.length * frac));
+            const clamped = Math.min(count, vehicles.length - vIdx - (stopGroups.length - g - 1));
+            result[g] = vehicles.slice(vIdx, vIdx + Math.max(1, clamped));
+            vIdx += result[g].length;
+        }
+        return result;
+    }
+
+    // -------------------------------------------------------------------------
+    // _singleRequest — send one VRP request for a given set of stops + vehicles
+    // -------------------------------------------------------------------------
+    async function _singleRequest(options) {
+        const { stops, vehicles, campLat, campLng, isArrival, serviceTimeSec, apiKey } = options;
+
         const campCoord = [campLng, campLat]; // Geoapify uses [lng, lat]
 
         // ── Build agents (buses) ──
-        // Dismissal: start at camp, no fixed end (ends at last delivery)
-        // Arrival:   no fixed start (optimizer picks first pickup), end at camp
         const agents = vehicles.map(function (v) {
             const cap = v.capacity || 44;
-            const a = isArrival
+            return isArrival
                 ? { pickup_capacity:   cap, end_location:   campCoord }
                 : { delivery_capacity: cap, start_location: campCoord };
-            return a;
         });
 
         // ── Build jobs (stops) ──
-        // Each stop is one job with service time and passenger demand.
-        // Geoapify uses "delivery_amount" for drops-offs and "pickup_amount" for pick-ups.
         const jobs = stops.map(function (s) {
             const j = {
                 location: [s.lng, s.lat],
@@ -85,29 +182,14 @@ window.GoGeoapifyOptimizer = (function () {
             return j;
         });
 
-        const body = {
-            mode:   'drive',
-            agents: agents,
-            jobs:   jobs
-        };
+        const body = { mode: 'drive', agents: agents, jobs: jobs };
 
         const totalLocations = stops.length + vehicles.length;
-        const isAsync = totalLocations > 200; // use async mode when approaching sync limit
+        const isAsync = totalLocations > 200;
 
-        // Free-tier hard cap is 300 total coordinates (stops + buses).
-        // Paid async tier allows 1000, but free plan rejects above 300 even with &mode=async.
-        // Bail out early rather than waste a credit-counted API call that will always 400.
-        if (totalLocations > 300) {
-            console.warn('[Geoapify] ' + totalLocations + ' coordinates exceeds free-tier limit of 300 ' +
-                '(' + stops.length + ' stops + ' + vehicles.length + ' buses). ' +
-                'Falling back to NN split. Upgrade to a paid Geoapify plan for larger runs.');
-            return null;
-        }
+        console.log('[Geoapify] Sending ' + stops.length + ' stops + ' + vehicles.length +
+            ' buses (' + totalLocations + ' coords, ' + (isAsync ? 'async' : 'sync') + ')');
 
-        console.log('[Geoapify] ' + stops.length + ' stops, ' + vehicles.length + ' buses, ' +
-            totalLocations + ' locations — ' + (isAsync ? 'async' : 'sync') + ' mode');
-
-        // ── Submit request ──
         const url = ENDPOINT + '?apiKey=' + encodeURIComponent(apiKey) +
                     (isAsync ? '&mode=async' : '');
 
@@ -129,17 +211,16 @@ window.GoGeoapifyOptimizer = (function () {
             console.error('[Geoapify] Submit error:', msg);
             if (submitResp.status === 401) console.error('[Geoapify] 401 — check API key at https://myprojects.geoapify.com');
             if (submitResp.status === 402) console.error('[Geoapify] 402 — insufficient credits. Add credits at https://www.geoapify.com/pricing');
-            if (submitResp.status === 422) console.error('[Geoapify] 422 — request too large for sync mode. Try again (async will be used).');
+            if (submitResp.status === 422) console.error('[Geoapify] 422 — request too large for sync mode.');
             return null;
         }
 
-        // ── Poll for async result (or use sync result directly) ──
+        // ── Poll for async result or use sync result directly ──
         let result;
         if (isAsync && submitData?.id) {
             result = await _pollAsync(submitData, apiKey);
             if (!result) return null;
         } else {
-            // Sync response — result is in the response body directly
             result = submitData;
         }
 
@@ -148,7 +229,6 @@ window.GoGeoapifyOptimizer = (function () {
             return null;
         }
 
-        // ── Parse GeoJSON result → app route format ──
         return _parseResult(result, stops, vehicles, isArrival);
     }
 
@@ -156,7 +236,6 @@ window.GoGeoapifyOptimizer = (function () {
     // _pollAsync — poll the job status URL until finished
     // -------------------------------------------------------------------------
     async function _pollAsync(submitData, apiKey) {
-        // submitData may have a "url" or we can poll via /v1/routeplanner/{id}
         const statusUrl = submitData.url ||
             (ENDPOINT + '/' + submitData.id + '?apiKey=' + encodeURIComponent(apiKey));
 
@@ -186,7 +265,6 @@ window.GoGeoapifyOptimizer = (function () {
                 console.error('[Geoapify] Job failed:', pollData?.error || pollData?.message || 'unknown error');
                 return null;
             }
-            // status === 'running' or 'pending' — keep polling
         }
 
         console.error('[Geoapify] Timed out after ' + (MAX_WAIT / 1000) + 's');
@@ -199,9 +277,6 @@ window.GoGeoapifyOptimizer = (function () {
     function _parseResult(geojson, stops, vehicles, isArrival) {
         const routes = [];
 
-        // Each Feature in the collection is one agent's (bus's) complete route.
-        // Multiple features may exist per agent (one for the route geometry +
-        // others for waypoints). We only need the ones with `actions`.
         const agentFeatures = (geojson.features || []).filter(function (f) {
             return f.properties?.agent_index !== undefined &&
                    Array.isArray(f.properties?.actions);
@@ -212,7 +287,6 @@ window.GoGeoapifyOptimizer = (function () {
             const vehicle  = vehicles[agentIdx];
             if (!vehicle) continue;
 
-            // Extract ordered job indices from actions array
             const orderedStops = [];
             for (const action of (feat.properties.actions || [])) {
                 if (action.type !== 'job' && action.type !== 'pickup' && action.type !== 'delivery') continue;
@@ -231,8 +305,6 @@ window.GoGeoapifyOptimizer = (function () {
 
             if (!orderedStops.length) continue;
 
-            // Extract road-following polyline from MultiLineString geometry
-            // Geoapify returns [lng,lat] → convert to [lat,lng] for Leaflet
             let roadPts = null;
             if (feat.geometry?.type === 'MultiLineString') {
                 roadPts = feat.geometry.coordinates
@@ -244,21 +316,21 @@ window.GoGeoapifyOptimizer = (function () {
             }
 
             routes.push({
-                busId:            vehicle.busId,
-                busName:          vehicle.name,
-                busColor:         vehicle.color     || '#10b981',
-                monitor:          vehicle.monitor   || null,
-                counselors:       vehicle.counselors|| [],
-                stops:            orderedStops,
-                camperCount:      orderedStops.reduce(function (s, st) { return s + st.campers.length; }, 0),
-                _cap:             vehicle.capacity,
-                totalDuration:    Math.round((feat.properties.time || 0)),
-                _source:          'geoapify',
-                _roadPts:         roadPts   // road-following [lat,lng] array for map cache
+                busId:         vehicle.busId,
+                busName:       vehicle.name,
+                busColor:      vehicle.color      || '#10b981',
+                monitor:       vehicle.monitor    || null,
+                counselors:    vehicle.counselors || [],
+                stops:         orderedStops,
+                camperCount:   orderedStops.reduce(function (s, st) { return s + st.campers.length; }, 0),
+                _cap:          vehicle.capacity,
+                totalDuration: Math.round((feat.properties.time || 0)),
+                _source:       'geoapify',
+                _roadPts:      roadPts
             });
         }
 
-        // Handle unassigned jobs
+        // Handle unassigned jobs with cheapest-insert fallback
         const unassignedJobs = geojson.unassigned_jobs || [];
         if (unassignedJobs.length) {
             console.warn('[Geoapify] ' + unassignedJobs.length + ' unassigned stops — cheapest-insert fallback');
