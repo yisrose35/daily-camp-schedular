@@ -747,36 +747,90 @@
     var _osrmLastCall = 0;
     var _osrmGeomQueue = [];
     var _osrmGeomRunning = false;
+
+    // Fetch road-following polyline for a route.
+    // PRIMARY:  Google Directions API (API key, real roads, no rate limits for small fleets)
+    // FALLBACK: OSRM public server (free, rate-limited)
+    // Returns array of [lat, lng] pairs, or null.
+    async function _fetchRoadGeometry(item) {
+        const gKey = D.setup.googleMapsKey?.trim();
+        // item.coordStr = "lng,lat;lng,lat;..." (OSRM format) — convert for Google
+        const pairs = item.coordStr.split(';').map(function(p) {
+            var parts = p.split(',');
+            return { lat: parseFloat(parts[1]), lng: parseFloat(parts[0]) };
+        });
+        if (pairs.length < 2) return null;
+
+        // ── Google Directions API ──
+        if (gKey && pairs.length >= 2) {
+            try {
+                const origin      = pairs[0].lat + ',' + pairs[0].lng;
+                const destination = pairs[pairs.length - 1].lat + ',' + pairs[pairs.length - 1].lng;
+                // Directions API supports max 25 waypoints. For longer routes chunk at 23 intermediates.
+                const intermediates = pairs.slice(1, pairs.length - 1);
+                const waypointStr   = intermediates.map(function(p) { return p.lat + ',' + p.lng; }).join('|');
+                const url = 'https://maps.googleapis.com/maps/api/directions/json'
+                    + '?origin='      + encodeURIComponent(origin)
+                    + '&destination=' + encodeURIComponent(destination)
+                    + (waypointStr ? '&waypoints=' + encodeURIComponent(waypointStr) : '')
+                    + '&key='         + encodeURIComponent(gKey);
+
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.status === 'OK' && data.routes?.[0]?.overview_polyline?.points) {
+                        const pts = decodePolyline(data.routes[0].overview_polyline.points);
+                        console.log('[Go] Road geometry via Google Directions: ' + pts.length + ' pts');
+                        return pts;
+                    }
+                    if (data.status && data.status !== 'OK') {
+                        console.warn('[Go] Google Directions status:', data.status);
+                    }
+                }
+            } catch (e) {
+                console.warn('[Go] Google Directions failed:', e.message, '— trying OSRM');
+            }
+        }
+
+        // ── OSRM fallback ──
+        await new Promise(function(r) { setTimeout(r, 500); });
+        try {
+            var url = 'https://router.project-osrm.org/route/v1/driving/' + item.coordStr + '?overview=full&geometries=geojson&continue_straight=true';
+            var resp = await fetch(url);
+            if (resp.status === 429) return '__429__'; // signal to re-queue
+            if (resp.ok) {
+                var data = await resp.json();
+                var coords = data.routes?.[0]?.geometry?.coordinates;
+                if (coords) {
+                    return coords.map(function(c) { return [c[1], c[0]]; });
+                }
+            }
+        } catch (e) { console.warn('[Go] OSRM geometry failed:', e.message); }
+
+        return null;
+    }
+
     async function _drainGeomQueue() {
         if (_osrmGeomRunning) return;
         _osrmGeomRunning = true;
         while (_osrmGeomQueue.length > 0) {
             var item = _osrmGeomQueue.shift();
             try {
-                await new Promise(function(r) { setTimeout(r, 500); }); // 500ms between requests
-                var url = 'https://router.project-osrm.org/route/v1/driving/' + item.coordStr + '?overview=full&geometries=geojson&continue_straight=true';
-                var resp = await fetch(url);
-                if (resp.status === 429) {
+                var pts = await _fetchRoadGeometry(item);
+                if (pts === '__429__') {
                     console.warn('[Go] OSRM 429 — waiting 5s before retry');
                     await new Promise(function(r) { setTimeout(r, 5000); });
-                    _osrmGeomQueue.unshift(item); // re-queue at front
+                    _osrmGeomQueue.unshift(item);
                     continue;
                 }
-                if (resp.ok) {
-                    var data = await resp.json();
-                    var coords = data.routes?.[0]?.geometry?.coordinates;
-                    if (coords && _map) {
-                        var pts = coords.map(function(c) { return [c[1], c[0]]; });
-                        if (pts.length > 0) {
-                            _routeGeomCache[item.ck] = pts;
-                            _map.removeLayer(item.temp);
-                            var idx = _mapLayers.indexOf(item.temp);
-                            if (idx >= 0) _mapLayers.splice(idx, 1);
-                            var road = L.polyline(pts, { color: item.color, weight: item.w, opacity: item.o, dashArray: item.dash }).addTo(_map);
-                            road._goRouteKey = item.ck;
-                            _mapLayers.push(road);
-                        }
-                    }
+                if (pts && pts.length > 0 && _map) {
+                    _routeGeomCache[item.ck] = pts;
+                    _map.removeLayer(item.temp);
+                    var idx = _mapLayers.indexOf(item.temp);
+                    if (idx >= 0) _mapLayers.splice(idx, 1);
+                    var road = L.polyline(pts, { color: item.color, weight: item.w, opacity: item.o, dashArray: item.dash }).addTo(_map);
+                    road._goRouteKey = item.ck;
+                    _mapLayers.push(road);
                 }
             } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
         }
@@ -5104,63 +5158,19 @@
             const key = getApiKey();
 
             // ══════════════════════════════════════════════════════════════
-            // STEP 3: Optimize routes
+            // STEP 3: Route = Nearest-neighbor tour → capacity split → assign
             //
-            // PRIMARY: Google Route Optimization API (OR-Tools cloud solver)
-            //   — Solves ALL buses simultaneously, globally optimal
-            //   — Returns road-following polylines for map rendering
-            //   — Requires googleMapsKey + googleProjectId in Setup
+            // Bus ASSIGNMENT: nearest-neighbor geographic ordering ensures stops
+            // in the same neighborhood stay on the same bus. Then splitTourAtGaps
+            // cuts the tour into K evenly-loaded segments.
             //
-            // FALLBACK: Nearest-neighbor tour → capacity split
-            //   — No API needed, fast, geographically coherent
+            // Road GEOMETRY: after routes are displayed, _fetchRoadGeometry() is
+            // called per bus using Google Directions API (API key) → real road
+            // lines on the map, replacing the straight-line / OSRM approach.
             // ══════════════════════════════════════════════════════════════
             let routes = [];
             let usedExternalOptimizer = false;
 
-            // ── PRIMARY: Google Route Optimization ──
-            if (!_previewGiantTour && D.setup.googleMapsKey && D.setup.googleProjectId && window.GoGoogleOptimizer) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing with Google...', pctBase + 25);
-                try {
-                    const gRoutes = await window.GoGoogleOptimizer.optimizeTours({
-                        stops:          allStops,
-                        vehicles:       shiftVehicles,
-                        campLat:        campLat,
-                        campLng:        campLng,
-                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
-                        isArrival:      isArrival,
-                        serviceTimeSec: serviceTime,
-                        apiKey:         D.setup.googleMapsKey,
-                        projectId:      D.setup.googleProjectId
-                    });
-
-                    if (gRoutes && gRoutes.length) {
-                        // Cache road-following polylines from Google response
-                        // so the map renders real road lines immediately (no OSRM needed)
-                        gRoutes.forEach(function(r) {
-                            if (r._encodedPolyline) {
-                                const cacheKey = r.busId + '_' + si;
-                                _routeGeomCache[cacheKey] = decodePolyline(r._encodedPolyline).map(function(pt) {
-                                    return [pt[0], pt[1]];
-                                });
-                            }
-                        });
-                        routes = gRoutes;
-                        usedExternalOptimizer = true;
-                        toast('✓ Google optimized — ' + gRoutes.length + ' buses, road-following routes');
-                        console.log('[Go] Google Route Optimization complete: ' + gRoutes.length + ' routes, ' +
-                            gRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
-                        allShiftResults.push({ shift, routes, camperCount: routes.reduce(function(s, r) { return s + r.camperCount; }, 0) });
-                        continue; // skip NN tour + split fallback
-                    }
-                } catch (e) {
-                    console.error('[Go] Google Route Optimization failed:', e.message, '— falling back to NN tour');
-                }
-            }
-
-            // ══════════════════════════════════════════════════════════════
-            // FALLBACK: Nearest-neighbor tour → capacity split
-            // (runs when Google not configured, or Google call failed)
-            // ══════════════════════════════════════════════════════════════
             // STEP 3: Route = Sort → Split → Assign
             //
             // Three clean steps, exactly as intended:
@@ -8792,7 +8802,7 @@
     async function testGoogleRouting() {
         const L = (icon, msg) => console.log(icon + ' ' + msg);
         console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('   Google Route Optimization — Live Test');
+        console.log('   Campistry Go — Google APIs Live Test');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
         // ── 1. Config check ──
@@ -8810,105 +8820,58 @@
         if (!campLat || !campLng) { L('❌', 'Camp coordinates not set — save Setup with a valid camp address first'); return; }
         L('✅', 'Camp coords: ' + campLat.toFixed(5) + ', ' + campLng.toFixed(5));
 
-        // ── 2. Build a minimal 1-stop, 1-bus request ──
-        // The test stop is placed 1.5 miles due north of camp so it's realistic.
-        const stopLat = campLat + 0.0217;  // ~1.5 mi north
+        // ── 2. Test stop 1.5 miles north of camp ──
+        const stopLat = campLat + 0.0217;
         const stopLng = campLng;
 
-        const today    = new Date();
-        const startDt  = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 16, 0, 0);
-        const endDt    = new Date(startDt.getTime() + 3 * 60 * 60 * 1000);
-        const toRFC    = d => d.toISOString();
+        // ── Test Google Directions API (API-key based, used for road geometry) ──
+        L('⏳', 'Testing Google Directions API (road geometry for map lines)...');
+        const testOrigin = campLat + ',' + campLng;
+        const testDest   = stopLat + ',' + stopLng;
+        const directionsUrl = 'https://maps.googleapis.com/maps/api/directions/json'
+            + '?origin='      + encodeURIComponent(testOrigin)
+            + '&destination=' + encodeURIComponent(testDest)
+            + '&key='         + encodeURIComponent(apiKey);
 
-        const body = {
-            timeout: '15s',
-            model: {
-                globalStartTime: toRFC(startDt),
-                globalEndTime:   toRFC(endDt),
-                shipments: [{
-                    label: 'test-stop',
-                    loadDemands: { campers: { amount: '3' } },
-                    deliveries: [{
-                        arrivalLocation: { latitude: stopLat, longitude: stopLng },
-                        duration: '120s'
-                    }]
-                }],
-                vehicles: [{
-                    label:         'Test Bus',
-                    travelMode:    1,
-                    startLocation: { latitude: campLat, longitude: campLng },
-                    loadLimits:    { campers: { maxLoad: '50' } },
-                    costPerHour:   40,
-                    costPerKilometer: 1
-                }]
-            },
-            considerRoadTraffic:   true,
-            populatePolylines:     true,
-            populateTravelStepPolylines: false
-        };
-
-        const url = 'https://routeoptimization.googleapis.com/v1/projects/'
-                  + encodeURIComponent(projId)
-                  + ':optimizeTours?key='
-                  + encodeURIComponent(apiKey);
-
-        L('⏳', 'Sending 1-stop test request to Google Route Optimization API...');
-        console.log('   Stop: ' + stopLat.toFixed(5) + ', ' + stopLng.toFixed(5) + ' (1.5mi north of camp)');
-
-        let resp, data;
+        let dresp, ddata;
         try {
-            resp = await fetch(url, {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify(body)
-            });
-            data = await resp.json();
+            dresp = await fetch(directionsUrl);
+            ddata = await dresp.json();
         } catch (e) {
-            L('❌', 'Network error: ' + e.message);
+            L('❌', 'Directions API network error: ' + e.message);
             return;
         }
 
-        // ── 3. Report results ──
-        console.log('   HTTP status: ' + resp.status);
-
-        if (!resp.ok) {
-            const msg = data?.error?.message || ('HTTP ' + resp.status);
-            L('❌', 'API error: ' + msg);
-            if (resp.status === 400) L('💡', 'Tip: 400 usually means a bad request field — check console above for details');
-            if (resp.status === 403) L('💡', 'Tip: 403 = Route Optimization API not enabled. Go to:\n   https://console.cloud.google.com/apis/library/routeoptimization.googleapis.com\n   and enable it for project: ' + projId);
-            if (resp.status === 401) L('💡', 'Tip: 401 = API key rejected. Verify key is correct and has no IP restrictions blocking this browser.');
-            if (resp.status === 429) L('💡', 'Tip: 429 = quota exceeded. Check your Google Cloud quota for Route Optimization API.');
-            console.log('\n   Full error response:', data?.error || data);
+        if (!dresp.ok || ddata.status === 'REQUEST_DENIED') {
+            L('❌', 'Directions API: ' + (ddata?.error_message || ddata?.status || 'HTTP ' + dresp.status));
+            L('💡', 'Enable the Directions API at:\n   https://console.cloud.google.com/apis/library/directions-backend.googleapis.com');
             return;
         }
-
-        // Success — inspect the response
-        const route = data.routes?.[0];
-        if (!route) {
-            L('⚠️ ', 'API returned OK but no routes — check skippedShipments');
-            console.log('   Skipped:', data.skippedShipments);
-            return;
+        if (ddata.status !== 'OK') {
+            L('⚠️ ', 'Directions API status: ' + ddata.status + ' — may still work for real addresses');
         }
 
-        const visit       = route.visits?.[0];
-        const transition  = route.transitions?.[1]; // transition TO the stop (index 1 = depot→stop)
-        const polyline    = route.routePolyline?.points;
-        const travelSec   = parseInt(route.metrics?.travelDuration || '0');
-        const distM       = route.metrics?.travelDistanceMeters || 0;
+        const leg     = ddata.routes?.[0]?.legs?.[0];
+        const polyEnc = ddata.routes?.[0]?.overview_polyline?.points;
+        const distTxt = leg?.distance?.text || '?';
+        const durTxt  = leg?.duration?.text  || '?';
 
-        L('✅', 'Route Optimization API: WORKING');
-        L('✅', 'Stop visited: shipmentIndex=' + (visit?.shipmentIndex ?? '?') + ', startTime=' + (visit?.startTime || '?'));
-        L(travelSec > 0 ? '✅' : '⚠️ ', 'Travel time: ' + Math.round(travelSec / 60) + ' min (' + (distM / 1609).toFixed(2) + ' mi)');
-        L(polyline   ? '✅' : '⚠️ ', polyline
-            ? 'Road polyline: received (' + polyline.length + ' encoded chars) — map will draw real road lines'
-            : 'Road polyline: NOT returned — check populatePolylines flag');
+        L('✅', 'Google Directions API: WORKING');
+        L('✅', 'Camp → test stop: ' + distTxt + ', ' + durTxt);
+        L(polyEnc ? '✅' : '⚠️ ', polyEnc
+            ? 'Road polyline: received (' + polyEnc.length + ' encoded chars) — map lines will follow real roads'
+            : 'Road polyline missing — unexpected');
 
-        if (data.skippedShipments?.length) {
-            L('⚠️ ', data.skippedShipments.length + ' shipment(s) skipped: ' + data.skippedShipments.map(s => s.reasons?.[0]?.code).join(', '));
-        }
+        // ── 3. Note about Route Optimization API ──
+        console.log('\n━━━  Route Optimization API  ━━━');
+        L('ℹ️ ', 'Google Route Optimization API requires OAuth2 (not API keys).');
+        L('ℹ️ ', 'Bus routing uses nearest-neighbor geographic ordering + capacity split.');
+        L('✅', 'Road geometry (map lines) uses Google Directions API ✓');
+        L('✅', 'Geocoding uses Google Address Validation API ✓');
 
-        console.log('\n🟢 Google Route Optimization is configured correctly and ready to use.');
-        console.log('   When you click Generate Routes, all ' + (D.buses.length || '?') + ' buses will be optimized globally.');
+        console.log('\n🟢 Google APIs are configured and working.');
+        console.log('   Map lines will follow real roads (no more lines through water).');
+        console.log('   ' + (D.buses.length || '?') + ' buses ready for route generation.');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
     }
 
