@@ -1102,9 +1102,9 @@
         if (coords.length > 100) return null;
 
         try {
-            // Rate limit OSRM route calls
+            // Rate limit OSRM route calls — public server allows ~1 req/sec
             var _now = Date.now(), _gap = _now - _osrmLastCall;
-            if (_gap < 200) await new Promise(function(r) { setTimeout(r, 200 - _gap); });
+            if (_gap < 1000) await new Promise(function(r) { setTimeout(r, 1000 - _gap); });
             _osrmLastCall = Date.now();
             const url = 'https://router.project-osrm.org/route/v1/driving/' +
                 coords.join(';') + '?annotations=duration&overview=false&steps=false';
@@ -5686,14 +5686,15 @@
             // trafficCache[busId] = [leg0_sec, leg1_sec, ...] or null
             const trafficCache = {};
             if (getMapboxToken()) {
-                const trafficPromises = routes.filter(r => r.stops.length > 0).map(async r => {
+                // Sequential — OSRM public server rate-limits to ~1 req/sec.
+                // Promise.all fires all 18 buses simultaneously and gets 429s.
+                for (const r of routes.filter(r => r.stops.length > 0)) {
                     const validStops = r.stops.filter(s => s.lat && s.lng);
                     if (validStops.length > 0) {
                         trafficCache[r.busId] = await fetchTrafficLegs(validStops, campLat, campLng, timeMin, isArrival);
                         if (trafficCache[r.busId]) r._trafficSource = true;
                     }
-                });
-                await Promise.all(trafficPromises);
+                }
                 const trafficCount = Object.values(trafficCache).filter(Boolean).length;
                 if (trafficCount > 0) console.log('[Go] Traffic-aware ETAs for ' + trafficCount + '/' + routes.length + ' routes');
             }
