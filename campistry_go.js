@@ -2281,7 +2281,9 @@
             const srcLabel = r.source ? ' via ' + r.source : '';
             const confTitle = (confPct ? confPct + ' confidence' + srcLabel : '') + (r.crossValidated ? ' [cross-validated]' : '');
             const badge = r.hasAddr ? (r.geocodeWarning ? '<span class="badge badge-danger" title="' + esc(r.geocodeWarning) + '">⚠ ' + esc(r.geocodeWarning.substring(0,30)) + '</span>' : r.geocoded ? (r.zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch' + (confTitle ? ' — ' + confTitle : '') + '">⚠ Check ZIP</span>' : r.confidence >= 0.8 ? '<span class="badge badge-success" title="' + esc(confTitle) + '">✓ ' + confPct + (r.crossValidated ? ' ✓✓' : '') + '</span>' : r.confidence >= 0.5 ? '<span class="badge badge-warning" title="' + esc(confTitle) + '">' + confPct + srcLabel + '</span>' : '<span class="badge badge-danger" title="' + esc(confTitle) + '">⚠ ' + confPct + '</span>') : validated ? '<span class="badge badge-warning">Verified, not geocoded</span>' : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
-            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (r.id ? '#' + String(r.id).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(r.last) + '</td><td>' + esc(r.first) + '</td><td>' + (esc(r.division) || '—') + '</td><td>' + (esc(r.grade) || '—') + '</td><td>' + (esc(r.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')">' + (r.hasAddr ? 'Edit' : 'Add') + '</button>' + (r.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + '</div></td></tr>';
+            const safeName = esc(r.name.replace(/'/g, "\\'"));
+            const deleteBtn = r.hasAddr ? '<button class="btn btn-ghost btn-sm" onclick="if(confirm(\'Delete address for ' + safeName + '?\'))CampistryGo._quickDeleteAddress(\'' + safeName + '\')" title="Delete address" style="color:var(--danger,#ef4444);font-size:.75rem;">🗑</button>' : '';
+            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (r.id ? '#' + String(r.id).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(r.last) + '</td><td>' + esc(r.first) + '</td><td>' + (esc(r.division) || '—') + '</td><td>' + (esc(r.grade) || '—') + '</td><td>' + (esc(r.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + safeName + '\')">' + (r.hasAddr ? 'Edit' : 'Add') + '</button>' + (r.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + safeName + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + deleteBtn + '</div></td></tr>';
         }).join('');
     }
     function updateAddrProgress(n, t) { const p = t > 0 ? Math.round(n / t * 100) : 0; document.getElementById('addressProgressBar').style.width = p + '%'; document.getElementById('addressProgressText').textContent = n + ' of ' + t + ' (' + p + '%)'; }
@@ -2350,6 +2352,8 @@
         // Arrival/Dismissal checkboxes (default true if not set)
         document.getElementById('addrArrival').checked = a._arrival !== false;
         document.getElementById('addrDismissal').checked = a._dismissal !== false;
+        const deleteBtn = document.getElementById('addrDeleteBtn');
+        if (deleteBtn) deleteBtn.style.display = D.addresses[name] ? 'inline-flex' : 'none';
         openModal('addressModal'); document.getElementById('addrStreet').focus();
     }
     async function saveAddress() {
@@ -2386,6 +2390,19 @@
         if (addrChanged) {
             geocodeOne(_editCamper).then(ok => { if (ok) { save(); renderAddresses(); } });
         }
+    }
+    function deleteAddress() {
+        if (!_editCamper) return;
+        if (!confirm('Delete all address data for ' + _editCamper + '?\n\nThis cannot be undone.')) return;
+        delete D.addresses[_editCamper];
+        save(); closeModal('addressModal'); renderAddresses(); updateStats();
+        toast(_editCamper + ': address deleted');
+    }
+    function _quickDeleteAddress(name) {
+        // Called directly from table row — confirmation already shown inline
+        delete D.addresses[name];
+        save(); renderAddresses(); updateStats();
+        toast(name + ': address deleted');
     }
 
     // =========================================================================
@@ -9108,7 +9125,7 @@
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
         acceptStaffAssign, denyStaffAssign, manualStaffAssign, acceptAllStaffSuggestions,
-        editAddress, saveAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
+        editAddress, saveAddress, deleteAddress, _quickDeleteAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck, testGoogleRouting, testGeoapify,
         generateRoutes, previewGiantTour, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
