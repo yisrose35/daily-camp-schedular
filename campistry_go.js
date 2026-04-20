@@ -164,6 +164,7 @@
     };
     let _editBusId = null, _editMonitorId = null, _editCounselorId = null, _editCamper = null;
     let _generatedRoutes = null;
+    let _previewGiantTour = false; // when true, skip split and render the full NN tour as one route
     let _toastTimer = null;
     const BUS_COLORS = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#06b6d4','#f97316','#8b5cf6','#14b8a6','#6366f1','#84cc16','#e11d48','#0ea5e9','#d946ef'];
     const STORE = 'campistry_go_data';
@@ -3416,6 +3417,7 @@
         document.getElementById('routeMode').value = D.setup.dropoffMode || 'door-to-door';
         document.getElementById('routeReserveSeats').value = D.setup.reserveSeats ?? 2;
         const btn = document.getElementById('generateRoutesBtn'); btn.disabled = !canGen; btn.style.opacity = canGen ? '1' : '0.5';
+        const prevBtn = document.getElementById('previewTourBtn'); if (prevBtn) { prevBtn.disabled = !canGen; prevBtn.style.opacity = canGen ? '1' : '0.5'; }
     }
 
     // =========================================================================
@@ -4199,7 +4201,15 @@
                 break;
             }
 
-            var busCap   = caps[bi];
+            // ── Dynamic target: spread kids evenly across ALL remaining buses ──
+            // e.g. 750 kids / 18 buses → target 42/bus (not 50 = busCap).
+            // This ensures all K buses get routes instead of stopping at capacity/totalKids.
+            var kidsInOrder  = order.reduce(function(s, st) { return s + st.campers.length; }, 0);
+            var busesLeft    = K - bi;
+            var targetKids   = Math.ceil(kidsInOrder / busesLeft);
+            var hardCap      = caps[bi];            // physical seat limit
+            var busCap       = Math.min(hardCap, targetKids); // soft-fill target
+
             var seg      = [];
             var deferred = []; // overflow stops held for next bus
             var cumKids  = 0;
@@ -5050,6 +5060,19 @@
     // ROUTING ENGINE v11.0 — Stops-first + Greedy zones + GH/VROOM
     // =========================================================================
 
+    // ── Preview Giant Tour ──
+    // Runs the full stop-creation + nearest-neighbor ordering pipeline but
+    // skips the split step. Renders all stops as one single route so you can
+    // visually verify the geographic ordering is sane before committing to cuts.
+    async function previewGiantTour() {
+        _previewGiantTour = true;
+        try {
+            await generateRoutes();
+        } finally {
+            _previewGiantTour = false;
+        }
+    }
+
     async function generateRoutes() {
         // Clear caches on each generation
         _intersectionCache = null;
@@ -5294,16 +5317,14 @@
             //
             //   Step 1 (done above): Create stops from camper addresses.
             //
-            //   Step 2 — ORDER: Sort ALL stops by driving distance from camp.
-            //     • Dismissal: nearest first → farthest last.
-            //       Stop 1 = closest to camp (kids there get off quickly).
-            //       Last stop = farthest (kids there have the longest ride,
-            //       but they also live the farthest away — that's fair).
-            //     • Arrival: farthest first → nearest last.
-            //       Stop 1 = farthest from camp (picked up first, longest ride
-            //       — but they live far).  Last pickup = nearest to camp
-            //       (shortest ride back).
-            //     No API call needed — pure distance sort.
+            //   Step 2 — ORDER: Build a nearest-neighbor tour through ALL stops.
+            //     • Dismissal: start at camp, always visit the closest unvisited
+            //       stop next.  Stops in the same neighborhood cluster together
+            //       naturally — no API call needed.
+            //     • Arrival: start at the farthest stop from camp, then nearest-
+            //       neighbor inward.  Same clustering benefit.
+            //     Result: a geographically coherent path — no zigzagging across
+            //     the map.  Runs in <200ms (O(N²) haversine cache lookups).
             //
             //   Step 3 — SPLIT: Cut the sorted list into K bus segments.
             //     splitTourAtGaps() cuts at the K-1 largest geographic gaps
@@ -5315,16 +5336,71 @@
             // ══════════════════════════════════════════════════════════════
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': ordering stops...', pctBase + 20);
 
-            // ── Step 2: Sort all stops by distance from camp ──
-            allStops.forEach(function(s) {
-                s._campDist = drivingDist(campLat, campLng, s.lat, s.lng);
-            });
-            // Dismissal: near → far  |  Arrival: far → near
-            allStops.sort(function(a, b) {
-                return isArrival ? b._campDist - a._campDist : a._campDist - b._campDist;
-            });
-            allStops.forEach(function(s) { delete s._campDist; });
-            console.log('[Go] Step 3a: ' + allStops.length + ' stops sorted by distance from camp (' + (isArrival ? 'far→near' : 'near→far') + ')');
+            // ── Step 2: Build a nearest-neighbor tour through ALL stops ──
+            //
+            // Pure distance sort is 1-dimensional: stops at the same distance from
+            // camp but in opposite directions (5mi north vs 5mi south) end up adjacent
+            // in the list, causing buses to zigzag across the map.
+            //
+            // Nearest-neighbor tour is 2-dimensional: each step visits the closest
+            // unvisited stop geographically, so stops in the same neighborhood
+            // naturally cluster together. When split, each bus gets a contiguous
+            // geographic corridor — no zigzagging.
+            //
+            // Dismissal: tour starts at camp, winds outward through neighborhoods.
+            // Arrival:   tour starts at the farthest stop, winds inward to camp.
+            // O(N²) but all cache lookups — runs in <200ms for 600 stops.
+            (function buildNNTour() {
+                var remaining = allStops.slice();
+                var tour = [];
+
+                // Arrival: find and anchor the farthest stop as first in tour
+                if (isArrival) {
+                    var fDist = 0, fIdx = 0;
+                    for (var fi = 0; fi < remaining.length; fi++) {
+                        var fd = drivingDist(campLat, campLng, remaining[fi].lat, remaining[fi].lng);
+                        if (fd > fDist) { fDist = fd; fIdx = fi; }
+                    }
+                    tour.push(remaining.splice(fIdx, 1)[0]);
+                }
+
+                while (remaining.length > 0) {
+                    var curLat = tour.length > 0 ? tour[tour.length - 1].lat : campLat;
+                    var curLng = tour.length > 0 ? tour[tour.length - 1].lng : campLng;
+                    var bestIdx = 0, bestD = Infinity;
+                    for (var ri = 0; ri < remaining.length; ri++) {
+                        var d = drivingDist(curLat, curLng, remaining[ri].lat, remaining[ri].lng);
+                        if (d < bestD) { bestD = d; bestIdx = ri; }
+                    }
+                    tour.push(remaining.splice(bestIdx, 1)[0]);
+                }
+
+                allStops = tour;
+            })();
+            console.log('[Go] Step 3a: ' + allStops.length + ' stops ordered via nearest-neighbor tour (' + (isArrival ? 'far→camp' : 'camp→far') + ')');
+
+            // ── Preview mode: skip split, render full tour as one giant route ──
+            if (_previewGiantTour) {
+                const totalKidsInTour = allStops.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                const giantRoute = {
+                    busId:       'giant-tour-preview',
+                    busName:     'Giant Tour — ' + allStops.length + ' stops · ' + totalKidsInTour + ' kids (unsplit)',
+                    busColor:    '#3b82f6',
+                    monitor:     null,
+                    counselors:  [],
+                    stops:       allStops.map(function(s, idx) {
+                        return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                    }),
+                    camperCount: totalKidsInTour,
+                    _cap:        9999,
+                    totalDuration: 0,
+                    _source:     'giant-tour-preview'
+                };
+                allShiftResults.push({ shift, routes: [giantRoute], camperCount: totalKidsInTour });
+                console.log('[Go] Preview mode — skipping split, rendering ' + allStops.length + ' stops as one route');
+                toast('👁 Giant tour preview — ' + allStops.length + ' stops in NN order (not split into buses)');
+                continue; // skip the rest of this shift's processing
+            }
 
             // ── Step 3: Split sorted stops into bus segments ──
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': splitting into bus routes...', pctBase + 40);
@@ -5368,7 +5444,7 @@
             if (builtRoutes.length) {
                 routes = builtRoutes;
                 usedExternalOptimizer = true;
-                toast('✓ Routes generated — ' + builtRoutes.length + ' buses, stops ordered near→far');
+                toast('✓ Routes generated — ' + builtRoutes.length + ' buses, geographically clustered routes');
                 console.log('[Go] Routing complete: ' + builtRoutes.length + ' routes, ' +
                     builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
             }
@@ -8873,7 +8949,7 @@
         editAddress, saveAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck,
-        generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
+        generateRoutes, previewGiantTour, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
         renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         setAddressPinMode, toggleHideRoutes, toggleZones,
         toggleAddressPins, showAddressesOnMap, locateCamper,
