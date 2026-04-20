@@ -873,10 +873,18 @@ return activity || field || '';    }
         const app1 = settings.app1 || {};
         const locations = [];
         (app1.fields || []).forEach(f => {
-            if (f.name && f.available !== false) locations.push({ name: f.name, type: 'field', capacity: f.sharableWith?.capacity || 1 });
+            if (f.name && f.available !== false) locations.push({
+                name: f.name, type: 'field',
+                capacity: f.sharableWith?.capacity || 1,
+                activities: f.activities || []
+            });
         });
         (app1.specialActivities || []).forEach(s => {
-            if (s.name) locations.push({ name: s.name, type: 'special', capacity: s.sharableWith?.capacity || 1 });
+            if (s.name) locations.push({
+                name: s.name, type: 'special',
+                capacity: s.sharableWith?.capacity || 1,
+                activities: [s.name]
+            });
         });
         return locations;
     }
@@ -3026,7 +3034,9 @@ if (bypassStatus.highlight) {
                 currentActivity = entry._activity || currentField || currentValue; 
             }
         }
-        modal.innerHTML = `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;"><h2 style="margin: 0; font-size: 1.25rem; color: #1f2937;">Edit Schedule Cell</h2><button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #9ca3af;">&times;</button></div><div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;"><div style="font-weight: 600; color: #374151;">${escapeHtml(bunk)}</div><div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div></div><div style="display: flex; flex-direction: column; gap: 16px;"><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Activity Name</label><input type="text" id="post-edit-activity" value="${escapeHtml(currentActivity)}" placeholder="e.g., Basketball" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;"><div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">Enter CLEAR or FREE to empty</div></div><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Location / Field</label><select id="post-edit-location" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: white;"><option value="">-- No specific location --</option><optgroup label="Fields">${locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`).join('')}</optgroup><optgroup label="Special Activities">${locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`).join('')}</optgroup></select></div><div id="post-edit-conflict" style="display: none;"></div><div style="display: flex; gap: 12px; margin-top: 8px;"><button id="post-edit-cancel" style="flex: 1; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 1rem; cursor: pointer; font-weight: 500;">Cancel</button><button id="post-edit-save" style="flex: 1; padding: 12px; border: none; border-radius: 8px; background: #2563eb; color: white; font-size: 1rem; cursor: pointer; font-weight: 500;">Save Changes</button></div></div>`;
+        // Build datalist of all possible activities across all locations
+        const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
+        modal.innerHTML = `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;"><h2 style="margin: 0; font-size: 1.25rem; color: #1f2937;">Edit Schedule Cell</h2><button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #9ca3af;">&times;</button></div><div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;"><div style="font-weight: 600; color: #374151;">${escapeHtml(bunk)}</div><div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div></div><div style="display: flex; flex-direction: column; gap: 16px;"><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Location / Field</label><select id="post-edit-location" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: white;"><option value="">-- No specific location --</option><optgroup label="Fields">${locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`).join('')}</optgroup><optgroup label="Special Activities">${locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`).join('')}</optgroup></select></div><div id="post-edit-activity-picker" style="margin-top: 4px; display: none;"></div><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; margin-top: 12px;">Activity Name</label><input type="text" id="post-edit-activity" list="post-edit-activity-list" value="${escapeHtml(currentActivity)}" placeholder="e.g., Basketball" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;"><datalist id="post-edit-activity-list">${allActivities.map(a => `<option value="${escapeHtml(a)}">`).join('')}</datalist><div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">Enter CLEAR or FREE to empty this slot</div></div><div id="post-edit-conflict" style="display: none;"></div><div style="display: flex; gap: 12px; margin-top: 8px;"><button id="post-edit-cancel" style="flex: 1; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 1rem; cursor: pointer; font-weight: 500;">Cancel</button><button id="post-edit-save" style="flex: 1; padding: 12px; border: none; border-radius: 8px; background: #2563eb; color: white; font-size: 1rem; cursor: pointer; font-weight: 500;">Save Changes</button></div></div>`;
         
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
@@ -3065,7 +3075,39 @@ if (bypassStatus.highlight) {
             }
         }
         
-        locationSelect.addEventListener('change', checkAndShowConflicts);
+        // Activity auto-fill: when location changes, suggest its activities
+        function updateActivityPicker() {
+            const selLoc = locations.find(l => l.name === locationSelect.value);
+            const pickerEl = document.getElementById('post-edit-activity-picker');
+            const actInput = document.getElementById('post-edit-activity');
+            const datalist = document.getElementById('post-edit-activity-list');
+            if (selLoc && selLoc.activities && selLoc.activities.length > 0) {
+                // Repopulate datalist with this location's activities
+                if (datalist) datalist.innerHTML = selLoc.activities.map(a => `<option value="${escapeHtml(a)}">`).join('');
+                // Auto-fill if the activity input hasn't been manually edited yet
+                if (actInput && !actInput._userEdited) {
+                    actInput.value = selLoc.activities[0];
+                }
+                // Show quick-pick chips for locations with multiple activities
+                if (pickerEl && selLoc.activities.length > 1) {
+                    pickerEl.style.display = 'flex';
+                    pickerEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;';
+                    pickerEl.innerHTML = selLoc.activities.map(a =>
+                        `<button type="button" onclick="(function(){var i=document.getElementById('post-edit-activity');if(i){i.value='${escapeHtml(a)}';i._userEdited=true;}})()" style="padding:4px 10px;border:1px solid #d1d5db;border-radius:20px;background:#f9fafb;font-size:0.8rem;cursor:pointer;" onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='#f9fafb'">${escapeHtml(a)}</button>`
+                    ).join('');
+                } else if (pickerEl) {
+                    pickerEl.style.display = 'none';
+                }
+            } else if (pickerEl) {
+                pickerEl.style.display = 'none';
+                // Reset datalist to all activities
+                if (datalist) datalist.innerHTML = allActivities.map(a => `<option value="${escapeHtml(a)}">`).join('');
+            }
+        }
+        const actInput = document.getElementById('post-edit-activity');
+        if (actInput) actInput.addEventListener('input', () => { actInput._userEdited = true; });
+        locationSelect.addEventListener('change', () => { updateActivityPicker(); checkAndShowConflicts(); });
+        updateActivityPicker();
         checkAndShowConflicts();
         
         document.getElementById('post-edit-save').onclick = () => {
@@ -3914,10 +3956,30 @@ function minutesToTimeString(mins) {
 
         document.body.appendChild(modal);
 
-        document.getElementById('multi-edit-location')?.addEventListener('change', () => {
-            document.getElementById('multi-edit-submit').disabled = true;
-            document.getElementById('multi-conflict-preview').style.display = 'none';
-        });
+        // Activity auto-fill for multi-bunk modal
+        const multiLocSel = document.getElementById('multi-edit-location');
+        const multiActInput = document.getElementById('multi-edit-activity');
+        if (multiLocSel && multiActInput) {
+            multiActInput.setAttribute('list', 'multi-edit-activity-list');
+            const multiDl = document.createElement('datalist');
+            multiDl.id = 'multi-edit-activity-list';
+            const allMultiActs = [...new Set(allLocations.flatMap(l => l.activities || []))].sort();
+            multiDl.innerHTML = allMultiActs.map(a => `<option value="${escapeHtml(a)}">`).join('');
+            multiActInput.after(multiDl);
+            multiActInput.addEventListener('input', () => { multiActInput._userEdited = true; });
+            multiLocSel.addEventListener('change', () => {
+                document.getElementById('multi-edit-submit').disabled = true;
+                document.getElementById('multi-conflict-preview').style.display = 'none';
+                // Auto-fill activity from location
+                const selLoc = allLocations.find(l => l.name === multiLocSel.value);
+                if (selLoc && selLoc.activities && selLoc.activities.length > 0) {
+                    multiDl.innerHTML = selLoc.activities.map(a => `<option value="${escapeHtml(a)}">`).join('');
+                    if (!multiActInput._userEdited) multiActInput.value = selLoc.activities[0];
+                } else {
+                    multiDl.innerHTML = allMultiActs.map(a => `<option value="${escapeHtml(a)}">`).join('');
+                }
+            });
+        }
     }
 
     function previewMultiBunkEdit() {
@@ -4239,10 +4301,27 @@ if (softBlocks.length > 0) {
        const divSlots = window.divisionTimes?.[divName] || [];
         const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
         const perBunkSlotMap = result.perBunkSlots || null;
-        
+
+        // ★★★ FIX: Capture old activities per-bunk BEFORE overwriting, for rotation count delta ★★★
+        const oldActivitiesByBunk = {};
+        for (const bunk of bunks) {
+            let capSlots;
+            if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
+                capSlots = findSlotsForRange(result.timeStartMin, result.timeEndMin, divName, bunk);
+            } else if (perBunkSlotMap?.[String(bunk)]) {
+                capSlots = perBunkSlotMap[String(bunk)];
+            } else {
+                capSlots = slots || [];
+            }
+            oldActivitiesByBunk[bunk] = (capSlots || [])
+                .filter(idx => window.scheduleAssignments[bunk]?.[idx] && !window.scheduleAssignments[bunk][idx].continuation)
+                .map(idx => window.scheduleAssignments[bunk][idx]._activity || window.scheduleAssignments[bunk][idx].field)
+                .filter(Boolean);
+        }
+
         for (const bunk of bunks) {
             let bunkSlots;
-            
+
            console.log('[applyMultiBunkEdit] ' + bunk + ': isAutoMode=' + isAutoMode + ' timeStartMin=' + result.timeStartMin + ' timeEndMin=' + result.timeEndMin);
             if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
                 // ★★★ AUTO MODE: Reshape per-bunk slots to guarantee exact time window ★★★
@@ -4252,16 +4331,16 @@ if (softBlocks.length > 0) {
             } else {
                 bunkSlots = slots;
             }
-            
+
             if (!bunkSlots || bunkSlots.length === 0) {
                 console.warn('[applyMultiBunkEdit] No slots resolved for ' + bunk + ', skipping');
                 continue;
             }
-            
+
             const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
             const slotCount = perBunk ? perBunk.length : (divSlots.length || 50);
             if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(slotCount);
-            
+
             for (let i = 0; i < bunkSlots.length; i++) {
                 window.scheduleAssignments[bunk][bunkSlots[i]] = {
                     field: location, sport: null, _activity: activity,
@@ -4304,8 +4383,178 @@ if (softBlocks.length > 0) {
             }
         }
 
+        // ★★★ FIX: Update rotation counts for each edited bunk (delta: decrement old, increment new) ★★★
+        try {
+            const _gs = window.loadGlobalSettings?.() || {};
+            const _hc = _gs.historicalCounts || {};
+            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
+            for (const bunk of bunks) {
+                if (!_hc[bunk]) _hc[bunk] = {};
+                // Decrement each old activity (de-duplicate: each unique activity counts once)
+                const oldUnique = {};
+                (oldActivitiesByBunk[bunk] || []).forEach(a => { oldUnique[a] = (oldUnique[a] || 0) + 1; });
+                for (const [act, cnt] of Object.entries(oldUnique)) {
+                    _hc[bunk][act] = Math.max(0, (_hc[bunk][act] || 0) - cnt);
+                }
+                // Increment new activity
+                if (activity && (_validActs.size === 0 || _validActs.has(activity))) {
+                    _hc[bunk][activity] = (_hc[bunk][activity] || 0) + 1;
+                }
+            }
+            window.saveGlobalSettings?.('historicalCounts', _hc);
+            setTimeout(() => window.forceSyncToCloud?.(), 200);
+            console.log('[applyMultiBunkEdit] Rotation counts updated for', bunks.length, 'bunks');
+        } catch (rcErr) { console.error('[applyMultiBunkEdit] Rotation count update failed:', rcErr); }
+
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
         showIntegratedToast(`✅ ${bunks.length} bunks assigned to ${location}` + (plan.length > 0 ? ` - ${plan.length} reassigned` : ''), 'success');
+
+        // ★★★ AUTO MODE: Check for capacity conflicts within the assigned group and offer rebalancing ★★★
+        if (isAutoMode && location && bunks.length > 1) {
+            setTimeout(() => autoModeRebalanceCheck(divName, bunks, location, activity, result.timeStartMin, result.timeEndMin), 400);
+        }
+    }
+
+    // =========================================================================
+    // AUTO MODE REBALANCING (post-edit capacity conflict resolution)
+    // =========================================================================
+
+    function autoModeRebalanceCheck(divName, editedBunks, location, activity, timeStartMin, timeEndMin) {
+        if (!location) return;
+        const activityProps = getActivityProperties();
+        const locProps = activityProps[location] || {};
+        const fieldCap = locProps.sharableWith?.capacity ? parseInt(locProps.sharableWith.capacity) || 1 : (locProps.sharable ? 2 : 1);
+
+        if (editedBunks.length <= fieldCap) return; // No capacity issue
+
+        // Find which bunks actually overlap in time (in auto mode, staggered times might not all collide)
+        const overlapGroups = []; // groups of bunks whose time ranges overlap each other
+        const bunkRanges = editedBunks.map(bunk => {
+            const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)] || [];
+            const slotIndices = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
+            const startMins = slotIndices.map(i => perBunkSlots[i]?.startMin).filter(v => v != null);
+            const endMins = slotIndices.map(i => perBunkSlots[i]?.endMin).filter(v => v != null);
+            return {
+                bunk,
+                start: startMins.length ? Math.min(...startMins) : timeStartMin,
+                end: endMins.length ? Math.max(...endMins) : timeEndMin
+            };
+        });
+
+        // Find the maximum overlap at any moment
+        let maxOverlap = 0;
+        bunkRanges.forEach((a, i) => {
+            let count = 0;
+            bunkRanges.forEach(b => {
+                if (a.start < b.end && a.end > b.start) count++;
+            });
+            if (count > maxOverlap) maxOverlap = count;
+        });
+
+        if (maxOverlap <= fieldCap) return; // Staggered enough — no real conflict
+
+        // Real conflict exists — show rebalancing modal
+        const conflictCount = maxOverlap - fieldCap;
+        const overBunks = bunkRanges.slice(fieldCap); // simplistic: last N are "overflow"
+        showAutoModeRebalanceModal(divName, editedBunks, overBunks.map(b => b.bunk), location, activity, fieldCap, timeStartMin, timeEndMin);
+    }
+
+    function showAutoModeRebalanceModal(divName, allBunks, overflowBunks, location, activity, capacity, timeStartMin, timeEndMin) {
+        const existingModal = document.getElementById('auto-rebalance-modal');
+        if (existingModal) existingModal.remove();
+        const existingOv = document.getElementById('auto-rebalance-overlay');
+        if (existingOv) existingOv.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'auto-rebalance-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:10000;';
+        document.body.appendChild(overlay);
+
+        const modal = document.createElement('div');
+        modal.id = 'auto-rebalance-modal';
+        modal.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:14px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.25);z-index:10001;width:480px;max-width:95vw;max-height:85vh;overflow-y:auto;';
+
+        const timeLabel = `${minutesToTimeStr(timeStartMin)} – ${minutesToTimeStr(timeEndMin)}`;
+        const suggestions = overflowBunks.map(bunk => {
+            const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
+            const simUsage = window.buildFieldUsageBySlot?.([]) || {};
+            // Mark the location as "taken" in the sim so findAlternativeForBunk avoids it
+            bunkSlots.forEach(idx => {
+                if (!simUsage[idx]) simUsage[idx] = {};
+                simUsage[idx][location] = { count: 999, bunks: {}, divisions: [] };
+            });
+            const alt = findAlternativeForBunk(bunk, bunkSlots, divName, simUsage, [location]);
+            return { bunk, alt };
+        });
+
+        modal.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h2 style="margin:0;font-size:1.15rem;color:#b45309;">⚠️ Field Capacity Conflict</h2>
+                <button id="ar-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#9ca3af;">&times;</button>
+            </div>
+            <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:16px;font-size:0.9rem;color:#78350f;">
+                <strong>${escapeHtml(location)}</strong> can hold <strong>${capacity}</strong> bunk${capacity!==1?'s':''} at a time, but <strong>${allBunks.length}</strong> bunks are now assigned there at <strong>${timeLabel}</strong>.
+                <div style="margin-top:4px;">${overflowBunks.length} bunk${overflowBunks.length!==1?'s need':'needs'} to be reassigned.</div>
+            </div>
+            <div style="margin-bottom:16px;">
+                <div style="font-weight:600;color:#374151;margin-bottom:10px;font-size:0.95rem;">Suggested reassignments:</div>
+                ${suggestions.map(({bunk, alt}) => `
+                    <div style="display:flex;align-items:center;gap:10px;padding:8px;background:#f9fafb;border-radius:8px;margin-bottom:6px;font-size:0.875rem;">
+                        <span style="font-weight:600;color:#374151;min-width:80px;">${escapeHtml(bunk)}</span>
+                        <span style="color:#6b7280;">→</span>
+                        <span style="color:${alt ? '#065f46' : '#991b1b'};font-weight:500;">${alt ? escapeHtml(alt.activityName) + (alt.field ? ' @ ' + escapeHtml(alt.field) : '') : 'No alternative found'}</span>
+                    </div>
+                `).join('')}
+            </div>
+            <div style="display:flex;gap:10px;">
+                <button id="ar-keep" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Keep As-Is</button>
+                <button id="ar-apply" style="flex:1;padding:10px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.95rem;cursor:pointer;font-weight:500;"${suggestions.some(s=>!s.alt)?' disabled':''}>✓ Auto-Rebalance</button>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        function closeRebalance() { modal.remove(); overlay.remove(); }
+        document.getElementById('ar-close').onclick = closeRebalance;
+        document.getElementById('ar-keep').onclick = closeRebalance;
+        overlay.onclick = closeRebalance;
+
+        document.getElementById('ar-apply').onclick = async () => {
+            closeRebalance();
+            try {
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _hc = _gs.historicalCounts || {};
+                const modifiedBunks = new Set();
+                for (const { bunk, alt } of suggestions) {
+                    if (!alt) continue;
+                    const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
+                    const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+                    const slotCount = perBunk ? perBunk.length : 50;
+                    if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(slotCount);
+                    // Capture old for rotation count
+                    const oldAct = bunkSlots.filter(i => window.scheduleAssignments[bunk]?.[i] && !window.scheduleAssignments[bunk][i].continuation)
+                        .map(i => window.scheduleAssignments[bunk][i]._activity).filter(Boolean);
+                    // Write alternative
+                    for (let i = 0; i < bunkSlots.length; i++) {
+                        window.scheduleAssignments[bunk][bunkSlots[i]] = {
+                            field: alt.field, sport: alt.activityName, _activity: alt.activityName,
+                            _fixed: true, _rebalanced: true, continuation: i > 0,
+                            _startMin: timeStartMin, _endMin: timeEndMin
+                        };
+                    }
+                    modifiedBunks.add(bunk);
+                    // Update rotation counts
+                    if (!_hc[bunk]) _hc[bunk] = {};
+                    oldAct.forEach(a => { _hc[bunk][a] = Math.max(0, (_hc[bunk][a] || 0) - 1); });
+                    _hc[bunk][alt.activityName] = (_hc[bunk][alt.activityName] || 0) + 1;
+                }
+                window.saveGlobalSettings?.('historicalCounts', _hc);
+                if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
+                if (typeof renderStaggeredView === 'function') renderStaggeredView();
+                if (typeof updateTable === 'function') updateTable();
+                showIntegratedToast(`✅ Rebalanced ${suggestions.length} bunk${suggestions.length!==1?'s':''}`, 'success');
+            } catch (e) { console.error('[AutoRebalance] Failed:', e); showIntegratedToast('Rebalance failed — try again', 'error'); }
+        };
     }
 
     // =========================================================================
