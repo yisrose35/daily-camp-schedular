@@ -2651,6 +2651,93 @@
         }
     }
 
+    // ── Google Address Validation API (primary — USPS-certified + geocoded) ──
+    async function googleAddressValidationScored(street, city, state, zip) {
+        const key = D.setup.googleMapsKey;
+        if (!key) return null;
+        try {
+            const resp = await fetch(
+                'https://addressvalidation.googleapis.com/v1:validateAddress?key=' + encodeURIComponent(key),
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        address: {
+                            addressLines: [street],
+                            locality: city || '',
+                            administrativeArea: state || '',
+                            postalCode: zip || '',
+                            regionCode: 'US'
+                        }
+                    })
+                }
+            );
+            if (!resp.ok) {
+                if (resp.status === 403) console.warn('[Go] Google Address Validation: 403 — enable Address Validation API in Cloud Console');
+                return null;
+            }
+            const data = await resp.json();
+            const result = data.result;
+            if (!result?.geocode?.location?.latitude) return null;
+
+            const lat = result.geocode.location.latitude;
+            const lng = result.geocode.location.longitude;
+            const verdict = result.verdict || {};
+            const usps   = result.uspsData || {};
+            const gran   = verdict.validationGranularity || '';
+
+            // Confidence from granularity
+            let confidence =
+                (gran === 'PREMISE' || gran === 'SUB_PREMISE') ? 0.97 :
+                gran === 'PREMISE_PROXIMITY'                   ? 0.88 :
+                gran === 'BLOCK'                               ? 0.75 :
+                gran === 'ROUTE'                               ? 0.60 : 0.40;
+
+            // USPS DPV match code
+            const dpv = usps.dpvMatchCode || '';
+            if (dpv === 'Y') confidence = Math.max(confidence, 0.97);      // full match
+            else if (dpv === 'S') confidence = Math.min(confidence, 0.80); // missing unit/apt
+            else if (dpv === 'D') confidence = Math.min(confidence, 0.72); // missing secondary
+            else if (dpv === 'N') confidence = Math.min(confidence, 0.40); // no match
+
+            // ZIP check
+            const retZip  = (usps.zipCode || result.address?.postalAddress?.postalCode || '').substring(0, 5);
+            const inZip   = (zip || '').substring(0, 5);
+            const zipMatch = !!(inZip && retZip && inZip === retZip);
+            if (!zipMatch && inZip && retZip) confidence -= 0.08;
+
+            // Capture corrected/standardized address from Google/USPS
+            const corrected = {};
+            if (usps.address1) {
+                corrected.street = usps.address1;
+                corrected.city   = usps.city  || city;
+                corrected.state  = usps.state || state;
+                corrected.zip    = usps.zipCode + (usps.zipPlus4Code ? '-' + usps.zipPlus4Code : '');
+            } else if (result.address?.postalAddress) {
+                const pa = result.address.postalAddress;
+                corrected.street = (pa.addressLines || [])[0] || street;
+                corrected.city   = pa.locality             || city;
+                corrected.state  = pa.administrativeArea   || state;
+                corrected.zip    = pa.postalCode           || zip;
+            }
+
+            return {
+                lat, lng,
+                confidence:  Math.min(Math.max(confidence, 0), 1),
+                source:      'google-address-validation',
+                zipMatch,
+                precision:   (gran === 'PREMISE' || gran === 'SUB_PREMISE') ? 'interpolated' : 'approximate',
+                zip:         retZip,
+                corrected,
+                _dpv:        dpv,
+                _granularity: gran
+            };
+        } catch (e) {
+            console.warn('[Go] Google Address Validation error:', e.message);
+            return null;
+        }
+    }
+
     // ── ORS geocoder (tertiary fallback) ──
     async function orsGeocodeScored(street, city, state, zip) {
         const key = getApiKey();
@@ -2688,15 +2775,43 @@
         const a = D.addresses[name];
         if (!a?.street) return false;
 
-        // Run free providers in priority order, stop early if high-confidence
+        // Run providers in priority order, stop early if high-confidence
         const results = [];
+
+        // 0. Google Address Validation (best — USPS-certified, corrects typos, returns precise coords)
+        if (D.setup.googleMapsKey) {
+            const gav = await googleAddressValidationScored(a.street, a.city, a.state, a.zip);
+            if (gav && validateGeocode(gav.lat, gav.lng, a.street, name, gav)) {
+                // Apply address standardization back to stored record
+                if (gav.corrected?.street) {
+                    const changed = gav.corrected.street !== a.street
+                                 || (gav.corrected.city  && gav.corrected.city  !== a.city)
+                                 || (gav.corrected.zip   && gav.corrected.zip.substring(0,5) !== (a.zip||'').substring(0,5));
+                    if (changed) {
+                        const oldAddr = [a.street, a.city, a.state, a.zip].join(', ');
+                        a.street = gav.corrected.street || a.street;
+                        a.city   = gav.corrected.city   || a.city;
+                        a.state  = gav.corrected.state  || a.state;
+                        a.zip    = gav.corrected.zip    || a.zip;
+                        a._addressCorrected = true;
+                        console.log('[Go] Address corrected for ' + name + ':\n  was: ' + oldAddr + '\n  now: ' + [a.street, a.city, a.state, a.zip].join(', '));
+                    }
+                }
+                results.push(gav);
+                // PREMISE-level Google match — best possible result, use immediately
+                if (gav.confidence >= 0.85) {
+                    applyBestGeocode(a, gav, name);
+                    return true;
+                }
+            }
+        }
 
         // 1. Census (free, unlimited, excellent for US residential)
         const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
         if (cen && validateGeocode(cen.lat, cen.lng, a.street, name, cen)) {
             results.push(cen);
-            // If Census returns high confidence with ZIP match, use immediately
-            if (cen.confidence >= 0.8 && cen.zipMatch !== false) {
+            // If Census returns high confidence with ZIP match and no Google result, use immediately
+            if (cen.confidence >= 0.8 && cen.zipMatch !== false && results.length === 1) {
                 applyBestGeocode(a, cen, name);
                 return true;
             }
@@ -2746,12 +2861,18 @@
         a._geocodePrecision = result.precision || 'unknown';
         a._crossValidated = result._crossValidated || false;
         a._zipMismatch = (result.zipMatch === false);
-        if (result.confidence < 0.5) {
+        if (result._dpv === 'N') {
+            a._geocodeWarning = 'USPS: address not found — verify address is real and deliverable';
+        } else if (result._dpv === 'S' || result._dpv === 'D') {
+            a._geocodeWarning = 'USPS: missing apartment/unit number — add unit to complete address';
+        } else if (result.confidence < 0.5) {
             a._geocodeWarning = 'Low confidence (' + Math.round(result.confidence * 100) + '%) — verify address';
         } else if (result.precision === 'approximate' && !result._crossValidated) {
             a._geocodeWarning = 'Approximate match — street not found exactly, verify address';
         } else if (result._zipMismatch) {
             a._geocodeWarning = 'ZIP mismatch — geocoded to a different ZIP, verify address';
+        } else if (a._addressCorrected) {
+            a._geocodeWarning = 'Address auto-corrected by Google/USPS — confirm the change is right';
         } else {
             delete a._geocodeWarning;
         }
