@@ -171,6 +171,23 @@
                                     <span class="form-hint">Get free at <a href="https://account.mapbox.com/access-tokens/" target="_blank" style="color:var(--blue-600)">mapbox.com</a> — 100K requests/month free. Without this, route lines use OSRM (less accurate in some neighborhoods).</span>
                                 </div>
                             </div>
+                            <div style="border-top:1px solid var(--border-light);padding-top:1rem;margin-top:.5rem;">
+                                <h4 style="margin:0 0 .25rem;display:flex;align-items:center;gap:.5rem;">
+                                    Google Route Optimization
+                                    <span style="background:#1a73e8;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">BEST ROUTES</span>
+                                </h4>
+                                <p class="muted" style="margin:0 0 .75rem;font-size:.8125rem;">Uses Google's OR-Tools to optimize ALL buses simultaneously — globally optimal routes, traffic-aware. Replaces the per-zone solver.</p>
+                                <div class="form-group full-width" style="margin-bottom:.75rem;">
+                                    <label class="form-label">Google Maps API Key</label>
+                                    <input type="text" class="form-input" id="googleMapsKey" placeholder="AIza...">
+                                    <span class="form-hint">Enable <strong>Route Optimization API</strong> in your <a href="https://console.cloud.google.com/apis/library/routeoptimization.googleapis.com" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a>. Same key used for Geocoding/Maps.</span>
+                                </div>
+                                <div class="form-group full-width">
+                                    <label class="form-label">Google Cloud Project ID</label>
+                                    <input type="text" class="form-input" id="googleProjectId" placeholder="my-camp-project-123456">
+                                    <span class="form-hint">Found in your <a href="https://console.cloud.google.com/" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a> dashboard — top of the page next to the project name.</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -502,6 +519,7 @@
 
 <!-- CAMPISTRY GO ENGINE -->
 <script src="campistry_go_cloud.js"></script>
+<script src="campistry_go_google.js"></script>
 <script src="campistry_go.js"></script>
     <script src="campistry_go_map_editor.js"></script>
 <script>

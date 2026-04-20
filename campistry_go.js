@@ -154,6 +154,7 @@
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
             avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
+            googleMapsKey: '', googleProjectId: '',
             campLat: null, campLng: null
         },
         activeMode: 'dismissal',
@@ -1562,7 +1563,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',googleMapsKey:'',googleProjectId:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
@@ -1753,6 +1754,9 @@
         document.getElementById('orsApiKey').value = s.orsApiKey || '';
         if (document.getElementById('ghApiKey')) document.getElementById('ghApiKey').value = s.graphhopperKey || '';
         if (document.getElementById('mapboxToken')) document.getElementById('mapboxToken').value = s.mapboxToken || '';
+        if (document.getElementById('googleMapsKey')) document.getElementById('googleMapsKey').value = s.googleMapsKey || '';
+        if (document.getElementById('googleProjectId')) document.getElementById('googleProjectId').value = s.googleProjectId || '';
+        window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
     function toggleStandalone(on) {
@@ -1780,6 +1784,10 @@
         D.setup.orsApiKey = el('orsApiKey')?.value.trim() || '';
         D.setup.graphhopperKey = el('ghApiKey')?.value.trim() || '';
         D.setup.mapboxToken = el('mapboxToken')?.value.trim() || '';
+        D.setup.googleMapsKey = el('googleMapsKey')?.value.trim() || '';
+        D.setup.googleProjectId = el('googleProjectId')?.value.trim() || '';
+        // Expose to GoGoogleOptimizer via getter
+        window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
     async function testApiKey() {
@@ -5079,20 +5087,51 @@
             const key = getApiKey();
 
             // ══════════════════════════════════════════════════════════════
-            // PRIMARY: Clarke-Wright Savings — creates compact geographic zones
+            // STEP 3: Optimize routes
             //
-            // HERE Tour Planning was disabled because it globally minimizes total
-            // fleet time, which stretches individual routes across town. Our
-            // goal is compact single-area zones per bus — Clarke-Wright does
-            // this naturally by merging nearby stops that save the most time.
+            // PRIMARY (if configured): Google Route Optimization API
+            //   — Solves ALL buses simultaneously using OR-Tools
+            //   — Traffic-aware, globally optimal, handles all constraints
+            //
+            // FALLBACK: Clarke-Wright Savings → per-zone VROOM/nearest-neighbor
+            //   — Per-zone greedy, good but not globally optimal
             // ══════════════════════════════════════════════════════════════
+            let routes = [];
+            let usedGoogleOptimizer = false;
+
+            // ── Try Google Route Optimization first ──
+            if (window.GoGoogleOptimizer && D.setup.googleMapsKey && D.setup.googleProjectId) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing with Google Route Optimization...', pctBase + 30);
+                try {
+                    const googleRoutes = await window.GoGoogleOptimizer.optimizeTours({
+                        stops:          allStops,
+                        vehicles:       shiftVehicles,
+                        campLat, campLng,
+                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
+                        isArrival,
+                        serviceTimeSec: serviceTime,
+                        apiKey:         D.setup.googleMapsKey,
+                        projectId:      D.setup.googleProjectId
+                    });
+                    if (googleRoutes && googleRoutes.length > 0) {
+                        routes = googleRoutes;
+                        usedGoogleOptimizer = true;
+                        toast('✓ Google Route Optimization — globally optimal routes generated');
+                        console.log('[Go] Google Route Optimization succeeded for shift "' + (shift.label || shift.id) + '"');
+                    }
+                } catch (e) {
+                    console.warn('[Go] Google Route Optimization failed, falling back to Clarke-Wright:', e.message);
+                }
+            }
+
+            // ── Fallback: Clarke-Wright Savings → per-zone VROOM/nearest-neighbor ──
+            if (!usedGoogleOptimizer) {
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': building zones (Clarke-Wright)...', pctBase + 30);
             const greedyZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
             toast(greedyZones.length + ' bus zones created — optimizing routes...');
 
-            // ── Step 4: Route each zone (VROOM TSP → directional sort) ──
+            // ── Step 4: Route each zone (VROOM TSP → nearest-neighbor → 2-opt → Or-opt) ──
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing routes...', pctBase + 50);
-            let routes = [];
             const totalZones = greedyZones.length;
 
             for (let zi = 0; zi < greedyZones.length; zi++) {
@@ -5327,7 +5366,9 @@
                 }
             });
 
-            console.log('[Go] All routes complete: ' + routes.length + ' bus routes');
+            } // end fallback block (Clarke-Wright)
+
+            console.log('[Go] All routes complete: ' + routes.length + ' bus routes' + (usedGoogleOptimizer ? ' [Google Route Optimization]' : ' [Clarke-Wright fallback]'));
 
             // ── Staff suggestions: find closest stop for "no stop" staff ──
             // For each staff member without a dedicated stop, find the closest
