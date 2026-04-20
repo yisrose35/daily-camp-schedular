@@ -4750,7 +4750,61 @@
             //   optimal within-bus stop ordering AND road-following geometry.
             //   1 vehicle + ~15 stops = ~16 coords, always under free-tier limits.
             //
-            const geoapifyKey = D.setup.geoapifyKey?.trim();
+            const geoapifyKey  = D.setup.geoapifyKey?.trim();
+            const googleKey    = D.setup.googleMapsKey?.trim();
+            const googleProjId = D.setup.googleProjectId?.trim();
+
+            // ── Step 3 (primary): Google Route Optimization API ──
+            //
+            // When Google credentials are configured, send ALL stops + ALL buses in
+            // a single request to Google's cloud OR-Tools VRP solver. This is globally
+            // optimal: assignment and ordering are solved simultaneously, capacity is
+            // enforced natively, and road geometry comes back in the same response as
+            // an encoded polyline (no separate TSP calls needed).
+            //
+            // Falls through to K-medoids + Geoapify TSP if:
+            //   • googleMapsKey or googleProjectId are not set
+            //   • The API call fails (network error, bad key, quota exceeded)
+            //   • The response contains 0 routes
+            if (!usedExternalOptimizer && googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing all buses via Google Route Optimization...', pctBase + 25);
+                try {
+                    const googleRoutes = await window.GoGoogleOptimizer.optimizeTours({
+                        stops:          allStops,
+                        vehicles:       shiftVehicles,
+                        campLat:        campLat,
+                        campLng:        campLng,
+                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
+                        isArrival:      isArrival,
+                        serviceTimeSec: serviceTime,
+                        apiKey:         googleKey,
+                        projectId:      googleProjId,
+                        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60
+                    });
+                    if (googleRoutes && googleRoutes.length > 0) {
+                        routes = googleRoutes;
+                        usedExternalOptimizer = true;
+                        // Cache road geometry from Google's decoded polylines.
+                        // _roadPts is already decoded in campistry_go_google.js;
+                        // store in _routeGeomCache now so the map draws road lines instantly.
+                        let gGeomCached = 0;
+                        googleRoutes.forEach(function(r) {
+                            if (r._roadPts && r._roadPts.length) {
+                                _routeGeomCache[r.busId + '_' + si] = r._roadPts;
+                                gGeomCached++;
+                            }
+                        });
+                        console.log('[Go] Google Route Optimization: ' + googleRoutes.length + ' routes, ' +
+                            googleRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops' +
+                            (gGeomCached ? ', ' + gGeomCached + ' routes with road geometry' : ''));
+                        toast('✓ Routes generated via Google Route Optimization — ' + googleRoutes.length + ' buses');
+                    } else {
+                        console.warn('[Go] Google Route Optimization returned no routes — falling back to K-medoids');
+                    }
+                } catch (e) {
+                    console.warn('[Go] Google Route Optimization failed (' + e.message + ') — falling back to K-medoids');
+                }
+            }
 
             if (!usedExternalOptimizer) {
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': clustering stops into bus zones...', pctBase + 30);
@@ -5065,22 +5119,40 @@
         _generatedRoutes = allShiftResults;
         _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
 
-        // Re-populate cache with road geometry returned by Geoapify (or any
-        // future solver that provides _roadPts directly). Must happen AFTER the
-        // cache reset so we don't lose geometry that was stored during the loop.
+        // Re-populate cache with road geometry from solvers. Must happen AFTER the
+        // cache reset so geometry stored during the per-shift loop is not lost.
+        //
+        // Priority:
+        //   1. _roadPts already decoded (Geoapify TSP or Google — stored during loop)
+        //   2. _encodedPolyline fallback — decode it now if _roadPts was somehow missed
         let geomCached = 0;
         allShiftResults.forEach(function(sr, si) {
             sr.routes.forEach(function(r) {
+                if (_routeGeomCache[r.busId + '_' + si]) {
+                    // Already cached during the routing loop (Google or Geoapify)
+                    geomCached++;
+                    return;
+                }
                 if (r._roadPts && r._roadPts.length) {
                     _routeGeomCache[r.busId + '_' + si] = r._roadPts;
                     geomCached++;
+                } else if (r._encodedPolyline) {
+                    // Fallback: decode Google encoded polyline if _roadPts wasn't set
+                    try {
+                        var decoded = decodePolyline(r._encodedPolyline);
+                        if (decoded && decoded.length) {
+                            _routeGeomCache[r.busId + '_' + si] = decoded;
+                            r._roadPts = decoded;
+                            geomCached++;
+                        }
+                    } catch(e) { /* ignore decode errors */ }
                 }
             });
         });
         if (geomCached > 0) {
-            console.log('[Go] Road geometry cached from solver: ' + geomCached + ' routes (map lines will draw instantly)');
+            console.log('[Go] Road geometry cached: ' + geomCached + ' routes (map lines will draw instantly)');
         } else {
-            console.log('[Go] No solver road geometry — map lines will be fetched via OSRM after render');
+            console.log('[Go] No solver road geometry — map lines will be fetched on render');
         }
 
         D.savedRoutes = allShiftResults;

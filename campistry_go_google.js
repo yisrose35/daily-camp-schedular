@@ -28,6 +28,25 @@ window.GoGoogleOptimizer = (function () {
     const API_BASE = 'https://routeoptimization.googleapis.com/v1/projects';
 
     // -------------------------------------------------------------------------
+    // _decodePolyline — decode a Google encoded polyline string into [[lat,lng],...]
+    // Identical algorithm to campistry_go.js decodePolyline() — kept local so this
+    // module is self-contained and road geometry works without any external dependency.
+    // -------------------------------------------------------------------------
+    function _decodePolyline(encoded) {
+        const points = []; let i = 0, lat = 0, lng = 0;
+        while (i < encoded.length) {
+            let b, shift = 0, result = 0;
+            do { b = encoded.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+            lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+            shift = 0; result = 0;
+            do { b = encoded.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+            lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+            points.push([lat / 1e5, lng / 1e5]);
+        }
+        return points;
+    }
+
+    // -------------------------------------------------------------------------
     // isConfigured()
     // -------------------------------------------------------------------------
     function isConfigured() {
@@ -56,7 +75,7 @@ window.GoGoogleOptimizer = (function () {
         const {
             stops, vehicles, campLat, campLng,
             departureTime, isArrival, serviceTimeSec,
-            apiKey, projectId
+            apiKey, projectId, maxRideTimeSec
         } = options;
 
         if (!apiKey || !projectId) {
@@ -97,17 +116,30 @@ window.GoGoogleOptimizer = (function () {
         });
 
         // ── Build vehicles ──
-        // Dismissal: startLocation = camp (bus leaves camp loaded)
-        //            no endLocation (bus ends at last drop-off — doesn't return)
-        // Arrival:   endLocation = camp (bus delivers everyone to camp)
-        //            no startLocation (solver picks optimal first pickup)
+        // Dismissal: startLocation = camp (bus leaves camp loaded, ends at last drop-off)
+        // Arrival:   endLocation   = camp (bus collects kids, delivers to camp)
+        //
+        // costPerHour drives time-balance: equal cost per hour means solver minimises
+        // the total hours across all buses, which naturally balances load.
+        // routeDurationLimit adds a soft cap so the solver prefers routes under
+        // the user's maxRideTime setting (plus service time per stop per bus).
+        const avgStopsPerBus = Math.ceil(stops.length / Math.max(1, vehicles.length));
+        const svcTotal       = avgStopsPerBus * Math.max(0, serviceTimeSec || 0);
+        const softDurLimit   = (maxRideTimeSec || 45 * 60) + svcTotal; // ride + service
+
         const modelVehicles = vehicles.map((v, vi) => {
             const veh = {
-                label:       v.name || ('Bus ' + (vi + 1)),
-                travelMode:  1,     // DRIVING
-                loadLimits:  { campers: { maxLoad: String(Math.max(1, v.capacity)) } },
-                costPerHour: 40,    // encourages balanced routes
-                costPerKilometer: 1
+                label:            v.name || ('Bus ' + (vi + 1)),
+                travelMode:       1,     // DRIVING
+                loadLimits:       { campers: { maxLoad: String(Math.max(1, v.capacity)) } },
+                costPerHour:      40,    // time-balance incentive
+                costPerKilometer: 1,
+                routeDurationLimit: {
+                    // Soft cap: solver prefers routes under this limit.
+                    // costPerHourAfterSoftMax penalises every excess minute heavily.
+                    softMaxDuration:         String(Math.round(softDurLimit)) + 's',
+                    costPerHourAfterSoftMax: '200'
+                }
             };
             if (isArrival) {
                 veh.endLocation = campLocation;
@@ -180,48 +212,80 @@ window.GoGoogleOptimizer = (function () {
             const vehicle = vehicles[vi];
             if (!vehicle) continue;
 
-            // Build ordered stop list from visits[]
-            // Each visit has shipmentIndex pointing back to our stops[] array.
-            // Filter to only the relevant visit type:
-            //   arrival  → isPickup = true
-            //   dismissal → isPickup = false (or undefined for delivery-only shipments)
-            const orderedStops = [];
+            // Collect relevant visits (filtered by mode) together with their raw visit
+            // objects so we can compute per-leg travel times from Google timestamps.
+            // Each shipment has only pickups (arrival) or only deliveries (dismissal).
+            const relevantPairs = []; // [{visit, stop}]
             for (const visit of (gRoute.visits || [])) {
-                // Each shipment has either only pickups (arrival) or only deliveries (dismissal).
-                // The API sets isPickup: true for pickup visits, false/absent for deliveries.
-                // Skip any visit that's explicitly the wrong type for our current mode.
-                if (isArrival  && visit.isPickup === false) continue; // delivery visit in arrival mode
-                if (!isArrival && visit.isPickup === true)  continue; // pickup visit in dismissal mode
-
+                if (isArrival  && visit.isPickup === false) continue;
+                if (!isArrival && visit.isPickup === true)  continue;
                 const stopIdx = visit.shipmentIndex ?? 0;
                 const stop    = stops[stopIdx];
                 if (!stop) continue;
-
-                orderedStops.push({
-                    stopNum:  orderedStops.length + 1,
-                    campers:  stop.campers,
-                    address:  stop.address,
-                    lat:      stop.lat,
-                    lng:      stop.lng
-                });
+                relevantPairs.push({ visit, stop });
             }
 
-            if (!orderedStops.length) continue;
+            if (!relevantPairs.length) continue;
+
+            // Build ordered stop list
+            const orderedStops = relevantPairs.map((rp, i) => ({
+                stopNum:  i + 1,
+                campers:  rp.stop.campers,
+                address:  rp.stop.address,
+                lat:      rp.stop.lat,
+                lng:      rp.stop.lng
+            }));
+
+            // ── Extract per-leg travel times from Google visit timestamps ──
+            // legTimes[i] = road seconds to reach stop i (from camp for i=0, from stop i-1 otherwise).
+            // legTimes[N] = last-stop → camp return leg seconds (arrival mode only).
+            // These feed directly into the ETA pipeline (trafficLegMin) so ride time
+            // calculations use real road times rather than haversine estimates.
+            const legTimes = [];
+            const vStartMs = gRoute.vehicleStartTime ? new Date(gRoute.vehicleStartTime).getTime() : null;
+            if (vStartMs !== null) {
+                for (let rpi = 0; rpi < relevantPairs.length; rpi++) {
+                    const visitStartMs = new Date(relevantPairs[rpi].visit.startTime).getTime();
+                    if (rpi === 0) {
+                        // Camp departure → first stop arrival (no service time to subtract)
+                        legTimes.push(Math.max(0, Math.round((visitStartMs - vStartMs) / 1000)));
+                    } else {
+                        // Previous stop departure → this stop arrival
+                        // Departure from previous = previous startTime + serviceTimeSec
+                        const prevDepartMs = new Date(relevantPairs[rpi - 1].visit.startTime).getTime()
+                            + (serviceTimeSec || 0) * 1000;
+                        legTimes.push(Math.max(0, Math.round((visitStartMs - prevDepartMs) / 1000)));
+                    }
+                }
+                // Return-to-camp leg (arrival mode: vehicle ends at camp)
+                if (isArrival && gRoute.vehicleEndTime && relevantPairs.length > 0) {
+                    const lastDepartMs = new Date(relevantPairs[relevantPairs.length - 1].visit.startTime).getTime()
+                        + (serviceTimeSec || 0) * 1000;
+                    const endMs = new Date(gRoute.vehicleEndTime).getTime();
+                    legTimes.push(Math.max(0, Math.round((endMs - lastDepartMs) / 1000)));
+                }
+            }
+
+            // ── Decode road geometry from Google encoded polyline ──
+            // Google returns a single encoded polyline for the whole route.
+            // _decodePolyline converts it to [[lat,lng],...] which campistry_go.js
+            // stores in _routeGeomCache so the map draws road-following lines instantly.
+            const encoded = gRoute.routePolyline?.points || null;
+            const roadPts = encoded ? _decodePolyline(encoded) : null;
 
             routes.push({
-                busId:            vehicle.busId,
-                busName:          vehicle.name,
-                busColor:         vehicle.color  || '#10b981',
-                monitor:          vehicle.monitor    || null,
-                counselors:       vehicle.counselors || [],
-                stops:            orderedStops,
-                camperCount:      orderedStops.reduce((s, st) => s + st.campers.length, 0),
-                _cap:             vehicle.capacity,
-                totalDuration:    _routeDurationSec(gRoute),
-                _source:          'google-route-optimization',
-                // Encoded polyline from Google — decoded by campistry_go.js
-                // and stored in _routeGeomCache so map draws road-following lines immediately.
-                _encodedPolyline: gRoute.routePolyline?.points || null
+                busId:         vehicle.busId,
+                busName:       vehicle.name,
+                busColor:      vehicle.color  || '#10b981',
+                monitor:       vehicle.monitor    || null,
+                counselors:    vehicle.counselors || [],
+                stops:         orderedStops,
+                camperCount:   orderedStops.reduce((s, st) => s + st.campers.length, 0),
+                _cap:          vehicle.capacity,
+                totalDuration: _routeDurationSec(gRoute),
+                _source:       'google-route-optimization',
+                _roadPts:      roadPts,                          // [lat,lng][] for map road lines
+                _tspLegTimes:  legTimes.length ? legTimes : null // seconds per leg for ETA pipeline
             });
         }
 
@@ -242,6 +306,15 @@ window.GoGoogleOptimizer = (function () {
             for (const { stop } of skipped) {
                 _cheapestInsert(routes, stop, vehicles);
             }
+            // Cheapest-insert changes stop order on modified routes, so per-leg
+            // times from Google are now stale for those routes. Clear them so the
+            // ETA pipeline falls back to haversine rather than using wrong times.
+            const affectedIds = new Set(skipped.map(() => null)); // rebuilt below
+            routes.forEach(r => {
+                if (r._tspLegTimes && r.stops.length !== r._tspLegTimes.length) {
+                    r._tspLegTimes = null;
+                }
+            });
         }
 
         console.log('[GoGoogle] Done — ' + routes.length + ' routes, ' +
