@@ -751,65 +751,20 @@
 
     // Fetch road-following polyline for a route.
     // PRIMARY:  Google Directions API (API key, real roads, no rate limits for small fleets)
-    // FALLBACK: road geometry for routes that didn't come from Geoapify.
-    // Google Directions API max = 25 waypoints per request.
-    // For longer routes we chunk into overlapping segments and stitch the polylines.
-    // OSRM is the final fallback (free, rate-limited, 100-waypoint URL limit).
+    // FALLBACK: road geometry for routes that didn't come with _roadPts
+    // (i.e. NN-split routes, not Geoapify routes).
+    //
+    // Google Directions REST API blocks CORS from browsers — cannot be used.
+    // OSRM public server is the only browser-compatible option.
+    // Hard cap at 100 waypoints to stay within URL length limits.
+    // Samples evenly if the route has more than 100 stops.
     async function _fetchRoadGeometry(item) {
-        const gKey = D.setup.googleMapsKey?.trim();
-        // item.coordStr = "lng,lat;lng,lat;..." (OSRM format) — convert for Google
         const pairs = item.coordStr.split(';').map(function(p) {
             var parts = p.split(',');
             return { lat: parseFloat(parts[1]), lng: parseFloat(parts[0]) };
         });
         if (pairs.length < 2) return null;
 
-        // ── Google Directions API (chunked at 25 waypoints per request) ──
-        // Each chunk: origin + up to 23 waypoints + destination = 25 stops max.
-        // Chunks overlap at endpoints so stitching is seamless.
-        const CHUNK = 25; // total points per request (origin + waypoints + dest)
-        if (gKey) {
-            try {
-                let allPts = [];
-                let i = 0;
-                while (i < pairs.length - 1) {
-                    const chunk = pairs.slice(i, i + CHUNK);
-                    if (chunk.length < 2) break;
-                    const origin      = chunk[0].lat + ',' + chunk[0].lng;
-                    const destination = chunk[chunk.length - 1].lat + ',' + chunk[chunk.length - 1].lng;
-                    const mids        = chunk.slice(1, chunk.length - 1);
-                    const waypointStr = mids.map(function(p) { return p.lat + ',' + p.lng; }).join('|');
-                    const url = 'https://maps.googleapis.com/maps/api/directions/json'
-                        + '?origin='      + encodeURIComponent(origin)
-                        + '&destination=' + encodeURIComponent(destination)
-                        + (waypointStr ? '&waypoints=' + encodeURIComponent(waypointStr) : '')
-                        + '&key='         + encodeURIComponent(gKey);
-
-                    const resp = await fetch(url);
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        if (data.status === 'OK' && data.routes?.[0]?.overview_polyline?.points) {
-                            const pts = decodePolyline(data.routes[0].overview_polyline.points);
-                            // Skip first point on subsequent chunks to avoid duplicates at seams
-                            allPts = allPts.concat(i === 0 ? pts : pts.slice(1));
-                        } else if (data.status && data.status !== 'OK') {
-                            console.warn('[Go] Google Directions chunk status:', data.status);
-                            allPts = null; break; // bail out of Google, try OSRM
-                        }
-                    }
-                    i += CHUNK - 1; // overlap by 1 point so chunks connect
-                }
-                if (allPts && allPts.length > 0) {
-                    console.log('[Go] Road geometry via Google Directions: ' + allPts.length + ' pts (' + Math.ceil(pairs.length / (CHUNK - 1)) + ' chunk(s))');
-                    return allPts;
-                }
-            } catch (e) {
-                console.warn('[Go] Google Directions failed:', e.message, '— trying OSRM');
-            }
-        }
-
-        // ── OSRM fallback (hard cap at 100 waypoints to avoid URL-too-long) ──
-        // Sample down to 100 evenly-spaced points if the route is longer.
         await new Promise(function(r) { setTimeout(r, 500); });
         try {
             let osrmPairs = pairs;
@@ -820,15 +775,13 @@
                 });
             }
             const coordStr = osrmPairs.map(function(p) { return p.lng + ',' + p.lat; }).join(';');
-            var url = 'https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true';
-            var resp = await fetch(url);
-            if (resp.status === 429) return '__429__'; // signal to re-queue
+            const url = 'https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true';
+            const resp = await fetch(url);
+            if (resp.status === 429) return '__429__';
             if (resp.ok) {
-                var data = await resp.json();
-                var coords = data.routes?.[0]?.geometry?.coordinates;
-                if (coords) {
-                    return coords.map(function(c) { return [c[1], c[0]]; });
-                }
+                const data = await resp.json();
+                const coords = data.routes?.[0]?.geometry?.coordinates;
+                if (coords) return coords.map(function(c) { return [c[1], c[0]]; });
             }
         } catch (e) { console.warn('[Go] OSRM geometry failed:', e.message); }
 
@@ -5820,13 +5773,20 @@
         // Re-populate cache with road geometry returned by Geoapify (or any
         // future solver that provides _roadPts directly). Must happen AFTER the
         // cache reset so we don't lose geometry that was stored during the loop.
+        let geomCached = 0;
         allShiftResults.forEach(function(sr, si) {
             sr.routes.forEach(function(r) {
-                if (r._roadPts?.length) {
+                if (r._roadPts && r._roadPts.length) {
                     _routeGeomCache[r.busId + '_' + si] = r._roadPts;
+                    geomCached++;
                 }
             });
         });
+        if (geomCached > 0) {
+            console.log('[Go] Road geometry cached from solver: ' + geomCached + ' routes (map lines will draw instantly)');
+        } else {
+            console.log('[Go] No solver road geometry — map lines will be fetched via OSRM after render');
+        }
 
         D.savedRoutes = allShiftResults;
         save();
