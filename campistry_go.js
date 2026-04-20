@@ -5146,76 +5146,134 @@
             let routes = [];
             let usedExternalOptimizer = false;
 
-            // ── PRIMARY: HERE Tour Planning ──
+            // ── PRIMARY: Geographic zones + HERE Tour Planning per zone ──
+            //
+            // WHY TWO STEPS?
+            // HERE Tour Planning optimizes total fleet cost — it will put kids from
+            // Lakewood (5 min from camp) and Jackson Township (45 min from camp) on
+            // the same bus if it saves overall distance. That gives nearby kids a
+            // 90-minute ride. The solution: separate the two sub-problems.
+            //
+            //   Step 1 — ASSIGNMENT: buildGreedyZones() clusters stops into compact
+            //     geographic corridors (K-medoids). Lakewood kids stay with Lakewood,
+            //     Jackson kids stay with Jackson. Stops are never mixed across zones.
+            //
+            //   Step 2 — ORDERING: HERE Tour Planning gets each zone's stops + 1 bus.
+            //     HERE can only optimize the sequence — the assignment is already locked.
+            //     Calls run in parallel so 18 zones ≈ same time as 1 large call.
+            //
+            //   Step 3 — DIRECTION: Directional sort ensures dismissal routes go
+            //     near → far (kids near camp drop first) and arrival routes go
+            //     far → near (far kids picked up first = shortest ride back to camp).
+            //
             if (getHereKey()) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing with HERE Tour Planning...', pctBase + 30);
-                try {
-                    const hereResult = await fetchHereTourPlan(allStops, shiftBuses, { lat: campLat, lng: campLng }, {
-                        isArrival,
-                        serviceTimeSec: serviceTime,
-                        maxRouteMinutes: D.setup.maxRouteDuration || 90
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': building geographic zones...', pctBase + 20);
+                const geoZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
+                console.log('[Go] Geographic zones: ' + geoZones.length + ' zones for ' + allStops.length + ' stops');
+
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing stop order (HERE)...', pctBase + 35);
+
+                // Helper: apply directional sort to an orderedStops array in-place
+                function applyDirectionalSort(orderedStops) {
+                    if (orderedStops.length < 2) return;
+                    orderedStops.forEach(function(s) {
+                        s._campDist = drivingDist(campLat, campLng, s.lat, s.lng);
                     });
-                    if (hereResult && hereResult.routes.length) {
-                        const builtRoutes = [];
-                        for (const hr of hereResult.routes) {
-                            const bus     = shiftBuses[hr.vehicleIdx];
-                            const vehicle = shiftVehicles.find(function(v) { return v.busId === bus?.id; });
-                            if (!bus || !vehicle) continue;
-                            const orderedStops = [];
-                            hr.stopIndices.forEach(function(stopIdx, sIdx) {
-                                const stop = allStops[stopIdx];
-                                if (!stop) return;
-                                orderedStops.push({ stopNum: sIdx + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng });
-                            });
-                            if (!orderedStops.length) continue;
-                            builtRoutes.push({
-                                busId:         vehicle.busId,
-                                busName:       vehicle.name,
-                                busColor:      vehicle.color || '#10b981',
-                                monitor:       vehicle.monitor    || null,
-                                counselors:    vehicle.counselors || [],
-                                stops:         orderedStops,
-                                camperCount:   orderedStops.reduce(function(s, st) { return s + st.campers.length; }, 0),
-                                _cap:          vehicle.capacity,
-                                totalDuration: hr.statistic?.duration || 0,
-                                _source:       'here-tour-planning'
-                            });
-                        }
-                        if (builtRoutes.length) {
-                            routes = builtRoutes;
-                            // Handle unassigned stops — insert via cheapest position
-                            if (hereResult.unassigned && hereResult.unassigned.length) {
-                                console.warn('[Go] HERE: ' + hereResult.unassigned.length + ' stops unassigned — inserting via cheapest position');
-                                hereResult.unassigned.forEach(function(stopIdx) {
-                                    const stop = allStops[stopIdx];
-                                    if (!stop) return;
-                                    let bestRoute = null, bestPos = 0, bestCost = Infinity;
-                                    routes.forEach(function(route) {
-                                        const v = shiftVehicles.find(function(sv) { return sv.busId === route.busId; });
-                                        if (v && route.camperCount + stop.campers.length > v.capacity) return;
-                                        for (var i = 0; i <= route.stops.length; i++) {
-                                            var prev = route.stops[i - 1] || null;
-                                            var next = route.stops[i]     || null;
-                                            var cost = (prev ? drivingDist(prev.lat, prev.lng, stop.lat, stop.lng) : 0)
-                                                     + (next ? drivingDist(stop.lat, stop.lng, next.lat, next.lng) : 0)
-                                                     - (prev && next ? drivingDist(prev.lat, prev.lng, next.lat, next.lng) : 0);
-                                            if (cost < bestCost) { bestCost = cost; bestRoute = route; bestPos = i; }
-                                        }
-                                    });
-                                    if (bestRoute) {
-                                        bestRoute.stops.splice(bestPos, 0, { stopNum: bestPos + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng });
-                                        bestRoute.stops.forEach(function(s, i) { s.stopNum = i + 1; });
-                                        bestRoute.camperCount += stop.campers.length;
-                                    }
+                    if (isArrival) {
+                        // Arrival: far first → near last (far kids picked up first)
+                        orderedStops.sort(function(a, b) { return b._campDist - a._campDist; });
+                    } else {
+                        // Dismissal: near first → far last (near kids dropped quickly)
+                        orderedStops.sort(function(a, b) { return a._campDist - b._campDist; });
+                    }
+                    orderedStops.forEach(function(s, i) { s.stopNum = i + 1; delete s._campDist; });
+                }
+
+                try {
+                    // Fire HERE calls for all zones in parallel
+                    const zoneRoutePromises = geoZones.map(async function(zone) {
+                        const vehicle = shiftVehicles.find(function(v) { return v.busId === zone.busId; });
+                        if (!vehicle) return null;
+                        const zoneStops = zone.stopIndices.map(function(si) { return allStops[si]; }).filter(Boolean);
+                        if (!zoneStops.length) return null;
+
+                        // Find the shiftBus object for this zone
+                        const zoneBus = shiftBuses.find(function(b) { return b.id === zone.busId; });
+                        if (!zoneBus) return null;
+
+                        // Call HERE with just this zone's stops + its assigned bus
+                        let orderedStops = null;
+                        try {
+                            const zoneResult = await fetchHereTourPlan(
+                                zoneStops, [zoneBus], { lat: campLat, lng: campLng },
+                                { isArrival, serviceTimeSec: serviceTime, maxRouteMinutes: D.setup.maxRouteDuration || 90 }
+                            );
+                            if (zoneResult && zoneResult.routes.length) {
+                                orderedStops = [];
+                                zoneResult.routes[0].stopIndices.forEach(function(stopIdx) {
+                                    const s = zoneStops[stopIdx];
+                                    if (s) orderedStops.push({ stopNum: orderedStops.length + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng });
                                 });
+                                // Insert any unassigned zone stops via cheapest position
+                                if (zoneResult.unassigned && zoneResult.unassigned.length) {
+                                    zoneResult.unassigned.forEach(function(ui) {
+                                        const s = zoneStops[ui];
+                                        if (!s) return;
+                                        let bestPos = orderedStops.length, bestCost = Infinity;
+                                        for (var pi = 0; pi <= orderedStops.length; pi++) {
+                                            var prev = orderedStops[pi - 1] || null;
+                                            var next = orderedStops[pi] || null;
+                                            var cost = (prev ? drivingDist(prev.lat, prev.lng, s.lat, s.lng) : 0)
+                                                     + (next ? drivingDist(s.lat, s.lng, next.lat, next.lng) : 0)
+                                                     - (prev && next ? drivingDist(prev.lat, prev.lng, next.lat, next.lng) : 0);
+                                            if (cost < bestCost) { bestCost = cost; bestPos = pi; }
+                                        }
+                                        orderedStops.splice(bestPos, 0, { stopNum: bestPos + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng });
+                                        orderedStops.forEach(function(st, i) { st.stopNum = i + 1; });
+                                    });
+                                }
                             }
-                            usedExternalOptimizer = true;
-                            toast('✓ HERE Tour Planning — globally optimal routes generated');
-                            console.log('[Go] HERE Tour Planning succeeded for shift "' + (shift.label || shift.id) + '"');
+                        } catch (zoneErr) {
+                            console.warn('[Go] HERE failed for zone "' + zone.busName + '":', zoneErr.message);
                         }
+
+                        // Fallback to directional sort if HERE didn't return a result for this zone
+                        if (!orderedStops || !orderedStops.length) {
+                            console.warn('[Go] Using directional sort fallback for zone "' + zone.busName + '"');
+                            orderedStops = zoneStops.map(function(s, i) {
+                                return { stopNum: i + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                            });
+                        }
+
+                        // Apply directional sort: near→far for dismissal, far→near for arrival
+                        applyDirectionalSort(orderedStops);
+
+                        return {
+                            busId:       vehicle.busId,
+                            busName:     vehicle.name,
+                            busColor:    vehicle.color || '#10b981',
+                            monitor:     vehicle.monitor    || null,
+                            counselors:  vehicle.counselors || [],
+                            stops:       orderedStops,
+                            camperCount: orderedStops.reduce(function(s, st) { return s + st.campers.length; }, 0),
+                            _cap:        vehicle.capacity,
+                            totalDuration: 0,
+                            _source:     'here-zone-routing'
+                        };
+                    });
+
+                    const zoneRoutes = await Promise.all(zoneRoutePromises);
+                    const builtRoutes = zoneRoutes.filter(Boolean);
+
+                    if (builtRoutes.length) {
+                        routes = builtRoutes;
+                        usedExternalOptimizer = true;
+                        toast('✓ Geographic zones + HERE ordering — routes generated');
+                        console.log('[Go] HERE zone routing succeeded: ' + builtRoutes.length + ' routes, ' +
+                            builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
                     }
                 } catch (e) {
-                    console.warn('[Go] HERE Tour Planning failed, falling back to Clarke-Wright:', e.message);
+                    console.warn('[Go] HERE zone routing failed, falling back to Clarke-Wright:', e.message);
                 }
             }
 
