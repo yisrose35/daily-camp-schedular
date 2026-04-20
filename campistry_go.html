@@ -140,37 +140,6 @@
                     </button>
                     <div class="advanced-panel" style="max-height:0;overflow:hidden;transition:max-height .3s ease;">
                         <div style="padding:0 1.25rem 1.25rem;display:flex;flex-direction:column;gap:1rem;">
-                            <div id="orsKeyCard">
-                                <h4 style="margin:0 0 .25rem;">OpenRouteService API Key</h4>
-                                <p class="muted" style="margin:0 0 .5rem;font-size:.8125rem;">Only needed if no platform key is configured</p>
-                                <div class="form-group full-width">
-                                    <label class="form-label">API Key</label>
-                                    <input type="text" class="form-input" id="orsApiKey" placeholder="Paste your ORS token">
-                                    <span class="form-hint">Get free at <a href="https://openrouteservice.org/dev/#/signup" target="_blank" style="color:var(--blue-600)">openrouteservice.org</a> (geocoding & directions)</span>
-                                </div>
-                            </div>
-                            <div>
-                                <h4 style="margin:0 0 .5rem;">GraphHopper Key <span style="background:#059669;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">RECOMMENDED</span></h4>
-                                <div class="form-group full-width">
-                                    <input type="text" class="form-input" id="ghApiKey" placeholder="Paste your GraphHopper key">
-                                    <span class="form-hint">Get free at <a href="https://graphhopper.com/dashboard/signup" target="_blank" style="color:var(--blue-600)">graphhopper.com</a> (route optimization — makes routes 10x better)</span>
-                                </div>
-                                <div style="margin-top:.5rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
-                                    <button class="btn btn-secondary btn-sm" onclick="CampistryGo.testApiKey()">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Test
-                                    </button>
-                                    <span id="apiKeyStatus" style="font-size:.8125rem;"></span>
-                                </div>
-                            </div>
-                            <div>
-                                <h4 style="margin:0 0 .5rem;">Mapbox Access Token</h4>
-                                <p class="muted" style="margin:0 0 .5rem;font-size:.8125rem;">Shows road-accurate route lines on the map (free)</p>
-                                <div class="form-group full-width">
-                                    <label class="form-label">Access Token</label>
-                                    <input type="text" class="form-input" id="mapboxToken" placeholder="pk.eyJ1Ijo...">
-                                    <span class="form-hint">Get free at <a href="https://account.mapbox.com/access-tokens/" target="_blank" style="color:var(--blue-600)">mapbox.com</a> — 100K requests/month free. Without this, route lines use OSRM (less accurate in some neighborhoods).</span>
-                                </div>
-                            </div>
                             <div style="border-top:1px solid var(--border-light);padding-top:1rem;margin-top:.5rem;">
                                 <h4 style="margin:0 0 .25rem;display:flex;align-items:center;gap:.5rem;">
                                     Geoapify Route Planner
@@ -192,11 +161,6 @@
                                     <label class="form-label">Google Maps API Key</label>
                                     <input type="text" class="form-input" id="googleMapsKey" placeholder="AIza...">
                                     <span class="form-hint">Enable <strong>Address Validation API</strong> and <strong>Directions API</strong> in your <a href="https://console.cloud.google.com/apis/library" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a>. Used for geocoding and map line geometry.</span>
-                                </div>
-                                <div class="form-group full-width">
-                                    <label class="form-label">Google Cloud Project ID</label>
-                                    <input type="text" class="form-input" id="googleProjectId" placeholder="my-camp-project-123456">
-                                    <span class="form-hint">Found in your <a href="https://console.cloud.google.com/" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a> dashboard — top of the page next to the project name.</span>
                                 </div>
                             </div>
                         </div>
