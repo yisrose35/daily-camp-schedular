@@ -2928,155 +2928,74 @@
     }
 
     async function validateAllAddresses() {
-        const names = Object.keys(D.addresses).filter(n => D.addresses[n]?.street);
-        if (!names.length) return;
-
-        progressStart('Validating Addresses');
-        let validated = 0, corrected = 0, geocoded = 0, failed = 0;
-
-        for (let i = 0; i < names.length; i++) {
-            const name = names[i];
-            const a = D.addresses[name];
-            if (!a.street) continue;
-
-            // Use Census (JSONP — no CORS issues) as primary validator
-            let result = null;
-            const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
-            if (cen && cen.lat && cen.lng) {
-                result = { lat: cen.lat, lng: cen.lng, confidence: cen.confidence, source: 'census', zip: cen.zip || '' };
-            }
-            // Fallback to ORS if Census fails
-            if (!result) {
-                const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
-                if (ors && ors.lat && ors.lng) {
-                    result = { lat: ors.lat, lng: ors.lng, confidence: ors.confidence, source: 'ors', zip: ors.zip || '' };
-                }
-            }
-
-            if (result && result.lat && result.lng) {
-                if (!validateGeocode(result.lat, result.lng, a.street, name, result)) {
-                    a._validated = false;
-                    a._geocodeWarning = 'Location invalid — check address';
-                    failed++;
-                } else {
-                    // Never overwrite the user's address — geocoders return variants
-                    // like "Village of Cedarhurst" instead of "Cedarhurst" which break
-                    // subsequent geocoding. Just validate and set coordinates.
-                    a.lat = result.lat;
-                    a.lng = result.lng;
-                    a.geocoded = true;
-                    a._geocodeSource = result.source;
-                    a._geocodeConfidence = result.confidence;
-                    a._validated = true;
-                    a._zipMismatch = !!(a.zip && result.zip && a.zip !== result.zip.substring(0, 5));
-                    delete a._geocodeWarning;
-                    validated++;
-                    geocoded++;
-                }
-            } else {
-                a._validated = false;
-                a._geocodeWarning = 'Address not found — may not exist';
-                failed++;
-                console.warn('[Go] Address not found: ' + name + ' (' + [a.street, a.city, a.state, a.zip].join(', ') + ')');
-            }
-
-            if ((i + 1) % 5 === 0 || i === names.length - 1) {
-                renderAddresses();
-                progressUpdate(i + 1, names.length, 'Census · ' + validated + ' verified');
-            }
-            if (i < names.length - 1) await new Promise(r => setTimeout(r, 300)); // Census has no rate limit
-        }
-
-        save(); renderAddresses(); updateStats();
-        const summary = validated + ' verified, ' + geocoded + ' geocoded' + (failed > 0 ? ', ' + failed + ' unverified' : '');
-        progressEnd(summary, failed > 0);
-
-        // For any that couldn't be found, try the full pipeline as backup
-        const stillUngeocoded = names.filter(n => !D.addresses[n]?.geocoded);
-        if (stillUngeocoded.length) {
-            await geocodeAll(false);
-        }
+        // Route through the full geocodeOne pipeline:
+        // Google Address Validation (primary) → Census → ORS
+        await geocodeAll(true);
     }
 
     async function geocodeAll(force) {
         if (!_campCoordsCache && D.setup.campAddress) { const cc = await geocodeSingle(D.setup.campAddress); if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; save(); } }
-        const todo = Object.keys(D.addresses).filter(n => { const a = D.addresses[n]; if (!a?.street) return false; if (force) { a.geocoded = false; a.lat = null; a.lng = null; a._zipMismatch = false; a._geocodeConfidence = null; a._geocodePrecision = null; a._crossValidated = false; return true; } return !a.geocoded; });
+
+        const todo = Object.keys(D.addresses).filter(n => {
+            const a = D.addresses[n];
+            if (!a?.street) return false;
+            if (force) {
+                a.geocoded = false; a.lat = null; a.lng = null;
+                a._zipMismatch = false; a._geocodeConfidence = null;
+                a._geocodePrecision = null; a._crossValidated = false;
+                a._dpv = null; a._addressCorrected = null; a._geocodeSource = null;
+                return true;
+            }
+            return !a.geocoded;
+        });
         if (!todo.length) return;
 
+        const hasGoogle = !!D.setup.googleMapsKey;
+        const primaryLabel = hasGoogle ? 'Google' : 'Census';
         progressStart('Geocoding Addresses');
-        const hasOrs = !!getApiKey();
-        let totalOk = 0, totalFail = 0;
+        let totalOk = 0, totalFail = 0, googleCount = 0, censusCount = 0, orsCount = 0;
 
-        // Calculate total work across all passes: every address goes through pass 1,
-        // then we estimate ~30% need pass 2, ~10% need pass 3 (adjusted as we go)
-        let processed = 0;
-        let totalWork = todo.length;
-
-        // ── Pass 1: Census (free, unlimited, US residential) ──
-        if (todo.length > 0) {
-            let cenOk = 0;
-            for (let i = 0; i < todo.length; i++) {
-                const name = todo[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) { processed++; continue; }
-                const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
-                if (cen && validateGeocode(cen.lat, cen.lng, a.street, name, cen)) {
-                    applyBestGeocode(a, cen, name);
-                    cenOk++;
-                }
-                processed++;
-                if ((i + 1) % 5 === 0 || i === todo.length - 1) {
-                    renderAddresses(); updateStats();
-                    progressUpdate(processed, totalWork, 'Pass 1: Census · ' + cenOk + ' geocoded');
-                }
-                if (i < todo.length - 1) await new Promise(r => setTimeout(r, 300));
+        for (let i = 0; i < todo.length; i++) {
+            const name = todo[i];
+            const ok = await geocodeOne(name);
+            if (ok) {
+                totalOk++;
+                const src = D.addresses[name]?._geocodeSource || '';
+                if (src.includes('google'))  googleCount++;
+                else if (src.includes('census')) censusCount++;
+                else orsCount++;
+            } else {
+                totalFail++;
+                if (D.addresses[name]) D.addresses[name]._geocodeWarning = 'All providers failed — verify address';
             }
-            totalOk += cenOk;
-            save();
+
+            if ((i + 1) % 5 === 0 || i === todo.length - 1) {
+                renderAddresses(); updateStats();
+                const parts = [];
+                if (googleCount) parts.push('Google: ' + googleCount);
+                if (censusCount) parts.push('Census: ' + censusCount);
+                if (orsCount)    parts.push('ORS: ' + orsCount);
+                progressUpdate(i + 1, todo.length, primaryLabel + ' · ' + totalOk + ' geocoded' + (parts.length > 1 ? ' (' + parts.join(', ') + ')' : ''));
+            }
+
+            // Small delay to avoid hammering APIs
+            if (i < todo.length - 1) await new Promise(r => setTimeout(r, 150));
+
+            // Save every 50 addresses
+            if ((i + 1) % 50 === 0) save();
         }
 
-        // ── Pass 2: ORS for any still remaining ──
-        const finalNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
-        if (finalNeeded.length > 0 && hasOrs) {
-            totalWork += finalNeeded.length; // extend total again
-            currentPass = 'ORS';
-            let orsOk = 0;
-            for (let i = 0; i < finalNeeded.length; i++) {
-                const name = finalNeeded[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) { processed++; continue; }
-                const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
-                if (ors && validateGeocode(ors.lat, ors.lng, a.street, name, ors)) {
-                    applyBestGeocode(a, ors, name);
-                    orsOk++;
-                } else {
-                    a._geocodeWarning = 'All providers failed — verify address';
-                    totalFail++;
-                }
-                processed++;
-                if ((i + 1) % 3 === 0 || i === finalNeeded.length - 1) {
-                    renderAddresses(); updateStats();
-                    progressUpdate(processed, totalWork, 'Pass 2: ORS · ' + orsOk + ' geocoded');
-                }
-                if (i < finalNeeded.length - 1) await new Promise(r => setTimeout(r, 500));
-            }
-            totalOk += orsOk;
-            save();
-        } else if (finalNeeded.length > 0) {
-            finalNeeded.forEach(n => {
-                if (!D.addresses[n]?.geocoded) {
-                    D.addresses[n]._geocodeWarning = 'Census failed — verify address';
-                    totalFail++;
-                }
-            });
-        }
-
-        renderAddresses(); updateStats();
-        const highConf = todo.filter(n => (D.addresses[n]?._geocodeConfidence || 0) >= 0.8).length;
-        const lowConf = todo.filter(n => D.addresses[n]?.geocoded && (D.addresses[n]._geocodeConfidence || 0) < 0.5).length;
+        save(); renderAddresses(); updateStats();
+        const highConf = todo.filter(n => (D.addresses[n]?._geocodeConfidence || 0) >= 0.85).length;
+        const lowConf  = todo.filter(n => D.addresses[n]?.geocoded && (D.addresses[n]._geocodeConfidence || 0) < 0.75).length;
         let summary = totalOk + ' geocoded';
-        if (highConf) summary += ' (' + highConf + ' high confidence)';
-        if (lowConf) summary += ', ' + lowConf + ' low confidence';
-        if (totalFail > 0) summary += ', ' + totalFail + ' failed';
+        if (googleCount) summary += ' · Google: ' + googleCount;
+        if (censusCount) summary += ' · Census: ' + censusCount;
+        if (orsCount)    summary += ' · ORS: ' + orsCount;
+        if (lowConf)     summary += ' · ' + lowConf + ' low confidence';
+        if (totalFail)   summary += ' · ' + totalFail + ' failed';
         progressEnd(summary, totalFail > 0);
+        console.log('[Go] Geocoding complete: ' + totalOk + '/' + todo.length + ' — Google: ' + googleCount + ', Census: ' + censusCount + ', ORS: ' + orsCount + ', failed: ' + totalFail);
     }
 
     async function geocodeSingle(addr) {
