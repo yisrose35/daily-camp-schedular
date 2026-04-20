@@ -154,7 +154,7 @@
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
             avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
-            googleMapsKey: '', googleProjectId: '',
+            googleMapsKey: '', googleProjectId: '', hereApiKey: '',
             campLat: null, campLng: null
         },
         activeMode: 'dismissal',
@@ -423,6 +423,9 @@
         // Profile name used in fleet.types[].profile must match fleet.profiles[].name
         const profileName = 'car_1';
 
+        const maxRouteSec = (opts.maxRouteMinutes || 90) * 60;
+        const campLoc = { lat: camp.lat, lng: camp.lng };
+
         // Build fleet — one vehicle type per bus so we preserve bus identity + capacity
         const fleetTypes = buses.map(function(b, i) {
             return {
@@ -430,14 +433,9 @@
                 profile: profileName,
                 costs: { fixed: 5.0, distance: 0.07, time: 0.01 },
                 shifts: [{
-                    start: {
-                        time: baseTime,
-                        location: { lat: camp.lat, lng: camp.lng }
-                    },
-                    end: {
-                        time: endTime,
-                        location: { lat: camp.lat, lng: camp.lng }
-                    }
+                    start: { time: baseTime, location: campLoc },
+                    end:   { time: endTime,  location: campLoc },
+                    limits: { maxTime: maxRouteSec }
                 }],
                 capacity: [b.capacity || 44],
                 amount: 1
@@ -445,11 +443,14 @@
         });
 
         // Build jobs — one per stop, with demand = # kids
+        // Arrival  = bus picks up kids from their homes (pickups)
+        // Dismissal = bus delivers kids to their homes (deliveries)
+        const taskKey = isArrival ? 'pickups' : 'deliveries';
         const jobs = stops.map(function(s, i) {
             return {
                 id: 'stop_' + i,
                 tasks: {
-                    deliveries: [{
+                    [taskKey]: [{
                         places: [{
                             location: { lat: s.lat, lng: s.lng },
                             duration: serviceTimeSec
@@ -503,7 +504,8 @@
                 tour.stops.forEach(function(ts) {
                     if (ts.activities) {
                         ts.activities.forEach(function(act) {
-                            if (act.jobId && act.type === 'delivery') {
+                            // match both 'delivery' (dismissal) and 'pickup' (arrival)
+                            if (act.jobId && (act.type === 'delivery' || act.type === 'pickup')) {
                                 const m = act.jobId.match(/stop_(\d+)/);
                                 if (m) stopIndices.push(parseInt(m[1]));
                             }
@@ -1563,7 +1565,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',googleMapsKey:'',googleProjectId:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',googleMapsKey:'',googleProjectId:'',hereApiKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
@@ -1756,6 +1758,7 @@
         if (document.getElementById('mapboxToken')) document.getElementById('mapboxToken').value = s.mapboxToken || '';
         if (document.getElementById('googleMapsKey')) document.getElementById('googleMapsKey').value = s.googleMapsKey || '';
         if (document.getElementById('googleProjectId')) document.getElementById('googleProjectId').value = s.googleProjectId || '';
+        if (document.getElementById('hereApiKeyInput')) document.getElementById('hereApiKeyInput').value = s.hereApiKey || '';
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
@@ -1786,7 +1789,7 @@
         D.setup.mapboxToken = el('mapboxToken')?.value.trim() || '';
         D.setup.googleMapsKey = el('googleMapsKey')?.value.trim() || '';
         D.setup.googleProjectId = el('googleProjectId')?.value.trim() || '';
-        // Expose to GoGoogleOptimizer via getter
+        D.setup.hereApiKey = el('hereApiKeyInput')?.value.trim() || '';
         window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
@@ -5210,43 +5213,91 @@
             // ══════════════════════════════════════════════════════════════
             // STEP 3: Optimize routes
             //
-            // PRIMARY (if configured): Google Route Optimization API
-            //   — Solves ALL buses simultaneously using OR-Tools
-            //   — Traffic-aware, globally optimal, handles all constraints
+            // PRIMARY: HERE Tour Planning API (professional VRP solver)
+            //   — Solves ALL buses simultaneously, globally optimal
+            //   — Respects capacities, max route time, handles all stops
             //
             // FALLBACK: Clarke-Wright Savings → per-zone VROOM/nearest-neighbor
             //   — Per-zone greedy, good but not globally optimal
             // ══════════════════════════════════════════════════════════════
             let routes = [];
-            let usedGoogleOptimizer = false;
+            let usedExternalOptimizer = false;
 
-            // ── Try Google Route Optimization first ──
-            if (window.GoGoogleOptimizer && D.setup.googleMapsKey && D.setup.googleProjectId) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing with Google Route Optimization...', pctBase + 30);
+            // ── PRIMARY: HERE Tour Planning ──
+            if (getHereKey()) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing with HERE Tour Planning...', pctBase + 30);
                 try {
-                    const googleRoutes = await window.GoGoogleOptimizer.optimizeTours({
-                        stops:          allStops,
-                        vehicles:       shiftVehicles,
-                        campLat, campLng,
-                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
+                    const hereResult = await fetchHereTourPlan(allStops, shiftBuses, { lat: campLat, lng: campLng }, {
                         isArrival,
                         serviceTimeSec: serviceTime,
-                        apiKey:         D.setup.googleMapsKey,
-                        projectId:      D.setup.googleProjectId
+                        maxRouteMinutes: D.setup.maxRouteDuration || 90
                     });
-                    if (googleRoutes && googleRoutes.length > 0) {
-                        routes = googleRoutes;
-                        usedGoogleOptimizer = true;
-                        toast('✓ Google Route Optimization — globally optimal routes generated');
-                        console.log('[Go] Google Route Optimization succeeded for shift "' + (shift.label || shift.id) + '"');
+                    if (hereResult && hereResult.routes.length) {
+                        const builtRoutes = [];
+                        for (const hr of hereResult.routes) {
+                            const bus     = shiftBuses[hr.vehicleIdx];
+                            const vehicle = shiftVehicles.find(function(v) { return v.busId === bus?.id; });
+                            if (!bus || !vehicle) continue;
+                            const orderedStops = [];
+                            hr.stopIndices.forEach(function(stopIdx, sIdx) {
+                                const stop = allStops[stopIdx];
+                                if (!stop) return;
+                                orderedStops.push({ stopNum: sIdx + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng });
+                            });
+                            if (!orderedStops.length) continue;
+                            builtRoutes.push({
+                                busId:         vehicle.busId,
+                                busName:       vehicle.name,
+                                busColor:      vehicle.color || '#10b981',
+                                monitor:       vehicle.monitor    || null,
+                                counselors:    vehicle.counselors || [],
+                                stops:         orderedStops,
+                                camperCount:   orderedStops.reduce(function(s, st) { return s + st.campers.length; }, 0),
+                                _cap:          vehicle.capacity,
+                                totalDuration: hr.statistic?.duration || 0,
+                                _source:       'here-tour-planning'
+                            });
+                        }
+                        if (builtRoutes.length) {
+                            routes = builtRoutes;
+                            // Handle unassigned stops — insert via cheapest position
+                            if (hereResult.unassigned && hereResult.unassigned.length) {
+                                console.warn('[Go] HERE: ' + hereResult.unassigned.length + ' stops unassigned — inserting via cheapest position');
+                                hereResult.unassigned.forEach(function(stopIdx) {
+                                    const stop = allStops[stopIdx];
+                                    if (!stop) return;
+                                    let bestRoute = null, bestPos = 0, bestCost = Infinity;
+                                    routes.forEach(function(route) {
+                                        const v = shiftVehicles.find(function(sv) { return sv.busId === route.busId; });
+                                        if (v && route.camperCount + stop.campers.length > v.capacity) return;
+                                        for (var i = 0; i <= route.stops.length; i++) {
+                                            var prev = route.stops[i - 1] || null;
+                                            var next = route.stops[i]     || null;
+                                            var cost = (prev ? drivingDist(prev.lat, prev.lng, stop.lat, stop.lng) : 0)
+                                                     + (next ? drivingDist(stop.lat, stop.lng, next.lat, next.lng) : 0)
+                                                     - (prev && next ? drivingDist(prev.lat, prev.lng, next.lat, next.lng) : 0);
+                                            if (cost < bestCost) { bestCost = cost; bestRoute = route; bestPos = i; }
+                                        }
+                                    });
+                                    if (bestRoute) {
+                                        bestRoute.stops.splice(bestPos, 0, { stopNum: bestPos + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng });
+                                        bestRoute.stops.forEach(function(s, i) { s.stopNum = i + 1; });
+                                        bestRoute.camperCount += stop.campers.length;
+                                    }
+                                });
+                            }
+                            usedExternalOptimizer = true;
+                            toast('✓ HERE Tour Planning — globally optimal routes generated');
+                            console.log('[Go] HERE Tour Planning succeeded for shift "' + (shift.label || shift.id) + '"');
+                        }
                     }
                 } catch (e) {
-                    console.warn('[Go] Google Route Optimization failed, falling back to Clarke-Wright:', e.message);
+                    console.warn('[Go] HERE Tour Planning failed, falling back to Clarke-Wright:', e.message);
                 }
             }
 
             // ── Fallback: Clarke-Wright Savings → per-zone VROOM/nearest-neighbor ──
-            if (!usedGoogleOptimizer) {
+            if (!usedExternalOptimizer) {
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': building zones (Clarke-Wright)...', pctBase + 30);
             const greedyZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
             toast(greedyZones.length + ' bus zones created — optimizing routes...');
@@ -5489,7 +5540,7 @@
 
             } // end fallback block (Clarke-Wright)
 
-            console.log('[Go] All routes complete: ' + routes.length + ' bus routes' + (usedGoogleOptimizer ? ' [Google Route Optimization]' : ' [Clarke-Wright fallback]'));
+            console.log('[Go] All routes complete: ' + routes.length + ' bus routes' + (usedExternalOptimizer ? ' [HERE Tour Planning]' : ' [Clarke-Wright fallback]'));
 
             // ── Staff suggestions: find closest stop for "no stop" staff ──
             // For each staff member without a dedicated stop, find the closest
