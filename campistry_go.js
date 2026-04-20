@@ -1492,6 +1492,69 @@
         } catch (e) { console.error('[Go] Load error:', e); }
     }
 
+    // -------------------------------------------------------------------------
+    // loadGoCloudData() — async supplement to load()
+    // Fetches addresses and routes from the go_standalone_data table.
+    // Called after campistry-cloud-hydrated fires (and optionally on init).
+    // Merges only fields that are currently empty so it never overwrites
+    // data the user just entered.
+    // -------------------------------------------------------------------------
+    async function loadGoCloudData() {
+        if (!window.GoCloudSync) return;
+        try {
+            const cloud = await window.GoCloudSync.loadAll();
+            if (!cloud) return;
+
+            let changed = false;
+
+            // Restore addresses if we don't have any locally
+            if (cloud.addresses && typeof cloud.addresses === 'object') {
+                const localCount = Object.keys(D.addresses || {}).length;
+                const cloudCount = Object.keys(cloud.addresses).length;
+                if (cloudCount > localCount) {
+                    // Cloud has more addresses — merge (cloud wins for matching keys)
+                    D.addresses = Object.assign({}, D.addresses || {}, cloud.addresses);
+                    changed = true;
+                    console.log('[Go] Restored', cloudCount, 'addresses from GoCloud');
+                }
+            }
+
+            // Restore routes if we don't have any locally
+            if (cloud.routes && typeof cloud.routes === 'object') {
+                if (!D.savedRoutes && cloud.routes.savedRoutes) {
+                    D.savedRoutes = cloud.routes.savedRoutes;
+                    changed = true;
+                    console.log('[Go] Restored savedRoutes from GoCloud');
+                }
+                if (D.dismissal && !D.dismissal.savedRoutes && cloud.routes.dismissalRoutes) {
+                    D.dismissal.savedRoutes = cloud.routes.dismissalRoutes;
+                    changed = true;
+                }
+                if (D.arrival && !D.arrival.savedRoutes && cloud.routes.arrivalRoutes) {
+                    D.arrival.savedRoutes = cloud.routes.arrivalRoutes;
+                    changed = true;
+                }
+                if (changed && (cloud.routes.savedRoutes || cloud.routes.dismissalRoutes)) {
+                    _generatedRoutes = D.savedRoutes;
+                    console.log('[Go] Restored routes from GoCloud — re-rendering');
+                }
+            }
+
+            if (changed) {
+                // Persist the restored data to localStorage so subsequent
+                // sync loads find it without another round-trip
+                try { localStorage.setItem(STORE, JSON.stringify(D)); } catch (_) {}
+                renderAddresses();
+                updateStats();
+                if (D.savedRoutes && D.savedRoutes.length) {
+                    setTimeout(() => { renderRouteResults(applyOverrides(D.savedRoutes)); toast('Routes restored from cloud'); }, 200);
+                }
+            }
+        } catch (e) {
+            console.error('[Go] loadGoCloudData error:', e);
+        }
+    }
+
     function merge(d) {
         const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
@@ -1522,6 +1585,26 @@
                 delete lite.savedRoutes; // strip route data — it's already in STORE
                 window.saveGlobalSettings('campistryGo', lite);
             }
+            // ── Go-specific cloud persistence ─────────────────────────────────
+            // Addresses and routes are stripped from the main camp_state payload.
+            // Save them to the dedicated go_standalone_data table so they survive
+            // cache clears / new devices.
+            if (window.GoCloudSync) {
+                // Addresses: save whenever there is at least one entry
+                if (D.addresses && Object.keys(D.addresses).length > 0) {
+                    window.GoCloudSync.save('addresses', D.addresses);
+                }
+                // Routes: save dismissal + arrival savedRoutes together
+                const routePayload = {
+                    savedRoutes:     D.savedRoutes            || null,
+                    dismissalRoutes: D.dismissal?.savedRoutes || null,
+                    arrivalRoutes:   D.arrival?.savedRoutes   || null
+                };
+                if (routePayload.savedRoutes || routePayload.dismissalRoutes || routePayload.arrivalRoutes) {
+                    window.GoCloudSync.save('routes', routePayload);
+                }
+            }
+            // ─────────────────────────────────────────────────────────────────
             setTimeout(() => setSyncStatus('synced'), 300);
         } catch (e) { console.error('[Go] Save:', e); setSyncStatus('error'); }
     }
@@ -8337,7 +8420,16 @@
         }
         document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); }));
         document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open')); });
-        window.addEventListener('campistry-cloud-hydrated', () => { console.log('[Go] Cloud data hydrated'); load(); renderAddresses(); updateStats(); renderShifts(); });
+        window.addEventListener('campistry-cloud-hydrated', () => {
+            console.log('[Go] Cloud data hydrated');
+            load();
+            renderAddresses(); updateStats(); renderShifts();
+            // Fetch addresses + routes from go_standalone_data table
+            // (they're stripped from the main camp_state payload)
+            loadGoCloudData();
+        });
+        // Also attempt Go-cloud restore on boot (in case cloud is already ready)
+        setTimeout(loadGoCloudData, 1500);
         window.addEventListener('storage', (e) => { if (e.key === 'campGlobalSettings_v1') { console.log('[Go] Roster changed — refreshing'); renderAddresses(); updateStats(); } });
         console.log('[Go] Ready —', D.buses.length, 'buses,', D.shifts.length, 'shifts,', Object.keys(getRoster()).length, 'campers');
     }
