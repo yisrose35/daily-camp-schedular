@@ -4839,10 +4839,58 @@
                 });
             });
 
+            // ── Step 3d: Per-bus TSP via Geoapify ──
+            // Now that splitTourAtGaps has done time-balanced assignment,
+            // send each bus's stops to Geoapify as a single-vehicle TSP to get:
+            //   • Optimal within-bus stop ordering (road distance, not bearing)
+            //   • Road-following geometry (real streets, not straight lines)
+            // Each call is 1 vehicle + ~15 stops = ~16 coords — well under free-tier limits.
+            if (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus && builtRoutes.length) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing stop order per bus...', pctBase + 48);
+                let geoTspSucc = 0;
+                for (const route of builtRoutes) {
+                    if (!route.stops || route.stops.length < 2) continue;
+                    try {
+                        const tspResult = await window.GoGeoapifyOptimizer.optimizeSingleBus({
+                            stops:          route.stops.map(function(s) {
+                                return { lat: s.lat, lng: s.lng, address: s.address, campers: s.campers };
+                            }),
+                            vehicle:        shiftVehicles.find(function(v) { return v.busId === route.busId; })
+                                            || { capacity: route._cap || 44 },
+                            campLat:        campLat,
+                            campLng:        campLng,
+                            isArrival:      isArrival,
+                            serviceTimeSec: serviceTime,
+                            apiKey:         geoapifyKey
+                        });
+                        if (tspResult?.orderedStops?.length) {
+                            route.stops = tspResult.orderedStops.map(function(s, idx) {
+                                return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                            });
+                            route.camperCount = route.stops.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                            if (tspResult.roadPts?.length) {
+                                _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
+                                route._roadPts = tspResult.roadPts;
+                            }
+                            route._source = 'geoapify-tsp';
+                            geoTspSucc++;
+                        }
+                    } catch (e) {
+                        console.warn('[Go] Per-bus TSP failed for ' + route.busId + ':', e.message);
+                    }
+                }
+                if (geoTspSucc > 0) {
+                    console.log('[Go] Per-bus TSP: ' + geoTspSucc + '/' + builtRoutes.length + ' buses optimized');
+                }
+            }
+
             if (builtRoutes.length) {
                 routes = builtRoutes;
                 usedExternalOptimizer = true;
-                toast('✓ Routes generated — ' + builtRoutes.length + ' buses, geographically clustered routes');
+                const tspLabel = (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus)
+                    ? ', stop order optimized per bus'
+                    : ', geographically clustered routes';
+                toast('✓ Routes generated — ' + builtRoutes.length + ' buses' + tspLabel);
                 console.log('[Go] Routing complete: ' + builtRoutes.length + ' routes, ' +
                     builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
             }

@@ -376,5 +376,132 @@ window.GoGeoapifyOptimizer = (function () {
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
-    return { isConfigured, optimizeTours };
+    // -------------------------------------------------------------------------
+    // optimizeSingleBus(options)
+    //
+    // Single-vehicle TSP: sends one bus + its assigned stops to Geoapify to get
+    // the optimal within-bus stop ordering and road-following geometry.
+    //
+    // options = {
+    //   stops         : [{lat, lng, address, campers:[{name,...}]}]
+    //   vehicle       : {busId, name, color, capacity, monitor, counselors}
+    //   campLat/Lng   : number
+    //   isArrival     : bool
+    //   serviceTimeSec: number
+    //   apiKey        : string
+    // }
+    //
+    // Returns { orderedStops, roadPts } or null on failure.
+    // orderedStops preserves the original stop objects in optimal order.
+    // roadPts is [[lat,lng], ...] road-following geometry or null.
+    // -------------------------------------------------------------------------
+    async function optimizeSingleBus(options) {
+        const { stops, vehicle, campLat, campLng, isArrival, serviceTimeSec, apiKey } = options;
+
+        if (!apiKey)          { return null; }
+        if (!vehicle)         { return null; }
+        if (!stops || stops.length < 2) { return null; } // 0-1 stops need no TSP
+
+        const campCoord = [campLng, campLat]; // Geoapify uses [lng, lat]
+        const cap = vehicle.capacity || 44;
+
+        // Single agent — one bus
+        const agent = isArrival
+            ? { pickup_capacity:   cap, end_location:   campCoord }
+            : { delivery_capacity: cap, start_location: campCoord };
+
+        // Build jobs preserving original index so we can map results back
+        const jobs = stops.map(function (s) {
+            const j = {
+                location: [s.lng, s.lat],
+                duration: Math.max(30, Math.round(serviceTimeSec || 60))
+            };
+            if (isArrival) {
+                j.pickup_amount   = s.campers.length || 1;
+            } else {
+                j.delivery_amount = s.campers.length || 1;
+            }
+            return j;
+        });
+
+        const body = { mode: 'drive', agents: [agent], jobs: jobs };
+
+        // 1 vehicle + N stops — always well under 300-coord limit, always sync
+        const url = ENDPOINT + '?apiKey=' + encodeURIComponent(apiKey);
+
+        let resp, data;
+        try {
+            resp = await fetch(url, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(body)
+            });
+            data = await resp.json();
+        } catch (e) {
+            console.warn('[Geoapify/TSP] Network error for bus ' + (vehicle.busId || '?') + ':', e.message);
+            return null;
+        }
+
+        if (!resp.ok) {
+            const msg = data?.message || data?.error || ('HTTP ' + resp.status);
+            console.warn('[Geoapify/TSP] Error for bus ' + (vehicle.busId || '?') + ':', msg);
+            return null;
+        }
+
+        if (!data?.features?.length) {
+            console.warn('[Geoapify/TSP] No features for bus ' + (vehicle.busId || '?'));
+            return null;
+        }
+
+        // ── Find the single agent feature ──
+        const feat = (data.features || []).find(function (f) {
+            return f.properties?.agent_index !== undefined &&
+                   Array.isArray(f.properties?.actions);
+        });
+
+        if (!feat) {
+            console.warn('[Geoapify/TSP] No agent feature for bus ' + (vehicle.busId || '?'));
+            return null;
+        }
+
+        // ── Extract ordered stops ──
+        const orderedStops = [];
+        for (const action of (feat.properties.actions || [])) {
+            if (action.type !== 'job' && action.type !== 'pickup' && action.type !== 'delivery') continue;
+            const jobIdx = action.job_index;
+            if (jobIdx === undefined || jobIdx === null) continue;
+            const stop = stops[jobIdx];
+            if (!stop) continue;
+            orderedStops.push(stop);
+        }
+
+        if (!orderedStops.length) {
+            console.warn('[Geoapify/TSP] No ordered stops returned for bus ' + (vehicle.busId || '?'));
+            return null;
+        }
+
+        // ── Extract road geometry ──
+        let roadPts = null;
+        if (feat.geometry?.type === 'MultiLineString') {
+            roadPts = feat.geometry.coordinates
+                .flat()
+                .map(function (c) { return [c[1], c[0]]; });
+        } else if (feat.geometry?.type === 'LineString') {
+            roadPts = feat.geometry.coordinates
+                .map(function (c) { return [c[1], c[0]]; });
+        }
+
+        // ── Handle any unassigned jobs by appending them at the end ──
+        const unassigned = data.unassigned_jobs || [];
+        if (unassigned.length) {
+            console.warn('[Geoapify/TSP] ' + unassigned.length + ' unassigned stops for bus ' + (vehicle.busId || '?') + ' — appending at end');
+            for (const idx of unassigned) {
+                if (stops[idx]) orderedStops.push(stops[idx]);
+            }
+        }
+
+        return { orderedStops, roadPts };
+    }
+
+    return { isConfigured, optimizeTours, optimizeSingleBus };
 })();
