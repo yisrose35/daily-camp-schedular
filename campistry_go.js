@@ -4973,15 +4973,24 @@
         const campLng = campCoords.lng;
 
         // ── Pre-warm driving distance cache ──
-        showProgress('Building driving distance cache...', 7);
-        const allCamperCoords = [];
-        Object.keys(roster).forEach(name => {
-            const a = D.addresses[name];
-            if (a?.geocoded && a.lat && a.lng && a.transport !== 'pickup') {
-                allCamperCoords.push({ lat: a.lat, lng: a.lng });
-            }
-        });
-        await prewarmCache(allCamperCoords, campLat, campLng);
+        // Skipped when Geoapify is configured — Geoapify handles all routing
+        // internally and never consults the local haversine distance cache.
+        // Pre-warming 750 points requires 30+ OSRM matrix API calls and adds
+        // 30-60 seconds of wait time for no benefit when using the VRP solver.
+        const geoapifyConfigured = !!(D.setup.geoapifyKey?.trim() && window.GoGeoapifyOptimizer);
+        if (!geoapifyConfigured) {
+            showProgress('Building driving distance cache...', 7);
+            const allCamperCoords = [];
+            Object.keys(roster).forEach(name => {
+                const a = D.addresses[name];
+                if (a?.geocoded && a.lat && a.lng && a.transport !== 'pickup') {
+                    allCamperCoords.push({ lat: a.lat, lng: a.lng });
+                }
+            });
+            await prewarmCache(allCamperCoords, campLat, campLng);
+        } else {
+            console.log('[Go] Skipping distance cache pre-warm — Geoapify VRP handles routing directly');
+        }
 
         // =========================================================
         // NEW PIPELINE: Stops first → Greedy zones → Route each zone
