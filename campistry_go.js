@@ -3364,7 +3364,7 @@
     //
     // Dynamic skip cap = 4 × average inter-stop drive time in the tour.
     // =========================================================================
-    function splitTourAtGaps(tourStops, buses, campLatArg, campLngArg) {
+    function splitTourAtGaps(tourStops, buses, campLatArg, campLngArg, maxRideSecArg) {
         var K = buses.length;
         var N = tourStops.length;
         if (K <= 1 || N === 0) return [tourStops.slice()];
@@ -3387,6 +3387,8 @@
         var MAX_DETOUR_MI  = 4.0;   // Phase 3: reject swap if min-bus detour exceeds this
         var BAL_TOL_SEC    = 5 * 60; // Phase 3: stop when max−min spread < 5 min
         var MAX_PASSES     = 60;    // Phase 3: iteration cap
+        // Dynamic max ride time cap — passed in from generateRoutes, computed per-dataset
+        var maxRideSec     = (maxRideSecArg && maxRideSecArg > 0) ? maxRideSecArg : Infinity;
 
         // Dynamic skip cap: 4× avg inter-stop drive time
         var totalGapSec = 0;
@@ -3512,8 +3514,10 @@
                 cumTimeSec += stopTimeSec;
                 pos++;
 
-                // Time target reached — cut here
+                // Time target reached — cut here (balanced split)
                 if (cumTimeSec >= targetTimeSec && seg.length >= 1) break;
+                // Hard dynamic max cap — never let any bus exceed this regardless of balance
+                if (maxRideSec < Infinity && cumTimeSec >= maxRideSec && seg.length >= 1) break;
             }
 
             // Ensure the segment has at least 1 stop
@@ -4758,56 +4762,73 @@
                 continue; // skip the rest of this shift's processing
             }
 
-            // ── Geoapify VRP: globally-optimal multi-vehicle routing ──
-            // When a Geoapify API key is configured, send ALL stops + ALL buses
-            // to Geoapify's OR-Tools solver in one request. The solver handles
-            // both stop-to-bus assignment AND intra-bus ordering globally.
-            // Results include road-following GeoJSON geometry cached directly
-            // into _routeGeomCache so map lines draw as real roads immediately.
-            // Falls back to NN split if Geoapify is not configured or fails.
+            // ── Step 3: Time-balanced split + per-bus Geoapify TSP ──
+            //
+            // Strategy: BALANCE FIRST, then optimize ordering.
+            //
+            // Phase A — splitTourAtGaps: time-balanced greedy assignment.
+            //   Divides stops across all buses so every bus has ~equal ride time.
+            //   Uses a dynamic max ride time cap so no bus can run far over the
+            //   ideal balanced time. Every bus is guaranteed at least 1 stop.
+            //
+            // Phase B — per-bus Geoapify TSP (Step 3d below): once each bus has
+            //   its stops, send them to Geoapify as a single-vehicle TSP problem.
+            //   This gives optimal within-bus stop ordering AND road-following
+            //   geometry. 1 vehicle + ~15 stops = ~16 coords, always under limits.
+            //
+            // Note: the full multi-vehicle Geoapify VRP (which would optimize
+            // global distance) is intentionally skipped here. VRP minimizes total
+            // distance, not ride time — it produces wildly unbalanced routes
+            // (e.g., one bus with 4 stops × 11 min, another with 27 stops × 93 min).
+            // Time balance is the primary goal; per-bus TSP handles stop ordering.
+            //
             const geoapifyKey = D.setup.geoapifyKey?.trim();
-            if (geoapifyKey && window.GoGeoapifyOptimizer && !usedExternalOptimizer) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': Geoapify VRP optimizing...', pctBase + 35);
-                console.log('[Go] Geoapify VRP — ' + allStops.length + ' stops, ' + shiftVehicles.length + ' buses');
-                try {
-                    const geoRoutes = await window.GoGeoapifyOptimizer.optimizeTours({
-                        stops:          allStops,
-                        vehicles:       shiftVehicles,
-                        campLat:        campLat,
-                        campLng:        campLng,
-                        isArrival:      isArrival,
-                        serviceTimeSec: serviceTime,
-                        apiKey:         geoapifyKey
-                    });
-                    if (geoRoutes?.length) {
-                        // Cache road-following geometry from Geoapify GeoJSON MultiLineString
-                        for (const gr of geoRoutes) {
-                            if (gr._roadPts?.length) {
-                                _routeGeomCache[gr.busId + '_' + si] = gr._roadPts;
-                            }
-                        }
-                        routes = geoRoutes;
-                        usedExternalOptimizer = true;
-                        toast('✓ Geoapify VRP — ' + geoRoutes.length + ' buses optimized globally');
-                        console.log('[Go] Geoapify VRP complete: ' + geoRoutes.length + ' routes, ' +
-                            geoRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
-                    } else {
-                        console.warn('[Go] Geoapify VRP returned no routes — falling back to NN split');
-                    }
-                } catch (e) {
-                    console.warn('[Go] Geoapify VRP error:', e.message, '— falling back to NN split');
-                }
-            }
 
-            // ── Step 3: Split sorted stops into bus segments (NN fallback) ──
             if (!usedExternalOptimizer) {
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': splitting into bus routes...', pctBase + 40);
-            const segments = splitTourAtGaps(allStops, shiftBuses, campLat, campLng);
-            console.log('[Go] Step 3b: ' + segments.length + ' segments from ' + allStops.length + ' stops');
-            segments.forEach(function(seg, i) {
-                var kids = seg.reduce(function(s, st) { return s + st.campers.length; }, 0);
-                console.log('[Go]   Segment ' + (i + 1) + ': ' + seg.length + ' stops, ' + kids + ' kids');
+            showProgress((shift.label || 'Shift ' + (si + 1)) + ': splitting into time-balanced bus routes...', pctBase + 40);
+
+            // ── Dynamic max ride time ──
+            // Computed from this dataset so it adapts to each camp's geography.
+            // Formula: (time to reach 90th-percentile-distant stop × 1.5)
+            //        + (average stops per bus × service time per stop)
+            //        × 1.25 overall buffer
+            //
+            // Interpretation: "a bus driving to the far edge of the pickup area
+            // and serving the average number of stops should be near the max."
+            // Prevents extreme outliers (90+ min) while still allowing geo spread.
+            const stopDrivesSec = allStops.map(function(s) {
+                return drivingDist(campLat, campLng, s.lat, s.lng);
             });
+            const sortedDrivesSec = stopDrivesSec.slice().sort(function(a, b) { return a - b; });
+            const p90Idx = Math.min(Math.floor(sortedDrivesSec.length * 0.90), sortedDrivesSec.length - 1);
+            const p90DriveSec = sortedDrivesSec[p90Idx] || 0;
+            const avgStopsPerBus = allStops.length / shiftVehicles.length;
+            const dynamicMaxSec = Math.round(
+                (p90DriveSec * 1.5 + avgStopsPerBus * serviceTime) * 1.25
+            );
+            console.log('[Go] Dynamic max ride time: ' + (dynamicMaxSec / 60).toFixed(0) + 'min' +
+                ' (p90 dist=' + (p90DriveSec / 60).toFixed(0) + 'min,' +
+                ' avgStops=' + avgStopsPerBus.toFixed(1) + '×' + (serviceTime/60).toFixed(0) + 'min)');
+
+            const segments = splitTourAtGaps(allStops, shiftBuses, campLat, campLng, dynamicMaxSec);
+            console.log('[Go] Step 3b: ' + segments.length + ' segments from ' + allStops.length + ' stops');
+            (function logSegments() {
+                var times = segments.map(function(seg) {
+                    if (!seg.length) return 0;
+                    var t = drivingDist(campLat, campLng, seg[0].lat, seg[0].lng) + serviceTime;
+                    for (var i = 1; i < seg.length; i++) {
+                        t += drivingDist(seg[i-1].lat, seg[i-1].lng, seg[i].lat, seg[i].lng) + serviceTime;
+                    }
+                    return t;
+                });
+                var maxT = Math.max.apply(null, times);
+                var minT = Math.min.apply(null, times.filter(function(t) { return t > 0; }));
+                segments.forEach(function(seg, i) {
+                    var kids = seg.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                    console.log('[Go]   Seg ' + (i+1) + ': ' + seg.length + ' stops, ' + kids + ' kids, ~' + (times[i]/60).toFixed(0) + 'min');
+                });
+                console.log('[Go] Balance: max=' + (maxT/60).toFixed(0) + 'min, min=' + (minT/60).toFixed(0) + 'min, spread=' + ((maxT-minT)/60).toFixed(0) + 'min (cap=' + (dynamicMaxSec/60).toFixed(0) + 'min)');
+            })();
 
             // ── Step 3c: Assign segments to buses ──
             // Biggest segment (most kids) → biggest bus (most seats)
