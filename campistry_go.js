@@ -3530,13 +3530,35 @@
             order = deferred.concat(order.slice(pos));
         }
 
-        // Any leftover stops (shouldn't happen but safety net) → last segment
+        // ── Overflow distribution ──
+        // When the time cap causes all K buses to cut early, stops remain in `order`.
+        // DON'T dump them all on the last segment (creates 411-min monsters).
+        // Instead: distribute each overflow stop to the segment that has the most
+        // remaining time budget (maxRideSec − current estimated time), respecting capacity.
         if (order.length > 0) {
-            if (segments.length > 0) {
-                segments[segments.length - 1] = segments[segments.length - 1].concat(order);
-            } else {
-                segments.push(order.slice());
-            }
+            console.warn('[Go] Split: ' + order.length + ' overflow stops — distributing to underloaded segments');
+            order.forEach(function(overStop) {
+                var bestIdx = -1, bestBudget = -Infinity;
+                for (var si = 0; si < segments.length; si++) {
+                    var segKids = segments[si].reduce(function(s, st) { return s + st.campers.length; }, 0);
+                    if (segKids + overStop.campers.length > caps[si]) continue; // capacity check
+                    var segTime = segTimeSec(segments[si]);
+                    // Budget = how much time capacity is still available in this segment
+                    var ceiling = maxRideSec < Infinity ? maxRideSec : 7200;
+                    var budget = ceiling - segTime;
+                    if (budget > bestBudget) { bestBudget = budget; bestIdx = si; }
+                }
+                if (bestIdx < 0) {
+                    // No segment has capacity — add to the currently shortest-time segment
+                    var minT = Infinity;
+                    for (var si = 0; si < segments.length; si++) {
+                        var t = segTimeSec(segments[si]);
+                        if (t < minT) { minT = t; bestIdx = si; }
+                    }
+                }
+                segments[bestIdx].push(overStop);
+            });
+            console.log('[Go] Split: overflow distributed across ' + segments.length + ' segments');
         }
 
         // Pad to K segments so every bus slot exists
@@ -4885,16 +4907,31 @@
                             apiKey:         geoapifyKey
                         });
                         if (tspResult?.orderedStops?.length) {
-                            route.stops = tspResult.orderedStops.map(function(s, idx) {
-                                return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
-                            });
-                            route.camperCount = route.stops.reduce(function(s, st) { return s + st.campers.length; }, 0);
-                            if (tspResult.roadPts?.length) {
-                                _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
-                                route._roadPts = tspResult.roadPts;
+                            const origCount = route.stops.length;
+                            const tspCount  = tspResult.orderedStops.length;
+                            if (tspCount < origCount) {
+                                // Geoapify dropped stops (capacity overflow in solver).
+                                // Keep original ordering — don't silently lose campers.
+                                console.warn('[Go] TSP for ' + route.busId + ' returned ' + tspCount +
+                                    '/' + origCount + ' stops — keeping original order to preserve all campers');
+                                // Still take road geometry if available (partial is fine for display)
+                                if (tspResult.roadPts?.length) {
+                                    _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
+                                    route._roadPts = tspResult.roadPts;
+                                }
+                                route._source = 'distance-sort-split'; // mark as not TSP-ordered
+                            } else {
+                                route.stops = tspResult.orderedStops.map(function(s, idx) {
+                                    return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                                });
+                                route.camperCount = route.stops.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                                if (tspResult.roadPts?.length) {
+                                    _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
+                                    route._roadPts = tspResult.roadPts;
+                                }
+                                route._source = 'geoapify-tsp';
+                                geoTspSucc++;
                             }
-                            route._source = 'geoapify-tsp';
-                            geoTspSucc++;
                         }
                     } catch (e) {
                         console.warn('[Go] Per-bus TSP failed for ' + route.busId + ':', e.message);
