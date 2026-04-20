@@ -138,6 +138,7 @@
                 leagueAssignments: {},
                 leagueRoundState: {},
                 leagueDayCounters: {},
+                bunkActivityOverrides: [],
                 overrides: {
                     fields: [],
                     bunks: [],
