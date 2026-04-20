@@ -4699,68 +4699,18 @@
             //
             //   Step 1 (done above): Create stops from camper addresses.
             //
-            //   Step 2 — ORDER: Build a nearest-neighbor tour through ALL stops.
-            //     • Dismissal: start at camp, always visit the closest unvisited
-            //       stop next.  Stops in the same neighborhood cluster together
-            //       naturally — no API call needed.
-            //     • Arrival: start at the farthest stop from camp, then nearest-
-            //       neighbor inward.  Same clustering benefit.
-            //     Result: a geographically coherent path — no zigzagging across
-            //     the map.  Runs in <200ms (O(N²) haversine cache lookups).
+            //   Step 2 — CLUSTER: buildGreedyZones() assigns stops to buses.
+            //     Uses capacitated K-medoids clustering (Lloyd's algorithm +
+            //     compactness polish + time-balance minimax pass).
+            //     Each bus gets a geographically compact zone with roughly
+            //     equal ride time.  No NN tour needed — 2D clustering handles
+            //     directionality automatically.
             //
-            //   Step 3 — SPLIT: Cut the sorted list into K bus segments.
-            //     splitTourAtGaps() cuts at the K-1 largest geographic gaps
-            //     (natural neighborhood boundaries) while respecting capacity.
-            //     Smart skip: if the next stop is too big, it looks ahead for
-            //     a nearby stop that fits and defers the overflow stop to the
-            //     next bus.  Skip distance is capped dynamically (~4× avg gap).
+            //   Step 3 — ORDER: Per-bus Geoapify TSP reorders each zone's stops
+            //     optimally (road distance) and returns road-following geometry.
+            //     1 vehicle + ~15 stops per call — always under free-tier limits.
             //
             // ══════════════════════════════════════════════════════════════
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': ordering stops...', pctBase + 20);
-
-            // ── Step 2: Build a nearest-neighbor tour through ALL stops ──
-            //
-            // Pure distance sort is 1-dimensional: stops at the same distance from
-            // camp but in opposite directions (5mi north vs 5mi south) end up adjacent
-            // in the list, causing buses to zigzag across the map.
-            //
-            // Nearest-neighbor tour is 2-dimensional: each step visits the closest
-            // unvisited stop geographically, so stops in the same neighborhood
-            // naturally cluster together. When split, each bus gets a contiguous
-            // geographic corridor — no zigzagging.
-            //
-            // Dismissal: tour starts at camp, winds outward through neighborhoods.
-            // Arrival:   tour starts at the farthest stop, winds inward to camp.
-            // O(N²) but all cache lookups — runs in <200ms for 600 stops.
-            (function buildNNTour() {
-                var remaining = allStops.slice();
-                var tour = [];
-
-                // Arrival: find and anchor the farthest stop as first in tour
-                if (isArrival) {
-                    var fDist = 0, fIdx = 0;
-                    for (var fi = 0; fi < remaining.length; fi++) {
-                        var fd = drivingDist(campLat, campLng, remaining[fi].lat, remaining[fi].lng);
-                        if (fd > fDist) { fDist = fd; fIdx = fi; }
-                    }
-                    tour.push(remaining.splice(fIdx, 1)[0]);
-                }
-
-                while (remaining.length > 0) {
-                    var curLat = tour.length > 0 ? tour[tour.length - 1].lat : campLat;
-                    var curLng = tour.length > 0 ? tour[tour.length - 1].lng : campLng;
-                    var bestIdx = 0, bestD = Infinity;
-                    for (var ri = 0; ri < remaining.length; ri++) {
-                        var d = drivingDist(curLat, curLng, remaining[ri].lat, remaining[ri].lng);
-                        if (d < bestD) { bestD = d; bestIdx = ri; }
-                    }
-                    tour.push(remaining.splice(bestIdx, 1)[0]);
-                }
-
-                allStops = tour;
-            })();
-            console.log('[Go] Step 3a: ' + allStops.length + ' stops ordered via nearest-neighbor tour (' + (isArrival ? 'far→camp' : 'camp→far') + ')');
-
             // ── Preview mode: skip split, render full tour as one giant route ──
             if (_previewGiantTour) {
                 const totalKidsInTour = allStops.reduce(function(s, st) { return s + st.campers.length; }, 0);
@@ -4784,106 +4734,78 @@
                 continue; // skip the rest of this shift's processing
             }
 
-            // ── Step 3: Time-balanced split + per-bus Geoapify TSP ──
+            // ── Step 3: K-medoids zone clustering + per-bus Geoapify TSP ──
             //
-            // Strategy: BALANCE FIRST, then optimize ordering.
+            // Strategy: CLUSTER FIRST (2D geography), then optimize ordering.
             //
-            // Phase A — splitTourAtGaps: time-balanced greedy assignment.
-            //   Divides stops across all buses so every bus has ~equal ride time.
-            //   Uses a dynamic max ride time cap so no bus can run far over the
-            //   ideal balanced time. Every bus is guaranteed at least 1 stop.
+            // Phase A — buildGreedyZones: capacitated K-medoids clustering.
+            //   Groups stops into K geographic zones, one per bus.
+            //   Iterates Lloyd's algorithm with compactness polish and a
+            //   time-balance minimax pass — every bus ends up with roughly
+            //   equal ride time AND geographically coherent stops.
+            //   No 1D path-cutting, no NN tour needed.
             //
             // Phase B — per-bus Geoapify TSP (Step 3d below): once each bus has
-            //   its stops, send them to Geoapify as a single-vehicle TSP problem.
-            //   This gives optimal within-bus stop ordering AND road-following
-            //   geometry. 1 vehicle + ~15 stops = ~16 coords, always under limits.
-            //
-            // Note: the full multi-vehicle Geoapify VRP (which would optimize
-            // global distance) is intentionally skipped here. VRP minimizes total
-            // distance, not ride time — it produces wildly unbalanced routes
-            // (e.g., one bus with 4 stops × 11 min, another with 27 stops × 93 min).
-            // Time balance is the primary goal; per-bus TSP handles stop ordering.
+            //   its stops, send them to Geoapify as a single-vehicle TSP to get
+            //   optimal within-bus stop ordering AND road-following geometry.
+            //   1 vehicle + ~15 stops = ~16 coords, always under free-tier limits.
             //
             const geoapifyKey = D.setup.geoapifyKey?.trim();
 
             if (!usedExternalOptimizer) {
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': splitting into time-balanced bus routes...', pctBase + 40);
+            showProgress((shift.label || 'Shift ' + (si + 1)) + ': clustering stops into bus zones...', pctBase + 30);
 
-            // ── Dynamic max ride time ──
-            // Computed from this dataset so it adapts to each camp's geography.
-            // Formula: (time to reach 90th-percentile-distant stop × 1.5)
-            //        + (average stops per bus × service time per stop)
-            //        × 1.25 overall buffer
-            //
-            // Interpretation: "a bus driving to the far edge of the pickup area
-            // and serving the average number of stops should be near the max."
-            // Prevents extreme outliers (90+ min) while still allowing geo spread.
-            const stopDrivesSec = allStops.map(function(s) {
-                return drivingDist(campLat, campLng, s.lat, s.lng);
-            });
-            const sortedDrivesSec = stopDrivesSec.slice().sort(function(a, b) { return a - b; });
-            const p90Idx = Math.min(Math.floor(sortedDrivesSec.length * 0.90), sortedDrivesSec.length - 1);
-            const p90DriveSec = sortedDrivesSec[p90Idx] || 0;
-            const avgStopsPerBus = allStops.length / shiftVehicles.length;
-            const dynamicMaxSec = Math.round(
-                (p90DriveSec * 1.5 + avgStopsPerBus * serviceTime) * 1.25
-            );
-            console.log('[Go] Dynamic max ride time: ' + (dynamicMaxSec / 60).toFixed(0) + 'min' +
-                ' (p90 dist=' + (p90DriveSec / 60).toFixed(0) + 'min,' +
-                ' avgStops=' + avgStopsPerBus.toFixed(1) + '×' + (serviceTime/60).toFixed(0) + 'min)');
-
-            const segments = splitTourAtGaps(allStops, shiftBuses, campLat, campLng, dynamicMaxSec);
-            console.log('[Go] Step 3b: ' + segments.length + ' segments from ' + allStops.length + ' stops');
-            (function logSegments() {
-                var times = segments.map(function(seg) {
-                    if (!seg.length) return 0;
-                    var t = drivingDist(campLat, campLng, seg[0].lat, seg[0].lng) + serviceTime;
-                    for (var i = 1; i < seg.length; i++) {
-                        t += drivingDist(seg[i-1].lat, seg[i-1].lng, seg[i].lat, seg[i].lng) + serviceTime;
+            // ── Step 3a: K-medoids zone clustering ──
+            const zones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
+            console.log('[Go] Step 3a: ' + zones.length + ' zones from ' + allStops.length + ' stops via K-medoids');
+            (function logZones() {
+                var times = zones.map(function(z) {
+                    var stops = z.stopIndices.map(function(idx) { return allStops[idx]; });
+                    if (!stops.length) return 0;
+                    var t = drivingDist(campLat, campLng, stops[0].lat, stops[0].lng) + serviceTime;
+                    for (var i = 1; i < stops.length; i++) {
+                        t += drivingDist(stops[i-1].lat, stops[i-1].lng, stops[i].lat, stops[i].lng) + serviceTime;
                     }
                     return t;
                 });
                 var maxT = Math.max.apply(null, times);
                 var minT = Math.min.apply(null, times.filter(function(t) { return t > 0; }));
-                segments.forEach(function(seg, i) {
-                    var kids = seg.reduce(function(s, st) { return s + st.campers.length; }, 0);
-                    console.log('[Go]   Seg ' + (i+1) + ': ' + seg.length + ' stops, ' + kids + ' kids, ~' + (times[i]/60).toFixed(0) + 'min');
+                zones.forEach(function(z, i) {
+                    console.log('[Go]   Zone ' + (i+1) + ' (' + (z.busName || z.busId) + '): ' +
+                        z.stopIndices.length + ' stops, ' + z.camperCount + ' kids, ~' + (times[i]/60).toFixed(0) + 'min');
+                    if (z.camperCount > z.capacity) {
+                        console.warn('[Go]   ⚠ Zone ' + (z.busName || z.busId) + ': ' + z.camperCount + ' kids > capacity ' + z.capacity);
+                    }
                 });
-                console.log('[Go] Balance: max=' + (maxT/60).toFixed(0) + 'min, min=' + (minT/60).toFixed(0) + 'min, spread=' + ((maxT-minT)/60).toFixed(0) + 'min (cap=' + (dynamicMaxSec/60).toFixed(0) + 'min)');
+                if (times.length > 1) {
+                    console.log('[Go] Balance: max=' + (maxT/60).toFixed(0) + 'min, min=' + (minT/60).toFixed(0) + 'min, spread=' + ((maxT-minT)/60).toFixed(0) + 'min');
+                }
             })();
 
-            // ── Step 3c: Assign segments to buses ──
-            // Biggest segment (most kids) → biggest bus (most seats)
-            const sortedVehicles = shiftVehicles.slice().sort(function(a, b) {
-                return (b.capacity || 0) - (a.capacity || 0);
-            });
-            const sortedSegments = segments.slice().sort(function(a, b) {
-                return b.reduce(function(s, st) { return s + st.campers.length; }, 0)
-                     - a.reduce(function(s, st) { return s + st.campers.length; }, 0);
-            });
-
+            // ── Step 3b: Convert zones → builtRoutes ──
             const builtRoutes = [];
-            sortedSegments.forEach(function(seg, i) {
-                const vehicle = sortedVehicles[i];
-                if (!vehicle || !seg.length) return;
+            zones.forEach(function(zone) {
+                const vehicle = shiftVehicles.find(function(v) { return v.busId === zone.busId; });
+                if (!vehicle || !zone.stopIndices.length) return;
                 builtRoutes.push({
-                    busId:       vehicle.busId,
-                    busName:     vehicle.name,
-                    busColor:    vehicle.color || '#10b981',
+                    busId:       zone.busId,
+                    busName:     zone.busName,
+                    busColor:    zone.busColor || '#10b981',
                     monitor:     vehicle.monitor    || null,
                     counselors:  vehicle.counselors || [],
-                    stops:       seg.map(function(s, idx) {
-                        return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                    stops:       zone.stopIndices.map(function(idx, i) {
+                        var s = allStops[idx];
+                        return { stopNum: i + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
                     }),
-                    camperCount: seg.reduce(function(s, st) { return s + st.campers.length; }, 0),
-                    _cap:        vehicle.capacity,
+                    camperCount: zone.camperCount,
+                    _cap:        zone.capacity,
                     totalDuration: 0,
-                    _source:     'distance-sort-split'
+                    _source:     'k-medoids-zones'
                 });
             });
 
-            // ── Step 3d: Per-bus TSP via Geoapify ──
-            // Now that splitTourAtGaps has done time-balanced assignment,
+            // ── Step 3c: Per-bus TSP via Geoapify ──
+            // Now that buildGreedyZones has done balanced zone assignment,
             // send each bus's stops to Geoapify as a single-vehicle TSP to get:
             //   • Optimal within-bus stop ordering (road distance, not bearing)
             //   • Road-following geometry (real streets, not straight lines)
