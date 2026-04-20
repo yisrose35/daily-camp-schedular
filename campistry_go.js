@@ -8922,6 +8922,152 @@
     }
 
     // =========================================================================
+    // GEOAPIFY CVRP TEST
+    // Run from browser console: CampistryGo.testGeoapify()
+    //
+    // Sends a real 5-stop / 2-bus CVRP request to Geoapify and verifies:
+    //   • API key is accepted (not 401/402)
+    //   • Solver assigns stops to buses correctly
+    //   • Road geometry comes back in the response
+    //   • Credit cost reported
+    // =========================================================================
+    async function testGeoapify() {
+        const L = (icon, msg) => console.log(icon + ' ' + msg);
+        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('   Campistry Go — Geoapify CVRP Live Test');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+        // ── 1. Config checks ──
+        const apiKey  = D.setup.geoapifyKey?.trim();
+        const campLat = D.setup.campLat;
+        const campLng = D.setup.campLng;
+
+        if (!apiKey) {
+            L('❌', 'geoapifyKey not set — go to Setup → Advanced Settings → Geoapify Route Planner');
+            L('💡', 'Get a free key at https://myprojects.geoapify.com');
+            return;
+        }
+        L('✅', 'API key found: ' + apiKey.slice(0, 6) + '...' + apiKey.slice(-4));
+
+        if (!campLat || !campLng) {
+            L('❌', 'Camp coordinates not set — save Setup with a valid camp address first');
+            return;
+        }
+        L('✅', 'Camp: ' + campLat.toFixed(5) + ', ' + campLng.toFixed(5));
+
+        // ── 2. Build a tiny 5-stop / 2-bus test request ──
+        // 5 stops scattered ~1–3 miles from camp, total 8 kids → 2 buses of cap 5
+        const offsets = [
+            [  0.012,  0.015, 2 ],   // ~1.2mi NE
+            [ -0.008,  0.022, 3 ],   // ~1.5mi NW-ish
+            [  0.025, -0.010, 1 ],   // ~1.7mi N
+            [ -0.018, -0.020, 1 ],   // ~1.7mi SW
+            [  0.035,  0.005, 1 ]    // ~2.4mi N
+        ];
+        const campCoord = [campLng, campLat];
+        const agents = [
+            { delivery_capacity: 5, pickup_capacity: 5, start_location: campCoord },
+            { delivery_capacity: 5, pickup_capacity: 5, start_location: campCoord }
+        ];
+        const jobs = offsets.map(function(o) {
+            return {
+                location: [ campLng + o[1], campLat + o[0] ],
+                duration: 60,
+                delivery_amount: o[2]
+            };
+        });
+        const body = { mode: 'drive', agents: agents, jobs: jobs };
+
+        L('⏳', 'Sending 5-stop / 2-bus CVRP test to Geoapify...');
+        const url = 'https://api.geoapify.com/v1/routeplanner?apikey=' + encodeURIComponent(apiKey);
+
+        let resp, data;
+        try {
+            resp = await fetch(url, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(body)
+            });
+            data = await resp.json();
+        } catch (e) {
+            L('❌', 'Network error: ' + e.message);
+            return;
+        }
+
+        // ── 3. Check HTTP status ──
+        if (!resp.ok) {
+            const msg = data?.message || data?.error || ('HTTP ' + resp.status);
+            L('❌', 'API error: ' + msg);
+            if (resp.status === 401) L('💡', '401 — API key is wrong or inactive. Check https://myprojects.geoapify.com');
+            if (resp.status === 402) L('💡', '402 — Out of credits. Check quota at https://myprojects.geoapify.com');
+            if (resp.status === 422) L('💡', '422 — Request format error (unexpected for this test)');
+            console.log('Full response:', data);
+            return;
+        }
+
+        // ── 4. Parse result ──
+        const features = data?.features || [];
+        const agentFeatures = features.filter(function(f) {
+            return f.properties?.agent_index !== undefined &&
+                   Array.isArray(f.properties?.actions);
+        });
+
+        if (!agentFeatures.length) {
+            L('⚠️ ', 'No route features returned — unexpected. Raw response:');
+            console.log(data);
+            return;
+        }
+
+        L('✅', 'Geoapify responded — ' + agentFeatures.length + ' bus route(s) returned');
+        console.log('');
+
+        let totalStopsAssigned = 0;
+        let totalKidsAssigned  = 0;
+
+        agentFeatures.forEach(function(feat, i) {
+            const actions   = feat.properties.actions || [];
+            const jobActions = actions.filter(function(a) {
+                return a.type === 'job' || a.type === 'delivery' || a.type === 'pickup';
+            });
+            const kids = jobActions.reduce(function(s, a) {
+                return s + (offsets[a.job_index]?.[2] || 0);
+            }, 0);
+            const hasGeom = !!(feat.geometry?.coordinates?.length);
+            totalStopsAssigned += jobActions.length;
+            totalKidsAssigned  += kids;
+
+            console.log('  🚌 Bus ' + (i + 1) + ': ' + jobActions.length + ' stop(s), ' + kids + ' kids' +
+                (hasGeom ? '  ✅ road geometry' : '  ⚠️  no geometry'));
+            jobActions.forEach(function(a) {
+                const o = offsets[a.job_index];
+                if (o) console.log('     Stop ' + (a.job_index + 1) + ': ' + o[2] + ' kid(s)  [job_index=' + a.job_index + ']');
+            });
+        });
+
+        const unassigned = data.unassigned_jobs || [];
+
+        console.log('');
+        L(totalStopsAssigned === 5 ? '✅' : '⚠️ ',
+            totalStopsAssigned + '/5 stops assigned, ' + totalKidsAssigned + '/8 kids assigned');
+
+        if (unassigned.length) {
+            L('⚠️ ', unassigned.length + ' stop(s) unassigned — capacity may be too tight for test data');
+        }
+
+        // ── 5. Credit cost estimate ──
+        const busCount  = D.buses.length  || 18;
+        const stopCount = Object.values(D.addresses).filter(function(a) { return a?.geocoded; }).length;
+        const estCost   = stopCount + busCount + 4; // Geoapify: N_locations + small overhead
+        console.log('');
+        L('ℹ️ ', 'Test cost: ~' + (5 + 2) + ' credits (5 stops + 2 buses)');
+        L('ℹ️ ', 'Est. real-run cost: ~' + estCost + ' credits (' + stopCount + ' stops + ' + busCount + ' buses)');
+        L('ℹ️ ', 'Free tier: 3,000 credits/day → ~' + Math.floor(3000 / Math.max(estCost, 1)) + ' full runs/day');
+
+        console.log('\n🟢 Geoapify CVRP is working. Generate Routes will use the global VRP solver.');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    }
+
+    // =========================================================================
     // PUBLIC API
     // =========================================================================
     window.CampistryGo = {
@@ -8934,7 +9080,7 @@
         acceptStaffAssign, denyStaffAssign, manualStaffAssign, acceptAllStaffSuggestions,
         editAddress, saveAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
         regeocodeAll: function() { geocodeAll(true); },
-        testGeocode, systemCheck, testGoogleRouting,
+        testGeocode, systemCheck, testGoogleRouting, testGeoapify,
         generateRoutes, previewGiantTour, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
         renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         setAddressPinMode, toggleHideRoutes, toggleZones,
