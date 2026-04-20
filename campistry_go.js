@@ -60,10 +60,8 @@
     const _PLATFORM_KEYS = {
         ors: window.__CAMPISTRY_ORS_KEY__ || '',
         graphhopper: window.__CAMPISTRY_GH_KEY__ || '',
-        mapbox: window.__CAMPISTRY_MAPBOX_TOKEN__ || '',
-        here: window.__CAMPISTRY_HERE_KEY__ || 'Z25s3ORcMjxXEPmBURvusJk4yxxx6O03yR3s-5Lmyo8'
+        mapbox: window.__CAMPISTRY_MAPBOX_TOKEN__ || ''
     };
-    function getHereKey() { return D.setup.hereApiKey || _PLATFORM_KEYS.here; }
 
     // =========================================================================
     // INDEXEDDB PERSISTENT DISTANCE CACHE
@@ -154,7 +152,7 @@
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
             avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
-            googleMapsKey: '', googleProjectId: '', hereApiKey: '',
+            googleMapsKey: '', googleProjectId: '',
             campLat: null, campLng: null
         },
         activeMode: 'dismissal',
@@ -315,7 +313,9 @@
     }
 
     // =========================================================================
-    // DISTANCE MATRIX CASCADE — Mapbox → OSRM → haversine fallback
+    // DISTANCE MATRIX CASCADE — OSRM → haversine fallback
+    // (Used for the NN-tour fallback ordering only.
+    //  Google Route Optimization handles all real routing.)
     // =========================================================================
 
     /**
@@ -328,19 +328,7 @@
         const n = coords.length;
         if (n < 2) return null;
 
-        // ── Primary: HERE Maps Matrix Routing v8 (250k/month free) ──
-        const hereKey = getHereKey();
-        if (hereKey) {
-            try {
-                const hereResult = await fetchHereMatrix(coords, hereKey);
-                if (hereResult) {
-                    _cacheFromMatrix(coords, hereResult);
-                    return hereResult;
-                }
-            } catch (e) { console.warn('[Go] HERE Matrix failed:', e.message); }
-        }
-
-        // ── Secondary: OSRM (free, rate-limited) ──
+        // ── Primary: OSRM (free, rate-limited) ──
         const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
         const osrmResult = await fetchOSRMWithRetry(coordStr, 3);
         if (osrmResult) {
@@ -362,198 +350,18 @@
     }
 
     /**
-     * fetchHereMatrix(coords, apiKey)
-     * Uses HERE Maps Matrix Routing v8 API.  Synchronous mode for small matrices.
-     * Docs: https://developer.here.com/documentation/matrix-routing-api/
-     */
-    async function fetchHereMatrix(coords, apiKey) {
-        const n = coords.length;
-        if (n < 2 || n > 100) return null; // sync mode limit is ~100x100
-        const body = {
-            origins: coords.map(function(c) { return { lat: c.lat, lng: c.lng }; }),
-            destinations: coords.map(function(c) { return { lat: c.lat, lng: c.lng }; }),
-            regionDefinition: { type: 'autoCircle', margin: 5000 },
-            matrixAttributes: ['travelTimes']
-        };
-        const url = 'https://matrix.router.hereapi.com/v8/matrix?apikey=' + encodeURIComponent(apiKey) + '&async=false';
-        const resp = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        if (!resp.ok) {
-            if (resp.status === 429) console.warn('[Go] HERE Matrix 429 rate limited');
-            else console.warn('[Go] HERE Matrix HTTP ' + resp.status);
-            return null;
-        }
-        const data = await resp.json();
-        if (!data.matrix?.travelTimes) return null;
-        // HERE returns flat array of size n*n, row-major
-        const travelTimes = data.matrix.travelTimes;
-        const matrix = [];
-        for (let i = 0; i < n; i++) {
-            const row = [];
-            for (let j = 0; j < n; j++) {
-                row.push(travelTimes[i * n + j] || 0);
-            }
-            matrix.push(row);
-        }
-        console.log('[Go] HERE Matrix: ' + n + 'x' + n + ' success');
-        return matrix;
-    }
-
-    /**
-     * fetchHereTourPlan(stops, buses, camp, opts)
-     * Uses HERE Tour Planning API v3 — professional VRP solver.
-     * Based on HERE's official working example:
-     * https://www.here.com/learn/blog/here-tour-planning-api-in-a-nutshell
-     *
-     * Returns: { routes: [{ vehicleIdx, stopIndices: [...] }], unassigned: [...] }
-     * or null if the API fails.
-     */
-    async function fetchHereTourPlan(stops, buses, camp, opts) {
-        const apiKey = getHereKey();
-        if (!apiKey || !stops.length || !buses.length) return null;
-
-        opts = opts || {};
-        const isArrival = opts.isArrival || false;
-        const serviceTimeSec = opts.serviceTimeSec || 120; // 2 min per stop
-        const baseTime = '2024-01-15T07:00:00Z';
-        const endTime = '2024-01-15T13:00:00Z'; // 6 hour window (generous)
-
-        // Profile name used in fleet.types[].profile must match fleet.profiles[].name
-        const profileName = 'car_1';
-
-        const maxRouteMinutes = opts.maxRouteMinutes || 90;
-        const campLoc = { lat: camp.lat, lng: camp.lng };
-
-        // Tighten the shift end window to enforce max route duration
-        // (HERE v3 does not support a limits field on shifts or vehicle types)
-        const [baseH, baseM] = baseTime.match(/T(\d+):(\d+)/).slice(1).map(Number);
-        const endDate = new Date('2024-01-15T' + baseTime.split('T')[1]);
-        endDate.setMinutes(endDate.getMinutes() + maxRouteMinutes);
-        const tightEndTime = endDate.toISOString().replace(/\.\d+Z$/, 'Z');
-
-        // Build fleet — one vehicle type per bus so we preserve bus identity + capacity
-        const fleetTypes = buses.map(function(b, i) {
-            return {
-                id: 'bus_' + i,
-                profile: profileName,
-                costs: { fixed: 25.0, distance: 0.07, time: 0.02 },
-                shifts: [{
-                    start: { time: baseTime,     location: campLoc },
-                    end:   { time: tightEndTime, location: campLoc }
-                }],
-                capacity: [b.capacity || 44],
-                amount: 1
-            };
-        });
-
-        // Build jobs — one per stop, with demand = # kids
-        // Arrival  = bus picks up kids from their homes (pickups)
-        // Dismissal = bus delivers kids to their homes (deliveries)
-        const taskKey = isArrival ? 'pickups' : 'deliveries';
-        const jobs = stops.map(function(s, i) {
-            return {
-                id: 'stop_' + i,
-                tasks: {
-                    [taskKey]: [{
-                        places: [{
-                            location: { lat: s.lat, lng: s.lng },
-                            duration: serviceTimeSec
-                        }],
-                        demand: [s.campers.length]
-                    }]
-                }
-            };
-        });
-
-        // Request format matches HERE's official blog example exactly.
-        // Profiles: type BEFORE name (order observed in working example).
-        // No objectives field — HERE uses sensible defaults if omitted.
-        const request = {
-            fleet: {
-                types: fleetTypes,
-                profiles: [{ type: 'car', name: profileName }]
-            },
-            plan: { jobs: jobs }
-        };
-
-        try {
-            console.log('[Go] HERE Tour Planning: ' + stops.length + ' stops, ' + buses.length + ' buses...');
-            const t0 = Date.now();
-            // HERE Tour Planning expects apiKey as camelCase query param
-            const resp = await fetch('https://tourplanning.hereapi.com/v3/problems?apiKey=' + encodeURIComponent(apiKey), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(request)
-            });
-
-            if (!resp.ok) {
-                const errText = await resp.text();
-                console.warn('[Go] HERE Tour Planning HTTP ' + resp.status + ': ' + errText.substring(0, 500));
-                return null;
-            }
-
-            const result = await resp.json();
-            console.log('[Go] HERE Tour Planning: solved in ' + ((Date.now()-t0)/1000).toFixed(1) + 's, ' +
-                (result.tours?.length || 0) + ' tours, ' + (result.unassigned?.length || 0) + ' unassigned');
-
-            if (!result.tours?.length) return null;
-
-            // Parse tours → our route format
-            const parsedRoutes = result.tours.map(function(tour) {
-                // vehicleId like "bus_0" → extract index
-                const busIdxMatch = tour.vehicleId.match(/bus_(\d+)/);
-                const busIdx = busIdxMatch ? parseInt(busIdxMatch[1]) : 0;
-
-                const stopIndices = [];
-                tour.stops.forEach(function(ts) {
-                    if (ts.activities) {
-                        ts.activities.forEach(function(act) {
-                            // match both 'delivery' (dismissal) and 'pickup' (arrival)
-                            if (act.jobId && (act.type === 'delivery' || act.type === 'pickup')) {
-                                const m = act.jobId.match(/stop_(\d+)/);
-                                if (m) stopIndices.push(parseInt(m[1]));
-                            }
-                        });
-                    }
-                });
-
-                return {
-                    vehicleIdx: busIdx,
-                    stopIndices: stopIndices,
-                    statistic: tour.statistic || null
-                };
-            });
-
-            return {
-                routes: parsedRoutes,
-                unassigned: (result.unassigned || []).map(function(u) {
-                    const m = u.jobId.match(/stop_(\d+)/);
-                    return m ? parseInt(m[1]) : -1;
-                }).filter(function(i) { return i >= 0; })
-            };
-        } catch (e) {
-            console.warn('[Go] HERE Tour Planning failed:', e.message);
-            return null;
-        }
-    }
-
-    /**
      * fetchLargeMatrixBatched(coords)
      * Handles >25 coords by pivot-row batching.
      * Always includes coord[0] (typically camp) in every batch for consistent anchoring.
      * Returns full NxN matrix in seconds.
+     * Used only for the NN-tour fallback; Google Route Optimization handles real routing.
      */
     async function fetchLargeMatrixBatched(coords) {
         const n = coords.length;
-        // With HERE Maps available, we can handle up to 100x100 in one call
-        const hasHere = !!getHereKey();
-        const singleCallLimit = hasHere ? 100 : 25;
+        const singleCallLimit = 25; // OSRM limit per request
         if (n <= singleCallLimit) return await fetchDistanceMatrixCascade(coords);
 
-        console.log('[Go] Matrix: batching ' + n + ' points (limit=' + singleCallLimit + ', HERE=' + hasHere + ')');
+        console.log('[Go] Matrix: batching ' + n + ' points (limit=' + singleCallLimit + ')');
         const matrix = Array.from({ length: n }, () => new Array(n).fill(null));
         // Self-distances are always 0
         for (let i = 0; i < n; i++) matrix[i][i] = 0;
@@ -1572,7 +1380,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',googleMapsKey:'',googleProjectId:'',hereApiKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',googleMapsKey:'',googleProjectId:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
@@ -1765,7 +1573,6 @@
         if (document.getElementById('mapboxToken')) document.getElementById('mapboxToken').value = s.mapboxToken || '';
         if (document.getElementById('googleMapsKey')) document.getElementById('googleMapsKey').value = s.googleMapsKey || '';
         if (document.getElementById('googleProjectId')) document.getElementById('googleProjectId').value = s.googleProjectId || '';
-        if (document.getElementById('hereApiKeyInput')) document.getElementById('hereApiKeyInput').value = s.hereApiKey || '';
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
@@ -1796,7 +1603,6 @@
         D.setup.mapboxToken = el('mapboxToken')?.value.trim() || '';
         D.setup.googleMapsKey = el('googleMapsKey')?.value.trim() || '';
         D.setup.googleProjectId = el('googleProjectId')?.value.trim() || '';
-        D.setup.hereApiKey = el('hereApiKeyInput')?.value.trim() || '';
         window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
@@ -5300,16 +5106,60 @@
             // ══════════════════════════════════════════════════════════════
             // STEP 3: Optimize routes
             //
-            // PRIMARY: HERE Tour Planning API (professional VRP solver)
+            // PRIMARY: Google Route Optimization API (OR-Tools cloud solver)
             //   — Solves ALL buses simultaneously, globally optimal
-            //   — Respects capacities, max route time, handles all stops
+            //   — Returns road-following polylines for map rendering
+            //   — Requires googleMapsKey + googleProjectId in Setup
             //
-            // FALLBACK: Clarke-Wright Savings → per-zone VROOM/nearest-neighbor
-            //   — Per-zone greedy, good but not globally optimal
+            // FALLBACK: Nearest-neighbor tour → capacity split
+            //   — No API needed, fast, geographically coherent
             // ══════════════════════════════════════════════════════════════
             let routes = [];
             let usedExternalOptimizer = false;
 
+            // ── PRIMARY: Google Route Optimization ──
+            if (!_previewGiantTour && D.setup.googleMapsKey && D.setup.googleProjectId && window.GoGoogleOptimizer) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing with Google...', pctBase + 25);
+                try {
+                    const gRoutes = await window.GoGoogleOptimizer.optimizeTours({
+                        stops:          allStops,
+                        vehicles:       shiftVehicles,
+                        campLat:        campLat,
+                        campLng:        campLng,
+                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
+                        isArrival:      isArrival,
+                        serviceTimeSec: serviceTime,
+                        apiKey:         D.setup.googleMapsKey,
+                        projectId:      D.setup.googleProjectId
+                    });
+
+                    if (gRoutes && gRoutes.length) {
+                        // Cache road-following polylines from Google response
+                        // so the map renders real road lines immediately (no OSRM needed)
+                        gRoutes.forEach(function(r) {
+                            if (r._encodedPolyline) {
+                                const cacheKey = r.busId + '_' + si;
+                                _routeGeomCache[cacheKey] = decodePolyline(r._encodedPolyline).map(function(pt) {
+                                    return [pt[0], pt[1]];
+                                });
+                            }
+                        });
+                        routes = gRoutes;
+                        usedExternalOptimizer = true;
+                        toast('✓ Google optimized — ' + gRoutes.length + ' buses, road-following routes');
+                        console.log('[Go] Google Route Optimization complete: ' + gRoutes.length + ' routes, ' +
+                            gRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
+                        allShiftResults.push({ shift, routes, camperCount: routes.reduce(function(s, r) { return s + r.camperCount; }, 0) });
+                        continue; // skip NN tour + split fallback
+                    }
+                } catch (e) {
+                    console.error('[Go] Google Route Optimization failed:', e.message, '— falling back to NN tour');
+                }
+            }
+
+            // ══════════════════════════════════════════════════════════════
+            // FALLBACK: Nearest-neighbor tour → capacity split
+            // (runs when Google not configured, or Google call failed)
             // ══════════════════════════════════════════════════════════════
             // STEP 3: Route = Sort → Split → Assign
             //

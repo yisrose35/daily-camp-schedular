@@ -173,26 +173,14 @@
                             </div>
                             <div style="border-top:1px solid var(--border-light);padding-top:1rem;margin-top:.5rem;">
                                 <h4 style="margin:0 0 .25rem;display:flex;align-items:center;gap:.5rem;">
-                                    HERE Tour Planning
-                                    <span style="background:#00b3a4;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">BEST ROUTES</span>
+                                    Google Route Optimization
+                                    <span style="background:#1a73e8;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">PRIMARY ROUTER</span>
                                 </h4>
-                                <p class="muted" style="margin:0 0 .75rem;font-size:.8125rem;"><strong>Globally optimal routing</strong> — HERE's professional VRP solver assigns ALL buses and ALL stops in one shot, minimizing total drive time across the entire fleet. Far superior to zone-by-zone optimization.</p>
-                                <div class="form-group full-width">
-                                    <label class="form-label">HERE API Key</label>
-                                    <input type="text" class="form-input" id="hereApiKeyInput" placeholder="Paste your HERE API key...">
-                                    <span class="form-hint">Get a free key at <a href="https://platform.here.com/sign-up" target="_blank" style="color:var(--blue-600)">platform.here.com</a>. Enable <strong>Tour Planning</strong> and <strong>Routing</strong> APIs in your project. 250,000 free requests/month.</span>
-                                </div>
-                            </div>
-                            <div style="border-top:1px solid var(--border-light);padding-top:1rem;margin-top:.5rem;">
-                                <h4 style="margin:0 0 .25rem;display:flex;align-items:center;gap:.5rem;">
-                                    Google APIs
-                                    <span style="background:#1a73e8;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">BEST GEOCODING</span>
-                                </h4>
-                                <p class="muted" style="margin:0 0 .75rem;font-size:.8125rem;"><strong>Address Validation</strong> — USPS-certified geocoding. Corrects typos, confirms every address is deliverable, returns the most precise coordinates possible. Prevents kids from being dropped at wrong locations.</p>
+                                <p class="muted" style="margin:0 0 .75rem;font-size:.8125rem;"><strong>Globally optimal routing + road-following lines</strong> — Google's OR-Tools cloud solver assigns ALL buses and ALL stops in one shot, following real roads. Also used for address validation (USPS-certified geocoding).</p>
                                 <div class="form-group full-width" style="margin-bottom:.75rem;">
                                     <label class="form-label">Google Maps API Key</label>
                                     <input type="text" class="form-input" id="googleMapsKey" placeholder="AIza...">
-                                    <span class="form-hint">Enable <strong>Address Validation API</strong> in your <a href="https://console.cloud.google.com/apis/library/addressvalidation.googleapis.com" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a>.</span>
+                                    <span class="form-hint">Enable <strong>Route Optimization API</strong> and <strong>Address Validation API</strong> in your <a href="https://console.cloud.google.com/apis/library" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a>. Also used for geocoding.</span>
                                 </div>
                                 <div class="form-group full-width">
                                     <label class="form-label">Google Cloud Project ID</label>

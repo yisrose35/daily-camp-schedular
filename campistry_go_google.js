@@ -2,19 +2,24 @@
 // campistry_go_google.js — Google Route Optimization API Integration
 // =============================================================================
 //
-// Replaces the per-zone VROOM/GraphHopper/nearest-neighbor pipeline with
-// Google's OR-Tools cloud solver, which optimizes ALL buses and ALL stops
-// in a single request — finding globally optimal routes that no greedy
-// per-zone approach can match.
+// Uses Google's OR-Tools cloud solver to optimise ALL buses and ALL stops
+// in a single request — globally optimal routes with real road geometry.
 //
-// API: https://routeoptimization.googleapis.com/v1/projects/{PROJECT_ID}:optimizeTours
+// API:  https://routeoptimization.googleapis.com/v1/projects/{PROJECT_ID}:optimizeTours
 // Docs: https://developers.google.com/maps/documentation/route-optimization
 //
-// Requires:
-//   - Google Maps API Key (with Route Optimization API enabled)
-//   - Google Cloud Project ID
-//   Both are set in Setup → Advanced Settings → Google Optimization
+// Requires (set in Setup → Advanced Settings):
+//   googleMapsKey    — Google Maps Platform API key with Route Optimization enabled
+//   googleProjectId  — Google Cloud Project ID
 //
+// Request model
+//   Each stop becomes ONE shipment.
+//   Dismissal: shipment has only deliveries[] — bus starts at camp, drops off.
+//   Arrival:   shipment has only pickups[]    — bus picks up, ends at camp.
+//   loadDemands / loadLimits enforce seat capacity.
+//   populatePolylines:true → each route comes back with a road-following
+//   encoded polyline that gets decoded and cached for instant map rendering
+//   (no OSRM call required).
 // =============================================================================
 
 window.GoGoogleOptimizer = (function () {
@@ -24,7 +29,6 @@ window.GoGoogleOptimizer = (function () {
 
     // -------------------------------------------------------------------------
     // isConfigured()
-    // Returns true if both key and project ID are present in D.setup
     // -------------------------------------------------------------------------
     function isConfigured() {
         const s = window._GoSetup?.();
@@ -35,17 +39,18 @@ window.GoGoogleOptimizer = (function () {
     // optimizeTours(options)
     //
     // options = {
-    //   stops        : [{lat, lng, address, campers:[{name,...}]}]  — already grouped stops
-    //   vehicles     : [{busId, name, color, capacity, monitor, counselors}]
-    //   campLat/Lng  : number
-    //   departureTime: "16:00" (HH:MM)
-    //   isArrival    : bool   — true = pickup at homes, deliver to camp
-    //   serviceTimeSec: number — seconds per stop
-    //   apiKey       : string
-    //   projectId    : string
+    //   stops         : [{lat, lng, address, campers:[{name,...}]}]
+    //   vehicles      : [{busId, name, color, capacity, monitor, counselors}]
+    //   campLat/Lng   : number
+    //   departureTime : "HH:MM"
+    //   isArrival     : bool   — true = pickup at homes, deliver to camp
+    //   serviceTimeSec: number — dwell seconds per stop
+    //   apiKey        : string
+    //   projectId     : string
     // }
     //
-    // Returns array of route objects matching the existing format, or null on failure.
+    // Returns array of route objects (same format as the rest of the app)
+    // or null on failure.
     // -------------------------------------------------------------------------
     async function optimizeTours(options) {
         const {
@@ -60,50 +65,50 @@ window.GoGoogleOptimizer = (function () {
         }
         if (!stops.length || !vehicles.length) return null;
 
-        // ── Build start/end time window ──
-        // Use today's date with the configured departure time
+        // ── Global time window ──
+        // Use today's date with the configured departure time.
+        // 5-hour planning horizon is generous for any camp route.
         const today = new Date();
         const [depHour, depMin] = (departureTime || (isArrival ? '07:30' : '16:00')).split(':').map(Number);
         const startDt = new Date(today.getFullYear(), today.getMonth(), today.getDate(), depHour, depMin, 0);
-        const endDt   = new Date(startDt.getTime() + 5 * 60 * 60 * 1000); // +5 hours window
+        const endDt   = new Date(startDt.getTime() + 5 * 60 * 60 * 1000);
+        const toRFC    = d => d.toISOString();
 
-        const toRFC3339 = (d) => d.toISOString();
+        // ── Build shipments — one per stop ──
+        // Dismissal → deliveries (bus starts loaded at camp, drops kids at home)
+        // Arrival   → pickups   (bus collects kids from home, ends at camp)
+        const durationStr = String(Math.max(30, Math.round(serviceTimeSec))) + 's';
+        const campLocation = { latitude: campLat, longitude: campLng };
 
-        // ── Build shipments (one per stop) ──
         const shipments = stops.map((stop, idx) => {
             const visitLocation = { latitude: stop.lat, longitude: stop.lng };
-            const visitDuration = serviceTimeSec + 's';
-            const camperCount   = stop.campers.length;
-
             const visit = {
                 arrivalLocation: visitLocation,
-                duration: visitDuration,
-                timeWindows: []   // no hard time windows — let optimizer be free
+                duration: durationStr
+                // no timeWindows — let the solver be free to find optimal order
             };
-
-            // Dismissal = deliver campers to their homes (bus starts at camp full)
-            // Arrival   = pick campers up from their homes (bus ends at camp full)
             return {
                 label: String(idx),
-                loadDemands: { campers: { amount: String(camperCount) } },
+                loadDemands: { campers: { amount: String(stop.campers.length) } },
                 ...(isArrival
-                    ? { pickups:   [visit] }
-                    : { deliveries:[visit] })
+                    ? { pickups:    [visit] }   // arrival:   pickup at home
+                    : { deliveries: [visit] })   // dismissal: delivery to home
             };
         });
 
         // ── Build vehicles ──
-        const campLocation = { latitude: campLat, longitude: campLng };
+        // Dismissal: startLocation = camp (bus leaves camp loaded)
+        //            no endLocation (bus ends at last drop-off — doesn't return)
+        // Arrival:   endLocation = camp (bus delivers everyone to camp)
+        //            no startLocation (solver picks optimal first pickup)
         const modelVehicles = vehicles.map((v, vi) => {
             const veh = {
-                label:       v.name || ('Bus ' + vi),
-                travelMode:  1,          // DRIVING
+                label:       v.name || ('Bus ' + (vi + 1)),
+                travelMode:  1,     // DRIVING
                 loadLimits:  { campers: { maxLoad: String(Math.max(1, v.capacity)) } },
-                costPerHour: 40,         // encourages balanced routes (not just shortest total)
+                costPerHour: 40,    // encourages balanced routes
                 costPerKilometer: 1
             };
-            // Dismissal: start at camp (buses leave camp loaded)
-            // Arrival:   end at camp (buses return to camp)
             if (isArrival) {
                 veh.endLocation = campLocation;
             } else {
@@ -112,22 +117,23 @@ window.GoGoogleOptimizer = (function () {
             return veh;
         });
 
-        // ── Assemble request body ──
+        // ── Request body ──
         const body = {
+            timeout: '120s',  // 2-minute solve limit — plenty for 700 stops / 18 buses
             model: {
-                globalStartTime: toRFC3339(startDt),
-                globalEndTime:   toRFC3339(endDt),
+                globalStartTime: toRFC(startDt),
+                globalEndTime:   toRFC(endDt),
                 shipments:       shipments,
                 vehicles:        modelVehicles
             },
-            considerRoadTraffic:   true,
-            populatePolylines:     false,
-            populateTravelStepPolylines: false
+            considerRoadTraffic:         true,
+            populatePolylines:           true,   // road-following route geometry
+            populateTravelStepPolylines: false    // per-leg detail not needed
         };
 
-        // ── Call the API ──
+        // ── API call ──
         const url = `${API_BASE}/${encodeURIComponent(projectId)}:optimizeTours?key=${encodeURIComponent(apiKey)}`;
-        console.log('[GoGoogle] Calling Route Optimization API —', stops.length, 'stops,', vehicles.length, 'vehicles...');
+        console.log('[GoGoogle] Sending request — ' + stops.length + ' stops, ' + vehicles.length + ' buses...');
 
         let resp, data;
         try {
@@ -145,31 +151,52 @@ window.GoGoogleOptimizer = (function () {
         if (!resp.ok) {
             const msg = data?.error?.message || ('HTTP ' + resp.status);
             console.error('[GoGoogle] API error:', msg);
-            // Surface quota/auth errors clearly
-            if (resp.status === 403) console.error('[GoGoogle] 403 — check API key permissions and that Route Optimization API is enabled in your Google Cloud project');
-            if (resp.status === 429) console.error('[GoGoogle] 429 — quota exceeded');
+            if (resp.status === 400) {
+                console.error('[GoGoogle] 400 Bad Request — check request body. Details:', JSON.stringify(data?.error?.details || []));
+            }
+            if (resp.status === 403) {
+                console.error('[GoGoogle] 403 Forbidden — verify API key has Route Optimization API enabled in your Google Cloud project');
+            }
+            if (resp.status === 429) {
+                console.error('[GoGoogle] 429 Quota exceeded — check your Google Cloud quota');
+            }
             return null;
         }
 
         if (!data.routes?.length) {
-            console.warn('[GoGoogle] API returned no routes — all shipments may be unassigned');
+            console.warn('[GoGoogle] No routes returned — all shipments may be skipped');
+            if (data.skippedShipments?.length) {
+                console.warn('[GoGoogle] Skipped shipments:', data.skippedShipments.length,
+                    data.skippedShipments.slice(0, 3).map(s => s.reasons?.[0]?.code).join(', '));
+            }
             return null;
         }
 
-        // ── Map response back to existing route format ──
+        // ── Map response routes back to app route format ──
         const routes = [];
 
         for (const gRoute of data.routes) {
-            const vi = gRoute.vehicleIndex ?? 0;
+            const vi      = gRoute.vehicleIndex ?? 0;
             const vehicle = vehicles[vi];
             if (!vehicle) continue;
 
-            // Collect ordered stops for this route
+            // Build ordered stop list from visits[]
+            // Each visit has shipmentIndex pointing back to our stops[] array.
+            // Filter to only the relevant visit type:
+            //   arrival  → isPickup = true
+            //   dismissal → isPickup = false (or undefined for delivery-only shipments)
             const orderedStops = [];
             for (const visit of (gRoute.visits || [])) {
+                // Each shipment has either only pickups (arrival) or only deliveries (dismissal).
+                // The API sets isPickup: true for pickup visits, false/absent for deliveries.
+                // Skip any visit that's explicitly the wrong type for our current mode.
+                if (isArrival  && visit.isPickup === false) continue; // delivery visit in arrival mode
+                if (!isArrival && visit.isPickup === true)  continue; // pickup visit in dismissal mode
+
                 const stopIdx = visit.shipmentIndex ?? 0;
                 const stop    = stops[stopIdx];
                 if (!stop) continue;
+
                 orderedStops.push({
                     stopNum:  orderedStops.length + 1,
                     campers:  stop.campers,
@@ -182,43 +209,60 @@ window.GoGoogleOptimizer = (function () {
             if (!orderedStops.length) continue;
 
             routes.push({
-                busId:       vehicle.busId,
-                busName:     vehicle.name,
-                busColor:    vehicle.color || '#10b981',
-                monitor:     vehicle.monitor   || null,
-                counselors:  vehicle.counselors|| [],
-                stops:       orderedStops,
-                camperCount: orderedStops.reduce((s, st) => s + st.campers.length, 0),
-                _cap:        vehicle.capacity,
-                totalDuration: 0,
-                _source:     'google-route-optimization'
+                busId:            vehicle.busId,
+                busName:          vehicle.name,
+                busColor:         vehicle.color  || '#10b981',
+                monitor:          vehicle.monitor    || null,
+                counselors:       vehicle.counselors || [],
+                stops:            orderedStops,
+                camperCount:      orderedStops.reduce((s, st) => s + st.campers.length, 0),
+                _cap:             vehicle.capacity,
+                totalDuration:    _routeDurationSec(gRoute),
+                _source:          'google-route-optimization',
+                // Encoded polyline from Google — decoded by campistry_go.js
+                // and stored in _routeGeomCache so map draws road-following lines immediately.
+                _encodedPolyline: gRoute.routePolyline?.points || null
             });
         }
 
-        // Handle skipped/unassigned stops — insert via cheapest position
-        const assignedStopIdxs = new Set(
-            (data.routes || []).flatMap(r => (r.visits || []).map(v => v.shipmentIndex))
+        // ── Handle skipped shipments ──
+        // Insert them onto the route with the most remaining capacity using
+        // cheapest-insertion (minimises extra distance).
+        const assignedIdx = new Set(
+            (data.routes || []).flatMap(r =>
+                (r.visits || []).map(v => v.shipmentIndex)
+            )
         );
-        const unassigned = stops
+        const skipped = stops
             .map((s, i) => ({ stop: s, idx: i }))
-            .filter(({ idx }) => !assignedStopIdxs.has(idx));
+            .filter(({ idx }) => !assignedIdx.has(idx));
 
-        if (unassigned.length) {
-            console.warn('[GoGoogle] ' + unassigned.length + ' stops unassigned — inserting via cheapest position');
-            for (const { stop } of unassigned) {
+        if (skipped.length) {
+            console.warn('[GoGoogle] ' + skipped.length + ' stop(s) skipped by solver — inserting via cheapest-insert fallback');
+            for (const { stop } of skipped) {
                 _cheapestInsert(routes, stop, vehicles);
             }
         }
 
-        console.log('[GoGoogle] Optimization complete —', routes.length, 'routes,',
-            routes.reduce((s, r) => s + r.stops.length, 0), 'stops assigned');
+        console.log('[GoGoogle] Done — ' + routes.length + ' routes, ' +
+            routes.reduce((s, r) => s + r.stops.length, 0) + ' stops assigned');
 
         return routes;
     }
 
     // -------------------------------------------------------------------------
-    // _cheapestInsert — fallback for unassigned stops
-    // Finds the route+position that adds the least extra distance
+    // _routeDurationSec — extract total route duration from Google response route
+    // -------------------------------------------------------------------------
+    function _routeDurationSec(gRoute) {
+        // gRoute.metrics.travelDuration is like "3600s"
+        const raw = gRoute.metrics?.travelDuration;
+        if (!raw) return 0;
+        return parseInt(raw) || 0;
+    }
+
+    // -------------------------------------------------------------------------
+    // _cheapestInsert — fallback for stops the solver couldn't assign
+    // Finds the route + position that adds the least extra driving distance.
     // -------------------------------------------------------------------------
     function _cheapestInsert(routes, stop, vehicles) {
         let bestRoute = null, bestPos = 0, bestCost = Infinity;
@@ -250,9 +294,16 @@ window.GoGoogleOptimizer = (function () {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // _hav — haversine distance in miles (cheap, for insertion cost only)
+    // -------------------------------------------------------------------------
     function _hav(lat1, lng1, lat2, lng2) {
-        const R = 3958.8, dLat = (lat2 - lat1) * Math.PI / 180, dLng = (lng2 - lng1) * Math.PI / 180;
-        const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+        const R = 3958.8;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLng = (lng2 - lng1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) ** 2
+                + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180)
+                * Math.sin(dLng / 2) ** 2;
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
