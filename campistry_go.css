@@ -499,7 +499,7 @@
 
 /* Advanced Settings */
 .advanced-open .advanced-chevron { transform: rotate(180deg); }
-.advanced-open .advanced-panel { max-height: 600px !important; }
+.advanced-open .advanced-panel { max-height: 2000px !important; }
 
 /* ==================== MAP ==================== */
 .bus-tab {
