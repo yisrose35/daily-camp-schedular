@@ -84,34 +84,57 @@ window.GoGoogleOptimizer = (function () {
         }
         if (!stops.length || !vehicles.length) return null;
 
-        // ── Global time window ──
-        // Use today's date with the configured departure time.
-        // 5-hour planning horizon is generous for any camp route.
+        // ── Time anchors ──
+        // departureTime is:
+        //   Dismissal → when buses LEAVE camp (pinned vehicle start)
+        //   Arrival   → when buses must ARRIVE at camp / bell time (pinned vehicle end)
+        //
+        // Global window:
+        //   Dismissal: [departureTime … +3 h]  — all drop-offs within 3 hours of departure
+        //   Arrival:   [departureTime − 3 h … departureTime] — pickups up to 3 h before bell
         const today = new Date();
-        const [depHour, depMin] = (departureTime || (isArrival ? '07:30' : '16:00')).split(':').map(Number);
-        const startDt = new Date(today.getFullYear(), today.getMonth(), today.getDate(), depHour, depMin, 0);
-        const endDt   = new Date(startDt.getTime() + 5 * 60 * 60 * 1000);
-        const toRFC    = d => d.toISOString();
+        const toRFC = d => d.toISOString();
+        const [depHour, depMin] = (departureTime || (isArrival ? '08:00' : '16:00')).split(':').map(Number);
+        const anchorDt = new Date(today.getFullYear(), today.getMonth(), today.getDate(), depHour, depMin, 0);
+
+        // For dismissal: global window starts at departure, ends 3 h later.
+        // For arrival:   global window starts 3 h before bell, ends at bell.
+        const globalStartDt = isArrival
+            ? new Date(anchorDt.getTime() - 3 * 60 * 60 * 1000)
+            : anchorDt;
+        const globalEndDt = isArrival
+            ? anchorDt
+            : new Date(anchorDt.getTime() + 3 * 60 * 60 * 1000);
+
+        // 5-minute departure window — tight enough to pin departure, loose enough to
+        // avoid infeasibility if the solver needs a few seconds of slack.
+        const depWindowEndDt = new Date(anchorDt.getTime() + 5 * 60 * 1000);
 
         // ── Build shipments — one per stop ──
-        // Dismissal → deliveries (bus starts loaded at camp, drops kids at home)
-        // Arrival   → pickups   (bus collects kids from home, ends at camp)
-        const durationStr = String(Math.max(30, Math.round(serviceTimeSec))) + 's';
+        // penaltyCost: very high value forces the solver to serve every stop.
+        // Without this the solver can freely skip stops (they fall back to the
+        // haversine cheapest-insert, which is substantially worse routing).
+        // 10,000 = prohibitively expensive to skip; solver only skips if truly
+        // infeasible (e.g. capacity mathematically cannot fit the stop).
+        const durationStr  = String(Math.max(30, Math.round(serviceTimeSec))) + 's';
         const campLocation = { latitude: campLat, longitude: campLng };
+        const SKIP_PENALTY = 10000; // cost units — effectively "never skip"
 
         const shipments = stops.map((stop, idx) => {
             const visitLocation = { latitude: stop.lat, longitude: stop.lng };
             const visit = {
                 arrivalLocation: visitLocation,
                 duration: durationStr
-                // no timeWindows — let the solver be free to find optimal order
+                // No per-stop time windows — we want the solver free to find the
+                // optimal ordering within the vehicle's global time constraints.
             };
             return {
-                label: String(idx),
+                label:       String(idx),
+                penaltyCost: SKIP_PENALTY,   // strongly penalise skipping any stop
                 loadDemands: { campers: { amount: String(stop.campers.length) } },
                 ...(isArrival
-                    ? { pickups:    [visit] }   // arrival:   pickup at home
-                    : { deliveries: [visit] })   // dismissal: delivery to home
+                    ? { pickups:    [visit] }   // arrival:   pickup at home → deliver to camp
+                    : { deliveries: [visit] })   // dismissal: deliver from camp → home
             };
         });
 
@@ -130,37 +153,44 @@ window.GoGoogleOptimizer = (function () {
         const modelVehicles = vehicles.map((v, vi) => {
             const veh = {
                 label:            v.name || ('Bus ' + (vi + 1)),
-                travelMode:       1,     // DRIVING
+                travelMode:       1,        // DRIVING
                 loadLimits:       { campers: { maxLoad: String(Math.max(1, v.capacity)) } },
-                costPerHour:      40,    // time-balance incentive
+                costPerHour:      40,       // time-balance: minimising total hours balances buses
                 costPerKilometer: 1,
                 routeDurationLimit: {
-                    // Soft cap: solver prefers routes under this limit.
-                    // costPerHourAfterSoftMax penalises every excess minute heavily.
+                    // Soft ride-time cap: penalises routes where the last student
+                    // rides longer than maxRideTime + estimated service time.
                     softMaxDuration:         String(Math.round(softDurLimit)) + 's',
-                    costPerHourAfterSoftMax: '200'
+                    costPerHourAfterSoftMax: '200'   // strong incentive to stay under limit
                 }
             };
+
             if (isArrival) {
-                veh.endLocation = campLocation;
+                // Arrival: bus starts anywhere (optimal first pickup), ends at camp.
+                // endTimeWindows pins the latest camp arrival to the bell time.
+                veh.endLocation    = campLocation;
+                veh.endTimeWindows = [{ endTime: toRFC(anchorDt) }];
             } else {
-                veh.startLocation = campLocation;
+                // Dismissal: bus starts at camp at departure time, ends at last drop-off.
+                // startTimeWindows pins departure to the configured time (5-min slack).
+                veh.startLocation    = campLocation;
+                veh.startTimeWindows = [{ startTime: toRFC(anchorDt), endTime: toRFC(depWindowEndDt) }];
             }
             return veh;
         });
 
         // ── Request body ──
         const body = {
-            timeout: '120s',  // 2-minute solve limit — plenty for 700 stops / 18 buses
+            timeout: '180s',  // 3-minute solve limit — handles 700+ stops / 18 buses comfortably
             model: {
-                globalStartTime: toRFC(startDt),
-                globalEndTime:   toRFC(endDt),
+                globalStartTime: toRFC(globalStartDt),
+                globalEndTime:   toRFC(globalEndDt),
                 shipments:       shipments,
                 vehicles:        modelVehicles
             },
-            considerRoadTraffic:         true,
-            populatePolylines:           true,   // road-following route geometry
-            populateTravelStepPolylines: false    // per-leg detail not needed
+            considerRoadTraffic:         true,   // use live traffic for travel time estimates
+            populatePolylines:           true,   // road-following geometry for map rendering
+            populateTravelStepPolylines: false    // per-leg polylines not needed (whole-route is enough)
         };
 
         // ── API call ──
