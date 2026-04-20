@@ -4851,6 +4851,13 @@
                                     _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
                                     route._roadPts = tspResult.roadPts;
                                 }
+                                // Store real per-leg driving times from Geoapify.
+                                // legTimes[i] = seconds of road travel to reach stop[i].
+                                // legTimes[N] = last stop → camp return leg (if present).
+                                // These replace haversine estimates in the ETA pipeline.
+                                if (tspResult.legTimes?.length) {
+                                    route._tspLegTimes = tspResult.legTimes;
+                                }
                                 route._source = 'geoapify-tsp';
                                 geoTspSucc++;
                             }
@@ -4937,7 +4944,8 @@
             for (const r of routes) {
                 if (!r.stops.length) continue;
                 const mx = r._osrmMatrix;
-                const tLegs = trafficCache[r.busId]; // traffic leg durations in seconds, or null
+                // Prefer Geoapify TSP per-leg road times → haversine fallback via trafficCache
+                const tLegs = r._tspLegTimes || trafficCache[r.busId] || null;
 
                 // Traffic-aware drive time: uses Mapbox traffic legs when available
                 // Leg indexing: leg[0] = camp→stop1 (dismissal) or stop1→stop2 (arrival)

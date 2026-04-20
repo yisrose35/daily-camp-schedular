@@ -464,16 +464,41 @@ window.GoGeoapifyOptimizer = (function () {
             return null;
         }
 
-        // ── Extract ordered stops ──
+        // ── Extract ordered stops + actual per-leg road travel times ──
+        //
+        // Geoapify returns action.travel_duration (seconds of actual road travel
+        // to reach each stop from the previous location). We capture these so the
+        // ETA / ride-time computation can use real road times instead of haversine.
+        //
+        // legTimes[i]  = seconds of road travel to reach stop[i]
+        //   leg[0]     = depot (camp) → stop[0]
+        //   leg[i>0]   = stop[i-1] → stop[i]
+        // legTimes[N]  = last stop → depot (return leg, for arrival mode)
+        //
         const orderedStops = [];
+        const legTimes = []; // seconds, parallel to orderedStops + 1 optional return leg
+        let returnLegSec = null;
+
         for (const action of (feat.properties.actions || [])) {
+            if (action.type === 'end') {
+                // Return leg: last stop → camp
+                if (typeof action.travel_duration === 'number') {
+                    returnLegSec = action.travel_duration;
+                }
+                continue;
+            }
             if (action.type !== 'job' && action.type !== 'pickup' && action.type !== 'delivery') continue;
             const jobIdx = action.job_index;
             if (jobIdx === undefined || jobIdx === null) continue;
             const stop = stops[jobIdx];
             if (!stop) continue;
             orderedStops.push(stop);
+            // travel_duration is seconds of road driving to reach this stop
+            legTimes.push(typeof action.travel_duration === 'number' ? action.travel_duration : null);
         }
+
+        // Append return leg as legTimes[N] so ETA code can use it for arrival mode
+        if (returnLegSec !== null) legTimes.push(returnLegSec);
 
         if (!orderedStops.length) {
             console.warn('[Geoapify/TSP] No ordered stops returned for bus ' + (vehicle.busId || '?'));
@@ -496,11 +521,14 @@ window.GoGeoapifyOptimizer = (function () {
         if (unassigned.length) {
             console.warn('[Geoapify/TSP] ' + unassigned.length + ' unassigned stops for bus ' + (vehicle.busId || '?') + ' — appending at end');
             for (const idx of unassigned) {
-                if (stops[idx]) orderedStops.push(stops[idx]);
+                if (stops[idx]) {
+                    orderedStops.push(stops[idx]);
+                    legTimes.splice(legTimes.length - (returnLegSec !== null ? 1 : 0), 0, null); // no leg time for appended
+                }
             }
         }
 
-        return { orderedStops, roadPts };
+        return { orderedStops, roadPts, legTimes };
     }
 
     return { isConfigured, optimizeTours, optimizeSingleBus };
