@@ -1378,11 +1378,11 @@
             console.warn('[Go] Geocode rejected for ' + camperName + ': outside continental US (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')');
             return false;
         }
-        // 3. If camp location known, hard limit 100 miles
+        // 3. If camp location known, hard limit 30 miles (was 100 — too loose for urban camps)
         if (_campCoordsCache) {
             const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, lat, lng);
-            if (dist > 100) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(0) + 'mi from camp (max 100)');
+            if (dist > 30) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(0) + 'mi from camp (max 30)');
                 return false;
             }
         }
@@ -1423,12 +1423,18 @@
                 return false;
             }
         }
-        // 5. ZIP mismatch: flag but don't reject (ZIP boundaries are fuzzy)
+        // 5. ZIP mismatch — reject if confidence is not high enough to trust a cross-ZIP match
         if (addrData?.zip && returnedResult?.zip) {
             const inputZip = addrData.zip.substring(0, 5);
             const returnedZip = (returnedResult.zip + '').substring(0, 5);
-            if (inputZip !== returnedZip) {
-                console.warn('[Go] Geocode ZIP mismatch for ' + camperName + ': input ' + inputZip + ' vs returned ' + returnedZip);
+            if (inputZip && returnedZip && inputZip !== returnedZip) {
+                const conf = returnedResult.confidence || 0;
+                if (conf < 0.75) {
+                    // Low-confidence cross-ZIP result — likely matched a different street in a neighboring ZIP
+                    console.warn('[Go] Geocode REJECTED for ' + camperName + ': ZIP mismatch (' + inputZip + ' vs ' + returnedZip + ') at confidence ' + (conf * 100).toFixed(0) + '% < 75%');
+                    return false;
+                }
+                console.warn('[Go] Geocode ZIP mismatch for ' + camperName + ': input ' + inputZip + ' vs returned ' + returnedZip + ' — accepting at ' + (conf * 100).toFixed(0) + '% confidence');
             }
         }
         return true;
@@ -2691,8 +2697,11 @@
         // 2. ORS (fallback if Census failed or low confidence)
         if (results.length === 0 || results.every(r => r.confidence < 0.6)) {
             const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
-            if (ors && validateGeocode(ors.lat, ors.lng, a.street, name, ors)) {
+            // Enforce minimum confidence for ORS — it's a looser provider
+            if (ors && ors.confidence >= 0.45 && validateGeocode(ors.lat, ors.lng, a.street, name, ors)) {
                 results.push(ors);
+            } else if (ors && ors.confidence < 0.45) {
+                console.warn('[Go] ORS result for ' + name + ' rejected — confidence too low (' + (ors.confidence * 100).toFixed(0) + '%)');
             }
         }
 
@@ -2731,6 +2740,10 @@
         a._zipMismatch = (result.zipMatch === false);
         if (result.confidence < 0.5) {
             a._geocodeWarning = 'Low confidence (' + Math.round(result.confidence * 100) + '%) — verify address';
+        } else if (result.precision === 'approximate' && !result._crossValidated) {
+            a._geocodeWarning = 'Approximate match — street not found exactly, verify address';
+        } else if (result._zipMismatch) {
+            a._geocodeWarning = 'ZIP mismatch — geocoded to a different ZIP, verify address';
         } else {
             delete a._geocodeWarning;
         }
@@ -3705,7 +3718,7 @@
 
         // ── D. Border rebalance for over-capacity pockets ──
         // Use hard bus cap (not targetFill) — we must fit in a single bus
-        const MAX_ABSORB_MI = 3.0; // max distance for absorbing/moving kids between zones
+        const MAX_ABSORB_MI = 1.5; // max distance for absorbing/moving kids between zones (tighter = cleaner geographic zones)
         const hardCap = Math.max(...effectiveCaps);
         for (let pass = 0; pass < 50; pass++) {
             let anyOver = false;
@@ -5123,13 +5136,39 @@
                     } catch (e) { console.warn('[Go] VROOM failed for ' + v.name + ':', e.message); }
                 }
 
-                // Fallback: directional sort
-                if (!orderedStops) { orderedStops = zoneStops.slice(); directionalSort(orderedStops, campLat, campLng); }
+                // Fallback: nearest-neighbor TSP from the anchor stop (much better than directional sort)
+                if (!orderedStops) {
+                    var nnStops = zoneStops.slice();
+                    var nnOrdered = [];
+                    // For dismissal start from camp (nearest first), for arrival start from farthest
+                    var nnVisited = new Array(nnStops.length).fill(false);
+                    var nnStart = fIdx; // fIdx = farthest stop from camp (set earlier)
+                    if (!isArrival) {
+                        // dismissal: start from stop nearest camp
+                        var nnMinD = Infinity;
+                        nnStops.forEach(function(s, i) { var d = drivingDist(campLat, campLng, s.lat, s.lng); if (d < nnMinD) { nnMinD = d; nnStart = i; } });
+                    }
+                    nnVisited[nnStart] = true;
+                    nnOrdered.push(nnStops[nnStart]);
+                    while (nnOrdered.length < nnStops.length) {
+                        var nnLast = nnOrdered[nnOrdered.length - 1];
+                        var nnBestI = -1, nnBestD = Infinity;
+                        nnStops.forEach(function(s, i) {
+                            if (nnVisited[i]) return;
+                            var d = drivingDist(nnLast.lat, nnLast.lng, s.lat, s.lng);
+                            if (d < nnBestD) { nnBestD = d; nnBestI = i; }
+                        });
+                        if (nnBestI < 0) break;
+                        nnVisited[nnBestI] = true;
+                        nnOrdered.push(nnStops[nnBestI]);
+                    }
+                    orderedStops = nnOrdered;
+                }
 
-                // 2-opt refinement
+                // 2-opt refinement — tighter threshold catches more improvements
                 if (orderedStops.length >= 3) {
                     var _2oi = true;
-                    for (var _2p = 0; _2p < 5 && _2oi; _2p++) {
+                    for (var _2p = 0; _2p < 10 && _2oi; _2p++) {
                         _2oi = false;
                         for (var ii = 0; ii < orderedStops.length - 2; ii++) {
                             for (var jj = ii + 2; jj < orderedStops.length; jj++) {
@@ -5138,13 +5177,50 @@
                                 if (!a?.lat || !b?.lat || !c?.lat) continue;
                                 var curD = drivingDist(a.lat, a.lng, b.lat, b.lng) + (d2 ? drivingDist(c.lat, c.lng, d2.lat, d2.lng) : 0);
                                 var newD = drivingDist(a.lat, a.lng, c.lat, c.lng) + (d2 ? drivingDist(b.lat, b.lng, d2.lat, d2.lng) : 0);
-                                if (newD < curD * 0.95) { var seg = orderedStops.splice(ii + 1, jj - ii); seg.reverse(); orderedStops.splice(ii + 1, 0, ...seg); _2oi = true; }
+                                if (newD < curD * 0.98) { var seg = orderedStops.splice(ii + 1, jj - ii); seg.reverse(); orderedStops.splice(ii + 1, 0, ...seg); _2oi = true; }
                             }
                         }
                     }
                 }
 
-                // Orientation check
+                // Or-opt pass — try relocating each single stop to a better position
+                if (orderedStops.length >= 4) {
+                    var orImproved = true;
+                    for (var _op = 0; _op < 5 && orImproved; _op++) {
+                        orImproved = false;
+                        for (var oi = 0; oi < orderedStops.length; oi++) {
+                            var oStop = orderedStops[oi];
+                            if (!oStop?.lat) continue;
+                            // Cost of removing oStop from current position
+                            var oPrev = orderedStops[oi - 1] || null;
+                            var oNext = orderedStops[oi + 1] || null;
+                            var removeCost = (oPrev ? drivingDist(oPrev.lat, oPrev.lng, oStop.lat, oStop.lng) : 0)
+                                           + (oNext ? drivingDist(oStop.lat, oStop.lng, oNext.lat, oNext.lng) : 0)
+                                           - (oPrev && oNext ? drivingDist(oPrev.lat, oPrev.lng, oNext.lat, oNext.lng) : 0);
+                            // Try inserting oStop at every other gap
+                            var bestGain = 0, bestPos = -1;
+                            for (var oj = 0; oj < orderedStops.length - 1; oj++) {
+                                if (oj === oi || oj === oi - 1) continue;
+                                var ojA = orderedStops[oj], ojB = orderedStops[oj + 1];
+                                if (!ojA?.lat || !ojB?.lat) continue;
+                                var insertCost = drivingDist(ojA.lat, ojA.lng, oStop.lat, oStop.lng)
+                                              + drivingDist(oStop.lat, oStop.lng, ojB.lat, ojB.lng)
+                                              - drivingDist(ojA.lat, ojA.lng, ojB.lat, ojB.lng);
+                                var gain = removeCost - insertCost;
+                                if (gain > bestGain) { bestGain = gain; bestPos = oj; }
+                            }
+                            if (bestPos >= 0 && bestGain > 0) {
+                                orderedStops.splice(oi, 1);
+                                var insertAt = bestPos >= oi ? bestPos : bestPos + 1;
+                                orderedStops.splice(insertAt + 1, 0, oStop);
+                                orImproved = true;
+                                break; // restart pass after any move
+                            }
+                        }
+                    }
+                }
+
+                // Orientation check — ensure route radiates correctly from camp
                 if (orderedStops.length >= 2) {
                     var fd = drivingDist(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
                     var ld = drivingDist(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
