@@ -423,8 +423,15 @@
         // Profile name used in fleet.types[].profile must match fleet.profiles[].name
         const profileName = 'car_1';
 
-        const maxRouteSec = (opts.maxRouteMinutes || 90) * 60;
+        const maxRouteMinutes = opts.maxRouteMinutes || 90;
         const campLoc = { lat: camp.lat, lng: camp.lng };
+
+        // Tighten the shift end window to enforce max route duration
+        // (HERE v3 does not support a limits field on shifts or vehicle types)
+        const [baseH, baseM] = baseTime.match(/T(\d+):(\d+)/).slice(1).map(Number);
+        const endDate = new Date('2024-01-15T' + baseTime.split('T')[1]);
+        endDate.setMinutes(endDate.getMinutes() + maxRouteMinutes);
+        const tightEndTime = endDate.toISOString().replace(/\.\d+Z$/, 'Z');
 
         // Build fleet — one vehicle type per bus so we preserve bus identity + capacity
         const fleetTypes = buses.map(function(b, i) {
@@ -433,9 +440,8 @@
                 profile: profileName,
                 costs: { fixed: 5.0, distance: 0.07, time: 0.01 },
                 shifts: [{
-                    start: { time: baseTime, location: campLoc },
-                    end:   { time: endTime,  location: campLoc },
-                    limits: { maxTime: maxRouteSec }
+                    start: { time: baseTime,     location: campLoc },
+                    end:   { time: tightEndTime, location: campLoc }
                 }],
                 capacity: [b.capacity || 44],
                 amount: 1
