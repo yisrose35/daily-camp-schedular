@@ -4145,97 +4145,116 @@
     // =========================================================================
     // splitTourAtGaps(tourStops, buses)
     //
-    // Takes a pre-ordered list of stops (a "giant tour") and splits it into
-    // K segments — one per bus — by cutting at the K-1 largest geographic gaps.
+    // Takes a pre-ordered giant tour and splits it into K bus segments.
     //
-    // Why gaps?  The giant tour orders stops by road proximity, so nearby stops
-    // are always consecutive.  The biggest jumps between consecutive stops are
-    // natural neighborhood boundaries — exactly where we want to split.
+    // Core algorithm — for each bus, walk the tour greedily:
+    //   • Stop fits in remaining capacity → take it, move on.
+    //   • Stop doesn't fit (overflow) → skip logic:
+    //       1. Measure how far this stop is from the last stop we took.
+    //       2. If within the dynamic skip cap, look ahead up to 5 stops for
+    //          one that fits AND is still within the cap distance.
+    //       3. If found: defer the overflow stop, take the nearby one instead.
+    //          The deferred stop becomes the FIRST stop of the next bus.
+    //       4. If not found (or stop is too far): cut here — this stop starts
+    //          the next bus's segment.
     //
-    // Capacity-aware: accumulates camper counts and won't let a segment exceed
-    // its bus capacity.  When a hard-capacity boundary is reached before a large
-    // gap, it finds the biggest gap within the valid window.
+    // Dynamic skip cap = 4 × average inter-stop distance in the tour.
+    // e.g. if stops average 0.4 mi apart the cap is ~1.6 mi — a bus will
+    // never skip over a stop that's more than ~1.6 mi away.
     // =========================================================================
     function splitTourAtGaps(tourStops, buses) {
-        const K = buses.length;
-        const N = tourStops.length;
+        var K = buses.length;
+        var N = tourStops.length;
         if (K <= 1 || N === 0) return [tourStops.slice()];
         if (N <= K) return tourStops.map(function(s) { return [s]; });
 
-        // Sort buses by capacity descending so the largest bus covers the biggest cluster
-        const caps = buses.slice().sort(function(a, b) {
+        // Sort buses by capacity descending
+        var caps = buses.slice().sort(function(a, b) {
             return (b.capacity || 44) - (a.capacity || 44);
         }).map(function(b) { return b.capacity || 44; });
 
-        const totalKids = tourStops.reduce(function(s, st) { return s + st.campers.length; }, 0);
-
-        // Pre-compute gap distances between every consecutive pair of stops
-        var gapDists = new Array(N - 1);
+        // Dynamic skip cap: 4× the average driving distance between consecutive stops
+        var totalGapSec = 0;
         for (var gi = 0; gi < N - 1; gi++) {
-            gapDists[gi] = drivingDist(tourStops[gi].lat, tourStops[gi].lng,
+            totalGapSec += drivingDist(tourStops[gi].lat, tourStops[gi].lng,
                                        tourStops[gi + 1].lat, tourStops[gi + 1].lng);
         }
+        var avgGapSec   = N > 1 ? totalGapSec / (N - 1) : 300;
+        var maxSkipSec  = avgGapSec * 4;
+        var maxDeferPerBus = 3; // hard limit: never defer more than 3 stops per bus
 
+        var avgSpeedMph = D.setup.avgSpeed || 25;
+        var maxSkipMi   = (maxSkipSec / 3600) * avgSpeedMph;
+        console.log('[Go] Split: avg gap ' + (avgGapSec / 60).toFixed(1) + 'min, skip cap ' + maxSkipMi.toFixed(1) + 'mi');
+
+        // `order` is the working list of stops — modified as deferred stops are prepended
+        var order    = tourStops.slice();
         var segments = [];
-        var pos = 0;
-        var kidsAssigned = 0;
 
-        for (var bi = 0; bi < K && pos < N; bi++) {
+        for (var bi = 0; bi < K && order.length > 0; bi++) {
             // Last bus takes everything remaining
             if (bi === K - 1) {
-                segments.push(tourStops.slice(pos));
+                segments.push(order.slice());
+                order = [];
                 break;
             }
 
-            var busCap    = caps[bi];
-            var bussesLeft = K - bi;
-            var kidsLeft  = totalKids - kidsAssigned;
-            // How many kids should this bus ideally take?
-            var targetKids = Math.min(busCap, Math.ceil(kidsLeft / bussesLeft));
+            var busCap   = caps[bi];
+            var seg      = [];
+            var deferred = []; // overflow stops held for next bus
+            var cumKids  = 0;
+            var pos      = 0;
 
-            // Find capacity boundary: last index where cumulative ≤ busCap
-            var cumKids = 0;
-            var capEnd = pos;
-            for (var ci = pos; ci < N; ci++) {
-                cumKids += tourStops[ci].campers.length;
-                if (cumKids <= busCap) capEnd = ci;
-                else break;
-            }
+            while (pos < order.length) {
+                var stop     = order[pos];
+                var stopKids = stop.campers.length;
 
-            // Find target boundary: last index where cumulative ≤ targetKids
-            var cumKids2 = 0;
-            var targetEnd = pos;
-            for (var ti = pos; ti <= capEnd; ti++) {
-                cumKids2 += tourStops[ti].campers.length;
-                if (cumKids2 <= targetKids) targetEnd = ti;
-            }
+                if (cumKids + stopKids <= busCap) {
+                    // ── Fits — take it ──
+                    seg.push(stop);
+                    cumKids += stopKids;
+                    pos++;
+                } else {
+                    // ── Overflow — try skip logic ──
+                    var lastStop  = seg.length > 0 ? seg[seg.length - 1] : { lat: campLat, lng: campLng };
+                    var distToStop = drivingDist(lastStop.lat, lastStop.lng, stop.lat, stop.lng);
 
-            // Search for the biggest geographic gap in the window [targetEnd-3 … capEnd]
-            // This is the natural neighborhood boundary — where we actually cut
-            var searchFrom = Math.max(pos, targetEnd - 3);
-            var searchTo   = Math.min(capEnd, N - 2);
-            var bestGapIdx = searchTo;   // fallback: cut at capacity boundary
-            var bestGapDist = -1;
-            for (var si2 = searchFrom; si2 <= searchTo; si2++) {
-                if (gapDists[si2] > bestGapDist) {
-                    bestGapDist = gapDists[si2];
-                    bestGapIdx  = si2;
+                    if (deferred.length < maxDeferPerBus && distToStop <= maxSkipSec) {
+                        // Stop is close enough to skip — look ahead for one that fits
+                        var swapped = false;
+                        for (var fwd = pos + 1; fwd < Math.min(pos + 6, order.length); fwd++) {
+                            var cand     = order[fwd];
+                            var distCand = drivingDist(lastStop.lat, lastStop.lng, cand.lat, cand.lng);
+                            if (cumKids + cand.campers.length <= busCap && distCand <= maxSkipSec) {
+                                // Defer current stop, take this nearby one instead
+                                deferred.push(order[pos]);   // mark overflow stop as deferred
+                                order.splice(fwd, 1);        // pull candidate out of order
+                                seg.push(cand);
+                                cumKids += cand.campers.length;
+                                pos++;                        // advance past the deferred stop
+                                swapped = true;
+                                break;
+                            }
+                        }
+                        if (!swapped) break; // no nearby candidate fits — cut here
+                    } else {
+                        // Stop is too far, or we've already deferred the max — cut here
+                        break;
+                    }
                 }
             }
 
-            // Segment: stops[pos … bestGapIdx] inclusive; next segment starts at bestGapIdx+1
-            var seg = tourStops.slice(pos, bestGapIdx + 1);
             segments.push(seg);
-            kidsAssigned += seg.reduce(function(s, st) { return s + st.campers.length; }, 0);
-            pos = bestGapIdx + 1;
+            // Deferred stops go FIRST on the next bus, then the remaining unprocessed stops
+            order = deferred.concat(order.slice(pos));
         }
 
-        // Catch any stragglers (shouldn't happen but be safe)
-        if (pos < N) {
+        // Safety: any leftover stops go onto the last segment
+        if (order.length > 0) {
             if (segments.length > 0) {
-                segments[segments.length - 1] = segments[segments.length - 1].concat(tourStops.slice(pos));
+                segments[segments.length - 1] = segments[segments.length - 1].concat(order);
             } else {
-                segments.push(tourStops.slice(pos));
+                segments.push(order.slice());
             }
         }
 
