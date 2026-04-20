@@ -2880,8 +2880,6 @@
             a._geocodeWarning = 'Approximate match — street not found exactly, verify address';
         } else if (result._zipMismatch) {
             a._geocodeWarning = 'ZIP mismatch — geocoded to a different ZIP, verify address';
-        } else if (a._addressCorrected) {
-            a._geocodeWarning = 'Address auto-corrected by Google/USPS — confirm the change is right';
         } else {
             delete a._geocodeWarning;
         }
