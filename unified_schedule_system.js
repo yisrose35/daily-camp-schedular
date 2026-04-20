@@ -3021,6 +3021,135 @@ if (bypassStatus.highlight) {
     // MODAL UI (LEGACY / DIRECT EDIT)
     // =========================================================================
 
+    // ── Activity-first field search ─────────────────────────────────────────
+    // Returns { open: [{name,capacity,...}], busy: [{name,capacity,conflict,...}] }
+    // for fields that support the given activity at the given time range.
+    function findFieldsForActivity(activityName, targetSlots, divName, excludeBunk) {
+        if (!activityName) return { open: [], busy: [], none: true };
+        const locs = getAllLocations();
+        const matching = locs.filter(l =>
+            (l.activities || []).some(a => a.toLowerCase() === activityName.toLowerCase())
+        );
+        if (matching.length === 0) return { open: [], busy: [], none: true };
+        const open = [], busy = [];
+        for (const loc of matching) {
+            const check = checkLocationConflict(loc.name, targetSlots, excludeBunk);
+            if (check.hasConflict) busy.push({ ...loc, conflict: check });
+            else open.push(loc);
+        }
+        return { open, busy, none: false };
+    }
+
+    // "Make Room" modal — shows which bunks to displace and their alternatives
+    function showMakeRoomModal(activityName, busyFields, targetSlots, divName, bunk, startMin, endMin, onFieldFreed) {
+        const existingMR = document.getElementById('make-room-overlay');
+        if (existingMR) existingMR.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'make-room-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10002;display:flex;align-items:center;justify-content:center;';
+
+        // Gather displaced bunks per field with alternatives
+        const fieldPlans = busyFields.map(loc => {
+            const conflictBunks = [...new Set([
+                ...loc.conflict.editableConflicts.map(c => c.bunk),
+                ...loc.conflict.nonEditableConflicts.map(c => c.bunk)
+            ])];
+            const simUsage = window.buildFieldUsageBySlot?.([]) || {};
+            // Mark this field as taken in sim
+            targetSlots.forEach(idx => {
+                if (!simUsage[idx]) simUsage[idx] = {};
+                simUsage[idx][loc.name] = { count: 999, bunks: {}, divisions: [] };
+            });
+            const alts = conflictBunks.map(cb => {
+                const cbDiv = getDivisionForBunk(cb);
+                const cbSlots = findSlotsForRange(startMin, endMin, cbDiv, cb);
+                const alt = findAlternativeForBunk(cb, cbSlots.length ? cbSlots : targetSlots, cbDiv, simUsage, [loc.name]);
+                return { bunk: cb, alt, editable: loc.conflict.editableConflicts.some(c => c.bunk === cb) };
+            });
+            return { loc, conflictBunks, alts };
+        });
+
+        // Only show fields where all displaceable bunks have alternatives
+        const actionable = fieldPlans.filter(p => p.alts.every(a => a.alt || !a.editable));
+
+        overlay.innerHTML = `<div style="background:#fff;border-radius:14px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.25);width:500px;max-width:95vw;max-height:85vh;overflow-y:auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h2 style="margin:0;font-size:1.1rem;color:#1e40af;">🔓 Make Room for ${escapeHtml(activityName)}</h2>
+                <button id="mr-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#9ca3af;">&times;</button>
+            </div>
+            <p style="margin:0 0 16px;font-size:0.875rem;color:#6b7280;">All courts that support <strong>${escapeHtml(activityName)}</strong> are in use. Here's the plan to free one up:</p>
+            ${actionable.length === 0 ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#991b1b;font-size:0.875rem;">❌ No room can be made — all displaced bunks have no available alternatives right now.</div>` :
+            actionable.map((plan, pi) => `
+                <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:14px;margin-bottom:12px;">
+                    <div style="font-weight:600;color:#0369a1;margin-bottom:8px;">Free up: <strong>${escapeHtml(plan.loc.name)}</strong></div>
+                    <div style="display:flex;flex-direction:column;gap:6px;">
+                    ${plan.alts.map(a => `
+                        <div style="display:flex;align-items:center;gap:8px;font-size:0.85rem;">
+                            <span style="font-weight:600;color:#374151;min-width:80px;">${escapeHtml(a.bunk)}</span>
+                            <span style="color:#9ca3af;">→</span>
+                            <span style="color:${a.alt ? '#065f46' : '#991b1b'};">
+                                ${a.alt ? `${escapeHtml(a.alt.activityName)}${a.alt.field ? ' @ ' + escapeHtml(a.alt.field) : ''}` : (a.editable ? '⚠️ No alternative' : '🔒 Other scheduler')}
+                            </span>
+                        </div>`).join('')}
+                    </div>
+                    <button data-plan-idx="${pi}" class="mr-apply-btn" style="margin-top:12px;width:100%;padding:10px;background:#0369a1;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:0.9rem;">
+                        ✓ Apply — Free ${escapeHtml(plan.loc.name)} for ${escapeHtml(activityName)}
+                    </button>
+                </div>`).join('')}
+            <button id="mr-ignore" style="width:100%;padding:10px;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;font-weight:500;cursor:pointer;margin-top:4px;">Place Without a Court (ignore field)</button>
+        </div>`;
+
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#mr-close').onclick = () => overlay.remove();
+        overlay.querySelector('#mr-ignore')?.addEventListener('click', () => {
+            overlay.remove();
+            onFieldFreed(null); // place with no field assignment
+        });
+
+        overlay.querySelectorAll('.mr-apply-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const pi = parseInt(btn.dataset.planIdx);
+                const plan = actionable[pi];
+                overlay.remove();
+
+                // Displace the blocking bunks to their alternatives
+                const modifiedBunks = new Set([bunk]);
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _hc = _gs.historicalCounts || {};
+
+                for (const { bunk: cb, alt, editable } of plan.alts) {
+                    if (!alt || !editable) continue;
+                    const cbDiv = getDivisionForBunk(cb);
+                    const cbSlots = findSlotsForRange(startMin, endMin, cbDiv, cb);
+                    if (!window.scheduleAssignments[cb]) window.scheduleAssignments[cb] = [];
+                    const oldAct = (cbSlots).filter(i => window.scheduleAssignments[cb]?.[i] && !window.scheduleAssignments[cb][i].continuation)
+                        .map(i => window.scheduleAssignments[cb][i]._activity).filter(Boolean);
+                    cbSlots.forEach((idx, i) => {
+                        window.scheduleAssignments[cb][idx] = {
+                            field: alt.field, sport: alt.activityName, _activity: alt.activityName,
+                            _fixed: true, _madeRoom: true, continuation: i > 0
+                        };
+                    });
+                    modifiedBunks.add(cb);
+                    // Rotation counts
+                    if (!_hc[cb]) _hc[cb] = {};
+                    oldAct.forEach(a => { _hc[cb][a] = Math.max(0, (_hc[cb][a] || 0) - 1); });
+                    _hc[cb][alt.activityName] = (_hc[cb][alt.activityName] || 0) + 1;
+                }
+
+                window.saveGlobalSettings?.('historicalCounts', _hc);
+                if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
+                if (typeof renderStaggeredView === 'function') renderStaggeredView();
+                if (typeof updateTable === 'function') updateTable();
+
+                // Now the field is free — proceed with the original edit
+                onFieldFreed(plan.loc.name);
+            });
+        });
+    }
+
     function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
         const modal = createModal();
         const locations = getAllLocations();
@@ -3029,108 +3158,171 @@ if (bypassStatus.highlight) {
         const slots = findSlotsForRange(startMin, endMin, divName);
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
-            if (entry) { 
-                currentField = fieldLabel(entry.field); 
-                currentActivity = entry._activity || currentField || currentValue; 
+            if (entry) {
+                currentField = fieldLabel(entry.field);
+                currentActivity = entry._activity || currentField || currentValue;
             }
         }
-        // Build datalist of all possible activities across all locations
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
-        modal.innerHTML = `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;"><h2 style="margin: 0; font-size: 1.25rem; color: #1f2937;">Edit Schedule Cell</h2><button id="post-edit-close" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #9ca3af;">&times;</button></div><div style="background: #f3f4f6; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;"><div style="font-weight: 600; color: #374151;">${escapeHtml(bunk)}</div><div style="font-size: 0.875rem; color: #6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div></div><div style="display: flex; flex-direction: column; gap: 16px;"><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px;">Location / Field</label><select id="post-edit-location" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: white;"><option value="">-- No specific location --</option><optgroup label="Fields">${locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`).join('')}</optgroup><optgroup label="Special Activities">${locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`).join('')}</optgroup></select></div><div id="post-edit-activity-picker" style="margin-top: 4px; display: none;"></div><div><label style="display: block; font-weight: 500; color: #374151; margin-bottom: 6px; margin-top: 12px;">Activity Name</label><input type="text" id="post-edit-activity" list="post-edit-activity-list" value="${escapeHtml(currentActivity)}" placeholder="e.g., Basketball" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; box-sizing: border-box;"><datalist id="post-edit-activity-list">${allActivities.map(a => `<option value="${escapeHtml(a)}">`).join('')}</datalist><div style="font-size: 0.75rem; color: #9ca3af; margin-top: 4px;">Enter CLEAR or FREE to empty this slot</div></div><div id="post-edit-conflict" style="display: none;"></div><div style="display: flex; gap: 12px; margin-top: 8px;"><button id="post-edit-cancel" style="flex: 1; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 1rem; cursor: pointer; font-weight: 500;">Cancel</button><button id="post-edit-save" style="flex: 1; padding: 12px; border: none; border-radius: 8px; background: #2563eb; color: white; font-size: 1rem; cursor: pointer; font-weight: 500;">Save Changes</button></div></div>`;
-        
+        const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+
+        modal.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+                <h2 style="margin:0;font-size:1.2rem;color:#1f2937;">✏️ Edit Schedule</h2>
+                <button id="post-edit-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;">&times;</button>
+            </div>
+            <div style="background:#f3f4f6;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:0.875rem;">
+                <span style="font-weight:600;color:#374151;">${escapeHtml(bunk)}</span>
+                <span style="color:#6b7280;margin-left:8px;">${minutesToTimeLabel(startMin)} – ${minutesToTimeLabel(endMin)}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:14px;">
+                <div>
+                    <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">What activity?</label>
+                    <input type="text" id="post-edit-activity" list="post-edit-activity-list"
+                        value="${escapeHtml(currentActivity)}" placeholder="e.g., Basketball"
+                        style="width:100%;padding:10px 12px;border:1.5px solid #6366f1;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;">
+                    <datalist id="post-edit-activity-list">${allActivities.map(a => `<option value="${escapeHtml(a)}">`).join('')}</datalist>
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Type an activity — the system will find a free court. Enter CLEAR to empty.</div>
+                </div>
+                <div id="post-edit-field-result" style="display:none;"></div>
+                <details id="post-edit-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                    <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">📍 Override field manually</summary>
+                    <select id="post-edit-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:0.95rem;box-sizing:border-box;background:white;margin-top:8px;">
+                        <option value="">-- No specific field --</option>
+                        <optgroup label="Fields">${locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (cap:${l.capacity})` : ''}</option>`).join('')}</optgroup>
+                        <optgroup label="Special Activities">${locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`).join('')}</optgroup>
+                    </select>
+                </details>
+                <div id="post-edit-conflict" style="display:none;"></div>
+                <div style="display:flex;gap:10px;margin-top:4px;">
+                    <button id="post-edit-cancel" style="flex:1;padding:11px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Cancel</button>
+                    <button id="post-edit-save" style="flex:1;padding:11px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:0.95rem;cursor:pointer;font-weight:600;">Save Changes</button>
+                </div>
+            </div>`;
+
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
-        
+
         const locationSelect = document.getElementById('post-edit-location');
-        const conflictArea = document.getElementById('post-edit-conflict');
-        
-       const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
-        function checkAndShowConflicts() {
-            const location = locationSelect.value;
+        const conflictArea  = document.getElementById('post-edit-conflict');
+        const fieldResult   = document.getElementById('post-edit-field-result');
+        const actInput      = document.getElementById('post-edit-activity');
+
+        function renderConflictArea(location) {
             if (!location) { conflictArea.style.display = 'none'; return null; }
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = checkLocationConflict(location, targetSlots, bunk);
-           if (conflictCheck.hasConflict) {
-                // ★★★ AUTO MODE: If all conflicts are auto-resolvable, show as info not warning ★★★
+            if (conflictCheck.hasConflict) {
                 const allAutoResolvable = conflictCheck.conflicts.every(c => c._autoResolvable);
                 const editableBunks = [...new Set(conflictCheck.editableConflicts.map(c => c.bunk))];
                 const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
                 conflictArea.style.display = 'block';
-                let html;
-                if (allAutoResolvable && !conflictCheck.globalLock) {
-                    html = `<div style="background: #dbeafe; border: 1px solid #3b82f6; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">🔄</span><strong style="color: #1e40af;">Will Auto-Reassign</strong></div><p style="margin: 0 0 8px 0; color: #1e3a5f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is in use — affected bunks will be automatically reassigned:</p>`;
-                } else {
-                    html = `<div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;"><div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;"><span style="font-size: 1.25rem;">⚠️</span><strong style="color: #92400e;">Location Conflict Detected</strong></div><p style="margin: 0 0 8px 0; color: #78350f; font-size: 0.875rem;"><strong>${escapeHtml(location)}</strong> is already in use:</p>`;
-                }                if (editableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #d1fae5; border-radius: 6px;"><div style="font-size: 0.8rem; color: #065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
-                if (nonEditableBunks.length > 0) html += `<div style="margin-bottom: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;"><div style="font-size: 0.8rem; color: #991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div></div><div style="margin-top: 12px;"><div style="font-weight: 500; color: #374151; margin-bottom: 8px; font-size: 0.875rem;">How to handle their bunks?</div><div style="display: flex; flex-direction: column; gap: 8px;"><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">📧 Notify other scheduler</div><div style="font-size: 0.75rem; color: #6b7280;">Create double-booking & send them a warning</div></div></label><label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; background: white; border-radius: 6px; border: 2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top: 2px;"><div><div style="font-weight: 500; color: #374151;">🔓 Bypass & reassign (Admin mode)</div><div style="font-size: 0.75rem; color: #6b7280;">Override permissions and use smart regeneration</div></div></label></div></div>`;
-                html += `</div>`; 
+                let html = allAutoResolvable && !conflictCheck.globalLock
+                    ? `<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:8px;padding:12px;"><strong style="color:#1e40af;">🔄 Will Auto-Reassign</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#1e3a5f;">${escapeHtml(location)} is in use — affected bunks will be auto-moved:</p>`
+                    : `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;"><strong style="color:#92400e;">⚠️ Field Conflict</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#78350f;">${escapeHtml(location)} is already in use:</p>`;
+                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">✓ Can auto-reassign: ${editableBunks.join(', ')}</div>`;
+                if (nonEditableBunks.length) html += `<div style="margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:6px;font-size:0.8rem;color:#991b1b;">✗ Other scheduler's bunks: ${nonEditableBunks.join(', ')}</div>
+                    <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
+                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">📧 Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & warn them</div></div></label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">🔓 Bypass & reassign</div><div style="font-size:0.75rem;color:#6b7280;">Override and use smart regeneration</div></div></label>
+                    </div>`;
+                html += '</div>';
                 conflictArea.innerHTML = html;
-                conflictArea.querySelectorAll('input[name="conflict-resolution"]').forEach(radio => { 
-                    radio.addEventListener('change', (e) => { resolutionChoice = e.target.value; }); 
-                });
+                conflictArea.querySelectorAll('input[name="conflict-resolution"]').forEach(r => r.addEventListener('change', e => resolutionChoice = e.target.value));
                 return conflictCheck;
-            } else { 
-                conflictArea.style.display = 'none'; 
-                return null; 
+            } else {
+                conflictArea.style.display = 'none';
+                return null;
             }
         }
-        
-        // Activity auto-fill: when location changes, suggest its activities
-        function updateActivityPicker() {
-            const selLoc = locations.find(l => l.name === locationSelect.value);
-            const pickerEl = document.getElementById('post-edit-activity-picker');
-            const actInput = document.getElementById('post-edit-activity');
-            const datalist = document.getElementById('post-edit-activity-list');
-            if (selLoc && selLoc.activities && selLoc.activities.length > 0) {
-                // Repopulate datalist with this location's activities
-                if (datalist) datalist.innerHTML = selLoc.activities.map(a => `<option value="${escapeHtml(a)}">`).join('');
-                // Auto-fill if the activity input hasn't been manually edited yet
-                if (actInput && !actInput._userEdited) {
-                    actInput.value = selLoc.activities[0];
-                }
-                // Show quick-pick chips for locations with multiple activities
-                if (pickerEl && selLoc.activities.length > 1) {
-                    pickerEl.style.display = 'flex';
-                    pickerEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;';
-                    pickerEl.innerHTML = selLoc.activities.map(a =>
-                        `<button type="button" onclick="(function(){var i=document.getElementById('post-edit-activity');if(i){i.value='${escapeHtml(a)}';i._userEdited=true;}})()" style="padding:4px 10px;border:1px solid #d1d5db;border-radius:20px;background:#f9fafb;font-size:0.8rem;cursor:pointer;" onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='#f9fafb'">${escapeHtml(a)}</button>`
-                    ).join('');
-                } else if (pickerEl) {
-                    pickerEl.style.display = 'none';
-                }
-            } else if (pickerEl) {
-                pickerEl.style.display = 'none';
-                // Reset datalist to all activities
-                if (datalist) datalist.innerHTML = allActivities.map(a => `<option value="${escapeHtml(a)}">`).join('');
+
+        // ── Activity-first field search ───────────────────────────────────────
+        let _searchTimer;
+        function runActivitySearch() {
+            const actVal = actInput.value.trim();
+            const isClear = !actVal || ['clear','free'].includes(actVal.toLowerCase());
+            if (isClear) { fieldResult.style.display = 'none'; return; }
+
+            const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
+            const { open, busy, none } = findFieldsForActivity(actVal, targetSlots, divName, bunk);
+
+            if (none) { fieldResult.style.display = 'none'; return; } // no fields configured for this activity
+
+            fieldResult.style.display = 'block';
+
+            if (open.length > 0) {
+                // Auto-select the first open field in the dropdown
+                locationSelect.value = open[0].name;
+                renderConflictArea(open[0].name);
+                const altLinks = open.slice(1).map(l =>
+                    `<a href="#" style="color:#1d4ed8;text-decoration:none;" onclick="event.preventDefault();document.getElementById('post-edit-location').value='${escapeHtml(l.name)}';document.getElementById('post-edit-location').dispatchEvent(new Event('change'));">${escapeHtml(l.name)}</a>`
+                ).join(', ');
+                fieldResult.innerHTML = `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;">
+                    ✅ <strong>${escapeHtml(open[0].name)}</strong> is open — auto-selected
+                    ${open.length > 1 ? `<div style="margin-top:4px;font-size:0.8rem;">Other free courts: ${altLinks}</div>` : ''}
+                </div>`;
+            } else {
+                // All courts busy
+                locationSelect.value = '';
+                renderConflictArea('');
+                fieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
+                    ⚠️ All courts for <strong>${escapeHtml(actVal)}</strong> are busy.
+                    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                        <button id="pe-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:500;">Place Anyway (no court)</button>
+                        <button id="pe-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">🔓 Make Room →</button>
+                    </div>
+                </div>`;
+                fieldResult.querySelector('#pe-ignore-field')?.addEventListener('click', () => {
+                    locationSelect.value = '';
+                    fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">ℹ️ Will place <strong>${escapeHtml(actVal)}</strong> without a specific court.</div>`;
+                });
+                fieldResult.querySelector('#pe-make-room')?.addEventListener('click', () => {
+                    showMakeRoomModal(actVal, busy, targetSlots, divName, bunk, startMin, endMin, (freedField) => {
+                        if (freedField) {
+                            locationSelect.value = freedField;
+                            fieldResult.innerHTML = `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;">✅ <strong>${escapeHtml(freedField)}</strong> has been freed up for ${escapeHtml(actVal)}.</div>`;
+                            renderConflictArea(freedField);
+                        } else {
+                            locationSelect.value = '';
+                            fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">ℹ️ Placing <strong>${escapeHtml(actVal)}</strong> without a specific court.</div>`;
+                        }
+                    });
+                });
             }
         }
-        const actInput = document.getElementById('post-edit-activity');
-        if (actInput) actInput.addEventListener('input', () => { actInput._userEdited = true; });
-        locationSelect.addEventListener('change', () => { updateActivityPicker(); checkAndShowConflicts(); });
-        updateActivityPicker();
-        checkAndShowConflicts();
-        
+
+        actInput.addEventListener('input', () => {
+            clearTimeout(_searchTimer);
+            _searchTimer = setTimeout(runActivitySearch, 380);
+        });
+        locationSelect.addEventListener('change', () => renderConflictArea(locationSelect.value));
+
+        // Run search on open if there's already an activity set
+        if (currentActivity && currentActivity.toLowerCase() !== 'free') {
+            setTimeout(runActivitySearch, 50);
+        } else {
+            renderConflictArea(currentField);
+        }
+
         document.getElementById('post-edit-save').onclick = () => {
-            const activity = document.getElementById('post-edit-activity').value.trim();
+            const activity = actInput.value.trim();
             const location = locationSelect.value;
             if (!activity) { alert('Please enter an activity name.'); return; }
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             if (conflictCheck?.hasConflict) {
-                onSave({ 
-                    activity, location, startMin, endMin, hasConflict: true, 
-                    conflicts: conflictCheck.conflicts, 
-                    editableConflicts: conflictCheck.editableConflicts || [], 
-                    nonEditableConflicts: conflictCheck.nonEditableConflicts || [], 
-                    resolutionChoice 
-                });
+                onSave({ activity, location, startMin, endMin, hasConflict: true,
+                    conflicts: conflictCheck.conflicts,
+                    editableConflicts: conflictCheck.editableConflicts || [],
+                    nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
+                    resolutionChoice });
             } else {
                 onSave({ activity, location, startMin, endMin, hasConflict: false, conflicts: [] });
             }
             closeModal();
         };
-        document.getElementById('post-edit-activity').focus(); 
-        document.getElementById('post-edit-activity').select();
+        actInput.focus();
+        actInput.select();
     }
 
     // =========================================================================
@@ -3181,6 +3373,9 @@ if (bypassStatus.highlight) {
     }
 
     function buildCascadeResolutionPlan(fieldName, slots, claimingDivision, claimingActivity, claimingBunks = []) {
+        // No field selected (activity-first "place without court") — no conflicts to resolve
+        if (!fieldName) return { success: true, plan: [], blocked: [] };
+
         console.log('[CascadeClaim] ★★★ BUILDING RESOLUTION PLAN ★★★');
         console.log(`[CascadeClaim] Claiming ${fieldName} for ${claimingDivision} (${claimingActivity})`);
         console.log(`[CascadeClaim] Slots: ${slots.join(', ')}`);
@@ -3914,19 +4109,21 @@ function minutesToTimeString(mins) {
                 </div>
                 <div style="font-size: 0.9rem; color: #6b7280; margin-top: 4px;">Time: ${timeRange}</div>
             </div>
-            <div style="display: grid; gap: 16px;">
+            <div style="display: grid; gap: 14px;">
                 <div>
-                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">📍 Location/Field</label>
-                    <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px;">
-                        <option value="">-- Select --</option>
+                    <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">What activity?</label>
+                    <input type="text" id="multi-edit-activity" placeholder="e.g., Basketball, Soccer…"
+                        style="width: 100%; padding: 10px; border: 1.5px solid #6366f1; border-radius: 8px; box-sizing: border-box; font-size: 0.95rem;">
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Type an activity — the system will find a free court for all bunks.</div>
+                </div>
+                <div id="multi-field-result" style="display:none;"></div>
+                <details id="multi-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
+                    <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">📍 Override field manually</summary>
+                    <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; margin-top:8px; box-sizing:border-box;">
+                        <option value="">-- No specific field --</option>
                         ${allLocations.map(loc => `<option value="${loc.name}">${escapeHtml(loc.name)}</option>`).join('')}
                     </select>
-                </div>
-                <div>
-                    <label style="display: block; font-weight: 500; margin-bottom: 6px; color: #374151;">🎪 Activity Name</label>
-                    <input type="text" id="multi-edit-activity" placeholder="e.g., Carnival, Color War"
-                        style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box;">
-                </div>
+                </details>
                 <div id="multi-conflict-preview" style="display: none;"></div>
                 <div id="multi-resolution-mode" style="display: none;">
                     <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">⚙️ How to handle other schedulers' bunks?</label>
@@ -3956,28 +4153,80 @@ function minutesToTimeString(mins) {
 
         document.body.appendChild(modal);
 
-        // Activity auto-fill for multi-bunk modal
-        const multiLocSel = document.getElementById('multi-edit-location');
+        // ── Activity-first search for multi-bunk modal ─────────────────────────
+        const multiLocSel  = document.getElementById('multi-edit-location');
         const multiActInput = document.getElementById('multi-edit-activity');
-        if (multiLocSel && multiActInput) {
-            multiActInput.setAttribute('list', 'multi-edit-activity-list');
+        const multiFieldResult = document.getElementById('multi-field-result');
+        if (multiActInput) {
+            const allMultiActs = [...new Set(allLocations.flatMap(l => l.activities || []))].sort();
             const multiDl = document.createElement('datalist');
             multiDl.id = 'multi-edit-activity-list';
-            const allMultiActs = [...new Set(allLocations.flatMap(l => l.activities || []))].sort();
             multiDl.innerHTML = allMultiActs.map(a => `<option value="${escapeHtml(a)}">`).join('');
+            multiActInput.setAttribute('list', 'multi-edit-activity-list');
             multiActInput.after(multiDl);
-            multiActInput.addEventListener('input', () => { multiActInput._userEdited = true; });
-            multiLocSel.addEventListener('change', () => {
+
+            const { slots: ctxSlots, divName: ctxDiv, timeStartMin: ctxStart, timeEndMin: ctxEnd, isAutoMode: ctxAuto } = _multiBunkEditContext;
+            // Use representative slots from first bunk for the search
+            const repSlots = ctxAuto && ctxStart != null
+                ? findSlotsForRange(ctxStart, ctxEnd, ctxDiv, bunks[0])
+                : (ctxSlots || []);
+
+            let multiSearchTimer;
+            function runMultiActivitySearch() {
+                const actVal = multiActInput.value.trim();
+                if (!actVal || ['clear','free'].includes(actVal.toLowerCase())) {
+                    if (multiFieldResult) multiFieldResult.style.display = 'none';
+                    return;
+                }
+                const { open, busy, none } = findFieldsForActivity(actVal, repSlots, ctxDiv, bunks[0]);
+                if (none || !multiFieldResult) return;
+                multiFieldResult.style.display = 'block';
                 document.getElementById('multi-edit-submit').disabled = true;
                 document.getElementById('multi-conflict-preview').style.display = 'none';
-                // Auto-fill activity from location
-                const selLoc = allLocations.find(l => l.name === multiLocSel.value);
-                if (selLoc && selLoc.activities && selLoc.activities.length > 0) {
-                    multiDl.innerHTML = selLoc.activities.map(a => `<option value="${escapeHtml(a)}">`).join('');
-                    if (!multiActInput._userEdited) multiActInput.value = selLoc.activities[0];
+
+                if (open.length > 0) {
+                    if (multiLocSel) multiLocSel.value = open[0].name;
+                    const altLinks = open.slice(1).map(l =>
+                        `<a href="#" style="color:#1d4ed8;" onclick="event.preventDefault();var s=document.getElementById('multi-edit-location');if(s)s.value='${escapeHtml(l.name)}';">${escapeHtml(l.name)}</a>`
+                    ).join(', ');
+                    multiFieldResult.innerHTML = `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;">
+                        ✅ <strong>${escapeHtml(open[0].name)}</strong> is open for ${escapeHtml(actVal)} — auto-selected
+                        ${open.length > 1 ? `<div style="margin-top:4px;font-size:0.8rem;">Other free courts: ${altLinks}</div>` : ''}
+                    </div>`;
+                } else if (busy.length > 0) {
+                    if (multiLocSel) multiLocSel.value = '';
+                    multiFieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
+                        ⚠️ All courts for <strong>${escapeHtml(actVal)}</strong> are busy.
+                        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                            <button id="multi-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;">Place Anyway (no court)</button>
+                            <button id="multi-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">🔓 Make Room →</button>
+                        </div>
+                    </div>`;
+                    multiFieldResult.querySelector('#multi-ignore-field')?.addEventListener('click', () => {
+                        if (multiLocSel) multiLocSel.value = '';
+                        multiFieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">ℹ️ Will place <strong>${escapeHtml(actVal)}</strong> without a specific court.</div>`;
+                    });
+                    multiFieldResult.querySelector('#multi-make-room')?.addEventListener('click', () => {
+                        showMakeRoomModal(actVal, busy, repSlots, ctxDiv, bunks[0], ctxStart ?? repSlots[0], ctxEnd ?? repSlots[repSlots.length-1], (freedField) => {
+                            if (freedField && multiLocSel) multiLocSel.value = freedField;
+                            multiFieldResult.innerHTML = freedField
+                                ? `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;">✅ <strong>${escapeHtml(freedField)}</strong> freed up for ${escapeHtml(actVal)}.</div>`
+                                : `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">ℹ️ Placing <strong>${escapeHtml(actVal)}</strong> without a court.</div>`;
+                        });
+                    });
                 } else {
-                    multiDl.innerHTML = allMultiActs.map(a => `<option value="${escapeHtml(a)}">`).join('');
+                    multiFieldResult.style.display = 'none';
                 }
+            }
+
+            multiActInput.addEventListener('input', () => {
+                clearTimeout(multiSearchTimer);
+                multiSearchTimer = setTimeout(runMultiActivitySearch, 380);
+            });
+            if (multiLocSel) multiLocSel.addEventListener('change', () => {
+                if (multiFieldResult) multiFieldResult.style.display = 'none';
+                document.getElementById('multi-edit-submit').disabled = true;
+                document.getElementById('multi-conflict-preview').style.display = 'none';
             });
         }
     }
@@ -3987,8 +4236,8 @@ function minutesToTimeString(mins) {
         const activity = document.getElementById('multi-edit-activity')?.value?.trim();
         const { bunks, slots, divName } = _multiBunkEditContext;
 
-        if (!location) { alert('Please select a location'); return; }
         if (!activity) { alert('Please enter an activity name'); return; }
+        // location may be empty (activity placed without a specific court) — that's allowed
 
         const result = buildCascadeResolutionPlan(location, slots, divName, activity, bunks);
         _multiBunkPreviewResult = { 
