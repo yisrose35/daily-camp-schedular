@@ -531,5 +531,53 @@ window.GoGeoapifyOptimizer = (function () {
         return { orderedStops, roadPts, legTimes };
     }
 
-    return { isConfigured, optimizeTours, optimizeSingleBus };
+    // -------------------------------------------------------------------------
+    // computeDriveMatrix(options)
+    //
+    // Uses Geoapify's Route Matrix API to compute actual road driving times
+    // from a set of origins to a set of destinations in one API call.
+    //
+    // options = {
+    //   origins  : [{lat, lng}]   — source locations
+    //   dests    : [{lat, lng}]   — destination locations
+    //   apiKey   : string
+    // }
+    //
+    // Returns a 2D array [originIdx][destIdx] = seconds, or null on failure.
+    // Free tier: up to 1,000 rows per matrix call.
+    // -------------------------------------------------------------------------
+    async function computeDriveMatrix(options) {
+        const { origins, dests, apiKey } = options;
+        if (!apiKey || !origins.length || !dests.length) return null;
+
+        const MATRIX_ENDPOINT = 'https://api.geoapify.com/v1/routematrix';
+
+        const body = {
+            mode: 'drive',
+            sources: origins.map(function(o) { return { location: [o.lng, o.lat] }; }),
+            targets: dests.map(function(d)   { return { location: [d.lng, d.lat] }; })
+        };
+
+        try {
+            const resp = await fetch(MATRIX_ENDPOINT + '?apiKey=' + encodeURIComponent(apiKey), {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(body)
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data?.sources_to_targets) {
+                console.warn('[Geoapify/Matrix] Error:', data?.message || ('HTTP ' + resp.status));
+                return null;
+            }
+            // data.sources_to_targets[i][j].time = seconds (road driving time)
+            return data.sources_to_targets.map(function(row) {
+                return row.map(function(cell) { return cell.time ?? null; });
+            });
+        } catch (e) {
+            console.warn('[Geoapify/Matrix] Network error:', e.message);
+            return null;
+        }
+    }
+
+    return { isConfigured, optimizeTours, optimizeSingleBus, computeDriveMatrix };
 })();

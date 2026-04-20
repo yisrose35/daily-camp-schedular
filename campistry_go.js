@@ -3667,7 +3667,10 @@
         return segments; // K entries, some may be empty if N < K
     }
 
-    function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
+    function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats, campDriveMatrix) {
+        // campDriveMatrix (optional): seconds from camp to stops[i], from Geoapify Route Matrix.
+        // When provided, replaces haversine × ROAD_FACTOR for camp→stop time estimates,
+        // making time-balance, anchor selection, and route-time estimation accurate.
         if (!stops.length || !buses.length) return [];
 
         const numBuses = buses.length;
@@ -3723,19 +3726,22 @@
         // =====================================================================
         var seeds = []; // "seeds" in our pipeline terminology = anchors here
 
-        // First anchor: stop farthest from camp
-        var farthest = 0, farthestD = 0;
-        for (var si1 = 0; si1 < numStops; si1++) {
-            var dc = drivingDist(stops[si1].lat, stops[si1].lng, campLat, campLng);
-            if (dc > farthestD) { farthestD = dc; farthest = si1; }
-        }
-        seeds.push(farthest);
-
-        // Precompute distances from camp for all stops
+        // Precompute distances (seconds) from camp to every stop.
+        // Uses Geoapify Route Matrix when available (accurate road times),
+        // falls back to haversine × ROAD_FACTOR otherwise.
         var distsFromCamp = new Array(numStops);
         for (var dci = 0; dci < numStops; dci++) {
-            distsFromCamp[dci] = drivingDist(stops[dci].lat, stops[dci].lng, campLat, campLng);
+            distsFromCamp[dci] = (campDriveMatrix && campDriveMatrix[dci] != null && campDriveMatrix[dci] > 0)
+                ? campDriveMatrix[dci]
+                : drivingDist(stops[dci].lat, stops[dci].lng, campLat, campLng);
         }
+
+        // First anchor: stop with greatest real road time from camp
+        var farthest = 0, farthestD = 0;
+        for (var si1 = 0; si1 < numStops; si1++) {
+            if (distsFromCamp[si1] > farthestD) { farthestD = distsFromCamp[si1]; farthest = si1; }
+        }
+        seeds.push(farthest);
 
         // Remaining anchors: maximize (distFromCamp + 2 × minDistFromOtherAnchors)
         while (seeds.length < K && seeds.length < numStops) {
@@ -4416,14 +4422,18 @@
             });
         }
 
-        // Route time estimator (for logging + downstream cross-route exchange)
+        // Route time estimator (for time-balance pass + logging).
+        // Sort stops by real road time from camp (matches what TSP will do for
+        // closest-first dismissal / farthest-first arrival ordering).
+        // First leg uses distsFromCamp (real road time when matrix available).
+        // Inter-stop legs use haversine × ROAD_FACTOR (accurate enough for
+        // relative comparison; exact times come from Geoapify TSP later).
         function estimateRouteTime(idxArr) {
             if (!idxArr.length) return 0;
             var sorted = idxArr.slice().sort(function(a, b) {
-                return haversineMi(campLat, campLng, stops[a].lat, stops[a].lng) -
-                       haversineMi(campLat, campLng, stops[b].lat, stops[b].lng);
+                return distsFromCamp[a] - distsFromCamp[b]; // consistent with distsFromCamp (real road or haversine)
             });
-            var t = drivingDist(campLat, campLng, stops[sorted[0]].lat, stops[sorted[0]].lng) + AVG_STOP_SEC;
+            var t = distsFromCamp[sorted[0]] + AVG_STOP_SEC; // real road time to first stop
             for (var rti = 1; rti < sorted.length; rti++) {
                 t += drivingDist(stops[sorted[rti - 1]].lat, stops[sorted[rti - 1]].lng,
                                   stops[sorted[rti]].lat, stops[sorted[rti]].lng) + AVG_STOP_SEC;
@@ -4753,18 +4763,57 @@
             const geoapifyKey = D.setup.geoapifyKey?.trim();
 
             if (!usedExternalOptimizer) {
+
+            // ── Step 3a-pre: Geoapify Route Matrix — pre-compute camp→stop road times ──
+            // Call once before buildGreedyZones so the clustering phase uses real
+            // road times instead of haversine × ROAD_FACTOR for:
+            //   • Anchor selection (which stops are truly farthest by road)
+            //   • Time-balance pass (which zones have equal real drive time)
+            //   • estimateRouteTime (accurate violation detection inside clustering)
+            // Free tier: 3,000 calls/day, 1,000 rows per matrix call.
+            let campToStopMatrix = null;
+            if (geoapifyKey && window.GoGeoapifyOptimizer?.computeDriveMatrix) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': loading camp→stop road times...', pctBase + 18);
+                try {
+                    var matrixResult = await window.GoGeoapifyOptimizer.computeDriveMatrix({
+                        origins: [{ lat: campLat, lng: campLng }],
+                        dests: allStops.map(function(s) { return { lat: s.lat, lng: s.lng }; }),
+                        apiKey: geoapifyKey
+                    });
+                    if (matrixResult && matrixResult[0] && matrixResult[0].length === allStops.length) {
+                        campToStopMatrix = matrixResult[0]; // seconds from camp to allStops[i]
+                        var validTimes = campToStopMatrix.filter(function(t) { return t != null && t > 0; });
+                        if (validTimes.length) {
+                            console.log('[Go] Route Matrix: ' + campToStopMatrix.length + ' camp→stop times loaded' +
+                                ' (min=' + Math.round(Math.min.apply(null, validTimes)/60) + 'min' +
+                                ', max=' + Math.round(Math.max.apply(null, validTimes)/60) + 'min)');
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[Go] Route Matrix pre-computation failed (will use haversine):', e.message);
+                }
+            }
+
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': clustering stops into bus zones...', pctBase + 30);
 
             // ── Step 3a: K-medoids zone clustering ──
-            const zones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
+            const zones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats, campToStopMatrix);
             console.log('[Go] Step 3a: ' + zones.length + ' zones from ' + allStops.length + ' stops via K-medoids');
             (function logZones() {
                 var times = zones.map(function(z) {
-                    var stops = z.stopIndices.map(function(idx) { return allStops[idx]; });
-                    if (!stops.length) return 0;
-                    var t = drivingDist(campLat, campLng, stops[0].lat, stops[0].lng) + serviceTime;
-                    for (var i = 1; i < stops.length; i++) {
-                        t += drivingDist(stops[i-1].lat, stops[i-1].lng, stops[i].lat, stops[i].lng) + serviceTime;
+                    var sorted = z.stopIndices.slice().sort(function(a, b) {
+                        // Sort by camp→stop distance (matches dismissal order: closest first)
+                        var dA = (campToStopMatrix && campToStopMatrix[a] > 0) ? campToStopMatrix[a] : drivingDist(campLat, campLng, allStops[a].lat, allStops[a].lng);
+                        var dB = (campToStopMatrix && campToStopMatrix[b] > 0) ? campToStopMatrix[b] : drivingDist(campLat, campLng, allStops[b].lat, allStops[b].lng);
+                        return dA - dB;
+                    });
+                    if (!sorted.length) return 0;
+                    var firstD = (campToStopMatrix && campToStopMatrix[sorted[0]] > 0)
+                        ? campToStopMatrix[sorted[0]]
+                        : drivingDist(campLat, campLng, allStops[sorted[0]].lat, allStops[sorted[0]].lng);
+                    var t = firstD + serviceTime;
+                    for (var i = 1; i < sorted.length; i++) {
+                        t += drivingDist(allStops[sorted[i-1]].lat, allStops[sorted[i-1]].lng, allStops[sorted[i]].lat, allStops[sorted[i]].lng) + serviceTime;
                     }
                     return t;
                 });
@@ -4870,6 +4919,176 @@
                     console.log('[Go] Per-bus TSP: ' + geoTspSucc + '/' + builtRoutes.length + ' buses optimized');
                 }
             }
+
+            // ── Step 3d: Dynamic achievable max + per-student ride time enforcement ──
+            //
+            // DYNAMIC ACHIEVABLE MAX:
+            // The hard floor on max ride time = road time from camp to the farthest stop.
+            // That student will always ride at least that long regardless of routing.
+            // If the user's maxRideTime setting is below this floor, warn them — no
+            // algorithm can meet a geometrically impossible constraint.
+            //
+            // PER-STUDENT REDISTRIBUTION (Edulog-style):
+            // For buses with cumulative ride time violations, move close-to-camp
+            // intermediate stops to under-capacity buses. Fewer intermediate stops
+            // = less cumulative time = the far students board sooner.
+            // Then re-run TSP for all affected buses to restore optimal order.
+            // (Only runs when violations are partially fixable — hard floor < 1.5× limit.)
+
+            var maxRideSec = (D.setup.maxRideTime || 45) * 60;
+
+            // Compute hard floor: farthest camp→stop direct road time
+            var achievableMaxSec = 0;
+            if (campToStopMatrix) {
+                for (var _ai = 0; _ai < campToStopMatrix.length; _ai++) {
+                    if (campToStopMatrix[_ai] && campToStopMatrix[_ai] > achievableMaxSec) {
+                        achievableMaxSec = campToStopMatrix[_ai];
+                    }
+                }
+            } else {
+                for (var _ai = 0; _ai < allStops.length; _ai++) {
+                    var _d = drivingDist(campLat, campLng, allStops[_ai].lat, allStops[_ai].lng);
+                    if (_d > achievableMaxSec) achievableMaxSec = _d;
+                }
+            }
+
+            if (achievableMaxSec > 0) {
+                var _achMin = Math.round(achievableMaxSec / 60);
+                var _setMin = D.setup.maxRideTime || 45;
+                if (achievableMaxSec > maxRideSec) {
+                    console.warn('[Go] ⚠ Max ride time setting (' + _setMin + 'min) is geometrically impossible — ' +
+                        'farthest stop is ' + _achMin + 'min from camp by road. ' +
+                        'Minimum achievable max: ' + _achMin + 'min.');
+                    toast('⚠ Farthest stop is ' + _achMin + 'min from camp — ' + _setMin + 'min ride limit cannot be met. Raise to ' + _achMin + 'min+ in Settings.');
+                } else {
+                    console.log('[Go] Achievable max ride time: ' + _achMin + 'min (hard floor from farthest stop). Setting: ' + _setMin + 'min ✓');
+                }
+            }
+
+            // Redistribution: only run when violations are at least partially fixable.
+            // Hard floor within 1.5× the limit means intermediate stops are contributing
+            // excess time that redistribution can reduce.
+            if (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus &&
+                builtRoutes.length > 1 && achievableMaxSec < maxRideSec * 1.5) {
+
+                var _redistributedIds = [];
+
+                for (var _ri = 0; _ri < builtRoutes.length; _ri++) {
+                    var _route = builtRoutes[_ri];
+                    if (!_route.stops || _route.stops.length < 3) continue;
+
+                    // Compute cumulative ride times using TSP leg times or haversine
+                    var _tLegsR = _route._tspLegTimes;
+                    var _cumT = 0, _cumTimes = [];
+                    for (var _ci = 0; _ci < _route.stops.length; _ci++) {
+                        if (_tLegsR && _tLegsR[_ci] != null) {
+                            _cumT += _tLegsR[_ci];
+                        } else {
+                            _cumT += _ci === 0
+                                ? drivingDist(campLat, campLng, _route.stops[_ci].lat, _route.stops[_ci].lng)
+                                : drivingDist(_route.stops[_ci-1].lat, _route.stops[_ci-1].lng, _route.stops[_ci].lat, _route.stops[_ci].lng);
+                        }
+                        _cumT += serviceTime;
+                        _cumTimes.push(_cumT);
+                    }
+
+                    // First violation index
+                    var _vIdx = -1;
+                    for (var _ci = 0; _ci < _cumTimes.length; _ci++) {
+                        if (_cumTimes[_ci] > maxRideSec) { _vIdx = _ci; break; }
+                    }
+                    if (_vIdx <= 0) continue; // no violation, or first stop itself violates (can't redistribute)
+
+                    // Candidates to move: pre-violation stops closest to camp.
+                    // Moving the closest-to-camp stops reduces intermediate drive time,
+                    // letting the bus reach far stops sooner.
+                    var _preViolStops = [];
+                    for (var _ci = 0; _ci < _vIdx; _ci++) {
+                        var _s = _route.stops[_ci];
+                        var _sArrIdx = -1;
+                        for (var _si2 = 0; _si2 < allStops.length; _si2++) {
+                            if (allStops[_si2].lat === _s.lat && allStops[_si2].lng === _s.lng) { _sArrIdx = _si2; break; }
+                        }
+                        var _campDirect = (campToStopMatrix && _sArrIdx >= 0 && campToStopMatrix[_sArrIdx] > 0)
+                            ? campToStopMatrix[_sArrIdx]
+                            : drivingDist(campLat, campLng, _s.lat, _s.lng);
+                        _preViolStops.push({ stopIdx: _ci, stop: _s, campDirect: _campDirect });
+                    }
+                    _preViolStops.sort(function(a, b) { return a.campDirect - b.campDirect; }); // closest to camp first
+                    var _moveCount = Math.ceil(_preViolStops.length * 0.25); // move up to 25% of pre-violation stops
+                    var _movedCount = 0;
+
+                    for (var _mi = 0; _mi < Math.min(_moveCount, _preViolStops.length); _mi++) {
+                        var _cand = _preViolStops[_mi];
+                        var _kids = _cand.stop.campers.length;
+
+                        // Find receiver bus with enough capacity (prefer most available space)
+                        var _receiver = null, _bestAvail = 0;
+                        for (var _rj = 0; _rj < builtRoutes.length; _rj++) {
+                            if (builtRoutes[_rj] === _route) continue;
+                            var _avail = (builtRoutes[_rj]._cap || 44) - builtRoutes[_rj].camperCount;
+                            if (_avail >= _kids && _avail > _bestAvail) {
+                                _receiver = builtRoutes[_rj]; _bestAvail = _avail;
+                            }
+                        }
+                        if (!_receiver) continue;
+
+                        // Execute move
+                        var _fromIdx = _route.stops.indexOf(_cand.stop);
+                        if (_fromIdx < 0) continue;
+                        _route.stops.splice(_fromIdx, 1);
+                        _route.camperCount -= _kids;
+                        _receiver.stops.push(_cand.stop);
+                        _receiver.camperCount += _kids;
+                        if (_redistributedIds.indexOf(_route.busId) < 0) _redistributedIds.push(_route.busId);
+                        if (_redistributedIds.indexOf(_receiver.busId) < 0) _redistributedIds.push(_receiver.busId);
+                        _movedCount++;
+                    }
+
+                    if (_movedCount > 0) {
+                        console.log('[Go] Redistribution: moved ' + _movedCount + ' stops from ' + _route.busName +
+                            ' (first violation at stop ' + (_vIdx+1) + ', ' + Math.round(_cumTimes[_vIdx]/60) + 'min)');
+                    }
+                }
+
+                // Re-run TSP for all buses that had stops added or removed
+                if (_redistributedIds.length > 0) {
+                    showProgress('Re-optimizing routes after ride-time redistribution...', pctBase + 70);
+                    var _redistSucc = 0;
+                    for (var _ri = 0; _ri < builtRoutes.length; _ri++) {
+                        var _route = builtRoutes[_ri];
+                        if (_redistributedIds.indexOf(_route.busId) < 0 || !_route.stops || _route.stops.length < 2) continue;
+                        try {
+                            var _reTsp = await window.GoGeoapifyOptimizer.optimizeSingleBus({
+                                stops: _route.stops.map(function(s) {
+                                    return { lat: s.lat, lng: s.lng, address: s.address, campers: s.campers };
+                                }),
+                                vehicle: shiftVehicles.find(function(v) { return v.busId === _route.busId; }) || { capacity: _route._cap || 44 },
+                                campLat: campLat, campLng: campLng,
+                                isArrival: isArrival, serviceTimeSec: serviceTime, apiKey: geoapifyKey
+                            });
+                            if (_reTsp && _reTsp.orderedStops && _reTsp.orderedStops.length === _route.stops.length) {
+                                _route.stops = _reTsp.orderedStops.map(function(s, idx) {
+                                    return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                                });
+                                _route.camperCount = _route.stops.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                                if (_reTsp.roadPts && _reTsp.roadPts.length) {
+                                    _routeGeomCache[_route.busId + '_' + si] = _reTsp.roadPts;
+                                    _route._roadPts = _reTsp.roadPts;
+                                }
+                                if (_reTsp.legTimes && _reTsp.legTimes.length) _route._tspLegTimes = _reTsp.legTimes;
+                                _route._source = 'geoapify-tsp-redistributed';
+                                _redistSucc++;
+                            }
+                        } catch (e) {
+                            console.warn('[Go] Re-TSP after redistribution failed for ' + _route.busId + ':', e.message);
+                        }
+                    }
+                    if (_redistSucc > 0) {
+                        console.log('[Go] Redistribution: re-optimized ' + _redistSucc + '/' + _redistributedIds.length + ' buses');
+                    }
+                }
+            } // end redistribution block
 
             if (builtRoutes.length) {
                 routes = builtRoutes;
