@@ -3339,10 +3339,10 @@
             { label: geocoded + '/' + camperCount + ' geocoded', status: geocoded === camperCount && camperCount > 0 ? 'ok' : geocoded > 0 ? 'warn' : 'fail' },
             { label: totalSeats + ' seats for ' + largestShift + ' in largest shift', status: 'ok' },
             { label: D.setup.campAddress ? 'Camp address set' : 'No camp address', status: D.setup.campAddress ? 'ok' : 'warn' },
-            { label: getApiKey() ? 'ORS key set (VROOM enabled)' : 'No ORS key — VROOM disabled', status: getApiKey() ? 'ok' : 'fail', detail: getApiKey() ? '' : 'VROOM optimization requires an ORS API key' },
+            { label: getApiKey() ? 'ORS key set (VROOM enabled)' : 'No ORS key — using built-in optimizer', status: getApiKey() ? 'ok' : 'warn', detail: getApiKey() ? '' : 'Routes will still generate using directional sort + 2-opt. Add an ORS key in Advanced Settings for VROOM (marginally better stop ordering).' },
             { label: pickupCount + ' carpool/pickup (excluded)', status: 'ok' }
         ];
-        const anyFail = checks.some(c => c.status === 'fail'); const canGen = D.buses.length > 0 && geocoded > 0 && getApiKey();
+        const anyFail = checks.some(c => c.status === 'fail'); const canGen = D.buses.length > 0 && geocoded > 0;
         const badge = document.getElementById('preflightStatus'); badge.className = 'badge ' + (anyFail ? 'badge-danger' : canGen ? 'badge-success' : 'badge-warning'); badge.textContent = anyFail ? 'Not ready' : 'Ready';
         document.getElementById('preflightBody').innerHTML = checks.map(c => '<div class="preflight-item preflight-' + c.status + '"><div class="preflight-icon">' + (c.status === 'ok' ? '✓' : c.status === 'warn' ? '!' : '✗') + '</div><div><div style="font-weight:600;color:var(--text-primary)">' + esc(c.label) + '</div>' + (c.detail ? '<div style="font-size:.75rem;color:var(--text-muted)">' + esc(c.detail) + '</div>' : '') + '</div></div>').join('');
         document.getElementById('routeMode').value = D.setup.dropoffMode || 'door-to-door';
