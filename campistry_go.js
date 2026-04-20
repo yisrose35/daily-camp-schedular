@@ -765,7 +765,10 @@
         });
         if (pairs.length < 2) return null;
 
-        await new Promise(function(r) { setTimeout(r, 500); });
+        // Share the global rate limiter with fetchTrafficLegs — 1 OSRM call/sec total
+        var _geomNow = Date.now(), _geomGap = _geomNow - _osrmLastCall;
+        if (_geomGap < 1100) await new Promise(function(r) { setTimeout(r, 1100 - _geomGap); });
+        _osrmLastCall = Date.now();
         try {
             let osrmPairs = pairs;
             if (pairs.length > 100) {
@@ -4030,7 +4033,7 @@
         if (K <= 1 || N === 0) return [tourStops.slice()];
         if (N <= K) return tourStops.map(function(s) { return [s]; });
 
-        // Resolve camp coordinates — prefer explicit args, fall back to D.setup / cache
+        // Resolve camp coordinates
         var campLat = campLatArg != null ? campLatArg : (D.setup.campLat || _campCoordsCache?.lat || 0);
         var campLng = campLngArg != null ? campLngArg : (D.setup.campLng || _campCoordsCache?.lng || 0);
 
@@ -4039,39 +4042,68 @@
             return (b.capacity || 44) - (a.capacity || 44);
         }).map(function(b) { return b.capacity || 44; });
 
-        // Dynamic skip cap: 4× the average driving distance between consecutive stops
+        // ── Config ──
+        var avgSpeedMph    = D.setup.avgSpeed || 25;
+        var serviceTimeSec = (D.setup.avgStopTime || 2) * 60;
+        var FUEL_THRESH_MI = 2.5;   // detours beyond this inflate the time budget cost
+        var FUEL_RATE      = 0.25;  // 25% extra per mile over the fuel threshold
+        var MAX_DETOUR_MI  = 4.0;   // Phase 3: reject swap if min-bus detour exceeds this
+        var BAL_TOL_SEC    = 5 * 60; // Phase 3: stop when max−min spread < 5 min
+        var MAX_PASSES     = 60;    // Phase 3: iteration cap
+
+        // Dynamic skip cap: 4× avg inter-stop drive time
         var totalGapSec = 0;
         for (var gi = 0; gi < N - 1; gi++) {
             totalGapSec += drivingDist(tourStops[gi].lat, tourStops[gi].lng,
                                        tourStops[gi + 1].lat, tourStops[gi + 1].lng);
         }
-        var avgGapSec   = N > 1 ? totalGapSec / (N - 1) : 300;
-        var maxSkipSec  = avgGapSec * 4;
-        var maxDeferPerBus = 3; // hard limit: never defer more than 3 stops per bus
+        var avgGapSec      = N > 1 ? totalGapSec / (N - 1) : 300;
+        var maxSkipSec     = avgGapSec * 4;
+        var maxDeferPerBus = 3;
+        console.log('[Go] Split: avg gap ' + (avgGapSec / 60).toFixed(1) +
+            'min, skip cap ' + ((maxSkipSec / 3600) * avgSpeedMph).toFixed(1) + 'mi');
 
-        var avgSpeedMph    = D.setup.avgSpeed || 25;
-        var serviceTimeSec = (D.setup.avgStopTime || 2) * 60; // dwell time per stop
-        var maxSkipMi      = (maxSkipSec / 3600) * avgSpeedMph;
-        console.log('[Go] Split: avg gap ' + (avgGapSec / 60).toFixed(1) + 'min, skip cap ' + maxSkipMi.toFixed(1) + 'mi');
+        // ── Helper: estimated total route time for a segment (camp → stops) ──
+        function segTimeSec(seg) {
+            if (!seg.length) return 0;
+            var t = drivingDist(campLat, campLng, seg[0].lat, seg[0].lng) + serviceTimeSec;
+            for (var i = 1; i < seg.length; i++) {
+                t += drivingDist(seg[i - 1].lat, seg[i - 1].lng, seg[i].lat, seg[i].lng) + serviceTimeSec;
+            }
+            return t;
+        }
 
-        // `order` is the working list of stops — modified as deferred stops are prepended
+        // ── Helper: cheapest-insertion cost + index ──
+        function cheapestInsert(seg, stop) {
+            var best = Infinity, bestIdx = seg.length;
+            for (var i = 0; i <= seg.length; i++) {
+                var prevLat = i > 0 ? seg[i - 1].lat : campLat;
+                var prevLng = i > 0 ? seg[i - 1].lng : campLng;
+                var nextLat = i < seg.length ? seg[i].lat : null;
+                var nextLng = i < seg.length ? seg[i].lng : null;
+                var cost = drivingDist(prevLat, prevLng, stop.lat, stop.lng)
+                         + (nextLat !== null ? drivingDist(stop.lat, stop.lng, nextLat, nextLng) : 0)
+                         - (nextLat !== null ? drivingDist(prevLat, prevLng, nextLat, nextLng) : 0);
+                if (cost < best) { best = cost; bestIdx = i; }
+            }
+            return { cost: best, idx: bestIdx };
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // PHASE 1: Time-balanced greedy split with fuel-detour penalty
+        // ════════════════════════════════════════════════════════════
         var order    = tourStops.slice();
         var segments = [];
 
         for (var bi = 0; bi < K && order.length > 0; bi++) {
-            // Last bus takes everything remaining
-            if (bi === K - 1) {
-                segments.push(order.slice());
-                order = [];
-                break;
-            }
-
-            // ── Time-balanced target: spread total remaining route time evenly ──
-            // Far buses get fewer stops, close buses get more — all finish near same time.
+            var hardCap   = caps[bi];
             var busesLeft = K - bi;
-            var hardCap   = caps[bi]; // physical seat limit
 
-            // Estimate total time if ONE bus served all remaining stops (from camp)
+            // Guard: don't let this bus eat stops that remaining buses still need.
+            // Each remaining bus (after this one) must get at least 1 stop.
+            var minReserve = busesLeft - 1;
+
+            // Estimate total time if ONE bus served all remaining stops from camp
             var remainTimeSec = 0;
             if (order.length > 0) {
                 remainTimeSec += drivingDist(campLat, campLng, order[0].lat, order[0].lng);
@@ -4086,34 +4118,45 @@
             var targetTimeSec = remainTimeSec / busesLeft;
 
             var seg        = [];
-            var deferred   = []; // overflow stops held for next bus
+            var deferred   = [];
             var cumKids    = 0;
             var cumTimeSec = 0;
             var pos        = 0;
 
             while (pos < order.length) {
+                // Always leave at least minReserve stops for subsequent buses
+                if (order.length - pos <= minReserve) break;
+
                 var stop     = order[pos];
                 var stopKids = stop.campers.length;
 
-                // Drive time: from camp if first stop, else from last taken stop
-                var prevLat     = seg.length > 0 ? seg[seg.length - 1].lat : campLat;
-                var prevLng     = seg.length > 0 ? seg[seg.length - 1].lng : campLng;
-                var driveSec    = drivingDist(prevLat, prevLng, stop.lat, stop.lng);
-                var stopTimeSec = driveSec + serviceTimeSec;
+                var prevLat  = seg.length > 0 ? seg[seg.length - 1].lat : campLat;
+                var prevLng  = seg.length > 0 ? seg[seg.length - 1].lng : campLng;
+                var driveSec = drivingDist(prevLat, prevLng, stop.lat, stop.lng);
 
-                // ── Hard capacity check — same skip logic as before ──
+                // Fuel-detour penalty: large detours inflate the effective time cost,
+                // causing the bus to cut earlier rather than chasing distant stops.
+                var detourMi   = (driveSec / 3600) * avgSpeedMph;
+                var fuelFactor = detourMi > FUEL_THRESH_MI
+                                 ? 1 + (detourMi - FUEL_THRESH_MI) * FUEL_RATE
+                                 : 1.0;
+                var stopTimeSec = (driveSec + serviceTimeSec) * fuelFactor;
+
+                // Hard capacity check — skip logic (look ahead up to 5 stops)
                 if (cumKids + stopKids > hardCap) {
                     if (deferred.length < maxDeferPerBus && driveSec <= maxSkipSec) {
                         var swapped = false;
                         for (var fwd = pos + 1; fwd < Math.min(pos + 6, order.length); fwd++) {
-                            var cand     = order[fwd];
-                            var distCand = drivingDist(prevLat, prevLng, cand.lat, cand.lng);
+                            var cand      = order[fwd];
+                            var distCand  = drivingDist(prevLat, prevLng, cand.lat, cand.lng);
                             if (cumKids + cand.campers.length <= hardCap && distCand <= maxSkipSec) {
                                 deferred.push(order[pos]);
                                 order.splice(fwd, 1);
+                                var cDetour  = (distCand / 3600) * avgSpeedMph;
+                                var cFuel    = cDetour > FUEL_THRESH_MI ? 1 + (cDetour - FUEL_THRESH_MI) * FUEL_RATE : 1.0;
                                 seg.push(cand);
                                 cumKids    += cand.campers.length;
-                                cumTimeSec += distCand + serviceTimeSec;
+                                cumTimeSec += (distCand + serviceTimeSec) * cFuel;
                                 pos++;
                                 swapped = true;
                                 break;
@@ -4126,22 +4169,27 @@
                     continue;
                 }
 
-                // ── Take this stop ──
+                // Take this stop
                 seg.push(stop);
                 cumKids    += stopKids;
                 cumTimeSec += stopTimeSec;
                 pos++;
 
-                // ── Time target reached — cut here ──
-                if (cumTimeSec >= targetTimeSec) break;
+                // Time target reached — cut here
+                if (cumTimeSec >= targetTimeSec && seg.length >= 1) break;
+            }
+
+            // Ensure the segment has at least 1 stop
+            if (seg.length === 0 && pos < order.length) {
+                seg.push(order[pos]);
+                pos++;
             }
 
             segments.push(seg);
-            // Deferred stops go FIRST on the next bus, then the remaining unprocessed stops
             order = deferred.concat(order.slice(pos));
         }
 
-        // Safety: any leftover stops go onto the last segment
+        // Any leftover stops (shouldn't happen but safety net) → last segment
         if (order.length > 0) {
             if (segments.length > 0) {
                 segments[segments.length - 1] = segments[segments.length - 1].concat(order);
@@ -4150,7 +4198,110 @@
             }
         }
 
-        return segments.filter(function(s) { return s.length > 0; });
+        // Pad to K segments so every bus slot exists
+        while (segments.length < K) segments.push([]);
+
+        // ════════════════════════════════════════════════════════════
+        // PHASE 2: Fill empty buses
+        // Every bus that has 0 stops steals from the heaviest segment.
+        // ════════════════════════════════════════════════════════════
+        var emptyCount = segments.filter(function(s) { return s.length === 0; }).length;
+        if (emptyCount > 0) {
+            console.log('[Go] Phase 2: filling ' + emptyCount + ' empty bus(es)');
+            for (var fi = 0; fi < K * 2; fi++) {
+                var emptyIdx = -1;
+                for (var ei = 0; ei < segments.length; ei++) {
+                    if (segments[ei].length === 0) { emptyIdx = ei; break; }
+                }
+                if (emptyIdx < 0) break;
+
+                // Find heaviest segment (max time) that has > 1 stop
+                var heavyIdx = -1, heavyTime = 0;
+                for (var hi = 0; hi < segments.length; hi++) {
+                    if (hi === emptyIdx || segments[hi].length <= 1) continue;
+                    var ht = segTimeSec(segments[hi]);
+                    if (ht > heavyTime) { heavyTime = ht; heavyIdx = hi; }
+                }
+                if (heavyIdx < 0) break;
+
+                // Steal the last stop (most time-expensive tail of the heavy route)
+                var stolen = segments[heavyIdx].pop();
+                segments[emptyIdx].push(stolen);
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // PHASE 3: Local-search time-balance swaps
+        // Priority: balance time. Constraint: no big fuel detours.
+        // ════════════════════════════════════════════════════════════
+        var times    = segments.map(segTimeSec);
+        var improved = true;
+        var passes   = 0;
+
+        while (improved && passes < MAX_PASSES) {
+            improved = false;
+            passes++;
+
+            // Find max-time and min-time segments
+            var maxIdx = 0, minIdx = 0;
+            for (var xi = 1; xi < times.length; xi++) {
+                if (times[xi] > times[maxIdx]) maxIdx = xi;
+                if (times[xi] < times[minIdx]) minIdx = xi;
+            }
+            if (times[maxIdx] - times[minIdx] < BAL_TOL_SEC) break; // good enough
+
+            var maxSeg = segments[maxIdx];
+            var minSeg = segments[minIdx];
+            if (maxSeg.length <= 1) continue; // can't strip the only stop
+
+            var bestGain = 1; // only accept positive gain
+            var bestSI = -1, bestII = -1;
+
+            for (var si = 0; si < maxSeg.length; si++) {
+                var cand     = maxSeg[si];
+                var minKids  = minSeg.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                if (minKids + cand.campers.length > (caps[minIdx] || 44)) continue; // capacity
+
+                // New max-seg time without this stop
+                var newMaxSeg  = maxSeg.slice(0, si).concat(maxSeg.slice(si + 1));
+                if (newMaxSeg.length === 0) continue; // never empty a bus
+
+                var ins = cheapestInsert(minSeg, cand);
+
+                // Fuel guard: reject if the insertion detour is too large
+                var insertMi = ((ins.cost < 0 ? 0 : ins.cost) / 3600) * avgSpeedMph;
+                if (insertMi > MAX_DETOUR_MI) continue;
+
+                var newMaxTime = segTimeSec(newMaxSeg);
+                var newMinTime = times[minIdx] + Math.max(0, ins.cost) + serviceTimeSec;
+                var oldSpread  = times[maxIdx] - times[minIdx];
+                var newSpread  = Math.abs(newMaxTime - newMinTime);
+                var gain = oldSpread - newSpread;
+
+                if (gain > bestGain) {
+                    bestGain = gain;
+                    bestSI   = si;
+                    bestII   = ins.idx;
+                }
+            }
+
+            if (bestSI >= 0) {
+                var movedStop = segments[maxIdx][bestSI];
+                segments[maxIdx] = segments[maxIdx].slice(0, bestSI).concat(segments[maxIdx].slice(bestSI + 1));
+                segments[minIdx] = segments[minIdx].slice(0, bestII).concat([movedStop], segments[minIdx].slice(bestII));
+                times    = segments.map(segTimeSec);
+                improved = true;
+            }
+        }
+
+        var finalMax = times.reduce(function(a, b) { return Math.max(a, b); }, 0);
+        var finalMin = times.filter(function(t) { return t > 0; }).reduce(function(a, b) { return Math.min(a, b); }, Infinity);
+        var used     = segments.filter(function(s) { return s.length > 0; }).length;
+        console.log('[Go] Split done: ' + used + '/' + K + ' buses used | ' + passes +
+            ' balance passes | spread ' + ((finalMax - finalMin) / 60).toFixed(1) + 'min' +
+            ' (' + (finalMin / 60).toFixed(0) + '–' + (finalMax / 60).toFixed(0) + 'min range)');
+
+        return segments; // K entries, some may be empty if N < K
     }
 
     function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
