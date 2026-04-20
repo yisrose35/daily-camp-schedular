@@ -3339,7 +3339,7 @@
             { label: geocoded + '/' + camperCount + ' geocoded', status: geocoded === camperCount && camperCount > 0 ? 'ok' : geocoded > 0 ? 'warn' : 'fail' },
             { label: totalSeats + ' seats for ' + largestShift + ' in largest shift', status: 'ok' },
             { label: D.setup.campAddress ? 'Camp address set' : 'No camp address', status: D.setup.campAddress ? 'ok' : 'warn' },
-            { label: getApiKey() ? 'ORS key set (VROOM enabled)' : 'No ORS key — using built-in optimizer', status: getApiKey() ? 'ok' : 'warn', detail: getApiKey() ? '' : 'Routes will still generate using directional sort + 2-opt. Add an ORS key in Advanced Settings for VROOM (marginally better stop ordering).' },
+            { label: getApiKey() ? 'ORS key set (VROOM enabled)' : 'Route optimizer ready (built-in)', status: 'ok', detail: '' },
             { label: pickupCount + ' carpool/pickup (excluded)', status: 'ok' }
         ];
         const anyFail = checks.some(c => c.status === 'fail'); const canGen = D.buses.length > 0 && geocoded > 0;
