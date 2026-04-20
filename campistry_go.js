@@ -438,7 +438,7 @@
             return {
                 id: 'bus_' + i,
                 profile: profileName,
-                costs: { fixed: 5.0, distance: 0.07, time: 0.01 },
+                costs: { fixed: 25.0, distance: 0.07, time: 0.02 },
                 shifts: [{
                     start: { time: baseTime,     location: campLoc },
                     end:   { time: tightEndTime, location: campLoc }
