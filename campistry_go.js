@@ -3989,20 +3989,23 @@
     //
     // Takes a pre-ordered giant tour and splits it into K bus segments.
     //
-    // Core algorithm — for each bus, walk the tour greedily:
-    //   • Stop fits in remaining capacity → take it, move on.
-    //   • Stop doesn't fit (overflow) → skip logic:
-    //       1. Measure how far this stop is from the last stop we took.
+    // Core algorithm — TIME-BALANCED splitting:
+    //   For each bus, estimate total remaining route time (camp → all remaining stops).
+    //   Target = remainingTime / busesLeft.  Walk the tour greedily, accumulating
+    //   estimated drive+service time; cut when the bus hits its time target.
+    //   This balances route DURATION — far buses get fewer stops, close buses get
+    //   more — so all buses finish at roughly the same time.
+    //
+    //   Hard capacity (seat count) is always enforced first.  If a stop overflows
+    //   capacity → skip logic:
+    //       1. Measure drive time to this stop from the last taken stop.
     //       2. If within the dynamic skip cap, look ahead up to 5 stops for
-    //          one that fits AND is still within the cap distance.
+    //          one that fits capacity AND is within the cap distance.
     //       3. If found: defer the overflow stop, take the nearby one instead.
     //          The deferred stop becomes the FIRST stop of the next bus.
-    //       4. If not found (or stop is too far): cut here — this stop starts
-    //          the next bus's segment.
+    //       4. If not found (or stop is too far): cut here.
     //
-    // Dynamic skip cap = 4 × average inter-stop distance in the tour.
-    // e.g. if stops average 0.4 mi apart the cap is ~1.6 mi — a bus will
-    // never skip over a stop that's more than ~1.6 mi away.
+    // Dynamic skip cap = 4 × average inter-stop drive time in the tour.
     // =========================================================================
     function splitTourAtGaps(tourStops, buses) {
         var K = buses.length;
@@ -4025,8 +4028,9 @@
         var maxSkipSec  = avgGapSec * 4;
         var maxDeferPerBus = 3; // hard limit: never defer more than 3 stops per bus
 
-        var avgSpeedMph = D.setup.avgSpeed || 25;
-        var maxSkipMi   = (maxSkipSec / 3600) * avgSpeedMph;
+        var avgSpeedMph    = D.setup.avgSpeed || 25;
+        var serviceTimeSec = (D.setup.avgStopTime || 2) * 60; // dwell time per stop
+        var maxSkipMi      = (maxSkipSec / 3600) * avgSpeedMph;
         console.log('[Go] Split: avg gap ' + (avgGapSec / 60).toFixed(1) + 'min, skip cap ' + maxSkipMi.toFixed(1) + 'mi');
 
         // `order` is the working list of stops — modified as deferred stops are prepended
@@ -4041,57 +4045,74 @@
                 break;
             }
 
-            // ── Dynamic target: spread kids evenly across ALL remaining buses ──
-            // e.g. 750 kids / 18 buses → target 42/bus (not 50 = busCap).
-            // This ensures all K buses get routes instead of stopping at capacity/totalKids.
-            var kidsInOrder  = order.reduce(function(s, st) { return s + st.campers.length; }, 0);
-            var busesLeft    = K - bi;
-            var targetKids   = Math.ceil(kidsInOrder / busesLeft);
-            var hardCap      = caps[bi];            // physical seat limit
-            var busCap       = Math.min(hardCap, targetKids); // soft-fill target
+            // ── Time-balanced target: spread total remaining route time evenly ──
+            // Far buses get fewer stops, close buses get more — all finish near same time.
+            var busesLeft = K - bi;
+            var hardCap   = caps[bi]; // physical seat limit
 
-            var seg      = [];
-            var deferred = []; // overflow stops held for next bus
-            var cumKids  = 0;
-            var pos      = 0;
+            // Estimate total time if ONE bus served all remaining stops (from camp)
+            var remainTimeSec = 0;
+            if (order.length > 0) {
+                remainTimeSec += drivingDist(campLat, campLng, order[0].lat, order[0].lng);
+                for (var ti = 0; ti < order.length; ti++) {
+                    remainTimeSec += serviceTimeSec;
+                    if (ti < order.length - 1) {
+                        remainTimeSec += drivingDist(order[ti].lat, order[ti].lng,
+                                                     order[ti + 1].lat, order[ti + 1].lng);
+                    }
+                }
+            }
+            var targetTimeSec = remainTimeSec / busesLeft;
+
+            var seg        = [];
+            var deferred   = []; // overflow stops held for next bus
+            var cumKids    = 0;
+            var cumTimeSec = 0;
+            var pos        = 0;
 
             while (pos < order.length) {
                 var stop     = order[pos];
                 var stopKids = stop.campers.length;
 
-                if (cumKids + stopKids <= busCap) {
-                    // ── Fits — take it ──
-                    seg.push(stop);
-                    cumKids += stopKids;
-                    pos++;
-                } else {
-                    // ── Overflow — try skip logic ──
-                    var lastStop  = seg.length > 0 ? seg[seg.length - 1] : { lat: campLat, lng: campLng };
-                    var distToStop = drivingDist(lastStop.lat, lastStop.lng, stop.lat, stop.lng);
+                // Drive time: from camp if first stop, else from last taken stop
+                var prevLat     = seg.length > 0 ? seg[seg.length - 1].lat : campLat;
+                var prevLng     = seg.length > 0 ? seg[seg.length - 1].lng : campLng;
+                var driveSec    = drivingDist(prevLat, prevLng, stop.lat, stop.lng);
+                var stopTimeSec = driveSec + serviceTimeSec;
 
-                    if (deferred.length < maxDeferPerBus && distToStop <= maxSkipSec) {
-                        // Stop is close enough to skip — look ahead for one that fits
+                // ── Hard capacity check — same skip logic as before ──
+                if (cumKids + stopKids > hardCap) {
+                    if (deferred.length < maxDeferPerBus && driveSec <= maxSkipSec) {
                         var swapped = false;
                         for (var fwd = pos + 1; fwd < Math.min(pos + 6, order.length); fwd++) {
                             var cand     = order[fwd];
-                            var distCand = drivingDist(lastStop.lat, lastStop.lng, cand.lat, cand.lng);
-                            if (cumKids + cand.campers.length <= busCap && distCand <= maxSkipSec) {
-                                // Defer current stop, take this nearby one instead
-                                deferred.push(order[pos]);   // mark overflow stop as deferred
-                                order.splice(fwd, 1);        // pull candidate out of order
+                            var distCand = drivingDist(prevLat, prevLng, cand.lat, cand.lng);
+                            if (cumKids + cand.campers.length <= hardCap && distCand <= maxSkipSec) {
+                                deferred.push(order[pos]);
+                                order.splice(fwd, 1);
                                 seg.push(cand);
-                                cumKids += cand.campers.length;
-                                pos++;                        // advance past the deferred stop
+                                cumKids    += cand.campers.length;
+                                cumTimeSec += distCand + serviceTimeSec;
+                                pos++;
                                 swapped = true;
                                 break;
                             }
                         }
-                        if (!swapped) break; // no nearby candidate fits — cut here
+                        if (!swapped) break;
                     } else {
-                        // Stop is too far, or we've already deferred the max — cut here
                         break;
                     }
+                    continue;
                 }
+
+                // ── Take this stop ──
+                seg.push(stop);
+                cumKids    += stopKids;
+                cumTimeSec += stopTimeSec;
+                pos++;
+
+                // ── Time target reached — cut here ──
+                if (cumTimeSec >= targetTimeSec) break;
             }
 
             segments.push(seg);
