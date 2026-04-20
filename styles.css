@@ -4299,3 +4299,21 @@ a:hover {
 .ms-assign-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:10px;}
 .ms-assign-item label{display:block;font-size:10px;color:#64748b;margin-bottom:3px;font-weight:500;}
 .ms-assign-item select{width:100%;padding:5px 6px;border:1px solid #e2e8f0;border-radius:4px;font-size:11px;}
+
+/* ── Fullscreen ── */
+.ms-daw-fs-btn { font-size:16px; padding:0 8px; min-width:32px; justify-content:center; }
+.ms-container:fullscreen { border-radius:0; height:100vh !important; }
+.ms-container:-webkit-full-screen { border-radius:0; height:100vh !important; }
+
+/* ── Mobile ── */
+@media (max-width:640px) {
+  .ms-daw-statusbar { flex-wrap:wrap; height:auto; padding:6px 10px; gap:6px; }
+  .ms-daw-sb-left { min-width:0; flex:1; }
+  .ms-daw-sb-center { flex:1 1 100%; order:3; justify-content:flex-start; gap:4px; flex-wrap:wrap; }
+  .ms-daw-sb-right { flex:0 0 auto; gap:4px; }
+  .ms-daw-sb-btn.ms-daw-sb-generate-btn { order:-1; }
+  .ms-daw-palette { display:none; }
+  .ms-daw-grade-label { width:60px; min-width:60px; }
+  .ms-toolbar { flex-wrap:wrap; height:auto; padding:6px 10px; gap:4px; }
+  .ms-sidebar { display:none; }
+}

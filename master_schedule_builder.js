@@ -1007,7 +1007,6 @@ function renderDAWPalette() {
   };
 
   let html = '';
-  html += '<div class="ms-daw-tile-label">Flexible</div>';
   DAW_LAYER_TYPES.filter(t => !t.anchor).forEach(t => {
     html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
@@ -1015,8 +1014,6 @@ function renderDAWPalette() {
     </div>`;
   });
 
-  html += '<div class="ms-daw-tile-divider"></div>';
-  html += '<div class="ms-daw-tile-label">Anchored</div>';
   DAW_LAYER_TYPES.filter(t => t.anchor).forEach(t => {
     html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
@@ -1100,6 +1097,8 @@ function renderDAWToolbar() {
         ${loadOptions}
       </select>
       <button id="daw-delete-btn" class="ms-daw-sb-btn ms-daw-sb-danger">Delete</button>
+      <div class="ms-daw-sb-div"></div>
+      <button id="daw-fullscreen-btn" class="ms-daw-sb-btn ms-daw-sb-ghost ms-daw-fs-btn" title="Fullscreen">&#9974;</button>
     </div>
   `;
   
@@ -1163,6 +1162,20 @@ function renderDAWToolbar() {
   };
   
   document.getElementById('daw-copy-btn').onclick = () => dawCopyLayersDialog();
+
+  const dawFsBtn = document.getElementById('daw-fullscreen-btn');
+  if (dawFsBtn) dawFsBtn.onclick = () => {
+    const container = document.querySelector('.ms-container') || document.documentElement;
+    if (!document.fullscreenElement) {
+      container.requestFullscreen().catch(() => {});
+      dawFsBtn.innerHTML = '&#x2715;';
+      dawFsBtn.title = 'Exit Fullscreen';
+    } else {
+      document.exitFullscreen();
+      dawFsBtn.innerHTML = '&#9974;';
+      dawFsBtn.title = 'Fullscreen';
+    }
+  };
   
   document.getElementById('daw-delete-btn').onclick = async () => {
     if (!window.AccessControl?.checkSetupAccess('delete schedule templates')) return;
@@ -1306,7 +1319,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     
     // Calculate row height based on layer count (stacking)
     const layerCount = Math.max(1, layers.length);
-    const rowHeight = Math.max(80, layerCount * 28 + 16);
+    const rowHeight = Math.max(62, layerCount * 38 + 16);
     
     html += `<div class="ms-daw-grade" data-grade="${gradeKey}" style="height:${rowHeight}px;">`;
     
@@ -1346,7 +1359,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     layers.forEach((layer, idx) => {
       const left = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
       const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
-      const top = 6 + idx * 26;
+      const top = 8 + idx * 38;
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
       let durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
         ? `${layer.durationMin}-${layer.durationMax}m`

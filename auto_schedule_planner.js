@@ -373,6 +373,7 @@ function renderStatusBar() {
       '<div class="al-sb-div"></div>' +
       '<button id="al-preview-btn" class="al-sb-btn al-sb-btn-ghost">Preview</button>' +
       '<button id="al-generate-btn" class="al-sb-btn al-sb-btn-generate">\u26A1 Generate</button>' +
+      '<button id="al-fullscreen-btn" class="al-sb-btn al-sb-btn-ghost al-fullscreen-btn" title="Fullscreen">\u26F6</button>' +
     '</div>' +
     '</div>';
 }
@@ -387,7 +388,6 @@ function renderPalette() {
   let html = '<div class="al-palette">';
   html += '<div class="al-palette-brand">Layers</div>';
 
-  html += '<div class="al-palette-section-label">Anchored</div>';
   anchored.forEach(tile => {
     const c = getColor(tile.type);
     html += '<div class="al-tile al-tile-' + tile.type + '" draggable="true" data-tile=\'' + JSON.stringify(tile).replace(/'/g, '&#39;') + '\'>' +
@@ -397,7 +397,6 @@ function renderPalette() {
       '</div>';
   });
 
-  html += '<div class="al-palette-section-label" style="margin-top:12px;">Flexible</div>';
   flexible.forEach(tile => {
     const c = getColor(tile.type);
     html += '<div class="al-tile al-tile-' + tile.type + '" draggable="true" data-tile=\'' + JSON.stringify(tile).replace(/'/g, '&#39;') + '\'>' +
@@ -434,7 +433,7 @@ function renderGradeRow(grade, dayStart, dayEnd, totalWidth, rowIndex) {
   var gradeTime = getGradeTime(grade);
   var gradeLayers = layers.filter(function(l) { return l.grade === grade; });
   var stacking = calcStacking(gradeLayers);
-  var rowHeight = Math.max(52, stacking.maxStack * 32 + 16);
+  var rowHeight = Math.max(56, stacking.maxStack * 40 + 12);
   var isEven = rowIndex % 2 === 0;
 
   var html = '<div class="al-grade-row' + (isEven ? '' : ' al-grade-row-alt') + '" style="height:' + rowHeight + 'px;">';
@@ -495,11 +494,11 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
 
   var topCss, heightCss;
   if (stackIdx === 'solo') {
-    topCss = '5px'; heightCss = 'calc(100% - 10px)';
+    topCss = '8px'; heightCss = 'calc(100% - 16px)';
   } else {
     var pct = 100 / maxStack;
-    topCss = (stackIdx * pct + 1) + '%';
-    heightCss = 'calc(' + pct + '% - 4px)';
+    topCss = 'calc(' + (stackIdx * pct) + '% + 6px)';
+    heightCss = 'calc(' + pct + '% - 12px)';
   }
 
   var selClass = isSelected ? ' al-band-selected' : '';
@@ -1058,6 +1057,24 @@ function setupToolbarEvents() {
     if (result.warnings.length > 0) msg += ', ' + result.warnings.length + ' warnings';
     notify(msg, 'info');
   };
+
+  var fsBtn = $('al-fullscreen-btn');
+  if (fsBtn) fsBtn.onclick = function() {
+    var container = document.querySelector('.al-container');
+    if (!document.fullscreenElement) {
+      (container || document.documentElement).requestFullscreen().catch(function() {});
+      fsBtn.textContent = '\u2715';
+      fsBtn.title = 'Exit Fullscreen';
+    } else {
+      document.exitFullscreen();
+      fsBtn.textContent = '\u26F6';
+      fsBtn.title = 'Fullscreen';
+    }
+  };
+  document.addEventListener('fullscreenchange', function() {
+    var btn = document.getElementById('al-fullscreen-btn');
+    if (btn) { btn.textContent = document.fullscreenElement ? '\u2715' : '\u26F6'; btn.title = document.fullscreenElement ? 'Exit Fullscreen' : 'Fullscreen'; }
+  }, { once: false });
 
   var genBtn = $('al-generate-btn');
   if (genBtn) genBtn.onclick = function() {
@@ -2082,6 +2099,22 @@ console.log('[AutoSchedulePlanner] v5.0 loaded \u2014 premium DAW UI');
 .al-empty-icon { font-size: 36px; opacity: 0.3; }
 .al-empty-state p { font-size: 14px; font-weight: 600; margin: 0; }
 .al-empty-sub { font-size: 12px; color: #cbd5e1; }
+
+/* ── Fullscreen ── */
+.al-fullscreen-btn { font-size: 16px; padding: 0 8px; min-width: 32px; justify-content: center; }
+.al-container:fullscreen { border-radius: 0; height: 100vh !important; }
+.al-container:-webkit-full-screen { border-radius: 0; height: 100vh !important; }
+
+/* ── Mobile ── */
+@media (max-width: 640px) {
+  .al-statusbar { flex-wrap: wrap; height: auto; padding: 6px 10px; gap: 6px; }
+  .al-statusbar-left { min-width: 0; flex: 1; }
+  .al-statusbar-center { flex: 1 1 100%; order: 3; justify-content: flex-start; gap: 4px; flex-wrap: wrap; }
+  .al-statusbar-right { flex: 0 0 auto; gap: 4px; }
+  .al-sb-btn-generate { order: -1; }
+  .al-palette { display: none; }
+  .al-grade-label { width: 60px; min-width: 60px; }
+}
 `;
   document.head.appendChild(s);
 })();
