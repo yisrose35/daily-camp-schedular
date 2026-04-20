@@ -153,6 +153,7 @@
             reserveSeats: 2, dropoffMode: 'door-to-door',
             avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
             googleMapsKey: '', googleProjectId: '',
+            geoapifyKey: '',
             campLat: null, campLng: null
         },
         activeMode: 'dismissal',
@@ -1434,7 +1435,7 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',googleMapsKey:'',googleProjectId:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',googleMapsKey:'',googleProjectId:'',geoapifyKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
@@ -1627,6 +1628,7 @@
         if (document.getElementById('mapboxToken')) document.getElementById('mapboxToken').value = s.mapboxToken || '';
         if (document.getElementById('googleMapsKey')) document.getElementById('googleMapsKey').value = s.googleMapsKey || '';
         if (document.getElementById('googleProjectId')) document.getElementById('googleProjectId').value = s.googleProjectId || '';
+        if (document.getElementById('geoapifyKey')) document.getElementById('geoapifyKey').value = s.geoapifyKey || '';
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
@@ -1657,6 +1659,7 @@
         D.setup.mapboxToken = el('mapboxToken')?.value.trim() || '';
         D.setup.googleMapsKey = el('googleMapsKey')?.value.trim() || '';
         D.setup.googleProjectId = el('googleProjectId')?.value.trim() || '';
+        D.setup.geoapifyKey = el('geoapifyKey')?.value.trim() || '';
         window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
@@ -5262,7 +5265,49 @@
                 continue; // skip the rest of this shift's processing
             }
 
-            // ── Step 3: Split sorted stops into bus segments ──
+            // ── Geoapify VRP: globally-optimal multi-vehicle routing ──
+            // When a Geoapify API key is configured, send ALL stops + ALL buses
+            // to Geoapify's OR-Tools solver in one request. The solver handles
+            // both stop-to-bus assignment AND intra-bus ordering globally.
+            // Results include road-following GeoJSON geometry cached directly
+            // into _routeGeomCache so map lines draw as real roads immediately.
+            // Falls back to NN split if Geoapify is not configured or fails.
+            const geoapifyKey = D.setup.geoapifyKey?.trim();
+            if (geoapifyKey && window.GoGeoapifyOptimizer && !usedExternalOptimizer) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': Geoapify VRP optimizing...', pctBase + 35);
+                console.log('[Go] Geoapify VRP — ' + allStops.length + ' stops, ' + shiftVehicles.length + ' buses');
+                try {
+                    const geoRoutes = await window.GoGeoapifyOptimizer.optimizeTours({
+                        stops:          allStops,
+                        vehicles:       shiftVehicles,
+                        campLat:        campLat,
+                        campLng:        campLng,
+                        isArrival:      isArrival,
+                        serviceTimeSec: serviceTime,
+                        apiKey:         geoapifyKey
+                    });
+                    if (geoRoutes?.length) {
+                        // Cache road-following geometry from Geoapify GeoJSON MultiLineString
+                        for (const gr of geoRoutes) {
+                            if (gr._roadPts?.length) {
+                                _routeGeomCache[gr.busId + '_' + si] = gr._roadPts;
+                            }
+                        }
+                        routes = geoRoutes;
+                        usedExternalOptimizer = true;
+                        toast('✓ Geoapify VRP — ' + geoRoutes.length + ' buses optimized globally');
+                        console.log('[Go] Geoapify VRP complete: ' + geoRoutes.length + ' routes, ' +
+                            geoRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
+                    } else {
+                        console.warn('[Go] Geoapify VRP returned no routes — falling back to NN split');
+                    }
+                } catch (e) {
+                    console.warn('[Go] Geoapify VRP error:', e.message, '— falling back to NN split');
+                }
+            }
+
+            // ── Step 3: Split sorted stops into bus segments (NN fallback) ──
+            if (!usedExternalOptimizer) {
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': splitting into bus routes...', pctBase + 40);
             const segments = splitTourAtGaps(allStops, shiftBuses);
             console.log('[Go] Step 3b: ' + segments.length + ' segments from ' + allStops.length + ' stops');
@@ -5308,6 +5353,7 @@
                 console.log('[Go] Routing complete: ' + builtRoutes.length + ' routes, ' +
                     builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
             }
+            } // end if (!usedExternalOptimizer) — NN split block
 
             // ── Fallback: Clarke-Wright Savings → per-zone VROOM/nearest-neighbor ──
             if (!usedExternalOptimizer) {

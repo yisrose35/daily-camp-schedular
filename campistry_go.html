@@ -173,14 +173,25 @@
                             </div>
                             <div style="border-top:1px solid var(--border-light);padding-top:1rem;margin-top:.5rem;">
                                 <h4 style="margin:0 0 .25rem;display:flex;align-items:center;gap:.5rem;">
-                                    Google Route Optimization
-                                    <span style="background:#1a73e8;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">PRIMARY ROUTER</span>
+                                    Geoapify Route Planner
+                                    <span style="background:#0ea5e9;color:#fff;font-size:.6rem;padding:.1rem .35rem;border-radius:3px;vertical-align:middle;">PRIMARY VRP OPTIMIZER</span>
                                 </h4>
-                                <p class="muted" style="margin:0 0 .75rem;font-size:.8125rem;"><strong>Globally optimal routing + road-following lines</strong> — Google's OR-Tools cloud solver assigns ALL buses and ALL stops in one shot, following real roads. Also used for address validation (USPS-certified geocoding).</p>
+                                <p class="muted" style="margin:0 0 .75rem;font-size:.8125rem;"><strong>Globally optimal multi-vehicle routing</strong> — Geoapify's OR-Tools solver assigns ALL buses and ALL stops in one shot, returning road-following GeoJSON geometry. Up to 1,000 locations per request. Free tier: 3,000 credits/day (~2 full runs). Get a free key at <a href="https://myprojects.geoapify.com" target="_blank" style="color:var(--blue-600)">myprojects.geoapify.com</a>.</p>
+                                <div class="form-group full-width">
+                                    <label class="form-label">Geoapify API Key</label>
+                                    <input type="text" class="form-input" id="geoapifyKey" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+                                    <span class="form-hint">Create a free project at <a href="https://myprojects.geoapify.com" target="_blank" style="color:var(--blue-600)">myprojects.geoapify.com</a> → copy the API key. No OAuth required — works directly from the browser.</span>
+                                </div>
+                            </div>
+                            <div style="border-top:1px solid var(--border-light);padding-top:1rem;margin-top:.5rem;">
+                                <h4 style="margin:0 0 .25rem;display:flex;align-items:center;gap:.5rem;">
+                                    Google Maps
+                                </h4>
+                                <p class="muted" style="margin:0 0 .75rem;font-size:.8125rem;">Used for address validation (USPS-certified geocoding) and road-following route lines when Geoapify is not configured.</p>
                                 <div class="form-group full-width" style="margin-bottom:.75rem;">
                                     <label class="form-label">Google Maps API Key</label>
                                     <input type="text" class="form-input" id="googleMapsKey" placeholder="AIza...">
-                                    <span class="form-hint">Enable <strong>Route Optimization API</strong> and <strong>Address Validation API</strong> in your <a href="https://console.cloud.google.com/apis/library" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a>. Also used for geocoding.</span>
+                                    <span class="form-hint">Enable <strong>Address Validation API</strong> and <strong>Directions API</strong> in your <a href="https://console.cloud.google.com/apis/library" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a>. Used for geocoding and map line geometry.</span>
                                 </div>
                                 <div class="form-group full-width">
                                     <label class="form-label">Google Cloud Project ID</label>
@@ -524,6 +535,7 @@
 <!-- CAMPISTRY GO ENGINE -->
 <script src="campistry_go_cloud.js"></script>
 <script src="campistry_go_google.js"></script>
+<script src="campistry_go_geoapify.js"></script>
 <script src="campistry_go.js"></script>
     <script src="campistry_go_map_editor.js"></script>
 <script>
