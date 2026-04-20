@@ -4142,6 +4142,106 @@
     //   5. Move to the next bus and repeat from step 3
     //   6. Any leftover stops go to the bus with most remaining capacity
     // =========================================================================
+    // =========================================================================
+    // splitTourAtGaps(tourStops, buses)
+    //
+    // Takes a pre-ordered list of stops (a "giant tour") and splits it into
+    // K segments — one per bus — by cutting at the K-1 largest geographic gaps.
+    //
+    // Why gaps?  The giant tour orders stops by road proximity, so nearby stops
+    // are always consecutive.  The biggest jumps between consecutive stops are
+    // natural neighborhood boundaries — exactly where we want to split.
+    //
+    // Capacity-aware: accumulates camper counts and won't let a segment exceed
+    // its bus capacity.  When a hard-capacity boundary is reached before a large
+    // gap, it finds the biggest gap within the valid window.
+    // =========================================================================
+    function splitTourAtGaps(tourStops, buses) {
+        const K = buses.length;
+        const N = tourStops.length;
+        if (K <= 1 || N === 0) return [tourStops.slice()];
+        if (N <= K) return tourStops.map(function(s) { return [s]; });
+
+        // Sort buses by capacity descending so the largest bus covers the biggest cluster
+        const caps = buses.slice().sort(function(a, b) {
+            return (b.capacity || 44) - (a.capacity || 44);
+        }).map(function(b) { return b.capacity || 44; });
+
+        const totalKids = tourStops.reduce(function(s, st) { return s + st.campers.length; }, 0);
+
+        // Pre-compute gap distances between every consecutive pair of stops
+        var gapDists = new Array(N - 1);
+        for (var gi = 0; gi < N - 1; gi++) {
+            gapDists[gi] = drivingDist(tourStops[gi].lat, tourStops[gi].lng,
+                                       tourStops[gi + 1].lat, tourStops[gi + 1].lng);
+        }
+
+        var segments = [];
+        var pos = 0;
+        var kidsAssigned = 0;
+
+        for (var bi = 0; bi < K && pos < N; bi++) {
+            // Last bus takes everything remaining
+            if (bi === K - 1) {
+                segments.push(tourStops.slice(pos));
+                break;
+            }
+
+            var busCap    = caps[bi];
+            var bussesLeft = K - bi;
+            var kidsLeft  = totalKids - kidsAssigned;
+            // How many kids should this bus ideally take?
+            var targetKids = Math.min(busCap, Math.ceil(kidsLeft / bussesLeft));
+
+            // Find capacity boundary: last index where cumulative ≤ busCap
+            var cumKids = 0;
+            var capEnd = pos;
+            for (var ci = pos; ci < N; ci++) {
+                cumKids += tourStops[ci].campers.length;
+                if (cumKids <= busCap) capEnd = ci;
+                else break;
+            }
+
+            // Find target boundary: last index where cumulative ≤ targetKids
+            var cumKids2 = 0;
+            var targetEnd = pos;
+            for (var ti = pos; ti <= capEnd; ti++) {
+                cumKids2 += tourStops[ti].campers.length;
+                if (cumKids2 <= targetKids) targetEnd = ti;
+            }
+
+            // Search for the biggest geographic gap in the window [targetEnd-3 … capEnd]
+            // This is the natural neighborhood boundary — where we actually cut
+            var searchFrom = Math.max(pos, targetEnd - 3);
+            var searchTo   = Math.min(capEnd, N - 2);
+            var bestGapIdx = searchTo;   // fallback: cut at capacity boundary
+            var bestGapDist = -1;
+            for (var si2 = searchFrom; si2 <= searchTo; si2++) {
+                if (gapDists[si2] > bestGapDist) {
+                    bestGapDist = gapDists[si2];
+                    bestGapIdx  = si2;
+                }
+            }
+
+            // Segment: stops[pos … bestGapIdx] inclusive; next segment starts at bestGapIdx+1
+            var seg = tourStops.slice(pos, bestGapIdx + 1);
+            segments.push(seg);
+            kidsAssigned += seg.reduce(function(s, st) { return s + st.campers.length; }, 0);
+            pos = bestGapIdx + 1;
+        }
+
+        // Catch any stragglers (shouldn't happen but be safe)
+        if (pos < N) {
+            if (segments.length > 0) {
+                segments[segments.length - 1] = segments[segments.length - 1].concat(tourStops.slice(pos));
+            } else {
+                segments.push(tourStops.slice(pos));
+            }
+        }
+
+        return segments.filter(function(s) { return s.length > 0; });
+    }
+
     function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
         if (!stops.length || !buses.length) return [];
 
@@ -5146,134 +5246,131 @@
             let routes = [];
             let usedExternalOptimizer = false;
 
-            // ── PRIMARY: Geographic zones + HERE Tour Planning per zone ──
+            // ── PRIMARY: Giant Tour + Geographic Split ──
             //
-            // WHY TWO STEPS?
-            // HERE Tour Planning optimizes total fleet cost — it will put kids from
-            // Lakewood (5 min from camp) and Jackson Township (45 min from camp) on
-            // the same bus if it saves overall distance. That gives nearby kids a
-            // 90-minute ride. The solution: separate the two sub-problems.
+            // Philosophy (3 clean steps):
             //
-            //   Step 1 — ASSIGNMENT: buildGreedyZones() clusters stops into compact
-            //     geographic corridors (K-medoids). Lakewood kids stay with Lakewood,
-            //     Jackson kids stay with Jackson. Stops are never mixed across zones.
+            //   Step 1 — GIANT TOUR: Ask HERE to plan ONE route visiting ALL stops
+            //     with a single unlimited-capacity vehicle.  HERE returns stops in
+            //     road-optimal order — nearby stops always end up consecutive.
+            //     Fallback: nearest-neighbor from camp if HERE fails.
             //
-            //   Step 2 — ORDERING: HERE Tour Planning gets each zone's stops + 1 bus.
-            //     HERE can only optimize the sequence — the assignment is already locked.
-            //     Calls run in parallel so 18 zones ≈ same time as 1 large call.
+            //   Step 2 — SPLIT AT GAPS: Cut the tour into K segments at the K-1
+            //     largest geographic jumps between consecutive stops.  Big jumps
+            //     are natural neighborhood boundaries (e.g. Lakewood → Jackson Twp).
+            //     Capacity is respected — a segment never overflows its bus.
             //
-            //   Step 3 — DIRECTION: Directional sort ensures dismissal routes go
-            //     near → far (kids near camp drop first) and arrival routes go
-            //     far → near (far kids picked up first = shortest ride back to camp).
+            //   Step 3 — DIRECTION: Sort stops within each segment near→far
+            //     (dismissal) or far→near (arrival) so ride time is proportional
+            //     to how far each child lives from camp.
             //
             if (getHereKey()) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': building geographic zones...', pctBase + 20);
-                const geoZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
-                console.log('[Go] Geographic zones: ' + geoZones.length + ' zones for ' + allStops.length + ' stops');
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': building giant tour...', pctBase + 20);
 
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing stop order (HERE)...', pctBase + 35);
-
-                // Helper: apply directional sort to an orderedStops array in-place
-                function applyDirectionalSort(orderedStops) {
-                    if (orderedStops.length < 2) return;
-                    orderedStops.forEach(function(s) {
-                        s._campDist = drivingDist(campLat, campLng, s.lat, s.lng);
-                    });
-                    if (isArrival) {
-                        // Arrival: far first → near last (far kids picked up first)
-                        orderedStops.sort(function(a, b) { return b._campDist - a._campDist; });
-                    } else {
-                        // Dismissal: near first → far last (near kids dropped quickly)
-                        orderedStops.sort(function(a, b) { return a._campDist - b._campDist; });
-                    }
-                    orderedStops.forEach(function(s, i) { s.stopNum = i + 1; delete s._campDist; });
-                }
+                // ── Step 1: Giant TSP tour via HERE ──
+                const totalKids = allStops.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                const fakeBus   = { id: 'giant_bus_0', capacity: totalKids + 999 };
+                let tourStops   = null;
 
                 try {
-                    // Fire HERE calls for all zones in parallel
-                    const zoneRoutePromises = geoZones.map(async function(zone) {
-                        const vehicle = shiftVehicles.find(function(v) { return v.busId === zone.busId; });
-                        if (!vehicle) return null;
-                        const zoneStops = zone.stopIndices.map(function(si) { return allStops[si]; }).filter(Boolean);
-                        if (!zoneStops.length) return null;
+                    const hResult = await fetchHereTourPlan(
+                        allStops, [fakeBus], { lat: campLat, lng: campLng },
+                        { isArrival, serviceTimeSec: serviceTime, maxRouteMinutes: 1200 }
+                    );
+                    if (hResult && hResult.routes && hResult.routes.length) {
+                        const idxSet = new Set();
+                        tourStops = [];
+                        hResult.routes[0].stopIndices.forEach(function(i) {
+                            if (!idxSet.has(i) && allStops[i]) { idxSet.add(i); tourStops.push(allStops[i]); }
+                        });
+                        // Append any stops HERE left unassigned
+                        (hResult.unassigned || []).forEach(function(i) {
+                            if (!idxSet.has(i) && allStops[i]) { idxSet.add(i); tourStops.push(allStops[i]); }
+                        });
+                        console.log('[Go] Giant tour: HERE returned ' + tourStops.length + ' stops in tour order');
+                    }
+                } catch (gtErr) {
+                    console.warn('[Go] Giant tour HERE call failed:', gtErr.message);
+                }
 
-                        // Find the shiftBus object for this zone
-                        const zoneBus = shiftBuses.find(function(b) { return b.id === zone.busId; });
-                        if (!zoneBus) return null;
-
-                        // Call HERE with just this zone's stops + its assigned bus
-                        let orderedStops = null;
-                        try {
-                            const zoneResult = await fetchHereTourPlan(
-                                zoneStops, [zoneBus], { lat: campLat, lng: campLng },
-                                { isArrival, serviceTimeSec: serviceTime, maxRouteMinutes: D.setup.maxRouteDuration || 90 }
-                            );
-                            if (zoneResult && zoneResult.routes.length) {
-                                orderedStops = [];
-                                zoneResult.routes[0].stopIndices.forEach(function(stopIdx) {
-                                    const s = zoneStops[stopIdx];
-                                    if (s) orderedStops.push({ stopNum: orderedStops.length + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng });
-                                });
-                                // Insert any unassigned zone stops via cheapest position
-                                if (zoneResult.unassigned && zoneResult.unassigned.length) {
-                                    zoneResult.unassigned.forEach(function(ui) {
-                                        const s = zoneStops[ui];
-                                        if (!s) return;
-                                        let bestPos = orderedStops.length, bestCost = Infinity;
-                                        for (var pi = 0; pi <= orderedStops.length; pi++) {
-                                            var prev = orderedStops[pi - 1] || null;
-                                            var next = orderedStops[pi] || null;
-                                            var cost = (prev ? drivingDist(prev.lat, prev.lng, s.lat, s.lng) : 0)
-                                                     + (next ? drivingDist(s.lat, s.lng, next.lat, next.lng) : 0)
-                                                     - (prev && next ? drivingDist(prev.lat, prev.lng, next.lat, next.lng) : 0);
-                                            if (cost < bestCost) { bestCost = cost; bestPos = pi; }
-                                        }
-                                        orderedStops.splice(bestPos, 0, { stopNum: bestPos + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng });
-                                        orderedStops.forEach(function(st, i) { st.stopNum = i + 1; });
-                                    });
-                                }
-                            }
-                        } catch (zoneErr) {
-                            console.warn('[Go] HERE failed for zone "' + zone.busName + '":', zoneErr.message);
+                // Fallback: nearest-neighbor greedy tour from camp
+                if (!tourStops || !tourStops.length) {
+                    console.warn('[Go] Falling back to nearest-neighbor giant tour');
+                    const nnRemaining = allStops.map(function(s, i) { return i; });
+                    const nnVisited   = new Set();
+                    tourStops = [];
+                    var nnCur = { lat: campLat, lng: campLng };
+                    while (nnRemaining.length) {
+                        var nnBest = 0, nnBestD = Infinity;
+                        for (var nni = 0; nni < nnRemaining.length; nni++) {
+                            var ri = nnRemaining[nni];
+                            var nd = drivingDist(nnCur.lat, nnCur.lng, allStops[ri].lat, allStops[ri].lng);
+                            if (nd < nnBestD) { nnBestD = nd; nnBest = nni; }
                         }
+                        var chosen = nnRemaining.splice(nnBest, 1)[0];
+                        tourStops.push(allStops[chosen]);
+                        nnCur = allStops[chosen];
+                    }
+                }
 
-                        // Fallback to directional sort if HERE didn't return a result for this zone
-                        if (!orderedStops || !orderedStops.length) {
-                            console.warn('[Go] Using directional sort fallback for zone "' + zone.busName + '"');
-                            orderedStops = zoneStops.map(function(s, i) {
-                                return { stopNum: i + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
-                            });
-                        }
+                if (tourStops && tourStops.length) {
+                    showProgress((shift.label || 'Shift ' + (si + 1)) + ': splitting tour into bus segments...', pctBase + 50);
 
-                        // Apply directional sort: near→far for dismissal, far→near for arrival
-                        applyDirectionalSort(orderedStops);
+                    // ── Step 2: Split at geographic gaps ──
+                    const segments = splitTourAtGaps(tourStops, shiftBuses);
+                    console.log('[Go] Giant tour split: ' + segments.length + ' segments from ' + tourStops.length + ' stops');
+                    segments.forEach(function(seg, i) {
+                        var kids = seg.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                        console.log('[Go]   Segment ' + (i + 1) + ': ' + seg.length + ' stops, ' + kids + ' kids');
+                    });
 
-                        return {
+                    // ── Step 3: Assign segments to buses + directional sort ──
+                    // Biggest segment → biggest bus (by capacity)
+                    const sortedVehicles = shiftVehicles.slice().sort(function(a, b) {
+                        return (b.capacity || 0) - (a.capacity || 0);
+                    });
+                    const sortedSegments = segments.slice().sort(function(a, b) {
+                        return b.reduce(function(s, st) { return s + st.campers.length; }, 0)
+                             - a.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                    });
+
+                    const builtRoutes = [];
+                    sortedSegments.forEach(function(seg, i) {
+                        const vehicle = sortedVehicles[i];
+                        if (!vehicle || !seg.length) return;
+
+                        // Directional sort: dismissal = near first, arrival = far first
+                        seg.forEach(function(s) {
+                            s._cd = drivingDist(campLat, campLng, s.lat, s.lng);
+                        });
+                        seg.sort(function(a, b) {
+                            return isArrival ? b._cd - a._cd : a._cd - b._cd;
+                        });
+
+                        builtRoutes.push({
                             busId:       vehicle.busId,
                             busName:     vehicle.name,
                             busColor:    vehicle.color || '#10b981',
                             monitor:     vehicle.monitor    || null,
                             counselors:  vehicle.counselors || [],
-                            stops:       orderedStops,
-                            camperCount: orderedStops.reduce(function(s, st) { return s + st.campers.length; }, 0),
+                            stops:       seg.map(function(s, idx) {
+                                delete s._cd;
+                                return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                            }),
+                            camperCount: seg.reduce(function(s, st) { return s + st.campers.length; }, 0),
                             _cap:        vehicle.capacity,
                             totalDuration: 0,
-                            _source:     'here-zone-routing'
-                        };
+                            _source:     'giant-tour-split'
+                        });
                     });
-
-                    const zoneRoutes = await Promise.all(zoneRoutePromises);
-                    const builtRoutes = zoneRoutes.filter(Boolean);
 
                     if (builtRoutes.length) {
                         routes = builtRoutes;
                         usedExternalOptimizer = true;
-                        toast('✓ Geographic zones + HERE ordering — routes generated');
-                        console.log('[Go] HERE zone routing succeeded: ' + builtRoutes.length + ' routes, ' +
-                            builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
+                        toast('✓ Giant tour split — ' + builtRoutes.length + ' geographically clean routes');
+                        console.log('[Go] Giant tour routing complete: ' + builtRoutes.length + ' routes, ' +
+                            builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops assigned');
                     }
-                } catch (e) {
-                    console.warn('[Go] HERE zone routing failed, falling back to Clarke-Wright:', e.message);
                 }
             }
 
