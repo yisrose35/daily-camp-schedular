@@ -8966,8 +8966,8 @@
         ];
         const campCoord = [campLng, campLat];
         const agents = [
-            { delivery_capacity: 5, pickup_capacity: 5, start_location: campCoord },
-            { delivery_capacity: 5, pickup_capacity: 5, start_location: campCoord }
+            { delivery_capacity: 5, start_location: campCoord },
+            { delivery_capacity: 5, start_location: campCoord }
         ];
         const jobs = offsets.map(function(o) {
             return {

@@ -62,15 +62,10 @@ window.GoGeoapifyOptimizer = (function () {
         // Dismissal: start at camp, no fixed end (ends at last delivery)
         // Arrival:   no fixed start (optimizer picks first pickup), end at camp
         const agents = vehicles.map(function (v) {
-            const a = {
-                delivery_capacity: v.capacity || 44,
-                pickup_capacity:   v.capacity || 44
-            };
-            if (isArrival) {
-                a.end_location = campCoord;
-            } else {
-                a.start_location = campCoord;
-            }
+            const cap = v.capacity || 44;
+            const a = isArrival
+                ? { pickup_capacity:   cap, end_location:   campCoord }
+                : { delivery_capacity: cap, start_location: campCoord };
             return a;
         });
 
