@@ -103,7 +103,7 @@ window.GoGeoapifyOptimizer = (function () {
             totalLocations + ' locations — ' + (isAsync ? 'async' : 'sync') + ' mode');
 
         // ── Submit request ──
-        const url = ENDPOINT + '?apikey=' + encodeURIComponent(apiKey) +
+        const url = ENDPOINT + '?apiKey=' + encodeURIComponent(apiKey) +
                     (isAsync ? '&mode=async' : '');
 
         let submitResp, submitData;
@@ -153,7 +153,7 @@ window.GoGeoapifyOptimizer = (function () {
     async function _pollAsync(submitData, apiKey) {
         // submitData may have a "url" or we can poll via /v1/routeplanner/{id}
         const statusUrl = submitData.url ||
-            (ENDPOINT + '/' + submitData.id + '?apikey=' + encodeURIComponent(apiKey));
+            (ENDPOINT + '/' + submitData.id + '?apiKey=' + encodeURIComponent(apiKey));
 
         const deadline = Date.now() + MAX_WAIT;
         console.log('[Geoapify] Job submitted (id=' + submitData.id + '), polling...');

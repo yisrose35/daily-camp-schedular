@@ -8979,7 +8979,7 @@
         const body = { mode: 'drive', agents: agents, jobs: jobs };
 
         L('⏳', 'Sending 5-stop / 2-bus CVRP test to Geoapify...');
-        const url = 'https://api.geoapify.com/v1/routeplanner?apikey=' + encodeURIComponent(apiKey);
+        const url = 'https://api.geoapify.com/v1/routeplanner?apiKey=' + encodeURIComponent(apiKey);
 
         let resp, data;
         try {
