@@ -8786,6 +8786,133 @@
     }
 
     // =========================================================================
+    // GOOGLE ROUTING TEST
+    // Run from browser console: CampistryGo.testGoogleRouting()
+    // =========================================================================
+    async function testGoogleRouting() {
+        const L = (icon, msg) => console.log(icon + ' ' + msg);
+        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('   Google Route Optimization — Live Test');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+        // ── 1. Config check ──
+        const apiKey   = D.setup.googleMapsKey?.trim();
+        const projId   = D.setup.googleProjectId?.trim();
+        const campLat  = D.setup.campLat;
+        const campLng  = D.setup.campLng;
+
+        if (!apiKey)  { L('❌', 'googleMapsKey not set — go to Setup → Advanced Settings'); return; }
+        L('✅', 'API key: ' + apiKey.slice(0, 8) + '...' + apiKey.slice(-4));
+
+        if (!projId)  { L('❌', 'googleProjectId not set — go to Setup → Advanced Settings'); return; }
+        L('✅', 'Project ID: ' + projId);
+
+        if (!campLat || !campLng) { L('❌', 'Camp coordinates not set — save Setup with a valid camp address first'); return; }
+        L('✅', 'Camp coords: ' + campLat.toFixed(5) + ', ' + campLng.toFixed(5));
+
+        // ── 2. Build a minimal 1-stop, 1-bus request ──
+        // The test stop is placed 1.5 miles due north of camp so it's realistic.
+        const stopLat = campLat + 0.0217;  // ~1.5 mi north
+        const stopLng = campLng;
+
+        const today    = new Date();
+        const startDt  = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 16, 0, 0);
+        const endDt    = new Date(startDt.getTime() + 3 * 60 * 60 * 1000);
+        const toRFC    = d => d.toISOString();
+
+        const body = {
+            timeout: '15s',
+            model: {
+                globalStartTime: toRFC(startDt),
+                globalEndTime:   toRFC(endDt),
+                shipments: [{
+                    label: 'test-stop',
+                    loadDemands: { campers: { amount: '3' } },
+                    deliveries: [{
+                        arrivalLocation: { latitude: stopLat, longitude: stopLng },
+                        duration: '120s'
+                    }]
+                }],
+                vehicles: [{
+                    label:         'Test Bus',
+                    travelMode:    1,
+                    startLocation: { latitude: campLat, longitude: campLng },
+                    loadLimits:    { campers: { maxLoad: '50' } },
+                    costPerHour:   40,
+                    costPerKilometer: 1
+                }]
+            },
+            considerRoadTraffic:   true,
+            populatePolylines:     true,
+            populateTravelStepPolylines: false
+        };
+
+        const url = 'https://routeoptimization.googleapis.com/v1/projects/'
+                  + encodeURIComponent(projId)
+                  + ':optimizeTours?key='
+                  + encodeURIComponent(apiKey);
+
+        L('⏳', 'Sending 1-stop test request to Google Route Optimization API...');
+        console.log('   Stop: ' + stopLat.toFixed(5) + ', ' + stopLng.toFixed(5) + ' (1.5mi north of camp)');
+
+        let resp, data;
+        try {
+            resp = await fetch(url, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(body)
+            });
+            data = await resp.json();
+        } catch (e) {
+            L('❌', 'Network error: ' + e.message);
+            return;
+        }
+
+        // ── 3. Report results ──
+        console.log('   HTTP status: ' + resp.status);
+
+        if (!resp.ok) {
+            const msg = data?.error?.message || ('HTTP ' + resp.status);
+            L('❌', 'API error: ' + msg);
+            if (resp.status === 400) L('💡', 'Tip: 400 usually means a bad request field — check console above for details');
+            if (resp.status === 403) L('💡', 'Tip: 403 = Route Optimization API not enabled. Go to:\n   https://console.cloud.google.com/apis/library/routeoptimization.googleapis.com\n   and enable it for project: ' + projId);
+            if (resp.status === 401) L('💡', 'Tip: 401 = API key rejected. Verify key is correct and has no IP restrictions blocking this browser.');
+            if (resp.status === 429) L('💡', 'Tip: 429 = quota exceeded. Check your Google Cloud quota for Route Optimization API.');
+            console.log('\n   Full error response:', data?.error || data);
+            return;
+        }
+
+        // Success — inspect the response
+        const route = data.routes?.[0];
+        if (!route) {
+            L('⚠️ ', 'API returned OK but no routes — check skippedShipments');
+            console.log('   Skipped:', data.skippedShipments);
+            return;
+        }
+
+        const visit       = route.visits?.[0];
+        const transition  = route.transitions?.[1]; // transition TO the stop (index 1 = depot→stop)
+        const polyline    = route.routePolyline?.points;
+        const travelSec   = parseInt(route.metrics?.travelDuration || '0');
+        const distM       = route.metrics?.travelDistanceMeters || 0;
+
+        L('✅', 'Route Optimization API: WORKING');
+        L('✅', 'Stop visited: shipmentIndex=' + (visit?.shipmentIndex ?? '?') + ', startTime=' + (visit?.startTime || '?'));
+        L(travelSec > 0 ? '✅' : '⚠️ ', 'Travel time: ' + Math.round(travelSec / 60) + ' min (' + (distM / 1609).toFixed(2) + ' mi)');
+        L(polyline   ? '✅' : '⚠️ ', polyline
+            ? 'Road polyline: received (' + polyline.length + ' encoded chars) — map will draw real road lines'
+            : 'Road polyline: NOT returned — check populatePolylines flag');
+
+        if (data.skippedShipments?.length) {
+            L('⚠️ ', data.skippedShipments.length + ' shipment(s) skipped: ' + data.skippedShipments.map(s => s.reasons?.[0]?.code).join(', '));
+        }
+
+        console.log('\n🟢 Google Route Optimization is configured correctly and ready to use.');
+        console.log('   When you click Generate Routes, all ' + (D.buses.length || '?') + ' buses will be optimized globally.');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    }
+
+    // =========================================================================
     // PUBLIC API
     // =========================================================================
     window.CampistryGo = {
@@ -8798,7 +8925,7 @@
         acceptStaffAssign, denyStaffAssign, manualStaffAssign, acceptAllStaffSuggestions,
         editAddress, saveAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
         regeocodeAll: function() { geocodeAll(true); },
-        testGeocode, systemCheck,
+        testGeocode, systemCheck, testGoogleRouting,
         generateRoutes, previewGiantTour, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
         renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         setAddressPinMode, toggleHideRoutes, toggleZones,
