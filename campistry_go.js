@@ -4007,11 +4007,15 @@
     //
     // Dynamic skip cap = 4 × average inter-stop drive time in the tour.
     // =========================================================================
-    function splitTourAtGaps(tourStops, buses) {
+    function splitTourAtGaps(tourStops, buses, campLatArg, campLngArg) {
         var K = buses.length;
         var N = tourStops.length;
         if (K <= 1 || N === 0) return [tourStops.slice()];
         if (N <= K) return tourStops.map(function(s) { return [s]; });
+
+        // Resolve camp coordinates — prefer explicit args, fall back to D.setup / cache
+        var campLat = campLatArg != null ? campLatArg : (D.setup.campLat || _campCoordsCache?.lat || 0);
+        var campLng = campLngArg != null ? campLngArg : (D.setup.campLng || _campCoordsCache?.lng || 0);
 
         // Sort buses by capacity descending
         var caps = buses.slice().sort(function(a, b) {
@@ -5316,7 +5320,7 @@
             // ── Step 3: Split sorted stops into bus segments (NN fallback) ──
             if (!usedExternalOptimizer) {
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': splitting into bus routes...', pctBase + 40);
-            const segments = splitTourAtGaps(allStops, shiftBuses);
+            const segments = splitTourAtGaps(allStops, shiftBuses, campLat, campLng);
             console.log('[Go] Step 3b: ' + segments.length + ' segments from ' + allStops.length + ' stops');
             segments.forEach(function(seg, i) {
                 var kids = seg.reduce(function(s, st) { return s + st.campers.length; }, 0);

@@ -92,7 +92,17 @@ window.GoGeoapifyOptimizer = (function () {
         };
 
         const totalLocations = stops.length + vehicles.length;
-        const isAsync = totalLocations > 250; // use async mode when close to sync limit
+        const isAsync = totalLocations > 200; // use async mode when approaching sync limit
+
+        // Free-tier hard cap is 300 total coordinates (stops + buses).
+        // Paid async tier allows 1000, but free plan rejects above 300 even with &mode=async.
+        // Bail out early rather than waste a credit-counted API call that will always 400.
+        if (totalLocations > 300) {
+            console.warn('[Geoapify] ' + totalLocations + ' coordinates exceeds free-tier limit of 300 ' +
+                '(' + stops.length + ' stops + ' + vehicles.length + ' buses). ' +
+                'Falling back to NN split. Upgrade to a paid Geoapify plan for larger runs.');
+            return null;
+        }
 
         console.log('[Geoapify] ' + stops.length + ' stops, ' + vehicles.length + ' buses, ' +
             totalLocations + ' locations — ' + (isAsync ? 'async' : 'sync') + ' mode');
