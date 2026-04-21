@@ -2828,8 +2828,8 @@ let _toastTimer = null;
                 // Preserve existing geocode if the street hasn't changed.
                 if (street) {
                     const _ex = D.addresses[name];
-                    const _norm = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.,]/g, '');
-                    const _keepGeocode = !!_ex?.geocoded && _norm(_ex.street) === _norm(street);
+                    const _streetKey = s => { const p = (s||'').trim().toLowerCase().replace(/[.,]/g,'').split(/\s+/); return p.slice(0,2).join(' '); };
+                    const _keepGeocode = !!_ex?.geocoded && _streetKey(_ex.street) === _streetKey(street);
                     D.addresses[name] = {
                         street, city, state, zip,
                         lat:      _keepGeocode ? (_ex.lat  || null) : null,
@@ -2859,10 +2859,11 @@ let _toastTimer = null;
                     // If the geocoded position still makes sense (house number + street
                     // name unchanged), keep it. If the street component changed
                     // (person moved), reset so it gets re-geocoded.
-                    const _norm  = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-                    const _houseAndStreet = s => _norm(s).replace(/[.,]/g, ''); // strip punctuation
-                    const _streetSame = _ex && _houseAndStreet(_ex.street) === _houseAndStreet(street);
-                    const _keepGeocode = !!_ex?.geocoded && _streetSame;
+                    // Compare house number + first word of street name only.
+                    // This handles abbreviation differences introduced by Google
+                    // Address Validation (e.g. "Dr" → "Drive", "Ct" → "Court").
+                    const _streetKey = s => { const p = (s||'').trim().toLowerCase().replace(/[.,]/g,'').split(/\s+/); return p.slice(0,2).join(' '); };
+                    const _keepGeocode = !!_ex?.geocoded && _streetKey(_ex.street) === _streetKey(street);
                     D.addresses[rn] = {
                         street, city, state, zip,
                         lat:      _keepGeocode ? (_ex.lat  || null) : null,
