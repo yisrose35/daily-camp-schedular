@@ -792,7 +792,60 @@
 
             let changed = false;
 
-            // Restore addresses if we don't have any locally
+            // ── Restore full state (setup, buses, shifts, monitors, counselors) ─
+            // Only hydrates fields that are empty/default locally so we never
+            // overwrite data the user just entered.
+            if (cloud.state && typeof cloud.state === 'object') {
+                const s = cloud.state;
+
+                // Setup: restore if local campName is empty but cloud has one
+                if (s.setup && !D.setup.campName && s.setup.campName) {
+                    D.setup = Object.assign({}, D.setup, s.setup);
+                    changed = true;
+                    console.log('[Go] Restored setup from GoCloud (campName:', s.setup.campName + ')');
+                }
+
+                // Fleet config: restore if local is empty
+                if (!D.buses?.length && s.buses?.length) {
+                    D.buses = s.buses;
+                    changed = true;
+                    console.log('[Go] Restored', s.buses.length, 'buses from GoCloud');
+                }
+                if (!D.shifts?.length && s.shifts?.length) {
+                    D.shifts = s.shifts;
+                    changed = true;
+                }
+                if (!D.monitors?.length && s.monitors?.length) {
+                    D.monitors = s.monitors;
+                    changed = true;
+                }
+                if (!D.counselors?.length && s.counselors?.length) {
+                    D.counselors = s.counselors;
+                    changed = true;
+                }
+
+                // Mode snapshots
+                if (s.dismissal && (!D.dismissal || !D.dismissal.buses?.length)) {
+                    D.dismissal = Object.assign(D.dismissal || {}, s.dismissal);
+                    changed = true;
+                }
+                if (s.arrival && (!D.arrival || !D.arrival.buses?.length)) {
+                    D.arrival = Object.assign(D.arrival || {}, s.arrival);
+                    changed = true;
+                }
+
+                // Daily overrides & carpool groups
+                if (s.dailyOverrides && !Object.keys(D.dailyOverrides || {}).length) {
+                    D.dailyOverrides = s.dailyOverrides;
+                    changed = true;
+                }
+                if (s.carpoolGroups && !Object.keys(D.carpoolGroups || {}).length) {
+                    D.carpoolGroups = s.carpoolGroups;
+                    changed = true;
+                }
+            }
+
+            // ── Restore addresses ─────────────────────────────────────────────
             if (cloud.addresses && typeof cloud.addresses === 'object') {
                 const localCount = Object.keys(D.addresses || {}).length;
                 const cloudCount = Object.keys(cloud.addresses).length;
@@ -804,7 +857,7 @@
                 }
             }
 
-            // Restore routes if we don't have any locally
+            // ── Restore routes ────────────────────────────────────────────────
             if (cloud.routes && typeof cloud.routes === 'object') {
                 if (!D.savedRoutes && cloud.routes.savedRoutes) {
                     D.savedRoutes = cloud.routes.savedRoutes;
@@ -829,8 +882,12 @@
                 // Persist the restored data to localStorage so subsequent
                 // sync loads find it without another round-trip
                 try { localStorage.setItem(STORE, JSON.stringify(D)); } catch (_) {}
+                renderFleet();
+                renderShifts();
+                renderStaff();
                 renderAddresses();
                 updateStats();
+                populateSetup();
                 if (D.savedRoutes && D.savedRoutes.length) {
                     setTimeout(() => { renderRouteResults(applyOverrides(D.savedRoutes)); toast('Routes restored from cloud'); }, 200);
                 }
@@ -875,15 +932,54 @@
                 window.saveGlobalSettings('campistryGo', lite);
             }
             // ── Go-specific cloud persistence ─────────────────────────────────
-            // Addresses and routes are stripped from the main camp_state payload.
-            // Save them to the dedicated go_standalone_data table so they survive
-            // cache clears / new devices.
+            // ALL Campistry Go data is saved to the go_standalone_data table so
+            // it survives cache clears / new devices / non-standalone mode.
+            // standaloneMode only controls WHERE camper+staff data comes from
+            // (Campistry Me vs manual/CSV) — it does NOT affect cloud saves.
+            //
+            // Data types saved:
+            //   'state'     — setup, buses, shifts, monitors, counselors (all modes)
+            //   'addresses' — geocoded camper addresses (large; kept separate)
+            //   'routes'    — computed route results (large; kept separate)
             if (window.GoCloudSync) {
-                // Addresses: save whenever there is at least one entry
+                // ── State: setup + fleet config for both modes ────────────────
+                // Snapshot the current mode's live data back into D[activeMode]
+                // before saving so the cloud copy is always up-to-date.
+                const _currentModeSnap = {
+                    buses:      D.buses      || [],
+                    shifts:     D.shifts     || [],
+                    monitors:   D.monitors   || [],
+                    counselors: D.counselors || []
+                };
+                const stateSnap = {
+                    setup:       D.setup,
+                    activeMode:  D.activeMode,
+                    buses:       D.buses      || [],
+                    shifts:      D.shifts     || [],
+                    monitors:    D.monitors   || [],
+                    counselors:  D.counselors || [],
+                    dismissal: D.dismissal ? {
+                        buses:      D.activeMode === 'dismissal' ? _currentModeSnap.buses      : (D.dismissal.buses      || []),
+                        shifts:     D.activeMode === 'dismissal' ? _currentModeSnap.shifts     : (D.dismissal.shifts     || []),
+                        monitors:   D.activeMode === 'dismissal' ? _currentModeSnap.monitors   : (D.dismissal.monitors   || []),
+                        counselors: D.activeMode === 'dismissal' ? _currentModeSnap.counselors : (D.dismissal.counselors || [])
+                    } : null,
+                    arrival: D.arrival ? {
+                        buses:      D.activeMode === 'arrival' ? _currentModeSnap.buses      : (D.arrival.buses      || []),
+                        shifts:     D.activeMode === 'arrival' ? _currentModeSnap.shifts     : (D.arrival.shifts     || []),
+                        monitors:   D.activeMode === 'arrival' ? _currentModeSnap.monitors   : (D.arrival.monitors   || []),
+                        counselors: D.activeMode === 'arrival' ? _currentModeSnap.counselors : (D.arrival.counselors || [])
+                    } : null,
+                    dailyOverrides: D.dailyOverrides || {},
+                    carpoolGroups:  D.carpoolGroups  || {}
+                };
+                window.GoCloudSync.save('state', stateSnap);
+
+                // ── Addresses: save whenever there is at least one entry ───────
                 if (D.addresses && Object.keys(D.addresses).length > 0) {
                     window.GoCloudSync.save('addresses', D.addresses);
                 }
-                // Routes: save dismissal + arrival savedRoutes together
+                // ── Routes: save dismissal + arrival savedRoutes together ──────
                 const routePayload = {
                     savedRoutes:     D.savedRoutes            || null,
                     dismissalRoutes: D.dismissal?.savedRoutes || null,

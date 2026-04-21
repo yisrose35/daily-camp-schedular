@@ -2,17 +2,25 @@
 // campistry_go_cloud.js — Go-Specific Cloud Persistence
 // =============================================================================
 //
-// Saves addresses and routes to a dedicated `go_standalone_data` Supabase table
-// so they survive browser cache clears. The main camp_state table strips these
-// fields (addresses are large; routes contain raw geometry). This module handles
-// them separately.
+// Saves ALL Campistry Go data to the `go_standalone_data` Supabase table so it
+// survives browser cache clears / new devices. This applies in BOTH standalone
+// and connected (Campistry Me) mode — standaloneMode only controls WHERE camper
+// and staff data comes from (manual/CSV vs Campistry Me), not whether we save.
+//
+// The main camp_state table strips addresses and routes because they are large.
+// This module handles the full Go dataset in separate rows per data_type.
 //
 // TABLE: go_standalone_data
 //   camp_id   text         (FK to camp)
-//   data_type text         ('addresses' | 'routes')
+//   data_type text         ('state' | 'addresses' | 'routes')
 //   data      jsonb        (the actual payload)
 //   updated_at timestamptz
 //   PRIMARY KEY (camp_id, data_type)
+//
+// Data types:
+//   'state'     — setup, buses, shifts, monitors, counselors (all modes)
+//   'addresses' — geocoded camper addresses (large; kept in own row)
+//   'routes'    — computed route results   (large; kept in own row)
 //
 // SQL to create:
 //   CREATE TABLE IF NOT EXISTS go_standalone_data (
