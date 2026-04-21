@@ -778,6 +778,47 @@
     }
 
     // -------------------------------------------------------------------------
+    // fetchGoConfig() — loads API keys from Supabase secrets via get-config
+    // edge function. Keys are injected into D.setup at runtime only — they are
+    // NEVER saved to localStorage, globalSettings, or the cloud table.
+    // Called after auth is confirmed (campistry-cloud-hydrated + 1.5s fallback).
+    // -------------------------------------------------------------------------
+    async function fetchGoConfig() {
+        const cfg = window.__CAMPISTRY_SUPABASE__;
+        if (!cfg?.url || !cfg?.anonKey) return; // Supabase not wired in
+        try {
+            const sess = await window.supabase?.auth?.getSession?.();
+            const token = sess?.data?.session?.access_token;
+            if (!token) return; // Not logged in — skip
+
+            const resp = await fetch(cfg.url + '/functions/v1/get-config', {
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'apikey': cfg.anonKey
+                }
+            });
+            if (!resp.ok) {
+                console.warn('[Go] fetchGoConfig: HTTP', resp.status);
+                return;
+            }
+            const config = await resp.json();
+
+            // Inject keys into D.setup (runtime only — not persisted)
+            if (config.googleMapsKey)  D.setup.googleMapsKey  = config.googleMapsKey;
+            if (config.geoapifyKey)    D.setup.geoapifyKey    = config.geoapifyKey;
+            if (config.googleProjectId) D.setup.googleProjectId = config.googleProjectId;
+
+            console.log('[Go] Config loaded from Supabase secrets — keys:', [
+                config.googleMapsKey  ? 'googleMaps ✅'  : 'googleMaps ❌',
+                config.geoapifyKey    ? 'geoapify ✅'    : 'geoapify ❌',
+                config.googleProjectId ? 'projectId ✅'  : 'projectId ❌'
+            ].join(', '));
+        } catch (e) {
+            console.warn('[Go] fetchGoConfig error:', e.message);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // loadGoCloudData() — async supplement to load()
     // Fetches addresses and routes from the go_standalone_data table.
     // Called after campistry-cloud-hydrated fires (and optionally on init).
@@ -951,8 +992,15 @@
                     monitors:   D.monitors   || [],
                     counselors: D.counselors || []
                 };
+                // Strip runtime-only API keys — these come from Supabase secrets
+                // via fetchGoConfig() and must never be written back to the DB.
+                const _setupForCloud = Object.assign({}, D.setup);
+                delete _setupForCloud.googleMapsKey;
+                delete _setupForCloud.googleProjectId;
+                delete _setupForCloud.geoapifyKey;
+
                 const stateSnap = {
-                    setup:       D.setup,
+                    setup:       _setupForCloud,
                     activeMode:  D.activeMode,
                     buses:       D.buses      || [],
                     shifts:      D.shifts     || [],
@@ -1129,9 +1177,6 @@
         if (document.getElementById('dropoffMode')) document.getElementById('dropoffMode').value = s.dropoffMode || 'door-to-door';
         document.getElementById('avgStopTime').value = s.avgStopTime ?? 2;
         document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 375;
-        if (document.getElementById('googleMapsKey')) document.getElementById('googleMapsKey').value = s.googleMapsKey || '';
-        if (document.getElementById('googleProjectId')) document.getElementById('googleProjectId').value = s.googleProjectId || '';
-        if (document.getElementById('geoapifyKey')) document.getElementById('geoapifyKey').value = s.geoapifyKey || '';
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
@@ -1157,9 +1202,6 @@
         D.setup.dropoffMode = el('dropoffMode')?.value || 'door-to-door';
         D.setup.avgStopTime = parseInt(el('avgStopTime')?.value) || 2;
         D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 375;
-        D.setup.googleMapsKey = el('googleMapsKey')?.value.trim() || '';
-        D.setup.googleProjectId = el('googleProjectId')?.value.trim() || '';
-        D.setup.geoapifyKey = el('geoapifyKey')?.value.trim() || '';
         window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
@@ -7043,12 +7085,14 @@
             console.log('[Go] Cloud data hydrated');
             load();
             renderAddresses(); updateStats(); renderShifts();
+            // Fetch API keys from Supabase secrets (non-blocking)
+            fetchGoConfig();
             // Fetch addresses + routes from go_standalone_data table
             // (they're stripped from the main camp_state payload)
             loadGoCloudData();
         });
         // Also attempt Go-cloud restore on boot (in case cloud is already ready)
-        setTimeout(loadGoCloudData, 1500);
+        setTimeout(() => { fetchGoConfig(); loadGoCloudData(); }, 1500);
         window.addEventListener('storage', (e) => { if (e.key === 'campGlobalSettings_v1') { console.log('[Go] Roster changed — refreshing'); renderAddresses(); updateStats(); } });
         console.log('[Go] Ready —', D.buses.length, 'buses,', D.shifts.length, 'shifts,', Object.keys(getRoster()).length, 'campers');
     }
