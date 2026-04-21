@@ -2231,7 +2231,7 @@ divBlocks.forEach((block, blockIdx) => {
         return;
     }
 
-    if (block.type === 'elective' || block.type === 'pinned') {
+    if (block.type === 'elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
         tr.appendChild(renderFixedBlockCell(block, bunks));
         tbody.appendChild(tr);
         return;
@@ -2400,7 +2400,7 @@ divBlocks.forEach((block, blockIdx) => {
             const displayName = acts.join(', ') || block.event || 'Elective';
             htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">${escapeHtml(displayName)}</div>`;
             bgColor = '#ede9fe';
-        } else if (block.type === 'pinned' && block.event) {
+        } else if (block.type === 'pinned' && block.event && !isFixedBlockType(block.event)) {
             const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
             const combined = loc ? `${block.event} - ${loc}` : block.event;
             htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#92400e;">${escapeHtml(combined)}</div>`;
