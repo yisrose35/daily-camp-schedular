@@ -773,6 +773,22 @@ let _toastTimer = null;
                 D = merge(local);
                 console.log('[Go] Loaded from localStorage');
             }
+
+            // Recover geocoding checkpoint: if the tab was closed mid-geocode,
+            // the checkpoint key has more geocodes than the main store.
+            try {
+                const ckptRaw = localStorage.getItem(STORE + '_addr_ckpt');
+                if (ckptRaw) {
+                    const ckpt = JSON.parse(ckptRaw);
+                    const ckptGeocoded = Object.values(ckpt).filter(a => a.geocoded).length;
+                    const mainGeocoded = Object.values(D.addresses || {}).filter(a => a.geocoded).length;
+                    if (ckptGeocoded > mainGeocoded) {
+                        D.addresses = ckpt;
+                        console.log('[Go] Recovered geocode checkpoint (' + ckptGeocoded + ' geocoded vs ' + mainGeocoded + ' in main store)');
+                    }
+                    localStorage.removeItem(STORE + '_addr_ckpt');
+                }
+            } catch (_) {}
         } catch (e) { console.error('[Go] Load error:', e); }
     }
 
@@ -2451,6 +2467,21 @@ let _toastTimer = null;
         await geocodeAll(true);
     }
 
+    // ── Lightweight address-only save used inside the geocoding loop ──────────
+    // Full save() serialises D.savedRoutes (can be several MB of road geometry)
+    // and fires 3 cloud upserts on every call. During geocoding we only need to
+    // checkpoint the addresses to localStorage so work isn't lost if the tab
+    // is closed; the full cloud sync runs once at the end.
+    function _saveAddressesCheckpoint() {
+        try {
+            // Write only the addresses object — not the full D state with routes
+            localStorage.setItem(STORE + '_addr_ckpt', JSON.stringify(D.addresses));
+        } catch (e) {
+            // Quota exceeded for checkpoint is non-fatal; the final save() handles it
+            console.warn('[Go] Address checkpoint quota exceeded — skipping mid-run save');
+        }
+    }
+
     async function geocodeAll(force) {
         if (!_campCoordsCache && D.setup.campAddress) { const cc = await geocodeSingle(D.setup.campAddress); if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; save(); } }
 
@@ -2487,24 +2518,31 @@ let _toastTimer = null;
                 if (D.addresses[name]) D.addresses[name]._geocodeWarning = 'All providers failed — verify address';
             }
 
-            if ((i + 1) % 5 === 0 || i === todo.length - 1) {
-                renderAddresses(); updateStats();
-                const parts = [];
-                if (googleCount) parts.push('Google: ' + googleCount);
-                if (censusCount) parts.push('Census: ' + censusCount);
-                if (orsCount)    parts.push('ORS: ' + orsCount);
-                progressUpdate(i + 1, todo.length, primaryLabel + ' · ' + totalOk + ' geocoded' + (parts.length > 1 ? ' (' + parts.join(', ') + ')' : ''));
-            }
+            // Update progress bar every address — but skip the heavy DOM table
+            // rebuild (renderAddresses) until the very end. Rebuilding a 500-row
+            // table 100 times creates / destroys thousands of DOM nodes and is
+            // a primary cause of the Out-of-Memory error on large imports.
+            const parts = [];
+            if (googleCount) parts.push('Google: ' + googleCount);
+            if (censusCount) parts.push('Census: ' + censusCount);
+            if (orsCount)    parts.push('ORS: ' + orsCount);
+            progressUpdate(i + 1, todo.length, primaryLabel + ' · ' + totalOk + ' geocoded' + (parts.length > 1 ? ' (' + parts.join(', ') + ')' : ''));
 
-            // Small delay to avoid hammering APIs
-            if (i < todo.length - 1) await new Promise(r => setTimeout(r, 150));
+            // Checkpoint addresses to localStorage every 25 addresses.
+            // Does NOT serialise routes or fire cloud upserts — those only
+            // happen in the final save() below once all geocoding is done.
+            if ((i + 1) % 25 === 0) _saveAddressesCheckpoint();
 
-            // Save every 50 addresses
-            if ((i + 1) % 50 === 0) save();
+            // Small delay to avoid hammering APIs and to yield the event loop
+            if (i < todo.length - 1) await new Promise(r => setTimeout(r, 200));
         }
 
+        // One full save + render at the end — this is the only point we write
+        // to cloud storage during the geocode run.
         save(); renderAddresses(); updateStats();
-        const highConf = todo.filter(n => (D.addresses[n]?._geocodeConfidence || 0) >= 0.85).length;
+        // Clean up checkpoint key now that the real save succeeded
+        try { localStorage.removeItem(STORE + '_addr_ckpt'); } catch (_) {}
+
         const lowConf  = todo.filter(n => D.addresses[n]?.geocoded && (D.addresses[n]._geocodeConfidence || 0) < 0.75).length;
         let summary = totalOk + ' geocoded';
         if (googleCount) summary += ' · Google: ' + googleCount;
