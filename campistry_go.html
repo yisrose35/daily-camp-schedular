@@ -167,6 +167,10 @@
                                     <input type="text" class="form-input" id="googleProjectId" placeholder="my-project-123456">
                                     <span class="form-hint">Found in <a href="https://console.cloud.google.com" target="_blank" style="color:var(--blue-600)">Google Cloud Console</a> → project dropdown → under the project name. Required to enable Google's OR-Tools bus routing solver.</span>
                                 </div>
+                                <div class="form-group full-width" style="margin-bottom:.25rem;">
+                                    <button type="button" id="btnTestGoogleProxy" class="btn btn-secondary" style="font-size:.8125rem;padding:.35rem .9rem;">🔍 Test Google Connection</button>
+                                    <div id="googleProxyStatus" style="margin-top:.6rem;font-size:.8125rem;line-height:1.6;display:none;background:var(--bg-secondary,#f4f5f7);border:1px solid var(--border-color,#ddd);border-radius:6px;padding:.6rem .85rem;white-space:pre-wrap;font-family:monospace;"></div>
+                                </div>
                             </div>
                         </div>
                     </div>

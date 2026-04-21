@@ -1064,6 +1064,77 @@
         save(); toast('Setup saved');
     }
 
+    // ── Google Route Optimization connection test ──────────────────────────────
+    (function () {
+        const btn = document.getElementById('btnTestGoogleProxy');
+        const box = document.getElementById('googleProxyStatus');
+        if (!btn || !box) return;
+
+        btn.addEventListener('click', async function () {
+            btn.disabled = true;
+            btn.textContent = '⏳ Testing...';
+            box.style.display = 'block';
+            box.textContent = 'Connecting to Supabase edge function…';
+
+            const supabaseUrl = window.__CAMPISTRY_SUPABASE__?.url || '';
+            let token = null;
+            try {
+                const sess = await window.supabase?.auth?.getSession();
+                token = sess?.data?.session?.access_token || null;
+            } catch (_) {}
+
+            const lines = [];
+
+            // Step 1: Supabase session
+            if (supabaseUrl && token) {
+                lines.push('✅ Supabase session: active');
+            } else if (!supabaseUrl) {
+                lines.push('❌ Supabase URL not found — are you logged in?');
+                finish(false, lines); return;
+            } else {
+                lines.push('❌ Not logged in to Campistry — please sign in first');
+                finish(false, lines); return;
+            }
+
+            // Step 2: Call edge function health check
+            lines.push('🔄 Calling edge function health check…');
+            box.textContent = lines.join('\n');
+            try {
+                const resp = await fetch(supabaseUrl + '/functions/v1/optimize-routes', {
+                    method: 'GET',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                const data = await resp.json();
+
+                if (data.checks) {
+                    Object.entries(data.checks).forEach(([k, v]) => lines.push(v + '  (' + k + ')'));
+                }
+
+                if (data.ok) {
+                    lines.push('');
+                    lines.push('🎉 All good! Google Route Optimization is ready.');
+                    lines.push('   Project: ' + (data.projectId || 'unknown'));
+                    finish(true, lines);
+                } else {
+                    lines.push('');
+                    lines.push('⚠️  Fix the issues above, then re-deploy the edge function.');
+                    finish(false, lines);
+                }
+            } catch (e) {
+                lines.push('❌ Could not reach edge function: ' + e.message);
+                lines.push('   Make sure it is deployed in Supabase → Edge Functions.');
+                finish(false, lines);
+            }
+
+            function finish(ok, lines) {
+                box.textContent = lines.join('\n');
+                box.style.borderColor = ok ? '#22c55e' : '#ef4444';
+                btn.disabled = false;
+                btn.textContent = '🔍 Test Google Connection';
+            }
+        });
+    })();
+
     // =========================================================================
     // BUS FLEET
     // =========================================================================

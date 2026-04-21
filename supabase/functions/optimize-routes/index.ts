@@ -77,6 +77,45 @@ serve(async (req: Request) => {
     return new Response("ok", { headers: CORS_HEADERS });
   }
 
+  // ── GET /functions/v1/optimize-routes — health check ─────────────────────
+  // Returns a JSON diagnostic: checks secrets exist and that Google token
+  // exchange succeeds. Safe to call without a request body.
+  if (req.method === "GET") {
+    const checks: Record<string, string> = {};
+
+    const clientId     = Deno.env.get("GOOGLE_OAUTH_CLIENT_ID");
+    const clientSecret = Deno.env.get("GOOGLE_OAUTH_CLIENT_SECRET");
+    const refreshToken = Deno.env.get("GOOGLE_OAUTH_REFRESH_TOKEN");
+    const projectId    = Deno.env.get("GOOGLE_PROJECT_ID");
+
+    checks.GOOGLE_OAUTH_CLIENT_ID     = clientId     ? "✅ set" : "❌ missing";
+    checks.GOOGLE_OAUTH_CLIENT_SECRET = clientSecret ? "✅ set" : "❌ missing";
+    checks.GOOGLE_OAUTH_REFRESH_TOKEN = refreshToken ? "✅ set" : "❌ missing";
+    checks.GOOGLE_PROJECT_ID          = projectId    ? "✅ set" : "❌ missing";
+
+    if (!clientId || !clientSecret || !refreshToken || !projectId) {
+      return new Response(JSON.stringify({ ok: false, checks }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
+
+    try {
+      await getGoogleAccessToken(clientId, clientSecret, refreshToken);
+      checks.google_token = "✅ token exchange succeeded";
+      return new Response(JSON.stringify({ ok: true, checks, projectId }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    } catch (e) {
+      checks.google_token = "❌ token exchange failed: " + (e as Error).message;
+      return new Response(JSON.stringify({ ok: false, checks }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
+  }
+
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
