@@ -127,13 +127,27 @@ window.GoGoogleOptimizer = (function () {
         const campLocation = { latitude: campLat, longitude: campLng };
         const SKIP_PENALTY = 10000; // cost units — effectively "never skip"
 
+        // ── Per-stop ride-time enforcement ───────────────────────────────────
+        // Hard time windows on each visit so Google cannot legally assign a stop
+        // that would exceed the max ride time:
+        //   Dismissal: delivery must happen within [departure, departure + maxRide]
+        //   Arrival:   pickup must happen within   [bell − maxRide, bell]
+        // Stops that are genuinely unreachable within the window get skipped
+        // (penaltyCost still pushes Google to try very hard); the cheapest-insert
+        // fallback places any skipped stops onto the nearest bus.
+        const maxRideSec       = maxRideTimeSec || 45 * 60;
+        const rideDeadlineDt   = new Date(anchorDt.getTime() + (isArrival ? -maxRideSec : maxRideSec) * 1000);
+
         const shipments = stops.map((stop, idx) => {
             const visitLocation = { latitude: stop.lat, longitude: stop.lng };
             const visit = {
                 arrivalLocation: visitLocation,
-                duration: durationStr
-                // No per-stop time windows — we want the solver free to find the
-                // optimal ordering within the vehicle's global time constraints.
+                duration:        durationStr,
+                timeWindows:     isArrival
+                    // Arrival: pickup must start no earlier than (bell − maxRide), end by bell
+                    ? [{ startTime: toRFC(rideDeadlineDt), endTime: toRFC(anchorDt) }]
+                    // Dismissal: delivery must start after departure, finish before (departure + maxRide)
+                    : [{ startTime: toRFC(anchorDt), endTime: toRFC(rideDeadlineDt) }]
             };
             return {
                 label:       String(idx),

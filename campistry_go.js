@@ -864,10 +864,14 @@
                 delete slim.dismissal?.savedRoutes;
                 localStorage.setItem(STORE, JSON.stringify(slim));
             }
-            // Sync to global settings without savedRoutes (too large for localStorage quota)
+            // Sync to global settings without any route data (too large for localStorage quota).
+            // Road geometry (_roadPts) alone can be several MB — strip all savedRoutes
+            // from every mode before writing to globalSettings / localStorage.
             if (typeof window.saveGlobalSettings === 'function') {
                 const lite = Object.assign({}, D);
-                delete lite.savedRoutes; // strip route data — it's already in STORE
+                delete lite.savedRoutes;
+                if (lite.dismissal) { lite.dismissal = Object.assign({}, lite.dismissal); delete lite.dismissal.savedRoutes; }
+                if (lite.arrival)   { lite.arrival   = Object.assign({}, lite.arrival);   delete lite.arrival.savedRoutes;   }
                 window.saveGlobalSettings('campistryGo', lite);
             }
             // ── Go-specific cloud persistence ─────────────────────────────────
