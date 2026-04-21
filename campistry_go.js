@@ -2683,8 +2683,11 @@ let _toastTimer = null;
         if (!hasFirstLast && !hasFullName) { toast('CSV needs either "First Name" + "Last Name" columns, or a "Name" column', 'error'); return; }
         if (si < 0) { toast('CSV needs an "Address" or "Street Address" column', 'error'); return; }
 
-        // Full overwrite — clear all existing data
-        D.addresses = {};
+        // Merge import — preserve existing geocodes for unchanged addresses.
+        // D.addresses is NOT wiped: if a person is already geocoded and their
+        // address hasn't changed, we keep their lat/lng so no re-geocoding needed.
+        // The standalone roster IS reset so it exactly reflects the new CSV.
+        // Routes are cleared since the roster may have changed.
         _goStandaloneRoster = {};
         D.savedRoutes = null;
         _generatedRoutes = null;
@@ -2763,11 +2766,16 @@ let _toastTimer = null;
                     });
                 }
 
-                // All staff get an address entry so they're geocoded with campers
+                // All staff get an address entry so they're geocoded with campers.
+                // Preserve existing geocode if the address hasn't changed.
                 if (street) {
+                    const _ex = D.addresses[name];
+                    const _addrSame = _ex && _ex.street === street && _ex.city === city && _ex.state === state && _ex.zip === zip;
                     D.addresses[name] = {
                         street, city, state, zip,
-                        lat: null, lng: null, geocoded: false,
+                        lat:      _addrSame ? (_ex.lat  || null) : null,
+                        lng:      _addrSame ? (_ex.lng  || null) : null,
+                        geocoded: _addrSame ? (!!_ex.geocoded)   : false,
                         transport: 'bus', rideWith: '',
                         _camperId: personId ? parseInt(personId) : 0,
                         _division: division, _grade: '', _bunk: bunk,
@@ -2787,11 +2795,16 @@ let _toastTimer = null;
                 const rn = Object.keys(meRoster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
 
                 if (street) {
+                    // Preserve existing geocode if the address hasn't changed.
+                    const _ex = D.addresses[rn];
+                    const _addrSame = _ex && _ex.street === street && _ex.city === city && _ex.state === state && _ex.zip === zip;
                     D.addresses[rn] = {
                         street, city, state, zip,
-                        lat: null, lng: null, geocoded: false,
-                        transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus',
-                        rideWith: rideWith,
+                        lat:      _addrSame ? (_ex.lat  || null) : null,
+                        lng:      _addrSame ? (_ex.lng  || null) : null,
+                        geocoded: _addrSame ? (!!_ex.geocoded)   : false,
+                        transport: _ex?.transport || ((transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus'),
+                        rideWith: rideWith || _ex?.rideWith || '',
                         _camperId: personId ? parseInt(personId) : 0,
                         _division: division, _grade: grade, _bunk: bunk,
                         _arrival: forArrival, _dismissal: forDismissal
@@ -2806,17 +2819,20 @@ let _toastTimer = null;
                 camperCount++;
             }
         }
+        // Count how many geocodes were preserved (address unchanged, already geocoded)
+        const preserved = Object.values(D.addresses).filter(a => a.geocoded).length;
         save(); renderAddresses(); renderStaff(); updateStats();
         // ★ Update starter banner camper count
         if (window.refreshStarterBanner) window.refreshStarterBanner(camperCount);
         const total = camperCount + staffCount;
+        const preservedNote = preserved > 0 ? ', ' + preserved + ' geocodes kept' : '';
         if (_goCapped > 0) {
-            toast(camperCount + ' imported, ' + _goCapped + ' skipped (plan limit)' + (staffCount > 0 ? ', ' + staffCount + ' staff' : ''));
+            toast(camperCount + ' imported, ' + _goCapped + ' skipped (plan limit)' + (staffCount > 0 ? ', ' + staffCount + ' staff' : '') + preservedNote);
         } else if (staffCount > 0) {
-            toast(camperCount + ' campers + ' + staffCount + ' staff imported (' + total + ' total)');
-            console.log('[Go] CSV import: ' + camperCount + ' campers, ' + staffCount + ' staff');
+            toast(camperCount + ' campers + ' + staffCount + ' staff imported' + preservedNote);
+            console.log('[Go] CSV import: ' + camperCount + ' campers, ' + staffCount + ' staff, ' + preserved + ' geocodes preserved');
         } else {
-            toast(camperCount + ' addresses imported');
+            toast(camperCount + ' addresses imported' + preservedNote);
         }
     }
     function parseLine(line) { const r = []; let cur = '', inQ = false; for (let i = 0; i < line.length; i++) { const ch = line[i]; if (inQ) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; } else cur += ch; } else { if (ch === '"') inQ = true; else if (ch === ',' || ch === '\t') { r.push(cur); cur = ''; } else cur += ch; } } r.push(cur); return r; }
