@@ -70,12 +70,11 @@
         activeMode: 'dismissal',
         buses: [], shifts: [], monitors: [], counselors: [],
         savedRoutes: null, dismissal: null, arrival: null,
-        addresses: {}, dailyOverrides: {}, carpoolGroups: {}
+        addresses: {}
     };
     let _editBusId = null, _editMonitorId = null, _editCounselorId = null, _editCamper = null;
     let _generatedRoutes = null;
-    let _previewGiantTour = false; // when true, skip split and render the full NN tour as one route
-    let _toastTimer = null;
+let _toastTimer = null;
     const BUS_COLORS = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#06b6d4','#f97316','#8b5cf6','#14b8a6','#6366f1','#84cc16','#e11d48','#0ea5e9','#d946ef'];
     const STORE = 'campistry_go_data';
     const REGION_COLORS = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#06b6d4','#f97316','#8b5cf6','#14b8a6','#6366f1','#e11d48'];
@@ -875,15 +874,6 @@
                     changed = true;
                 }
 
-                // Daily overrides & carpool groups
-                if (s.dailyOverrides && !Object.keys(D.dailyOverrides || {}).length) {
-                    D.dailyOverrides = s.dailyOverrides;
-                    changed = true;
-                }
-                if (s.carpoolGroups && !Object.keys(D.carpoolGroups || {}).length) {
-                    D.carpoolGroups = s.carpoolGroups;
-                    changed = true;
-                }
             }
 
             // ── Restore addresses ─────────────────────────────────────────────
@@ -930,7 +920,7 @@
                 updateStats();
                 populateSetup();
                 if (D.savedRoutes && D.savedRoutes.length) {
-                    setTimeout(() => { renderRouteResults(applyOverrides(D.savedRoutes)); toast('Routes restored from cloud'); }, 200);
+                    setTimeout(() => { renderRouteResults(D.savedRoutes); toast('Routes restored from cloud'); }, 200);
                 }
             }
         } catch (e) {
@@ -939,8 +929,8 @@
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,googleMapsKey:'',googleProjectId:'',geoapifyKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
-        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,googleMapsKey:'',googleProjectId:'',geoapifyKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null };
+        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
         return result;
@@ -1018,8 +1008,6 @@
                         monitors:   D.activeMode === 'arrival' ? _currentModeSnap.monitors   : (D.arrival.monitors   || []),
                         counselors: D.activeMode === 'arrival' ? _currentModeSnap.counselors : (D.arrival.counselors || [])
                     } : null,
-                    dailyOverrides: D.dailyOverrides || {},
-                    carpoolGroups:  D.carpoolGroups  || {}
                 };
                 window.GoCloudSync.save('state', stateSnap);
 
@@ -1063,7 +1051,7 @@
         document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
         const sub = document.getElementById('modeLabel');
         if (sub) sub.textContent = mode === 'arrival' ? 'Morning Pickup Routes' : 'Afternoon Drop-off Routes';
-        if (D.savedRoutes) { renderRouteResults(applyOverrides(D.savedRoutes)); }
+        if (D.savedRoutes) { renderRouteResults(D.savedRoutes); }
         else { document.getElementById('routeResults').style.display = 'none'; document.getElementById('shiftResultsContainer').innerHTML = ''; }
         toast('Switched to ' + (mode === 'arrival' ? 'Arrival' : 'Dismissal') + ' mode');
     }
@@ -1073,7 +1061,7 @@
     // =========================================================================
     function getCapacityWarnings() {
         if (!_generatedRoutes) return [];
-        const applied = applyOverrides(_generatedRoutes);
+        const applied = _generatedRoutes;
         const warnings = [];
         applied.forEach(sr => { sr.routes.forEach(r => { const bus = D.buses.find(b => b.id === r.busId); if (!bus) return; const brs = getBusReserve(bus); const mon = D.monitors.find(m => m.assignedBus === bus.id); const couns = D.counselors.filter(c => c.assignedBus === bus.id); const maxCampers = Math.max(0, (bus.capacity || 0) - (mon ? 1 : 0) - couns.length - brs); if (r.camperCount > maxCampers) warnings.push({ busName: r.busName, busColor: r.busColor, shift: sr.shift.label || 'Shift', actual: r.camperCount, max: maxCampers, over: r.camperCount - maxCampers }); }); });
         return warnings;
@@ -2886,7 +2874,6 @@
         document.getElementById('routeMode').value = D.setup.dropoffMode || 'door-to-door';
         document.getElementById('routeReserveSeats').value = D.setup.reserveSeats ?? 2;
         const btn = document.getElementById('generateRoutesBtn'); btn.disabled = !canGen; btn.style.opacity = canGen ? '1' : '0.5';
-        const prevBtn = document.getElementById('previewTourBtn'); if (prevBtn) { prevBtn.disabled = !canGen; prevBtn.style.opacity = canGen ? '1' : '0.5'; }
     }
 
     // =========================================================================
@@ -4735,20 +4722,7 @@
     // ROUTING ENGINE v11.0 — Stops-first + Greedy zones + GH/VROOM
     // =========================================================================
 
-    // ── Preview Giant Tour ──
-    // Runs the full stop-creation + nearest-neighbor ordering pipeline but
-    // skips the split step. Renders all stops as one single route so you can
-    // visually verify the geographic ordering is sane before committing to cuts.
-    async function previewGiantTour() {
-        _previewGiantTour = true;
-        try {
-            await generateRoutes();
-        } finally {
-            _previewGiantTour = false;
-        }
-    }
-
-    async function generateRoutes() {
+async function generateRoutes() {
         // Clear caches on each generation
         _intersectionCache = null;
 
@@ -4990,28 +4964,6 @@
             //     1 vehicle + ~15 stops per call — always under free-tier limits.
             //
             // ══════════════════════════════════════════════════════════════
-            // ── Preview mode: skip split, render full tour as one giant route ──
-            if (_previewGiantTour) {
-                const totalKidsInTour = allStops.reduce(function(s, st) { return s + st.campers.length; }, 0);
-                const giantRoute = {
-                    busId:       'giant-tour-preview',
-                    busName:     'Giant Tour — ' + allStops.length + ' stops · ' + totalKidsInTour + ' kids (unsplit)',
-                    busColor:    '#3b82f6',
-                    monitor:     null,
-                    counselors:  [],
-                    stops:       allStops.map(function(s, idx) {
-                        return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
-                    }),
-                    camperCount: totalKidsInTour,
-                    _cap:        9999,
-                    totalDuration: 0,
-                    _source:     'giant-tour-preview'
-                };
-                allShiftResults.push({ shift, routes: [giantRoute], camperCount: totalKidsInTour });
-                console.log('[Go] Preview mode — skipping split, rendering ' + allStops.length + ' stops as one route');
-                toast('👁 Giant tour preview — ' + allStops.length + ' stops in NN order (not split into buses)');
-                continue; // skip the rest of this shift's processing
-            }
 
             // ── Step 3: K-medoids zone clustering + per-bus Geoapify TSP ──
             //
@@ -5458,7 +5410,7 @@
         const totalCampers = allShiftResults.reduce((s, sr) => s + sr.camperCount, 0);
         const totalBuses = allShiftResults.reduce((s, sr) => s + sr.routes.length, 0);
         showProgressDone('Routes Complete', totalBuses + ' buses, ' + totalCampers + ' campers — finished in ' + elapsedStr);
-        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); renderStaff(); }, 3000);
+        setTimeout(() => { hideProgress(); renderRouteResults(allShiftResults); renderStaff(); }, 3000);
     }
 
 
@@ -5572,7 +5524,7 @@
                     try { await reOptimizeBus(busId, shiftIdx); }
                     catch (e) { console.error('[Go] reOptimizeBus failed for ' + busId, e); }
                 }
-                renderRouteResults(applyOverrides(D.savedRoutes));
+                renderRouteResults(D.savedRoutes);
                 if (typeof renderStaff === 'function') renderStaff();
                 toast(added + ' dedicated counselor stop' + (added > 1 ? 's' : '') + ' added');
             } else {
@@ -5694,7 +5646,7 @@
 
         route.stops.forEach(s => { delete s._matrixIdx; }); delete route._osrmMatrix;
         _generatedRoutes = D.savedRoutes; save();
-        renderRouteResults(applyOverrides(D.savedRoutes));
+        renderRouteResults(D.savedRoutes);
         console.log('[Go] Re-optimized ' + route.busName + ': ~' + Math.round(bestCost / 60) + ' min (' + (matrix ? 'road-matrix' : 'haversine') + ')');
         toast(route.busName + ' re-optimized!');
     }
@@ -6875,61 +6827,14 @@
         toast('Showing ' + _addressPinLayers.length + ' camper addresses');
     }
 
-    // =========================================================================
-    // DAILY OVERRIDES
-    // =========================================================================
-    function getTodayKey() { const d = new Date(); d.setHours(12, 0, 0, 0); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
-    function getOverrides() { const key = getTodayKey(); if (!D.dailyOverrides[key]) D.dailyOverrides[key] = {}; return D.dailyOverrides[key]; }
-    function addOverride(camperName, type, details) { const ov = getOverrides(); ov[camperName] = { type, ...details, timestamp: Date.now() }; save(); if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes)); renderDailyOverrides(); toast('Override added for ' + camperName); }
-    function removeOverride(camperName) { const ov = getOverrides(); delete ov[camperName]; save(); if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes)); renderDailyOverrides(); toast('Override removed'); }
-
-    function applyOverrides(routes) {
-        if (!routes) return routes;
-        const ov = getOverrides(); if (!Object.keys(ov).length) return routes;
-        const clone = JSON.parse(JSON.stringify(routes));
-        Object.entries(ov).forEach(([camperName, override]) => {
-            if (override.type === 'not-riding') {
-                clone.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { st.campers = st.campers.filter(c => c.name !== camperName); }); r.stops = r.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor); r.stops.forEach((st, i) => { st.stopNum = i + 1; }); r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0); }); });
-            }
-            if (override.type === 'ride-with') {
-                const targetName = override.targetCamper;
-                let targetBusId = null, targetShiftIdx = null, targetStopIdx = null;
-                clone.forEach((sr, si) => { sr.routes.forEach(r => { r.stops.forEach((st, sti) => { if (st.campers.some(c => c.name === targetName)) { targetBusId = r.busId; targetShiftIdx = si; targetStopIdx = sti; } }); }); });
-                if (targetBusId !== null) {
-                    clone.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { st.campers = st.campers.filter(c => c.name !== camperName); }); r.stops = r.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor); }); });
-                    const targetRoute = clone[targetShiftIdx]?.routes.find(r => r.busId === targetBusId);
-                    if (targetRoute?.stops[targetStopIdx]) { const roster = getRoster(); const camper = roster[camperName] || {}; targetRoute.stops[targetStopIdx].campers.push({ name: camperName, division: camper.division || '', bunk: camper.bunk || '' }); }
-                    clone.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach((st, i) => { st.stopNum = i + 1; }); r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0); }); });
-                }
-            }
-            if (override.type === 'add-rider') {
-                const addr = D.addresses[camperName]; if (!addr?.geocoded) return;
-                const roster = getRoster(); const camper = roster[camperName] || {};
-                clone.forEach(sr => { const divSet = new Set(sr.shift.divisions || []); if (!divSet.has(camper.division)) return; let bestRoute = null, bestStopIdx = -1, bestDist = Infinity; sr.routes.forEach(r => { r.stops.forEach((st, sti) => { if (!st.lat || !st.lng) return; const d = haversineMi(addr.lat, addr.lng, st.lat, st.lng); if (d < bestDist) { bestDist = d; bestRoute = r; bestStopIdx = sti; } }); }); if (bestRoute && bestStopIdx >= 0) { if (bestDist <= 0.3) bestRoute.stops[bestStopIdx].campers.push({ name: camperName, division: camper.division || '', bunk: camper.bunk || '' }); else { const cLa = D.setup.campLat || _campCoordsCache?.lat || 0; const cLn = D.setup.campLng || _campCoordsCache?.lng || 0; directionalInsert(bestRoute.stops, { stopNum: 0, campers: [{ name: camperName, division: camper.division || '', bunk: camper.bunk || '' }], address: [addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', '), lat: addr.lat, lng: addr.lng }, cLa, cLn); } bestRoute.camperCount = bestRoute.stops.reduce((s, st) => s + st.campers.length, 0); } });
-            }
-        });
-        return clone;
-    }
-
-    function renderDailyOverrides() {
-        const container = document.getElementById('dailyOverridesBody'); if (!container) return;
-        const ov = getOverrides(); const entries = Object.entries(ov);
-        if (!entries.length) { container.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--text-muted);">No overrides for today.</div>'; return; }
-        container.innerHTML = entries.map(([name, ov]) => { let desc = '', badgeCls = 'badge-neutral'; if (ov.type === 'not-riding') { desc = 'Not riding'; badgeCls = 'badge-danger'; } else if (ov.type === 'ride-with') { desc = 'With ' + esc(ov.targetCamper); badgeCls = 'badge-warning'; } else if (ov.type === 'add-rider') { desc = 'Added to bus'; badgeCls = 'badge-success'; } return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><div><strong>' + esc(name) + '</strong> — <span class="badge ' + badgeCls + '">' + desc + '</span></div><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.removeOverride(\'' + esc(name.replace(/'/g, "\\'")) + '\')">Remove</button></div>'; }).join('');
-    }
-
-    function openOverrideModal() { const roster = getRoster(); const names = Object.keys(roster).sort(); const sel = document.getElementById('overrideCamper'); sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join(''); document.getElementById('overrideSearch').value = ''; document.getElementById('overrideType').value = 'not-riding'; document.getElementById('overrideRideWithGroup').style.display = 'none'; openModal('overrideModal'); }
-    function filterOverrideSelect(inputId, selectId) { const q = (document.getElementById(inputId)?.value || '').toLowerCase().trim(); const sel = document.getElementById(selectId); const roster = getRoster(); const names = Object.keys(roster).sort(); const filtered = q ? names.filter(n => n.toLowerCase().includes(q)) : names; sel.innerHTML = '<option value="">— Select —</option>' + filtered.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join(''); if (filtered.length === 1) sel.value = filtered[0]; }
-    function onOverrideTypeChange() { const type = document.getElementById('overrideType')?.value; document.getElementById('overrideRideWithGroup').style.display = type === 'ride-with' ? '' : 'none'; if (type === 'ride-with') { document.getElementById('overrideTargetSearch').value = ''; filterOverrideSelect('overrideTargetSearch', 'overrideTarget'); } }
-    function saveOverride() { const camper = document.getElementById('overrideCamper')?.value; const type = document.getElementById('overrideType')?.value; if (!camper) { toast('Select a camper', 'error'); return; } if (type === 'ride-with') { const target = document.getElementById('overrideTarget')?.value; if (!target) { toast('Select target', 'error'); return; } addOverride(camper, 'ride-with', { targetCamper: target }); } else if (type === 'add-rider') { if (!D.addresses[camper]?.geocoded) { toast('Need geocoded address', 'error'); return; } addOverride(camper, 'add-rider', {}); } else addOverride(camper, 'not-riding', {}); closeModal('overrideModal'); }
 
     // =========================================================================
     // CAMPER SEARCH + MOVE
     // =========================================================================
     function searchCamperInRoutes(query) {
         if (!_generatedRoutes || !query) return;
-        const q = query.toLowerCase().trim(); if (!q) { if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes)); return; }
-        const results = []; const applied = applyOverrides(_generatedRoutes);
+        const q = query.toLowerCase().trim(); if (!q) { if (_generatedRoutes) renderRouteResults(_generatedRoutes); return; }
+        const results = []; const applied = _generatedRoutes;
         applied.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { st.campers.forEach(c => { if (c.name.toLowerCase().includes(q)) results.push({ name: c.name, shift: sr.shift.label || '', busName: r.busName, busColor: r.busColor, busId: r.busId, stopNum: st.stopNum, address: st.address, time: st.estimatedTime || '—', lat: st.lat, lng: st.lng, shiftIdx: _generatedRoutes.indexOf(sr) }); }); }); }); });
         const container = document.getElementById('camperSearchResults'); if (!container) return;
         if (!results.length) { container.innerHTML = '<div style="padding:.75rem;color:var(--text-muted);">No match for "' + esc(query) + '"</div>'; container.style.display = ''; return; }
@@ -6976,7 +6881,7 @@
         if (camperStop.lat && camperStop.lng) { for (const st of toRoute.stops) { if (st.lat && st.lng && haversineMi(camperStop.lat, camperStop.lng, st.lat, st.lng) < 0.3) { st.campers.push(camperData); added = true; break; } } }
         if (!added) { const cLat = D.setup.campLat || _campCoordsCache?.lat || 0; const cLng = D.setup.campLng || _campCoordsCache?.lng || 0; directionalInsert(toRoute.stops, { stopNum: 0, campers: [camperData], address: camperStop.address, lat: camperStop.lat, lng: camperStop.lng, estimatedTime: camperStop.estimatedTime }, cLat, cLng); }
         toRoute.stops.forEach((st, i) => { st.stopNum = i + 1; }); toRoute.camperCount = toRoute.stops.reduce((s, st) => s + st.campers.length, 0);
-        _generatedRoutes = D.savedRoutes; save(); renderRouteResults(applyOverrides(D.savedRoutes)); toast(camperName + ' moved to ' + toRoute.busName);
+        _generatedRoutes = D.savedRoutes; save(); renderRouteResults(D.savedRoutes); toast(camperName + ' moved to ' + toRoute.busName);
     }
     function openMoveModal(camperName, fromBusId, shiftIdx) { const sr = _generatedRoutes?.[shiftIdx]; if (!sr) return; const otherBuses = sr.routes.filter(r => r.busId !== fromBusId && r.stops.length > 0); document.getElementById('moveCamperName').textContent = camperName; const sel = document.getElementById('moveToBus'); sel.innerHTML = otherBuses.map(r => '<option value="' + r.busId + '">' + esc(r.busName) + ' (' + r.camperCount + ')</option>').join(''); document.getElementById('moveConfirmBtn').onclick = function() { moveCamperToBus(camperName, fromBusId, sel.value, shiftIdx); closeModal('moveModal'); }; openModal('moveModal'); }
 
@@ -7008,40 +6913,6 @@
         h += '</body></html>'; const w = window.open('', '_blank'); w.document.write(h); w.document.close(); setTimeout(() => w.print(), 500);
     }
 
-    // =========================================================================
-    // CARPOOL & RIDE-WITH
-    // =========================================================================
-    function renderCarpool() {
-        const card = document.getElementById('carpoolCard'), body = document.getElementById('carpoolBody'), countEl = document.getElementById('carpoolCount');
-        if (!card || !body) return;
-        const roster = getRoster(); if (!D.carpoolGroups) D.carpoolGroups = {};
-        const pickups = [], rideWithPairs = [], allKidsInGroups = new Set();
-        Object.values(D.carpoolGroups).forEach(g => (g.kids || []).forEach(k => allKidsInGroups.add(k)));
-        Object.keys(roster).forEach(name => { const a = D.addresses[name]; if (!a) return; if (a.transport === 'pickup') pickups.push({ name, division: roster[name].division || '', address: [a.street, a.city].filter(Boolean).join(', ') }); if (a.rideWith) rideWithPairs.push({ name, partner: a.rideWith, division: roster[name].division || '' }); });
-        const ungrouped = pickups.filter(p => !allKidsInGroups.has(p.name));
-        const groups = Object.entries(D.carpoolGroups).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
-        card.style.display = '';
-        if (countEl) countEl.textContent = pickups.length + ' pickup, ' + groups.length + ' group' + (groups.length !== 1 ? 's' : '');
-        let html = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;"><div style="font-size:.875rem;font-weight:700;">🚗 Carpool Groups</div><button class="btn btn-primary btn-sm" onclick="CampistryGo.openCarpoolGroupModal()">+ New Group</button></div>';
-        if (groups.length) { html += groups.map(([num, g]) => { const kidRows = (g.kids || []).map(kid => { const c = roster[kid]; return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid var(--border-light);"><span style="font-size:.8125rem;"><strong>' + esc(kid) + '</strong>' + (c?.division ? ' <span style="color:var(--text-muted);font-size:.75rem;">' + esc(c.division) + '</span>' : '') + '</span><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;padding:2px 6px;" onclick="CampistryGo.removeFromCarpoolGroup(\'' + esc(num) + '\',\'' + esc(kid.replace(/'/g, "\\'")) + '\')">×</button></div>'; }).join(''); return '<div style="border:1px solid var(--border-light);border-radius:8px;margin-bottom:.75rem;overflow:hidden;"><div style="display:flex;align-items:center;justify-content:space-between;padding:.625rem .75rem;background:var(--surface-secondary,#f9fafb);"><div><span style="font-weight:700;font-size:.875rem;">Carpool ' + esc(num) + '</span>' + (g.driver ? ' <span style="font-size:.75rem;color:var(--text-muted);">— ' + esc(g.driver) + (g.phone ? ' · ' + esc(g.phone) : '') + '</span>' : '') + '</div><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.openAddToCarpoolModal(\'' + esc(num) + '\')">+ Add</button><button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.editCarpoolGroup(\'' + esc(num) + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;" onclick="CampistryGo.deleteCarpoolGroup(\'' + esc(num) + '\')">Delete</button></div></div><div style="padding:.5rem .75rem;">' + (kidRows || '<div style="font-size:.8125rem;color:var(--text-muted);">No kids yet</div>') + '</div></div>'; }).join(''); }
-        else html += '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8125rem;border:1px dashed var(--border-light);border-radius:8px;">No carpool groups yet</div>';
-        if (ungrouped.length) { html += '<div style="margin-top:.75rem;border-top:1px solid var(--border-light);padding-top:.75rem;"><div style="font-size:.8125rem;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem;">Ungrouped Pickup Kids (' + ungrouped.length + ')</div>'; html += ungrouped.map(p => { const opts = groups.map(([n]) => '<option value="' + esc(n) + '">Carpool ' + esc(n) + '</option>').join(''); return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><strong>' + esc(p.name) + '</strong><div style="display:flex;gap:4px;">' + (groups.length ? '<select class="form-input" style="font-size:.7rem;padding:2px 4px;width:auto;" onchange="if(this.value)CampistryGo.addToCarpoolGroup(this.value,\'' + esc(p.name.replace(/'/g, "\\'")) + '\');this.value=\'\'"><option value="">Add to...</option>' + opts + '</select>' : '') + '<button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.setTransport(\'' + esc(p.name.replace(/'/g, "\\'")) + '\',\'bus\')">→ Bus</button></div></div>'; }).join(''); html += '</div>'; }
-        if (rideWithPairs.length) { html += '<div style="margin-top:.75rem;border-top:1px solid var(--border-light);padding-top:.75rem;"><div style="font-size:.8125rem;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem;">🤝 Ride-With Pairs (' + rideWithPairs.length + ')</div>'; rideWithPairs.forEach(p => { html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><span><strong>' + esc(p.name) + '</strong> rides with <strong>' + esc(p.partner) + '</strong></span><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;" onclick="CampistryGo.removeRideWith(\'' + esc(p.name.replace(/'/g, "\\'")) + '\')">Remove</button></div>'; }); html += '</div>'; }
-        body.innerHTML = html;
-    }
-
-    function setTransport(name, mode) { if (!D.addresses[name]) return; D.addresses[name].transport = mode; save(); renderCarpool(); renderAddresses(); updateStats(); toast(name + ' → ' + (mode === 'pickup' ? 'carpool' : 'bus')); }
-    function setRideWith(name, partner) { if (!D.addresses[name]) return; D.addresses[name].rideWith = partner; save(); renderCarpool(); toast(name + ' paired with ' + partner); }
-    function removeRideWith(name) { if (!D.addresses[name]) return; D.addresses[name].rideWith = ''; save(); renderCarpool(); toast('Pairing removed'); }
-    function openCarpoolGroupModal(editNum) { const existing = editNum ? D.carpoolGroups[editNum] : null; document.getElementById('carpoolGroupNum').value = editNum || ''; document.getElementById('carpoolGroupDriver').value = existing?.driver || ''; document.getElementById('carpoolGroupPhone').value = existing?.phone || ''; document.getElementById('carpoolGroupNum').disabled = !!editNum; document.getElementById('carpoolGroupModalTitle').textContent = editNum ? 'Edit Carpool ' + editNum : 'New Carpool Group'; openModal('carpoolGroupModal'); }
-    function saveCarpoolGroup() { const num = document.getElementById('carpoolGroupNum')?.value.trim(); if (!num) { toast('Enter a number', 'error'); return; } if (!D.carpoolGroups) D.carpoolGroups = {}; if (!D.carpoolGroups[num]) D.carpoolGroups[num] = { label: 'Carpool ' + num, driver: '', phone: '', kids: [] }; D.carpoolGroups[num].driver = document.getElementById('carpoolGroupDriver')?.value.trim() || ''; D.carpoolGroups[num].phone = document.getElementById('carpoolGroupPhone')?.value.trim() || ''; save(); closeModal('carpoolGroupModal'); renderCarpool(); toast('Carpool ' + num + ' saved'); }
-    function editCarpoolGroup(num) { openCarpoolGroupModal(num); }
-    function deleteCarpoolGroup(num) { if (!D.carpoolGroups?.[num]) return; if (!confirm('Delete Carpool ' + num + '?')) return; delete D.carpoolGroups[num]; save(); renderCarpool(); toast('Deleted'); }
-    function addToCarpoolGroup(num, kidName) { if (!D.carpoolGroups?.[num]) return; if (!D.carpoolGroups[num].kids) D.carpoolGroups[num].kids = []; if (!D.carpoolGroups[num].kids.includes(kidName)) D.carpoolGroups[num].kids.push(kidName); if (D.addresses[kidName]) D.addresses[kidName].transport = 'pickup'; save(); renderCarpool(); toast(kidName + ' → Carpool ' + num); }
-    function removeFromCarpoolGroup(num, kidName) { if (!D.carpoolGroups?.[num]) return; D.carpoolGroups[num].kids = (D.carpoolGroups[num].kids || []).filter(k => k !== kidName); save(); renderCarpool(); toast(kidName + ' removed'); }
-    function openAddToCarpoolModal(num) { const roster = getRoster(); const existing = new Set(D.carpoolGroups[num]?.kids || []); const available = Object.keys(roster).sort().filter(n => D.addresses[n] && !existing.has(n)); const sel = document.getElementById('addToCarpoolSelect'); if (sel) sel.innerHTML = '<option value="">— Select —</option>' + available.map(n => '<option value="' + esc(n) + '">' + esc(n) + (D.addresses[n]?.transport === 'pickup' ? ' 🚗' : ' 🚌') + '</option>').join(''); document.getElementById('addToCarpoolSearch').value = ''; document.getElementById('addToCarpoolNum').value = num; document.getElementById('addToCarpoolTitle').textContent = 'Add to Carpool ' + num; openModal('addToCarpoolModal'); }
-    function filterAddToCarpool() { const q = (document.getElementById('addToCarpoolSearch')?.value || '').toLowerCase().trim(); const num = document.getElementById('addToCarpoolNum')?.value; const roster = getRoster(); const existing = new Set(D.carpoolGroups[num]?.kids || []); const names = Object.keys(roster).sort().filter(n => D.addresses[n] && !existing.has(n) && (!q || n.toLowerCase().includes(q))); const sel = document.getElementById('addToCarpoolSelect'); if (sel) sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + (D.addresses[n]?.transport === 'pickup' ? ' 🚗' : ' 🚌') + '</option>').join(''); if (names.length === 1 && sel) sel.value = names[0]; }
-    function confirmAddToCarpool() { const num = document.getElementById('addToCarpoolNum')?.value; const kid = document.getElementById('addToCarpoolSelect')?.value; if (!num || !kid) { toast('Select a camper', 'error'); return; } addToCarpoolGroup(num, kid); closeModal('addToCarpoolModal'); }
 
     // =========================================================================
     // TABS + INIT
@@ -7076,7 +6947,7 @@
             D.savedRoutes.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { if (st.address && st.address.startsWith('Shared stop')) { let bestAddr = null, bestDist = Infinity; (st.campers || []).forEach(c => { const a = D.addresses[c.name]; if (a?.geocoded && a.lat && a.lng && st.lat && st.lng) { const d = haversineMi(st.lat, st.lng, a.lat, a.lng); if (d < bestDist) { bestDist = d; bestAddr = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '); } } }); if (bestAddr) { st.address = bestAddr; needsSave = true; } } }); }); });
             if (needsSave) save();
             _generatedRoutes = D.savedRoutes;
-            setTimeout(() => { renderRouteResults(applyOverrides(D.savedRoutes)); toast('Saved routes loaded'); }, 200);
+            setTimeout(() => { renderRouteResults(D.savedRoutes); toast('Saved routes loaded'); }, 200);
         }
         document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); }));
         document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open')); });
@@ -7316,17 +7187,12 @@
         editAddress, saveAddress, deleteAddress, _quickDeleteAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck, testGeoapify,
-        generateRoutes, previewGiantTour, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
+        generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
         renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         setAddressPinMode, toggleHideRoutes, toggleZones,
         toggleAddressPins, showAddressesOnMap, locateCamper,
-        openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride, filterOverrideSelect,
         searchCamperInRoutes, zoomToStop, openMoveModal, renderFilteredMasterList, sortMasterBy,
         switchMode,
-        setTransport, setRideWith, removeRideWith, renderCarpool,
-        openCarpoolGroupModal, saveCarpoolGroup, editCarpoolGroup, deleteCarpoolGroup,
-        addToCarpoolGroup, removeFromCarpoolGroup,
-        openAddToCarpoolModal, filterAddToCarpool, confirmAddToCarpool,
         closeModal, openModal,
         _getMap: function() { return _map; },
         _getSavedRoutes: function() { return D.savedRoutes; },
@@ -7336,7 +7202,7 @@
             if (D.savedRoutes) {
                 _generatedRoutes = D.savedRoutes;
                 var c = _map ? _map.getCenter() : null, z = _map ? _map.getZoom() : null;
-                renderRouteResults(applyOverrides(D.savedRoutes));
+                renderRouteResults(D.savedRoutes);
                 if (_map && c && z != null) setTimeout(function() { _map.setView(c, z, { animate: false }); }, 200);
             }
         },
