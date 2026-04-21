@@ -2226,9 +2226,15 @@ divBlocks.forEach((block, blockIdx) => {
     tr.appendChild(tdTime);
     
     if (isLeagueBlockType(block.event, block.type)) {
-        tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable)); 
-        tbody.appendChild(tr); 
-        return; 
+        tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable));
+        tbody.appendChild(tr);
+        return;
+    }
+
+    if (block.type === 'elective' || block.type === 'pinned') {
+        tr.appendChild(renderFixedBlockCell(block, bunks));
+        tbody.appendChild(tr);
+        return;
     }
     
     bunks.forEach(bunk => {
@@ -2355,6 +2361,23 @@ divBlocks.forEach((block, blockIdx) => {
         return td;
     }
 
+    function renderFixedBlockCell(block, bunks) {
+        const td = document.createElement('td');
+        td.colSpan = bunks.length;
+        if (block.type === 'elective') {
+            const acts = block.electiveActivities || block.reservedFields || [];
+            const label = acts.join(', ') || block.event || 'Elective';
+            td.style.cssText = 'padding: 10px 16px; background: linear-gradient(135deg, #ede9fe, #ddd6fe); border-left: 4px solid #7c3aed; vertical-align: middle; text-align: center;';
+            td.innerHTML = `<span style="font-weight:600;color:#5b21b6;font-size:0.95rem;">🎯 ${escapeHtml(label)}</span>`;
+        } else {
+            const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
+            const label = loc ? `${block.event} - ${loc}` : block.event;
+            td.style.cssText = 'padding: 10px 16px; background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 4px solid #f59e0b; vertical-align: middle; text-align: center;';
+            td.innerHTML = `<span style="font-weight:600;color:#92400e;font-size:0.95rem;">${escapeHtml(label)}</span>`;
+        }
+        return td;
+    }
+
     function renderBunkCell(block, bunk, divName, isEditable) {
         const td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
@@ -2379,7 +2402,7 @@ divBlocks.forEach((block, blockIdx) => {
             bgColor = '#ede9fe';
         } else if (block.type === 'pinned' && block.event) {
             const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
-            const combined = loc ? `${block.event} @ ${loc}` : block.event;
+            const combined = loc ? `${block.event} - ${loc}` : block.event;
             htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#92400e;">${escapeHtml(combined)}</div>`;
             bgColor = '#fff8e1';
         } else if (entry && !entry.continuation) {
