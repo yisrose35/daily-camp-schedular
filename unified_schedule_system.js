@@ -2363,15 +2363,23 @@ divBlocks.forEach((block, blockIdx) => {
             if (blockCheck.blocked) { isBlocked = true; blockedReason = blockCheck.reason; } 
         }
         
-        let displayText = '', bgColor = '#fff';
-        if (entry && !entry.continuation) { 
-            displayText = formatEntry(entry); 
-            bgColor = getEntryBackground(entry, block.event); 
-            if (entry._pinned) displayText = '📌 ' + displayText; 
+        let displayText = '', bgColor = '#fff', htmlContent = null;
+        if (entry && !entry.continuation) {
+            displayText = formatEntry(entry);
+            bgColor = getEntryBackground(entry, block.event);
+            if (entry._pinned) displayText = '📌 ' + displayText;
         }
-        else if (!entry) { 
-            if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; } 
-            else bgColor = '#f9fafb'; 
+        else if (!entry) {
+            if (block.type === 'elective') {
+                const acts = block.electiveActivities || block.reservedFields || [];
+                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">Elective</div>${acts.length > 0 ? `<div style="font-size:0.75rem;color:#6d28d9;margin-top:2px;">🎯 ${escapeHtml(acts.join(', '))}</div>` : ''}`;
+                bgColor = '#ede9fe';
+            } else if (block.type === 'pinned' && block.event) {
+                const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
+                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#92400e;">${escapeHtml(block.event)}</div>${loc ? `<div style="font-size:0.75rem;color:#78350f;margin-top:2px;">📍 ${escapeHtml(loc)}</div>` : ''}`;
+                bgColor = '#fff8e1';
+            } else if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; }
+            else bgColor = '#f9fafb';
         }
         
        // ★★★ AUTO BUILDER v2: _subEntries = multiple activities in one slot ★★★
@@ -2392,11 +2400,15 @@ divBlocks.forEach((block, blockIdx) => {
                 subDiv.title = subText + ' (' + subDur + 'min)';
                 td.appendChild(subDiv);
             });
+        } else if (htmlContent) {
+            td.innerHTML = htmlContent;
+            td.style.background = bgColor;
+            td.style.textAlign = 'left';
         } else {
             td.textContent = displayText;
             td.style.background = bgColor;
         }
-        
+
         // Cell-specific bypass highlighting
 const bypassStatus = getCellBypassStatus(bunk, slotIdx);
 if (bypassStatus.highlight) {

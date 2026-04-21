@@ -168,12 +168,17 @@ function showModal(config) {
       }
       else if (field.type === 'checkbox-group') {
         const _cbDefaults = Array.isArray(field.default) ? field.default : [];
-        const checkboxes = (field.options || []).map(o => `
-          <label class="ms-checkbox-item">
-            <input type="checkbox" value="${o}" data-group="${field.name}"${_cbDefaults.includes(o) ? ' checked' : ''}>
-            <span>${o}</span>
-          </label>
-        `).join('');
+        const checkboxes = (field.options || []).map(o => {
+          const val = typeof o === 'object' ? o.value : o;
+          const lbl = typeof o === 'object' ? o.label : o;
+          const dis = typeof o === 'object' && o.disabled;
+          const reason = dis && o.disabledReason ? ` title="${o.disabledReason}"` : '';
+          const chk = !dis && _cbDefaults.includes(val) ? ' checked' : '';
+          return `<label class="ms-checkbox-item${dis ? ' ms-cb-disabled' : ''}"${reason} style="${dis ? 'opacity:0.45;pointer-events:none;' : ''}">
+            <input type="checkbox" value="${val}" data-group="${field.name}"${chk}${dis ? ' disabled' : ''}>
+            <span>${lbl}${dis ? ' <em style="font-size:9px;">(taken)</em>' : ''}</span>
+          </label>`;
+        }).join('');
         fieldEl.innerHTML = `
           <label>${field.label}</label>
           <div class="ms-checkbox-group">${checkboxes}</div>
@@ -218,12 +223,14 @@ function showModal(config) {
       fieldsContainer.appendChild(fieldEl);
     });
     
+    if (config.postRender) config.postRender(overlay);
+
     // Focus first input
     setTimeout(() => {
       const firstInput = overlay.querySelector('.ms-modal-input');
       if (firstInput) firstInput.focus();
     }, 50);
-    
+
     // Event handlers
     const close = (result) => {
       overlay.remove();
@@ -514,6 +521,34 @@ function getAllLocations() {
   return all;
 }
 
+// Returns Set of facility names already reserved by other elective tiles that overlap the given time range
+function getConflictingFacilities(startTime, endTime, excludeId) {
+  const s = parseTimeToMinutes(startTime), e = parseTimeToMinutes(endTime);
+  if (s === null || e === null) return new Set();
+  const taken = new Set();
+  (dailySkeleton || []).forEach(ev => {
+    if (ev.id === excludeId || ev.type !== 'elective') return;
+    const es = parseTimeToMinutes(ev.startTime), ee = parseTimeToMinutes(ev.endTime);
+    if (es === null || ee === null) return;
+    if (s < ee && e > es) (ev.electiveActivities || []).forEach(a => taken.add(a));
+  });
+  return taken;
+}
+
+// Returns { activityName: [facilityName, ...] } from fields[].activities
+function getSportFacilitiesMap() {
+  const gs = window.loadGlobalSettings?.() || {};
+  const map = {};
+  (gs.app1?.fields || []).forEach(f => {
+    (f.activities || []).forEach(act => {
+      const key = typeof act === 'string' ? act : (act.name || String(act));
+      if (!map[key]) map[key] = [];
+      if (f.name && !map[key].includes(f.name)) map[key].push(f.name);
+    });
+  });
+  return map;
+}
+
 // =================================================================
 // ★ v2.5: Build grouped location options (matches DA bunk overrides pattern)
 // =================================================================
@@ -766,18 +801,37 @@ async function editTile(id) {
 
   } else if (ev.type === 'elective') {
     const locations = getAllLocations();
+    const taken = getConflictingFacilities(ev.startTime, ev.endTime, ev.id);
+    const sportMap = getSportFacilitiesMap();
+    const sportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(sportMap).sort().map(s => ({ value: s, label: s }))];
+    const locationOptions = locations.map(l => (taken.has(l) && !(ev.electiveActivities || []).includes(l)) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
     const result = await showModal({
       title: 'Edit Elective',
       fields: [
         { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
-        { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locations, default: ev.electiveActivities || [] }
-      ]
+        ...(sportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: sportOptions }] : []),
+        { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locationOptions, default: ev.electiveActivities || [] }
+      ],
+      postRender: (overlay) => {
+        const sportSel = overlay.querySelector('[data-field="sport"]');
+        if (!sportSel) return;
+        sportSel.addEventListener('change', () => {
+          const s = sportSel.value;
+          const matching = s ? (sportMap[s] || []) : [];
+          overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(cb => {
+            cb.checked = matching.includes(cb.value);
+          });
+        });
+      }
     });
-    if (!result || !result.activities?.length) return;
+    if (!result) return;
+    let chosen = result.activities || [];
+    if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f));
+    if (!chosen.length) return;
     ev.startTime = result.startTime; ev.endTime = result.endTime;
-    ev.event = `Elective: ${result.activities.slice(0, 3).join(', ')}${result.activities.length > 3 ? '...' : ''}`;
-    ev.electiveActivities = result.activities; ev.reservedFields = result.activities;
+    ev.event = `Elective: ${chosen.slice(0, 3).join(', ')}${chosen.length > 3 ? '...' : ''}`;
+    ev.electiveActivities = chosen; ev.reservedFields = chosen;
 
   } else {
     const { groups: locationGroups, hasAny: hasLocations } = getGroupedLocationOptions();
@@ -2741,19 +2795,36 @@ function addDropListeners(selector) {
           await showAlert('No locations configured. Please set up fields/facilities first.');
           return;
         }
-        
+        const taken = getConflictingFacilities(startStr, endStr, null);
+        const sportMap = getSportFacilitiesMap();
+        const sportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(sportMap).sort().map(s => ({ value: s, label: s }))];
+        const locationOptions = locations.map(l => taken.has(l) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
         const result = await showModal({
           title: `Elective for ${divName}`,
           description: 'Select activities to RESERVE for this division only. Other divisions cannot use these during this time.',
           fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
-            { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locations }
-          ]
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
+            ...(sportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: sportOptions }] : []),
+            { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locationOptions }
+          ],
+          postRender: (overlay) => {
+            const sportSel = overlay.querySelector('[data-field="sport"]');
+            if (!sportSel) return;
+            sportSel.addEventListener('change', () => {
+              const s = sportSel.value;
+              const matching = s ? (sportMap[s] || []) : [];
+              overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(cb => {
+                cb.checked = matching.includes(cb.value);
+              });
+            });
+          }
         });
-        if (!result || !result.activities?.length) return;
-        
-        const eventName = `Elective: ${result.activities.slice(0, 3).join(', ')}${result.activities.length > 3 ? '...' : ''}`;
+        if (!result) return;
+        let chosen = result.activities || [];
+        if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f));
+        if (!chosen.length) return;
+        const eventName = `Elective: ${chosen.slice(0, 3).join(', ')}${chosen.length > 3 ? '...' : ''}`;
         newEvent = {
           id: Date.now().toString(),
           type: 'elective',
@@ -2761,8 +2832,8 @@ function addDropListeners(selector) {
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
-          electiveActivities: result.activities,
-          reservedFields: result.activities
+          electiveActivities: chosen,
+          reservedFields: chosen
         };
       }
       // ★ v2.5: CUSTOM PINNED - Now uses grouped locations from locationZones (matches DA bunk overrides)

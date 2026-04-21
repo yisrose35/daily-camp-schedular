@@ -142,9 +142,15 @@ function daShowModal(config) {
       else if (field.type === 'checkbox-group') {
         var _cbDefaults = Array.isArray(field.default) ? field.default : [];
         var checkboxes = (field.options || []).map(function(o) {
-          return '<label class="da-modal-cb-item">' +
-            '<input type="checkbox" value="' + o + '" data-group="' + field.name + '"' + (_cbDefaults.indexOf(o) !== -1 ? ' checked' : '') + '>' +
-            '<span>' + o + '</span></label>';
+          var val = typeof o === 'object' ? o.value : o;
+          var lbl = typeof o === 'object' ? o.label : o;
+          var dis = typeof o === 'object' && o.disabled;
+          var reason = dis && o.disabledReason ? ' title="' + o.disabledReason + '"' : '';
+          var chk = (!dis && _cbDefaults.indexOf(val) !== -1) ? ' checked' : '';
+          return '<label class="da-modal-cb-item' + (dis ? ' da-cb-disabled' : '') + '"' + reason +
+            (dis ? ' style="opacity:0.45;pointer-events:none;"' : '') + '>' +
+            '<input type="checkbox" value="' + val + '" data-group="' + field.name + '"' + chk + (dis ? ' disabled' : '') + '>' +
+            '<span>' + lbl + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
         }).join('');
         fieldEl.innerHTML = '<label>' + field.label + '</label>' +
           '<div class="da-modal-cb-group">' + checkboxes + '</div>';
@@ -156,6 +162,8 @@ function daShowModal(config) {
 
       fieldsContainer.appendChild(fieldEl);
     });
+
+    if (config.postRender) config.postRender(overlay);
 
     setTimeout(function() {
       var firstInput = overlay.querySelector('.da-modal-focusable');
@@ -2500,6 +2508,10 @@ function addDropListeners(gridEl) {
         const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
         const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
         const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
+        const daTaken = daGetConflictingFacilities(startStr, endStr, null);
+        const daSportMap = daGetSportFacilitiesMap();
+        const daSportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(daSportMap).sort().map(s => ({ value: s, label: s }))];
+        const daLocOptions = allLocations.map(l => daTaken.has(l) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
         const result = await daShowModal({
           title: 'Elective for ' + divName,
           description: 'Select activities to RESERVE for this division only. Other divisions cannot use these during this time.',
@@ -2507,11 +2519,24 @@ function addDropListeners(gridEl) {
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
-            { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: allLocations }
-          ]
+            ...(daSportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: daSportOptions }] : []),
+            { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: daLocOptions }
+          ],
+          postRender: function(overlay) {
+            var sportSel = overlay.querySelector('[data-field="sport"]');
+            if (!sportSel) return;
+            sportSel.addEventListener('change', function() {
+              var s = sportSel.value;
+              var matching = s ? (daSportMap[s] || []) : [];
+              overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+                cb.checked = matching.indexOf(cb.value) !== -1;
+              });
+            });
+          }
         });
         if (!result || !result.startTime || !result.endTime) return;
-        const electiveActivities = result.activities || [];
+        let electiveActivities = result.activities || [];
+        if (result.sport && electiveActivities.length === 0) electiveActivities = (daSportMap[result.sport] || []).filter(f => !daTaken.has(f));
         if (electiveActivities.length === 0) { await daShowAlert("Please select at least one activity."); return; }
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
@@ -2881,18 +2906,37 @@ async function editTile(id) {
     const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
     const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
     const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
+    const daTaken2 = daGetConflictingFacilities(ev.startTime, ev.endTime, ev.id);
+    const daSportMap2 = daGetSportFacilitiesMap();
+    const daSportOpts2 = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(daSportMap2).sort().map(s => ({ value: s, label: s }))];
+    const daLocOpts2 = allLocations.map(l => (daTaken2.has(l) && !(ev.electiveActivities || []).includes(l)) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
     const result = await daShowModal({
       title: 'Edit Elective',
       wide: true,
       fields: [
         { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
-        { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: allLocations, default: ev.electiveActivities || [] }
-      ]
+        ...(daSportOpts2.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: daSportOpts2 }] : []),
+        { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: daLocOpts2, default: ev.electiveActivities || [] }
+      ],
+      postRender: function(overlay) {
+        var sportSel = overlay.querySelector('[data-field="sport"]');
+        if (!sportSel) return;
+        sportSel.addEventListener('change', function() {
+          var s = sportSel.value;
+          var matching = s ? (daSportMap2[s] || []) : [];
+          overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+            cb.checked = matching.indexOf(cb.value) !== -1;
+          });
+        });
+      }
     });
-    if (!result || !result.activities?.length) return;
+    if (!result) return;
+    let chosen2 = result.activities || [];
+    if (result.sport && chosen2.length === 0) chosen2 = (daSportMap2[result.sport] || []).filter(f => !daTaken2.has(f));
+    if (!chosen2.length) return;
     ev.startTime = result.startTime; ev.endTime = result.endTime;
-    ev.event = 'Elective'; ev.electiveActivities = result.activities;
+    ev.event = 'Elective'; ev.electiveActivities = chosen2;
 
   } else {
     const _eAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
@@ -3146,6 +3190,32 @@ function saveDailySkeleton() {
   
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
   window.forceSyncToCloud?.();
+}
+
+function daGetConflictingFacilities(startTime, endTime, excludeId) {
+  var s = parseTimeToMinutes(startTime), e = parseTimeToMinutes(endTime);
+  if (s === null || e === null) return new Set();
+  var taken = new Set();
+  (dailyOverrideSkeleton || []).forEach(function(ev) {
+    if (ev.id === excludeId || ev.type !== 'elective') return;
+    var es = parseTimeToMinutes(ev.startTime), ee = parseTimeToMinutes(ev.endTime);
+    if (es === null || ee === null) return;
+    if (s < ee && e > es) (ev.electiveActivities || []).forEach(function(a) { taken.add(a); });
+  });
+  return taken;
+}
+
+function daGetSportFacilitiesMap() {
+  var gs = window.loadGlobalSettings?.() || {};
+  var map = {};
+  (gs.app1?.fields || []).forEach(function(f) {
+    (f.activities || []).forEach(function(act) {
+      var key = typeof act === 'string' ? act : (act.name || String(act));
+      if (!map[key]) map[key] = [];
+      if (f.name && map[key].indexOf(f.name) === -1) map[key].push(f.name);
+    });
+  });
+  return map;
 }
 
 function parseTimeToMinutes(str) {
