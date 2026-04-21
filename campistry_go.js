@@ -4754,6 +4754,20 @@
             const googleKey    = D.setup.googleMapsKey?.trim();
             const googleProjId = D.setup.googleProjectId?.trim();
 
+            // ── Supabase session — used by the Google Route Optimization proxy ──
+            // The Route Optimization API requires OAuth2 (not browser API keys).
+            // The Supabase edge function at /functions/v1/optimize-routes handles
+            // the service-account OAuth dance server-side. We pass the user's
+            // Supabase access token so the edge function can verify the caller.
+            const _supabaseUrl = window.__CAMPISTRY_SUPABASE__?.url || '';
+            let _googleProxyToken = null;
+            if (_supabaseUrl && window.supabase?.auth?.getSession) {
+                try {
+                    const _sess = await window.supabase.auth.getSession();
+                    _googleProxyToken = _sess?.data?.session?.access_token || null;
+                } catch (_e) { /* non-fatal — fall back to direct API key */ }
+            }
+
             // ── Step 3 (primary): Google Route Optimization API ──
             //
             // When Google credentials are configured, send ALL stops + ALL buses in
@@ -4779,7 +4793,9 @@
                         serviceTimeSec: serviceTime,
                         apiKey:         googleKey,
                         projectId:      googleProjId,
-                        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60
+                        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+                        supabaseUrl:    _supabaseUrl,
+                        accessToken:    _googleProxyToken
                     });
                     if (googleRoutes && googleRoutes.length > 0) {
                         routes = googleRoutes;

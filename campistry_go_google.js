@@ -64,8 +64,11 @@ window.GoGoogleOptimizer = (function () {
     //   departureTime : "HH:MM"
     //   isArrival     : bool   — true = pickup at homes, deliver to camp
     //   serviceTimeSec: number — dwell seconds per stop
-    //   apiKey        : string
-    //   projectId     : string
+    //   apiKey        : string — Google Maps API key (fallback only)
+    //   projectId     : string — Google Cloud Project ID (fallback only)
+    //   maxRideTimeSec: number — soft max ride time per passenger
+    //   supabaseUrl   : string — Supabase project URL (preferred auth path)
+    //   accessToken   : string — Supabase user JWT (sent to edge function proxy)
     // }
     //
     // Returns array of route objects (same format as the rest of the app)
@@ -75,7 +78,11 @@ window.GoGoogleOptimizer = (function () {
         const {
             stops, vehicles, campLat, campLng,
             departureTime, isArrival, serviceTimeSec,
-            apiKey, projectId, maxRideTimeSec
+            apiKey, projectId, maxRideTimeSec,
+            // Proxy auth — when provided, the request goes through the Supabase
+            // edge function which handles Google OAuth. This is the preferred path
+            // because the Route Optimization API rejects browser API key requests.
+            supabaseUrl, accessToken
         } = options;
 
         if (!apiKey || !projectId) {
@@ -193,17 +200,37 @@ window.GoGoogleOptimizer = (function () {
             populateTravelStepPolylines: false    // per-leg polylines not needed (whole-route is enough)
         };
 
-        // ── API call ──
-        const url = `${API_BASE}/${encodeURIComponent(projectId)}:optimizeTours?key=${encodeURIComponent(apiKey)}`;
-        console.log('[GoGoogle] Sending request — ' + stops.length + ' stops, ' + vehicles.length + ' buses...');
-
+        // ── API call — proxy through Supabase edge function (preferred) ──────
+        // The Route Optimization API requires OAuth2 — API keys are rejected from
+        // browser requests. When supabaseUrl + accessToken are provided the request
+        // goes through the edge function at /functions/v1/optimize-routes which
+        // mints a short-lived Google Bearer token using the service account secret.
+        // Fall back to a direct API key request only if the proxy auth is absent
+        // (e.g. offline testing).
         let resp, data;
         try {
-            resp = await fetch(url, {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify(body)
-            });
+            if (supabaseUrl && accessToken) {
+                console.log('[GoGoogle] Sending via Supabase proxy — ' + stops.length + ' stops, ' + vehicles.length + ' buses...');
+                resp = await fetch(supabaseUrl + '/functions/v1/optimize-routes', {
+                    method:  'POST',
+                    headers: {
+                        'Content-Type':  'application/json',
+                        'Authorization': 'Bearer ' + accessToken,
+                    },
+                    body: JSON.stringify(body),
+                });
+            } else if (apiKey && projectId) {
+                console.log('[GoGoogle] Sending direct (API key fallback) — ' + stops.length + ' stops, ' + vehicles.length + ' buses...');
+                const url = API_BASE + '/' + encodeURIComponent(projectId) + ':optimizeTours?key=' + encodeURIComponent(apiKey);
+                resp = await fetch(url, {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify(body),
+                });
+            } else {
+                console.warn('[GoGoogle] No auth available — need Supabase session or both apiKey + projectId');
+                return null;
+            }
             data = await resp.json();
         } catch (e) {
             console.error('[GoGoogle] Network error:', e.message);
@@ -216,8 +243,12 @@ window.GoGoogleOptimizer = (function () {
             if (resp.status === 400) {
                 console.error('[GoGoogle] 400 Bad Request — check request body. Details:', JSON.stringify(data?.error?.details || []));
             }
-            if (resp.status === 403) {
-                console.error('[GoGoogle] 403 Forbidden — verify API key has Route Optimization API enabled in your Google Cloud project');
+            if (resp.status === 401 || resp.status === 403) {
+                if (supabaseUrl && accessToken) {
+                    console.error('[GoGoogle] Auth error via proxy — verify the GOOGLE_SERVICE_ACCOUNT secret is set in Supabase and the service account has the Route Optimization API enabled');
+                } else {
+                    console.error('[GoGoogle] Auth error (direct) — Route Optimization API requires OAuth2; set up the Supabase proxy for production use');
+                }
             }
             if (resp.status === 429) {
                 console.error('[GoGoogle] 429 Quota exceeded — check your Google Cloud quota');
