@@ -187,17 +187,21 @@ window.GoGoogleOptimizer = (function () {
         });
 
         // ── Request body ──
+        // Solver timeout: keep well under Supabase edge function wall-clock limit (~150s).
+        // Google returns early when it finds a good solution, so 100s is plenty for
+        // 700+ stops / 18 buses in practice. considerRoadTraffic adds accuracy but
+        // significantly increases solve time at scale — leave off for large runs.
         const body = {
-            timeout: '180s',  // 3-minute solve limit — handles 700+ stops / 18 buses comfortably
+            timeout: '100s',
             model: {
                 globalStartTime: toRFC(globalStartDt),
                 globalEndTime:   toRFC(globalEndDt),
                 shipments:       shipments,
                 vehicles:        modelVehicles
             },
-            considerRoadTraffic:         true,   // use live traffic for travel time estimates
+            considerRoadTraffic:         false,  // disabled — too slow at 700+ stop scale
             populatePolylines:           true,   // road-following geometry for map rendering
-            populateTravelStepPolylines: false    // per-leg polylines not needed (whole-route is enough)
+            populateTravelStepPolylines: false   // per-leg polylines not needed (whole-route is enough)
         };
 
         // ── API call — proxy through Supabase edge function (preferred) ──────

@@ -172,14 +172,21 @@ serve(async (req: Request) => {
 
     console.log(`[optimize-routes] Forwarding to Google — project: ${projectId}`);
 
+    // 120-second fetch timeout — Google solver is capped at 100s so this
+    // gives enough headroom for network overhead without hitting Supabase limits.
+    const controller = new AbortController();
+    const fetchTimeout = setTimeout(() => controller.abort(), 120_000);
+
     const googleResp = await fetch(googleUrl, {
       method:  "POST",
       headers: {
         "Content-Type":  "application/json",
         "Authorization": `Bearer ${accessToken}`,
       },
-      body: JSON.stringify(requestBody),
+      body:   JSON.stringify(requestBody),
+      signal: controller.signal,
     });
+    clearTimeout(fetchTimeout);
 
     const responseData = await googleResp.json();
 
