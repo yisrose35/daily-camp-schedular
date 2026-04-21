@@ -2828,8 +2828,8 @@ let _toastTimer = null;
                 // Preserve existing geocode if the street hasn't changed.
                 if (street) {
                     const _ex = D.addresses[name];
-                    const _streetKey = s => { const p = (s||'').trim().toLowerCase().replace(/[.,]/g,'').split(/\s+/); return p.slice(0,2).join(' '); };
-                    const _keepGeocode = !!_ex?.geocoded && _streetKey(_ex.street) === _streetKey(street);
+                    const _normStreet = s => { const ab = { dr:'drive',st:'street',ave:'avenue',blvd:'boulevard',ct:'court',ln:'lane',rd:'road',pl:'place',cir:'circle',hwy:'highway',pkwy:'parkway',trl:'trail',ter:'terrace',terr:'terrace',expy:'expressway',crst:'crest',crk:'creek',xing:'crossing',aly:'alley' }; return (s||'').trim().toLowerCase().replace(/[.,#]/g,'').split(/\s+/).map(w=>ab[w]||w).join(' '); };
+                    const _keepGeocode = !!_ex?.geocoded && _normStreet(_ex.street) === _normStreet(street);
                     D.addresses[name] = {
                         street, city, state, zip,
                         lat:      _keepGeocode ? (_ex.lat  || null) : null,
@@ -2859,11 +2859,10 @@ let _toastTimer = null;
                     // If the geocoded position still makes sense (house number + street
                     // name unchanged), keep it. If the street component changed
                     // (person moved), reset so it gets re-geocoded.
-                    // Compare house number + first word of street name only.
-                    // This handles abbreviation differences introduced by Google
-                    // Address Validation (e.g. "Dr" → "Drive", "Ct" → "Court").
-                    const _streetKey = s => { const p = (s||'').trim().toLowerCase().replace(/[.,]/g,'').split(/\s+/); return p.slice(0,2).join(' '); };
-                    const _keepGeocode = !!_ex?.geocoded && _streetKey(_ex.street) === _streetKey(street);
+                    // Normalize street type abbreviations before comparing so that
+                    // Google-corrected addresses ("Drive") match CSV originals ("Dr").
+                    const _normStreet = s => { const ab = { dr:'drive',st:'street',ave:'avenue',blvd:'boulevard',ct:'court',ln:'lane',rd:'road',pl:'place',cir:'circle',hwy:'highway',pkwy:'parkway',trl:'trail',ter:'terrace',terr:'terrace',expy:'expressway',crst:'crest',crk:'creek',xing:'crossing',aly:'alley' }; return (s||'').trim().toLowerCase().replace(/[.,#]/g,'').split(/\s+/).map(w=>ab[w]||w).join(' '); };
+                    const _keepGeocode = !!_ex?.geocoded && _normStreet(_ex.street) === _normStreet(street);
                     D.addresses[rn] = {
                         street, city, state, zip,
                         lat:      _keepGeocode ? (_ex.lat  || null) : null,
