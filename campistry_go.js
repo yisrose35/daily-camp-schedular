@@ -2767,15 +2767,16 @@ let _toastTimer = null;
                 }
 
                 // All staff get an address entry so they're geocoded with campers.
-                // Preserve existing geocode if the address hasn't changed.
+                // Preserve existing geocode if the street hasn't changed.
                 if (street) {
                     const _ex = D.addresses[name];
-                    const _addrSame = _ex && _ex.street === street && _ex.city === city && _ex.state === state && _ex.zip === zip;
+                    const _norm = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.,]/g, '');
+                    const _keepGeocode = !!_ex?.geocoded && _norm(_ex.street) === _norm(street);
                     D.addresses[name] = {
                         street, city, state, zip,
-                        lat:      _addrSame ? (_ex.lat  || null) : null,
-                        lng:      _addrSame ? (_ex.lng  || null) : null,
-                        geocoded: _addrSame ? (!!_ex.geocoded)   : false,
+                        lat:      _keepGeocode ? (_ex.lat  || null) : null,
+                        lng:      _keepGeocode ? (_ex.lng  || null) : null,
+                        geocoded: _keepGeocode,
                         transport: 'bus', rideWith: '',
                         _camperId: personId ? parseInt(personId) : 0,
                         _division: division, _grade: '', _bunk: bunk,
@@ -2795,14 +2796,20 @@ let _toastTimer = null;
                 const rn = Object.keys(meRoster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
 
                 if (street) {
-                    // Preserve existing geocode if the address hasn't changed.
                     const _ex = D.addresses[rn];
-                    const _addrSame = _ex && _ex.street === street && _ex.city === city && _ex.state === state && _ex.zip === zip;
+                    // Compare addresses case-insensitively and whitespace-normalised.
+                    // If the geocoded position still makes sense (house number + street
+                    // name unchanged), keep it. If the street component changed
+                    // (person moved), reset so it gets re-geocoded.
+                    const _norm  = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+                    const _houseAndStreet = s => _norm(s).replace(/[.,]/g, ''); // strip punctuation
+                    const _streetSame = _ex && _houseAndStreet(_ex.street) === _houseAndStreet(street);
+                    const _keepGeocode = !!_ex?.geocoded && _streetSame;
                     D.addresses[rn] = {
                         street, city, state, zip,
-                        lat:      _addrSame ? (_ex.lat  || null) : null,
-                        lng:      _addrSame ? (_ex.lng  || null) : null,
-                        geocoded: _addrSame ? (!!_ex.geocoded)   : false,
+                        lat:      _keepGeocode ? (_ex.lat  || null) : null,
+                        lng:      _keepGeocode ? (_ex.lng  || null) : null,
+                        geocoded: _keepGeocode,
                         transport: _ex?.transport || ((transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus'),
                         rideWith: rideWith || _ex?.rideWith || '',
                         _camperId: personId ? parseInt(personId) : 0,
