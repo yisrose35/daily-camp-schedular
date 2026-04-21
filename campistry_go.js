@@ -1511,16 +1511,78 @@
         toast('Accepted ' + accepted + ' staff suggestion' + (accepted > 1 ? 's' : ''));
     }
 
+    // ── Capacity check helper ────────────────────────────────────────────────
+    // Returns how many seats over capacity a bus will be AFTER adding one more
+    // staff member. Positive = over capacity.
+    function _capacityAfterStaffAdd(busId) {
+        const bus = D.buses.find(b => b.id === busId);
+        if (!bus) return 0;
+        const brs    = getBusReserve(bus);
+        const mon    = D.monitors.find(m => m.assignedBus === busId);
+        const couns  = D.counselors.filter(c => c.assignedBus === busId);
+        // +1 accounts for the staff member we're about to add
+        const usedByStaff = (mon ? 1 : 0) + couns.length + 1 + brs;
+        const maxCampers  = Math.max(0, (bus.capacity || 0) - usedByStaff);
+        let camperCount   = 0;
+        (D.savedRoutes || []).forEach(sr => {
+            const r = (sr.routes || []).find(r => r.busId === busId);
+            if (r) camperCount += r.camperCount || 0;
+        });
+        return { overBy: camperCount - maxCampers, camperCount, maxCampers, busName: bus.name };
+    }
+
+    // ── Commit a staff assignment and refresh the UI ─────────────────────────
+    function _commitStaffAssign(staff, busId, busName, stopAddr, stopNum) {
+        staff._assignStatus  = 'accepted';
+        staff._acceptedBus   = busName;
+        staff._acceptedBusId = busId;
+        staff._acceptedStop  = stopAddr;
+        staff._acceptedStopNum = stopNum;
+        staff.assignedBus    = busId;
+        save();
+        renderStaff();
+        // Re-render routes so capacity badges + stop lists reflect the new assignment
+        if (typeof CampistryGo !== 'undefined' && CampistryGo._refreshRoutes) {
+            CampistryGo._refreshRoutes();
+        }
+        toast(staff.name + ' confirmed on ' + busName);
+    }
+
+    // ── Overcapacity warning modal ───────────────────────────────────────────
+    function _showCapacityWarning(staff, type, busId, busName, stopAddr, stopNum, overBy) {
+        const existing = document.getElementById('staffCapWarningModal');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'staffCapWarningModal';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;';
+        overlay.innerHTML = '<div class="modal" style="max-width:400px;padding:1.5rem;">'
+            + '<h3 style="margin:0 0 .75rem;color:var(--red-600);">⚠ Bus Over Capacity</h3>'
+            + '<p style="margin:0 0 1.25rem;line-height:1.5;">Adding <strong>' + esc(staff.name) + '</strong> to <strong>' + esc(busName) + '</strong> will put it <strong>' + overBy + ' seat' + (overBy > 1 ? 's' : '') + ' over capacity</strong>.</p>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">'
+            + '<button class="btn btn-secondary" id="scwCancel">Cancel</button>'
+            + '<button class="btn btn-secondary" id="scwManual">Choose Different Bus</button>'
+            + '<button class="btn btn-danger" id="scwForce">Force Anyway</button>'
+            + '</div></div>';
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#scwCancel').onclick  = () => overlay.remove();
+        overlay.querySelector('#scwForce').onclick   = () => { overlay.remove(); _commitStaffAssign(staff, busId, busName, stopAddr, stopNum); };
+        overlay.querySelector('#scwManual').onclick  = () => { overlay.remove(); manualStaffAssign(staff.id, type); };
+    }
+
     function acceptStaffAssign(staffId, type) {
         const staff = type === 'monitor' ? D.monitors.find(m => m.id === staffId) : D.counselors.find(c => c.id === staffId);
         if (!staff || !staff._suggestedBusId) return;
-        staff._assignStatus = 'accepted';
-        staff._acceptedBus = staff._suggestedBus;
-        staff._acceptedBusId = staff._suggestedBusId;
-        staff._acceptedStop = staff._suggestedStop;
-        staff._acceptedStopNum = staff._suggestedStopNum;
-        staff.assignedBus = staff._suggestedBusId;
-        save(); renderStaff(); toast(staff.name + ' confirmed on ' + staff._suggestedBus);
+
+        const cap = _capacityAfterStaffAdd(staff._suggestedBusId);
+        if (cap.overBy > 0) {
+            _showCapacityWarning(staff, type,
+                staff._suggestedBusId, staff._suggestedBus,
+                staff._suggestedStop, staff._suggestedStopNum,
+                cap.overBy);
+            return;
+        }
+        _commitStaffAssign(staff, staff._suggestedBusId, staff._suggestedBus, staff._suggestedStop, staff._suggestedStopNum);
     }
 
     function denyStaffAssign(staffId, type) {
@@ -1592,16 +1654,16 @@
                 });
             }
 
-            staff._assignStatus = 'accepted';
-            staff._acceptedBus = bus?.name || '';
-            staff._acceptedBusId = busId;
-            staff._acceptedStop = stopAddr;
-            staff._acceptedStopNum = stopNum;
-            staff.assignedBus = busId;
+            // Capacity check before committing
+            const cap = _capacityAfterStaffAdd(busId);
+            if (cap.overBy > 0) {
+                overlay.remove();
+                _showCapacityWarning(staff, type, busId, bus?.name || '', stopAddr, stopNum, cap.overBy);
+                return;
+            }
 
-            save(); renderStaff();
             overlay.remove();
-            toast(staff.name + ' assigned to ' + (bus?.name || 'bus') + (stopNum ? ', Stop ' + stopNum : ''));
+            _commitStaffAssign(staff, busId, bus?.name || '', stopAddr, stopNum);
         });
     }
     function openMonitorModal(eId) { _editMonitorId = eId || null; document.getElementById('monitorModalTitle').textContent = eId ? 'Edit Monitor' : 'Add Monitor'; updateBusSelects(); const m = eId ? D.monitors.find(x => x.id === eId) : null; document.getElementById('monitorName').value = m?.name || ''; document.getElementById('monitorAddress').value = m?.address || ''; document.getElementById('monitorPhone').value = m?.phone || ''; document.getElementById('monitorBusAssign').value = m?.assignedBus || ''; openModal('monitorModal'); document.getElementById('monitorName').focus(); }
