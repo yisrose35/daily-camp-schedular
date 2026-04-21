@@ -2697,55 +2697,117 @@ let _toastTimer = null;
                 toast('Accepting ' + slotsAvailable + ' of ' + newCount + ' entries (limit: ' + limit.max + ')');
             }
         }
+        // ── Column detection: two-phase ──────────────────────────────────────────
+        //
+        // Phase 1 — Header matching: normalise each header (lowercase, trim,
+        //   underscores→spaces) then match against known aliases.
+        //
+        // Phase 2 — Data inference: for any critical column still undetected,
+        //   score every unclaimed column against a content fingerprint (regex
+        //   applied to up to 20 sampled data rows). The column with the highest
+        //   match rate wins. This handles columns named "leave_blank1", "col7",
+        //   or any arbitrary name, as long as the DATA looks right.
+        //
         const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim().replace(/_/g, ' '));
         console.log('[Go] CSV headers (' + hdr.length + '):', hdr.join(' | '));
 
-        // Detect column indices — support multiple naming conventions.
-        // Headers are normalised: lowercase, trimmed, underscores→spaces.
-        const idi = hdr.findIndex(h => h === 'camper id' || h === 'id' || h === 'camperid' || h === '#' || h === 'person id' || h === 'personid');
-        const lni = hdr.findIndex(h => h === 'last name' || h === 'last' || h === 'lastname' || h === 'family name' || h === 'surname' || h === 'lname' || h === 'l name');
-        const fni = hdr.findIndex(h => h === 'first name' || h === 'first' || h === 'firstname' || h === 'given name' || h === 'fname' || h === 'f name' || h === 'preferred name' || h === 'preferred');
-        const ni = hdr.findIndex(h => h === 'name' || h === 'camper name' || h === 'camper' || h === 'full name' || h === 'fullname' || h === 'student name' || h === 'child name');
-        const divi = hdr.findIndex(h => h === 'division' || h === 'div' || h === 'group' || h === 'section');
-        const gri = hdr.findIndex(h => h === 'grade' || h === 'grade level');
-        const bki = hdr.findIndex(h => h === 'bunk' || h === 'cabin' || h === 'room' || h === 'bunk name');
-        let si = hdr.findIndex(h => h === 'address' || h === 'street address' || h === 'home address' || h === 'address 1' || h === 'address1' || h.includes('street'));
-        const ci = hdr.findIndex(h => h === 'city' || h === 'city/town' || h === 'town' || h === 'municipality');
-        const sti = hdr.findIndex(h => h === 'state' || h === 'state/province' || h === 'province');
-        const zi = hdr.findIndex(h => h === 'zip' || h === 'zip code' || h === 'zipcode' || h === 'postal code' || h === 'postalcode' || h.includes('zip'));
-        const tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h === 'transportation' || h.includes('pickup') || h.includes('carpool'));
-        const rwi = hdr.findIndex(h => h === 'ride with' || h === 'ridewith' || h === 'ride-with' || h.includes('pair'));
-        const roi = hdr.findIndex(h => h === 'role' || h === 'type' || h === 'person type');
-        const nsi = hdr.findIndex(h => h === 'needs stop' || h === 'needsstop' || h === 'needs stop' || h === 'stop');
-        const arri = hdr.findIndex(h => h === 'arrival' || h === 'arr' || h === 'morning');
-        const disi = hdr.findIndex(h => h === 'dismissal' || h === 'dis' || h === 'dismiss' || h === 'afternoon');
+        // Sample up to 20 data rows for content scoring
+        const _sampleRows = [];
+        for (let _r = 1; _r < Math.min(lines.length, 21); _r++) _sampleRows.push(parseLine(lines[_r]));
 
-        console.log('[Go] CSV column map → first/last:' + fni + '/' + lni + ' name:' + ni + ' addr:' + si + ' city:' + ci + ' state:' + sti + ' zip:' + zi + ' role:' + roi);
-
-        // Auto-detect address column: if no known header matched, scan up to
-        // the first 10 data rows for a value that looks like a street address
-        // (starts with a number followed by letters, e.g. "1 Wood Ave").
-        // Checks multiple rows so sparse columns aren't missed.
-        if (si < 0) {
-            const addrPattern = /^\d+\s+[A-Za-z]/;  // "123 Main St" pattern
-            const claimed = new Set([idi, lni, fni, ni, divi, gri, bki, ci, sti, zi, tri, rwi, roi, nsi, arri, disi].filter(x => x >= 0));
-            // Track how many address-like hits each column gets across multiple rows;
-            // pick the column with the most hits so a sparse column doesn't win.
-            const colHits = {};
-            var scanLimit = Math.min(lines.length, 11); // header + up to 10 rows
-            for (let row = 1; row < scanLimit; row++) {
-                var sampleCols = parseLine(lines[row]);
-                for (let c = 0; c < sampleCols.length; c++) {
-                    if (claimed.has(c)) continue;
-                    if (addrPattern.test(sampleCols[c].trim())) { colHits[c] = (colHits[c] || 0) + 1; }
-                }
+        // Returns the fraction of non-empty values in a column that pass testFn
+        function _scoreCol(colIdx, testFn) {
+            let hits = 0, total = 0;
+            for (const row of _sampleRows) {
+                const v = (row[colIdx] || '').trim();
+                if (!v) continue;
+                total++;
+                if (testFn(v)) hits++;
             }
-            if (Object.keys(colHits).length > 0) {
-                // Choose the column with the most hits (most populated address-like column)
-                si = parseInt(Object.entries(colHits).sort((a, b) => b[1] - a[1])[0][0]);
-                console.log('[Go] Auto-detected address column: index ' + si + ' ("' + hdr[si] + '") with ' + colHits[si] + ' address-like values in first ' + (scanLimit - 1) + ' rows');
-            }
+            return total >= 2 ? hits / total : 0;   // require at least 2 non-empty values
         }
+
+        // Greedily find the unclaimed column with the best score for a test.
+        // claimedSet is a Set of already-assigned column indices.
+        // minScore: only accept if score is at least this fraction (0-1).
+        function _inferCol(claimedSet, testFn, minScore) {
+            let best = -1, bestScore = minScore - 0.001;
+            for (let c = 0; c < hdr.length; c++) {
+                if (claimedSet.has(c)) continue;
+                const s = _scoreCol(c, testFn);
+                if (s > bestScore) { bestScore = s; best = c; }
+            }
+            return best;
+        }
+
+        // ── Phase 1: header matching ──────────────────────────────────────────
+        const _hm = h => hdr.findIndex(x => x === h);
+        let idi  = hdr.findIndex(h => ['camper id','id','camperid','#','person id','personid','camper number'].includes(h));
+        let lni  = hdr.findIndex(h => ['last name','last','lastname','family name','surname','lname','l name','last nm'].includes(h));
+        let fni  = hdr.findIndex(h => ['first name','first','firstname','given name','fname','f name','preferred name','preferred','first nm'].includes(h));
+        let ni   = hdr.findIndex(h => ['name','camper name','camper','full name','fullname','student name','child name','participant'].includes(h));
+        let divi = hdr.findIndex(h => ['division','div','group','section','unit','age group'].includes(h));
+        let gri  = hdr.findIndex(h => ['grade','grade level','school grade'].includes(h));
+        let bki  = hdr.findIndex(h => ['bunk','cabin','room','bunk name','bunk number'].includes(h));
+        let si   = hdr.findIndex(h => ['address','street address','home address','address 1','address1','mailing address','residential address'].includes(h) || h.includes('street'));
+        let ci   = hdr.findIndex(h => ['city','city/town','town','municipality','locality'].includes(h));
+        let sti  = hdr.findIndex(h => ['state','state/province','province','st'].includes(h));
+        let zi   = hdr.findIndex(h => ['zip','zip code','zipcode','postal code','postalcode','zip postal'].includes(h) || (h.includes('zip') && !h.includes('zipwith')));
+        let tri  = hdr.findIndex(h => ['transport','mode','transportation','bus or pickup','travel mode'].includes(h) || h.includes('pickup') || h.includes('carpool'));
+        let rwi  = hdr.findIndex(h => ['ride with','ridewith','ride-with','pair with'].includes(h) || h.includes('pair'));
+        let roi  = hdr.findIndex(h => ['role','type','person type','participant type'].includes(h));
+        let nsi  = hdr.findIndex(h => ['needs stop','needsstop','needs a stop','stop'].includes(h));
+        let arri = hdr.findIndex(h => ['arrival','arr','morning','am'].includes(h));
+        let disi = hdr.findIndex(h => ['dismissal','dis','dismiss','afternoon','pm'].includes(h));
+
+        // ── Phase 2: data-content inference for undetected columns ─────────────
+        // US state abbreviations used by the state scorer
+        const _usStates = new Set(['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC']);
+
+        // Build claimed set from Phase 1 results
+        const _claimed = () => new Set([idi,lni,fni,ni,divi,gri,bki,si,ci,sti,zi,tri,rwi,roi,nsi,arri,disi].filter(x => x >= 0));
+
+        // Infer address (most distinctive: digits then word, e.g. "15 Oak Drive")
+        if (si < 0) {
+            si = _inferCol(_claimed(), v => /^\d+\s+[A-Za-z]/.test(v), 0.4);
+            if (si >= 0) console.log('[Go] Inferred address col from data: index ' + si + ' ("' + hdr[si] + '")');
+        }
+
+        // Infer zip (4-5 digits, possibly Excel-stripped leading zero)
+        if (zi < 0) {
+            zi = _inferCol(_claimed(), v => /^\d{4,5}(-\d{4})?$/.test(v), 0.6);
+            if (zi >= 0) console.log('[Go] Inferred zip col from data: index ' + zi + ' ("' + hdr[zi] + '")');
+        }
+
+        // Infer state (2-letter US abbreviation)
+        if (sti < 0) {
+            sti = _inferCol(_claimed(), v => _usStates.has(v.toUpperCase()), 0.6);
+            if (sti >= 0) console.log('[Go] Inferred state col from data: index ' + sti + ' ("' + hdr[sti] + '")');
+        }
+
+        // Infer city (alphabetic, no digits, 2-30 chars — must score higher than names)
+        if (ci < 0) {
+            ci = _inferCol(_claimed(), v => /^[A-Za-z][A-Za-z .'-]{1,29}$/.test(v) && !/\d/.test(v) && !v.includes('  '), 0.7);
+            if (ci >= 0) console.log('[Go] Inferred city col from data: index ' + ci + ' ("' + hdr[ci] + '")');
+        }
+
+        // Infer full name (two or more words separated by a single space, all alpha)
+        if (ni < 0 && fni < 0 && lni < 0) {
+            ni = _inferCol(_claimed(), v => /^[A-Za-z][A-Za-z']{0,19} [A-Za-z][A-Za-z' -]{0,29}$/.test(v), 0.7);
+            if (ni >= 0) console.log('[Go] Inferred full-name col from data: index ' + ni + ' ("' + hdr[ni] + '")');
+        }
+
+        // Infer first name (single word, alphabetic, 2-20 chars) if still missing both name columns
+        if (fni < 0 && ni < 0) {
+            fni = _inferCol(_claimed(), v => /^[A-Za-z][A-Za-z'-]{1,19}$/.test(v) && !/\s/.test(v), 0.7);
+            if (fni >= 0) console.log('[Go] Inferred first-name col from data: index ' + fni + ' ("' + hdr[fni] + '")');
+        }
+        if (lni < 0 && fni >= 0 && ni < 0) {
+            lni = _inferCol(_claimed(), v => /^[A-Za-z][A-Za-z'-]{1,24}$/.test(v) && !/\s/.test(v), 0.7);
+            if (lni >= 0) console.log('[Go] Inferred last-name col from data: index ' + lni + ' ("' + hdr[lni] + '")');
+        }
+
+        console.log('[Go] Final column map → first/last:' + fni + '/' + lni + ' name:' + ni + ' addr:' + si + ' city:' + ci + ' state:' + sti + ' zip:' + zi + ' role:' + roi);
 
         // Must have either (first+last) or (full name), plus an address
         const hasFirstLast = fni >= 0 && lni >= 0;
