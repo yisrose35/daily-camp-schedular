@@ -2543,7 +2543,7 @@ function addDropListeners(gridEl) {
         isNightActivity = times.isNight;
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
-          type: 'elective', event: 'Elective', division: divName,
+          type: 'elective', event: electiveActivities.join(', '), division: divName,
           startTime: result.startTime, endTime: result.endTime,
           electiveActivities, isNightActivity
         };
@@ -2936,7 +2936,7 @@ async function editTile(id) {
     if (result.sport && chosen2.length === 0) chosen2 = (daSportMap2[result.sport] || []).filter(f => !daTaken2.has(f));
     if (!chosen2.length) return;
     ev.startTime = result.startTime; ev.endTime = result.endTime;
-    ev.event = 'Elective'; ev.electiveActivities = chosen2;
+    ev.event = chosen2.join(', '); ev.electiveActivities = chosen2;
 
   } else {
     const _eAllFields = (masterSettings.app1?.fields || []).map(f => f.name);

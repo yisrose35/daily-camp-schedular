@@ -830,7 +830,7 @@ async function editTile(id) {
     if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f));
     if (!chosen.length) return;
     ev.startTime = result.startTime; ev.endTime = result.endTime;
-    ev.event = `Elective: ${chosen.slice(0, 3).join(', ')}${chosen.length > 3 ? '...' : ''}`;
+    ev.event = chosen.join(', ');
     ev.electiveActivities = chosen; ev.reservedFields = chosen;
 
   } else {
@@ -2824,7 +2824,7 @@ function addDropListeners(selector) {
         let chosen = result.activities || [];
         if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f));
         if (!chosen.length) return;
-        const eventName = `Elective: ${chosen.slice(0, 3).join(', ')}${chosen.length > 3 ? '...' : ''}`;
+        const eventName = chosen.join(', ');
         newEvent = {
           id: Date.now().toString(),
           type: 'elective',

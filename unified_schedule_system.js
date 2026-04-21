@@ -2372,11 +2372,13 @@ divBlocks.forEach((block, blockIdx) => {
         else if (!entry) {
             if (block.type === 'elective') {
                 const acts = block.electiveActivities || block.reservedFields || [];
-                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">Elective</div>${acts.length > 0 ? `<div style="font-size:0.75rem;color:#6d28d9;margin-top:2px;">🎯 ${escapeHtml(acts.join(', '))}</div>` : ''}`;
+                const displayName = (block.event && block.event !== 'Elective') ? block.event : acts.join(', ');
+                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">${escapeHtml(displayName || 'Elective')}</div>`;
                 bgColor = '#ede9fe';
             } else if (block.type === 'pinned' && block.event) {
                 const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
-                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#92400e;">${escapeHtml(block.event)}</div>${loc ? `<div style="font-size:0.75rem;color:#78350f;margin-top:2px;">📍 ${escapeHtml(loc)}</div>` : ''}`;
+                const combined = loc ? `${block.event} @ ${loc}` : block.event;
+                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#92400e;">${escapeHtml(combined)}</div>`;
                 bgColor = '#fff8e1';
             } else if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; }
             else bgColor = '#f9fafb';
