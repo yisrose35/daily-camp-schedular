@@ -374,9 +374,11 @@ window.GoGoogleOptimizer = (function () {
         // ── Handle skipped shipments ──
         // Insert them onto the route with the most remaining capacity using
         // cheapest-insertion (minimises extra distance).
+        // Google omits shipmentIndex on the first visit (implicit 0) — use ?? 0
+        // so stop 0 is correctly recognised as assigned and not cheapest-inserted again.
         const assignedIdx = new Set(
             (data.routes || []).flatMap(r =>
-                (r.visits || []).map(v => v.shipmentIndex)
+                (r.visits || []).map(v => v.shipmentIndex ?? 0)
             )
         );
         const skipped = stops
