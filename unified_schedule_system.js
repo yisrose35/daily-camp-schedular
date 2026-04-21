@@ -2053,11 +2053,14 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         
         let divisionsToShow = Object.keys(divisions);
         if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
-        divisionsToShow.sort((a, b) => { 
-            const numA = parseInt(a), numB = parseInt(b); 
-            if (!isNaN(numA) && !isNaN(numB)) return numA - numB; 
-            return String(a).localeCompare(String(b)); 
-        });
+        { const _customOrder = (window.loadGlobalSettings?.() || {})?.app1?.manualColumnOrder;
+          if (Array.isArray(_customOrder) && _customOrder.length > 0) {
+            const _pos = d => { const i = _customOrder.indexOf(d); return i === -1 ? 9999 : i; };
+            divisionsToShow.sort((a, b) => _pos(a) - _pos(b));
+          } else {
+            divisionsToShow.sort((a, b) => { const numA = parseInt(a), numB = parseInt(b); if (!isNaN(numA) && !isNaN(numB)) return numA - numB; return String(a).localeCompare(String(b)); });
+          }
+        }
         
         if (divisionsToShow.length === 0) { 
             container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No divisions configured.</p></div>`; 

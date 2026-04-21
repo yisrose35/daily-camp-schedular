@@ -947,6 +947,7 @@ function renderToolbar() {
     const ok = await showConfirm(`Overwrite "${templateToUpdate}" with current grid?`);
     if (ok) {
       window.saveSkeleton?.(templateToUpdate, dailySkeleton);
+      { const g = window.loadGlobalSettings?.() || {}; if (!g.app1) g.app1 = {}; if (!g.app1.skeletonColumnOrders) g.app1.skeletonColumnOrders = {}; g.app1.skeletonColumnOrders[templateToUpdate] = getColumnOrder(); window.saveGlobalSettings?.('app1', g.app1); }
       window.forceSyncToCloud?.();
       currentLoadedTemplate = templateToUpdate; // Set it as explicitly loaded now
       hasUnsavedChanges = false;
@@ -971,6 +972,7 @@ function renderToolbar() {
     }
     
     window.saveSkeleton?.(name, dailySkeleton);
+    { const g = window.loadGlobalSettings?.() || {}; if (!g.app1) g.app1 = {}; if (!g.app1.skeletonColumnOrders) g.app1.skeletonColumnOrders = {}; g.app1.skeletonColumnOrders[name] = getColumnOrder(); window.saveGlobalSettings?.('app1', g.app1); }
     window.forceSyncToCloud?.();
     currentLoadedTemplate = name;
     hasUnsavedChanges = false;
@@ -3229,6 +3231,10 @@ function loadSkeletonToBuilder(name) {
     dailySkeleton = JSON.parse(JSON.stringify(all[name]));
     currentLoadedTemplate = name;
     hasUnsavedChanges = false;
+    const savedOrders = (window.loadGlobalSettings?.() || {})?.app1?.skeletonColumnOrders || {};
+    if (Array.isArray(savedOrders[name]) && savedOrders[name].length > 0) {
+      saveColumnOrder(savedOrders[name]);
+    }
   }
   renderGrid();
   renderToolbar();

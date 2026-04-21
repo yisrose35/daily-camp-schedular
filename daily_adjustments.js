@@ -3057,6 +3057,8 @@ function saveDAAutoLayers() {
       if (parsed && parsed.length > 0) {
         dailyOverrideSkeleton = parsed;
         window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+        const savedOrder = JSON.parse(localStorage.getItem(`campManualColumnOrder_${dateKey}`) || 'null');
+        if (Array.isArray(savedOrder) && savedOrder.length > 0) saveColumnOrder(savedOrder);
         console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from localStorage`);
         return;
       }
@@ -3064,7 +3066,7 @@ function saveDAAutoLayers() {
   } catch (e) {
     console.warn('[DailyAdj] Failed to load from localStorage:', e);
   }
-  
+
   // Priority 2: Cloud
   try {
     const cloudSkeleton = masterSettings?.app1?.dailySkeletons?.[dateKey];
@@ -3073,6 +3075,11 @@ function saveDAAutoLayers() {
       window.dailyOverrideSkeleton = dailyOverrideSkeleton;
       const storageKey = `campManualSkeleton_${dateKey}`;
       localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+      const cloudOrder = masterSettings?.app1?.dailyColumnOrders?.[dateKey];
+      if (Array.isArray(cloudOrder) && cloudOrder.length > 0) {
+        saveColumnOrder(cloudOrder);
+        localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(cloudOrder));
+      }
       console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from CLOUD`);
       return;
     }
@@ -3117,16 +3124,19 @@ function saveDailySkeleton() {
   try {
     const storageKey = `campManualSkeleton_${dateKey}`;
     localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+    localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(getColumnOrder()));
   } catch (e) {
     console.error('[DailyAdj] Failed to save to localStorage:', e);
   }
-  
+
   // Save to cloud
   try {
     if (!masterSettings.app1.dailySkeletons) {
       masterSettings.app1.dailySkeletons = {};
     }
     masterSettings.app1.dailySkeletons[dateKey] = dailyOverrideSkeleton;
+    if (!masterSettings.app1.dailyColumnOrders) masterSettings.app1.dailyColumnOrders = {};
+    masterSettings.app1.dailyColumnOrders[dateKey] = getColumnOrder();
     if (typeof window.saveGlobalSettings === 'function') {
       window.saveGlobalSettings('app1', masterSettings.app1);
     }
