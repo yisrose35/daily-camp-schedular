@@ -6463,7 +6463,6 @@
         if (routesTab && routesTab.classList.contains('active')) setTimeout(() => initMap(allShifts), 100);
         else _pendingMapInit = allShifts;
         renderCapacityWarnings();
-        renderCarpool();
     }
 
     function renderMasterList(allShifts) {
@@ -7054,7 +7053,7 @@
             btn.classList.add('active');
             const t = btn.dataset.tab; document.getElementById('tab-' + t)?.classList.add('active');
             if (t === 'fleet') { renderFleet(); renderShifts(); } else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'routes') {
-                runPreflight(); renderDailyOverrides(); renderCarpool();
+                runPreflight();
                 if (_pendingMapInit) { setTimeout(function() { initMap(_pendingMapInit); _pendingMapInit = null; }, 150); }
                 else { setTimeout(function() { if (_map) _map.invalidateSize(); }, 150); }
             }
