@@ -2043,13 +2043,7 @@ function renderEventTile(ev, top, height) {
     fontSize = '13px'; lineHeight = '1.35'; padding = '5px 8px';
   }
   
-  const _daElectiveActs = ev.type === 'elective' ? (ev.electiveActivities || ev.reservedFields || []) : [];
-  const _daTileLabel = ev.type === 'elective'
-    ? (_daElectiveActs.length > 0 ? _daElectiveActs.join(', ') : (ev.event || 'Elective'))
-    : ev.type === 'pinned'
-      ? (() => { const _l = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : ''); return _l ? `${ev.event} @ ${_l}` : ev.event; })()
-      : ev.event;
-  const eventName = _daTileLabel || 'Event';
+  const eventName = ev.event || 'Event';
   const timeStr = `${ev.startTime}-${ev.endTime}`;
 
   // Compact content for very small tiles
@@ -2071,8 +2065,13 @@ function renderEventTile(ev, top, height) {
       content += `<div style="font-size:9px;opacity:0.8;">🏆 ${ev.leagueName}</div>`;
     }
     const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
-    if (locationDisplay && ev.type !== 'elective' && ev.type !== 'pinned') {
+    if (locationDisplay && ev.type !== 'elective') {
       content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
+    }
+    if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
+      const actList = ev.electiveActivities.slice(0, 3).join(', ');
+      const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
+      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
     }
     if (ev.type === 'smart' && ev.smartData) {
       content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
@@ -2544,7 +2543,7 @@ function addDropListeners(gridEl) {
         isNightActivity = times.isNight;
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
-          type: 'elective', event: electiveActivities.join(', '), division: divName,
+          type: 'elective', event: 'Elective', division: divName,
           startTime: result.startTime, endTime: result.endTime,
           electiveActivities, isNightActivity
         };
@@ -2937,7 +2936,7 @@ async function editTile(id) {
     if (result.sport && chosen2.length === 0) chosen2 = (daSportMap2[result.sport] || []).filter(f => !daTaken2.has(f));
     if (!chosen2.length) return;
     ev.startTime = result.startTime; ev.endTime = result.endTime;
-    ev.event = chosen2.join(', '); ev.electiveActivities = chosen2;
+    ev.event = 'Elective'; ev.electiveActivities = chosen2;
 
   } else {
     const _eAllFields = (masterSettings.app1?.fields || []).map(f => f.name);

@@ -2120,7 +2120,10 @@ const isAutoSchedule = currentBuilderMode === 'auto';
                 division: divName,
                 _splitHalf: slot._splitHalf,
                 _splitParentEvent: slot._splitParentEvent,
-                _isSplitTile: !!slot._splitHalf
+                _isSplitTile: !!slot._splitHalf,
+                electiveActivities: slot.electiveActivities,
+                reservedFields: slot.reservedFields,
+                location: slot.location
             }));
         } else {
             divBlocks = skeleton.filter(b => b.division === divName).map(b => ({ 
@@ -2371,8 +2374,8 @@ divBlocks.forEach((block, blockIdx) => {
         // Elective and pinned (custom) blocks always show their own skeleton data
         if (block.type === 'elective') {
             const acts = block.electiveActivities || block.reservedFields || [];
-            const displayName = (block.event && block.event !== 'Elective') ? block.event : acts.join(', ');
-            htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">${escapeHtml(displayName || 'Elective')}</div>`;
+            const displayName = acts.join(', ') || block.event || 'Elective';
+            htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">${escapeHtml(displayName)}</div>`;
             bgColor = '#ede9fe';
         } else if (block.type === 'pinned' && block.event) {
             const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');

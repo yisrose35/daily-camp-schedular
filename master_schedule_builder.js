@@ -830,7 +830,7 @@ async function editTile(id) {
     if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f));
     if (!chosen.length) return;
     ev.startTime = result.startTime; ev.endTime = result.endTime;
-    ev.event = chosen.join(', ');
+    ev.event = 'Elective';
     ev.electiveActivities = chosen; ev.reservedFields = chosen;
 
   } else {
@@ -2611,23 +2611,16 @@ function renderEventTile(ev, top, height) {
   // Add 1px gap at bottom to prevent overlap with next tile
   const adjustedHeight = Math.max(height - 1, 10);
   
-  const _electiveActs = ev.type === 'elective' ? (ev.electiveActivities || ev.reservedFields || []) : [];
-  const _tileLabel = ev.type === 'elective'
-    ? (_electiveActs.length > 0 ? _electiveActs.join(', ') : ev.event)
-    : ev.type === 'pinned'
-      ? (() => { const _loc = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : ''); return _loc ? `${ev.event} @ ${_loc}` : ev.event; })()
-      : ev.event;
-
   let innerHtml = `
     <div class="tile-header">
-      <strong style="font-size:11px;">${_tileLabel}</strong>
+      <strong style="font-size:11px;">${ev.event}</strong>
       <div style="font-size:10px;opacity:0.9;">${ev.startTime}-${ev.endTime}</div>
     </div>
   `;
 
-  if (ev.location && ev.type !== 'elective' && ev.type !== 'pinned') {
+  if (ev.location) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.location}</div>`;
-  } else if (ev.reservedFields?.length > 0 && ev.type !== 'elective' && ev.type !== 'pinned') {
+  } else if (ev.reservedFields?.length > 0 && ev.type !== 'elective') {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
   }
   
@@ -2635,6 +2628,12 @@ function renderEventTile(ev, top, height) {
 // ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
   if (ev.leagueName) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
+  }
+
+  if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
+    const actList = ev.electiveActivities.slice(0, 3).join(', ');
+    const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🎯 ${actList}${more}</div>`;
   }
 
   if (ev.type === 'smart' && ev.smartData) {
@@ -2825,7 +2824,7 @@ function addDropListeners(selector) {
         let chosen = result.activities || [];
         if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f));
         if (!chosen.length) return;
-        const eventName = chosen.join(', ');
+        const eventName = 'Elective';
         newEvent = {
           id: Date.now().toString(),
           type: 'elective',
