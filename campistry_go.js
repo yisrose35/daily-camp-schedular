@@ -2830,17 +2830,17 @@ let _toastTimer = null;
                     const _ex = D.addresses[name];
                     const _normStreet = s => { const ab = { dr:'drive',st:'street',ave:'avenue',blvd:'boulevard',ct:'court',ln:'lane',rd:'road',pl:'place',cir:'circle',hwy:'highway',pkwy:'parkway',trl:'trail',ter:'terrace',terr:'terrace',expy:'expressway',crst:'crest',crk:'creek',xing:'crossing',aly:'alley' }; return (s||'').trim().toLowerCase().replace(/[.,#]/g,'').split(/\s+/).map(w=>ab[w]||w).join(' '); };
                     const _keepGeocode = !!_ex?.geocoded && _normStreet(_ex.street) === _normStreet(street);
-                    D.addresses[name] = {
+                    D.addresses[name] = Object.assign({}, _keepGeocode ? _ex : {}, {
                         street, city, state, zip,
-                        lat:      _keepGeocode ? (_ex.lat  || null) : null,
-                        lng:      _keepGeocode ? (_ex.lng  || null) : null,
+                        lat:      _keepGeocode ? (_ex.lat || null) : null,
+                        lng:      _keepGeocode ? (_ex.lng || null) : null,
                         geocoded: _keepGeocode,
                         transport: 'bus', rideWith: '',
                         _camperId: personId ? parseInt(personId) : 0,
                         _division: division, _grade: '', _bunk: bunk,
                         _isStaff: true,
                         _arrival: forArrival, _dismissal: forDismissal
-                    };
+                    });
                 }
 
                 staffCount++;
@@ -2863,17 +2863,20 @@ let _toastTimer = null;
                     // Google-corrected addresses ("Drive") match CSV originals ("Dr").
                     const _normStreet = s => { const ab = { dr:'drive',st:'street',ave:'avenue',blvd:'boulevard',ct:'court',ln:'lane',rd:'road',pl:'place',cir:'circle',hwy:'highway',pkwy:'parkway',trl:'trail',ter:'terrace',terr:'terrace',expy:'expressway',crst:'crest',crk:'creek',xing:'crossing',aly:'alley' }; return (s||'').trim().toLowerCase().replace(/[.,#]/g,'').split(/\s+/).map(w=>ab[w]||w).join(' '); };
                     const _keepGeocode = !!_ex?.geocoded && _normStreet(_ex.street) === _normStreet(street);
-                    D.addresses[rn] = {
+                    // Spread existing entry first so ALL geocode metadata
+                    // (_geocodeConfidence, _geocodeWarning, _zipMismatch, etc.)
+                    // is preserved — then overlay the updated CSV fields on top.
+                    D.addresses[rn] = Object.assign({}, _keepGeocode ? _ex : {}, {
                         street, city, state, zip,
-                        lat:      _keepGeocode ? (_ex.lat  || null) : null,
-                        lng:      _keepGeocode ? (_ex.lng  || null) : null,
+                        lat:      _keepGeocode ? (_ex.lat || null) : null,
+                        lng:      _keepGeocode ? (_ex.lng || null) : null,
                         geocoded: _keepGeocode,
                         transport: _ex?.transport || ((transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus'),
                         rideWith: rideWith || _ex?.rideWith || '',
                         _camperId: personId ? parseInt(personId) : 0,
                         _division: division, _grade: grade, _bunk: bunk,
                         _arrival: forArrival, _dismissal: forDismissal
-                    };
+                    });
                 }
 
                 _goStandaloneRoster[rn] = {
