@@ -2475,7 +2475,7 @@ function renderGrid() {
 
 function addClickToSelectListeners() {
   grid.querySelectorAll('.grid-event').forEach(el => {
-    let _downX, _downY;
+    let _downX, _downY, _clickTimer;
     el.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
 
     el.onclick = (e) => {
@@ -2483,11 +2483,13 @@ function addClickToSelectListeners() {
       e.stopPropagation();
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(el.dataset.id); return; }
-      editTile(el.dataset.id);
+      clearTimeout(_clickTimer);
+      _clickTimer = setTimeout(() => { editTile(el.dataset.id); }, 280);
     };
 
     el.ondblclick = async (e) => {
       e.stopPropagation();
+      clearTimeout(_clickTimer);
       if (e.target.classList.contains('resize-handle')) return;
       await deleteTile(el.dataset.id);
     };

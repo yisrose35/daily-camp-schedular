@@ -2056,22 +2056,17 @@ function renderEventTile(ev, top, height) {
     if (ev.leagueName) {
       content += `<div style="font-size:9px;opacity:0.8;">🏆 ${ev.leagueName}</div>`;
     }
-    // Location display for larger tiles
-    if (adjustedHeight > 50) {
-      const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
-      if (locationDisplay && ev.type !== 'elective') {
-        content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
-      }
-      
-      if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-        const actList = ev.electiveActivities.slice(0, 3).join(', ');
-        const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
-        content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
-      }
-      
-      if (ev.type === 'smart' && ev.smartData) {
-        content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
-      }
+    const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
+    if (locationDisplay && ev.type !== 'elective') {
+      content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
+    }
+    if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
+      const actList = ev.electiveActivities.slice(0, 3).join(', ');
+      const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
+      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
+    }
+    if (ev.type === 'smart' && ev.smartData) {
+      content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
     }
   }
   
@@ -2530,20 +2525,27 @@ function addDropListeners(gridEl) {
       }
       // ===== CUSTOM PINNED =====
       else if (tileData.type === 'custom') {
+        const _cAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
+        const _cAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const _cAllLocations = [...new Set([..._cAllFields, ..._cAllSpecials])].sort();
+        const customModalFields = [
+          { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
+          { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+          { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
+        ];
+        if (_cAllLocations.length > 0) {
+          customModalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: _cAllLocations });
+        }
         const result = await daShowModal({
           title: 'Custom Pinned Event for ' + divName,
           description: 'Create a fixed event like Assembly, Special Program, etc.',
-          fields: [
-            { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
-          ]
+          fields: customModalFields
         });
         if (!result || !result.eventName || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
-        const reservedFields = await promptForReservedFields(result.eventName);
+        const reservedFields = result.reservedFields || [];
         newEvent = {
           id: Date.now().toString(), type: 'pinned', event: result.eventName.trim(),
           division: divName, startTime: result.startTime, endTime: result.endTime,
@@ -2796,7 +2798,7 @@ function addDropListeners(gridEl) {
 // =================================================================
 function addRemoveListeners(gridEl) {
   gridEl.querySelectorAll('.da-event').forEach(tile => {
-    let _downX, _downY;
+    let _downX, _downY, _clickTimer;
     tile.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
 
     tile.onclick = (e) => {
@@ -2804,11 +2806,13 @@ function addRemoveListeners(gridEl) {
       e.stopPropagation();
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(tile.dataset.id); return; }
-      editTile(tile.dataset.id);
+      clearTimeout(_clickTimer);
+      _clickTimer = setTimeout(() => { editTile(tile.dataset.id); }, 280);
     };
 
     tile.ondblclick = async (e) => {
       e.stopPropagation();
+      clearTimeout(_clickTimer);
       if (e.target.classList.contains('da-resize-handle')) return;
       const id = tile.dataset.id;
       if (!id) return;
@@ -2891,11 +2895,17 @@ async function editTile(id) {
     ev.event = 'Elective'; ev.electiveActivities = result.activities;
 
   } else {
+    const _eAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
+    const _eAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+    const _eAllLocations = [...new Set([..._eAllFields, ..._eAllSpecials])].sort();
     const modalFields = [
       { name: 'eventName', label: 'Event Name', type: 'text', default: ev.event },
       { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
       { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime }
     ];
+    if (_eAllLocations.length > 0 && (ev.type === 'pinned' || ev.type === 'slot')) {
+      modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: _eAllLocations, default: ev.reservedFields || [] });
+    }
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
       const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
@@ -2910,6 +2920,10 @@ async function editTile(id) {
     const result = await daShowModal({ title: 'Edit Event', fields: modalFields });
     if (!result || !result.eventName?.trim()) return;
     ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
+    if (result.reservedFields !== undefined) {
+      ev.reservedFields = result.reservedFields;
+      ev.location = result.reservedFields.length === 1 ? result.reservedFields[0] : (result.reservedFields.length > 1 ? null : ev.location);
+    }
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
   }
 
