@@ -2611,16 +2611,23 @@ function renderEventTile(ev, top, height) {
   // Add 1px gap at bottom to prevent overlap with next tile
   const adjustedHeight = Math.max(height - 1, 10);
   
+  const _electiveActs = ev.type === 'elective' ? (ev.electiveActivities || ev.reservedFields || []) : [];
+  const _tileLabel = ev.type === 'elective'
+    ? (_electiveActs.length > 0 ? _electiveActs.join(', ') : ev.event)
+    : ev.type === 'pinned'
+      ? (() => { const _loc = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : ''); return _loc ? `${ev.event} @ ${_loc}` : ev.event; })()
+      : ev.event;
+
   let innerHtml = `
     <div class="tile-header">
-      <strong style="font-size:11px;">${ev.event}</strong>
+      <strong style="font-size:11px;">${_tileLabel}</strong>
       <div style="font-size:10px;opacity:0.9;">${ev.startTime}-${ev.endTime}</div>
     </div>
   `;
-  
-  if (ev.location) {
+
+  if (ev.location && ev.type !== 'elective' && ev.type !== 'pinned') {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.location}</div>`;
-  } else if (ev.reservedFields?.length > 0 && ev.type !== 'elective') {
+  } else if (ev.reservedFields?.length > 0 && ev.type !== 'elective' && ev.type !== 'pinned') {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
   }
   
@@ -2630,12 +2637,6 @@ function renderEventTile(ev, top, height) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
   }
 
-  if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-    const actList = ev.electiveActivities.slice(0, 3).join(', ');
-    const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🎯 ${actList}${more}</div>`;
-  }
-  
   if (ev.type === 'smart' && ev.smartData) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${ev.smartData.fallbackActivity}</div>`;
   }
