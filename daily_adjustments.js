@@ -1715,6 +1715,24 @@ function renderPalette() {
 }
 
 // =================================================================
+// --- Column Order Persistence ---
+function getColumnOrder() {
+  const all = window.availableDivisions || [];
+  const g = window.loadGlobalSettings?.() || {};
+  const saved = g.app1?.manualColumnOrder;
+  if (!Array.isArray(saved) || saved.length === 0) return [...all];
+  const valid = saved.filter(d => all.includes(d));
+  return [...valid, ...all.filter(d => !valid.includes(d))];
+}
+
+function saveColumnOrder(order) {
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  g.app1.manualColumnOrder = [...order];
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+}
+
 // RENDER GRID
 // =================================================================
 function renderGrid() {
@@ -1728,7 +1746,7 @@ function renderGrid() {
   }
 
   const divisions = window.divisions || {};
-  const availableDivisions = window.availableDivisions || [];
+  const availableDivisions = getColumnOrder();
   if (availableDivisions.length === 0) {
     gridEl.innerHTML = `<div class="da-empty-state">No divisions found.</div>`;
     return;
@@ -1768,7 +1786,7 @@ function renderGrid() {
   html += `<div class="da-grid-header da-time-header">Time</div>`;
   availableDivisions.forEach((divName) => {
     const color = divisions[divName]?.color || '#444';
-    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;">${divName}</div>`;
+    html += `<div data-col-header="${divName}" draggable="true" class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0; cursor:grab; user-select:none;">${divName}</div>`;
   });
   
   // Time column
@@ -1810,12 +1828,50 @@ function renderGrid() {
   
   html += `</div>`;
   gridEl.innerHTML = html;
-  
+
+  addColumnReorderListeners(gridEl);
   addDropListeners(gridEl);
   addDragToRepositionListeners(gridEl);
   addResizeListeners(gridEl);
   addRemoveListeners(gridEl);
   applyConflictHighlighting(gridEl);
+}
+
+function addColumnReorderListeners(containerEl) {
+  let dragSrc = null;
+  const headers = () => containerEl.querySelectorAll('[data-col-header]');
+
+  headers().forEach(hdr => {
+    hdr.addEventListener('dragstart', e => {
+      dragSrc = hdr.dataset.colHeader;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => { hdr.style.opacity = '0.4'; }, 0);
+    });
+    hdr.addEventListener('dragend', () => {
+      hdr.style.opacity = '';
+      headers().forEach(h => h.style.outline = '');
+    });
+    hdr.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    hdr.addEventListener('dragenter', e => {
+      e.preventDefault();
+      headers().forEach(h => h.style.outline = '');
+      if (hdr.dataset.colHeader !== dragSrc) hdr.style.outline = '2px dashed #3b82f6';
+    });
+    hdr.addEventListener('dragleave', () => { hdr.style.outline = ''; });
+    hdr.addEventListener('drop', e => {
+      e.preventDefault();
+      hdr.style.outline = '';
+      if (!dragSrc || dragSrc === hdr.dataset.colHeader) return;
+      const order = getColumnOrder();
+      const from = order.indexOf(dragSrc);
+      const to = order.indexOf(hdr.dataset.colHeader);
+      if (from === -1 || to === -1) return;
+      order.splice(from, 1);
+      order.splice(to, 0, dragSrc);
+      saveColumnOrder(order);
+      renderGrid();
+    });
+  });
 }
 
 // --- AUTO MODE: DAW Layer Timeline ---

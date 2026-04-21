@@ -2249,6 +2249,24 @@ function softenColor(hexColor) {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
+// --- Column Order Persistence ---
+function getColumnOrder() {
+  const all = window.availableDivisions || [];
+  const g = window.loadGlobalSettings?.() || {};
+  const saved = g.app1?.manualColumnOrder;
+  if (!Array.isArray(saved) || saved.length === 0) return [...all];
+  const valid = saved.filter(d => all.includes(d));
+  return [...valid, ...all.filter(d => !valid.includes(d))];
+}
+
+function saveColumnOrder(order) {
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  g.app1.manualColumnOrder = [...order];
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+}
+
 // --- RENDER GRID ---
 function renderGrid() {
   if (!grid) return;
@@ -2260,7 +2278,7 @@ function renderGrid() {
   }
 
   const divisions = window.divisions || {};
-  const availableDivisions = window.availableDivisions || [];
+  const availableDivisions = getColumnOrder();
 
   if (availableDivisions.length === 0) {
     grid.innerHTML = `<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">
@@ -2292,7 +2310,7 @@ function renderGrid() {
   availableDivisions.forEach((divName, i) => {
     const rawColor = divisions[divName]?.color || '#475569';
     const color = softenColor(rawColor);
-    html += `<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#1e293b; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px;">${divName}</div>`;
+    html += `<div data-col-header="${divName}" draggable="true" style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#1e293b; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px; cursor:grab; user-select:none;">${divName}</div>`;
   });
 
   // Time Column
@@ -2336,6 +2354,7 @@ function renderGrid() {
   grid.innerHTML = html;
   grid.dataset.earliestMin = earliestMin;
 
+  addColumnReorderListeners(grid);
   addDropListeners('.grid-cell');
   addDragToRepositionListeners(grid);
   addResizeListeners(grid);
@@ -2366,6 +2385,43 @@ function addClickToSelectListeners() {
       deselectAllTiles();
     }
   };
+}
+
+function addColumnReorderListeners(containerEl) {
+  let dragSrc = null;
+  const headers = () => containerEl.querySelectorAll('[data-col-header]');
+
+  headers().forEach(hdr => {
+    hdr.addEventListener('dragstart', e => {
+      dragSrc = hdr.dataset.colHeader;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => { hdr.style.opacity = '0.4'; }, 0);
+    });
+    hdr.addEventListener('dragend', () => {
+      hdr.style.opacity = '';
+      headers().forEach(h => h.style.outline = '');
+    });
+    hdr.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    hdr.addEventListener('dragenter', e => {
+      e.preventDefault();
+      headers().forEach(h => h.style.outline = '');
+      if (hdr.dataset.colHeader !== dragSrc) hdr.style.outline = '2px dashed #3b82f6';
+    });
+    hdr.addEventListener('dragleave', () => { hdr.style.outline = ''; });
+    hdr.addEventListener('drop', e => {
+      e.preventDefault();
+      hdr.style.outline = '';
+      if (!dragSrc || dragSrc === hdr.dataset.colHeader) return;
+      const order = getColumnOrder();
+      const from = order.indexOf(dragSrc);
+      const to = order.indexOf(hdr.dataset.colHeader);
+      if (from === -1 || to === -1) return;
+      order.splice(from, 1);
+      order.splice(to, 0, dragSrc);
+      saveColumnOrder(order);
+      renderGrid();
+    });
+  });
 }
 
 // --- Render Tile ---
