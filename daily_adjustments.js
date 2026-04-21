@@ -140,9 +140,10 @@ function daShowModal(config) {
         inputs[field.name] = function() { return fieldEl.querySelector('select').value; };
       }
       else if (field.type === 'checkbox-group') {
+        var _cbDefaults = Array.isArray(field.default) ? field.default : [];
         var checkboxes = (field.options || []).map(function(o) {
           return '<label class="da-modal-cb-item">' +
-            '<input type="checkbox" value="' + o + '" data-group="' + field.name + '">' +
+            '<input type="checkbox" value="' + o + '" data-group="' + field.name + '"' + (_cbDefaults.indexOf(o) !== -1 ? ' checked' : '') + '>' +
             '<span>' + o + '</span></label>';
         }).join('');
         fieldEl.innerHTML = '<label>' + field.label + '</label>' +
@@ -2099,6 +2100,10 @@ function renderEventTile(ev, top, height) {
           title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
           style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
           <div class="da-resize-handle da-resize-top"></div>
+          <div style="position:absolute;top:2px;right:2px;display:flex;gap:2px;z-index:5;">
+            <button onclick="event.stopPropagation();event.preventDefault();editTile('${ev.id}')" ondblclick="event.stopPropagation()" style="background:rgba(255,255,255,0.75);border:none;border-radius:3px;width:15px;height:13px;font-size:9px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;" title="Edit">✏</button>
+            <button onclick="event.stopPropagation();event.preventDefault();copyTile('${ev.id}')" ondblclick="event.stopPropagation()" style="background:rgba(255,255,255,0.75);border:none;border-radius:3px;width:15px;height:13px;font-size:9px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;" title="Copy to grade">⊕</button>
+          </div>
           ${content}
           ${_travelStrips}
           <div class="da-resize-handle da-resize-bottom"></div>
@@ -2819,6 +2824,106 @@ function selectTile(id) {
 function deselectAllTiles() {
   selectedTileId = null;
   document.querySelectorAll('.da-event.selected').forEach(el => el.classList.remove('selected'));
+}
+
+async function editTile(id) {
+  const ev = dailyOverrideSkeleton.find(e => e.id === id);
+  if (!ev) return;
+
+  if (ev.type === 'smart') {
+    const result = await daShowModal({
+      title: 'Edit Smart Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '' },
+        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '' },
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity' }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' };
+
+  } else if (ev.type === 'split') {
+    const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const result = await daShowModal({
+      title: 'Edit Split Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
+        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    const event1 = mapEventNameForOptimizer(result.main1);
+    const event2 = mapEventNameForOptimizer(result.main2);
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+
+  } else if (ev.type === 'elective') {
+    const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
+    const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+    const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
+    const result = await daShowModal({
+      title: 'Edit Elective',
+      wide: true,
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: allLocations, default: ev.electiveActivities || [] }
+      ]
+    });
+    if (!result || !result.activities?.length) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = 'Elective'; ev.electiveActivities = result.activities;
+
+  } else {
+    const modalFields = [
+      { name: 'eventName', label: 'Event Name', type: 'text', default: ev.event },
+      { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+      { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime }
+    ];
+    if (ev.type === 'league' || ev.type === 'specialty_league') {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
+      if (_leagueNames.length > 0) {
+        modalFields.splice(1, 0, {
+          name: 'leagueName', label: 'Which League?', type: 'select',
+          options: [{ value: '', label: '— Any League (auto) —' }].concat(_leagueNames.map(ln => ({ value: ln, label: ln }))),
+          default: ev.leagueName || ''
+        });
+      }
+    }
+    const result = await daShowModal({ title: 'Edit Event', fields: modalFields });
+    if (!result || !result.eventName?.trim()) return;
+    ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
+    if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  saveDailySkeleton();
+  renderGrid();
+}
+
+async function copyTile(id) {
+  const ev = dailyOverrideSkeleton.find(e => e.id === id);
+  if (!ev) return;
+  const others = getColumnOrder().filter(d => d !== ev.division);
+  if (others.length === 0) { await daShowAlert('No other grades to copy to.'); return; }
+  const result = await daShowModal({
+    title: 'Copy Tile to Grades',
+    description: `Copy "${ev.event}" (${ev.startTime}–${ev.endTime}) to:`,
+    fields: [{ name: 'targets', label: 'Select target grades', type: 'checkbox-group', options: others }]
+  });
+  if (!result || !result.targets?.length) return;
+  result.targets.forEach(div => {
+    dailyOverrideSkeleton.push({ ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div });
+  });
+  saveDailySkeleton();
+  renderGrid();
 }
 
 // =================================================================

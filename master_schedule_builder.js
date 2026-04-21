@@ -154,9 +154,10 @@ function showModal(config) {
         inputs[field.name] = () => fieldEl.querySelector('input').value;
       }
       else if (field.type === 'select') {
-        const options = (field.options || []).map(o => 
-          `<option value="${o.value || o}" ${o === field.default ? 'selected' : ''}>${o.label || o}</option>`
-        ).join('');
+        const options = (field.options || []).map(o => {
+          const val = (o.value !== undefined) ? o.value : o;
+          return `<option value="${val}" ${val === field.default ? 'selected' : ''}>${o.label || o}</option>`;
+        }).join('');
         fieldEl.innerHTML = `
           <label>${field.label}</label>
           <select class="ms-modal-input" data-field="${field.name}">
@@ -166,9 +167,10 @@ function showModal(config) {
         inputs[field.name] = () => fieldEl.querySelector('select').value;
       }
       else if (field.type === 'checkbox-group') {
+        const _cbDefaults = Array.isArray(field.default) ? field.default : [];
         const checkboxes = (field.options || []).map(o => `
           <label class="ms-checkbox-item">
-            <input type="checkbox" value="${o}" data-group="${field.name}">
+            <input type="checkbox" value="${o}" data-group="${field.name}"${_cbDefaults.includes(o) ? ' checked' : ''}>
             <span>${o}</span>
           </label>
         `).join('');
@@ -184,6 +186,7 @@ function showModal(config) {
       // ★ v2.5: Grouped checkbox - renders checkboxes with category headers (like DA bunk overrides)
       else if (field.type === 'grouped-checkbox') {
         let groupsHTML = '';
+        const _gcDefaults = Array.isArray(field.default) ? field.default : [];
         (field.groups || []).forEach(group => {
           if (!group.options || group.options.length === 0) return;
           groupsHTML += `<div class="ms-checkbox-group-header">${group.label}</div>`;
@@ -193,7 +196,7 @@ function showModal(config) {
             const display = typeof o === 'object' ? o.label : o;
             groupsHTML += `
               <label class="ms-checkbox-item">
-                <input type="checkbox" value="${val}" data-group="${field.name}">
+                <input type="checkbox" value="${val}" data-group="${field.name}"${_gcDefaults.includes(val) ? ' checked' : ''}>
                 <span>${display}</span>
               </label>`;
           });
@@ -721,6 +724,113 @@ async function deleteTile(id) {
     saveDraftToLocalStorage();
     renderGrid();
   }
+}
+
+async function editTile(id) {
+  const ev = dailySkeleton.find(e => e.id === id);
+  if (!ev) return;
+
+  if (ev.type === 'smart') {
+    const result = await showModal({
+      title: 'Edit Smart Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '' },
+        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '' },
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity' }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' };
+
+  } else if (ev.type === 'split') {
+    const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const result = await showModal({
+      title: 'Edit Split Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
+        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    const event1 = mapEventNameForOptimizer(result.main1);
+    const event2 = mapEventNameForOptimizer(result.main2);
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+
+  } else if (ev.type === 'elective') {
+    const locations = getAllLocations();
+    const result = await showModal({
+      title: 'Edit Elective',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locations, default: ev.electiveActivities || [] }
+      ]
+    });
+    if (!result || !result.activities?.length) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `Elective: ${result.activities.slice(0, 3).join(', ')}${result.activities.length > 3 ? '...' : ''}`;
+    ev.electiveActivities = result.activities; ev.reservedFields = result.activities;
+
+  } else {
+    const { groups: locationGroups, hasAny: hasLocations } = getGroupedLocationOptions();
+    const modalFields = [
+      { name: 'eventName', label: 'Event Name', type: 'text', default: ev.event },
+      { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+      { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime }
+    ];
+    if (ev.type === 'league' || ev.type === 'specialty_league') {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
+      if (_leagueNames.length > 0) {
+        modalFields.splice(1, 0, {
+          name: 'leagueName', label: 'Which League?', type: 'select',
+          options: [{ value: '', label: '— Any League (auto) —' }].concat(_leagueNames.map(ln => ({ value: ln, label: ln }))),
+          default: ev.leagueName || ''
+        });
+      }
+    }
+    if (hasLocations) {
+      modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'grouped-checkbox', groups: locationGroups, default: ev.reservedFields || [] });
+    }
+    const result = await showModal({ title: 'Edit Event', fields: modalFields });
+    if (!result || !result.eventName?.trim()) return;
+    const reservedFields = result.reservedFields || [];
+    ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.reservedFields = reservedFields;
+    ev.location = reservedFields.length === 1 ? reservedFields[0] : (reservedFields.length > 1 ? null : ev.location);
+    if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  markUnsavedChanges();
+  saveDraftToLocalStorage();
+  renderGrid();
+}
+
+async function copyTile(id) {
+  const ev = dailySkeleton.find(e => e.id === id);
+  if (!ev) return;
+  const others = getColumnOrder().filter(d => d !== ev.division);
+  if (others.length === 0) { await showAlert('No other grades to copy to.'); return; }
+  const result = await showModal({
+    title: 'Copy Tile to Grades',
+    description: `Copy "${ev.event}" (${ev.startTime}–${ev.endTime}) to:`,
+    fields: [{ name: 'targets', label: 'Select target grades', type: 'checkbox-group', options: others }]
+  });
+  if (!result || !result.targets?.length) return;
+  result.targets.forEach(div => {
+    dailySkeleton.push({ ...ev, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: div });
+  });
+  markUnsavedChanges();
+  saveDraftToLocalStorage();
+  renderGrid();
 }
 
 // --- Render Toolbar ---
@@ -2498,6 +2608,10 @@ function renderEventTile(ev, top, height) {
   return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove"
           style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
           <div class="resize-handle resize-handle-top"></div>
+          <div style="position:absolute;top:2px;right:2px;display:flex;gap:2px;z-index:5;">
+            <button onclick="event.stopPropagation();event.preventDefault();editTile('${ev.id}')" ondblclick="event.stopPropagation()" style="background:rgba(255,255,255,0.75);border:none;border-radius:3px;width:15px;height:13px;font-size:9px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;" title="Edit">✏</button>
+            <button onclick="event.stopPropagation();event.preventDefault();copyTile('${ev.id}')" ondblclick="event.stopPropagation()" style="background:rgba(255,255,255,0.75);border:none;border-radius:3px;width:15px;height:13px;font-size:9px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;" title="Copy to grade">⊕</button>
+          </div>
           ${innerHtml}
           ${_travelStrips}
           <div class="resize-handle resize-handle-bottom"></div>
