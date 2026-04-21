@@ -2125,6 +2125,22 @@ const isAutoSchedule = currentBuilderMode === 'auto';
                 reservedFields: slot.reservedFields,
                 location: slot.location
             }));
+            // Enrich from skeleton for elective/pinned blocks that may be missing data (cached divisionTimes)
+            divBlocks.forEach(block => {
+                if (block.type === 'elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
+                    if (!block.electiveActivities?.length && !block.reservedFields?.length && !block.location) {
+                        const match = skeleton.find(s => s.division === divName &&
+                            parseTimeToMinutes(s.startTime) === block.startMin &&
+                            (s.type === block.type || (block.type === 'pinned' && s.type === 'pinned')));
+                        if (match) {
+                            block.electiveActivities = match.electiveActivities;
+                            block.reservedFields = match.reservedFields;
+                            block.location = match.location;
+                            block.event = match.event;
+                        }
+                    }
+                }
+            });
         } else {
             divBlocks = skeleton.filter(b => b.division === divName).map(b => ({ 
                 ...b, 
