@@ -490,7 +490,10 @@ function shouldHighlightBunk(bunkName) {
                 endMin: parseTimeToMinutes(block.endTime),
                 event: block.event || 'GA',
                 type: block.type || 'slot',
-                label: `${minutesToTimeLabel(parseTimeToMinutes(block.startTime))} - ${minutesToTimeLabel(parseTimeToMinutes(block.endTime))}`
+                label: `${minutesToTimeLabel(parseTimeToMinutes(block.startTime))} - ${minutesToTimeLabel(parseTimeToMinutes(block.endTime))}`,
+                electiveActivities: block.electiveActivities,
+                reservedFields: block.reservedFields,
+                location: block.location
             })).filter(s => s.startMin !== null && s.endMin !== null);
         }
         
@@ -2053,11 +2056,14 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         
         let divisionsToShow = Object.keys(divisions);
         if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
-        divisionsToShow.sort((a, b) => { 
-            const numA = parseInt(a), numB = parseInt(b); 
-            if (!isNaN(numA) && !isNaN(numB)) return numA - numB; 
-            return String(a).localeCompare(String(b)); 
-        });
+        { const _customOrder = (window.loadGlobalSettings?.() || {})?.app1?.manualColumnOrder;
+          if (Array.isArray(_customOrder) && _customOrder.length > 0) {
+            const _pos = d => { const i = _customOrder.indexOf(d); return i === -1 ? 9999 : i; };
+            divisionsToShow.sort((a, b) => _pos(a) - _pos(b));
+          } else {
+            divisionsToShow.sort((a, b) => { const numA = parseInt(a), numB = parseInt(b); if (!isNaN(numA) && !isNaN(numB)) return numA - numB; return String(a).localeCompare(String(b)); });
+          }
+        }
         
         if (divisionsToShow.length === 0) { 
             container.innerHTML = `<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No divisions configured.</p></div>`; 
@@ -2114,8 +2120,27 @@ const isAutoSchedule = currentBuilderMode === 'auto';
                 division: divName,
                 _splitHalf: slot._splitHalf,
                 _splitParentEvent: slot._splitParentEvent,
-                _isSplitTile: !!slot._splitHalf
+                _isSplitTile: !!slot._splitHalf,
+                electiveActivities: slot.electiveActivities,
+                reservedFields: slot.reservedFields,
+                location: slot.location
             }));
+            // Enrich from skeleton for elective/pinned blocks that may be missing data (cached divisionTimes)
+            divBlocks.forEach(block => {
+                if (block.type === 'elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
+                    if (!block.electiveActivities?.length && !block.reservedFields?.length && !block.location) {
+                        const match = skeleton.find(s => s.division === divName &&
+                            parseTimeToMinutes(s.startTime) === block.startMin &&
+                            (s.type === block.type || (block.type === 'pinned' && s.type === 'pinned')));
+                        if (match) {
+                            block.electiveActivities = match.electiveActivities;
+                            block.reservedFields = match.reservedFields;
+                            block.location = match.location;
+                            block.event = match.event;
+                        }
+                    }
+                }
+            });
         } else {
             divBlocks = skeleton.filter(b => b.division === divName).map(b => ({ 
                 ...b, 
@@ -2217,9 +2242,15 @@ divBlocks.forEach((block, blockIdx) => {
     tr.appendChild(tdTime);
     
     if (isLeagueBlockType(block.event, block.type)) {
-        tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable)); 
-        tbody.appendChild(tr); 
-        return; 
+        tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable));
+        tbody.appendChild(tr);
+        return;
+    }
+
+    if (block.type === 'elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
+        tr.appendChild(renderFixedBlockCell(block, bunks));
+        tbody.appendChild(tr);
+        return;
     }
     
     bunks.forEach(bunk => {
@@ -2346,6 +2377,23 @@ divBlocks.forEach((block, blockIdx) => {
         return td;
     }
 
+    function renderFixedBlockCell(block, bunks) {
+        const td = document.createElement('td');
+        td.colSpan = bunks.length;
+        if (block.type === 'elective') {
+            const acts = block.electiveActivities || block.reservedFields || [];
+            const label = acts.join(', ') || block.event || 'Elective';
+            td.style.cssText = 'padding: 10px 16px; background: linear-gradient(135deg, #ede9fe, #ddd6fe); border-left: 4px solid #7c3aed; vertical-align: middle; text-align: center;';
+            td.innerHTML = `<span style="font-weight:600;color:#5b21b6;font-size:0.95rem;">🎯 ${escapeHtml(label)}</span>`;
+        } else {
+            const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
+            const label = loc ? `${block.event} - ${loc}` : block.event;
+            td.style.cssText = 'padding: 10px 16px; background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 4px solid #f59e0b; vertical-align: middle; text-align: center;';
+            td.innerHTML = `<span style="font-weight:600;color:#92400e;font-size:0.95rem;">${escapeHtml(label)}</span>`;
+        }
+        return td;
+    }
+
     function renderBunkCell(block, bunk, divName, isEditable) {
         const td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
@@ -2360,15 +2408,27 @@ divBlocks.forEach((block, blockIdx) => {
             if (blockCheck.blocked) { isBlocked = true; blockedReason = blockCheck.reason; } 
         }
         
-        let displayText = '', bgColor = '#fff';
-        if (entry && !entry.continuation) { 
-            displayText = formatEntry(entry); 
-            bgColor = getEntryBackground(entry, block.event); 
-            if (entry._pinned) displayText = '📌 ' + displayText; 
+        let displayText = '', bgColor = '#fff', htmlContent = null;
+
+        // Elective and pinned (custom) blocks always show their own skeleton data
+        if (block.type === 'elective') {
+            const acts = block.electiveActivities || block.reservedFields || [];
+            const displayName = acts.join(', ') || block.event || 'Elective';
+            htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">${escapeHtml(displayName)}</div>`;
+            bgColor = '#ede9fe';
+        } else if (block.type === 'pinned' && block.event && !isFixedBlockType(block.event)) {
+            const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
+            const combined = loc ? `${block.event} - ${loc}` : block.event;
+            htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#92400e;">${escapeHtml(combined)}</div>`;
+            bgColor = '#fff8e1';
+        } else if (entry && !entry.continuation) {
+            displayText = formatEntry(entry);
+            bgColor = getEntryBackground(entry, block.event);
+            if (entry._pinned) displayText = '📌 ' + displayText;
         }
-        else if (!entry) { 
-            if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; } 
-            else bgColor = '#f9fafb'; 
+        else if (!entry) {
+            if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; }
+            else bgColor = '#f9fafb';
         }
         
        // ★★★ AUTO BUILDER v2: _subEntries = multiple activities in one slot ★★★
@@ -2389,11 +2449,15 @@ divBlocks.forEach((block, blockIdx) => {
                 subDiv.title = subText + ' (' + subDur + 'min)';
                 td.appendChild(subDiv);
             });
+        } else if (htmlContent) {
+            td.innerHTML = htmlContent;
+            td.style.background = bgColor;
+            td.style.textAlign = 'left';
         } else {
             td.textContent = displayText;
             td.style.background = bgColor;
         }
-        
+
         // Cell-specific bypass highlighting
 const bypassStatus = getCellBypassStatus(bunk, slotIdx);
 if (bypassStatus.highlight) {

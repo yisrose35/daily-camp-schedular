@@ -154,9 +154,10 @@ function showModal(config) {
         inputs[field.name] = () => fieldEl.querySelector('input').value;
       }
       else if (field.type === 'select') {
-        const options = (field.options || []).map(o => 
-          `<option value="${o.value || o}" ${o === field.default ? 'selected' : ''}>${o.label || o}</option>`
-        ).join('');
+        const options = (field.options || []).map(o => {
+          const val = (o.value !== undefined) ? o.value : o;
+          return `<option value="${val}" ${val === field.default ? 'selected' : ''}>${o.label || o}</option>`;
+        }).join('');
         fieldEl.innerHTML = `
           <label>${field.label}</label>
           <select class="ms-modal-input" data-field="${field.name}">
@@ -166,12 +167,18 @@ function showModal(config) {
         inputs[field.name] = () => fieldEl.querySelector('select').value;
       }
       else if (field.type === 'checkbox-group') {
-        const checkboxes = (field.options || []).map(o => `
-          <label class="ms-checkbox-item">
-            <input type="checkbox" value="${o}" data-group="${field.name}">
-            <span>${o}</span>
-          </label>
-        `).join('');
+        const _cbDefaults = Array.isArray(field.default) ? field.default : [];
+        const checkboxes = (field.options || []).map(o => {
+          const val = typeof o === 'object' ? o.value : o;
+          const lbl = typeof o === 'object' ? o.label : o;
+          const dis = typeof o === 'object' && o.disabled;
+          const reason = dis && o.disabledReason ? ` title="${o.disabledReason}"` : '';
+          const chk = !dis && _cbDefaults.includes(val) ? ' checked' : '';
+          return `<label class="ms-checkbox-item${dis ? ' ms-cb-disabled' : ''}"${reason} style="${dis ? 'opacity:0.45;pointer-events:none;' : ''}">
+            <input type="checkbox" value="${val}" data-group="${field.name}"${chk}${dis ? ' disabled' : ''}>
+            <span>${lbl}${dis ? ' <em style="font-size:9px;">(taken)</em>' : ''}</span>
+          </label>`;
+        }).join('');
         fieldEl.innerHTML = `
           <label>${field.label}</label>
           <div class="ms-checkbox-group">${checkboxes}</div>
@@ -184,6 +191,7 @@ function showModal(config) {
       // ★ v2.5: Grouped checkbox - renders checkboxes with category headers (like DA bunk overrides)
       else if (field.type === 'grouped-checkbox') {
         let groupsHTML = '';
+        const _gcDefaults = Array.isArray(field.default) ? field.default : [];
         (field.groups || []).forEach(group => {
           if (!group.options || group.options.length === 0) return;
           groupsHTML += `<div class="ms-checkbox-group-header">${group.label}</div>`;
@@ -193,7 +201,7 @@ function showModal(config) {
             const display = typeof o === 'object' ? o.label : o;
             groupsHTML += `
               <label class="ms-checkbox-item">
-                <input type="checkbox" value="${val}" data-group="${field.name}">
+                <input type="checkbox" value="${val}" data-group="${field.name}"${_gcDefaults.includes(val) ? ' checked' : ''}>
                 <span>${display}</span>
               </label>`;
           });
@@ -215,12 +223,14 @@ function showModal(config) {
       fieldsContainer.appendChild(fieldEl);
     });
     
+    if (config.postRender) config.postRender(overlay);
+
     // Focus first input
     setTimeout(() => {
       const firstInput = overlay.querySelector('.ms-modal-input');
       if (firstInput) firstInput.focus();
     }, 50);
-    
+
     // Event handlers
     const close = (result) => {
       overlay.remove();
@@ -511,6 +521,34 @@ function getAllLocations() {
   return all;
 }
 
+// Returns Set of facility names already reserved by other elective tiles that overlap the given time range
+function getConflictingFacilities(startTime, endTime, excludeId) {
+  const s = parseTimeToMinutes(startTime), e = parseTimeToMinutes(endTime);
+  if (s === null || e === null) return new Set();
+  const taken = new Set();
+  (dailySkeleton || []).forEach(ev => {
+    if (ev.id === excludeId || ev.type !== 'elective') return;
+    const es = parseTimeToMinutes(ev.startTime), ee = parseTimeToMinutes(ev.endTime);
+    if (es === null || ee === null) return;
+    if (s < ee && e > es) (ev.electiveActivities || []).forEach(a => taken.add(a));
+  });
+  return taken;
+}
+
+// Returns { activityName: [facilityName, ...] } from fields[].activities
+function getSportFacilitiesMap() {
+  const gs = window.loadGlobalSettings?.() || {};
+  const map = {};
+  (gs.app1?.fields || []).forEach(f => {
+    (f.activities || []).forEach(act => {
+      const key = typeof act === 'string' ? act : (act.name || String(act));
+      if (!map[key]) map[key] = [];
+      if (f.name && !map[key].includes(f.name)) map[key].push(f.name);
+    });
+  });
+  return map;
+}
+
 // =================================================================
 // ★ v2.5: Build grouped location options (matches DA bunk overrides pattern)
 // =================================================================
@@ -723,6 +761,132 @@ async function deleteTile(id) {
   }
 }
 
+async function editTile(id) {
+  const ev = dailySkeleton.find(e => e.id === id);
+  if (!ev) return;
+
+  if (ev.type === 'smart') {
+    const result = await showModal({
+      title: 'Edit Smart Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '' },
+        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '' },
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity' }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' };
+
+  } else if (ev.type === 'split') {
+    const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const result = await showModal({
+      title: 'Edit Split Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
+        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    const event1 = mapEventNameForOptimizer(result.main1);
+    const event2 = mapEventNameForOptimizer(result.main2);
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+
+  } else if (ev.type === 'elective') {
+    const locations = getAllLocations();
+    const taken = getConflictingFacilities(ev.startTime, ev.endTime, ev.id);
+    const sportMap = getSportFacilitiesMap();
+    const sportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(sportMap).sort().map(s => ({ value: s, label: s }))];
+    const locationOptions = locations.map(l => (taken.has(l) && !(ev.electiveActivities || []).includes(l)) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
+    const result = await showModal({
+      title: 'Edit Elective',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        ...(sportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: sportOptions }] : []),
+        { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locationOptions, default: ev.electiveActivities || [] }
+      ],
+      postRender: (overlay) => {
+        const sportSel = overlay.querySelector('[data-field="sport"]');
+        if (!sportSel) return;
+        sportSel.addEventListener('change', () => {
+          const s = sportSel.value;
+          const matching = s ? (sportMap[s] || []) : [];
+          overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(cb => {
+            cb.checked = matching.includes(cb.value);
+          });
+        });
+      }
+    });
+    if (!result) return;
+    let chosen = result.activities || [];
+    if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f));
+    if (!chosen.length) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = 'Elective';
+    ev.electiveActivities = chosen; ev.reservedFields = chosen;
+
+  } else {
+    const { groups: locationGroups, hasAny: hasLocations } = getGroupedLocationOptions();
+    const modalFields = [
+      { name: 'eventName', label: 'Event Name', type: 'text', default: ev.event },
+      { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+      { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime }
+    ];
+    if (ev.type === 'league' || ev.type === 'specialty_league') {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
+      if (_leagueNames.length > 0) {
+        modalFields.splice(1, 0, {
+          name: 'leagueName', label: 'Which League?', type: 'select',
+          options: [{ value: '', label: '— Any League (auto) —' }].concat(_leagueNames.map(ln => ({ value: ln, label: ln }))),
+          default: ev.leagueName || ''
+        });
+      }
+    }
+    if (hasLocations) {
+      modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'grouped-checkbox', groups: locationGroups, default: ev.reservedFields || [] });
+    }
+    const result = await showModal({ title: 'Edit Event', fields: modalFields });
+    if (!result || !result.eventName?.trim()) return;
+    const reservedFields = result.reservedFields || [];
+    ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.reservedFields = reservedFields;
+    ev.location = reservedFields.length === 1 ? reservedFields[0] : (reservedFields.length > 1 ? null : ev.location);
+    if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  markUnsavedChanges();
+  saveDraftToLocalStorage();
+  renderGrid();
+}
+
+async function copyTile(id) {
+  const ev = dailySkeleton.find(e => e.id === id);
+  if (!ev) return;
+  const others = getColumnOrder().filter(d => d !== ev.division);
+  if (others.length === 0) { await showAlert('No other grades to copy to.'); return; }
+  const result = await showModal({
+    title: 'Copy Tile to Grades',
+    description: `Copy "${ev.event}" (${ev.startTime}–${ev.endTime}) to:`,
+    fields: [{ name: 'targets', label: 'Select target grades', type: 'checkbox-group', options: others }]
+  });
+  if (!result || !result.targets?.length) return;
+  result.targets.forEach(div => {
+    dailySkeleton.push({ ...ev, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: div });
+  });
+  markUnsavedChanges();
+  saveDraftToLocalStorage();
+  renderGrid();
+}
+
 // --- Render Toolbar ---
 function renderToolbar() {
   const toolbar = document.getElementById('scheduler-toolbar');
@@ -837,6 +1001,7 @@ function renderToolbar() {
     const ok = await showConfirm(`Overwrite "${templateToUpdate}" with current grid?`);
     if (ok) {
       window.saveSkeleton?.(templateToUpdate, dailySkeleton);
+      { const g = window.loadGlobalSettings?.() || {}; if (!g.app1) g.app1 = {}; if (!g.app1.skeletonColumnOrders) g.app1.skeletonColumnOrders = {}; g.app1.skeletonColumnOrders[templateToUpdate] = getColumnOrder(); window.saveGlobalSettings?.('app1', g.app1); }
       window.forceSyncToCloud?.();
       currentLoadedTemplate = templateToUpdate; // Set it as explicitly loaded now
       hasUnsavedChanges = false;
@@ -861,6 +1026,7 @@ function renderToolbar() {
     }
     
     window.saveSkeleton?.(name, dailySkeleton);
+    { const g = window.loadGlobalSettings?.() || {}; if (!g.app1) g.app1 = {}; if (!g.app1.skeletonColumnOrders) g.app1.skeletonColumnOrders = {}; g.app1.skeletonColumnOrders[name] = getColumnOrder(); window.saveGlobalSettings?.('app1', g.app1); }
     window.forceSyncToCloud?.();
     currentLoadedTemplate = name;
     hasUnsavedChanges = false;
@@ -2249,6 +2415,24 @@ function softenColor(hexColor) {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
+// --- Column Order Persistence ---
+function getColumnOrder() {
+  const all = window.availableDivisions || [];
+  const g = window.loadGlobalSettings?.() || {};
+  const saved = g.app1?.manualColumnOrder;
+  if (!Array.isArray(saved) || saved.length === 0) return [...all];
+  const valid = saved.filter(d => all.includes(d));
+  return [...valid, ...all.filter(d => !valid.includes(d))];
+}
+
+function saveColumnOrder(order) {
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  g.app1.manualColumnOrder = [...order];
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+}
+
 // --- RENDER GRID ---
 function renderGrid() {
   if (!grid) return;
@@ -2260,7 +2444,7 @@ function renderGrid() {
   }
 
   const divisions = window.divisions || {};
-  const availableDivisions = window.availableDivisions || [];
+  const availableDivisions = getColumnOrder();
 
   if (availableDivisions.length === 0) {
     grid.innerHTML = `<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">
@@ -2292,7 +2476,7 @@ function renderGrid() {
   availableDivisions.forEach((divName, i) => {
     const rawColor = divisions[divName]?.color || '#475569';
     const color = softenColor(rawColor);
-    html += `<div style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#1e293b; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px;">${divName}</div>`;
+    html += `<div data-col-header="${divName}" draggable="true" style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#1e293b; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px; cursor:grab; user-select:none;">${divName}</div>`;
   });
 
   // Time Column
@@ -2336,6 +2520,7 @@ function renderGrid() {
   grid.innerHTML = html;
   grid.dataset.earliestMin = earliestMin;
 
+  addColumnReorderListeners(grid);
   addDropListeners('.grid-cell');
   addDragToRepositionListeners(grid);
   addResizeListeners(grid);
@@ -2346,26 +2531,68 @@ function renderGrid() {
 
 function addClickToSelectListeners() {
   grid.querySelectorAll('.grid-event').forEach(el => {
+    let _downX, _downY, _clickTimer;
+    el.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
+
     el.onclick = (e) => {
       if (e.target.classList.contains('resize-handle')) return;
       e.stopPropagation();
-      selectTile(el.dataset.id);
+      const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
+      if (dist > 5) { selectTile(el.dataset.id); return; }
+      clearTimeout(_clickTimer);
+      _clickTimer = setTimeout(() => { editTile(el.dataset.id); }, 280);
     };
-    
-    // Double-click still works as fallback
+
     el.ondblclick = async (e) => {
       e.stopPropagation();
+      clearTimeout(_clickTimer);
       if (e.target.classList.contains('resize-handle')) return;
       await deleteTile(el.dataset.id);
     };
   });
-  
-  // Click on grid background to deselect
+
   grid.onclick = (e) => {
     if (e.target.classList.contains('grid-cell') || e.target.id === 'scheduler-grid') {
       deselectAllTiles();
     }
   };
+}
+
+function addColumnReorderListeners(containerEl) {
+  let dragSrc = null;
+  const headers = () => containerEl.querySelectorAll('[data-col-header]');
+
+  headers().forEach(hdr => {
+    hdr.addEventListener('dragstart', e => {
+      dragSrc = hdr.dataset.colHeader;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => { hdr.style.opacity = '0.4'; }, 0);
+    });
+    hdr.addEventListener('dragend', () => {
+      hdr.style.opacity = '';
+      headers().forEach(h => h.style.outline = '');
+    });
+    hdr.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    hdr.addEventListener('dragenter', e => {
+      e.preventDefault();
+      headers().forEach(h => h.style.outline = '');
+      if (hdr.dataset.colHeader !== dragSrc) hdr.style.outline = '2px dashed #3b82f6';
+    });
+    hdr.addEventListener('dragleave', () => { hdr.style.outline = ''; });
+    hdr.addEventListener('drop', e => {
+      e.preventDefault();
+      hdr.style.outline = '';
+      if (!dragSrc || dragSrc === hdr.dataset.colHeader) return;
+      const order = getColumnOrder();
+      const from = order.indexOf(dragSrc);
+      const to = order.indexOf(hdr.dataset.colHeader);
+      if (from === -1 || to === -1) return;
+      order.splice(from, 1);
+      order.splice(to, 0, dragSrc);
+      saveColumnOrder(order);
+      renderGrid();
+    });
+  });
 }
 
 // --- Render Tile ---
@@ -2390,7 +2617,7 @@ function renderEventTile(ev, top, height) {
       <div style="font-size:10px;opacity:0.9;">${ev.startTime}-${ev.endTime}</div>
     </div>
   `;
-  
+
   if (ev.location) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.location}</div>`;
   } else if (ev.reservedFields?.length > 0 && ev.type !== 'elective') {
@@ -2408,7 +2635,7 @@ function renderEventTile(ev, top, height) {
     const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🎯 ${actList}${more}</div>`;
   }
-  
+
   if (ev.type === 'smart' && ev.smartData) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${ev.smartData.fallbackActivity}</div>`;
   }
@@ -2470,10 +2697,16 @@ function addDropListeners(selector) {
         const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
         
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        event.division = divName;
-        event.startTime = minutesToTime(cellStartMin + snapMin);
-        event.endTime = minutesToTime(cellStartMin + snapMin + duration);
-        
+        const newStart = minutesToTime(cellStartMin + snapMin);
+        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+
+        if (divName !== event.division) {
+          dailySkeleton.push({ ...event, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: divName, startTime: newStart, endTime: newEnd });
+        } else {
+          event.startTime = newStart;
+          event.endTime = newEnd;
+        }
+
         markUnsavedChanges();
         saveDraftToLocalStorage();
         renderGrid();
@@ -2562,19 +2795,36 @@ function addDropListeners(selector) {
           await showAlert('No locations configured. Please set up fields/facilities first.');
           return;
         }
-        
+        const taken = getConflictingFacilities(startStr, endStr, null);
+        const sportMap = getSportFacilitiesMap();
+        const sportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(sportMap).sort().map(s => ({ value: s, label: s }))];
+        const locationOptions = locations.map(l => taken.has(l) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
         const result = await showModal({
           title: `Elective for ${divName}`,
           description: 'Select activities to RESERVE for this division only. Other divisions cannot use these during this time.',
           fields: [
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
-            { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locations }
-          ]
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
+            ...(sportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: sportOptions }] : []),
+            { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locationOptions }
+          ],
+          postRender: (overlay) => {
+            const sportSel = overlay.querySelector('[data-field="sport"]');
+            if (!sportSel) return;
+            sportSel.addEventListener('change', () => {
+              const s = sportSel.value;
+              const matching = s ? (sportMap[s] || []) : [];
+              overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(cb => {
+                cb.checked = matching.includes(cb.value);
+              });
+            });
+          }
         });
-        if (!result || !result.activities?.length) return;
-        
-        const eventName = `Elective: ${result.activities.slice(0, 3).join(', ')}${result.activities.length > 3 ? '...' : ''}`;
+        if (!result) return;
+        let chosen = result.activities || [];
+        if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f));
+        if (!chosen.length) return;
+        const eventName = 'Elective';
         newEvent = {
           id: Date.now().toString(),
           type: 'elective',
@@ -2582,8 +2832,8 @@ function addDropListeners(selector) {
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
-          electiveActivities: result.activities,
-          reservedFields: result.activities
+          electiveActivities: chosen,
+          reservedFields: chosen
         };
       }
       // ★ v2.5: CUSTOM PINNED - Now uses grouped locations from locationZones (matches DA bunk overrides)
@@ -3052,6 +3302,10 @@ function loadSkeletonToBuilder(name) {
     dailySkeleton = JSON.parse(JSON.stringify(all[name]));
     currentLoadedTemplate = name;
     hasUnsavedChanges = false;
+    const savedOrders = (window.loadGlobalSettings?.() || {})?.app1?.skeletonColumnOrders || {};
+    if (Array.isArray(savedOrders[name]) && savedOrders[name].length > 0) {
+      saveColumnOrder(savedOrders[name]);
+    }
   }
   renderGrid();
   renderToolbar();

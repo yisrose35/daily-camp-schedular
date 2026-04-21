@@ -26,6 +26,7 @@ let selectedFacilityId = null;
 let facilitiesListEl = null;
 let detailPaneEl = null;
 let addFacilityInput = null;
+let _facilitySearchQuery = '';
 
 // Sport metadata (min/max players) - synced with app1.js
 let sportMetaData = {};
@@ -60,9 +61,15 @@ function initFacilitiesTab() {
               <div style="flex:1; min-width:280px;">
                 <div class="setup-subtitle" style="margin-bottom:8px;">All Facilities</div>
 
-                <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; gap:8px;">
+                <div style="background:white; padding:10px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:8px; display:flex; gap:8px;">
                   <input id="new-facility-input" placeholder="New Facility (e.g., Court 1, Gym, Lunchroom)" style="flex:1; border:none; outline:none; font-size:0.9rem;">
                   <button id="add-facility-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
+                </div>
+
+                <div style="background:white; padding:8px 12px; border-radius:12px; border:1px solid #E5E7EB; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+                  <span style="font-size:0.95rem; color:#9CA3AF;">🔍</span>
+                  <input id="facilities-search-input" placeholder="Search by name, sport, or type (e.g. basketball, special)…" style="flex:1; border:none; outline:none; font-size:0.85rem; color:#374151;">
+                  <button id="facilities-search-clear" style="display:none; background:none; border:none; cursor:pointer; color:#9CA3AF; font-size:1rem; line-height:1; padding:0;">✕</button>
                 </div>
 
                 <div id="facilities-master-list" style="max-height:600px; overflow-y:auto;"></div>
@@ -85,6 +92,21 @@ function initFacilitiesTab() {
 
     document.getElementById("add-facility-btn").onclick = addFacility;
     addFacilityInput.onkeyup = e => { if (e.key === "Enter") addFacility(); };
+
+    const searchInput = document.getElementById('facilities-search-input');
+    const searchClear = document.getElementById('facilities-search-clear');
+    searchInput.oninput = () => {
+        _facilitySearchQuery = searchInput.value.trim().toLowerCase();
+        searchClear.style.display = _facilitySearchQuery ? 'block' : 'none';
+        renderMasterList();
+    };
+    searchClear.onclick = () => {
+        searchInput.value = '';
+        _facilitySearchQuery = '';
+        searchClear.style.display = 'none';
+        renderMasterList();
+        searchInput.focus();
+    };
 
     renderMasterList();
     renderDetailPane();
@@ -427,6 +449,19 @@ function deleteFacility(fac) {
 // =========================================================================
 // MASTER LIST (Left Pane)
 // =========================================================================
+function facilityMatchesQuery(fac, query) {
+    if (!query) return true;
+    if (fac.name.toLowerCase().includes(query)) return true;
+    if ((fac.usedFor || []).some(t => t.toLowerCase().includes(query))) return true;
+    if ((fac.specialActivityNames || []).some(n => n.toLowerCase().includes(query))) return true;
+    if ((fac.generalActivities || []).some(a => (a.name || a).toLowerCase().includes(query))) return true;
+    // Check sport activities from app1.fields
+    const gs = window.loadGlobalSettings?.() || {};
+    const field = (gs.app1?.fields || []).find(f => f.name === fac.name);
+    if (field && (field.activities || []).some(a => (typeof a === 'string' ? a : (a.name || '')).toLowerCase().includes(query))) return true;
+    return false;
+}
+
 function renderMasterList() {
     facilitiesListEl.innerHTML = "";
 
@@ -436,7 +471,14 @@ function renderMasterList() {
     }
 
     facilities.sort((a, b) => (a.order || 0) - (b.order || 0));
-    facilities.forEach(fac => facilitiesListEl.appendChild(masterListItem(fac)));
+    const visible = facilities.filter(fac => facilityMatchesQuery(fac, _facilitySearchQuery));
+
+    if (visible.length === 0) {
+        facilitiesListEl.innerHTML = `<div style="padding:20px; text-align:center; color:#9CA3AF;">No facilities match "<strong>${_facilitySearchQuery}</strong>".</div>`;
+        return;
+    }
+
+    visible.forEach(fac => facilitiesListEl.appendChild(masterListItem(fac)));
 }
 
 function masterListItem(fac) {

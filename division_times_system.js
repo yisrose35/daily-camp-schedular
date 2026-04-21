@@ -298,6 +298,9 @@ if (hasBunkSpecificBlocks) {
             type: meta?.type || 'slot',
             label: `${minutesToTimeLabel(s)} - ${minutesToTimeLabel(e)}`,
             _originalId: meta?.id,
+            electiveActivities: meta?.electiveActivities,
+            reservedFields: meta?.reservedFields,
+            location: meta?.location,
             start: minutesToDate(s),
             end: minutesToDate(e)
         });
@@ -358,6 +361,9 @@ if (hasBunkSpecificBlocks) {
         _splitAct2: block._splitAct2,
         _originalStartMin: block._originalStartMin,
         _originalEndMin: block._originalEndMin,
+        electiveActivities: block.electiveActivities,
+        reservedFields: block.reservedFields,
+        location: block.location,
         start: minutesToDate(block.startMin),
         end: minutesToDate(block.endMin)
     }));

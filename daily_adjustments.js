@@ -140,10 +140,17 @@ function daShowModal(config) {
         inputs[field.name] = function() { return fieldEl.querySelector('select').value; };
       }
       else if (field.type === 'checkbox-group') {
+        var _cbDefaults = Array.isArray(field.default) ? field.default : [];
         var checkboxes = (field.options || []).map(function(o) {
-          return '<label class="da-modal-cb-item">' +
-            '<input type="checkbox" value="' + o + '" data-group="' + field.name + '">' +
-            '<span>' + o + '</span></label>';
+          var val = typeof o === 'object' ? o.value : o;
+          var lbl = typeof o === 'object' ? o.label : o;
+          var dis = typeof o === 'object' && o.disabled;
+          var reason = dis && o.disabledReason ? ' title="' + o.disabledReason + '"' : '';
+          var chk = (!dis && _cbDefaults.indexOf(val) !== -1) ? ' checked' : '';
+          return '<label class="da-modal-cb-item' + (dis ? ' da-cb-disabled' : '') + '"' + reason +
+            (dis ? ' style="opacity:0.45;pointer-events:none;"' : '') + '>' +
+            '<input type="checkbox" value="' + val + '" data-group="' + field.name + '"' + chk + (dis ? ' disabled' : '') + '>' +
+            '<span>' + lbl + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
         }).join('');
         fieldEl.innerHTML = '<label>' + field.label + '</label>' +
           '<div class="da-modal-cb-group">' + checkboxes + '</div>';
@@ -155,6 +162,8 @@ function daShowModal(config) {
 
       fieldsContainer.appendChild(fieldEl);
     });
+
+    if (config.postRender) config.postRender(overlay);
 
     setTimeout(function() {
       var firstInput = overlay.querySelector('.da-modal-focusable');
@@ -1715,6 +1724,24 @@ function renderPalette() {
 }
 
 // =================================================================
+// --- Column Order Persistence ---
+function getColumnOrder() {
+  const all = window.availableDivisions || [];
+  const g = window.loadGlobalSettings?.() || {};
+  const saved = g.app1?.manualColumnOrder;
+  if (!Array.isArray(saved) || saved.length === 0) return [...all];
+  const valid = saved.filter(d => all.includes(d));
+  return [...valid, ...all.filter(d => !valid.includes(d))];
+}
+
+function saveColumnOrder(order) {
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  g.app1.manualColumnOrder = [...order];
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+}
+
 // RENDER GRID
 // =================================================================
 function renderGrid() {
@@ -1728,7 +1755,7 @@ function renderGrid() {
   }
 
   const divisions = window.divisions || {};
-  const availableDivisions = window.availableDivisions || [];
+  const availableDivisions = getColumnOrder();
   if (availableDivisions.length === 0) {
     gridEl.innerHTML = `<div class="da-empty-state">No divisions found.</div>`;
     return;
@@ -1768,7 +1795,7 @@ function renderGrid() {
   html += `<div class="da-grid-header da-time-header">Time</div>`;
   availableDivisions.forEach((divName) => {
     const color = divisions[divName]?.color || '#444';
-    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;">${divName}</div>`;
+    html += `<div data-col-header="${divName}" draggable="true" class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0; cursor:grab; user-select:none;">${divName}</div>`;
   });
   
   // Time column
@@ -1810,12 +1837,50 @@ function renderGrid() {
   
   html += `</div>`;
   gridEl.innerHTML = html;
-  
+
+  addColumnReorderListeners(gridEl);
   addDropListeners(gridEl);
   addDragToRepositionListeners(gridEl);
   addResizeListeners(gridEl);
   addRemoveListeners(gridEl);
   applyConflictHighlighting(gridEl);
+}
+
+function addColumnReorderListeners(containerEl) {
+  let dragSrc = null;
+  const headers = () => containerEl.querySelectorAll('[data-col-header]');
+
+  headers().forEach(hdr => {
+    hdr.addEventListener('dragstart', e => {
+      dragSrc = hdr.dataset.colHeader;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => { hdr.style.opacity = '0.4'; }, 0);
+    });
+    hdr.addEventListener('dragend', () => {
+      hdr.style.opacity = '';
+      headers().forEach(h => h.style.outline = '');
+    });
+    hdr.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    hdr.addEventListener('dragenter', e => {
+      e.preventDefault();
+      headers().forEach(h => h.style.outline = '');
+      if (hdr.dataset.colHeader !== dragSrc) hdr.style.outline = '2px dashed #3b82f6';
+    });
+    hdr.addEventListener('dragleave', () => { hdr.style.outline = ''; });
+    hdr.addEventListener('drop', e => {
+      e.preventDefault();
+      hdr.style.outline = '';
+      if (!dragSrc || dragSrc === hdr.dataset.colHeader) return;
+      const order = getColumnOrder();
+      const from = order.indexOf(dragSrc);
+      const to = order.indexOf(hdr.dataset.colHeader);
+      if (from === -1 || to === -1) return;
+      order.splice(from, 1);
+      order.splice(to, 0, dragSrc);
+      saveColumnOrder(order);
+      renderGrid();
+    });
+  });
 }
 
 // --- AUTO MODE: DAW Layer Timeline ---
@@ -1980,7 +2045,7 @@ function renderEventTile(ev, top, height) {
   
   const eventName = ev.event || 'Event';
   const timeStr = `${ev.startTime}-${ev.endTime}`;
-  
+
   // Compact content for very small tiles
   let content;
   if (adjustedHeight < 24) {
@@ -1999,22 +2064,17 @@ function renderEventTile(ev, top, height) {
     if (ev.leagueName) {
       content += `<div style="font-size:9px;opacity:0.8;">🏆 ${ev.leagueName}</div>`;
     }
-    // Location display for larger tiles
-    if (adjustedHeight > 50) {
-      const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
-      if (locationDisplay && ev.type !== 'elective') {
-        content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
-      }
-      
-      if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-        const actList = ev.electiveActivities.slice(0, 3).join(', ');
-        const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
-        content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
-      }
-      
-      if (ev.type === 'smart' && ev.smartData) {
-        content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
-      }
+    const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
+    if (locationDisplay && ev.type !== 'elective') {
+      content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
+    }
+    if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
+      const actList = ev.electiveActivities.slice(0, 3).join(', ');
+      const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
+      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
+    }
+    if (ev.type === 'smart' && ev.smartData) {
+      content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
     }
   }
   
@@ -2292,11 +2352,19 @@ function addDragToRepositionListeners(gridEl) {
         const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
         
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        event.division = divName;
-        event.startTime = minutesToTime(cellStartMin + snapMin);
-        event.endTime = minutesToTime(cellStartMin + snapMin + duration);
-        
-        bumpOverlappingTiles(event, divName);
+        const newStart = minutesToTime(cellStartMin + snapMin);
+        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+
+        if (divName !== event.division) {
+          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd };
+          dailyOverrideSkeleton.push(copy);
+          bumpOverlappingTiles(copy, divName);
+        } else {
+          event.startTime = newStart;
+          event.endTime = newEnd;
+          bumpOverlappingTiles(event, divName);
+        }
+
         saveDailySkeleton();
         renderGrid();
         return;
@@ -2440,6 +2508,10 @@ function addDropListeners(gridEl) {
         const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
         const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
         const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
+        const daTaken = daGetConflictingFacilities(startStr, endStr, null);
+        const daSportMap = daGetSportFacilitiesMap();
+        const daSportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(daSportMap).sort().map(s => ({ value: s, label: s }))];
+        const daLocOptions = allLocations.map(l => daTaken.has(l) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
         const result = await daShowModal({
           title: 'Elective for ' + divName,
           description: 'Select activities to RESERVE for this division only. Other divisions cannot use these during this time.',
@@ -2447,11 +2519,24 @@ function addDropListeners(gridEl) {
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
-            { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: allLocations }
-          ]
+            ...(daSportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: daSportOptions }] : []),
+            { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: daLocOptions }
+          ],
+          postRender: function(overlay) {
+            var sportSel = overlay.querySelector('[data-field="sport"]');
+            if (!sportSel) return;
+            sportSel.addEventListener('change', function() {
+              var s = sportSel.value;
+              var matching = s ? (daSportMap[s] || []) : [];
+              overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+                cb.checked = matching.indexOf(cb.value) !== -1;
+              });
+            });
+          }
         });
         if (!result || !result.startTime || !result.endTime) return;
-        const electiveActivities = result.activities || [];
+        let electiveActivities = result.activities || [];
+        if (result.sport && electiveActivities.length === 0) electiveActivities = (daSportMap[result.sport] || []).filter(f => !daTaken.has(f));
         if (electiveActivities.length === 0) { await daShowAlert("Please select at least one activity."); return; }
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
@@ -2465,20 +2550,27 @@ function addDropListeners(gridEl) {
       }
       // ===== CUSTOM PINNED =====
       else if (tileData.type === 'custom') {
+        const _cAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
+        const _cAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const _cAllLocations = [...new Set([..._cAllFields, ..._cAllSpecials])].sort();
+        const customModalFields = [
+          { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
+          { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+          { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
+        ];
+        if (_cAllLocations.length > 0) {
+          customModalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: _cAllLocations });
+        }
         const result = await daShowModal({
           title: 'Custom Pinned Event for ' + divName,
           description: 'Create a fixed event like Assembly, Special Program, etc.',
-          fields: [
-            { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
-          ]
+          fields: customModalFields
         });
         if (!result || !result.eventName || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
-        const reservedFields = await promptForReservedFields(result.eventName);
+        const reservedFields = result.reservedFields || [];
         newEvent = {
           id: Date.now().toString(), type: 'pinned', event: result.eventName.trim(),
           division: divName, startTime: result.startTime, endTime: result.endTime,
@@ -2731,14 +2823,21 @@ function addDropListeners(gridEl) {
 // =================================================================
 function addRemoveListeners(gridEl) {
   gridEl.querySelectorAll('.da-event').forEach(tile => {
+    let _downX, _downY, _clickTimer;
+    tile.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
+
     tile.onclick = (e) => {
       if (e.target.classList.contains('da-resize-handle')) return;
       e.stopPropagation();
-      selectTile(tile.dataset.id);
+      const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
+      if (dist > 5) { selectTile(tile.dataset.id); return; }
+      clearTimeout(_clickTimer);
+      _clickTimer = setTimeout(() => { editTile(tile.dataset.id); }, 280);
     };
-    
+
     tile.ondblclick = async (e) => {
       e.stopPropagation();
+      clearTimeout(_clickTimer);
       if (e.target.classList.contains('da-resize-handle')) return;
       const id = tile.dataset.id;
       if (!id) return;
@@ -2763,6 +2862,135 @@ function selectTile(id) {
 function deselectAllTiles() {
   selectedTileId = null;
   document.querySelectorAll('.da-event.selected').forEach(el => el.classList.remove('selected'));
+}
+
+async function editTile(id) {
+  const ev = dailyOverrideSkeleton.find(e => e.id === id);
+  if (!ev) return;
+
+  if (ev.type === 'smart') {
+    const result = await daShowModal({
+      title: 'Edit Smart Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '' },
+        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '' },
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity' }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' };
+
+  } else if (ev.type === 'split') {
+    const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const result = await daShowModal({
+      title: 'Edit Split Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
+        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    const event1 = mapEventNameForOptimizer(result.main1);
+    const event2 = mapEventNameForOptimizer(result.main2);
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+
+  } else if (ev.type === 'elective') {
+    const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
+    const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+    const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
+    const daTaken2 = daGetConflictingFacilities(ev.startTime, ev.endTime, ev.id);
+    const daSportMap2 = daGetSportFacilitiesMap();
+    const daSportOpts2 = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(daSportMap2).sort().map(s => ({ value: s, label: s }))];
+    const daLocOpts2 = allLocations.map(l => (daTaken2.has(l) && !(ev.electiveActivities || []).includes(l)) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
+    const result = await daShowModal({
+      title: 'Edit Elective',
+      wide: true,
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        ...(daSportOpts2.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: daSportOpts2 }] : []),
+        { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: daLocOpts2, default: ev.electiveActivities || [] }
+      ],
+      postRender: function(overlay) {
+        var sportSel = overlay.querySelector('[data-field="sport"]');
+        if (!sportSel) return;
+        sportSel.addEventListener('change', function() {
+          var s = sportSel.value;
+          var matching = s ? (daSportMap2[s] || []) : [];
+          overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+            cb.checked = matching.indexOf(cb.value) !== -1;
+          });
+        });
+      }
+    });
+    if (!result) return;
+    let chosen2 = result.activities || [];
+    if (result.sport && chosen2.length === 0) chosen2 = (daSportMap2[result.sport] || []).filter(f => !daTaken2.has(f));
+    if (!chosen2.length) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = 'Elective'; ev.electiveActivities = chosen2;
+
+  } else {
+    const _eAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
+    const _eAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+    const _eAllLocations = [...new Set([..._eAllFields, ..._eAllSpecials])].sort();
+    const modalFields = [
+      { name: 'eventName', label: 'Event Name', type: 'text', default: ev.event },
+      { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+      { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime }
+    ];
+    if (_eAllLocations.length > 0 && (ev.type === 'pinned' || ev.type === 'slot')) {
+      modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: _eAllLocations, default: ev.reservedFields || [] });
+    }
+    if (ev.type === 'league' || ev.type === 'specialty_league') {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
+      if (_leagueNames.length > 0) {
+        modalFields.splice(1, 0, {
+          name: 'leagueName', label: 'Which League?', type: 'select',
+          options: [{ value: '', label: '— Any League (auto) —' }].concat(_leagueNames.map(ln => ({ value: ln, label: ln }))),
+          default: ev.leagueName || ''
+        });
+      }
+    }
+    const result = await daShowModal({ title: 'Edit Event', fields: modalFields });
+    if (!result || !result.eventName?.trim()) return;
+    ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
+    if (result.reservedFields !== undefined) {
+      ev.reservedFields = result.reservedFields;
+      ev.location = result.reservedFields.length === 1 ? result.reservedFields[0] : (result.reservedFields.length > 1 ? null : ev.location);
+    }
+    if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  saveDailySkeleton();
+  renderGrid();
+}
+
+async function copyTile(id) {
+  const ev = dailyOverrideSkeleton.find(e => e.id === id);
+  if (!ev) return;
+  const others = getColumnOrder().filter(d => d !== ev.division);
+  if (others.length === 0) { await daShowAlert('No other grades to copy to.'); return; }
+  const result = await daShowModal({
+    title: 'Copy Tile to Grades',
+    description: `Copy "${ev.event}" (${ev.startTime}–${ev.endTime}) to:`,
+    fields: [{ name: 'targets', label: 'Select target grades', type: 'checkbox-group', options: others }]
+  });
+  if (!result || !result.targets?.length) return;
+  result.targets.forEach(div => {
+    dailyOverrideSkeleton.push({ ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div });
+  });
+  saveDailySkeleton();
+  renderGrid();
 }
 
 // =================================================================
@@ -2873,6 +3101,8 @@ function saveDAAutoLayers() {
       if (parsed && parsed.length > 0) {
         dailyOverrideSkeleton = parsed;
         window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+        const savedOrder = JSON.parse(localStorage.getItem(`campManualColumnOrder_${dateKey}`) || 'null');
+        if (Array.isArray(savedOrder) && savedOrder.length > 0) saveColumnOrder(savedOrder);
         console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from localStorage`);
         return;
       }
@@ -2880,7 +3110,7 @@ function saveDAAutoLayers() {
   } catch (e) {
     console.warn('[DailyAdj] Failed to load from localStorage:', e);
   }
-  
+
   // Priority 2: Cloud
   try {
     const cloudSkeleton = masterSettings?.app1?.dailySkeletons?.[dateKey];
@@ -2889,6 +3119,11 @@ function saveDAAutoLayers() {
       window.dailyOverrideSkeleton = dailyOverrideSkeleton;
       const storageKey = `campManualSkeleton_${dateKey}`;
       localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+      const cloudOrder = masterSettings?.app1?.dailyColumnOrders?.[dateKey];
+      if (Array.isArray(cloudOrder) && cloudOrder.length > 0) {
+        saveColumnOrder(cloudOrder);
+        localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(cloudOrder));
+      }
       console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from CLOUD`);
       return;
     }
@@ -2933,16 +3168,19 @@ function saveDailySkeleton() {
   try {
     const storageKey = `campManualSkeleton_${dateKey}`;
     localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+    localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(getColumnOrder()));
   } catch (e) {
     console.error('[DailyAdj] Failed to save to localStorage:', e);
   }
-  
+
   // Save to cloud
   try {
     if (!masterSettings.app1.dailySkeletons) {
       masterSettings.app1.dailySkeletons = {};
     }
     masterSettings.app1.dailySkeletons[dateKey] = dailyOverrideSkeleton;
+    if (!masterSettings.app1.dailyColumnOrders) masterSettings.app1.dailyColumnOrders = {};
+    masterSettings.app1.dailyColumnOrders[dateKey] = getColumnOrder();
     if (typeof window.saveGlobalSettings === 'function') {
       window.saveGlobalSettings('app1', masterSettings.app1);
     }
@@ -2952,6 +3190,32 @@ function saveDailySkeleton() {
   
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
   window.forceSyncToCloud?.();
+}
+
+function daGetConflictingFacilities(startTime, endTime, excludeId) {
+  var s = parseTimeToMinutes(startTime), e = parseTimeToMinutes(endTime);
+  if (s === null || e === null) return new Set();
+  var taken = new Set();
+  (dailyOverrideSkeleton || []).forEach(function(ev) {
+    if (ev.id === excludeId || ev.type !== 'elective') return;
+    var es = parseTimeToMinutes(ev.startTime), ee = parseTimeToMinutes(ev.endTime);
+    if (es === null || ee === null) return;
+    if (s < ee && e > es) (ev.electiveActivities || []).forEach(function(a) { taken.add(a); });
+  });
+  return taken;
+}
+
+function daGetSportFacilitiesMap() {
+  var gs = window.loadGlobalSettings?.() || {};
+  var map = {};
+  (gs.app1?.fields || []).forEach(function(f) {
+    (f.activities || []).forEach(function(act) {
+      var key = typeof act === 'string' ? act : (act.name || String(act));
+      if (!map[key]) map[key] = [];
+      if (f.name && map[key].indexOf(f.name) === -1) map[key].push(f.name);
+    });
+  });
+  return map;
 }
 
 function parseTimeToMinutes(str) {
