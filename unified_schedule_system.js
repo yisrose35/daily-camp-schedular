@@ -490,7 +490,10 @@ function shouldHighlightBunk(bunkName) {
                 endMin: parseTimeToMinutes(block.endTime),
                 event: block.event || 'GA',
                 type: block.type || 'slot',
-                label: `${minutesToTimeLabel(parseTimeToMinutes(block.startTime))} - ${minutesToTimeLabel(parseTimeToMinutes(block.endTime))}`
+                label: `${minutesToTimeLabel(parseTimeToMinutes(block.startTime))} - ${minutesToTimeLabel(parseTimeToMinutes(block.endTime))}`,
+                electiveActivities: block.electiveActivities,
+                reservedFields: block.reservedFields,
+                location: block.location
             })).filter(s => s.startMin !== null && s.endMin !== null);
         }
         
