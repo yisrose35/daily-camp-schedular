@@ -274,17 +274,25 @@ window.GoGoogleOptimizer = (function () {
             const vehicle = vehicles[vi];
             if (!vehicle) continue;
 
-            // Collect relevant visits (filtered by mode) together with their raw visit
-            // objects so we can compute per-leg travel times from Google timestamps.
-            // Each shipment has only pickups (arrival) or only deliveries (dismissal).
-            const relevantPairs = []; // [{visit, stop}]
-            for (const visit of (gRoute.visits || [])) {
+            // Collect relevant visits filtered by mode.
+            // In dismissal mode each shipment has only deliveries (isPickup=false).
+            // In arrival mode each shipment has only pickups (isPickup=true).
+            // Google sometimes omits isPickup when a shipment has only one visit type,
+            // so we accept undefined as matching the expected type for each mode.
+            const seenShipment = new Set(); // guard against double-counting
+            const relevantPairs = []; // [{visit, stop, visitIndex}]
+            const allVisits = gRoute.visits || [];
+            for (let vi2 = 0; vi2 < allVisits.length; vi2++) {
+                const visit = allVisits[vi2];
+                // Filter by mode — skip visits of the wrong type
                 if (isArrival  && visit.isPickup === false) continue;
                 if (!isArrival && visit.isPickup === true)  continue;
                 const stopIdx = visit.shipmentIndex ?? 0;
-                const stop    = stops[stopIdx];
+                if (seenShipment.has(stopIdx)) continue; // skip if same shipment appears twice
+                seenShipment.add(stopIdx);
+                const stop = stops[stopIdx];
                 if (!stop) continue;
-                relevantPairs.push({ visit, stop });
+                relevantPairs.push({ visit, stop, visitIndex: vi2 });
             }
 
             if (!relevantPairs.length) continue;
@@ -298,33 +306,45 @@ window.GoGoogleOptimizer = (function () {
                 lng:      rp.stop.lng
             }));
 
-            // ── Extract per-leg travel times from Google visit timestamps ──
-            // legTimes[i] = road seconds to reach stop i (from camp for i=0, from stop i-1 otherwise).
-            // legTimes[N] = last-stop → camp return leg seconds (arrival mode only).
-            // These feed directly into the ETA pipeline (trafficLegMin) so ride time
-            // calculations use real road times rather than haversine estimates.
+            // ── Extract per-leg travel times from Google transitions ──────────
+            // Google's response includes a transitions[] array where transitions[i]
+            // is the leg BEFORE visit[i] (transitions[0] = depot→visit[0]).
+            // transitions[N] = last-visit→depot (return leg).
+            // travelDuration is a string like "312s" — far more reliable than
+            // computing from timestamps (which requires vehicleStartTime to be set).
             const legTimes = [];
-            const vStartMs = gRoute.vehicleStartTime ? new Date(gRoute.vehicleStartTime).getTime() : null;
-            if (vStartMs !== null) {
+            const transitions = gRoute.transitions || [];
+            const parseDur = d => { const s = parseInt((d || '').replace('s', ''), 10); return isNaN(s) ? 0 : s; };
+
+            if (transitions.length > 0) {
                 for (let rpi = 0; rpi < relevantPairs.length; rpi++) {
-                    const visitStartMs = new Date(relevantPairs[rpi].visit.startTime).getTime();
-                    if (rpi === 0) {
-                        // Camp departure → first stop arrival (no service time to subtract)
-                        legTimes.push(Math.max(0, Math.round((visitStartMs - vStartMs) / 1000)));
-                    } else {
-                        // Previous stop departure → this stop arrival
-                        // Departure from previous = previous startTime + serviceTimeSec
-                        const prevDepartMs = new Date(relevantPairs[rpi - 1].visit.startTime).getTime()
-                            + (serviceTimeSec || 0) * 1000;
-                        legTimes.push(Math.max(0, Math.round((visitStartMs - prevDepartMs) / 1000)));
-                    }
+                    // transitions[visitIndex] is the leg arriving at this visit
+                    const ti = relevantPairs[rpi].visitIndex;
+                    legTimes.push(parseDur(transitions[ti]?.travelDuration));
                 }
                 // Return-to-camp leg (arrival mode: vehicle ends at camp)
-                if (isArrival && gRoute.vehicleEndTime && relevantPairs.length > 0) {
-                    const lastDepartMs = new Date(relevantPairs[relevantPairs.length - 1].visit.startTime).getTime()
-                        + (serviceTimeSec || 0) * 1000;
-                    const endMs = new Date(gRoute.vehicleEndTime).getTime();
-                    legTimes.push(Math.max(0, Math.round((endMs - lastDepartMs) / 1000)));
+                if (isArrival && transitions.length > allVisits.length) {
+                    legTimes.push(parseDur(transitions[allVisits.length]?.travelDuration));
+                }
+            } else {
+                // Fallback: compute from timestamps when transitions not in response
+                const vStartMs = gRoute.vehicleStartTime ? new Date(gRoute.vehicleStartTime).getTime() : null;
+                if (vStartMs !== null) {
+                    for (let rpi = 0; rpi < relevantPairs.length; rpi++) {
+                        const visitStartMs = new Date(relevantPairs[rpi].visit.startTime).getTime();
+                        if (rpi === 0) {
+                            legTimes.push(Math.max(0, Math.round((visitStartMs - vStartMs) / 1000)));
+                        } else {
+                            const prevDepartMs = new Date(relevantPairs[rpi - 1].visit.startTime).getTime()
+                                + (serviceTimeSec || 0) * 1000;
+                            legTimes.push(Math.max(0, Math.round((visitStartMs - prevDepartMs) / 1000)));
+                        }
+                    }
+                    if (isArrival && gRoute.vehicleEndTime) {
+                        const lastDepartMs = new Date(relevantPairs[relevantPairs.length - 1].visit.startTime).getTime()
+                            + (serviceTimeSec || 0) * 1000;
+                        legTimes.push(Math.max(0, Math.round((new Date(gRoute.vehicleEndTime).getTime() - lastDepartMs) / 1000)));
+                    }
                 }
             }
 
