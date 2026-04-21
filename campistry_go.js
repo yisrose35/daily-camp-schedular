@@ -1077,22 +1077,23 @@
             box.textContent = 'Connecting to Supabase edge function…';
 
             const supabaseUrl = window.__CAMPISTRY_SUPABASE__?.url || '';
+            const anonKey    = window.__CAMPISTRY_SUPABASE__?.anonKey || '';
             let token = null;
             try {
                 const sess = await window.supabase?.auth?.getSession();
-                token = sess?.data?.session?.access_token || null;
-            } catch (_) {}
+                token = sess?.data?.session?.access_token || anonKey || null;
+            } catch (_) { token = anonKey || null; }
 
             const lines = [];
 
             // Step 1: Supabase session
             if (supabaseUrl && token) {
-                lines.push('✅ Supabase session: active');
+                lines.push('✅ Supabase: connected');
             } else if (!supabaseUrl) {
-                lines.push('❌ Supabase URL not found — are you logged in?');
+                lines.push('❌ Supabase URL not found');
                 finish(false, lines); return;
             } else {
-                lines.push('❌ Not logged in to Campistry — please sign in first');
+                lines.push('❌ No auth token available');
                 finish(false, lines); return;
             }
 
@@ -1102,7 +1103,10 @@
             try {
                 const resp = await fetch(supabaseUrl + '/functions/v1/optimize-routes', {
                     method: 'GET',
-                    headers: { 'Authorization': 'Bearer ' + token }
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'apikey': anonKey
+                    }
                 });
                 const data = await resp.json();
 
@@ -4866,7 +4870,8 @@
                         projectId:      googleProjId,
                         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
                         supabaseUrl:    _supabaseUrl,
-                        accessToken:    _googleProxyToken
+                        accessToken:    _googleProxyToken,
+                        anonKey:        window.__CAMPISTRY_SUPABASE__?.anonKey || ''
                     });
                     if (googleRoutes && googleRoutes.length > 0) {
                         routes = googleRoutes;

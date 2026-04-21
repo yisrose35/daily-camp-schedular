@@ -82,7 +82,7 @@ window.GoGoogleOptimizer = (function () {
             // Proxy auth — when provided, the request goes through the Supabase
             // edge function which handles Google OAuth. This is the preferred path
             // because the Route Optimization API rejects browser API key requests.
-            supabaseUrl, accessToken
+            supabaseUrl, accessToken, anonKey
         } = options;
 
         if (!apiKey || !projectId) {
@@ -216,6 +216,7 @@ window.GoGoogleOptimizer = (function () {
                     headers: {
                         'Content-Type':  'application/json',
                         'Authorization': 'Bearer ' + accessToken,
+                        'apikey':        anonKey || '',
                     },
                     body: JSON.stringify(body),
                 });
