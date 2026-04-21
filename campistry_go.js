@@ -7292,4 +7292,11 @@ async function generateRoutes() {
         _clearGeomCache: function(key) { if (key) delete _routeGeomCache[key]; else _routeGeomCache = {}; }
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+
+    // Temporary debug helper — remove after diagnosis
+    window._GoDebug = {
+        getAddresses:  () => D.addresses,
+        getRoster:     () => _goStandaloneRoster,
+        getD:          () => D,
+    };
 })();
