@@ -2088,6 +2088,64 @@ let _toastTimer = null;
         toast(name + ': address deleted');
     }
 
+    // ── Clear-all helpers ──────────────────────────────────────────────────────
+    // Each wipes the relevant data from D, localStorage (via save()), and the
+    // go_standalone_data Supabase table.
+
+    function _clearCloudDataType(dataType) {
+        // Overwrite the cloud row with an empty object so it can't restore stale data
+        if (window.GoCloudSync) window.GoCloudSync.save(dataType, {});
+    }
+
+    function clearAllAddresses() {
+        if (!Object.keys(D.addresses).length) { toast('No addresses to clear', 'error'); return; }
+        const count = Object.keys(D.addresses).length;
+        if (!confirm('Delete all ' + count + ' camper addresses?\n\nGeocodes and imported data will be permanently removed from this device and the cloud. This cannot be undone.')) return;
+        D.addresses = {};
+        D.savedRoutes = null;
+        _generatedRoutes = null;
+        if (D.dismissal) D.dismissal.savedRoutes = null;
+        if (D.arrival)   D.arrival.savedRoutes   = null;
+        save();
+        _clearCloudDataType('addresses');
+        _clearCloudDataType('routes');
+        _clearCloudDataType('state');
+        _goStandaloneRoster = {};
+        renderAddresses(); updateStats();
+        document.getElementById('routeResults').style.display = 'none';
+        document.getElementById('shiftResultsContainer').innerHTML = '';
+        toast(count + ' addresses cleared');
+    }
+
+    function clearAllMonitors() {
+        if (!D.monitors.length) { toast('No monitors to clear', 'error'); return; }
+        const count = D.monitors.length;
+        if (!confirm('Delete all ' + count + ' monitor(s)?\n\nThis cannot be undone.')) return;
+        // Also remove their address entries
+        D.monitors.forEach(m => { if (D.addresses[m.name]?._isStaff) delete D.addresses[m.name]; });
+        D.monitors = [];
+        save();
+        _clearCloudDataType('state');
+        if (Object.keys(D.addresses).length > 0) _clearCloudDataType('addresses');
+        renderStaff(); updateStats();
+        toast(count + ' monitor(s) cleared');
+    }
+
+    function clearAllCounselors() {
+        if (!D.counselors.length) { toast('No counselors to clear', 'error'); return; }
+        const count = D.counselors.length;
+        if (!confirm('Delete all ' + count + ' counselor(s)?\n\nThis cannot be undone.')) return;
+        // Also remove their address entries
+        D.counselors.forEach(c => { if (D.addresses[c.name]?._isStaff) delete D.addresses[c.name]; });
+        D.counselors = [];
+        save();
+        _clearCloudDataType('state');
+        if (Object.keys(D.addresses).length > 0) _clearCloudDataType('addresses');
+        renderStaff(); updateStats();
+        toast(count + ' counselor(s) cleared');
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     // =========================================================================
     // GEOCODING — Multi-provider confidence-ranked pipeline
     // Priority: Google (best accuracy) → Census (free/unlimited) → Nominatim
@@ -7208,6 +7266,7 @@ async function generateRoutes() {
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
         acceptStaffAssign, denyStaffAssign, manualStaffAssign, acceptAllStaffSuggestions,
         editAddress, saveAddress, deleteAddress, _quickDeleteAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
+        clearAllAddresses, clearAllMonitors, clearAllCounselors,
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck, testGeoapify,
         generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
