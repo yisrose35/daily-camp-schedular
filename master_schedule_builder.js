@@ -2475,21 +2475,24 @@ function renderGrid() {
 
 function addClickToSelectListeners() {
   grid.querySelectorAll('.grid-event').forEach(el => {
+    let _downX, _downY;
+    el.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
+
     el.onclick = (e) => {
       if (e.target.classList.contains('resize-handle')) return;
       e.stopPropagation();
-      selectTile(el.dataset.id);
+      const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
+      if (dist > 5) { selectTile(el.dataset.id); return; }
+      editTile(el.dataset.id);
     };
-    
-    // Double-click still works as fallback
+
     el.ondblclick = async (e) => {
       e.stopPropagation();
       if (e.target.classList.contains('resize-handle')) return;
       await deleteTile(el.dataset.id);
     };
   });
-  
-  // Click on grid background to deselect
+
   grid.onclick = (e) => {
     if (e.target.classList.contains('grid-cell') || e.target.id === 'scheduler-grid') {
       deselectAllTiles();
@@ -2608,10 +2611,6 @@ function renderEventTile(ev, top, height) {
   return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove"
           style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
           <div class="resize-handle resize-handle-top"></div>
-          <div style="position:absolute;top:2px;right:2px;display:flex;gap:2px;z-index:5;">
-            <button onclick="event.stopPropagation();event.preventDefault();editTile('${ev.id}')" ondblclick="event.stopPropagation()" style="background:rgba(255,255,255,0.75);border:none;border-radius:3px;width:15px;height:13px;font-size:9px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;" title="Edit">✏</button>
-            <button onclick="event.stopPropagation();event.preventDefault();copyTile('${ev.id}')" ondblclick="event.stopPropagation()" style="background:rgba(255,255,255,0.75);border:none;border-radius:3px;width:15px;height:13px;font-size:9px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;" title="Copy to grade">⊕</button>
-          </div>
           ${innerHtml}
           ${_travelStrips}
           <div class="resize-handle resize-handle-bottom"></div>
@@ -2640,10 +2639,16 @@ function addDropListeners(selector) {
         const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
         
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        event.division = divName;
-        event.startTime = minutesToTime(cellStartMin + snapMin);
-        event.endTime = minutesToTime(cellStartMin + snapMin + duration);
-        
+        const newStart = minutesToTime(cellStartMin + snapMin);
+        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+
+        if (divName !== event.division) {
+          dailySkeleton.push({ ...event, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: divName, startTime: newStart, endTime: newEnd });
+        } else {
+          event.startTime = newStart;
+          event.endTime = newEnd;
+        }
+
         markUnsavedChanges();
         saveDraftToLocalStorage();
         renderGrid();

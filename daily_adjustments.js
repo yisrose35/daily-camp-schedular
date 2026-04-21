@@ -2100,10 +2100,6 @@ function renderEventTile(ev, top, height) {
           title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
           style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
           <div class="da-resize-handle da-resize-top"></div>
-          <div style="position:absolute;top:2px;right:2px;display:flex;gap:2px;z-index:5;">
-            <button onclick="event.stopPropagation();event.preventDefault();editTile('${ev.id}')" ondblclick="event.stopPropagation()" style="background:rgba(255,255,255,0.75);border:none;border-radius:3px;width:15px;height:13px;font-size:9px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;" title="Edit">✏</button>
-            <button onclick="event.stopPropagation();event.preventDefault();copyTile('${ev.id}')" ondblclick="event.stopPropagation()" style="background:rgba(255,255,255,0.75);border:none;border-radius:3px;width:15px;height:13px;font-size:9px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;" title="Copy to grade">⊕</button>
-          </div>
           ${content}
           ${_travelStrips}
           <div class="da-resize-handle da-resize-bottom"></div>
@@ -2353,11 +2349,19 @@ function addDragToRepositionListeners(gridEl) {
         const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
         
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        event.division = divName;
-        event.startTime = minutesToTime(cellStartMin + snapMin);
-        event.endTime = minutesToTime(cellStartMin + snapMin + duration);
-        
-        bumpOverlappingTiles(event, divName);
+        const newStart = minutesToTime(cellStartMin + snapMin);
+        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+
+        if (divName !== event.division) {
+          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd };
+          dailyOverrideSkeleton.push(copy);
+          bumpOverlappingTiles(copy, divName);
+        } else {
+          event.startTime = newStart;
+          event.endTime = newEnd;
+          bumpOverlappingTiles(event, divName);
+        }
+
         saveDailySkeleton();
         renderGrid();
         return;
@@ -2792,12 +2796,17 @@ function addDropListeners(gridEl) {
 // =================================================================
 function addRemoveListeners(gridEl) {
   gridEl.querySelectorAll('.da-event').forEach(tile => {
+    let _downX, _downY;
+    tile.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
+
     tile.onclick = (e) => {
       if (e.target.classList.contains('da-resize-handle')) return;
       e.stopPropagation();
-      selectTile(tile.dataset.id);
+      const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
+      if (dist > 5) { selectTile(tile.dataset.id); return; }
+      editTile(tile.dataset.id);
     };
-    
+
     tile.ondblclick = async (e) => {
       e.stopPropagation();
       if (e.target.classList.contains('da-resize-handle')) return;
