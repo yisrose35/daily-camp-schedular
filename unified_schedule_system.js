@@ -2367,23 +2367,25 @@ divBlocks.forEach((block, blockIdx) => {
         }
         
         let displayText = '', bgColor = '#fff', htmlContent = null;
-        if (entry && !entry.continuation) {
+
+        // Elective and pinned (custom) blocks always show their own skeleton data
+        if (block.type === 'elective') {
+            const acts = block.electiveActivities || block.reservedFields || [];
+            const displayName = (block.event && block.event !== 'Elective') ? block.event : acts.join(', ');
+            htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">${escapeHtml(displayName || 'Elective')}</div>`;
+            bgColor = '#ede9fe';
+        } else if (block.type === 'pinned' && block.event) {
+            const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
+            const combined = loc ? `${block.event} @ ${loc}` : block.event;
+            htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#92400e;">${escapeHtml(combined)}</div>`;
+            bgColor = '#fff8e1';
+        } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
             bgColor = getEntryBackground(entry, block.event);
             if (entry._pinned) displayText = '📌 ' + displayText;
         }
         else if (!entry) {
-            if (block.type === 'elective') {
-                const acts = block.electiveActivities || block.reservedFields || [];
-                const displayName = (block.event && block.event !== 'Elective') ? block.event : acts.join(', ');
-                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">${escapeHtml(displayName || 'Elective')}</div>`;
-                bgColor = '#ede9fe';
-            } else if (block.type === 'pinned' && block.event) {
-                const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
-                const combined = loc ? `${block.event} @ ${loc}` : block.event;
-                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#92400e;">${escapeHtml(combined)}</div>`;
-                bgColor = '#fff8e1';
-            } else if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; }
+            if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; }
             else bgColor = '#f9fafb';
         }
         
