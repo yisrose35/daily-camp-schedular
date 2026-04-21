@@ -2697,41 +2697,53 @@ let _toastTimer = null;
                 toast('Accepting ' + slotsAvailable + ' of ' + newCount + ' entries (limit: ' + limit.max + ')');
             }
         }
-        const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim());
+        const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim().replace(/_/g, ' '));
+        console.log('[Go] CSV headers (' + hdr.length + '):', hdr.join(' | '));
 
-        // Detect column indices — support multiple naming conventions
-        const idi = hdr.findIndex(h => h === 'camper id' || h === 'id' || h === 'camperid' || h === '#');
-        const lni = hdr.findIndex(h => h === 'last name' || h === 'last' || h === 'lastname' || h === 'family name');
-        const fni = hdr.findIndex(h => h === 'first name' || h === 'first' || h === 'firstname' || h === 'given name');
-        const ni = hdr.findIndex(h => h === 'name' || h === 'camper name' || h === 'camper' || h === 'full name');
-        const divi = hdr.findIndex(h => h === 'division' || h === 'div');
-        const gri = hdr.findIndex(h => h === 'grade');
-        const bki = hdr.findIndex(h => h === 'bunk' || h === 'cabin');
-        let si = hdr.findIndex(h => h === 'address' || h.includes('street') || h === 'street address');
-        const ci = hdr.findIndex(h => h === 'city' || h === 'city/town' || h === 'town');
-        const sti = hdr.findIndex(h => h === 'state');
-        const zi = hdr.findIndex(h => h === 'zip' || h === 'zip code' || h === 'zipcode' || h.includes('zip'));
-        const tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h.includes('pickup') || h.includes('carpool'));
-        const rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));
+        // Detect column indices — support multiple naming conventions.
+        // Headers are normalised: lowercase, trimmed, underscores→spaces.
+        const idi = hdr.findIndex(h => h === 'camper id' || h === 'id' || h === 'camperid' || h === '#' || h === 'person id' || h === 'personid');
+        const lni = hdr.findIndex(h => h === 'last name' || h === 'last' || h === 'lastname' || h === 'family name' || h === 'surname' || h === 'lname' || h === 'l name');
+        const fni = hdr.findIndex(h => h === 'first name' || h === 'first' || h === 'firstname' || h === 'given name' || h === 'fname' || h === 'f name' || h === 'preferred name' || h === 'preferred');
+        const ni = hdr.findIndex(h => h === 'name' || h === 'camper name' || h === 'camper' || h === 'full name' || h === 'fullname' || h === 'student name' || h === 'child name');
+        const divi = hdr.findIndex(h => h === 'division' || h === 'div' || h === 'group' || h === 'section');
+        const gri = hdr.findIndex(h => h === 'grade' || h === 'grade level');
+        const bki = hdr.findIndex(h => h === 'bunk' || h === 'cabin' || h === 'room' || h === 'bunk name');
+        let si = hdr.findIndex(h => h === 'address' || h === 'street address' || h === 'home address' || h === 'address 1' || h === 'address1' || h.includes('street'));
+        const ci = hdr.findIndex(h => h === 'city' || h === 'city/town' || h === 'town' || h === 'municipality');
+        const sti = hdr.findIndex(h => h === 'state' || h === 'state/province' || h === 'province');
+        const zi = hdr.findIndex(h => h === 'zip' || h === 'zip code' || h === 'zipcode' || h === 'postal code' || h === 'postalcode' || h.includes('zip'));
+        const tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h === 'transportation' || h.includes('pickup') || h.includes('carpool'));
+        const rwi = hdr.findIndex(h => h === 'ride with' || h === 'ridewith' || h === 'ride-with' || h.includes('pair'));
         const roi = hdr.findIndex(h => h === 'role' || h === 'type' || h === 'person type');
-        const nsi = hdr.findIndex(h => h === 'needs stop' || h === 'needsstop' || h === 'needs_stop' || h === 'stop');
+        const nsi = hdr.findIndex(h => h === 'needs stop' || h === 'needsstop' || h === 'needs stop' || h === 'stop');
         const arri = hdr.findIndex(h => h === 'arrival' || h === 'arr' || h === 'morning');
         const disi = hdr.findIndex(h => h === 'dismissal' || h === 'dis' || h === 'dismiss' || h === 'afternoon');
 
+        console.log('[Go] CSV column map → first/last:' + fni + '/' + lni + ' name:' + ni + ' addr:' + si + ' city:' + ci + ' state:' + sti + ' zip:' + zi + ' role:' + roi);
+
         // Auto-detect address column: if no known header matched, scan up to
-        // the first 5 data rows for a value that looks like a street address
+        // the first 10 data rows for a value that looks like a street address
         // (starts with a number followed by letters, e.g. "1 Wood Ave").
-        // Checks multiple rows in case the first row has an empty address.
+        // Checks multiple rows so sparse columns aren't missed.
         if (si < 0) {
             const addrPattern = /^\d+\s+[A-Za-z]/;  // "123 Main St" pattern
             const claimed = new Set([idi, lni, fni, ni, divi, gri, bki, ci, sti, zi, tri, rwi, roi, nsi, arri, disi].filter(x => x >= 0));
-            var scanLimit = Math.min(lines.length, 6); // header + up to 5 rows
-            for (let row = 1; row < scanLimit && si < 0; row++) {
+            // Track how many address-like hits each column gets across multiple rows;
+            // pick the column with the most hits so a sparse column doesn't win.
+            const colHits = {};
+            var scanLimit = Math.min(lines.length, 11); // header + up to 10 rows
+            for (let row = 1; row < scanLimit; row++) {
                 var sampleCols = parseLine(lines[row]);
                 for (let c = 0; c < sampleCols.length; c++) {
                     if (claimed.has(c)) continue;
-                    if (addrPattern.test(sampleCols[c].trim())) { si = c; console.log('[Go] Auto-detected address column: index ' + c + ' ("' + hdr[c] + '") from row ' + row + ' value "' + sampleCols[c].trim() + '"'); break; }
+                    if (addrPattern.test(sampleCols[c].trim())) { colHits[c] = (colHits[c] || 0) + 1; }
                 }
+            }
+            if (Object.keys(colHits).length > 0) {
+                // Choose the column with the most hits (most populated address-like column)
+                si = parseInt(Object.entries(colHits).sort((a, b) => b[1] - a[1])[0][0]);
+                console.log('[Go] Auto-detected address column: index ' + si + ' ("' + hdr[si] + '") with ' + colHits[si] + ' address-like values in first ' + (scanLimit - 1) + ' rows');
             }
         }
 
@@ -2754,7 +2766,7 @@ let _toastTimer = null;
         // Clear staff imported from CSV (keep manually added ones)
         D.counselors = D.counselors.filter(c => !c._fromCsv);
         D.monitors = D.monitors.filter(m => !m._fromCsv);
-        let camperCount = 0, staffCount = 0;
+        let camperCount = 0, staffCount = 0, _skippedEmpty = 0, _skippedNoAddr = 0;
 
         for (let i = 1; i < lines.length; i++) {
             const cols = parseLine(lines[i]);
@@ -2764,11 +2776,11 @@ let _toastTimer = null;
             if (hasFirstLast) {
                 firstName = (cols[fni] || '').trim();
                 lastName = (cols[lni] || '').trim();
-                if (!firstName && !lastName) continue;
+                if (!firstName && !lastName) { _skippedEmpty++; continue; }
                 name = firstName + (lastName ? ' ' + lastName : '');
             } else {
                 name = (cols[ni] || '').trim();
-                if (!name) continue;
+                if (!name) { _skippedEmpty++; continue; }
                 // Try to split "First Last" for staff records
                 const parts = name.split(/\s+/);
                 if (parts.length >= 2) { firstName = parts[0]; lastName = parts.slice(1).join(' '); }
@@ -2877,6 +2889,8 @@ let _toastTimer = null;
                         _division: division, _grade: grade, _bunk: bunk,
                         _arrival: forArrival, _dismissal: forDismissal
                     });
+                } else {
+                    _skippedNoAddr++;
                 }
 
                 _goStandaloneRoster[rn] = {
@@ -2889,6 +2903,9 @@ let _toastTimer = null;
         }
         // Count how many geocodes were preserved (address unchanged, already geocoded)
         const preserved = Object.values(D.addresses).filter(a => a.geocoded).length;
+        console.log('[Go] CSV parse done — campers:' + camperCount + ' staff:' + staffCount +
+            ' skipped(empty name):' + _skippedEmpty + ' skipped(no address):' + _skippedNoAddr +
+            ' geocodes kept:' + preserved + ' total rows:' + (lines.length - 1));
         save(); renderAddresses(); renderStaff(); updateStats();
         // ★ Update starter banner camper count
         if (window.refreshStarterBanner) window.refreshStarterBanner(camperCount);
