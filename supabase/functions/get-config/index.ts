@@ -46,9 +46,10 @@ serve(async (req: Request) => {
   const googleMapsKey  = Deno.env.get("GOOGLE_MAPS_KEY")   || "";
   const geoapifyKey    = Deno.env.get("GEOAPIFY_KEY")       || "";
   const googleProjectId = Deno.env.get("GOOGLE_PROJECT_ID") || "";
+  const orsKey         = Deno.env.get("ORS_KEY")            || "";
 
   return new Response(
-    JSON.stringify({ googleMapsKey, geoapifyKey, googleProjectId }),
+    JSON.stringify({ googleMapsKey, geoapifyKey, googleProjectId, orsKey }),
     {
       status: 200,
       headers: { ...CORS_HEADERS, "Content-Type": "application/json" },

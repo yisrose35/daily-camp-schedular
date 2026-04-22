@@ -890,6 +890,10 @@ let _toastTimer = null;
             if (config.googleMapsKey)  D.setup.googleMapsKey  = config.googleMapsKey;
             if (config.geoapifyKey)    D.setup.geoapifyKey    = config.geoapifyKey;
             if (config.googleProjectId) D.setup.googleProjectId = config.googleProjectId;
+            if (config.orsKey) {
+                D.setup.orsKey = config.orsKey;
+                window.__CAMPISTRY_ORS_KEY__ = config.orsKey;
+            }
 
             console.log('[Go] Config loaded from Supabase secrets — keys:', [
                 config.googleMapsKey  ? 'googleMaps ✅'  : 'googleMaps ❌',
@@ -5280,18 +5284,20 @@ async function generateRoutes() {
                 } catch (_e) { /* non-fatal — fall back to direct API key */ }
             }
 
+            // ── Optimizer selection diagnostics ───────────────────────────────
+            // Log which optimizer will run so failures are immediately visible.
+            console.log('[Go] Optimizer tiers available:',
+                (googleKey && googleProjId ? '✓ GMPRO' : '✗ GMPRO (no keys)'),
+                '|', (D.setup.orsKey || window.__CAMPISTRY_ORS_KEY__ ? '✓ ORS-Vroom' : '✗ ORS-Vroom (no key)'),
+                '|', (geoapifyKey ? '✓ Geoapify-multi' : '✗ Geoapify-multi (no key)'),
+                '|', (geoapifyKey ? '✓ Geoapify-per-bus' : '✗ Geoapify-per-bus (no key)'),
+                '| ✓ K-medoids+NN (always)');
+
             // ── Step 3 (primary): Google Route Optimization API ──
             //
-            // When Google credentials are configured, send ALL stops + ALL buses in
-            // a single request to Google's cloud OR-Tools VRP solver. This is globally
-            // optimal: assignment and ordering are solved simultaneously, capacity is
-            // enforced natively, and road geometry comes back in the same response as
-            // an encoded polyline (no separate TSP calls needed).
-            //
-            // Falls through to K-medoids + Geoapify TSP if:
-            //   • googleMapsKey or googleProjectId are not set
-            //   • The API call fails (network error, bad key, quota exceeded)
-            //   • The response contains 0 routes
+            // Sends ALL stops + ALL buses in one request to Google's OR-Tools VRP
+            // solver — globally optimal assignment + ordering + road geometry.
+            // Falls through on missing keys, network error, or empty response.
             if (!usedExternalOptimizer && googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours) {
                 showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing all buses via Google Route Optimization...', pctBase + 25);
                 try {
@@ -5332,6 +5338,74 @@ async function generateRoutes() {
                     }
                 } catch (e) {
                     console.warn('[Go] Google Route Optimization failed (' + e.message + ') — falling back to K-medoids');
+                }
+            }
+
+            // ── Step 3b (secondary): ORS Vroom multi-vehicle VRP ──────────────
+            // Free alternative to GMPRO. Solves all buses + all stops globally
+            // in one request using the Vroom VRP solver via OpenRouteService.
+            // Requires ORS_KEY Supabase secret (set in Edge Functions → Secrets).
+            if (!usedExternalOptimizer && window.GoOrsOptimizer?.optimizeTours && (D.setup.orsKey || window.__CAMPISTRY_ORS_KEY__)) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing all buses via ORS Vroom...', pctBase + 27);
+                try {
+                    const orsRoutes = await window.GoOrsOptimizer.optimizeTours({
+                        stops:          allStops,
+                        vehicles:       shiftVehicles,
+                        campLat:        campLat,
+                        campLng:        campLng,
+                        isArrival:      isArrival,
+                        serviceTimeSec: serviceTime,
+                        apiKey:         D.setup.orsKey || window.__CAMPISTRY_ORS_KEY__
+                    });
+                    if (orsRoutes && orsRoutes.length > 0) {
+                        routes = orsRoutes;
+                        usedExternalOptimizer = true;
+                        console.log('[Go] ORS Vroom: ' + orsRoutes.length + ' routes, ' +
+                            orsRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
+                        toast('✓ Routes generated via ORS Vroom — ' + orsRoutes.length + ' buses');
+                    } else {
+                        console.warn('[Go] ORS Vroom returned no routes — falling through');
+                    }
+                } catch (e) {
+                    console.warn('[Go] ORS Vroom failed (' + e.message + ') — falling through');
+                }
+            }
+
+            // ── Step 3c (tertiary): Geoapify multi-vehicle VRP ────────────────
+            // Uses Geoapify's Route Planner for global multi-vehicle optimization.
+            // Better than K-medoids+per-bus because assignment and ordering are
+            // solved together. Falls through on missing key or API failure.
+            if (!usedExternalOptimizer && geoapifyKey && window.GoGeoapifyOptimizer?.optimizeTours) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing all buses via Geoapify...', pctBase + 28);
+                try {
+                    const geoRoutes = await window.GoGeoapifyOptimizer.optimizeTours({
+                        stops:          allStops,
+                        vehicles:       shiftVehicles,
+                        campLat:        campLat,
+                        campLng:        campLng,
+                        isArrival:      isArrival,
+                        serviceTimeSec: serviceTime,
+                        apiKey:         geoapifyKey
+                    });
+                    if (geoRoutes && geoRoutes.length > 0) {
+                        routes = geoRoutes;
+                        usedExternalOptimizer = true;
+                        let gGeomCached2 = 0;
+                        geoRoutes.forEach(function(r) {
+                            if (r._roadPts && r._roadPts.length) {
+                                _routeGeomCache[r.busId + '_' + si] = r._roadPts;
+                                gGeomCached2++;
+                            }
+                        });
+                        console.log('[Go] Geoapify multi-vehicle: ' + geoRoutes.length + ' routes, ' +
+                            geoRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops' +
+                            (gGeomCached2 ? ', ' + gGeomCached2 + ' with road geometry' : ''));
+                        toast('✓ Routes generated via Geoapify — ' + geoRoutes.length + ' buses');
+                    } else {
+                        console.warn('[Go] Geoapify multi-vehicle returned no routes — falling through to K-medoids');
+                    }
+                } catch (e) {
+                    console.warn('[Go] Geoapify multi-vehicle failed (' + e.message + ') — falling through to K-medoids');
                 }
             }
 
