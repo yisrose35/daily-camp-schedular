@@ -148,7 +148,11 @@ function validateSpecialActivity(activity, activityName) {
         sharableWith, limitUsage, timeRules,
         maxUsage: (() => { if (activity.maxUsage == null || activity.maxUsage === "") return null; const p = parseInt(activity.maxUsage, 10); return (!isNaN(p) && p > 0) ? p : null; })(),
         maxUsagePeriod: activity.maxUsagePeriod || 'half',
-        frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0, rainyDayExclusive: activity.rainyDayExclusive === true,
+        // Min days between visits. Renamed from legacy `frequencyWeeks` —
+        // kept as a fallback read for old configs, but always written as
+        // `frequencyDays` going forward.
+        frequencyDays: parseInt(activity.frequencyDays, 10) || parseInt(activity.frequencyWeeks, 10) || 0,
+        rainyDayExclusive: activity.rainyDayExclusive === true,
         rainyDayOnly: activity.rainyDayOnly === true, prepDuration: parseInt(activity.prepDuration, 10) || 0,
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
@@ -204,7 +208,7 @@ function validateSpecialActivity(activity, activityName) {
 function createDefaultActivity(name) {
     return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
-        maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
+        maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0,
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },

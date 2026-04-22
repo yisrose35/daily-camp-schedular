@@ -347,7 +347,7 @@
                 name: specialName,
                 capacity: capacity,
                 maxUsage: props.maxUsage || 0,
-                frequencyWeeks: props.frequencyWeeks || 0,
+                frequencyDays: props.frequencyDays || props.frequencyWeeks || 0,
                 remainingSlots: capacity,
                 props: props // Keep reference for bunk-level checks
             });

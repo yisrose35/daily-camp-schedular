@@ -341,7 +341,7 @@ function createDefaultSpecialActivity(name) {
         timeRules: [],
         maxUsage: null,
         maxUsagePeriod: 'half',
-        frequencyWeeks: 0,
+        frequencyDays: 0,
         rainyDayExclusive: false,
         rainyDayOnly: false,
         prepDuration: 0,
@@ -958,9 +958,6 @@ function renderSpecialConfig(container, fac) {
 
         saBody.appendChild(section("Multi-Part Activity", summarySpecialMultiPart(saData),
             () => renderSpecialMultiPart(saData)));
-
-        saBody.appendChild(section("Rotation Cohort", summarySpecialRotationCohort(saData),
-            () => renderSpecialRotationCohort(saData)));
 
         saCard.appendChild(saBody);
         container.appendChild(saCard);
@@ -1654,8 +1651,14 @@ function summarySpecialSchedulingMode(s) {
     return `Individual bunks — up to ${parseInt(rules.capacity) || 2} at once`;
 }
 function summarySpecialUsage(s) {
-    if (!s.maxUsage) return "No limit";
-    return `Max ${s.maxUsage} per ${s.maxUsagePeriod || 'half'}`;
+    const parts = [];
+    if (s.maxUsage) parts.push(`Max ${s.maxUsage} per ${s.maxUsagePeriod || 'half'}`);
+    const days = parseInt(s.frequencyDays || s.frequencyWeeks || 0, 10);
+    if (days > 0) parts.push(`Min ${days}d between`);
+    if (s.rotationCohort?.enabled && Array.isArray(s.rotationCohort.grades) && s.rotationCohort.grades.length > 0) {
+        parts.push(`Equal visits across ${s.rotationCohort.grades.join(', ')}`);
+    }
+    return parts.length > 0 ? parts.join(' • ') : 'No limit';
 }
 function summarySpecialDuration(s) {
     const durations = (Array.isArray(s.durations) ? s.durations : [])
@@ -1677,100 +1680,6 @@ function summarySpecialPrep(s) { return s.prepDuration ? `${s.prepDuration} min`
 function summarySpecialMultiPart(s) {
     if (!s.multiPart?.enabled) return "Single session";
     return `${s.multiPart.totalParts} parts, ${s.multiPart.daysBetween} days apart`;
-}
-
-function summarySpecialRotationCohort(s) {
-    const rc = s.rotationCohort;
-    if (!rc?.enabled) return "Off";
-    const grades = Array.isArray(rc.grades) ? rc.grades : [];
-    if (!grades.length) return "On — no grades selected";
-    return "Round-robin across: " + grades.join(", ");
-}
-
-function renderSpecialRotationCohort(saData) {
-    const container = document.createElement("div");
-    if (!saData.rotationCohort) {
-        saData.rotationCohort = { enabled: false, grades: [] };
-    }
-    const updateSummary = () => {
-        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-        if (el) el.textContent = summarySpecialRotationCohort(saData);
-    };
-    const renderContent = () => {
-        container.innerHTML = "";
-        const rc = saData.rotationCohort;
-
-        const help = document.createElement("div");
-        help.style.cssText = "font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;";
-        help.textContent = "When enabled, every bunk in the listed grades must visit this special the same number of times before any bunk visits it again. Auto-resets each round (e.g., when supplies for the next project arrive).";
-        container.appendChild(help);
-
-        const modeWrap = document.createElement("div");
-        modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:14px;";
-
-        const btnOff = document.createElement("button");
-        btnOff.textContent = "Off";
-        btnOff.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${!rc.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${!rc.enabled ? '#e6f4f7' : '#fff'}; font-weight:${!rc.enabled ? '600' : '400'};`;
-
-        const btnOn = document.createElement("button");
-        btnOn.textContent = "Round-robin";
-        btnOn.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${rc.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rc.enabled ? '#e6f4f7' : '#fff'}; font-weight:${rc.enabled ? '600' : '400'};`;
-
-        btnOff.onclick = () => {
-            rc.enabled = false;
-            saveSpecialData(saData);
-            renderContent(); updateSummary();
-        };
-        btnOn.onclick = () => {
-            rc.enabled = true;
-            // Auto-fill grades from limitUsage if user hasn't picked any yet
-            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.limitUsage?.enabled) {
-                rc.grades = Object.keys(saData.limitUsage.divisions || {});
-            }
-            saveSpecialData(saData);
-            renderContent(); updateSummary();
-        };
-
-        modeWrap.appendChild(btnOff); modeWrap.appendChild(btnOn);
-        container.appendChild(modeWrap);
-
-        if (rc.enabled) {
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
-            if (!Array.isArray(rc.grades)) rc.grades = [];
-
-            const label = document.createElement("div");
-            label.style.cssText = "font-size:0.8rem; font-weight:600; color:#374151; margin-bottom:6px;";
-            label.textContent = "Cohort grades (share the round-robin):";
-            container.appendChild(label);
-
-            const chipWrap = document.createElement("div");
-            chipWrap.style.cssText = "display:flex; flex-wrap:wrap; gap:4px;";
-
-            allDivs.forEach(divName => {
-                const isOn = rc.grades.includes(divName);
-                const c = document.createElement("span");
-                c.className = "chip " + (isOn ? "active" : "inactive");
-                c.textContent = divName;
-                c.onclick = () => {
-                    if (isOn) rc.grades = rc.grades.filter(g => g !== divName);
-                    else rc.grades.push(divName);
-                    saveSpecialData(saData);
-                    renderContent(); updateSummary();
-                };
-                chipWrap.appendChild(c);
-            });
-            container.appendChild(chipWrap);
-
-            if (rc.grades.length === 0) {
-                const warn = document.createElement("div");
-                warn.style.cssText = "font-size:0.75rem; color:#D97706; margin-top:8px;";
-                warn.textContent = "No grades selected — round-robin has no effect.";
-                container.appendChild(warn);
-            }
-        }
-    };
-    renderContent();
-    return container;
 }
 
 function saveSpecialData(saData) {
@@ -2164,13 +2073,29 @@ function renderSpecialSchedulingMode(saData) {
 // -- Usage & Frequency --
 function renderSpecialUsage(saData) {
     const container = document.createElement("div");
+
+    // One-time legacy migration: copy frequencyWeeks → frequencyDays if
+    // the new field is missing. The validator already does this on read,
+    // but mirror it on the live object so saves persist the new key.
+    if (saData.frequencyDays == null && saData.frequencyWeeks != null) {
+        saData.frequencyDays = parseInt(saData.frequencyWeeks, 10) || 0;
+    }
+    if (!saData.rotationCohort || typeof saData.rotationCohort !== 'object') {
+        saData.rotationCohort = { enabled: false, grades: [] };
+    }
+
     const updateSummary = () => {
         const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
         if (el) el.textContent = summarySpecialUsage(saData);
     };
 
-    container.innerHTML = `
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+    const renderContent = () => {
+        container.innerHTML = '';
+
+        // ── Max usage row ───────────────────────────────────────
+        const maxRow = document.createElement('div');
+        maxRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;';
+        maxRow.innerHTML = `
             <span style="font-size:0.85rem;">Max usage per</span>
             <select id="fac-sa-usage-period" style="border-radius:6px; border:1px solid #D1D5DB; padding:4px;">
                 <option value="half" ${saData.maxUsagePeriod === 'half' ? 'selected' : ''}>Half Summer</option>
@@ -2179,14 +2104,101 @@ function renderSpecialUsage(saData) {
             <span style="font-size:0.85rem;">:</span>
             <input type="number" id="fac-sa-max-usage" min="0" placeholder="No limit" value="${saData.maxUsage || ''}"
                 style="width:70px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-        </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-size:0.85rem;">Min frequency (weeks between):</span>
-            <input type="number" id="fac-sa-freq" min="0" value="${saData.frequencyWeeks || 0}"
-                style="width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-        </div>`;
+        `;
+        container.appendChild(maxRow);
 
-    const bindInputs = () => {
+        // ── Min frequency (days between) ────────────────────────
+        const freqRow = document.createElement('div');
+        freqRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:18px; flex-wrap:wrap;';
+        freqRow.innerHTML = `
+            <span style="font-size:0.85rem;">Min frequency (days between):</span>
+            <input type="number" id="fac-sa-freq" min="0" value="${saData.frequencyDays || 0}"
+                style="width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
+        `;
+        container.appendChild(freqRow);
+
+        // ── Equal visits across grades (cohort round-robin) ─────
+        const cohortBox = document.createElement('div');
+        cohortBox.style.cssText = 'border-top:1px dashed #E5E7EB; padding-top:14px;';
+
+        const cohortLabel = document.createElement('div');
+        cohortLabel.style.cssText = 'font-size:0.85rem; font-weight:600; color:#374151; margin-bottom:6px;';
+        cohortLabel.textContent = 'Equal visits across grades';
+        cohortBox.appendChild(cohortLabel);
+
+        const cohortHelp = document.createElement('div');
+        cohortHelp.style.cssText = 'font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;';
+        cohortHelp.textContent = 'Every bunk in the chosen grades visits this activity the same number of times before any bunk visits again. Useful when supplies for the next round arrive only after every bunk has had a turn.';
+        cohortBox.appendChild(cohortHelp);
+
+        const rc = saData.rotationCohort;
+
+        const modeWrap = document.createElement('div');
+        modeWrap.style.cssText = 'display:flex; gap:8px; margin-bottom:12px;';
+
+        const btnOff = document.createElement('button');
+        btnOff.textContent = 'Off';
+        btnOff.style.cssText = `flex:1; padding:7px; border-radius:6px; border:1px solid ${!rc.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${!rc.enabled ? '#e6f4f7' : '#fff'}; font-weight:${!rc.enabled ? '600' : '400'}; font-size:0.85rem;`;
+
+        const btnOn = document.createElement('button');
+        btnOn.textContent = 'Take turns by bunk';
+        btnOn.style.cssText = `flex:1; padding:7px; border-radius:6px; border:1px solid ${rc.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rc.enabled ? '#e6f4f7' : '#fff'}; font-weight:${rc.enabled ? '600' : '400'}; font-size:0.85rem;`;
+
+        btnOff.onclick = () => {
+            rc.enabled = false;
+            saveSpecialData(saData);
+            renderContent(); updateSummary();
+        };
+        btnOn.onclick = () => {
+            rc.enabled = true;
+            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.limitUsage?.enabled) {
+                rc.grades = Object.keys(saData.limitUsage.divisions || {});
+            }
+            saveSpecialData(saData);
+            renderContent(); updateSummary();
+        };
+
+        modeWrap.appendChild(btnOff);
+        modeWrap.appendChild(btnOn);
+        cohortBox.appendChild(modeWrap);
+
+        if (rc.enabled) {
+            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!Array.isArray(rc.grades)) rc.grades = [];
+
+            const chipLabel = document.createElement('div');
+            chipLabel.style.cssText = 'font-size:0.78rem; color:#374151; margin-bottom:6px;';
+            chipLabel.textContent = 'Grades sharing the rotation:';
+            cohortBox.appendChild(chipLabel);
+
+            const chipWrap = document.createElement('div');
+            chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:4px;';
+            allDivs.forEach(divName => {
+                const isOn = rc.grades.includes(divName);
+                const c = document.createElement('span');
+                c.className = 'chip ' + (isOn ? 'active' : 'inactive');
+                c.textContent = divName;
+                c.onclick = () => {
+                    if (isOn) rc.grades = rc.grades.filter(g => g !== divName);
+                    else rc.grades.push(divName);
+                    saveSpecialData(saData);
+                    renderContent(); updateSummary();
+                };
+                chipWrap.appendChild(c);
+            });
+            cohortBox.appendChild(chipWrap);
+
+            if (rc.grades.length === 0) {
+                const warn = document.createElement('div');
+                warn.style.cssText = 'font-size:0.75rem; color:#D97706; margin-top:8px;';
+                warn.textContent = 'No grades selected — rotation has no effect.';
+                cohortBox.appendChild(warn);
+            }
+        }
+
+        container.appendChild(cohortBox);
+
+        // ── Bind inputs ─────────────────────────────────────────
         const maxInput = container.querySelector('#fac-sa-max-usage');
         const periodSel = container.querySelector('#fac-sa-usage-period');
         const freqInput = container.querySelector('#fac-sa-freq');
@@ -2201,12 +2213,14 @@ function renderSpecialUsage(saData) {
             saveSpecialData(saData); updateSummary();
         };
         if (freqInput) freqInput.onchange = () => {
-            saData.frequencyWeeks = parseInt(freqInput.value) || 0;
-            saveSpecialData(saData);
+            saData.frequencyDays = parseInt(freqInput.value) || 0;
+            // Clear legacy field so writes only use the new key
+            if (saData.frequencyWeeks != null) delete saData.frequencyWeeks;
+            saveSpecialData(saData); updateSummary();
         };
     };
-    setTimeout(bindInputs, 0);
 
+    renderContent();
     return container;
 }
 

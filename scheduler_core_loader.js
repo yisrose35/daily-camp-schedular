@@ -217,7 +217,7 @@
                 timeRules: [],
                 minDurationMin: 0,
                 maxUsage: 0,
-                frequencyWeeks: 0,
+                frequencyDays: 0,
                 rainyDayAvailable: false,
                 activities: [],
                 type: 'activity',
