@@ -4824,6 +4824,63 @@ let _toastTimer = null;
                 tgt.cy = tgt.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt.stops.length;
             }
 
+            // ── Stop-count rebalancing: cap stops per cluster to bound ride time ──
+            // Ride time ≈ stopCount × serviceTime + drive time.  A 27-stop route
+            // has ~54 min of service time alone, guaranteeing the last pickup exceeds
+            // 45 min.  This pass donates boundary stops from over-crowded clusters to
+            // under-crowded neighbors, respecting both camper capacity and geographic
+            // proximity (2.5 mi max move — so territories stay clean).
+            var targetStops  = Math.ceil(stops.length / k);
+            var stopCap      = Math.ceil(targetStops * 1.2); // 20% above average
+            var maxMoveDistMi = 2.5;
+            var stopMoves    = 0;
+            for (var sbPass = 0; sbPass < stops.length * 2; sbPass++) {
+                // Find the cluster furthest over the stop cap
+                var overIdx = -1, maxOver = 0;
+                for (var i = 0; i < clusters.length; i++) {
+                    var over = clusters[i].stops.length - stopCap;
+                    if (over > maxOver) { maxOver = over; overIdx = i; }
+                }
+                if (overIdx === -1) break; // no cluster over cap → done
+
+                // Find best stop-in-overflow-cluster + target-undercrowded-cluster pair
+                var src = clusters[overIdx];
+                var bestSi = -1, bestDist = Infinity, bestTgtIdx = -1;
+                for (var si = 0; si < src.stops.length; si++) {
+                    var st   = src.stops[si];
+                    var stCW = Math.max(1, (st.campers || []).length);
+                    for (var ti = 0; ti < clusters.length; ti++) {
+                        if (ti === overIdx) continue;
+                        if (clusters[ti].stops.length >= stopCap) continue; // target already full-enough
+                        var tgtCap = sortedCaps ? sortedCaps[ti] : fallbackTarget;
+                        if (clusters[ti].cw + stCW > tgtCap) continue; // camper capacity
+                        var d = haversineMi(st.lat, st.lng, clusters[ti].cx, clusters[ti].cy);
+                        if (d > maxMoveDistMi) continue; // geographic guard
+                        if (d < bestDist) { bestDist = d; bestSi = si; bestTgtIdx = ti; }
+                    }
+                }
+                if (bestSi === -1) break; // no valid move — src has no stops close to any underfilled cluster
+
+                // Execute the move
+                var movingStop = src.stops[bestSi];
+                var movingCW   = Math.max(1, (movingStop.campers || []).length);
+                src.stops.splice(bestSi, 1);
+                src.w  -= 1;
+                src.cw -= movingCW;
+                if (src.stops.length) {
+                    src.cx = src.stops.reduce(function(s, st) { return s + st.lat; }, 0) / src.stops.length;
+                    src.cy = src.stops.reduce(function(s, st) { return s + st.lng; }, 0) / src.stops.length;
+                }
+                var tgt2 = clusters[bestTgtIdx];
+                tgt2.stops.push(movingStop);
+                tgt2.w  += 1;
+                tgt2.cw += movingCW;
+                tgt2.cx = tgt2.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgt2.stops.length;
+                tgt2.cy = tgt2.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt2.stops.length;
+                stopMoves++;
+            }
+            if (stopMoves > 0) console.log('[Go] Stop-count balance: ' + stopMoves + ' stop(s) moved (cap ' + stopCap + ' stops/cluster)');
+
             return clusters
                 .filter(function(c) { return c.stops.length > 0; })
                 .map(function(c) { return c.stops; });
