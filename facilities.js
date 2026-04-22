@@ -959,6 +959,9 @@ function renderSpecialConfig(container, fac) {
         saBody.appendChild(section("Multi-Part Activity", summarySpecialMultiPart(saData),
             () => renderSpecialMultiPart(saData)));
 
+        saBody.appendChild(section("Rotation Cohort", summarySpecialRotationCohort(saData),
+            () => renderSpecialRotationCohort(saData)));
+
         saCard.appendChild(saBody);
         container.appendChild(saCard);
     });
@@ -1674,6 +1677,100 @@ function summarySpecialPrep(s) { return s.prepDuration ? `${s.prepDuration} min`
 function summarySpecialMultiPart(s) {
     if (!s.multiPart?.enabled) return "Single session";
     return `${s.multiPart.totalParts} parts, ${s.multiPart.daysBetween} days apart`;
+}
+
+function summarySpecialRotationCohort(s) {
+    const rc = s.rotationCohort;
+    if (!rc?.enabled) return "Off";
+    const grades = Array.isArray(rc.grades) ? rc.grades : [];
+    if (!grades.length) return "On — no grades selected";
+    return "Round-robin across: " + grades.join(", ");
+}
+
+function renderSpecialRotationCohort(saData) {
+    const container = document.createElement("div");
+    if (!saData.rotationCohort) {
+        saData.rotationCohort = { enabled: false, grades: [] };
+    }
+    const updateSummary = () => {
+        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summarySpecialRotationCohort(saData);
+    };
+    const renderContent = () => {
+        container.innerHTML = "";
+        const rc = saData.rotationCohort;
+
+        const help = document.createElement("div");
+        help.style.cssText = "font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;";
+        help.textContent = "When enabled, every bunk in the listed grades must visit this special the same number of times before any bunk visits it again. Auto-resets each round (e.g., when supplies for the next project arrive).";
+        container.appendChild(help);
+
+        const modeWrap = document.createElement("div");
+        modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:14px;";
+
+        const btnOff = document.createElement("button");
+        btnOff.textContent = "Off";
+        btnOff.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${!rc.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${!rc.enabled ? '#e6f4f7' : '#fff'}; font-weight:${!rc.enabled ? '600' : '400'};`;
+
+        const btnOn = document.createElement("button");
+        btnOn.textContent = "Round-robin";
+        btnOn.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${rc.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rc.enabled ? '#e6f4f7' : '#fff'}; font-weight:${rc.enabled ? '600' : '400'};`;
+
+        btnOff.onclick = () => {
+            rc.enabled = false;
+            saveSpecialData(saData);
+            renderContent(); updateSummary();
+        };
+        btnOn.onclick = () => {
+            rc.enabled = true;
+            // Auto-fill grades from limitUsage if user hasn't picked any yet
+            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.limitUsage?.enabled) {
+                rc.grades = Object.keys(saData.limitUsage.divisions || {});
+            }
+            saveSpecialData(saData);
+            renderContent(); updateSummary();
+        };
+
+        modeWrap.appendChild(btnOff); modeWrap.appendChild(btnOn);
+        container.appendChild(modeWrap);
+
+        if (rc.enabled) {
+            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            if (!Array.isArray(rc.grades)) rc.grades = [];
+
+            const label = document.createElement("div");
+            label.style.cssText = "font-size:0.8rem; font-weight:600; color:#374151; margin-bottom:6px;";
+            label.textContent = "Cohort grades (share the round-robin):";
+            container.appendChild(label);
+
+            const chipWrap = document.createElement("div");
+            chipWrap.style.cssText = "display:flex; flex-wrap:wrap; gap:4px;";
+
+            allDivs.forEach(divName => {
+                const isOn = rc.grades.includes(divName);
+                const c = document.createElement("span");
+                c.className = "chip " + (isOn ? "active" : "inactive");
+                c.textContent = divName;
+                c.onclick = () => {
+                    if (isOn) rc.grades = rc.grades.filter(g => g !== divName);
+                    else rc.grades.push(divName);
+                    saveSpecialData(saData);
+                    renderContent(); updateSummary();
+                };
+                chipWrap.appendChild(c);
+            });
+            container.appendChild(chipWrap);
+
+            if (rc.grades.length === 0) {
+                const warn = document.createElement("div");
+                warn.style.cssText = "font-size:0.75rem; color:#D97706; margin-top:8px;";
+                warn.textContent = "No grades selected — round-robin has no effect.";
+                container.appendChild(warn);
+            }
+        }
+    };
+    renderContent();
+    return container;
 }
 
 function saveSpecialData(saData) {

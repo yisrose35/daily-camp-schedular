@@ -488,6 +488,24 @@
             });
             return count;
         }
+        // Lifetime visit count for rotation-cohort enforcement.
+        // Counts every prior day in allDailyData where this bunk had this
+        // special on its schedule.
+        const _cohortCountCache = {};
+        function getLifetimeSpecialCount(bunk, specialName) {
+            const key = bunk + '||' + specialName;
+            if (_cohortCountCache[key] != null) return _cohortCountCache[key];
+            let count = 0;
+            Object.entries(allDailyData).forEach(([dateKey, dayData]) => {
+                if (dateKey >= currentDate) return;
+                const slots = dayData?.scheduleAssignments?.[bunk];
+                if (!Array.isArray(slots)) return;
+                if (slots.some(e => e && !e.continuation &&
+                    (e._activity === specialName || e.field === specialName))) count++;
+            });
+            _cohortCountCache[key] = count;
+            return count;
+        }
 
         log('[STEP 1] Day: ' + dayName + ' | Rainy: ' + (isRainy ? 'YES' : 'NO'));
         const allowedDivisions = options.allowedDivisions || null;
@@ -1768,6 +1786,31 @@
                 const maxUsage = parseInt(props.maxUsage) || 0;
                 const maxUsagePeriod = props.maxUsagePeriod || 'half';
                 if (maxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= maxUsage) return;
+                // Rotation cohort: every bunk in the cohort must visit this
+                // special the same number of times before any bunk visits it
+                // again. Skip this special for `bunk` if its lifetime count
+                // already exceeds the cohort minimum.
+                const rc = props.rotationCohort || s.rotationCohort;
+                if (rc && rc.enabled && Array.isArray(rc.grades) && rc.grades.length > 0) {
+                    const cohortBunks = [];
+                    rc.grades.forEach(g => {
+                        if (!isSpecialAvailableForDivision(s.name, g, globalSettings)) return;
+                        getBunksForGrade(g, divisions).forEach(b => cohortBunks.push(String(b)));
+                    });
+                    if (cohortBunks.length > 0 && cohortBunks.includes(String(bunk))) {
+                        const myCount = getLifetimeSpecialCount(String(bunk), s.name);
+                        let minCount = Infinity;
+                        for (const b of cohortBunks) {
+                            const c = getLifetimeSpecialCount(b, s.name);
+                            if (c < minCount) minCount = c;
+                        }
+                        if (myCount > minCount) {
+                            log('[cohort] skip ' + s.name + ' for ' + bunk +
+                                ' (count=' + myCount + ' > cohort min=' + minCount + ')');
+                            return;
+                        }
+                    }
+                }
 
                 const specificDuration = getSpecialDuration(s.name, activityProperties, globalSettings);
                 const cfg = getSpecialConfig(s.name, globalSettings);

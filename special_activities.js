@@ -188,7 +188,16 @@ function validateSpecialActivity(activity, activityName) {
         duration: (activity.duration != null && parseInt(activity.duration, 10) > 0)
             ? parseInt(activity.duration, 10)
             : (Array.isArray(activity.durations) && activity.durations[0] > 0
-                ? parseInt(activity.durations[0], 10) : null)
+                ? parseInt(activity.durations[0], 10) : null),
+        // Rotation cohort: when enabled, every bunk listed in `grades`
+        // must visit this special the same number of times before any
+        // bunk visits it again. Auto-resets on completion of each round.
+        rotationCohort: (activity.rotationCohort && typeof activity.rotationCohort === 'object') ? {
+            enabled: activity.rotationCohort.enabled === true,
+            grades: Array.isArray(activity.rotationCohort.grades)
+                ? activity.rotationCohort.grades.slice()
+                : []
+        } : { enabled: false, grades: [] }
     };
 }
 
