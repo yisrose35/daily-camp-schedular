@@ -2510,7 +2510,10 @@ let _toastTimer = null;
         } else {
             delete a._geocodeWarning;
         }
-        console.log('[Go] Geocoded ' + name + ': ' + result.source + ' (' + Math.round(result.confidence * 100) + '% confidence, ' + (result.precision || '?') + ')' + (result._crossValidated ? ' [cross-validated]' : ''));
+        console.log('[Go] Geocoded ' + name + ': ' + result.source +
+            ' (' + Math.round(result.confidence * 100) + '% confidence, ' + (result.precision || '?') + ')' +
+            (a.carrierRoute ? ' [route ' + a.carrierRoute + ']' : ' [no carrier route]') +
+            (result._crossValidated ? ' [cross-validated]' : ''));
     }
 
     // =========================================================================
