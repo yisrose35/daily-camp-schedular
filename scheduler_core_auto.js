@@ -9165,47 +9165,49 @@
                 'swim','lunch','snacks','snack','dismissal','league','specialty_league',
                 'custom','change','pre-change','post-change'
             ]);
-            // Build duration candidates per grade (used by PeriodPacker for
-            // multi-segment splitting). One candidate per unique duration —
-            // the solver picks the actual activity later.
-            const periodCandidatesByGrade = {};
             const PACKER_STEP = 5; // 5-min granularity (handles 20/25/30/35/40 etc.)
             const PACKER_DEFAULT_FLOOR = 10;
-            // Per-grade minimum segment, derived from the smallest layer
-            // durationMin across non-special / non-skip layers. Specials are
-            // pre-placed before the packer runs, so their durations don't
-            // belong in the gap-fill candidate pool.
-            const periodFloorByGrade = {};
-            const computeFloorForGrade = (grade) => {
-                if (periodFloorByGrade[grade] != null) return periodFloorByGrade[grade];
+            // Floor + candidate pool are *time-range specific*. Each layer
+            // covers a [startMin, endMin) window — only layers overlapping
+            // the gap being packed contribute to its floor / candidates.
+            // This way a 9am-12pm sports layer (min 20) doesn't constrain
+            // a 1pm-4pm electives layer (min 30), and vice versa.
+            const isLayerEligibleForGap = (l, grade, gapStart, gapEnd) => {
+                const lg = l.grade || l.division || '';
+                if (lg !== grade) return false;
+                const t = String(l.type || '').toLowerCase();
+                if (SKIP_LAYER_TYPES.has(t)) return false;
+                if (t === 'special') return false; // specials are pre-placed
+                const ls = (l.startMin != null) ? l.startMin : -Infinity;
+                const le = (l.endMin   != null) ? l.endMin   : Infinity;
+                return ls < gapEnd && le > gapStart;
+            };
+            const layerMinDur = (l) => {
+                const cands = [l.durationMin, l.periodMin, l.duration]
+                    .map(v => parseInt(v, 10))
+                    .filter(v => !isNaN(v) && v > 0);
+                return cands.length ? Math.min.apply(null, cands) : null;
+            };
+            // Cache by (grade + startMin + endMin)
+            const floorCache = {};
+            const candsCache = {};
+            const computeFloorForGap = (grade, gapStart, gapEnd) => {
+                const key = grade + '_' + gapStart + '_' + gapEnd;
+                if (floorCache[key] != null) return floorCache[key];
                 let floor = Infinity;
-                let floorLayer = null;
                 (layers || []).forEach(l => {
-                    const lg = l.grade || l.division || '';
-                    if (lg !== grade) return;
-                    const t = String(l.type || '').toLowerCase();
-                    if (SKIP_LAYER_TYPES.has(t)) return;
-                    if (t === 'special') return;
-                    const candidates = [l.durationMin, l.periodMin, l.duration]
-                        .map(v => parseInt(v, 10))
-                        .filter(v => !isNaN(v) && v > 0);
-                    if (!candidates.length) return;
-                    const lo = Math.min.apply(null, candidates);
-                    if (lo < floor) { floor = lo; floorLayer = l; }
+                    if (!isLayerEligibleForGap(l, grade, gapStart, gapEnd)) return;
+                    const m = layerMinDur(l);
+                    if (m != null && m < floor) floor = m;
                 });
                 if (!isFinite(floor)) floor = PACKER_DEFAULT_FLOOR;
-                periodFloorByGrade[grade] = floor;
-                if (floorLayer) {
-                    log('[2.75]   floor source: type=' + (floorLayer.type || '?') +
-                        ' durationMin=' + (floorLayer.durationMin || '?') +
-                        ' durationMax=' + (floorLayer.durationMax || '?') +
-                        ' periodMin=' + (floorLayer.periodMin || '?'));
-                }
+                floorCache[key] = floor;
                 return floor;
             };
-            const buildPeriodCandidates = (grade) => {
-                if (periodCandidatesByGrade[grade]) return periodCandidatesByGrade[grade];
-                const floor = computeFloorForGrade(grade);
+            const buildCandidatesForGap = (grade, gapStart, gapEnd) => {
+                const key = grade + '_' + gapStart + '_' + gapEnd;
+                if (candsCache[key]) return candsCache[key];
+                const floor = computeFloorForGap(grade, gapStart, gapEnd);
                 const durations = new Set();
                 const addDur = (n) => {
                     if (typeof n !== 'number' || isNaN(n)) return;
@@ -9213,11 +9215,7 @@
                     durations.add(n);
                 };
                 (layers || []).forEach(l => {
-                    const lg = l.grade || l.division || '';
-                    if (lg !== grade) return;
-                    const t = String(l.type || '').toLowerCase();
-                    if (SKIP_LAYER_TYPES.has(t)) return;
-                    if (t === 'special') return; // specials are pre-placed; not a gap-fill option
+                    if (!isLayerEligibleForGap(l, grade, gapStart, gapEnd)) return;
                     const lMin = parseInt(l.durationMin || l.periodMin || l.duration || 0, 10);
                     const lMax = parseInt(l.durationMax || l.periodMin || l.duration || lMin, 10);
                     if (lMin > 0) {
@@ -9228,17 +9226,18 @@
                     addDur(parseInt(l.duration, 10));
                 });
                 const cands = [...durations].sort((a,b)=>a-b).map(d => ({ activity: 'd' + d, durationMin: d }));
-                periodCandidatesByGrade[grade] = cands;
+                candsCache[key] = cands;
                 return cands;
             };
             // Split a period gap (start..end) into sub-slot durations whose
             // sum equals (end - start), using PeriodPacker. Returns an array
             // of segment durations; [dur] means single segment.
             const segDursCache = {};
-            const computeSegDurs = (grade, dur) => {
-                const key = grade + '_' + dur;
+            const computeSegDurs = (grade, gapStart, gapEnd) => {
+                const dur = gapEnd - gapStart;
+                const key = grade + '_' + gapStart + '_' + gapEnd;
                 if (segDursCache[key] !== undefined) return segDursCache[key];
-                const floor = computeFloorForGrade(grade);
+                const floor = computeFloorForGap(grade, gapStart, gapEnd);
                 // Sub-floor or non-step gaps are dropped: emitting a slot
                 // shorter than the layer's minimum would let the solver place
                 // an undersized activity. Better to leave the time empty.
@@ -9249,7 +9248,7 @@
                 let result = [dur];
                 do {
                     if (typeof window.PeriodPacker?.pack !== 'function') break;
-                    const cands = buildPeriodCandidates(grade);
+                    const cands = buildCandidatesForGap(grade, gapStart, gapEnd);
                     if (!cands.length) break;
                     let packing = null;
                     try {
@@ -9275,8 +9274,7 @@
                 return result;
             };
             const splitGapIntoSegments = (startMin, endMin, period, bunk, grade) => {
-                const dur = endMin - startMin;
-                const segDurs = computeSegDurs(grade, dur);
+                const segDurs = computeSegDurs(grade, startMin, endMin);
                 let cursor = startMin;
                 return segDurs.map((segDur, i) => {
                     const segStart = cursor;
@@ -9305,12 +9303,17 @@
                 if (!periods || periods.length === 0) return;
                 const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
                 if (!pbs) return;
-                // Diagnostic: show what floor + candidate pool this grade
-                // is using so it's obvious if a stray small-min layer is
-                // pulling the floor down below user expectation.
-                const _floorDiag = computeFloorForGrade(grade);
-                const _candsDiag = buildPeriodCandidates(grade).map(c => c.durationMin);
-                log('[2.75] ' + grade + ' floor=' + _floorDiag + 'min, candidates=[' + _candsDiag.join(',') + ']');
+                // Diagnostic: show what floor + candidate pool each period
+                // is using. Floor + candidates are derived from the layers
+                // whose time windows overlap that period, so different
+                // periods can legitimately have different floors.
+                periods.forEach(p => {
+                    const _f = computeFloorForGap(grade, p.startMin, p.endMin);
+                    const _c = buildCandidatesForGap(grade, p.startMin, p.endMin).map(c => c.durationMin);
+                    log('[2.75] ' + grade + ' "' + (p.name || 'period') + '" ' +
+                        minutesToTimeLabel(p.startMin) + '-' + minutesToTimeLabel(p.endMin) +
+                        ' floor=' + _f + 'min, candidates=[' + _c.join(',') + ']');
+                });
                 // Pre-compute period boundary points for "crosses boundary" test
                 const boundaries = [];
                 periods.forEach(p => { boundaries.push(p.startMin); boundaries.push(p.endMin); });
@@ -9400,23 +9403,25 @@
 
                     // Pass C: fillability check. A soft-fixed event is only
                     // allowed to stay in a period if every remaining gap can
-                    // be cleanly packed by the per-grade duration pool. If
-                    // even one gap is unpackable (e.g., 25-min special leaves
-                    // a 15-min remainder when the floor is 20), evict the
-                    // soft-fixed event so the period re-carves cleanly.
-                    const floor = computeFloorForGrade(grade);
-                    const cands = buildPeriodCandidates(grade);
-                    const isGapPackable = (gap) => {
+                    // be cleanly packed by the layers overlapping that gap.
+                    // Floor + candidate pool are now per-gap (time-range
+                    // specific), so a 9am-12pm 20-min layer doesn't help
+                    // pack a 1pm-4pm gap whose only overlapping layer is
+                    // 30-60min electives.
+                    const isGapPackable = (gapStart, gapEnd) => {
+                        const gap = gapEnd - gapStart;
                         if (gap <= 0) return true;
-                        if (gap < floor) return false;
+                        const f = computeFloorForGap(grade, gapStart, gapEnd);
+                        const c = buildCandidatesForGap(grade, gapStart, gapEnd);
+                        if (gap < f) return false;
                         if (gap % PACKER_STEP !== 0) return false;
-                        if (!cands.length || typeof window.PeriodPacker?.pack !== 'function') return true;
+                        if (!c.length || typeof window.PeriodPacker?.pack !== 'function') return true;
                         try {
                             const ps = window.PeriodPacker.pack({
                                 periodLengthMin: gap,
-                                candidates: cands,
+                                candidates: c,
                                 maxSegments: 4,
-                                minSegmentMin: floor,
+                                minSegmentMin: f,
                                 granularityMin: PACKER_STEP,
                                 allowRepeat: true,
                                 topN: 1
@@ -9431,12 +9436,13 @@
                         const gaps = [];
                         let cursor = period.startMin;
                         inside.forEach(f => {
-                            if (f.startMin > cursor) gaps.push(f.startMin - cursor);
+                            if (f.startMin > cursor) gaps.push({ start: cursor, end: f.startMin });
                             cursor = Math.max(cursor, f.endMin);
                         });
-                        if (cursor < period.endMin) gaps.push(period.endMin - cursor);
+                        if (cursor < period.endMin) gaps.push({ start: cursor, end: period.endMin });
                         return gaps;
                     };
+                    const allGapsPackable = (gaps) => gaps.every(g => isGapPackable(g.start, g.end));
                     // For each soft-fixed slot in fixedSlots, check whether
                     // removing it would make its containing period(s) packable.
                     // Iterate until no more evictions happen (cascades).
@@ -9453,16 +9459,16 @@
                             );
                             if (!containing) continue;
                             const gapsWith = computeGapsAround(containing, fixedSlots);
-                            if (gapsWith.every(isGapPackable)) continue;
+                            if (allGapsPackable(gapsWith)) continue;
                             const others = fixedSlots.filter(o => o !== s);
                             const gapsWithout = computeGapsAround(containing, others);
-                            if (!gapsWithout.every(isGapPackable)) continue;
+                            if (!allGapsPackable(gapsWithout)) continue;
                             // Eviction is beneficial: removing s makes the period packable.
                             evictedBlocks.push({
                                 grade, bunk: String(bunk),
                                 name: s.event || s._assignedSpecial || '(unknown)',
                                 type: t, startMin: s.startMin, endMin: s.endMin,
-                                reason: 'remainder gap unpackable (floor=' + floor + ')'
+                                reason: 'remainder gap unpackable for overlapping layers'
                             });
                             if (Array.isArray(bunkTimelines[bunk])) {
                                 bunkTimelines[bunk] = bunkTimelines[bunk].filter(b =>
