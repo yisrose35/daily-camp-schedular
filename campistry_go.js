@@ -2587,6 +2587,7 @@ let _toastTimer = null;
                 a._zipMismatch = false; a._geocodeConfidence = null;
                 a._geocodePrecision = null; a._crossValidated = false;
                 a._dpv = null; a._addressCorrected = null; a._geocodeSource = null;
+                a.carrierRoute = null; a.neighborhood = null; // clear zone-key fields so stale values don't persist
                 return true;
             }
             return !a.geocoded;
