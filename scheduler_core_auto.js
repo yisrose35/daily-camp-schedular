@@ -9144,19 +9144,26 @@
         // =====================================================================
         try {
             const periodMap = window.campPeriods || {};
-            // Truly fixed types — NEVER evict, even if they cross a period boundary
+            // Truly fixed types — NEVER evict, even if they cross a period boundary.
+            // Includes user-anchored 'custom' blocks (e.g., Change) and the
+            // auto-generated pre/post-change wrappers around swim.
             const PERIOD_HARD_FIXED = new Set([
-                'swim','snacks','lunch','dismissal','league','specialty_league'
+                'swim','snacks','lunch','dismissal','league','specialty_league',
+                'custom','change','pre-change','post-change'
             ]);
             // Soft-fixed types — preserve when they fit inside a period, but
             // evict when they straddle a period boundary (planner placed them
-            // without knowing about periods).
+            // without knowing about periods) or leave an unpackable remainder.
             const PERIOD_SOFT_FIXED = new Set([
-                'special','pinned','rotation_event','custom'
+                'special','pinned','rotation_event'
             ]);
-            // Period-pool types to skip when collecting layer durations
+            // Period-pool types to skip when collecting layer durations.
+            // These are either fixed events (swim/lunch/etc.) or anchored
+            // single-purpose blocks (custom/change) that shouldn't be a
+            // generic gap-fill option for the packer.
             const SKIP_LAYER_TYPES = new Set([
-                'swim','lunch','snacks','snack','dismissal','league','specialty_league'
+                'swim','lunch','snacks','snack','dismissal','league','specialty_league',
+                'custom','change','pre-change','post-change'
             ]);
             // Build duration candidates per grade (used by PeriodPacker for
             // multi-segment splitting). One candidate per unique duration —
