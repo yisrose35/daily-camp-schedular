@@ -85,6 +85,26 @@
         return next;
     }
 
+    // Return an entry-shaped object (underscore-prefixed fields) from a
+    // segment — so renderers and style helpers that expect the scheduleAssignments
+    // entry shape work uniformly whether a segment came from a legacy single-
+    // activity cell (has _source) or was written fresh by the packer (no _source).
+    function toRenderEntry(segment) {
+        if (!segment) return null;
+        if (segment._source) return segment._source;
+        return {
+            _activity:   segment.activity,
+            sport:       segment.activity,
+            field:       segment.field,
+            _startMin:   segment.startMin,
+            _endMin:     segment.endMin,
+            _fixed:      !!segment.fixed,
+            continuation:!!segment.continuation,
+            _autoMode:   true,
+            _autoSolved: true
+        };
+    }
+
     window.AutoSegmentModel = {
         VERSION,
         getSegments,
@@ -93,7 +113,8 @@
         getPrimarySegment,
         isEmpty,
         rebuildFromAssignments,
-        segmentFromAssignment
+        segmentFromAssignment,
+        toRenderEntry
     };
 
     window.addEventListener('campistry-cloud-schedule-loaded', () => {

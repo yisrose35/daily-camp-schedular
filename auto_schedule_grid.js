@@ -182,6 +182,10 @@
     // ─────────────────────────────────────────────
     // COLLECT ACTIVITIES FOR A BUNK (time-based)
     // ─────────────────────────────────────────────
+    // Phase 3: segment-aware. When a slot has >1 segment (intra-period split
+    // produced by the packer), emit each segment as its own block. Single-
+    // segment slots fall through to the legacy merge-continuation path so
+    // cross-period activities keep rendering as a single merged block.
     function getBunkActivities(bunk, divName) {
         var assignments = (window.scheduleAssignments || {})[bunk];
         if (!Array.isArray(assignments)) return [];
@@ -192,10 +196,37 @@
             : allDivSlots;
         if (!divSlots.length) return [];
 
+        var segmentsByBunk = (window.scheduleSegments || {})[bunk];
+        var toRenderEntry = window.AutoSegmentModel?.toRenderEntry || (function (s) { return s?._source || s || null; });
+
         var out = [], i = 0;
         while (i < assignments.length && i < divSlots.length) {
+            var slotSegs = Array.isArray(segmentsByBunk?.[i]) ? segmentsByBunk[i] : null;
+
+            // Multi-segment period — emit one block per segment, no cross-slot merge.
+            if (slotSegs && slotSegs.length > 1) {
+                for (var s = 0; s < slotSegs.length; s++) {
+                    var seg = slotSegs[s];
+                    var segEntry = toRenderEntry(seg);
+                    if (!segEntry || segEntry._isTransition) continue;
+                    var segStart = (seg.startMin != null) ? seg.startMin : divSlots[i].startMin;
+                    var segEnd   = (seg.endMin   != null) ? seg.endMin   : divSlots[i].endMin;
+                    out.push({
+                        startMin: segStart,
+                        endMin:   segEnd,
+                        duration: segEnd - segStart,
+                        entry:    segEntry,
+                        slotIdx:  i,
+                        segIdx:   s,
+                        isLeague: !!(segEntry._league || segEntry._h2h)
+                    });
+                }
+                i++;
+                continue;
+            }
+
+            // Single-segment / empty slot — legacy merge-continuation path.
             var entry = assignments[i];
-            var slot  = divSlots[i];
             if (!entry || entry._isTransition || entry.continuation) { i++; continue; }
 
             var end = i;
