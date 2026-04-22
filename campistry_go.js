@@ -4602,13 +4602,25 @@ let _toastTimer = null;
         // minimises total within-cluster spread (Ward's criterion, weighted by camper
         // count).  Guarantees non-overlapping, compact patches — no Voronoi artifacts,
         // no interleaving buses on the same street.
-        function wardSubCluster(stops, k) {
+        //
+        // busCaps (optional): array of k effective capacities for the buses being
+        // assigned (e.g. [44, 48, 44]).  When provided the function sorts clusters
+        // largest-first and matches them to buses largest-first so each cluster is
+        // balanced against its actual bus ceiling rather than a pooled average.
+        // Returns clusters in the same sorted order so subClusters[i] pairs with
+        // the i-th bus in the sorted bus list passed by the caller.
+        function wardSubCluster(stops, k, busCaps) {
             if (stops.length <= k) return stops.map(function(s) { return [s]; });
 
+            // Per-bus capacity ceilings, sorted descending (largest bus first).
+            // Fall back to equal-split average if not provided.
             var totalCampers = stops.reduce(function(s, st) {
                 return s + (st.campers || []).length;
             }, 0);
-            var targetPerCluster = Math.ceil(totalCampers / k);
+            var sortedCaps = (busCaps && busCaps.length === k)
+                ? busCaps.slice().sort(function(a, b) { return b - a; })
+                : null;
+            var fallbackTarget = Math.ceil(totalCampers / k);
 
             // Initialise: one cluster per stop, weighted by camper count
             var clusters = stops.map(function(s) {
@@ -4622,7 +4634,6 @@ let _toastTimer = null;
                 for (var i = 0; i < clusters.length; i++) {
                     for (var j = i + 1; j < clusters.length; j++) {
                         var A = clusters[i], B = clusters[j];
-                        // Convert degree offsets to metres for consistent scaling
                         var cosLat = Math.cos((A.cx + B.cx) * 0.5 * Math.PI / 180);
                         var dlat   = (A.cx - B.cx) * 111000;
                         var dlng   = (A.cy - B.cy) * 111000 * cosLat;
@@ -4634,7 +4645,6 @@ let _toastTimer = null;
                 }
                 if (bestI === -1) break;
 
-                // Merge bestJ into bestI, updating weighted centroid
                 var A = clusters[bestI], B = clusters[bestJ];
                 var newW = A.w + B.w;
                 clusters[bestI] = {
@@ -4646,34 +4656,43 @@ let _toastTimer = null;
                 clusters.splice(bestJ, 1);
             }
 
-            // Post-hoc capacity balancing: move boundary stops from overfull → underfull
+            // Match largest cluster → largest bus (optimal assignment).
+            // After this sort, clusters[i] pairs with sortedCaps[i].
+            clusters.sort(function(a, b) { return b.w - a.w; });
+
+            // Post-hoc capacity balancing: move boundary stops from overfull → underfull.
+            // Uses each cluster's actual bus ceiling when available.
             for (var pass = 0; pass < stops.length * 2; pass++) {
-                // Find most overfull cluster
+                // Find the cluster most over its ceiling
                 var srcIdx = -1, maxExcess = 0;
                 for (var i = 0; i < clusters.length; i++) {
-                    var excess = clusters[i].w - targetPerCluster;
+                    var cap    = sortedCaps ? sortedCaps[i] : fallbackTarget;
+                    var excess = clusters[i].w - cap;
                     if (excess > maxExcess) { maxExcess = excess; srcIdx = i; }
                 }
                 if (srcIdx === -1) break;
 
-                // Collect underfull clusters
+                // Collect clusters that still have room
                 var underfullIdxs = [];
                 for (var i = 0; i < clusters.length; i++) {
-                    if (clusters[i].w < targetPerCluster) underfullIdxs.push(i);
+                    var cap = sortedCaps ? sortedCaps[i] : fallbackTarget;
+                    if (clusters[i].w < cap) underfullIdxs.push(i);
                 }
                 if (!underfullIdxs.length) break;
 
-                // Find the boundary stop in srcCluster closest to any underfull centroid
+                // Find boundary stop in src closest to any underfull cluster centroid
                 var src = clusters[srcIdx];
                 var bestStopSi = -1, bestMoveD = Infinity, bestTgtIdx = -1;
                 for (var si = 0; si < src.stops.length; si++) {
                     var st  = src.stops[si];
                     var stW = Math.max(1, (st.campers || []).length);
                     for (var ui = 0; ui < underfullIdxs.length; ui++) {
-                        var tgt = clusters[underfullIdxs[ui]];
-                        if (tgt.w + stW > targetPerCluster * 1.15) continue; // don't overfill
+                        var ti  = underfullIdxs[ui];
+                        var tgt = clusters[ti];
+                        var tgtCap = sortedCaps ? sortedCaps[ti] : fallbackTarget;
+                        if (tgt.w + stW > tgtCap) continue; // respect hard ceiling
                         var d = haversineMi(st.lat, st.lng, tgt.cx, tgt.cy);
-                        if (d < bestMoveD) { bestMoveD = d; bestStopSi = si; bestTgtIdx = underfullIdxs[ui]; }
+                        if (d < bestMoveD) { bestMoveD = d; bestStopSi = si; bestTgtIdx = ti; }
                     }
                 }
                 if (bestStopSi === -1) break;
@@ -4865,14 +4884,19 @@ let _toastTimer = null;
             if (!group.stops.length || !zipBuses.length) continue;
 
             // ── Ward's sub-clustering: split multi-bus zones into compact neighborhoods ──
-            // Each resulting sub-cluster gets exactly one bus and one Google call.
-            // This prevents buses from interleaving on the same streets.
+            // Buses are sorted largest-first so Ward's can match each cluster to its
+            // actual bus ceiling rather than a pooled average.
+            var sortedZipBuses = zipBuses.slice().sort(function(a, b) {
+                return (b.capacity || 44) - (a.capacity || 44);
+            });
             var subClusters;
             if (numBusesForZip > 1) {
-                subClusters = wardSubCluster(group.stops, numBusesForZip);
+                var busCaps = sortedZipBuses.map(function(b) { return b.capacity || 44; });
+                subClusters = wardSubCluster(group.stops, numBusesForZip, busCaps);
                 console.log('[Go] Ward: "' + group.zoneKey + '" → ' + subClusters.length +
-                    ' neighborhoods (' + subClusters.map(function(c) {
-                        return c.reduce(function(s, st) { return s + (st.campers || []).length; }, 0) + ' kids';
+                    ' neighborhoods (' + subClusters.map(function(c, ci) {
+                        var kids = c.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
+                        return kids + '/' + (busCaps[ci] || 44) + ' cap';
                     }).join(', ') + ')');
             } else {
                 subClusters = [group.stops];
@@ -4880,7 +4904,7 @@ let _toastTimer = null;
 
             for (var sci = 0; sci < subClusters.length; sci++) {
                 var subStops = subClusters[sci];
-                var subBus   = zipBuses[sci] || zipBuses[zipBuses.length - 1];
+                var subBus   = sortedZipBuses[sci] || sortedZipBuses[sortedZipBuses.length - 1];
                 var subKids  = subStops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
 
                 if (!subStops.length) continue;
