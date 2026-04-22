@@ -3289,8 +3289,9 @@ function renderToolbar() {
     </div>
     
     <div style="flex:1;"></div>
-    
+
     <div class="da-toolbar-group">
+      ${isAutoMode ? '<button id="da-periods-btn" class="da-btn da-btn-ghost">Bell Schedule</button>' : ''}
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
     </div>
   `;
@@ -3360,6 +3361,23 @@ function renderToolbar() {
   }
   
   document.getElementById('da-generate-btn').onclick = runOptimizer;
+
+  const daPeriodsBtn = document.getElementById('da-periods-btn');
+  if (daPeriodsBtn) {
+    daPeriodsBtn.onclick = () => {
+      const panel = document.getElementById('da-period-panel');
+      if (!panel) return;
+      const isOpen = panel.style.display !== 'none';
+      if (isOpen) {
+        panel.style.display = 'none';
+      } else {
+        panel.style.display = 'block';
+        if (typeof window.PeriodEditor?.renderEditor === 'function') {
+          window.PeriodEditor.renderEditor(panel);
+        }
+      }
+    };
+  }
 }
 
 // =================================================================
@@ -4805,6 +4823,7 @@ function getMainHTML(useMS) {
           <div id="da-rainy-panel"></div>
           <div id="da-displaced-tiles-panel" style="display:none;"></div>
           <div id="da-skeleton-toolbar" class="da-toolbar"></div>
+          <div id="da-period-panel" style="display:none; border-bottom:1px solid #e2e8f0; max-height:420px; overflow-y:auto;"></div>
           <div class="da-grid-wrapper">
             <div id="da-skeleton-grid"></div>
           </div>
@@ -5076,6 +5095,18 @@ function cleanup() {
 // =================================================================
 // PUBLIC API
 // =================================================================
+// Re-overlay period blocks and refresh open panel when bell schedule changes
+window.addEventListener('campistry-periods-changed', function() {
+  const gridEl = document.getElementById('da-skeleton-grid');
+  if (gridEl && typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+    window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+  }
+  const panel = document.getElementById('da-period-panel');
+  if (panel && panel.style.display !== 'none' && typeof window.PeriodEditor?.renderEditor === 'function') {
+    window.PeriodEditor.renderEditor(panel);
+  }
+});
+
 window.initDailyAdjustments = init;
 window.cleanupDailyAdjustments = cleanup;
 window.refreshDailyAdjustmentsFromCloud = refreshFromCloud;

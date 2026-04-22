@@ -688,6 +688,7 @@ function init(targetElement = null){
       <div class="ms-auto-container" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
         <div id="daw-toolbar" class="ms-toolbar"></div>
         <div id="daw-expand" class="ms-expand"></div>
+        <div id="daw-period-panel" style="display:none; border-bottom:1px solid #e2e8f0; overflow:hidden; max-height:420px; overflow-y:auto;"></div>
         <div class="ms-daw-wrapper">
           <div id="daw-grid" class="ms-daw-grid"></div>
         </div>
@@ -1255,6 +1256,8 @@ function renderDAWToolbar() {
       <button id="daw-save-btn" class="ms-daw-sb-btn ms-daw-sb-accent">Save As</button>
     </div>
     <div class="ms-daw-sb-right">
+      <button id="daw-periods-btn" class="ms-daw-sb-btn ms-daw-sb-ghost">Bell Schedule</button>
+      <div class="ms-daw-sb-div"></div>
       <button id="daw-copy-btn" class="ms-daw-sb-btn ms-daw-sb-ghost">Copy To…</button>
       <button id="daw-clear-btn" class="ms-daw-sb-btn ms-daw-sb-danger">Clear</button>
       <div class="ms-daw-sb-div"></div>
@@ -1328,6 +1331,20 @@ function renderDAWToolbar() {
   };
   
   document.getElementById('daw-copy-btn').onclick = () => dawCopyLayersDialog();
+
+  document.getElementById('daw-periods-btn').onclick = () => {
+    const panel = document.getElementById('daw-period-panel');
+    if (!panel) return;
+    const isOpen = panel.style.display !== 'none';
+    if (isOpen) {
+      panel.style.display = 'none';
+    } else {
+      panel.style.display = 'block';
+      if (typeof window.PeriodEditor?.renderEditor === 'function') {
+        window.PeriodEditor.renderEditor(panel);
+      }
+    }
+  };
 
   const dawFsBtn = document.getElementById('daw-fullscreen-btn');
   if (dawFsBtn) dawFsBtn.onclick = () => {
@@ -3375,6 +3392,11 @@ window.MasterSchedulerInternal = {
     const gridEl = document.getElementById('daw-grid');
     if (gridEl && typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
       window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+    }
+    // Re-render panel sidebar badges if panel is open
+    const panel = document.getElementById('daw-period-panel');
+    if (panel && panel.style.display !== 'none' && typeof window.PeriodEditor?.renderEditor === 'function') {
+      window.PeriodEditor.renderEditor(panel);
     }
   });
 
