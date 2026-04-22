@@ -4657,6 +4657,47 @@ let _toastTimer = null;
                 clusters.splice(bestJ, 1);
             }
 
+            // ── Lloyd's refinement: Ward's gives good centroids; now snap every stop
+            // to its nearest centroid (k-means iteration).  This converts Ward's
+            // irregular merge shapes into proper Voronoi cells — convex, non-overlapping
+            // geographic territories.  USPS calls this "clean territory": no truck ever
+            // drives through another truck's zone to reach its own stops.
+            var lloydIters = 0;
+            for (var lloyd = 0; lloyd < 30; lloyd++) {
+                // Recompute each centroid from its current stops
+                for (var li = 0; li < clusters.length; li++) {
+                    if (!clusters[li].stops.length) continue;
+                    clusters[li].cx = clusters[li].stops.reduce(function(s, st) { return s + st.lat; }, 0) / clusters[li].stops.length;
+                    clusters[li].cy = clusters[li].stops.reduce(function(s, st) { return s + st.lng; }, 0) / clusters[li].stops.length;
+                }
+                // Flatten all stops, clear clusters, then reassign each stop to nearest centroid
+                var flatStops = [];
+                for (var li = 0; li < clusters.length; li++) {
+                    for (var si = 0; si < clusters[li].stops.length; si++) {
+                        flatStops.push({ stop: clusters[li].stops[si], prevCi: li });
+                    }
+                    clusters[li].stops = [];
+                    clusters[li].w     = 0;
+                }
+                var lloydMoved = 0;
+                for (var fi = 0; fi < flatStops.length; fi++) {
+                    var item = flatStops[fi];
+                    var bestCi = 0, bestDist = Infinity;
+                    for (var li = 0; li < clusters.length; li++) {
+                        var d = haversineMi(item.stop.lat, item.stop.lng, clusters[li].cx, clusters[li].cy);
+                        if (d < bestDist) { bestDist = d; bestCi = li; }
+                    }
+                    clusters[bestCi].stops.push(item.stop);
+                    clusters[bestCi].w += Math.max(1, (item.stop.campers || []).length);
+                    if (bestCi !== item.prevCi) lloydMoved++;
+                }
+                lloydIters++;
+                if (lloydMoved === 0) break; // fully converged — every stop is in its nearest territory
+            }
+            // Drop any cluster that Lloyd's drained to zero (rare edge case)
+            clusters = clusters.filter(function(c) { return c.stops.length > 0; });
+            console.log('[Go] Ward+Lloyd converged in ' + lloydIters + ' iter(s), ' + clusters.length + ' territories');
+
             // Match largest cluster → largest bus (optimal assignment).
             // After this sort, clusters[i] pairs with sortedCaps[i].
             clusters.sort(function(a, b) { return b.w - a.w; });
