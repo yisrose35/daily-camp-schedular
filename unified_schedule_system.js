@@ -386,7 +386,18 @@ function shouldHighlightBunk(bunkName) {
             loadedAssignments = true;
         }
         if (!loadedAssignments) window.scheduleAssignments = window.scheduleAssignments || {};
-        
+
+        // Phase 4: restore scheduleSegments (auto-builder segment data).
+        // If absent on an older save, rebuild from assignments so the segment
+        // store is always populated for segment-aware readers.
+        if (dateData.scheduleSegments && Object.keys(dateData.scheduleSegments).length > 0) {
+            window.scheduleSegments = dateData.scheduleSegments;
+        } else if (dailyData.scheduleSegments && Object.keys(dailyData.scheduleSegments).length > 0) {
+            window.scheduleSegments = dailyData.scheduleSegments;
+        } else {
+            try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+        }
+
         // Load league assignments
         if (!window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
             window.leagueAssignments = dateData.leagueAssignments && Object.keys(dateData.leagueAssignments).length > 0 
@@ -5210,9 +5221,10 @@ if (softBlocks.length > 0) {
             if (!name) { name = prompt('Enter a name for this version:'); if (!name) return { success: false }; }
             const dailyData = loadDailyData(); 
             const dateData = dailyData[dateKey] || {};
-            const payload = { 
-                scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {}, 
-                leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {}, 
+            const payload = {
+                scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {},
+                scheduleSegments: window.scheduleSegments || dateData.scheduleSegments || {},
+                leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {},
                 divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {}
             };
             if (Object.keys(payload.scheduleAssignments).length === 0) { alert('No schedule data to save.'); return { success: false }; }
@@ -5250,10 +5262,16 @@ if (softBlocks.length > 0) {
                 let data = selected.schedule_data; 
                 if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
                 window.scheduleAssignments = data.scheduleAssignments || data;
+                // Phase 4: restore segments from the version, or rebuild from assignments.
+                if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
+                    window.scheduleSegments = data.scheduleSegments;
+                } else {
+                    try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+                }
                 if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
                 if (data.divisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
-                saveSchedule(); 
-                updateTable(); 
+                saveSchedule();
+                updateTable();
                 alert('✅ Version loaded!');
             } catch (err) { alert('Error: ' + err.message); }
         },
@@ -5264,8 +5282,9 @@ if (softBlocks.length > 0) {
             try {
                 const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
                 if (!versions?.length) { alert('No versions to merge.'); return { success: false }; }
-                const mergedAssignments = {}; 
-                const bunksTouched = new Set(); 
+                const mergedAssignments = {};
+                const mergedSegments = {};
+                const bunksTouched = new Set();
                 let latestLeagueData = null;
                 let latestDivisionTimes = null;
                 versions.forEach(ver => {
@@ -5274,15 +5293,26 @@ if (softBlocks.length > 0) {
                     if (!scheduleData) return;
                     const assignments = scheduleData.scheduleAssignments || scheduleData;
                     if (assignments && typeof assignments === 'object') {
-                        Object.entries(assignments).forEach(([bunkId, slots]) => { 
-                            mergedAssignments[bunkId] = slots; 
-                            bunksTouched.add(bunkId); 
+                        Object.entries(assignments).forEach(([bunkId, slots]) => {
+                            mergedAssignments[bunkId] = slots;
+                            bunksTouched.add(bunkId);
+                        });
+                    }
+                    // Phase 4: merge scheduleSegments per-bunk (same ownership pattern)
+                    if (scheduleData.scheduleSegments && typeof scheduleData.scheduleSegments === 'object') {
+                        Object.entries(scheduleData.scheduleSegments).forEach(([bunkId, row]) => {
+                            mergedSegments[bunkId] = row;
                         });
                     }
                     if (scheduleData.leagueAssignments) latestLeagueData = scheduleData.leagueAssignments;
                     if (scheduleData.divisionTimes) latestDivisionTimes = scheduleData.divisionTimes;
                 });
                 window.scheduleAssignments = mergedAssignments;
+                if (Object.keys(mergedSegments).length > 0) {
+                    window.scheduleSegments = mergedSegments;
+                } else {
+                    try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+                }
                 if (latestLeagueData) window.leagueAssignments = latestLeagueData;
                 if (latestDivisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(latestDivisionTimes) || latestDivisionTimes;
                 saveSchedule(); 
