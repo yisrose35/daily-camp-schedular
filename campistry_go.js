@@ -4719,52 +4719,20 @@ let _toastTimer = null;
                 .map(function(c) { return c.stops; });
         }
 
-        // ── Group stops by sub-zone ──
-        var subZoneGroups = new Map();
-        var unknownStops  = [];
-        for (var si = 0; si < allStops.length; si++) {
-            var stop     = allStops[si];
-            var zip      = getZipForStop(stop);
-            var kidCount = (stop.campers || []).length;
-            if (!zip) { unknownStops.push(stop); continue; }
-            var zoneKey  = getSubZoneKey(stop);
-            if (!subZoneGroups.has(zoneKey)) subZoneGroups.set(zoneKey, { stops: [], camperCount: 0, zip: zip, zoneKey: zoneKey });
-            var g = subZoneGroups.get(zoneKey);
-            g.stops.push(stop);
-            g.camperCount += kidCount;
-        }
-
-        if (subZoneGroups.size === 0) {
-            console.warn('[Go] ZIP+Google: no ZIP data — falling back');
+        // ── Single-stage Ward's HAC: cluster ALL stops into exactly buses.length patches ──
+        // Skip zone grouping entirely — Ward's runs on all stops at once and produces
+        // buses.length geographically compact, non-overlapping clusters with zero cross-
+        // zone overlap.  Each cluster[i] is sent to Google with sortedBuses[i]: 1 bus,
+        // 1 territory, no two buses ever serving the same street block.
+        if (!allStops.length) {
+            console.warn('[Go] ZIP+Google: no stops — falling back');
             return null;
         }
 
-        // Absorb no-ZIP stops into nearest sub-zone centroid
-        if (unknownStops.length) {
-            var cents = new Map();
-            subZoneGroups.forEach(function(g, key) {
-                cents.set(key, {
-                    lat: g.stops.reduce(function(s, st) { return s + st.lat; }, 0) / g.stops.length,
-                    lng: g.stops.reduce(function(s, st) { return s + st.lng; }, 0) / g.stops.length
-                });
-            });
-            unknownStops.forEach(function(stop) {
-                var bestKey = null, bestDist = Infinity;
-                cents.forEach(function(c, key) {
-                    var d = haversineMi(stop.lat, stop.lng, c.lat, c.lng);
-                    if (d < bestDist) { bestDist = d; bestKey = key; }
-                });
-                if (bestKey) {
-                    var g = subZoneGroups.get(bestKey);
-                    g.stops.push(stop);
-                    g.camperCount += (stop.campers || []).length;
-                }
-            });
-        }
-
-        // ── Pre-compute effective capacity (needed by both merge phases) ──
-        var busTrueEffCaps = buses.map(function(b) {
-            // If already a vehicle object (has busId), capacity is pre-computed effective
+        // Per-bus effective capacities, sorted largest-first so Ward's matches
+        // the biggest cluster to the biggest bus.
+        var sortedBuses = buses.slice().sort(function(a, b) { return (b.capacity || 44) - (a.capacity || 44); });
+        var sortedEffCaps = sortedBuses.map(function(b) {
             if (b.busId) return Math.max(1, b.capacity || 44);
             var bid  = b.id;
             var mon  = (D.monitors  || []).find(function(m) { return m.assignedBus === bid; });
@@ -4772,182 +4740,60 @@ let _toastTimer = null;
             var brs  = (b.reserveMode === 'custom' && b.reserveSeats != null) ? b.reserveSeats : (reserveSeats || 0);
             return Math.max(1, (b.capacity || 44) - (mon ? 1 : 0) - cous.length - brs);
         });
-        var effectiveCap = Math.max(1, Math.floor(
-            busTrueEffCaps.reduce(function(s, c) { return s + c; }, 0) / buses.length
-        ));
 
-        // ── Merge sub-zones in two phases ──
-        // Phase 1: collapse count down to ≤ buses.length (handles 100+ H3/grid cells)
-        // Phase 2: keep merging until totalAlloc ≤ buses.length so every zone gets at
-        //          least one bus and the trim loop never hits the "cannot trim" wall.
-        (function mergeSubZones() {
-            function centroidOf(grp) {
-                if (!grp.stops.length) return { lat: 0, lng: 0 };
-                return {
-                    lat: grp.stops.reduce(function(s, st) { return s + st.lat; }, 0) / grp.stops.length,
-                    lng: grp.stops.reduce(function(s, st) { return s + st.lng; }, 0) / grp.stops.length
-                };
-            }
+        var totalKidsAll = allStops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
+        console.log('[Go] Ward global: ' + allStops.length + ' stops, ' + totalKidsAll + ' kids → ' + buses.length + ' clusters');
 
-            // Core helper — merge smallest zone into its nearest neighbour.
-            // Returns false if nothing can be merged.
-            function mergeSmallestIntoNearest() {
-                var smallest = null;
-                subZoneGroups.forEach(function(g) {
-                    if (!smallest || g.camperCount < smallest.camperCount) smallest = g;
-                });
-                if (!smallest) return false;
-                var sc = centroidOf(smallest);
-                var nearestKey = null, nearestDist = Infinity;
-                subZoneGroups.forEach(function(g, key) {
-                    if (key === smallest.zoneKey) return;
-                    var c = centroidOf(g);
-                    var d = haversineMi(sc.lat, sc.lng, c.lat, c.lng);
-                    if (d < nearestDist) { nearestDist = d; nearestKey = key; }
-                });
-                if (!nearestKey) return false;
-                var nearest = subZoneGroups.get(nearestKey);
-                nearest.stops       = nearest.stops.concat(smallest.stops);
-                nearest.camperCount += smallest.camperCount;
-                subZoneGroups.delete(smallest.zoneKey);
-                return true;
-            }
+        var wardClusters = wardSubCluster(allStops, buses.length, sortedEffCaps);
 
-            // Helper — compute how many total buses all current zones would need.
-            function computeTotalAlloc() {
-                var t = 0;
-                subZoneGroups.forEach(function(g) {
-                    t += Math.max(1, Math.ceil(g.camperCount / effectiveCap));
-                });
-                return t;
-            }
+        console.log('[Go] Ward global result: ' + wardClusters.length + ' clusters — ' +
+            wardClusters.map(function(c, ci) {
+                var kids = c.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
+                return kids + '/' + (sortedEffCaps[ci] || 44) + ' cap';
+            }).join(', '));
 
-            // Phase 1: collapse to at most buses.length zones
-            while (subZoneGroups.size > buses.length) {
-                if (!mergeSmallestIntoNearest()) break;
-            }
-
-            // Phase 2: keep merging until every zone can be served within the bus budget
-            // (i.e. sum of ceil(campers/cap) ≤ buses.length)
-            var phase2iters = 0;
-            while (computeTotalAlloc() > buses.length && subZoneGroups.size > 1) {
-                if (!mergeSmallestIntoNearest()) break;
-                phase2iters++;
-            }
-
-            var finalAlloc = computeTotalAlloc();
-            console.log('[Go] Sub-zones after merge: ' + subZoneGroups.size + ' zone(s), totalAlloc=' + finalAlloc + ' for ' + buses.length + ' buses (phase2 iters=' + phase2iters + ')');
-        })();
-
-        var zoneList  = Array.from(subZoneGroups.values()).sort(function(a, b) { return b.camperCount - a.camperCount; });
-        var busAlloc  = new Map();
-        var totalAlloc = 0;
-        zoneList.forEach(function(g) {
-            var needed = Math.max(1, Math.ceil(g.camperCount / effectiveCap));
-            busAlloc.set(g.zoneKey, needed);
-            totalAlloc += needed;
-        });
-
-        // Trim over-allocation (never below capacity floor)
-        while (totalAlloc > buses.length) {
-            var trimmable = zoneList.filter(function(g) {
-                return busAlloc.get(g.zoneKey) > Math.max(1, Math.ceil(g.camperCount / effectiveCap));
-            }).sort(function(a, b) {
-                return (busAlloc.get(b.zoneKey) * effectiveCap - b.camperCount) -
-                       (busAlloc.get(a.zoneKey) * effectiveCap - a.camperCount);
-            });
-            if (!trimmable.length) { console.warn('[Go] ZIP+Google: cannot trim — need more buses'); break; }
-            busAlloc.set(trimmable[0].zoneKey, busAlloc.get(trimmable[0].zoneKey) - 1);
-            totalAlloc--;
-        }
-        // Expand under-allocation
-        while (totalAlloc < buses.length) {
-            var expandable = zoneList.slice().sort(function(a, b) {
-                return (b.camperCount / busAlloc.get(b.zoneKey)) - (a.camperCount / busAlloc.get(a.zoneKey));
-            });
-            busAlloc.set(expandable[0].zoneKey, busAlloc.get(expandable[0].zoneKey) + 1);
-            totalAlloc++;
-        }
-
-        console.log('[Go] Sub-zone allocation (' + zoneList.length + ' zones):',
-            zoneList.map(function(g) { return '"' + g.zoneKey + '" → ' + g.camperCount + ' kids / ' + busAlloc.get(g.zoneKey) + ' bus(es)'; }).join(' | '));
-
-        // ── Send each sub-zone to Google Route Optimization ──
-        var busIdx    = 0;
+        // ── Send each Ward's cluster to Google Route Optimization ──
         var allRoutes = [];
 
-        for (var gi = 0; gi < zoneList.length; gi++) {
-            var group          = zoneList[gi];
-            var numBusesForZip = busAlloc.get(group.zoneKey);
-            var zipBuses       = buses.slice(busIdx, busIdx + numBusesForZip);
-            busIdx += numBusesForZip;
+        for (var sci = 0; sci < wardClusters.length; sci++) {
+            var subStops = wardClusters[sci];
+            var subBus   = sortedBuses[sci] || sortedBuses[sortedBuses.length - 1];
+            var subKids  = subStops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
 
-            if (!group.stops.length || !zipBuses.length) continue;
+            if (!subStops.length) continue;
 
-            // ── Ward's sub-clustering: split multi-bus zones into compact neighborhoods ──
-            // Buses are sorted largest-first so Ward's can match each cluster to its
-            // actual bus ceiling rather than a pooled average.
-            var sortedZipBuses = zipBuses.slice().sort(function(a, b) {
-                return (b.capacity || 44) - (a.capacity || 44);
-            });
-            var subClusters;
-            if (numBusesForZip > 1) {
-                var busCaps = sortedZipBuses.map(function(b) { return b.capacity || 44; });
-                subClusters = wardSubCluster(group.stops, numBusesForZip, busCaps);
-                console.log('[Go] Ward: "' + group.zoneKey + '" → ' + subClusters.length +
-                    ' neighborhoods (' + subClusters.map(function(c, ci) {
-                        var kids = c.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
-                        return kids + '/' + (busCaps[ci] || 44) + ' cap';
-                    }).join(', ') + ')');
-            } else {
-                subClusters = [group.stops];
-            }
+            showProgress(shiftLabel + ': cluster ' + (sci + 1) + '/' + wardClusters.length +
+                ' → Google (' + subStops.length + ' stops, ' + subKids + ' kids)...',
+                pctBase + 25 + Math.round(sci / wardClusters.length * 30));
 
-            for (var sci = 0; sci < subClusters.length; sci++) {
-                var subStops = subClusters[sci];
-                var subBus   = sortedZipBuses[sci] || sortedZipBuses[sortedZipBuses.length - 1];
-                var subKids  = subStops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
+            console.log('[Go] Ward cluster ' + (sci + 1) + '/' + wardClusters.length +
+                ' — ' + subStops.length + ' stops, ' + subKids + ' kids → ' + (subBus.busName || subBus.busId));
 
-                if (!subStops.length) continue;
+            try {
+                var zipRoutes = await window.GoGoogleOptimizer.optimizeTours({
+                    stops:          subStops,
+                    vehicles:       [subBus],
+                    campLat:        campLat,
+                    campLng:        campLng,
+                    departureTime:  departureTime,
+                    isArrival:      isArrival,
+                    serviceTimeSec: serviceTime,
+                    apiKey:         googleKey,
+                    projectId:      googleProjId,
+                    maxRideTimeSec: maxRideTimeSec,
+                    supabaseUrl:    supabaseUrl,
+                    accessToken:    accessToken,
+                    anonKey:        anonKey
+                });
 
-                showProgress(shiftLabel + ': ' + group.zoneKey +
-                    (subClusters.length > 1 ? ' [' + (sci + 1) + '/' + subClusters.length + ']' : '') +
-                    ' → Google (' + subStops.length + ' stops)...',
-                    pctBase + 25 + Math.round((gi * subClusters.length + sci) / (zoneList.length * Math.max(numBusesForZip, 1)) * 30));
-
-                console.log('[Go] ZIP+Google: "' + group.zoneKey + '"' +
-                    (subClusters.length > 1 ? ' nbhd ' + (sci + 1) + '/' + subClusters.length : '') +
-                    ' — ' + subStops.length + ' stops, ' + subKids + ' kids → ' + (subBus.busName || subBus.busId));
-
-                try {
-                    var zipRoutes = await window.GoGoogleOptimizer.optimizeTours({
-                        stops:          subStops,
-                        vehicles:       [subBus],
-                        campLat:        campLat,
-                        campLng:        campLng,
-                        departureTime:  departureTime,
-                        isArrival:      isArrival,
-                        serviceTimeSec: serviceTime,
-                        apiKey:         googleKey,
-                        projectId:      googleProjId,
-                        maxRideTimeSec: maxRideTimeSec,
-                        supabaseUrl:    supabaseUrl,
-                        accessToken:    accessToken,
-                        anonKey:        anonKey
-                    });
-
-                    if (zipRoutes && zipRoutes.length) {
-                        allRoutes.push.apply(allRoutes, zipRoutes);
-                        console.log('[Go] ZIP+Google: "' + group.zoneKey + '"' +
-                            (subClusters.length > 1 ? ' nbhd ' + (sci + 1) : '') +
-                            ' → ' + zipRoutes.length + ' route(s) built');
-                    } else {
-                        console.warn('[Go] ZIP+Google: "' + group.zoneKey + '" nbhd ' + (sci + 1) + ' returned no routes');
-                    }
-                } catch (e) {
-                    console.warn('[Go] ZIP+Google: "' + group.zoneKey + '" nbhd ' + (sci + 1) +
-                        ' failed (' + e.message + ') — neighborhood will be missing');
+                if (zipRoutes && zipRoutes.length) {
+                    allRoutes.push.apply(allRoutes, zipRoutes);
+                    console.log('[Go] Ward cluster ' + (sci + 1) + ' → ' + zipRoutes.length + ' route(s) built');
+                } else {
+                    console.warn('[Go] Ward cluster ' + (sci + 1) + ' returned no routes');
                 }
+            } catch (e) {
+                console.warn('[Go] Ward cluster ' + (sci + 1) + ' failed (' + e.message + ') — cluster will be missing');
             }
         }
 
