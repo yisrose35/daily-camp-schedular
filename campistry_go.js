@@ -4891,23 +4891,12 @@ let _toastTimer = null;
             }
             // For each stop, find its nearest OTHER-cluster neighbor's cluster index
             // and the distance to that neighbor (actual stop-to-stop adjacency).
-            function nearestOtherClusterFor(stop, ownIdx) {
-                var bestIdx = -1, bestD = Infinity;
-                for (var ci = 0; ci < clusters.length; ci++) {
-                    if (ci === ownIdx) continue;
-                    var cs = clusters[ci].stops;
-                    for (var k2 = 0; k2 < cs.length; k2++) {
-                        var d = haversineMi(stop.lat, stop.lng, cs[k2].lat, cs[k2].lng);
-                        if (d < bestD) { bestD = d; bestIdx = ci; }
-                    }
-                }
-                return { idx: bestIdx, dist: bestD };
-            }
-            function nearestSameClusterDist(stop, ownIdx, ownSi) {
+            // Nearest-stop-in-a-specific-cluster distance (per-target adjacency)
+            function nearestDistInCluster(stop, clusterIdx, excludeSi) {
                 var bestD = Infinity;
-                var cs = clusters[ownIdx].stops;
+                var cs = clusters[clusterIdx].stops;
                 for (var k2 = 0; k2 < cs.length; k2++) {
-                    if (k2 === ownSi) continue;
+                    if (excludeSi != null && k2 === excludeSi) continue;
                     var d = haversineMi(stop.lat, stop.lng, cs[k2].lat, cs[k2].lng);
                     if (d < bestD) bestD = d;
                 }
@@ -4924,61 +4913,72 @@ let _toastTimer = null;
                     if (t0[i0] < initialMinT) initialMinT = t0[i0];
                 }
             }
+            // Diagnostics: count why moves were rejected (helps tune thresholds)
+            var rejAdjacency = 0, rejCapacity = 0, rejImprovement = 0, considered = 0;
             for (var dPass = 0; dPass < stops.length; dPass++) {
                 var times = clusters.map(clusterTime);
                 var maxT = -Infinity, minT = Infinity;
+                var activeCount = 0;
                 for (var ti = 0; ti < clusters.length; ti++) {
                     if (!clusters[ti].stops.length) continue;
+                    activeCount++;
                     if (times[ti] > maxT) maxT = times[ti];
                     if (times[ti] < minT) minT = times[ti];
                 }
                 if ((maxT - minT) < TRIGGER_GAP_MIN) break;
 
-                // Search every stop in every above-median cluster for the best move.
-                // Only stops whose nearest cross-cluster neighbor sits in a faster
-                // cluster are candidates (geographic adjacency guard).
+                // Median time used as source-qualification floor: only above-median
+                // clusters donate stops (so fast clusters don't lose stops to each other).
+                var sortedT = times.slice().sort(function(a, b) { return a - b; });
+                var medianT = sortedT[Math.floor(sortedT.length / 2)];
+
                 var bestImprovement = MIN_IMPROVEMENT_MIN;
                 var bestSrcIdx = -1, bestSi = -1, bestTgtIdx = -1;
                 for (var srcI = 0; srcI < clusters.length; srcI++) {
-                    if (times[srcI] < maxT - MIN_IMPROVEMENT_MIN) continue; // only drain the slowest
+                    if (!clusters[srcI].stops.length) continue;
+                    if (times[srcI] <= medianT) continue; // only above-median clusters donate
                     var srcClust = clusters[srcI];
                     for (var si = 0; si < srcClust.stops.length; si++) {
                         var stop = srcClust.stops[si];
                         var stCW = Math.max(1, (stop.campers || []).length);
+                        var nearSameDist = nearestDistInCluster(stop, srcI, si);
 
-                        // (2) adjacency: nearest neighbor must be in a DIFFERENT cluster
-                        //     AND closer than the nearest same-cluster neighbor.
-                        var nearOther = nearestOtherClusterFor(stop, srcI);
-                        if (nearOther.idx === -1) continue;
-                        var nearSame = nearestSameClusterDist(stop, srcI, si);
-                        if (nearOther.dist >= nearSame) continue; // not on target's natural route
+                        // Iterate ALL potential targets — not just the globally-nearest.
+                        for (var tgtI = 0; tgtI < clusters.length; tgtI++) {
+                            if (tgtI === srcI) continue;
+                            if (!clusters[tgtI].stops.length) continue;
+                            considered++;
 
-                        var tgtI = nearOther.idx;
-                        // (4) capacity
-                        var tgtCap = sortedCaps ? sortedCaps[tgtI] : fallbackTarget;
-                        if (clusters[tgtI].cw + stCW > tgtCap) continue;
-                        // target must be meaningfully faster than src
-                        if (times[tgtI] >= times[srcI] - MIN_IMPROVEMENT_MIN) continue;
+                            // (2) Per-target adjacency: a stop in target must be closer
+                            //     to the moving stop than any stop in source.  This
+                            //     means target's driver is genuinely driving past it.
+                            var nearTgtDist = nearestDistInCluster(stop, tgtI, null);
+                            if (nearTgtDist >= nearSameDist) { rejAdjacency++; continue; }
 
-                        // (3) simulate
-                        var newSrcT = clusterTimeWithout(srcClust, si);
-                        var newTgtT = clusterTimeWith(clusters[tgtI], stop);
-                        // recompute overall max excluding src & tgt
-                        var otherMax = 0;
-                        for (var oi = 0; oi < clusters.length; oi++) {
-                            if (oi === srcI || oi === tgtI) continue;
-                            if (!clusters[oi].stops.length) continue;
-                            if (times[oi] > otherMax) otherMax = times[oi];
-                        }
-                        var newMax = Math.max(otherMax, newSrcT, newTgtT);
-                        var improvement = maxT - newMax;
-                        if (improvement > bestImprovement) {
-                            bestImprovement = improvement;
-                            bestSrcIdx = srcI; bestSi = si; bestTgtIdx = tgtI;
+                            // (4) Capacity
+                            var tgtCap = sortedCaps ? sortedCaps[tgtI] : fallbackTarget;
+                            if (clusters[tgtI].cw + stCW > tgtCap) { rejCapacity++; continue; }
+
+                            // (3) Simulate — rely on this to enforce "worth it"
+                            var newSrcT = clusterTimeWithout(srcClust, si);
+                            var newTgtT = clusterTimeWith(clusters[tgtI], stop);
+                            var otherMax = 0;
+                            for (var oi = 0; oi < clusters.length; oi++) {
+                                if (oi === srcI || oi === tgtI) continue;
+                                if (!clusters[oi].stops.length) continue;
+                                if (times[oi] > otherMax) otherMax = times[oi];
+                            }
+                            var newMax = Math.max(otherMax, newSrcT, newTgtT);
+                            var improvement = maxT - newMax;
+                            if (improvement <= MIN_IMPROVEMENT_MIN) { rejImprovement++; continue; }
+                            if (improvement > bestImprovement) {
+                                bestImprovement = improvement;
+                                bestSrcIdx = srcI; bestSi = si; bestTgtIdx = tgtI;
+                            }
                         }
                     }
                 }
-                if (bestSrcIdx === -1) break; // no move meets all criteria → done
+                if (bestSrcIdx === -1) break; // no move clears all gates → done
 
                 // Execute the best move
                 var srcX = clusters[bestSrcIdx];
@@ -4999,7 +4999,8 @@ let _toastTimer = null;
                 tgtX.cy = tgtX.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgtX.stops.length;
                 durMoves++;
             }
-            if (durMoves > 0) {
+            // Always log duration balance outcome — even 0 moves (shows why).
+            {
                 var finalTimes = clusters.map(clusterTime);
                 var fMax = 0, fMin = Infinity;
                 for (var fi = 0; fi < finalTimes.length; fi++) {
@@ -5007,9 +5008,22 @@ let _toastTimer = null;
                     if (finalTimes[fi] > fMax) fMax = finalTimes[fi];
                     if (finalTimes[fi] < fMin) fMin = finalTimes[fi];
                 }
-                console.log('[Go] Duration balance: ' + durMoves + ' stop(s) moved — est time range ' +
-                    initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) +
-                    ' min before, ' + fMin.toFixed(0) + '→' + fMax.toFixed(0) + ' min after');
+                if (durMoves > 0) {
+                    console.log('[Go] Duration balance: ' + durMoves + ' stop(s) moved — est time range ' +
+                        initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) +
+                        ' min before, ' + fMin.toFixed(0) + '→' + fMax.toFixed(0) + ' min after');
+                } else if ((initialMaxT - initialMinT) >= TRIGGER_GAP_MIN) {
+                    // Gap was big enough to trigger, but nothing moved — diagnose why.
+                    console.log('[Go] Duration balance: 0 moves — gap ' +
+                        initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) +
+                        ' min. Rejected: ' + rejAdjacency + ' adjacency, ' +
+                        rejCapacity + ' capacity, ' + rejImprovement + ' insufficient-improvement (of ' +
+                        considered + ' candidates)');
+                } else {
+                    console.log('[Go] Duration balance: clusters within ' + TRIGGER_GAP_MIN +
+                        ' min of each other — no rebalance needed (' +
+                        initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) + ' min)');
+                }
             }
 
             return clusters
