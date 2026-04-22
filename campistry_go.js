@@ -4206,6 +4206,215 @@ let _toastTimer = null;
         return segments; // K entries, some may be empty if N < K
     }
 
+    // =========================================================================
+    // buildZipBasedZones — ZIP-first geographic clustering
+    // =========================================================================
+    //
+    // Algorithm:
+    //   1. Group corner stops by ZIP code (via D.addresses[camper.name].zip)
+    //   2. Calculate buses needed per ZIP: ceil(campers / effectiveCap)
+    //   3. Adjust totals to match available bus count
+    //   4. ZIPs needing > 1 bus: sub-cluster with K-means (geoSubCluster)
+    //   5. Assign buses to zones; return same format as buildGreedyZones
+    //
+    // Returns null if no ZIP data is available (caller falls back to buildGreedyZones).
+    // =========================================================================
+    function buildZipBasedZones(allStops, buses, campLat, campLng, reserveSeats) {
+        if (!allStops.length || !buses.length) return null;
+
+        // ── Helper: get ZIP for a corner stop (majority vote on campers) ──
+        function getZipForStop(stop) {
+            const zipCounts = {};
+            for (const camper of (stop.campers || [])) {
+                const addr = D.addresses[camper.name] || {};
+                const zip  = addr.zip || '';
+                if (zip && zip.length >= 4) {
+                    zipCounts[zip] = (zipCounts[zip] || 0) + 1;
+                }
+            }
+            const entries = Object.entries(zipCounts);
+            if (!entries.length) return null;
+            return entries.sort((a, b) => b[1] - a[1])[0][0];
+        }
+
+        // ── Helper: centroid of a list of stops ──
+        function centroid(stops) {
+            if (!stops.length) return { lat: campLat, lng: campLng };
+            return {
+                lat: stops.reduce((s, st) => s + (st.lat || 0), 0) / stops.length,
+                lng: stops.reduce((s, st) => s + (st.lng || 0), 0) / stops.length
+            };
+        }
+
+        // ── Helper: K-means sub-cluster within a single ZIP ──
+        function geoSubCluster(stops, k, maxCap) {
+            if (stops.length <= k) return stops.map(s => [s]);
+            // Farthest-point seed initialization
+            const seeds = [{ lat: stops[0].lat, lng: stops[0].lng }];
+            while (seeds.length < k) {
+                let farthest = null, farthestDist = -1;
+                for (const stop of stops) {
+                    const minDist = Math.min(...seeds.map(s => haversineMi(stop.lat, stop.lng, s.lat, s.lng)));
+                    if (minDist > farthestDist) { farthestDist = minDist; farthest = stop; }
+                }
+                if (farthest) seeds.push({ lat: farthest.lat, lng: farthest.lng });
+                else break;
+            }
+            // K-means iterations
+            let assignments = new Array(stops.length).fill(0);
+            for (let iter = 0; iter < 20; iter++) {
+                let changed = false;
+                for (let i = 0; i < stops.length; i++) {
+                    let best = 0, bestDist = Infinity;
+                    for (let c = 0; c < seeds.length; c++) {
+                        const d = haversineMi(stops[i].lat, stops[i].lng, seeds[c].lat, seeds[c].lng);
+                        if (d < bestDist) { bestDist = d; best = c; }
+                    }
+                    if (assignments[i] !== best) { assignments[i] = best; changed = true; }
+                }
+                if (!changed) break;
+                // Recompute centroids
+                for (let c = 0; c < k; c++) {
+                    const cs = stops.filter((_, i) => assignments[i] === c);
+                    if (!cs.length) continue;
+                    seeds[c] = {
+                        lat: cs.reduce((s, st) => s + st.lat, 0) / cs.length,
+                        lng: cs.reduce((s, st) => s + st.lng, 0) / cs.length
+                    };
+                }
+            }
+            const clusters = Array.from({ length: k }, () => []);
+            for (let i = 0; i < stops.length; i++) clusters[assignments[i]].push(stops[i]);
+            return clusters.filter(c => c.length > 0);
+        }
+
+        // ── Step 1: Group stops by ZIP ──
+        const zipGroups = new Map(); // zip → { stops:[], camperCount:0 }
+        const unknownStops = [];
+
+        for (const stop of allStops) {
+            const zip      = getZipForStop(stop);
+            const kidCount = (stop.campers || []).length;
+            if (!zip) { unknownStops.push(stop); continue; }
+            if (!zipGroups.has(zip)) zipGroups.set(zip, { stops: [], camperCount: 0, zip });
+            const g = zipGroups.get(zip);
+            g.stops.push(stop);
+            g.camperCount += kidCount;
+        }
+
+        // No ZIP data at all → signal caller to fall back
+        if (zipGroups.size === 0) {
+            console.warn('[Go] ZIP clustering: no ZIP data found — falling back to K-medoids');
+            return null;
+        }
+
+        // Assign unknown-ZIP stops to nearest ZIP by centroid
+        if (unknownStops.length) {
+            const cents = new Map();
+            for (const [zip, g] of zipGroups) cents.set(zip, centroid(g.stops));
+            for (const stop of unknownStops) {
+                let bestZip = null, bestDist = Infinity;
+                for (const [zip, c] of cents) {
+                    const d = haversineMi(stop.lat, stop.lng, c.lat, c.lng);
+                    if (d < bestDist) { bestDist = d; bestZip = zip; }
+                }
+                if (bestZip) {
+                    const g = zipGroups.get(bestZip);
+                    g.stops.push(stop);
+                    g.camperCount += (stop.campers || []).length;
+                }
+            }
+        }
+
+        // ── Step 2: Calculate buses needed per ZIP ──
+        const avgCap     = Math.floor(buses.reduce((s, b) => s + (b.capacity || 44), 0) / buses.length);
+        const effectiveCap = Math.max(1, avgCap - (reserveSeats || 0));
+        const totalBuses   = buses.length;
+
+        const zipList = Array.from(zipGroups.values()).sort((a, b) => b.camperCount - a.camperCount);
+        const busAlloc = new Map();
+        let totalAlloc = 0;
+
+        for (const g of zipList) {
+            const needed = Math.max(1, Math.ceil(g.camperCount / effectiveCap));
+            busAlloc.set(g.zip, needed);
+            totalAlloc += needed;
+        }
+
+        // ── Step 3: Adjust allocation to match available bus count ──
+        // Over-allocated → trim slack from ZIPs with lowest load ratio
+        while (totalAlloc > totalBuses) {
+            const trimmable = zipList
+                .filter(g => busAlloc.get(g.zip) > 1)
+                .sort((a, b) => {
+                    const slackA = busAlloc.get(a.zip) * effectiveCap - a.camperCount;
+                    const slackB = busAlloc.get(b.zip) * effectiveCap - b.camperCount;
+                    return slackB - slackA; // most slack first
+                });
+            if (!trimmable.length) break;
+            busAlloc.set(trimmable[0].zip, busAlloc.get(trimmable[0].zip) - 1);
+            totalAlloc--;
+        }
+        // Under-allocated → add to ZIP with highest campers-per-bus ratio
+        while (totalAlloc < totalBuses) {
+            const expandable = zipList.slice().sort((a, b) =>
+                (b.camperCount / busAlloc.get(b.zip)) - (a.camperCount / busAlloc.get(a.zip)));
+            busAlloc.set(expandable[0].zip, busAlloc.get(expandable[0].zip) + 1);
+            totalAlloc++;
+        }
+
+        // Log ZIP → bus allocation
+        console.log('[Go] ZIP bus allocation:',
+            zipList.map(g => g.zip + ' → ' + g.camperCount + ' kids / ' + busAlloc.get(g.zip) + ' bus(es)').join(' | '));
+
+        // ── Step 4: Build one zone per bus ──
+        // ZIPs needing 1 bus → one zone.
+        // ZIPs needing N > 1 buses → sub-cluster with K-means into N zones.
+        const allZones = [];
+
+        for (const group of zipList) {
+            const numBusesForZip = busAlloc.get(group.zip);
+            if (numBusesForZip <= 1 || group.stops.length <= 1) {
+                allZones.push({ stops: group.stops.slice(), camperCount: group.camperCount, zip: group.zip });
+            } else {
+                const subClusters = geoSubCluster(group.stops, numBusesForZip, effectiveCap);
+                for (const cluster of subClusters) {
+                    allZones.push({
+                        stops:       cluster,
+                        camperCount: cluster.reduce((s, st) => s + (st.campers || []).length, 0),
+                        zip:         group.zip
+                    });
+                }
+            }
+        }
+
+        // ── Step 5: Sort zones by bearing from camp, assign buses ──
+        // Sorting by compass angle gives a consistent, geographic bus ordering.
+        allZones.sort((a, b) => {
+            const ca = centroid(a.stops), cb = centroid(b.stops);
+            return Math.atan2(ca.lng - campLng, ca.lat - campLat) -
+                   Math.atan2(cb.lng - campLng, cb.lat - campLat);
+        });
+
+        const result = [];
+        for (let i = 0; i < Math.min(allZones.length, buses.length); i++) {
+            const zone = allZones[i];
+            const bus  = buses[i];
+            result.push({
+                busId:       bus.busId || bus.id,
+                busName:     bus.busName || bus.name,
+                busColor:    bus.busColor || bus.color || '#10b981',
+                stopIndices: zone.stops.map(s => allStops.indexOf(s)),
+                camperCount: zone.camperCount,
+                capacity:    bus.capacity,
+                zip:         zone.zip
+            });
+        }
+
+        console.log('[Go] ZIP clustering: ' + result.length + ' zones across ' + zipGroups.size + ' ZIP codes');
+        return result;
+    }
+
     function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
         if (!stops.length || !buses.length) return [];
 
@@ -5305,8 +5514,11 @@ async function generateRoutes() {
             // Global VRP solvers only run if K-medoids produces zero routes.
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': clustering stops into bus zones...', pctBase + 25);
 
-            const zones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
-            console.log('[Go] K-medoids: ' + zones.length + ' geographic zones from ' + allStops.length + ' stops');
+            // Try ZIP-first clustering; fall back to K-medoids if no ZIP data
+            const zones = buildZipBasedZones(allStops, shiftBuses, campLat, campLng, reserveSeats)
+                       || buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
+            const clusterMethod = zones[0]?.zip ? 'ZIP-based' : 'K-medoids';
+            console.log('[Go] ' + clusterMethod + ': ' + zones.length + ' geographic zones from ' + allStops.length + ' stops');
             (function logZones() {
                 var times = zones.map(function(z) {
                     var stops = z.stopIndices.map(function(idx) { return allStops[idx]; });
