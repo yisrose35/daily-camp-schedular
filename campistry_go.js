@@ -4227,7 +4227,7 @@ let _toastTimer = null;
             const zipCounts = {};
             for (const camper of (stop.campers || [])) {
                 const addr = D.addresses[camper.name] || {};
-                const zip  = addr.zip || '';
+                const zip  = (addr.zip || '').replace(/-\d{4}$/, '').trim(); // normalize ZIP+4 → 5-digit base ZIP
                 if (zip && zip.length >= 4) {
                     zipCounts[zip] = (zipCounts[zip] || 0) + 1;
                 }
