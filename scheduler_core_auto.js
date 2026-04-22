@@ -9162,26 +9162,35 @@
             // multi-segment splitting). One candidate per unique duration —
             // the solver picks the actual activity later.
             const periodCandidatesByGrade = {};
+            const PACKER_STEP = 5; // 5-min granularity (handles 20/25/30/35/40 etc.)
+            const PACKER_MIN_SEG = 5;
             const buildPeriodCandidates = (grade) => {
                 if (periodCandidatesByGrade[grade]) return periodCandidatesByGrade[grade];
                 const durations = new Set();
+                const addDur = (n) => {
+                    if (typeof n !== 'number' || isNaN(n)) return;
+                    if (n < PACKER_MIN_SEG || n % PACKER_STEP !== 0) return;
+                    durations.add(n);
+                };
                 (layers || []).forEach(l => {
                     const lg = l.grade || l.division || '';
                     if (lg !== grade) return;
                     const t = String(l.type || '').toLowerCase();
                     if (SKIP_LAYER_TYPES.has(t)) return;
-                    [l.periodMin, l.durationMin, l.durationMax, l.duration].forEach(d => {
-                        const n = parseInt(d, 10);
-                        if (!isNaN(n) && n >= 10 && n % 10 === 0) durations.add(n);
-                    });
+                    // Expand layer's min..max range in PACKER_STEP increments
+                    const lMin = parseInt(l.durationMin || l.periodMin || l.duration || 0, 10);
+                    const lMax = parseInt(l.durationMax || l.periodMin || l.duration || lMin, 10);
+                    if (lMin > 0) {
+                        const lo = lMin, hi = Math.max(lMax, lMin);
+                        for (let d = lo; d <= hi; d += PACKER_STEP) addDur(d);
+                    }
+                    addDur(parseInt(l.periodMin, 10));
+                    addDur(parseInt(l.duration, 10));
                 });
                 Object.keys(activityProperties || {}).forEach(name => {
                     try {
                         const ds = getSpecialDurations(name, activityProperties, globalSettings);
-                        ds.forEach(d => {
-                            const n = parseInt(d, 10);
-                            if (!isNaN(n) && n >= 10 && n % 10 === 0) durations.add(n);
-                        });
+                        ds.forEach(d => addDur(parseInt(d, 10)));
                     } catch (_e) {}
                 });
                 const cands = [...durations].sort((a,b)=>a-b).map(d => ({ activity: 'd' + d, durationMin: d }));
@@ -9197,7 +9206,7 @@
                 if (segDursCache[key]) return segDursCache[key];
                 let result = [dur];
                 do {
-                    if (dur < 10 || dur % 10 !== 0) break;
+                    if (dur < PACKER_MIN_SEG || dur % PACKER_STEP !== 0) break;
                     if (typeof window.PeriodPacker?.pack !== 'function') break;
                     const cands = buildPeriodCandidates(grade);
                     if (!cands.length) break;
@@ -9207,8 +9216,8 @@
                             periodLengthMin: dur,
                             candidates: cands,
                             maxSegments: 4,
-                            minSegmentMin: 10,
-                            granularityMin: 10,
+                            minSegmentMin: PACKER_MIN_SEG,
+                            granularityMin: PACKER_STEP,
                             allowRepeat: true,
                             // Prefer fewest segments first; tie-break by larger
                             // average segment (more room for solver picks).
@@ -9264,8 +9273,61 @@
                     }
                     return false;
                 };
+                // Hard-fixed types we'll attempt to shift to a period boundary
+                // when they currently cross one. (lunch / dismissal / leagues
+                // are typically rigid so we leave them alone.)
+                const SHIFTABLE_HARD = new Set(['swim','snacks']);
+                const sortedPeriods = [...periods].sort((a,b) => a.startMin - b.startMin);
                 getBunksForGrade(grade, divisions).forEach(bunk => {
                     const oldSlots = pbs[String(bunk)] || [];
+                    // Pass A: try to align shiftable hard-fixed blocks (swim, snacks)
+                    // that currently cross a period boundary.
+                    oldSlots.forEach(slot => {
+                        const t = String(slot.type || '').toLowerCase();
+                        if (!SHIFTABLE_HARD.has(t)) return;
+                        if (!crossesBoundary(slot)) return;
+                        const blockDur = slot.endMin - slot.startMin;
+                        for (const p of sortedPeriods) {
+                            const pDur = p.endMin - p.startMin;
+                            if (pDur < blockDur) continue;
+                            const targetStart = p.startMin;
+                            const targetEnd = targetStart + blockDur;
+                            // No conflict with any other "fixed-ish" block in oldSlots
+                            const conflict = oldSlots.some(other => {
+                                if (other === slot) return false;
+                                const ot = String(other.type || '').toLowerCase();
+                                const isFixedish = PERIOD_HARD_FIXED.has(ot) ||
+                                                   PERIOD_SOFT_FIXED.has(ot) ||
+                                                   other._fixed;
+                                if (!isFixedish) return false;
+                                return other.startMin < targetEnd && other.endMin > targetStart;
+                            });
+                            if (conflict) continue;
+                            // Update both the slot and the matching bunkTimelines block
+                            const oldStart = slot.startMin, oldEnd = slot.endMin;
+                            slot.startMin = targetStart;
+                            slot.endMin = targetEnd;
+                            slot.startTime = minutesToTimeLabel(targetStart);
+                            slot.endTime = minutesToTimeLabel(targetEnd);
+                            if (Array.isArray(bunkTimelines[bunk])) {
+                                const tlBlock = bunkTimelines[bunk].find(b =>
+                                    b.startMin === oldStart && b.endMin === oldEnd &&
+                                    String(b.type || '').toLowerCase() === t
+                                );
+                                if (tlBlock) {
+                                    tlBlock.startMin = targetStart;
+                                    tlBlock.endMin = targetEnd;
+                                    tlBlock.startTime = minutesToTimeLabel(targetStart);
+                                    tlBlock.endTime = minutesToTimeLabel(targetEnd);
+                                }
+                            }
+                            log('[2.75] Shifted ' + t + ' for ' + grade + '/' + bunk +
+                                ' from ' + minutesToTimeLabel(oldStart) + '-' + minutesToTimeLabel(oldEnd) +
+                                ' to ' + minutesToTimeLabel(targetStart) + '-' + minutesToTimeLabel(targetEnd) +
+                                ' (period: ' + (p.name || 'unnamed') + ')');
+                            break;
+                        }
+                    });
                     const fixedSlots = oldSlots.filter(s => {
                         const t = String(s.type || '').toLowerCase();
                         if (PERIOD_HARD_FIXED.has(t)) return true;
