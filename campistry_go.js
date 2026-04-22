@@ -4698,6 +4698,62 @@ let _toastTimer = null;
             clusters = clusters.filter(function(c) { return c.stops.length > 0; });
             console.log('[Go] Ward+Lloyd converged in ' + lloydIters + ' iter(s), ' + clusters.length + ' territories');
 
+            // ── Isolation fix: rescue stops stranded far from their cluster ──
+            // Lloyd's centroid-distance can trap a stop in a cluster whose centroid
+            // happens to be closest, even though the stop is geographically surrounded
+            // by stops from a different cluster.  For each stop, compare its nearest
+            // in-cluster neighbor distance to its nearest cross-cluster neighbor distance.
+            // If the out-cluster neighbor is ≥25% closer, move the stop there (if capacity
+            // allows).  Repeat until no more moves — typically 1-3 passes.
+            var isoMoves = 0;
+            for (var isoPass = 0; isoPass < stops.length; isoPass++) {
+                var isoMoved = false;
+                for (var ci = 0; ci < clusters.length; ci++) {
+                    for (var si = clusters[ci].stops.length - 1; si >= 0; si--) {
+                        var st  = clusters[ci].stops[si];
+                        var stW = Math.max(1, (st.campers || []).length);
+
+                        // Nearest neighbor within own cluster
+                        var nearInDist = Infinity;
+                        for (var ni = 0; ni < clusters[ci].stops.length; ni++) {
+                            if (ni === si) continue;
+                            var d = haversineMi(st.lat, st.lng, clusters[ci].stops[ni].lat, clusters[ci].stops[ni].lng);
+                            if (d < nearInDist) nearInDist = d;
+                        }
+
+                        // Nearest neighbor across all other clusters (with capacity room)
+                        var nearOutDist = Infinity, nearOutCi = -1;
+                        for (var oi = 0; oi < clusters.length; oi++) {
+                            if (oi === ci) continue;
+                            var oCap = sortedCaps ? sortedCaps[oi] : fallbackTarget;
+                            if (clusters[oi].w + stW > oCap) continue; // respect capacity
+                            for (var oni = 0; oni < clusters[oi].stops.length; oni++) {
+                                var d = haversineMi(st.lat, st.lng, clusters[oi].stops[oni].lat, clusters[oi].stops[oni].lng);
+                                if (d < nearOutDist) { nearOutDist = d; nearOutCi = oi; }
+                            }
+                        }
+
+                        // Move if out-cluster neighbor is ≥25% closer than in-cluster neighbor
+                        if (nearOutCi !== -1 && nearOutDist < nearInDist * 0.75) {
+                            clusters[ci].stops.splice(si, 1);
+                            clusters[ci].w -= stW;
+                            if (clusters[ci].stops.length) {
+                                clusters[ci].cx = clusters[ci].stops.reduce(function(s, st) { return s + st.lat; }, 0) / clusters[ci].stops.length;
+                                clusters[ci].cy = clusters[ci].stops.reduce(function(s, st) { return s + st.lng; }, 0) / clusters[ci].stops.length;
+                            }
+                            clusters[nearOutCi].stops.push(st);
+                            clusters[nearOutCi].w += stW;
+                            clusters[nearOutCi].cx = clusters[nearOutCi].stops.reduce(function(s, st) { return s + st.lat; }, 0) / clusters[nearOutCi].stops.length;
+                            clusters[nearOutCi].cy = clusters[nearOutCi].stops.reduce(function(s, st) { return s + st.lng; }, 0) / clusters[nearOutCi].stops.length;
+                            isoMoved = true;
+                            isoMoves++;
+                        }
+                    }
+                }
+                if (!isoMoved) break;
+            }
+            if (isoMoves > 0) console.log('[Go] Isolation fix: ' + isoMoves + ' stop(s) moved to natural cluster');
+
             // Match largest cluster → largest bus (optimal assignment).
             // After this sort, clusters[i] pairs with sortedCaps[i].
             clusters.sort(function(a, b) { return b.w - a.w; });
