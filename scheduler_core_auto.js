@@ -9172,6 +9172,7 @@
             const computeFloorForGrade = (grade) => {
                 if (periodFloorByGrade[grade] != null) return periodFloorByGrade[grade];
                 let floor = Infinity;
+                let floorLayer = null;
                 (layers || []).forEach(l => {
                     const lg = l.grade || l.division || '';
                     if (lg !== grade) return;
@@ -9183,10 +9184,16 @@
                         .filter(v => !isNaN(v) && v > 0);
                     if (!candidates.length) return;
                     const lo = Math.min.apply(null, candidates);
-                    if (lo < floor) floor = lo;
+                    if (lo < floor) { floor = lo; floorLayer = l; }
                 });
                 if (!isFinite(floor)) floor = PACKER_DEFAULT_FLOOR;
                 periodFloorByGrade[grade] = floor;
+                if (floorLayer) {
+                    log('[2.75]   floor source: type=' + (floorLayer.type || '?') +
+                        ' durationMin=' + (floorLayer.durationMin || '?') +
+                        ' durationMax=' + (floorLayer.durationMax || '?') +
+                        ' periodMin=' + (floorLayer.periodMin || '?'));
+                }
                 return floor;
             };
             const buildPeriodCandidates = (grade) => {
