@@ -4623,13 +4623,18 @@ let _toastTimer = null;
                 : null;
             var fallbackTarget = Math.ceil(totalCampers / k);
 
-            // Initialise: one cluster per stop, weighted by camper count
+            // Initialise: one cluster per stop.
+            //   w  = stop count (drives Ward's merge — balances STOPS, not campers,
+            //        because ride-time is dominated by stop count × service time)
+            //   cw = camper count (used only for capacity ceilings)
             var clusters = stops.map(function(s) {
-                var w = Math.max(1, (s.campers || []).length);
-                return { stops: [s], w: w, cx: s.lat, cy: s.lng };
+                return { stops: [s], w: 1, cw: Math.max(1, (s.campers || []).length), cx: s.lat, cy: s.lng };
             });
 
-            // Bottom-up merge until k clusters remain
+            // Bottom-up merge until k clusters remain.
+            // Ward's criterion weights by STOP count so clusters end up with roughly
+            // equal numbers of pickup points — not equal numbers of kids.  This is what
+            // actually determines route duration.
             while (clusters.length > k) {
                 var bestI = -1, bestJ = -1, bestWard = Infinity;
                 for (var i = 0; i < clusters.length; i++) {
@@ -4639,7 +4644,7 @@ let _toastTimer = null;
                         var dlat   = (A.cx - B.cx) * 111000;
                         var dlng   = (A.cy - B.cy) * 111000 * cosLat;
                         var distSq = dlat * dlat + dlng * dlng;
-                        // Ward's distance: (wA·wB / (wA+wB)) × ||centA−centB||²
+                        // Ward's distance: (wA·wB / (wA+wB)) × ||centA−centB||² using stop count
                         var ward = (A.w * B.w) / (A.w + B.w) * distSq;
                         if (ward < bestWard) { bestWard = ward; bestI = i; bestJ = j; }
                     }
@@ -4651,6 +4656,7 @@ let _toastTimer = null;
                 clusters[bestI] = {
                     stops: A.stops.concat(B.stops),
                     w:     newW,
+                    cw:    A.cw + B.cw,
                     cx:    (A.cx * A.w + B.cx * B.w) / newW,
                     cy:    (A.cy * A.w + B.cy * B.w) / newW
                 };
@@ -4678,6 +4684,7 @@ let _toastTimer = null;
                     }
                     clusters[li].stops = [];
                     clusters[li].w     = 0;
+                    clusters[li].cw    = 0;
                 }
                 var lloydMoved = 0;
                 for (var fi = 0; fi < flatStops.length; fi++) {
@@ -4688,7 +4695,8 @@ let _toastTimer = null;
                         if (d < bestDist) { bestDist = d; bestCi = li; }
                     }
                     clusters[bestCi].stops.push(item.stop);
-                    clusters[bestCi].w += Math.max(1, (item.stop.campers || []).length);
+                    clusters[bestCi].w  += 1; // stop count
+                    clusters[bestCi].cw += Math.max(1, (item.stop.campers || []).length); // camper count
                     if (bestCi !== item.prevCi) lloydMoved++;
                 }
                 lloydIters++;
@@ -4710,8 +4718,8 @@ let _toastTimer = null;
                 var isoMoved = false;
                 for (var ci = 0; ci < clusters.length; ci++) {
                     for (var si = clusters[ci].stops.length - 1; si >= 0; si--) {
-                        var st  = clusters[ci].stops[si];
-                        var stW = Math.max(1, (st.campers || []).length);
+                        var st   = clusters[ci].stops[si];
+                        var stCW = Math.max(1, (st.campers || []).length); // camper weight
 
                         // Nearest neighbor within own cluster
                         var nearInDist = Infinity;
@@ -4721,12 +4729,12 @@ let _toastTimer = null;
                             if (d < nearInDist) nearInDist = d;
                         }
 
-                        // Nearest neighbor across all other clusters (with capacity room)
+                        // Nearest neighbor across all other clusters (with capacity room for campers)
                         var nearOutDist = Infinity, nearOutCi = -1;
                         for (var oi = 0; oi < clusters.length; oi++) {
                             if (oi === ci) continue;
                             var oCap = sortedCaps ? sortedCaps[oi] : fallbackTarget;
-                            if (clusters[oi].w + stW > oCap) continue; // respect capacity
+                            if (clusters[oi].cw + stCW > oCap) continue; // camper capacity check
                             for (var oni = 0; oni < clusters[oi].stops.length; oni++) {
                                 var d = haversineMi(st.lat, st.lng, clusters[oi].stops[oni].lat, clusters[oi].stops[oni].lng);
                                 if (d < nearOutDist) { nearOutDist = d; nearOutCi = oi; }
@@ -4736,13 +4744,15 @@ let _toastTimer = null;
                         // Move if out-cluster neighbor is ≥25% closer than in-cluster neighbor
                         if (nearOutCi !== -1 && nearOutDist < nearInDist * 0.75) {
                             clusters[ci].stops.splice(si, 1);
-                            clusters[ci].w -= stW;
+                            clusters[ci].w  -= 1;
+                            clusters[ci].cw -= stCW;
                             if (clusters[ci].stops.length) {
                                 clusters[ci].cx = clusters[ci].stops.reduce(function(s, st) { return s + st.lat; }, 0) / clusters[ci].stops.length;
                                 clusters[ci].cy = clusters[ci].stops.reduce(function(s, st) { return s + st.lng; }, 0) / clusters[ci].stops.length;
                             }
                             clusters[nearOutCi].stops.push(st);
-                            clusters[nearOutCi].w += stW;
+                            clusters[nearOutCi].w  += 1;
+                            clusters[nearOutCi].cw += stCW;
                             clusters[nearOutCi].cx = clusters[nearOutCi].stops.reduce(function(s, st) { return s + st.lat; }, 0) / clusters[nearOutCi].stops.length;
                             clusters[nearOutCi].cy = clusters[nearOutCi].stops.reduce(function(s, st) { return s + st.lng; }, 0) / clusters[nearOutCi].stops.length;
                             isoMoved = true;
@@ -4754,27 +4764,28 @@ let _toastTimer = null;
             }
             if (isoMoves > 0) console.log('[Go] Isolation fix: ' + isoMoves + ' stop(s) moved to natural cluster');
 
-            // Match largest cluster → largest bus (optimal assignment).
-            // After this sort, clusters[i] pairs with sortedCaps[i].
-            clusters.sort(function(a, b) { return b.w - a.w; });
+            // Match biggest cluster (by kid count) → biggest bus.
+            // After this sort, clusters[i].cw pairs with sortedCaps[i] (both in camper units).
+            clusters.sort(function(a, b) { return b.cw - a.cw; });
 
-            // Post-hoc capacity balancing: move boundary stops from overfull → underfull.
-            // Uses each cluster's actual bus ceiling when available.
+            // Post-hoc capacity balancing: only fires if some cluster exceeds its bus capacity.
+            // Ward's stop-balanced clusters may have uneven camper totals; this fixes only
+            // the capacity-violation clusters, without trying to maximize fill.
             for (var pass = 0; pass < stops.length * 2; pass++) {
-                // Find the cluster most over its ceiling
+                // Find the cluster most over its camper ceiling
                 var srcIdx = -1, maxExcess = 0;
                 for (var i = 0; i < clusters.length; i++) {
                     var cap    = sortedCaps ? sortedCaps[i] : fallbackTarget;
-                    var excess = clusters[i].w - cap;
+                    var excess = clusters[i].cw - cap;
                     if (excess > maxExcess) { maxExcess = excess; srcIdx = i; }
                 }
-                if (srcIdx === -1) break;
+                if (srcIdx === -1) break; // no cluster over capacity → done
 
-                // Collect clusters that still have room
+                // Collect clusters that still have camper room
                 var underfullIdxs = [];
                 for (var i = 0; i < clusters.length; i++) {
                     var cap = sortedCaps ? sortedCaps[i] : fallbackTarget;
-                    if (clusters[i].w < cap) underfullIdxs.push(i);
+                    if (clusters[i].cw < cap) underfullIdxs.push(i);
                 }
                 if (!underfullIdxs.length) break;
 
@@ -4782,31 +4793,33 @@ let _toastTimer = null;
                 var src = clusters[srcIdx];
                 var bestStopSi = -1, bestMoveD = Infinity, bestTgtIdx = -1;
                 for (var si = 0; si < src.stops.length; si++) {
-                    var st  = src.stops[si];
-                    var stW = Math.max(1, (st.campers || []).length);
+                    var st   = src.stops[si];
+                    var stCW = Math.max(1, (st.campers || []).length);
                     for (var ui = 0; ui < underfullIdxs.length; ui++) {
                         var ti  = underfullIdxs[ui];
                         var tgt = clusters[ti];
                         var tgtCap = sortedCaps ? sortedCaps[ti] : fallbackTarget;
-                        if (tgt.w + stW > tgtCap) continue; // respect hard ceiling
+                        if (tgt.cw + stCW > tgtCap) continue; // respect hard camper ceiling
                         var d = haversineMi(st.lat, st.lng, tgt.cx, tgt.cy);
                         if (d < bestMoveD) { bestMoveD = d; bestStopSi = si; bestTgtIdx = ti; }
                     }
                 }
                 if (bestStopSi === -1) break;
 
-                // Move the stop
+                // Move the stop (update both stop-count and camper-count weights)
                 var movingStop = src.stops[bestStopSi];
-                var movingW    = Math.max(1, (movingStop.campers || []).length);
+                var movingCW   = Math.max(1, (movingStop.campers || []).length);
                 src.stops.splice(bestStopSi, 1);
-                src.w -= movingW;
+                src.w  -= 1;
+                src.cw -= movingCW;
                 if (src.stops.length) {
                     src.cx = src.stops.reduce(function(s, st) { return s + st.lat; }, 0) / src.stops.length;
                     src.cy = src.stops.reduce(function(s, st) { return s + st.lng; }, 0) / src.stops.length;
                 }
                 var tgt = clusters[bestTgtIdx];
                 tgt.stops.push(movingStop);
-                tgt.w += movingW;
+                tgt.w  += 1;
+                tgt.cw += movingCW;
                 tgt.cx = tgt.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgt.stops.length;
                 tgt.cy = tgt.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt.stops.length;
             }
@@ -4846,7 +4859,7 @@ let _toastTimer = null;
         console.log('[Go] Ward global result: ' + wardClusters.length + ' clusters — ' +
             wardClusters.map(function(c, ci) {
                 var kids = c.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
-                return kids + '/' + (sortedEffCaps[ci] || 44) + ' cap';
+                return c.length + ' stops/' + kids + ' kids (cap ' + (sortedEffCaps[ci] || 44) + ')';
             }).join(', '));
 
         // ── Send each Ward's cluster to Google Route Optimization ──
