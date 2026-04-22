@@ -9144,21 +9144,56 @@
         // =====================================================================
         try {
             const periodMap = window.campPeriods || {};
-            const PERIOD_PRESERVE_TYPES = new Set([
-                'special','pinned','swim','snacks','lunch','dismissal',
-                'rotation_event','league','specialty_league','custom'
+            // Truly fixed types — NEVER evict, even if they cross a period boundary
+            const PERIOD_HARD_FIXED = new Set([
+                'swim','snacks','lunch','dismissal','league','specialty_league'
+            ]);
+            // Soft-fixed types — preserve when they fit inside a period, but
+            // evict when they straddle a period boundary (planner placed them
+            // without knowing about periods).
+            const PERIOD_SOFT_FIXED = new Set([
+                'special','pinned','rotation_event','custom'
             ]);
             let periodOverrideBunks = 0;
+            const evictedBlocks = [];
             allGrades.forEach(grade => {
                 const periods = periodMap[grade];
                 if (!periods || periods.length === 0) return;
                 const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
                 if (!pbs) return;
+                // Pre-compute period boundary points for "crosses boundary" test
+                const boundaries = [];
+                periods.forEach(p => { boundaries.push(p.startMin); boundaries.push(p.endMin); });
+                const crossesBoundary = (s) => {
+                    for (const b of boundaries) {
+                        if (s.startMin < b && s.endMin > b) return true;
+                    }
+                    return false;
+                };
                 getBunksForGrade(grade, divisions).forEach(bunk => {
                     const oldSlots = pbs[String(bunk)] || [];
                     const fixedSlots = oldSlots.filter(s => {
                         const t = String(s.type || '').toLowerCase();
-                        return PERIOD_PRESERVE_TYPES.has(t) || s._fixed;
+                        if (PERIOD_HARD_FIXED.has(t)) return true;
+                        if (PERIOD_SOFT_FIXED.has(t) || s._fixed) {
+                            if (crossesBoundary(s)) {
+                                evictedBlocks.push({
+                                    grade, bunk: String(bunk),
+                                    name: s.event || s._assignedSpecial || '(unknown)',
+                                    type: t, startMin: s.startMin, endMin: s.endMin
+                                });
+                                // Also evict from bunkTimelines so the special-write
+                                // loop later doesn't try to re-place it.
+                                if (Array.isArray(bunkTimelines[bunk])) {
+                                    bunkTimelines[bunk] = bunkTimelines[bunk].filter(b =>
+                                        !(b.startMin === s.startMin && b.endMin === s.endMin)
+                                    );
+                                }
+                                return false;
+                            }
+                            return true;
+                        }
+                        return false;
                     });
                     const periodSlots = [];
                     periods.forEach(period => {
@@ -9202,6 +9237,14 @@
             });
             if (periodOverrideBunks > 0) {
                 log('[2.75] ✅ Bell-schedule periods applied to ' + periodOverrideBunks + ' bunks');
+            }
+            if (evictedBlocks.length > 0) {
+                warn('[2.75] Evicted ' + evictedBlocks.length + ' pre-placed block(s) that crossed period boundaries:');
+                evictedBlocks.forEach(e => {
+                    warn('  - ' + e.grade + '/' + e.bunk + ': ' + e.name + ' (' + e.type + ') @ ' +
+                         minutesToTimeLabel(e.startMin) + '-' + minutesToTimeLabel(e.endMin));
+                });
+                warnings.push('Bell schedule: ' + evictedBlocks.length + ' pre-placed activity/activities removed for crossing period boundaries (see console).');
             }
         } catch (e) {
             warn('[2.75] Period override failed: ' + e.message);
