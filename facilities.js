@@ -1655,11 +1655,20 @@ function summarySpecialUsage(s) {
     return `Max ${s.maxUsage} per ${s.maxUsagePeriod || 'half'}`;
 }
 function summarySpecialDuration(s) {
-    const d = parseInt(s.duration) || 0;
-    if (d <= 0) return "Uses block size";
+    const durations = (Array.isArray(s.durations) ? s.durations : [])
+        .map(d => parseInt(d, 10)).filter(d => d > 0).sort((a, b) => a - b);
+    if (durations.length === 0) {
+        const d = parseInt(s.duration) || 0;
+        if (d <= 0) return "Uses block size";
+        const prep = parseInt(s.prepDuration) || 0;
+        if (prep > 0) return `${d} min (+${prep} prep = ${d + prep} total)`;
+        return `${d} minutes`;
+    }
+    const label = durations.length === 1
+        ? `${durations[0]} minutes`
+        : `${durations.join(' or ')} minutes`;
     const prep = parseInt(s.prepDuration) || 0;
-    if (prep > 0) return `${d} min (+${prep} prep = ${d + prep} total)`;
-    return `${d} minutes`;
+    return prep > 0 ? `${label} (+${prep} prep)` : label;
 }
 function summarySpecialPrep(s) { return s.prepDuration ? `${s.prepDuration} min` : "None"; }
 function summarySpecialMultiPart(s) {
@@ -2112,39 +2121,102 @@ function renderSpecialDuration(saData) {
         if (el) el.textContent = summarySpecialDuration(saData);
     };
 
+    // Normalize storage: durations array is canonical; duration scalar mirrors durations[0].
+    const normalize = () => {
+        let arr = Array.isArray(saData.durations) ? saData.durations.slice() : [];
+        arr = arr.map(d => parseInt(d, 10)).filter(d => !isNaN(d) && d > 0);
+        // Dedupe + sort ascending.
+        arr = Array.from(new Set(arr)).sort((a, b) => a - b);
+        saData.durations = arr;
+        saData.duration = arr.length > 0 ? arr[0] : null;
+    };
+
+    // Lazy-migrate legacy scalar to array on first render.
+    if ((!Array.isArray(saData.durations) || saData.durations.length === 0)
+        && parseInt(saData.duration, 10) > 0) {
+        saData.durations = [parseInt(saData.duration, 10)];
+    }
+    normalize();
+
+    const commit = () => { normalize(); saveSpecialData(saData); updateSummary(); };
+
     const renderContent = () => {
-        const hasDur = (parseInt(saData.duration) || 0) > 0;
-        const cur = parseInt(saData.duration) || 30;
+        const hasDur = Array.isArray(saData.durations) && saData.durations.length > 0;
+        const rowsHtml = hasDur
+            ? saData.durations.map((d, i) => `
+                <div class="fac-sa-dur-row" data-idx="${i}" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                    <input type="number" class="fac-sa-dur-input" data-idx="${i}" min="5" max="180" step="5" value="${d}"
+                        style="width:80px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
+                    <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
+                    <button type="button" class="fac-sa-dur-del" data-idx="${i}"
+                        style="margin-left:auto; background:transparent; border:none; color:#DC2626; cursor:pointer; font-size:0.9rem;"
+                        title="Remove this duration">✕</button>
+                </div>`).join('')
+            : '';
+
         container.innerHTML = `
             <p style="font-size:0.85rem; color:#6B7280; margin:0 0 10px 0;">
-                Set a fixed duration for this activity. The auto-scheduler will use this instead of the layer's default block size.
+                Set one or more allowed durations for this activity. The auto-scheduler will pick whichever fits the period best. Leave off to use the skeleton block size.
             </p>
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:${hasDur ? '10px' : '0'};">
                 <span style="font-size:0.85rem; color:#374151; flex:1;">
-                    ${hasDur ? `<strong>${cur} minutes</strong>` : 'Not set — uses skeleton block size'}
+                    ${hasDur ? `<strong>${saData.durations.join(' or ')} minutes</strong>` : 'Not set — uses skeleton block size'}
                 </span>
                 <label class="switch">
                     <input type="checkbox" id="fac-sa-dur-toggle" ${hasDur ? 'checked' : ''}>
                     <span class="slider"></span>
                 </label>
             </div>
-            <div id="fac-sa-dur-config" style="display:${hasDur ? 'flex' : 'none'}; align-items:center; gap:8px;">
-                <span style="font-size:0.85rem;">Duration:</span>
-                <input type="number" id="fac-sa-dur-input" min="5" max="180" step="5" value="${cur}"
-                    style="width:70px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-                <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
+            <div id="fac-sa-dur-config" style="display:${hasDur ? 'block' : 'none'};">
+                <div id="fac-sa-dur-rows">${rowsHtml}</div>
+                <button type="button" id="fac-sa-dur-add"
+                    style="margin-top:4px; padding:4px 10px; background:#EEF2FF; border:1px solid #C7D2FE; color:#3730A3; border-radius:6px; cursor:pointer; font-size:0.8rem;">
+                    + Add another duration
+                </button>
             </div>`;
 
         const tog = container.querySelector('#fac-sa-dur-toggle');
         if (tog) tog.onchange = () => {
-            saData.duration = tog.checked ? (parseInt(saData.duration) > 0 ? parseInt(saData.duration) : 30) : null;
-            saveSpecialData(saData); updateSummary(); renderContent();
+            if (tog.checked) {
+                if (!Array.isArray(saData.durations) || saData.durations.length === 0) {
+                    saData.durations = [30];
+                }
+            } else {
+                saData.durations = [];
+            }
+            commit(); renderContent();
         };
-        const input = container.querySelector('#fac-sa-dur-input');
-        if (input) input.onchange = () => {
-            const v = Math.max(5, Math.min(180, parseInt(input.value) || 30));
-            saData.duration = v;
-            saveSpecialData(saData); updateSummary();
+
+        container.querySelectorAll('.fac-sa-dur-input').forEach(input => {
+            input.onchange = () => {
+                const idx = parseInt(input.dataset.idx, 10);
+                const v = Math.max(5, Math.min(180, parseInt(input.value, 10) || 0));
+                if (Number.isFinite(v) && v > 0) saData.durations[idx] = v;
+                commit(); renderContent();
+            };
+        });
+
+        container.querySelectorAll('.fac-sa-dur-del').forEach(btn => {
+            btn.onclick = () => {
+                const idx = parseInt(btn.dataset.idx, 10);
+                saData.durations.splice(idx, 1);
+                commit();
+                if (saData.durations.length === 0) {
+                    // Auto-disable toggle if the last row was removed.
+                    renderContent();
+                } else {
+                    renderContent();
+                }
+            };
+        });
+
+        const addBtn = container.querySelector('#fac-sa-dur-add');
+        if (addBtn) addBtn.onclick = () => {
+            const existing = new Set(saData.durations);
+            // Suggest a new value distinct from current ones.
+            const suggestion = [40, 30, 20, 15, 45, 60].find(v => !existing.has(v)) || 30;
+            saData.durations.push(suggestion);
+            commit(); renderContent();
         };
     };
 

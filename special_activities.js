@@ -170,8 +170,25 @@ function validateSpecialActivity(activity, activityName) {
             ? activity.maxUsagePerGrade : {},
         availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
             ? activity.availableDays : [],
+        // Canonical duration storage: `durations` is an array of allowed durations
+        // (in minutes). User can configure 1-to-N options — e.g. [20, 40] means
+        // "this special runs either 20 or 40 minutes." The legacy scalar `duration`
+        // stays in sync with durations[0] so older readers keep working.
+        durations: (function () {
+            const arr = Array.isArray(activity.durations)
+                ? activity.durations.map(d => parseInt(d, 10)).filter(d => !isNaN(d) && d > 0)
+                : [];
+            if (arr.length > 0) return arr.slice().sort((a, b) => a - b);
+            // Lazy-upgrade: older save with only `duration` scalar.
+            if (activity.duration != null && parseInt(activity.duration, 10) > 0) {
+                return [parseInt(activity.duration, 10)];
+            }
+            return [];
+        })(),
         duration: (activity.duration != null && parseInt(activity.duration, 10) > 0)
-            ? parseInt(activity.duration, 10) : null
+            ? parseInt(activity.duration, 10)
+            : (Array.isArray(activity.durations) && activity.durations[0] > 0
+                ? parseInt(activity.durations[0], 10) : null)
     };
 }
 

@@ -179,25 +179,35 @@
         return null;
     }
 
-    function getSpecialDuration(specialName, activityProperties, gs) {
-        const props = activityProperties && activityProperties[specialName];
-        if (props) {
-            const d = props.defaultDuration || props.duration || props.durationMin || props.periodMin;
-            if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
-        }
-        const cfg = getSpecialConfig(specialName, gs);
-        if (cfg) {
-            const d = cfg.defaultDuration || cfg.duration || cfg.durationMin || cfg.periodMin;
-            if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
-        }
-        if (window.getSpecialActivityByName) {
-            const live = window.getSpecialActivityByName(specialName);
-            if (live) {
-                const d = live.defaultDuration || live.duration || live.durationMin;
-                if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
+    // Return all user-configured allowed durations for a special, in ascending
+    // order. Empty array = user has not configured any → caller should fall
+    // back to the layer's dMin/dMax range. Used by the period-packer integration
+    // to enumerate candidate durations per special.
+    function getSpecialDurations(specialName, activityProperties, gs) {
+        const collect = (obj) => {
+            if (!obj) return null;
+            if (Array.isArray(obj.durations)) {
+                const arr = obj.durations.map(d => parseInt(d, 10)).filter(d => !isNaN(d) && d > 0);
+                if (arr.length > 0) return Array.from(new Set(arr)).sort((a, b) => a - b);
             }
+            const d = obj.defaultDuration || obj.duration || obj.durationMin || obj.periodMin;
+            if (d && parseInt(d, 10) > 0) return [parseInt(d, 10)];
+            return null;
+        };
+        const fromProps = activityProperties && collect(activityProperties[specialName]);
+        if (fromProps) return fromProps;
+        const fromCfg = collect(getSpecialConfig(specialName, gs));
+        if (fromCfg) return fromCfg;
+        if (window.getSpecialActivityByName) {
+            const fromLive = collect(window.getSpecialActivityByName(specialName));
+            if (fromLive) return fromLive;
         }
-        return null; // null = use layer dMin/dMax range
+        return [];
+    }
+
+    function getSpecialDuration(specialName, activityProperties, gs) {
+        const all = getSpecialDurations(specialName, activityProperties, gs);
+        return all.length > 0 ? all[0] : null; // null = use layer dMin/dMax range
     }
 
     function getSpecialCapacity(specialName, activityProperties, gs) {
