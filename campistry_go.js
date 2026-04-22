@@ -4266,12 +4266,17 @@ let _toastTimer = null;
             );
         }
 
-        // ── Helper: K-medoids sub-cluster within a single ZIP using road distances ──
-        // Falls back to haversine if Geoapify matrix unavailable.
+        // ── Helper: CAPACITATED K-medoids sub-cluster within a single ZIP ──
+        // Uses road distances (Geoapify) with haversine fallback.
+        // Enforces maxPerCluster = ceil(totalCampers / k) so no sub-cluster
+        // receives more campers than its fair share — preventing overcrowded buses.
         async function geoSubCluster(stops, k, geoapifyKey) {
             if (stops.length <= k) return stops.map(s => [s]);
 
-            // Farthest-point seed initialization (haversine — just for initial placement)
+            const totalCampers  = stops.reduce((s, st) => s + (st.campers || []).length, 0);
+            const maxPerCluster = Math.ceil(totalCampers / k); // soft cap per sub-cluster
+
+            // Farthest-point seed initialization (haversine — initial placement only)
             let seeds = [stops[0]];
             while (seeds.length < k) {
                 let farthest = null, farthestDist = -1;
@@ -4285,9 +4290,8 @@ let _toastTimer = null;
 
             let assignments = new Array(stops.length).fill(0);
 
-            // Up to 3 iterations using real road distances from Geoapify matrix
-            for (let iter = 0; iter < 3; iter++) {
-                // Get road distances: seeds → all stops
+            // Up to 5 iterations using real road distances
+            for (let iter = 0; iter < 5; iter++) {
                 let distMatrix = null;
                 if (geoapifyKey) {
                     try {
@@ -4297,18 +4301,46 @@ let _toastTimer = null;
                     }
                 }
 
-                // Assign each stop to nearest seed
-                let changed = false;
-                for (let i = 0; i < stops.length; i++) {
-                    let best = 0, bestDist = Infinity;
-                    for (let c = 0; c < seeds.length; c++) {
-                        const d = distMatrix
-                            ? (distMatrix[c]?.[i] ?? Infinity)
-                            : haversineMi(stops[i].lat, stops[i].lng, seeds[c].lat, seeds[c].lng);
-                        if (d < bestDist) { bestDist = d; best = c; }
+                const getDist = (c, i) => distMatrix
+                    ? (distMatrix[c]?.[i] ?? Infinity)
+                    : haversineMi(stops[i].lat, stops[i].lng, seeds[c].lat, seeds[c].lng);
+
+                // CAPACITATED assignment: process stops in order of confidence
+                // (closest to any seed first = most obvious assignments go first, leaving
+                //  hard-to-assign stops to fill in remaining capacity).
+                const clusterCampers = new Array(k).fill(0);
+                const newAssignments = new Array(stops.length).fill(-1);
+
+                const sortedIndices = stops.map((_, i) => i).sort((a, b) => {
+                    const da = Math.min(...seeds.map((_, c) => getDist(c, a)));
+                    const db = Math.min(...seeds.map((_, c) => getDist(c, b)));
+                    return da - db; // ascending: most-certain first
+                });
+
+                for (const i of sortedIndices) {
+                    const kidCount = (stops[i].campers || []).length;
+                    // Rank clusters by distance from this stop
+                    const ranked = seeds.map((_, c) => ({ c, d: getDist(c, i) }))
+                                        .sort((a, b) => a.d - b.d);
+                    // Assign to nearest cluster that still has capacity
+                    let assigned = false;
+                    for (const { c } of ranked) {
+                        if (clusterCampers[c] + kidCount <= maxPerCluster) {
+                            newAssignments[i] = c;
+                            clusterCampers[c] += kidCount;
+                            assigned = true;
+                            break;
+                        }
                     }
-                    if (assignments[i] !== best) { assignments[i] = best; changed = true; }
+                    if (!assigned) {
+                        // All clusters full — assign to nearest regardless (graceful overflow)
+                        newAssignments[i] = ranked[0].c;
+                        clusterCampers[ranked[0].c] += kidCount;
+                    }
                 }
+
+                const changed = newAssignments.some((a, i) => a !== assignments[i]);
+                assignments = newAssignments;
                 if (!changed) break;
 
                 // Recompute seeds: geographic centroid → nearest actual stop in that cluster
@@ -4370,8 +4402,18 @@ let _toastTimer = null;
         }
 
         // ── Step 2: Calculate buses needed per ZIP ──
-        const avgCap     = Math.floor(buses.reduce((s, b) => s + (b.capacity || 44), 0) / buses.length);
-        const effectiveCap = Math.max(1, avgCap - (reserveSeats || 0));
+        // Use true per-bus effective capacity (accounts for monitors, counselors, custom reserves)
+        // so that allocation doesn't undercount how many buses are needed.
+        const busTrueEffCaps = buses.map(b => {
+            const bid  = b.busId || b.id;
+            const mon  = (D.monitors  || []).find(m => m.assignedBus === bid);
+            const cous = (D.counselors || []).filter(c => c.assignedBus === bid);
+            const brs  = (b.reserveMode === 'custom' && b.reserveSeats != null)
+                         ? b.reserveSeats : (reserveSeats || 0);
+            return Math.max(1, (b.capacity || 44) - (mon ? 1 : 0) - cous.length - brs);
+        });
+        const totalEffCap  = busTrueEffCaps.reduce((s, c) => s + c, 0);
+        const effectiveCap = Math.max(1, Math.floor(totalEffCap / buses.length));
         const totalBuses   = buses.length;
 
         const zipList = Array.from(zipGroups.values()).sort((a, b) => b.camperCount - a.camperCount);
