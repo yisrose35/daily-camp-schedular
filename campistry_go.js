@@ -4661,6 +4661,40 @@ let _toastTimer = null;
             });
         }
 
+        // ── Merge sub-zones down to ≤ bus count ──
+        // Grid/H3 fallback can produce 100+ tiny cells; merge smallest into nearest
+        // neighbour until zone count ≤ available buses so every bus gets assigned.
+        (function mergeSubZones() {
+            function centroidOf(grp) {
+                if (!grp.stops.length) return { lat: 0, lng: 0 };
+                return {
+                    lat: grp.stops.reduce(function(s, st) { return s + st.lat; }, 0) / grp.stops.length,
+                    lng: grp.stops.reduce(function(s, st) { return s + st.lng; }, 0) / grp.stops.length
+                };
+            }
+            while (subZoneGroups.size > buses.length) {
+                var smallest = null;
+                subZoneGroups.forEach(function(g) {
+                    if (!smallest || g.camperCount < smallest.camperCount) smallest = g;
+                });
+                if (!smallest) break;
+                var sc = centroidOf(smallest);
+                var nearestKey = null, nearestDist = Infinity;
+                subZoneGroups.forEach(function(g, key) {
+                    if (key === smallest.zoneKey) return;
+                    var c = centroidOf(g);
+                    var d = haversineMi(sc.lat, sc.lng, c.lat, c.lng);
+                    if (d < nearestDist) { nearestDist = d; nearestKey = key; }
+                });
+                if (!nearestKey) break;
+                var nearest = subZoneGroups.get(nearestKey);
+                nearest.stops       = nearest.stops.concat(smallest.stops);
+                nearest.camperCount += smallest.camperCount;
+                subZoneGroups.delete(smallest.zoneKey);
+            }
+            console.log('[Go] Sub-zones after merge: ' + subZoneGroups.size + ' zone(s) for ' + buses.length + ' buses');
+        })();
+
         // ── Bus allocation per sub-zone ──
         var busTrueEffCaps = buses.map(function(b) {
             // If already a vehicle object (has busId), capacity is pre-computed effective
