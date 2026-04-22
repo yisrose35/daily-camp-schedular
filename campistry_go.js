@@ -4543,6 +4543,186 @@ let _toastTimer = null;
         return result;
     }
 
+    // =========================================================================
+    // buildRoutesByZipGoogle — ZIP-segmented Google Route Optimization
+    //
+    // Groups stops by ZIP code, allocates buses proportionally, then sends each
+    // ZIP as an independent Google Route Optimization request. Google handles
+    // all capacity enforcement and stop ordering within each ZIP.
+    //
+    // This guarantees buses never cross ZIP boundaries while getting globally-
+    // optimal route ordering within each geographic zone.
+    //
+    // Returns array of route objects, or null if Google is unavailable.
+    // =========================================================================
+    async function buildRoutesByZipGoogle(allStops, buses, campLat, campLng, reserveSeats, opts) {
+        var googleKey      = opts.googleKey;
+        var googleProjId   = opts.googleProjId;
+        var isArrival      = opts.isArrival;
+        var serviceTime    = opts.serviceTime;
+        var departureTime  = opts.departureTime;
+        var maxRideTimeSec = opts.maxRideTimeSec;
+        var supabaseUrl    = opts.supabaseUrl;
+        var accessToken    = opts.accessToken;
+        var anonKey        = opts.anonKey;
+        var shiftLabel     = opts.shiftLabel || 'Shift';
+        var pctBase        = opts.pctBase    || 0;
+
+        // ── Group stops by ZIP (majority-vote on campers at each stop) ──
+        function getZipForStop(stop) {
+            var zipCounts = {};
+            for (var i = 0; i < (stop.campers || []).length; i++) {
+                var addr = D.addresses[(stop.campers[i] || {}).name] || {};
+                var zip  = (addr.zip || '').replace(/-\d{4}$/, '').trim();
+                if (zip && zip.length >= 4) zipCounts[zip] = (zipCounts[zip] || 0) + 1;
+            }
+            var entries = Object.entries(zipCounts);
+            if (!entries.length) return null;
+            return entries.sort(function(a, b) { return b[1] - a[1]; })[0][0];
+        }
+
+        var zipGroups   = new Map();
+        var unknownStops = [];
+        for (var si = 0; si < allStops.length; si++) {
+            var zip      = getZipForStop(allStops[si]);
+            var kidCount = (allStops[si].campers || []).length;
+            if (!zip) { unknownStops.push(allStops[si]); continue; }
+            if (!zipGroups.has(zip)) zipGroups.set(zip, { stops: [], camperCount: 0, zip: zip });
+            var g = zipGroups.get(zip);
+            g.stops.push(allStops[si]);
+            g.camperCount += kidCount;
+        }
+
+        if (zipGroups.size === 0) {
+            console.warn('[Go] ZIP+Google: no ZIP data — falling back');
+            return null;
+        }
+
+        // Absorb no-ZIP stops into nearest ZIP centroid
+        if (unknownStops.length) {
+            var cents = new Map();
+            zipGroups.forEach(function(g, zip) {
+                cents.set(zip, {
+                    lat: g.stops.reduce(function(s, st) { return s + st.lat; }, 0) / g.stops.length,
+                    lng: g.stops.reduce(function(s, st) { return s + st.lng; }, 0) / g.stops.length
+                });
+            });
+            unknownStops.forEach(function(stop) {
+                var bestZip = null, bestDist = Infinity;
+                cents.forEach(function(c, zip) {
+                    var d = haversineMi(stop.lat, stop.lng, c.lat, c.lng);
+                    if (d < bestDist) { bestDist = d; bestZip = zip; }
+                });
+                if (bestZip) {
+                    var g = zipGroups.get(bestZip);
+                    g.stops.push(stop);
+                    g.camperCount += (stop.campers || []).length;
+                }
+            });
+        }
+
+        // ── Bus allocation per ZIP ──
+        var busTrueEffCaps = buses.map(function(b) {
+            var bid  = b.busId || b.id;
+            var mon  = (D.monitors  || []).find(function(m) { return m.assignedBus === bid; });
+            var cous = (D.counselors || []).filter(function(c) { return c.assignedBus === bid; });
+            var brs  = (b.reserveMode === 'custom' && b.reserveSeats != null) ? b.reserveSeats : (reserveSeats || 0);
+            return Math.max(1, (b.capacity || 44) - (mon ? 1 : 0) - cous.length - brs);
+        });
+        var effectiveCap = Math.max(1, Math.floor(
+            busTrueEffCaps.reduce(function(s, c) { return s + c; }, 0) / buses.length
+        ));
+
+        var zipList  = Array.from(zipGroups.values()).sort(function(a, b) { return b.camperCount - a.camperCount; });
+        var busAlloc = new Map();
+        var totalAlloc = 0;
+        zipList.forEach(function(g) {
+            var needed = Math.max(1, Math.ceil(g.camperCount / effectiveCap));
+            busAlloc.set(g.zip, needed);
+            totalAlloc += needed;
+        });
+
+        // Trim over-allocation (never below capacity floor)
+        while (totalAlloc > buses.length) {
+            var trimmable = zipList.filter(function(g) {
+                return busAlloc.get(g.zip) > Math.max(1, Math.ceil(g.camperCount / effectiveCap));
+            }).sort(function(a, b) {
+                return (busAlloc.get(b.zip) * effectiveCap - b.camperCount) -
+                       (busAlloc.get(a.zip) * effectiveCap - a.camperCount);
+            });
+            if (!trimmable.length) { console.warn('[Go] ZIP+Google: cannot trim — need more buses'); break; }
+            busAlloc.set(trimmable[0].zip, busAlloc.get(trimmable[0].zip) - 1);
+            totalAlloc--;
+        }
+        // Expand under-allocation
+        while (totalAlloc < buses.length) {
+            var expandable = zipList.slice().sort(function(a, b) {
+                return (b.camperCount / busAlloc.get(b.zip)) - (a.camperCount / busAlloc.get(a.zip));
+            });
+            busAlloc.set(expandable[0].zip, busAlloc.get(expandable[0].zip) + 1);
+            totalAlloc++;
+        }
+
+        console.log('[Go] ZIP+Google allocation:',
+            zipList.map(function(g) { return g.zip + ' → ' + g.camperCount + ' kids / ' + busAlloc.get(g.zip) + ' bus(es)'; }).join(' | '));
+
+        // ── Send each ZIP to Google Route Optimization ──
+        var busIdx    = 0;
+        var allRoutes = [];
+
+        for (var gi = 0; gi < zipList.length; gi++) {
+            var group        = zipList[gi];
+            var numBusesForZip = busAlloc.get(group.zip);
+            var zipBuses     = buses.slice(busIdx, busIdx + numBusesForZip);
+            busIdx += numBusesForZip;
+
+            if (!group.stops.length || !zipBuses.length) continue;
+
+            showProgress(shiftLabel + ': ZIP ' + group.zip + ' → Google (' +
+                group.stops.length + ' stops, ' + zipBuses.length + ' bus' + (zipBuses.length > 1 ? 'es' : '') + ')...',
+                pctBase + 25 + Math.round(gi / zipList.length * 30));
+
+            console.log('[Go] ZIP+Google: ' + group.zip + ' — ' + group.stops.length +
+                ' stops, ' + group.camperCount + ' kids, ' + zipBuses.length + ' bus(es)');
+
+            try {
+                var zipRoutes = await window.GoGoogleOptimizer.optimizeTours({
+                    stops:          group.stops,
+                    vehicles:       zipBuses,
+                    campLat:        campLat,
+                    campLng:        campLng,
+                    departureTime:  departureTime,
+                    isArrival:      isArrival,
+                    serviceTimeSec: serviceTime,
+                    apiKey:         googleKey,
+                    projectId:      googleProjId,
+                    maxRideTimeSec: maxRideTimeSec,
+                    supabaseUrl:    supabaseUrl,
+                    accessToken:    accessToken,
+                    anonKey:        anonKey
+                });
+
+                if (zipRoutes && zipRoutes.length) {
+                    allRoutes.push.apply(allRoutes, zipRoutes);
+                    console.log('[Go] ZIP+Google: ' + group.zip + ' → ' + zipRoutes.length + ' route(s) built');
+                } else {
+                    console.warn('[Go] ZIP+Google: ' + group.zip + ' returned no routes');
+                }
+            } catch (e) {
+                console.warn('[Go] ZIP+Google: ' + group.zip + ' failed (' + e.message + ') — this ZIP will be missing');
+            }
+        }
+
+        if (!allRoutes.length) {
+            console.warn('[Go] ZIP+Google: all ZIP requests failed — falling back');
+            return null;
+        }
+
+        console.log('[Go] ZIP+Google complete: ' + allRoutes.length + ' routes, ' +
+            allRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops total');
+        return allRoutes;
+    }
+
     function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
         if (!stops.length || !buses.length) return [];
 
@@ -5625,189 +5805,164 @@ async function generateRoutes() {
             }
 
             // ── Optimizer selection diagnostics ───────────────────────────────
-            console.log('[Go] Routing strategy: geographic clustering (K-medoids) PRIMARY,',
-                'global VRP solvers (GMPRO/ORS/Geoapify-multi) FALLBACK only.',
-                'Geoapify per-bus TSP:', (geoapifyKey ? '✓ available' : '✗ no key'));
+            console.log('[Go] Routing strategy: ZIP-segmented Google Route Optimization PRIMARY,',
+                'ZIP-based K-medoids + per-bus TSP FALLBACK.',
+                'Google available:', !!(googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours),
+                '| Geoapify TSP:', (geoapifyKey ? '✓' : '✗'));
 
-            // ── Step 3 (PRIMARY): K-medoids geographic clustering + per-bus TSP ──
+            // ── Step 3 (PRIMARY): ZIP-segmented Google Route Optimization ──
             //
-            // Stops that are geographically close always go on the same bus.
-            // Global VRP solvers (GMPRO, ORS, Geoapify-multi) are NOT used as the
-            // primary optimizer because they optimize total time across all buses,
-            // which causes geographically nearby stops to be split across buses and
-            // creates non-sequential stop orderings (passing a stop then looping back).
+            // Groups stops by ZIP code, allocates buses proportionally
+            // (ceil(zipKids / busCapacity)), then sends each ZIP as an independent
+            // Google Route Optimization request.  Google handles capacity enforcement
+            // and globally-optimal stop ordering within each ZIP.
             //
-            // Pipeline:
-            //   1. buildGreedyZones() — K-medoids geographic clustering (bus assignment)
-            //   2. Geoapify per-bus TSP — road-optimal stop ordering within each cluster
-            //   3. NN+2opt fallback — if Geoapify unavailable
-            //
-            // Global VRP solvers only run if K-medoids produces zero routes.
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': clustering stops into bus zones...', pctBase + 25);
-
-            // Try ZIP-first clustering; fall back to K-medoids if no ZIP data
-            const zones = await buildZipBasedZones(allStops, shiftBuses, campLat, campLng, reserveSeats, geoapifyKey)
-                       || buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
-            const clusterMethod = zones[0]?.zip ? 'ZIP-based' : 'K-medoids';
-            console.log('[Go] ' + clusterMethod + ': ' + zones.length + ' geographic zones from ' + allStops.length + ' stops');
-            (function logZones() {
-                var times = zones.map(function(z) {
-                    var stops = z.stopIndices.map(function(idx) { return allStops[idx]; });
-                    if (!stops.length) return 0;
-                    var t = drivingDist(campLat, campLng, stops[0].lat, stops[0].lng) + serviceTime;
-                    for (var i = 1; i < stops.length; i++) {
-                        t += drivingDist(stops[i-1].lat, stops[i-1].lng, stops[i].lat, stops[i].lng) + serviceTime;
-                    }
-                    return t;
-                });
-                var maxT = Math.max.apply(null, times);
-                var minT = Math.min.apply(null, times.filter(function(t) { return t > 0; }));
-                zones.forEach(function(z, i) {
-                    console.log('[Go]   Zone ' + (i+1) + ' (' + (z.busName || z.busId) + '): ' +
-                        z.stopIndices.length + ' stops, ' + z.camperCount + ' kids, ~' + (times[i]/60).toFixed(0) + 'min');
-                    if (z.camperCount > z.capacity) {
-                        console.warn('[Go]   ⚠ Zone ' + (z.busName || z.busId) + ': ' + z.camperCount + ' kids > capacity ' + z.capacity);
-                    }
-                });
-                if (times.length > 1) {
-                    console.log('[Go] Balance: max=' + (maxT/60).toFixed(0) + 'min, min=' + (minT/60).toFixed(0) + 'min, spread=' + ((maxT-minT)/60).toFixed(0) + 'min');
-                }
-            })();
-
-            // Convert zones → route objects
-            const builtRoutes = [];
-            zones.forEach(function(zone) {
-                const vehicle = shiftVehicles.find(function(v) { return v.busId === zone.busId; });
-                if (!vehicle || !zone.stopIndices.length) return;
-                builtRoutes.push({
-                    busId:       zone.busId,
-                    busName:     zone.busName,
-                    busColor:    zone.busColor || '#10b981',
-                    monitor:     vehicle.monitor    || null,
-                    counselors:  vehicle.counselors || [],
-                    stops:       zone.stopIndices.map(function(idx, i) {
-                        var s = allStops[idx];
-                        return { stopNum: i + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
-                    }),
-                    camperCount: zone.camperCount,
-                    _cap:        zone.capacity,
-                    totalDuration: 0,
-                    _source:     'k-medoids-zones'
-                });
-            });
-
-            // Per-bus TSP via Geoapify: preserves geographic cluster assignments,
-            // optimizes stop ordering within each cluster using real road distances.
-            // This eliminates backtracking (passing stop 5 to reach stop 4, etc.).
-            if (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus && builtRoutes.length) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing stop order per bus...', pctBase + 40);
-                let geoTspSucc = 0;
-                for (const route of builtRoutes) {
-                    if (!route.stops || route.stops.length < 2) continue;
-                    try {
-                        const tspResult = await window.GoGeoapifyOptimizer.optimizeSingleBus({
-                            stops:          route.stops.map(function(s) {
-                                return { lat: s.lat, lng: s.lng, address: s.address, campers: s.campers };
-                            }),
-                            vehicle:        shiftVehicles.find(function(v) { return v.busId === route.busId; })
-                                            || { capacity: route._cap || 44 },
-                            campLat:        campLat,
-                            campLng:        campLng,
-                            isArrival:      isArrival,
-                            serviceTimeSec: serviceTime,
-                            apiKey:         geoapifyKey
-                        });
-                        if (tspResult?.orderedStops?.length) {
-                            const origCount = route.stops.length;
-                            const tspCount  = tspResult.orderedStops.length;
-                            if (tspCount < origCount) {
-                                // Geoapify dropped stops (capacity overflow in solver).
-                                // Keep original ordering — don't silently lose campers.
-                                console.warn('[Go] TSP for ' + route.busId + ' returned ' + tspCount +
-                                    '/' + origCount + ' stops — keeping original order to preserve all campers');
-                                if (tspResult.roadPts?.length) {
-                                    _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
-                                    route._roadPts = tspResult.roadPts;
-                                }
-                                route._source = 'distance-sort-split';
-                            } else {
-                                route.stops = tspResult.orderedStops.map(function(s, idx) {
-                                    return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
-                                });
-                                route.camperCount = route.stops.reduce(function(s, st) { return s + st.campers.length; }, 0);
-                                if (tspResult.roadPts?.length) {
-                                    _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
-                                    route._roadPts = tspResult.roadPts;
-                                }
-                                if (tspResult.legTimes?.length) {
-                                    route._tspLegTimes = tspResult.legTimes;
-                                }
-                                route._source = 'geoapify-tsp';
-                                geoTspSucc++;
-                            }
-                        }
-                    } catch (e) {
-                        console.warn('[Go] Per-bus TSP failed for ' + route.busId + ':', e.message);
-                    }
-                }
-                if (geoTspSucc > 0) {
-                    console.log('[Go] Per-bus TSP: ' + geoTspSucc + '/' + builtRoutes.length + ' buses optimized via Geoapify');
-                }
-            }
-
-            if (builtRoutes.length) {
-                routes = builtRoutes;
-                usedExternalOptimizer = true;
-                const tspLabel = (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus)
-                    ? ', stop order optimized per bus'
-                    : ', geographically clustered routes';
-                toast('✓ Routes generated — ' + builtRoutes.length + ' buses' + tspLabel);
-                console.log('[Go] Routing complete: ' + builtRoutes.length + ' routes, ' +
-                    builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
-            }
-
-            // ── Global VRP solvers (FALLBACK ONLY — run only if K-medoids fails) ──
-            // These optimize globally across all buses simultaneously.
-            // WARNING: global VRP solvers trade geographic coherence for time balance —
-            // they may split geographically adjacent stops across different buses and
-            // create non-sequential stop orderings. Use only as a last resort.
-
-            // GMPRO fallback
-            if (!usedExternalOptimizer && googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing all buses via Google Route Optimization...', pctBase + 55);
-                try {
-                    const googleRoutes = await window.GoGoogleOptimizer.optimizeTours({
-                        stops:          allStops,
-                        vehicles:       shiftVehicles,
-                        campLat:        campLat,
-                        campLng:        campLng,
-                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
+            // Buses never cross ZIP boundaries → no cross-zone routing.
+            if (googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours) {
+                const googleZipRoutes = await buildRoutesByZipGoogle(
+                    allStops, shiftBuses, campLat, campLng, reserveSeats, {
+                        googleKey:      googleKey,
+                        googleProjId:   googleProjId,
                         isArrival:      isArrival,
-                        serviceTimeSec: serviceTime,
-                        apiKey:         googleKey,
-                        projectId:      googleProjId,
+                        serviceTime:    serviceTime,
+                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
                         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
                         supabaseUrl:    _supabaseUrl,
                         accessToken:    _googleProxyToken,
-                        anonKey:        window.__CAMPISTRY_SUPABASE__?.anonKey || ''
-                    });
-                    if (googleRoutes && googleRoutes.length > 0) {
-                        routes = googleRoutes;
-                        usedExternalOptimizer = true;
-                        let gGeomCached = 0;
-                        googleRoutes.forEach(function(r) {
-                            if (r._roadPts && r._roadPts.length) {
-                                _routeGeomCache[r.busId + '_' + si] = r._roadPts;
-                                gGeomCached++;
-                            }
-                        });
-                        console.log('[Go] Google Route Optimization (fallback): ' + googleRoutes.length + ' routes, ' +
-                            googleRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops' +
-                            (gGeomCached ? ', ' + gGeomCached + ' routes with road geometry' : ''));
-                        toast('✓ Routes generated via Google Route Optimization — ' + googleRoutes.length + ' buses');
+                        anonKey:        window.__CAMPISTRY_SUPABASE__?.anonKey || '',
+                        shiftLabel:     shift.label || ('Shift ' + (si + 1)),
+                        pctBase:        pctBase
                     }
-                } catch (e) {
-                    console.warn('[Go] Google Route Optimization failed (' + e.message + ') — falling back');
+                );
+                if (googleZipRoutes && googleZipRoutes.length) {
+                    routes = googleZipRoutes;
+                    usedExternalOptimizer = true;
+                    routes.forEach(function(r) {
+                        if (r._roadPts && r._roadPts.length) _routeGeomCache[r.busId + '_' + si] = r._roadPts;
+                    });
+                    console.log('[Go] ZIP+Google complete: ' + routes.length + ' routes, ' +
+                        routes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
+                    toast('✓ Routes generated via ZIP-segmented Google Route Optimization — ' + routes.length + ' buses');
+                }
+            }
+
+            // ── Step 3 (FALLBACK): ZIP-based K-medoids + per-bus Geoapify TSP ──
+            //
+            // Runs when Google is not configured or all ZIP requests failed.
+            // Groups stops geographically, then orders each bus's stops with Geoapify.
+            if (!usedExternalOptimizer) {
+                console.log('[Go] Falling back to ZIP-based K-medoids + per-bus TSP');
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': clustering stops into bus zones...', pctBase + 25);
+
+                const zones = await buildZipBasedZones(allStops, shiftBuses, campLat, campLng, reserveSeats, geoapifyKey)
+                           || buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
+                const clusterMethod = zones[0]?.zip ? 'ZIP-based' : 'K-medoids';
+                console.log('[Go] ' + clusterMethod + ': ' + zones.length + ' geographic zones from ' + allStops.length + ' stops');
+                (function logZones() {
+                    var times = zones.map(function(z) {
+                        var stops = z.stopIndices.map(function(idx) { return allStops[idx]; });
+                        if (!stops.length) return 0;
+                        var t = drivingDist(campLat, campLng, stops[0].lat, stops[0].lng) + serviceTime;
+                        for (var i = 1; i < stops.length; i++) {
+                            t += drivingDist(stops[i-1].lat, stops[i-1].lng, stops[i].lat, stops[i].lng) + serviceTime;
+                        }
+                        return t;
+                    });
+                    var maxT = Math.max.apply(null, times);
+                    var minT = Math.min.apply(null, times.filter(function(t) { return t > 0; }));
+                    zones.forEach(function(z, i) {
+                        console.log('[Go]   Zone ' + (i+1) + ' (' + (z.busName || z.busId) + '): ' +
+                            z.stopIndices.length + ' stops, ' + z.camperCount + ' kids, ~' + (times[i]/60).toFixed(0) + 'min');
+                        if (z.camperCount > z.capacity) {
+                            console.warn('[Go]   ⚠ Zone ' + (z.busName || z.busId) + ': ' + z.camperCount + ' kids > capacity ' + z.capacity);
+                        }
+                    });
+                    if (times.length > 1) {
+                        console.log('[Go] Balance: max=' + (maxT/60).toFixed(0) + 'min, min=' + (minT/60).toFixed(0) + 'min, spread=' + ((maxT-minT)/60).toFixed(0) + 'min');
+                    }
+                })();
+
+                const builtRoutes = [];
+                zones.forEach(function(zone) {
+                    const vehicle = shiftVehicles.find(function(v) { return v.busId === zone.busId; });
+                    if (!vehicle || !zone.stopIndices.length) return;
+                    builtRoutes.push({
+                        busId:         zone.busId,
+                        busName:       zone.busName,
+                        busColor:      zone.busColor || '#10b981',
+                        monitor:       vehicle.monitor    || null,
+                        counselors:    vehicle.counselors || [],
+                        stops:         zone.stopIndices.map(function(idx, i) {
+                            var s = allStops[idx];
+                            return { stopNum: i + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                        }),
+                        camperCount:   zone.camperCount,
+                        _cap:          zone.capacity,
+                        totalDuration: 0,
+                        _source:       'k-medoids-zones'
+                    });
+                });
+
+                if (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus && builtRoutes.length) {
+                    showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing stop order per bus...', pctBase + 40);
+                    let geoTspSucc = 0;
+                    for (const route of builtRoutes) {
+                        if (!route.stops || route.stops.length < 2) continue;
+                        try {
+                            const tspResult = await window.GoGeoapifyOptimizer.optimizeSingleBus({
+                                stops:          route.stops.map(function(s) {
+                                    return { lat: s.lat, lng: s.lng, address: s.address, campers: s.campers };
+                                }),
+                                vehicle:        shiftVehicles.find(function(v) { return v.busId === route.busId; })
+                                                || { capacity: route._cap || 44 },
+                                campLat:        campLat,
+                                campLng:        campLng,
+                                isArrival:      isArrival,
+                                serviceTimeSec: serviceTime,
+                                apiKey:         geoapifyKey
+                            });
+                            if (tspResult?.orderedStops?.length) {
+                                const origCount = route.stops.length;
+                                const tspCount  = tspResult.orderedStops.length;
+                                if (tspCount < origCount) {
+                                    console.warn('[Go] TSP for ' + route.busId + ' returned ' + tspCount +
+                                        '/' + origCount + ' stops — keeping original order to preserve all campers');
+                                    if (tspResult.roadPts?.length) {
+                                        _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
+                                        route._roadPts = tspResult.roadPts;
+                                    }
+                                    route._source = 'distance-sort-split';
+                                } else {
+                                    route.stops = tspResult.orderedStops.map(function(s, idx) {
+                                        return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                                    });
+                                    route.camperCount = route.stops.reduce(function(s, st) { return s + st.campers.length; }, 0);
+                                    if (tspResult.roadPts?.length) {
+                                        _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
+                                        route._roadPts = tspResult.roadPts;
+                                    }
+                                    if (tspResult.legTimes?.length) route._tspLegTimes = tspResult.legTimes;
+                                    route._source = 'geoapify-tsp';
+                                    geoTspSucc++;
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('[Go] Per-bus TSP failed for ' + route.busId + ':', e.message);
+                        }
+                    }
+                    if (geoTspSucc > 0) {
+                        console.log('[Go] Per-bus TSP: ' + geoTspSucc + '/' + builtRoutes.length + ' buses optimized via Geoapify');
+                    }
+                }
+
+                if (builtRoutes.length) {
+                    routes = builtRoutes;
+                    usedExternalOptimizer = true;
+                    const tspLabel = (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus)
+                        ? ', stop order optimized per bus' : ', geographically clustered routes';
+                    toast('✓ Routes generated — ' + builtRoutes.length + ' buses' + tspLabel);
+                    console.log('[Go] Routing complete: ' + builtRoutes.length + ' routes, ' +
+                        builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
                 }
             }
 
