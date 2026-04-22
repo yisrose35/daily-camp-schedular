@@ -60,8 +60,9 @@
 //   3. vehicles[] → vehicles[] (id = vehicle_index + 1, capacity = [effectiveCap])
 //      Dismissal: vehicle start = camp (bus leaves camp, stops end at last home)
 //      Arrival:   vehicle end   = camp (bus starts at first pickup, ends at camp)
-//   4. If stops.length + vehicles.length > 150, split into two geographic halves
-//      and optimize each half with a proportional share of buses, then merge.
+//   4. If multiple buses: recursively bisect stops by geography (bearing → distance
+//      alternating) until each leaf region's camper count fits its allocated buses.
+//      Each leaf is sent as an independent VROOM request, then results are merged.
 //   5. Parse response: step.type === 'job', step.id → stops[id - 1]
 //   6. Unassigned jobs: cheapest-insertion (haversine) onto route with most slack
 //   7. Return array of route objects in app format (_source: 'ors-vroom')
@@ -115,11 +116,11 @@ window.GoOrsOptimizer = (function () {
         if (!vehicles || !vehicles.length) { console.warn('[OrsVroom] No vehicles provided'); return null; }
         if (campLat == null || campLng == null) { console.warn('[OrsVroom] Camp coordinates missing'); return null; }
 
-        // Geographic pre-split when the problem exceeds the threshold.
-        // Vroom can handle large problems but splits reduce per-request latency
-        // and keep us safely within free-tier limits.
-        if (stops.length + vehicles.length > SPLIT_THRESHOLD) {
-            return await _splitAndOptimize(options, key);
+        // Recursively bisect the region by geography so each bus is pre-assigned
+        // to a coherent sub-region before VROOM routes it.  Falls back to a
+        // single VROOM call when only one bus is available or the region is small.
+        if (vehicles.length > 1) {
+            return await _recursiveSplit(options, key, 0);
         }
 
         return await _singleRequest(options, key);
@@ -179,6 +180,84 @@ window.GoOrsOptimizer = (function () {
         }
 
         console.log('[OrsVroom] Split-optimize complete: ' + allRoutes.length + ' total routes');
+        return allRoutes.length ? allRoutes : null;
+    }
+
+    // -------------------------------------------------------------------------
+    // _recursiveSplit — capacity-driven recursive geographic bisection
+    //
+    // Recursively splits stops into geographic sub-regions until each leaf
+    // region's total camper count fits within the buses assigned to it.
+    // Each leaf is sent to VROOM independently, guaranteeing every bus stays
+    // in its own contiguous geographic zone.
+    //
+    // Alternates split axis each level (KD-tree style):
+    //   Even depth → angular wedges by compass bearing from camp
+    //   Odd depth  → inner/outer rings by distance from camp
+    // -------------------------------------------------------------------------
+    async function _recursiveSplit(options, key, depth) {
+        var stops    = options.stops;
+        var vehicles = options.vehicles;
+        var campLat  = options.campLat;
+        var campLng  = options.campLng;
+        var prefix   = '[OrsVroom][d=' + depth + '] ';
+
+        var totalKids = stops.reduce(function (s, st) { return s + st.campers.length; }, 0);
+        var totalCap  = vehicles.reduce(function (s, v) {
+            var reserved = (v.monitor ? 1 : 0) + ((v.counselors && v.counselors.length) ? v.counselors.length : 0);
+            return s + Math.max(1, (v.capacity || 44) - reserved);
+        }, 0);
+
+        // Base case: fits in assigned capacity, single bus, or below API threshold
+        if (vehicles.length <= 1 || totalKids <= totalCap ||
+                stops.length <= 1 || stops.length + vehicles.length <= SPLIT_THRESHOLD) {
+            console.log(prefix + 'Leaf → ' + stops.length + ' stops, ' +
+                totalKids + ' kids, ' + vehicles.length + ' bus(es)');
+            return await _singleRequest(options, key);
+        }
+
+        var axis = depth % 2 === 0 ? 'bearing' : 'distance';
+        console.log(prefix + stops.length + ' stops / ' + totalKids + ' kids / ' +
+            vehicles.length + ' buses — bisecting by ' + axis);
+
+        // Sort stops by alternating axis
+        var sorted;
+        if (depth % 2 === 0) {
+            // Angular sweep: creates geographic wedge sub-regions around camp
+            sorted = stops.slice().sort(function (a, b) {
+                return Math.atan2(a.lng - campLng, a.lat - campLat)
+                     - Math.atan2(b.lng - campLng, b.lat - campLat);
+            });
+        } else {
+            // Distance rings: splits near vs far stops from camp
+            sorted = stops.slice().sort(function (a, b) {
+                return _hav(campLat, campLng, a.lat, a.lng)
+                     - _hav(campLat, campLng, b.lat, b.lng);
+            });
+        }
+
+        // Find split index that balances camper count (not stop count) between halves
+        var half = totalKids / 2, cum = 0, splitIdx = Math.ceil(sorted.length / 2);
+        for (var i = 0; i < sorted.length; i++) {
+            cum += sorted[i].campers.length;
+            if (cum >= half) { splitIdx = i + 1; break; }
+        }
+
+        var stopGroups    = [sorted.slice(0, splitIdx), sorted.slice(splitIdx)];
+        var vehicleGroups = _allocateVehicles(vehicles, stopGroups);
+
+        var allRoutes = [];
+        for (var g = 0; g < 2; g++) {
+            if (!stopGroups[g].length || !vehicleGroups[g].length) continue;
+            var groupRoutes = await _recursiveSplit(
+                Object.assign({}, options, { stops: stopGroups[g], vehicles: vehicleGroups[g] }),
+                key,
+                depth + 1
+            );
+            if (groupRoutes && groupRoutes.length) {
+                allRoutes.push.apply(allRoutes, groupRoutes);
+            }
+        }
         return allRoutes.length ? allRoutes : null;
     }
 
