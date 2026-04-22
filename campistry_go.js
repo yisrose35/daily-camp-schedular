@@ -2338,6 +2338,16 @@ let _toastTimer = null;
                 corrected.zip    = pa.postalCode           || zip;
             }
 
+            const comps = (result.address && result.address.addressComponents) || [];
+            const neighborhood = (function() {
+                const prefer = ['neighborhood', 'sublocality_level_1', 'sublocality'];
+                for (let t = 0; t < prefer.length; t++) {
+                    const c = comps.find(c => c.componentType === prefer[t]);
+                    if (c && c.componentName && c.componentName.text) return c.componentName.text;
+                }
+                return null;
+            })();
+
             return {
                 lat, lng,
                 confidence:  Math.min(Math.max(confidence, 0), 1),
@@ -2346,6 +2356,7 @@ let _toastTimer = null;
                 precision:   (gran === 'PREMISE' || gran === 'SUB_PREMISE') ? 'interpolated' : 'approximate',
                 zip:         retZip,
                 corrected,
+                neighborhood,
                 _dpv:        dpv,
                 _granularity: gran
             };
@@ -2478,6 +2489,7 @@ let _toastTimer = null;
         a._geocodePrecision = result.precision || 'unknown';
         a._crossValidated = result._crossValidated || false;
         a._zipMismatch = (result.zipMatch === false);
+        if (result.neighborhood) a.neighborhood = result.neighborhood;
         if (result._dpv === 'N') {
             a._geocodeWarning = 'USPS: address not found — verify address is real and deliverable';
         } else if (result._dpv === 'S' || result._dpv === 'D') {
@@ -4568,7 +4580,7 @@ let _toastTimer = null;
         var shiftLabel     = opts.shiftLabel || 'Shift';
         var pctBase        = opts.pctBase    || 0;
 
-        // ── Group stops by ZIP (majority-vote on campers at each stop) ──
+        // ── Sub-zone helpers: neighborhood (primary) + H3 hex cell (fallback) ──
         function getZipForStop(stop) {
             var zipCounts = {};
             for (var i = 0; i < (stop.campers || []).length; i++) {
@@ -4581,47 +4593,75 @@ let _toastTimer = null;
             return entries.sort(function(a, b) { return b[1] - a[1]; })[0][0];
         }
 
-        var zipGroups   = new Map();
-        var unknownStops = [];
+        function getNeighborhoodForStop(stop) {
+            var nbhdCounts = {};
+            for (var i = 0; i < (stop.campers || []).length; i++) {
+                var nbhd = ((D.addresses[(stop.campers[i] || {}).name] || {}).neighborhood || '').trim();
+                if (nbhd) nbhdCounts[nbhd] = (nbhdCounts[nbhd] || 0) + 1;
+            }
+            var entries = Object.entries(nbhdCounts);
+            if (!entries.length) return null;
+            return entries.sort(function(a, b) { return b[1] - a[1]; })[0][0];
+        }
+
+        // Returns a sub-zone key: "ZIP:NeighborhoodName" if available,
+        // "ZIP:h3:CELLID" via H3 library (res 7 ≈ 1.2 km hex) if loaded,
+        // or "ZIP:GX:GY" grid cell fallback (~0.55 mi cells).
+        function getSubZoneKey(stop) {
+            var zip  = getZipForStop(stop) || 'NOZIP';
+            var nbhd = getNeighborhoodForStop(stop);
+            if (nbhd) return zip + ':' + nbhd;
+            var h3fn = window.H3 && (window.H3.latLngToCell || window.H3.geoToH3);
+            if (h3fn) return zip + ':h3:' + h3fn(stop.lat, stop.lng, 7);
+            var gx = Math.round(stop.lat / 0.008);
+            var gy = Math.round(stop.lng / 0.008);
+            return zip + ':' + gx + ':' + gy;
+        }
+
+        // ── Group stops by sub-zone ──
+        var subZoneGroups = new Map();
+        var unknownStops  = [];
         for (var si = 0; si < allStops.length; si++) {
-            var zip      = getZipForStop(allStops[si]);
-            var kidCount = (allStops[si].campers || []).length;
-            if (!zip) { unknownStops.push(allStops[si]); continue; }
-            if (!zipGroups.has(zip)) zipGroups.set(zip, { stops: [], camperCount: 0, zip: zip });
-            var g = zipGroups.get(zip);
-            g.stops.push(allStops[si]);
+            var stop     = allStops[si];
+            var zip      = getZipForStop(stop);
+            var kidCount = (stop.campers || []).length;
+            if (!zip) { unknownStops.push(stop); continue; }
+            var zoneKey  = getSubZoneKey(stop);
+            if (!subZoneGroups.has(zoneKey)) subZoneGroups.set(zoneKey, { stops: [], camperCount: 0, zip: zip, zoneKey: zoneKey });
+            var g = subZoneGroups.get(zoneKey);
+            g.stops.push(stop);
             g.camperCount += kidCount;
         }
 
-        if (zipGroups.size === 0) {
+        if (subZoneGroups.size === 0) {
             console.warn('[Go] ZIP+Google: no ZIP data — falling back');
             return null;
         }
 
-        // Absorb no-ZIP stops into nearest ZIP centroid
+        // Absorb no-ZIP stops into nearest sub-zone centroid
         if (unknownStops.length) {
             var cents = new Map();
-            zipGroups.forEach(function(g, zip) {
-                cents.set(zip, {
+            subZoneGroups.forEach(function(g, key) {
+                cents.set(key, {
                     lat: g.stops.reduce(function(s, st) { return s + st.lat; }, 0) / g.stops.length,
                     lng: g.stops.reduce(function(s, st) { return s + st.lng; }, 0) / g.stops.length
                 });
             });
             unknownStops.forEach(function(stop) {
-                var bestZip = null, bestDist = Infinity;
-                cents.forEach(function(c, zip) {
+                var bestKey = null, bestDist = Infinity;
+                cents.forEach(function(c, key) {
                     var d = haversineMi(stop.lat, stop.lng, c.lat, c.lng);
-                    if (d < bestDist) { bestDist = d; bestZip = zip; }
+                    if (d < bestDist) { bestDist = d; bestKey = key; }
                 });
-                if (bestZip) {
-                    var g = zipGroups.get(bestZip);
+                if (bestKey) {
+                    var g = subZoneGroups.get(bestKey);
                     g.stops.push(stop);
                     g.camperCount += (stop.campers || []).length;
                 }
             });
         }
 
-        // ── Bus allocation per ZIP ──
+        // ── Bus allocation per sub-zone ──
         var busTrueEffCaps = buses.map(function(b) {
             // If already a vehicle object (has busId), capacity is pre-computed effective
             if (b.busId) return Math.max(1, b.capacity || 44);
@@ -4635,56 +4675,56 @@ let _toastTimer = null;
             busTrueEffCaps.reduce(function(s, c) { return s + c; }, 0) / buses.length
         ));
 
-        var zipList  = Array.from(zipGroups.values()).sort(function(a, b) { return b.camperCount - a.camperCount; });
-        var busAlloc = new Map();
+        var zoneList  = Array.from(subZoneGroups.values()).sort(function(a, b) { return b.camperCount - a.camperCount; });
+        var busAlloc  = new Map();
         var totalAlloc = 0;
-        zipList.forEach(function(g) {
+        zoneList.forEach(function(g) {
             var needed = Math.max(1, Math.ceil(g.camperCount / effectiveCap));
-            busAlloc.set(g.zip, needed);
+            busAlloc.set(g.zoneKey, needed);
             totalAlloc += needed;
         });
 
         // Trim over-allocation (never below capacity floor)
         while (totalAlloc > buses.length) {
-            var trimmable = zipList.filter(function(g) {
-                return busAlloc.get(g.zip) > Math.max(1, Math.ceil(g.camperCount / effectiveCap));
+            var trimmable = zoneList.filter(function(g) {
+                return busAlloc.get(g.zoneKey) > Math.max(1, Math.ceil(g.camperCount / effectiveCap));
             }).sort(function(a, b) {
-                return (busAlloc.get(b.zip) * effectiveCap - b.camperCount) -
-                       (busAlloc.get(a.zip) * effectiveCap - a.camperCount);
+                return (busAlloc.get(b.zoneKey) * effectiveCap - b.camperCount) -
+                       (busAlloc.get(a.zoneKey) * effectiveCap - a.camperCount);
             });
             if (!trimmable.length) { console.warn('[Go] ZIP+Google: cannot trim — need more buses'); break; }
-            busAlloc.set(trimmable[0].zip, busAlloc.get(trimmable[0].zip) - 1);
+            busAlloc.set(trimmable[0].zoneKey, busAlloc.get(trimmable[0].zoneKey) - 1);
             totalAlloc--;
         }
         // Expand under-allocation
         while (totalAlloc < buses.length) {
-            var expandable = zipList.slice().sort(function(a, b) {
-                return (b.camperCount / busAlloc.get(b.zip)) - (a.camperCount / busAlloc.get(a.zip));
+            var expandable = zoneList.slice().sort(function(a, b) {
+                return (b.camperCount / busAlloc.get(b.zoneKey)) - (a.camperCount / busAlloc.get(a.zoneKey));
             });
-            busAlloc.set(expandable[0].zip, busAlloc.get(expandable[0].zip) + 1);
+            busAlloc.set(expandable[0].zoneKey, busAlloc.get(expandable[0].zoneKey) + 1);
             totalAlloc++;
         }
 
-        console.log('[Go] ZIP+Google allocation:',
-            zipList.map(function(g) { return g.zip + ' → ' + g.camperCount + ' kids / ' + busAlloc.get(g.zip) + ' bus(es)'; }).join(' | '));
+        console.log('[Go] Sub-zone allocation (' + zoneList.length + ' zones):',
+            zoneList.map(function(g) { return '"' + g.zoneKey + '" → ' + g.camperCount + ' kids / ' + busAlloc.get(g.zoneKey) + ' bus(es)'; }).join(' | '));
 
-        // ── Send each ZIP to Google Route Optimization ──
+        // ── Send each sub-zone to Google Route Optimization ──
         var busIdx    = 0;
         var allRoutes = [];
 
-        for (var gi = 0; gi < zipList.length; gi++) {
-            var group        = zipList[gi];
-            var numBusesForZip = busAlloc.get(group.zip);
-            var zipBuses     = buses.slice(busIdx, busIdx + numBusesForZip);
+        for (var gi = 0; gi < zoneList.length; gi++) {
+            var group          = zoneList[gi];
+            var numBusesForZip = busAlloc.get(group.zoneKey);
+            var zipBuses       = buses.slice(busIdx, busIdx + numBusesForZip);
             busIdx += numBusesForZip;
 
             if (!group.stops.length || !zipBuses.length) continue;
 
-            showProgress(shiftLabel + ': ZIP ' + group.zip + ' → Google (' +
+            showProgress(shiftLabel + ': ' + group.zoneKey + ' → Google (' +
                 group.stops.length + ' stops, ' + zipBuses.length + ' bus' + (zipBuses.length > 1 ? 'es' : '') + ')...',
-                pctBase + 25 + Math.round(gi / zipList.length * 30));
+                pctBase + 25 + Math.round(gi / zoneList.length * 30));
 
-            console.log('[Go] ZIP+Google: ' + group.zip + ' — ' + group.stops.length +
+            console.log('[Go] ZIP+Google: "' + group.zoneKey + '" — ' + group.stops.length +
                 ' stops, ' + group.camperCount + ' kids, ' + zipBuses.length + ' bus(es)');
 
             try {
@@ -4706,12 +4746,12 @@ let _toastTimer = null;
 
                 if (zipRoutes && zipRoutes.length) {
                     allRoutes.push.apply(allRoutes, zipRoutes);
-                    console.log('[Go] ZIP+Google: ' + group.zip + ' → ' + zipRoutes.length + ' route(s) built');
+                    console.log('[Go] ZIP+Google: "' + group.zoneKey + '" → ' + zipRoutes.length + ' route(s) built');
                 } else {
-                    console.warn('[Go] ZIP+Google: ' + group.zip + ' returned no routes');
+                    console.warn('[Go] ZIP+Google: "' + group.zoneKey + '" returned no routes');
                 }
             } catch (e) {
-                console.warn('[Go] ZIP+Google: ' + group.zip + ' failed (' + e.message + ') — this ZIP will be missing');
+                console.warn('[Go] ZIP+Google: "' + group.zoneKey + '" failed (' + e.message + ') — this zone will be missing');
             }
         }
 
