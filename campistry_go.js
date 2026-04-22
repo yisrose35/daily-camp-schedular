@@ -4824,81 +4824,180 @@ let _toastTimer = null;
                 tgt.cy = tgt.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt.stops.length;
             }
 
-            // ── Duration rebalancing (USPS pressure-relief) ──
-            // Fast buses should absorb stops from slow ones.  We estimate each
-            // cluster's route time (stops × service + radius × drive) and donate
-            // the farthest stop of the slowest cluster to the FASTEST cluster
-            // that (a) has camper capacity and (b) is geographically reachable
-            // from that stop.  This lets a 4-stop bus take work off a 27-stop
-            // neighbor even when strict "closer centroid" test would block it.
+            // ── Duration rebalancing (disciplined, operationally-justified) ──
+            // A stop only moves if ALL of the following are true:
+            //   (1) Max-min time gap across clusters exceeds TRIGGER_GAP_MIN
+            //       (otherwise the system is balanced enough — don't churn).
+            //   (2) The stop's *nearest neighbor across all stops* lives in the
+            //       candidate target cluster (not in its own cluster). This means
+            //       the target's driver is genuinely driving past it — no detour.
+            //       Centroid distance is not used; actual adjacency is.
+            //   (3) Simulating the move must drop the overall cluster-max time
+            //       by at least MIN_IMPROVEMENT_MIN.  A move that saves 30 sec
+            //       isn't worth the territory disruption.
+            //   (4) Target has camper capacity.
+            // We pick the single best move (biggest time-max drop) each pass.
             var SERVICE_MIN_PER_STOP = 2.0;
-            var DRIVE_MIN_PER_MI     = 4.0;  // ~15 mph avg with stop churn
-            var REACH_MI             = 4.0;  // max mi from stop to target centroid
-            var TIME_TOL_MIN         = 5.0;  // stop if max-min time gap < this
+            var DRIVE_MIN_PER_MI     = 4.0;   // ~15 mph avg with urban stop churn
+            var TRIGGER_GAP_MIN      = 15.0;  // don't rebalance tighter than this
+            var MIN_IMPROVEMENT_MIN  = 2.0;   // move must cut max-time by ≥ this
+            function clusterMaxR(c) {
+                if (!c.stops.length) return 0;
+                var mr = 0;
+                for (var i = 0; i < c.stops.length; i++) {
+                    var d = haversineMi(c.stops[i].lat, c.stops[i].lng, c.cx, c.cy);
+                    if (d > mr) mr = d;
+                }
+                return mr;
+            }
             function clusterTime(c) {
                 if (!c.stops.length) return 0;
-                var maxR = 0;
-                for (var ri = 0; ri < c.stops.length; ri++) {
-                    var rd = haversineMi(c.stops[ri].lat, c.stops[ri].lng, c.cx, c.cy);
-                    if (rd > maxR) maxR = rd;
-                }
-                // diameter ≈ 2× radius, round trip traversal ≈ 2× diameter
-                return c.stops.length * SERVICE_MIN_PER_STOP + maxR * 2 * DRIVE_MIN_PER_MI;
+                // round-trip traversal ≈ 2 × diameter ≈ 4 × radius
+                return c.stops.length * SERVICE_MIN_PER_STOP + clusterMaxR(c) * 4 * DRIVE_MIN_PER_MI;
             }
+            // Simulate cluster time WITHOUT stop at index si (for source side)
+            function clusterTimeWithout(c, si) {
+                if (c.stops.length <= 1) return 0;
+                var tmpCx = 0, tmpCy = 0;
+                for (var i = 0; i < c.stops.length; i++) {
+                    if (i === si) continue;
+                    tmpCx += c.stops[i].lat;
+                    tmpCy += c.stops[i].lng;
+                }
+                var n = c.stops.length - 1;
+                tmpCx /= n; tmpCy /= n;
+                var mr = 0;
+                for (var j = 0; j < c.stops.length; j++) {
+                    if (j === si) continue;
+                    var d = haversineMi(c.stops[j].lat, c.stops[j].lng, tmpCx, tmpCy);
+                    if (d > mr) mr = d;
+                }
+                return n * SERVICE_MIN_PER_STOP + mr * 4 * DRIVE_MIN_PER_MI;
+            }
+            // Simulate cluster time WITH an extra stop added
+            function clusterTimeWith(c, extraStop) {
+                var n = c.stops.length + 1;
+                var sumLat = extraStop.lat, sumLng = extraStop.lng;
+                for (var i = 0; i < c.stops.length; i++) {
+                    sumLat += c.stops[i].lat; sumLng += c.stops[i].lng;
+                }
+                var ncx = sumLat / n, ncy = sumLng / n;
+                var mr = haversineMi(extraStop.lat, extraStop.lng, ncx, ncy);
+                for (var j = 0; j < c.stops.length; j++) {
+                    var d = haversineMi(c.stops[j].lat, c.stops[j].lng, ncx, ncy);
+                    if (d > mr) mr = d;
+                }
+                return n * SERVICE_MIN_PER_STOP + mr * 4 * DRIVE_MIN_PER_MI;
+            }
+            // For each stop, find its nearest OTHER-cluster neighbor's cluster index
+            // and the distance to that neighbor (actual stop-to-stop adjacency).
+            function nearestOtherClusterFor(stop, ownIdx) {
+                var bestIdx = -1, bestD = Infinity;
+                for (var ci = 0; ci < clusters.length; ci++) {
+                    if (ci === ownIdx) continue;
+                    var cs = clusters[ci].stops;
+                    for (var k2 = 0; k2 < cs.length; k2++) {
+                        var d = haversineMi(stop.lat, stop.lng, cs[k2].lat, cs[k2].lng);
+                        if (d < bestD) { bestD = d; bestIdx = ci; }
+                    }
+                }
+                return { idx: bestIdx, dist: bestD };
+            }
+            function nearestSameClusterDist(stop, ownIdx, ownSi) {
+                var bestD = Infinity;
+                var cs = clusters[ownIdx].stops;
+                for (var k2 = 0; k2 < cs.length; k2++) {
+                    if (k2 === ownSi) continue;
+                    var d = haversineMi(stop.lat, stop.lng, cs[k2].lat, cs[k2].lng);
+                    if (d < bestD) bestD = d;
+                }
+                return bestD;
+            }
+
             var durMoves = 0;
-            var lastDurLog = null;
+            var initialMaxT = 0, initialMinT = Infinity;
+            {
+                var t0 = clusters.map(clusterTime);
+                for (var i0 = 0; i0 < clusters.length; i0++) {
+                    if (!clusters[i0].stops.length) continue;
+                    if (t0[i0] > initialMaxT) initialMaxT = t0[i0];
+                    if (t0[i0] < initialMinT) initialMinT = t0[i0];
+                }
+            }
             for (var dPass = 0; dPass < stops.length; dPass++) {
                 var times = clusters.map(clusterTime);
-                var maxT = -Infinity, maxIdx = -1, minT = Infinity;
+                var maxT = -Infinity, minT = Infinity;
                 for (var ti = 0; ti < clusters.length; ti++) {
                     if (!clusters[ti].stops.length) continue;
-                    if (times[ti] > maxT) { maxT = times[ti]; maxIdx = ti; }
-                    if (times[ti] < minT) { minT = times[ti]; }
+                    if (times[ti] > maxT) maxT = times[ti];
+                    if (times[ti] < minT) minT = times[ti];
                 }
-                if (maxIdx === -1 || (maxT - minT) < TIME_TOL_MIN) break;
+                if ((maxT - minT) < TRIGGER_GAP_MIN) break;
 
-                // Farthest stop in slowest cluster (boundary donor)
-                var srcC = clusters[maxIdx];
-                var farSi = -1, farD = -1;
-                for (var fsi = 0; fsi < srcC.stops.length; fsi++) {
-                    var fd = haversineMi(srcC.stops[fsi].lat, srcC.stops[fsi].lng, srcC.cx, srcC.cy);
-                    if (fd > farD) { farD = fd; farSi = fsi; }
-                }
-                if (farSi === -1) break;
-                var moveSt = srcC.stops[farSi];
-                var moveCW = Math.max(1, (moveSt.campers || []).length);
+                // Search every stop in every above-median cluster for the best move.
+                // Only stops whose nearest cross-cluster neighbor sits in a faster
+                // cluster are candidates (geographic adjacency guard).
+                var bestImprovement = MIN_IMPROVEMENT_MIN;
+                var bestSrcIdx = -1, bestSi = -1, bestTgtIdx = -1;
+                for (var srcI = 0; srcI < clusters.length; srcI++) {
+                    if (times[srcI] < maxT - MIN_IMPROVEMENT_MIN) continue; // only drain the slowest
+                    var srcClust = clusters[srcI];
+                    for (var si = 0; si < srcClust.stops.length; si++) {
+                        var stop = srcClust.stops[si];
+                        var stCW = Math.max(1, (stop.campers || []).length);
 
-                // Pick the target with the LOWEST time (pressure relief), respecting
-                // capacity + geographic reachability from the stop.
-                var bestTgt = -1, bestTgtTime = maxT;
-                for (var tti = 0; tti < clusters.length; tti++) {
-                    if (tti === maxIdx) continue;
-                    var tgtCap2 = sortedCaps ? sortedCaps[tti] : fallbackTarget;
-                    if (clusters[tti].cw + moveCW > tgtCap2) continue;
-                    var distToTgt = haversineMi(moveSt.lat, moveSt.lng, clusters[tti].cx, clusters[tti].cy);
-                    if (distToTgt > REACH_MI) continue;
-                    // Candidate: must be strictly faster than src so move reduces max-time
-                    if (times[tti] >= maxT - TIME_TOL_MIN) continue;
-                    if (times[tti] < bestTgtTime) { bestTgtTime = times[tti]; bestTgt = tti; }
-                }
-                if (bestTgt === -1) break; // no reachable faster cluster with room
+                        // (2) adjacency: nearest neighbor must be in a DIFFERENT cluster
+                        //     AND closer than the nearest same-cluster neighbor.
+                        var nearOther = nearestOtherClusterFor(stop, srcI);
+                        if (nearOther.idx === -1) continue;
+                        var nearSame = nearestSameClusterDist(stop, srcI, si);
+                        if (nearOther.dist >= nearSame) continue; // not on target's natural route
 
-                // Execute move
-                srcC.stops.splice(farSi, 1);
-                srcC.w  -= 1;
-                srcC.cw -= moveCW;
-                if (srcC.stops.length) {
-                    srcC.cx = srcC.stops.reduce(function(s, st) { return s + st.lat; }, 0) / srcC.stops.length;
-                    srcC.cy = srcC.stops.reduce(function(s, st) { return s + st.lng; }, 0) / srcC.stops.length;
+                        var tgtI = nearOther.idx;
+                        // (4) capacity
+                        var tgtCap = sortedCaps ? sortedCaps[tgtI] : fallbackTarget;
+                        if (clusters[tgtI].cw + stCW > tgtCap) continue;
+                        // target must be meaningfully faster than src
+                        if (times[tgtI] >= times[srcI] - MIN_IMPROVEMENT_MIN) continue;
+
+                        // (3) simulate
+                        var newSrcT = clusterTimeWithout(srcClust, si);
+                        var newTgtT = clusterTimeWith(clusters[tgtI], stop);
+                        // recompute overall max excluding src & tgt
+                        var otherMax = 0;
+                        for (var oi = 0; oi < clusters.length; oi++) {
+                            if (oi === srcI || oi === tgtI) continue;
+                            if (!clusters[oi].stops.length) continue;
+                            if (times[oi] > otherMax) otherMax = times[oi];
+                        }
+                        var newMax = Math.max(otherMax, newSrcT, newTgtT);
+                        var improvement = maxT - newMax;
+                        if (improvement > bestImprovement) {
+                            bestImprovement = improvement;
+                            bestSrcIdx = srcI; bestSi = si; bestTgtIdx = tgtI;
+                        }
+                    }
                 }
-                var tgtC = clusters[bestTgt];
-                tgtC.stops.push(moveSt);
-                tgtC.w  += 1;
-                tgtC.cw += moveCW;
-                tgtC.cx = tgtC.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgtC.stops.length;
-                tgtC.cy = tgtC.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgtC.stops.length;
+                if (bestSrcIdx === -1) break; // no move meets all criteria → done
+
+                // Execute the best move
+                var srcX = clusters[bestSrcIdx];
+                var movingStop = srcX.stops[bestSi];
+                var movingCW   = Math.max(1, (movingStop.campers || []).length);
+                srcX.stops.splice(bestSi, 1);
+                srcX.w  -= 1;
+                srcX.cw -= movingCW;
+                if (srcX.stops.length) {
+                    srcX.cx = srcX.stops.reduce(function(s, st) { return s + st.lat; }, 0) / srcX.stops.length;
+                    srcX.cy = srcX.stops.reduce(function(s, st) { return s + st.lng; }, 0) / srcX.stops.length;
+                }
+                var tgtX = clusters[bestTgtIdx];
+                tgtX.stops.push(movingStop);
+                tgtX.w  += 1;
+                tgtX.cw += movingCW;
+                tgtX.cx = tgtX.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgtX.stops.length;
+                tgtX.cy = tgtX.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgtX.stops.length;
                 durMoves++;
-                lastDurLog = { maxT: maxT, minT: minT };
             }
             if (durMoves > 0) {
                 var finalTimes = clusters.map(clusterTime);
@@ -4909,7 +5008,7 @@ let _toastTimer = null;
                     if (finalTimes[fi] < fMin) fMin = finalTimes[fi];
                 }
                 console.log('[Go] Duration balance: ' + durMoves + ' stop(s) moved — est time range ' +
-                    (lastDurLog ? lastDurLog.minT.toFixed(0) + '→' + lastDurLog.maxT.toFixed(0) : '?') +
+                    initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) +
                     ' min before, ' + fMin.toFixed(0) + '→' + fMax.toFixed(0) + ' min after');
             }
 
