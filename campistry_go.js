@@ -4266,15 +4266,18 @@ let _toastTimer = null;
             );
         }
 
-        // ── Helper: CAPACITATED K-medoids sub-cluster within a single ZIP ──
-        // Uses road distances (Geoapify) with haversine fallback.
-        // Enforces maxPerCluster = ceil(totalCampers / k) so no sub-cluster
-        // receives more campers than its fair share — preventing overcrowded buses.
+        // ── Helper: GEOGRAPHIC K-medoids sub-cluster with capacity balancing ──
+        // Phase 1: Pure geographic k-means → natural, compact geographic clusters.
+        // Phase 2: Capacity balancing — only moves BOUNDARY stops (closest to another
+        //          cluster) from overfull clusters to underfull ones, preserving the
+        //          geographic shape of each cluster as much as possible.
         async function geoSubCluster(stops, k, geoapifyKey) {
             if (stops.length <= k) return stops.map(s => [s]);
 
             const totalCampers  = stops.reduce((s, st) => s + (st.campers || []).length, 0);
-            const maxPerCluster = Math.ceil(totalCampers / k); // soft cap per sub-cluster
+            const maxPerCluster = Math.ceil(totalCampers / k); // capacity target per sub-cluster
+
+            // ── Phase 1: Geographic k-means to convergence ──
 
             // Farthest-point seed initialization (haversine — initial placement only)
             let seeds = [stops[0]];
@@ -4290,60 +4293,35 @@ let _toastTimer = null;
 
             let assignments = new Array(stops.length).fill(0);
 
-            // Up to 5 iterations using real road distances
-            for (let iter = 0; iter < 5; iter++) {
-                let distMatrix = null;
-                if (geoapifyKey) {
-                    try {
-                        distMatrix = await getRoadDistMatrix(seeds, stops, geoapifyKey);
-                    } catch (e) {
-                        console.warn('[Go] Road matrix failed (ZIP sub-cluster), using haversine:', e.message);
-                    }
+            // Fetch road distance matrix once (seeds → all stops)
+            let distMatrix = null;
+            if (geoapifyKey) {
+                try {
+                    distMatrix = await getRoadDistMatrix(seeds, stops, geoapifyKey);
+                } catch (e) {
+                    console.warn('[Go] Road matrix failed (ZIP sub-cluster), using haversine:', e.message);
                 }
+            }
 
-                const getDist = (c, i) => distMatrix
-                    ? (distMatrix[c]?.[i] ?? Infinity)
-                    : haversineMi(stops[i].lat, stops[i].lng, seeds[c].lat, seeds[c].lng);
+            const getDist = (seedIdx, stopIdx) => distMatrix
+                ? (distMatrix[seedIdx]?.[stopIdx] ?? Infinity)
+                : haversineMi(stops[stopIdx].lat, stops[stopIdx].lng, seeds[seedIdx].lat, seeds[seedIdx].lng);
 
-                // CAPACITATED assignment: process stops in order of confidence
-                // (closest to any seed first = most obvious assignments go first, leaving
-                //  hard-to-assign stops to fill in remaining capacity).
-                const clusterCampers = new Array(k).fill(0);
-                const newAssignments = new Array(stops.length).fill(-1);
-
-                const sortedIndices = stops.map((_, i) => i).sort((a, b) => {
-                    const da = Math.min(...seeds.map((_, c) => getDist(c, a)));
-                    const db = Math.min(...seeds.map((_, c) => getDist(c, b)));
-                    return da - db; // ascending: most-certain first
-                });
-
-                for (const i of sortedIndices) {
-                    const kidCount = (stops[i].campers || []).length;
-                    // Rank clusters by distance from this stop
-                    const ranked = seeds.map((_, c) => ({ c, d: getDist(c, i) }))
-                                        .sort((a, b) => a.d - b.d);
-                    // Assign to nearest cluster that still has capacity
-                    let assigned = false;
-                    for (const { c } of ranked) {
-                        if (clusterCampers[c] + kidCount <= maxPerCluster) {
-                            newAssignments[i] = c;
-                            clusterCampers[c] += kidCount;
-                            assigned = true;
-                            break;
-                        }
+            // Unconstrained geographic assignment — up to 8 iterations until stable
+            for (let iter = 0; iter < 8; iter++) {
+                let changed = false;
+                for (let i = 0; i < stops.length; i++) {
+                    let best = 0, bestDist = Infinity;
+                    for (let c = 0; c < seeds.length; c++) {
+                        const d = getDist(c, i);
+                        if (d < bestDist) { bestDist = d; best = c; }
                     }
-                    if (!assigned) {
-                        // All clusters full — assign to nearest regardless (graceful overflow)
-                        newAssignments[i] = ranked[0].c;
-                        clusterCampers[ranked[0].c] += kidCount;
-                    }
+                    if (assignments[i] !== best) { assignments[i] = best; changed = true; }
                 }
-
-                const changed = newAssignments.some((a, i) => a !== assignments[i]);
-                assignments = newAssignments;
                 if (!changed) break;
 
                 // Recompute seeds: geographic centroid → nearest actual stop in that cluster
+                const newSeeds = seeds.slice();
                 for (let c = 0; c < k; c++) {
                     const cs = stops.filter((_, i) => assignments[i] === c);
                     if (!cs.length) continue;
@@ -4354,8 +4332,66 @@ let _toastTimer = null;
                         const d = haversineMi(st.lat, st.lng, avgLat, avgLng);
                         if (d < nearestD) { nearestD = d; nearest = st; }
                     }
-                    seeds[c] = nearest;
+                    newSeeds[c] = nearest;
                 }
+
+                // Re-fetch matrix if seeds moved significantly
+                if (geoapifyKey && newSeeds.some((ns, c) => ns !== seeds[c])) {
+                    seeds = newSeeds;
+                    try {
+                        distMatrix = await getRoadDistMatrix(seeds, stops, geoapifyKey);
+                    } catch (e) { /* keep old matrix */ }
+                } else {
+                    seeds = newSeeds;
+                }
+            }
+
+            // ── Phase 2: Capacity balancing (boundary-stop transfers only) ──
+            // Moves stops from overfull → underfull clusters, always picking the stop
+            // that is closest to the destination cluster (boundary stop).
+            // This preserves the geographic core of each cluster.
+            for (let pass = 0; pass < stops.length; pass++) {
+                const camperCounts = Array.from({ length: k }, (_, c) =>
+                    stops.filter((_, i) => assignments[i] === c)
+                         .reduce((s, st) => s + (st.campers || []).length, 0));
+
+                // Find most-overfull cluster
+                let srcCluster = -1, maxExcess = 0;
+                for (let c = 0; c < k; c++) {
+                    const excess = camperCounts[c] - maxPerCluster;
+                    if (excess > maxExcess) { maxExcess = excess; srcCluster = c; }
+                }
+                if (srcCluster === -1) break; // all clusters within capacity
+
+                // Find underfull clusters (have room)
+                const underfull = Array.from({ length: k }, (_, c) => c)
+                    .filter(c => camperCounts[c] < maxPerCluster);
+                if (!underfull.length) break; // nowhere to move stops
+
+                // Gather stops in overfull cluster, ranked by proximity to any underfull cluster
+                const candidates = stops
+                    .map((st, i) => ({ i, kidCount: (st.campers || []).length }))
+                    .filter(x => assignments[x.i] === srcCluster)
+                    .map(x => ({
+                        ...x,
+                        nearestUnderfull: underfull
+                            .map(c => ({ c, d: getDist(c, x.i) }))
+                            .sort((a, b) => a.d - b.d)[0]
+                    }))
+                    .sort((a, b) => a.nearestUnderfull.d - b.nearestUnderfull.d); // boundary stops first
+
+                let moved = false;
+                for (const cand of candidates) {
+                    const target = underfull.find(c =>
+                        camperCounts[c] + cand.kidCount <= maxPerCluster &&
+                        getDist(c, cand.i) < Infinity);
+                    if (target !== undefined) {
+                        assignments[cand.i] = target;
+                        moved = true;
+                        break;
+                    }
+                }
+                if (!moved) break; // can't balance further
             }
 
             const clusters = Array.from({ length: k }, () => []);
