@@ -9163,13 +9163,39 @@
             // the solver picks the actual activity later.
             const periodCandidatesByGrade = {};
             const PACKER_STEP = 5; // 5-min granularity (handles 20/25/30/35/40 etc.)
-            const PACKER_MIN_SEG = 5;
+            const PACKER_DEFAULT_FLOOR = 10;
+            // Per-grade minimum segment, derived from the smallest layer
+            // durationMin across non-special / non-skip layers. Specials are
+            // pre-placed before the packer runs, so their durations don't
+            // belong in the gap-fill candidate pool.
+            const periodFloorByGrade = {};
+            const computeFloorForGrade = (grade) => {
+                if (periodFloorByGrade[grade] != null) return periodFloorByGrade[grade];
+                let floor = Infinity;
+                (layers || []).forEach(l => {
+                    const lg = l.grade || l.division || '';
+                    if (lg !== grade) return;
+                    const t = String(l.type || '').toLowerCase();
+                    if (SKIP_LAYER_TYPES.has(t)) return;
+                    if (t === 'special') return;
+                    const candidates = [l.durationMin, l.periodMin, l.duration]
+                        .map(v => parseInt(v, 10))
+                        .filter(v => !isNaN(v) && v > 0);
+                    if (!candidates.length) return;
+                    const lo = Math.min.apply(null, candidates);
+                    if (lo < floor) floor = lo;
+                });
+                if (!isFinite(floor)) floor = PACKER_DEFAULT_FLOOR;
+                periodFloorByGrade[grade] = floor;
+                return floor;
+            };
             const buildPeriodCandidates = (grade) => {
                 if (periodCandidatesByGrade[grade]) return periodCandidatesByGrade[grade];
+                const floor = computeFloorForGrade(grade);
                 const durations = new Set();
                 const addDur = (n) => {
                     if (typeof n !== 'number' || isNaN(n)) return;
-                    if (n < PACKER_MIN_SEG || n % PACKER_STEP !== 0) return;
+                    if (n < floor || n % PACKER_STEP !== 0) return;
                     durations.add(n);
                 };
                 (layers || []).forEach(l => {
@@ -9177,7 +9203,7 @@
                     if (lg !== grade) return;
                     const t = String(l.type || '').toLowerCase();
                     if (SKIP_LAYER_TYPES.has(t)) return;
-                    // Expand layer's min..max range in PACKER_STEP increments
+                    if (t === 'special') return; // specials are pre-placed; not a gap-fill option
                     const lMin = parseInt(l.durationMin || l.periodMin || l.duration || 0, 10);
                     const lMax = parseInt(l.durationMax || l.periodMin || l.duration || lMin, 10);
                     if (lMin > 0) {
@@ -9186,12 +9212,6 @@
                     }
                     addDur(parseInt(l.periodMin, 10));
                     addDur(parseInt(l.duration, 10));
-                });
-                Object.keys(activityProperties || {}).forEach(name => {
-                    try {
-                        const ds = getSpecialDurations(name, activityProperties, globalSettings);
-                        ds.forEach(d => addDur(parseInt(d, 10)));
-                    } catch (_e) {}
                 });
                 const cands = [...durations].sort((a,b)=>a-b).map(d => ({ activity: 'd' + d, durationMin: d }));
                 periodCandidatesByGrade[grade] = cands;
@@ -9204,9 +9224,10 @@
             const computeSegDurs = (grade, dur) => {
                 const key = grade + '_' + dur;
                 if (segDursCache[key]) return segDursCache[key];
+                const floor = computeFloorForGrade(grade);
                 let result = [dur];
                 do {
-                    if (dur < PACKER_MIN_SEG || dur % PACKER_STEP !== 0) break;
+                    if (dur < floor || dur % PACKER_STEP !== 0) break;
                     if (typeof window.PeriodPacker?.pack !== 'function') break;
                     const cands = buildPeriodCandidates(grade);
                     if (!cands.length) break;
@@ -9216,7 +9237,7 @@
                             periodLengthMin: dur,
                             candidates: cands,
                             maxSegments: 4,
-                            minSegmentMin: PACKER_MIN_SEG,
+                            minSegmentMin: floor,
                             granularityMin: PACKER_STEP,
                             allowRepeat: true,
                             // Prefer fewest segments first; tie-break by larger
