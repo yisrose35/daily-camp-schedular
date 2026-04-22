@@ -4824,62 +4824,79 @@ let _toastTimer = null;
                 tgt.cy = tgt.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt.stops.length;
             }
 
-            // ── Stop-count rebalancing: cap stops per cluster to bound ride time ──
-            // Ride time ≈ stopCount × serviceTime + drive time.  A 27-stop route
-            // has ~54 min of service time alone, guaranteeing the last pickup exceeds
-            // 45 min.  This pass donates boundary stops from over-crowded clusters to
-            // under-crowded neighbors, respecting both camper capacity and geographic
-            // proximity (2.5 mi max move — so territories stay clean).
-            var targetStops  = Math.ceil(stops.length / k);
-            var stopCap      = Math.ceil(targetStops * 1.2); // 20% above average
-            var maxMoveDistMi = 2.5;
-            var stopMoves    = 0;
-            for (var sbPass = 0; sbPass < stops.length * 2; sbPass++) {
-                // Find the cluster furthest over the stop cap
-                var overIdx = -1, maxOver = 0;
-                for (var i = 0; i < clusters.length; i++) {
-                    var over = clusters[i].stops.length - stopCap;
-                    if (over > maxOver) { maxOver = over; overIdx = i; }
-                }
-                if (overIdx === -1) break; // no cluster over cap → done
-
-                // Find best stop-in-overflow-cluster + target-undercrowded-cluster pair
-                var src = clusters[overIdx];
-                var bestSi = -1, bestDist = Infinity, bestTgtIdx = -1;
-                for (var si = 0; si < src.stops.length; si++) {
-                    var st   = src.stops[si];
-                    var stCW = Math.max(1, (st.campers || []).length);
-                    for (var ti = 0; ti < clusters.length; ti++) {
-                        if (ti === overIdx) continue;
-                        if (clusters[ti].stops.length >= stopCap) continue; // target already full-enough
-                        var tgtCap = sortedCaps ? sortedCaps[ti] : fallbackTarget;
-                        if (clusters[ti].cw + stCW > tgtCap) continue; // camper capacity
-                        var d = haversineMi(st.lat, st.lng, clusters[ti].cx, clusters[ti].cy);
-                        if (d > maxMoveDistMi) continue; // geographic guard
-                        if (d < bestDist) { bestDist = d; bestSi = si; bestTgtIdx = ti; }
+            // ── Spread rebalancing: cap cluster radius to bound ride time ──
+            // Ride time is driven by geographic spread, not stop count (5 far-flung
+            // stops > 15 tight stops).  For each cluster we compute max radius
+            // (farthest stop from centroid in miles).  We donate the worst
+            // outlier from the most-spread cluster to a neighboring cluster whose
+            // centroid is closer to that stop (respecting camper capacity).
+            var spreadMoves = 0;
+            var lastSpreadLog = null;
+            for (var spPass = 0; spPass < stops.length; spPass++) {
+                // Recompute per-cluster max radius
+                var radii = clusters.map(function(c) {
+                    if (!c.stops.length) return 0;
+                    var maxR = 0;
+                    for (var ri = 0; ri < c.stops.length; ri++) {
+                        var rd = haversineMi(c.stops[ri].lat, c.stops[ri].lng, c.cx, c.cy);
+                        if (rd > maxR) maxR = rd;
                     }
-                }
-                if (bestSi === -1) break; // no valid move — src has no stops close to any underfilled cluster
+                    return maxR;
+                });
+                var sortedR  = radii.slice().sort(function(a, b) { return a - b; });
+                var medianR  = sortedR[Math.floor(sortedR.length / 2)] || 0;
+                var radiusCap = Math.max(medianR * 1.3, 1.5); // allow 1.5 mi floor
 
-                // Execute the move
-                var movingStop = src.stops[bestSi];
-                var movingCW   = Math.max(1, (movingStop.campers || []).length);
-                src.stops.splice(bestSi, 1);
-                src.w  -= 1;
-                src.cw -= movingCW;
-                if (src.stops.length) {
-                    src.cx = src.stops.reduce(function(s, st) { return s + st.lat; }, 0) / src.stops.length;
-                    src.cy = src.stops.reduce(function(s, st) { return s + st.lng; }, 0) / src.stops.length;
+                // Find most-spread cluster above cap
+                var worstIdx = -1, worstR = radiusCap;
+                for (var ci = 0; ci < clusters.length; ci++) {
+                    if (radii[ci] > worstR) { worstR = radii[ci]; worstIdx = ci; }
                 }
-                var tgt2 = clusters[bestTgtIdx];
-                tgt2.stops.push(movingStop);
-                tgt2.w  += 1;
-                tgt2.cw += movingCW;
-                tgt2.cx = tgt2.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgt2.stops.length;
-                tgt2.cy = tgt2.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt2.stops.length;
-                stopMoves++;
+                if (worstIdx === -1) break;
+
+                // Find its farthest stop
+                var srcC = clusters[worstIdx];
+                var farSi = -1, farD = 0;
+                for (var fsi = 0; fsi < srcC.stops.length; fsi++) {
+                    var fd = haversineMi(srcC.stops[fsi].lat, srcC.stops[fsi].lng, srcC.cx, srcC.cy);
+                    if (fd > farD) { farD = fd; farSi = fsi; }
+                }
+                if (farSi === -1) break;
+
+                // Find target whose centroid is CLOSER to that stop, with capacity
+                var moveSt = srcC.stops[farSi];
+                var moveCW = Math.max(1, (moveSt.campers || []).length);
+                var bestTgt = -1, bestD = farD;
+                for (var tti = 0; tti < clusters.length; tti++) {
+                    if (tti === worstIdx) continue;
+                    var tgtCap2 = sortedCaps ? sortedCaps[tti] : fallbackTarget;
+                    if (clusters[tti].cw + moveCW > tgtCap2) continue;
+                    var td = haversineMi(moveSt.lat, moveSt.lng, clusters[tti].cx, clusters[tti].cy);
+                    if (td < bestD) { bestD = td; bestTgt = tti; }
+                }
+                if (bestTgt === -1) break; // nothing is closer with room → done
+
+                // Execute move
+                srcC.stops.splice(farSi, 1);
+                srcC.w  -= 1;
+                srcC.cw -= moveCW;
+                if (srcC.stops.length) {
+                    srcC.cx = srcC.stops.reduce(function(s, st) { return s + st.lat; }, 0) / srcC.stops.length;
+                    srcC.cy = srcC.stops.reduce(function(s, st) { return s + st.lng; }, 0) / srcC.stops.length;
+                }
+                var tgtC = clusters[bestTgt];
+                tgtC.stops.push(moveSt);
+                tgtC.w  += 1;
+                tgtC.cw += moveCW;
+                tgtC.cx = tgtC.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgtC.stops.length;
+                tgtC.cy = tgtC.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgtC.stops.length;
+                spreadMoves++;
+                lastSpreadLog = { cap: radiusCap, worst: worstR };
             }
-            if (stopMoves > 0) console.log('[Go] Stop-count balance: ' + stopMoves + ' stop(s) moved (cap ' + stopCap + ' stops/cluster)');
+            if (spreadMoves > 0) {
+                console.log('[Go] Spread balance: ' + spreadMoves + ' stop(s) moved (radius cap ≈ ' +
+                    (lastSpreadLog ? lastSpreadLog.cap.toFixed(2) : '?') + ' mi)');
+            }
 
             return clusters
                 .filter(function(c) { return c.stops.length > 0; })
