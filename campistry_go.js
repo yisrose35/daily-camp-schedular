@@ -4385,16 +4385,23 @@ let _toastTimer = null;
         }
 
         // ── Step 3: Adjust allocation to match available bus count ──
-        // Over-allocated → trim slack from ZIPs with lowest load ratio
+        // Over-allocated → trim slack from ZIPs with lowest load ratio,
+        // but NEVER below the minimum buses needed to keep each bus within capacity.
         while (totalAlloc > totalBuses) {
             const trimmable = zipList
-                .filter(g => busAlloc.get(g.zip) > 1)
+                .filter(g => {
+                    const minNeeded = Math.ceil(g.camperCount / effectiveCap);
+                    return busAlloc.get(g.zip) > Math.max(1, minNeeded); // never trim below capacity floor
+                })
                 .sort((a, b) => {
                     const slackA = busAlloc.get(a.zip) * effectiveCap - a.camperCount;
                     const slackB = busAlloc.get(b.zip) * effectiveCap - b.camperCount;
                     return slackB - slackA; // most slack first
                 });
-            if (!trimmable.length) break;
+            if (!trimmable.length) {
+                console.warn('[Go] ZIP alloc: cannot trim further without exceeding bus capacity — need more buses.');
+                break;
+            }
             busAlloc.set(trimmable[0].zip, busAlloc.get(trimmable[0].zip) - 1);
             totalAlloc--;
         }
