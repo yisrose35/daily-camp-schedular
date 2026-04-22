@@ -173,16 +173,84 @@ let _toastTimer = null;
     // All use drivingDist (driving seconds) for ordering, not haversine.
     // =========================================================================
 
-    /** Sort stops by driving distance from camp: farthest-first for arrival, nearest-first for dismissal */
+    /**
+     * Order stops using nearest-neighbor TSP heuristic + 2-opt improvement.
+     *
+     * Much better than the old 1D distance-from-camp sort, which produced
+     * routes that zigzagged (skipping a nearby stop, driving far away, then
+     * looping back). NN always moves to the closest unvisited stop, producing
+     * a coherent path with no unnecessary doubling-back.
+     *
+     * Dismissal: camp → nearest unvisited → ... → farthest stop
+     * Arrival:   reversed (bus starts farthest, works back toward camp)
+     *
+     * 2-opt sweeps remove remaining crossing segments (runs up to 3 passes,
+     * fast for the typical 8-20 stops per bus).
+     */
     function directionalSort(stops, campLat, campLng) {
-        if (stops.length < 2) return;
+        if (stops.length < 2) { stops.forEach((s, i) => { s.stopNum = i + 1; }); return; }
         const isArr = D.activeMode === 'arrival';
-        stops.forEach(s => {
-            s._dSort = (s.lat && s.lng) ? drivingDist(campLat, campLng, s.lat, s.lng) : 0;
-        });
-        if (isArr) stops.sort((a, b) => b._dSort - a._dSort);
-        else stops.sort((a, b) => a._dSort - b._dSort);
-        stops.forEach((s, i) => { s.stopNum = i + 1; delete s._dSort; });
+
+        // ── Nearest-neighbor heuristic (start from camp) ──
+        const visited = new Array(stops.length).fill(false);
+        const order = [];
+        let curLat = campLat, curLng = campLng;
+
+        for (let step = 0; step < stops.length; step++) {
+            let bestI = -1, bestD = Infinity;
+            for (let i = 0; i < stops.length; i++) {
+                if (visited[i]) continue;
+                const s = stops[i];
+                if (!s.lat || !s.lng) { if (bestI < 0) bestI = i; continue; }
+                const d = drivingDist(curLat, curLng, s.lat, s.lng);
+                if (d < bestD) { bestD = d; bestI = i; }
+            }
+            if (bestI < 0) break;
+            visited[bestI] = true;
+            order.push(bestI);
+            curLat = stops[bestI].lat || curLat;
+            curLng = stops[bestI].lng || curLng;
+        }
+
+        // Arrival: bus picks up from farthest point → toward camp, so reverse
+        if (isArr) order.reverse();
+
+        // Rearrange stops in-place according to NN order
+        const orig = stops.slice();
+        for (let i = 0; i < order.length; i++) {
+            stops[i] = orig[order[i]];
+            stops[i].stopNum = i + 1;
+        }
+
+        // ── 2-opt improvement (up to 3 passes) ──
+        // Reverses sub-sequences that would shorten the total path.
+        // Eliminates crossing segments that NN can introduce.
+        for (let pass = 0; pass < 3; pass++) {
+            let improved = false;
+            for (let i = 0; i < stops.length - 1; i++) {
+                for (let j = i + 1; j < stops.length; j++) {
+                    const sA = stops[i], sB = stops[j];
+                    if (!sA.lat || !sB.lat) continue;
+                    const prevLat = i === 0 ? campLat : (stops[i - 1].lat || campLat);
+                    const prevLng = i === 0 ? campLng : (stops[i - 1].lng || campLng);
+                    const nextLat = j === stops.length - 1 ? campLat : (stops[j + 1].lat || campLat);
+                    const nextLng = j === stops.length - 1 ? campLng : (stops[j + 1].lng || campLng);
+                    const before = drivingDist(prevLat, prevLng, sA.lat, sA.lng) +
+                                   drivingDist(sB.lat, sB.lng, nextLat, nextLng);
+                    const after  = drivingDist(prevLat, prevLng, sB.lat, sB.lng) +
+                                   drivingDist(sA.lat, sA.lng, nextLat, nextLng);
+                    if (after < before * 0.99) { // accept 1%+ improvement
+                        // Reverse stops[i..j]
+                        let lo = i, hi = j;
+                        while (lo < hi) { const t = stops[lo]; stops[lo] = stops[hi]; stops[hi] = t; lo++; hi--; }
+                        stops.forEach((s, idx) => { s.stopNum = idx + 1; });
+                        improved = true;
+                    }
+                }
+            }
+            if (!improved) break;
+        }
+        stops.forEach((s, i) => { s.stopNum = i + 1; });
     }
 
     /** Insert a stop at the directionally correct position (by driving distance from camp) */
@@ -4508,17 +4576,18 @@ let _toastTimer = null;
             return t;
         }
 
-        // Strategy: aggressive minimax — for each pass, find the slowest
-        // cluster, try moving every one of its stops to EVERY OTHER cluster.
-        // Accept the move that produces the lowest new max time (across all
-        // clusters). The minimax itself guards against bad moves — no need
-        // for rigid compactness checks.
+        // Strategy: minimax — for each pass, find the slowest cluster and try
+        // moving each of its stops to every other cluster. Accept whichever
+        // move produces the lowest new global-max route time.
         //
-        // "On the way" is implicit: moving a stop to a cluster naturally
-        // looks at the full route time AFTER the move. If a stop is truly
-        // on-the-way for the receiving cluster, adding it barely increases
-        // that cluster's time (small detour cost), so the move gets accepted.
-        var TIME_GAP_THRESHOLD_SEC = 8 * 60; // tighter threshold — 8min gap
+        // GEOGRAPHIC GUARD (added to prevent cross-city detours):
+        // A stop may only move to a target cluster if it is geographically
+        // close to that cluster. "Close" = driving distance to target medoid
+        // is no more than MAX_DIST_RATIO × driving distance to own medoid.
+        // This prevents a Lakewood stop from being pushed onto a Toms River
+        // bus just to shave a few minutes off the time imbalance.
+        var TIME_GAP_THRESHOLD_SEC = 15 * 60; // only rebalance if gap > 15min
+        var MAX_DIST_RATIO = 1.5; // stop must be within 1.5× of target vs own medoid
         var tbMoves = 0;
         for (var tbPass = 0; tbPass < 200; tbPass++) {
             var times = clusters.map(_routeTimeEst);
@@ -4541,11 +4610,22 @@ let _toastTimer = null;
             for (var mi = 0; mi < clusters[slowI].length; mi++) {
                 var cand = clusters[slowI][mi];
 
+                // Distance from candidate stop to its own cluster's medoid
+                var distToOwn = sd(cand, seeds[slowI]);
+
                 for (var tgt = 0; tgt < clusters.length; tgt++) {
                     if (tgt === slowI) continue;
                     if (clusters[tgt].length === 0) continue;
                     // Capacity check
                     if (clusterKids[tgt] + kidCount[cand] > maxClusterCap) continue;
+
+                    // ── Geographic guard ─────────────────────────────────────
+                    // Reject if the candidate is significantly farther from the
+                    // target medoid than from its own medoid. This keeps stops
+                    // in their geographic zone — a Lakewood stop won't move to
+                    // a Toms River cluster just because times are imbalanced.
+                    var distToTgt = sd(cand, seeds[tgt]);
+                    if (distToTgt > distToOwn * MAX_DIST_RATIO) continue;
 
                     // Estimate new times for donor and receiver
                     var newSlowStops = clusters[slowI].filter(function(_, idx) { return idx !== mi; });
@@ -4625,9 +4705,9 @@ let _toastTimer = null;
         // on the way from camp to the cluster (narrow angle-cone + closer to camp).
         // Hard cap on expansion prevents chain-stretching where each move widens the
         // cluster and each subsequent move passes using the new (wider) bound.
-        var HARD_RADIUS_CAP_SEC = 8 * 60; // never allow >8min driving from medoid
-        var CONE_DEGREES = 20;            // narrow wedge for "on the way"
-        var AREA_BUFFER = 1.15;           // tight buffer around cluster area
+        var HARD_RADIUS_CAP_SEC = 5 * 60; // never allow >5min driving from medoid
+        var CONE_DEGREES = 15;            // narrow wedge for "on the way"
+        var AREA_BUFFER = 1.1;            // tight buffer around cluster area
         function stopInServiceArea(stopIdx, clusterIdx) {
             if (!clusters[clusterIdx].length) return true; // empty cluster — anything OK
             var sLat = stops[stopIdx].lat, sLng = stops[stopIdx].lng;
