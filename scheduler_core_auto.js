@@ -9349,7 +9349,7 @@
                             break;
                         }
                     });
-                    const fixedSlots = oldSlots.filter(s => {
+                    let fixedSlots = oldSlots.filter(s => {
                         const t = String(s.type || '').toLowerCase();
                         if (PERIOD_HARD_FIXED.has(t)) return true;
                         if (PERIOD_SOFT_FIXED.has(t) || s._fixed) {
@@ -9357,10 +9357,9 @@
                                 evictedBlocks.push({
                                     grade, bunk: String(bunk),
                                     name: s.event || s._assignedSpecial || '(unknown)',
-                                    type: t, startMin: s.startMin, endMin: s.endMin
+                                    type: t, startMin: s.startMin, endMin: s.endMin,
+                                    reason: 'crosses period boundary'
                                 });
-                                // Also evict from bunkTimelines so the special-write
-                                // loop later doesn't try to re-place it.
                                 if (Array.isArray(bunkTimelines[bunk])) {
                                     bunkTimelines[bunk] = bunkTimelines[bunk].filter(b =>
                                         !(b.startMin === s.startMin && b.endMin === s.endMin)
@@ -9372,6 +9371,83 @@
                         }
                         return false;
                     });
+
+                    // Pass C: fillability check. A soft-fixed event is only
+                    // allowed to stay in a period if every remaining gap can
+                    // be cleanly packed by the per-grade duration pool. If
+                    // even one gap is unpackable (e.g., 25-min special leaves
+                    // a 15-min remainder when the floor is 20), evict the
+                    // soft-fixed event so the period re-carves cleanly.
+                    const floor = computeFloorForGrade(grade);
+                    const cands = buildPeriodCandidates(grade);
+                    const isGapPackable = (gap) => {
+                        if (gap <= 0) return true;
+                        if (gap < floor) return false;
+                        if (gap % PACKER_STEP !== 0) return false;
+                        if (!cands.length || typeof window.PeriodPacker?.pack !== 'function') return true;
+                        try {
+                            const ps = window.PeriodPacker.pack({
+                                periodLengthMin: gap,
+                                candidates: cands,
+                                maxSegments: 4,
+                                minSegmentMin: floor,
+                                granularityMin: PACKER_STEP,
+                                allowRepeat: true,
+                                topN: 1
+                            });
+                            return ps.length > 0;
+                        } catch (_e) { return false; }
+                    };
+                    const computeGapsAround = (period, blocks) => {
+                        const inside = blocks
+                            .filter(f => f.startMin < period.endMin && f.endMin > period.startMin)
+                            .sort((a, b) => a.startMin - b.startMin);
+                        const gaps = [];
+                        let cursor = period.startMin;
+                        inside.forEach(f => {
+                            if (f.startMin > cursor) gaps.push(f.startMin - cursor);
+                            cursor = Math.max(cursor, f.endMin);
+                        });
+                        if (cursor < period.endMin) gaps.push(period.endMin - cursor);
+                        return gaps;
+                    };
+                    // For each soft-fixed slot in fixedSlots, check whether
+                    // removing it would make its containing period(s) packable.
+                    // Iterate until no more evictions happen (cascades).
+                    let changed = true;
+                    while (changed) {
+                        changed = false;
+                        for (const s of fixedSlots) {
+                            const t = String(s.type || '').toLowerCase();
+                            if (!PERIOD_SOFT_FIXED.has(t) && !s._fixed) continue;
+                            if (PERIOD_HARD_FIXED.has(t)) continue;
+                            // Find period containing this slot
+                            const containing = periods.find(p =>
+                                s.startMin >= p.startMin && s.endMin <= p.endMin
+                            );
+                            if (!containing) continue;
+                            const gapsWith = computeGapsAround(containing, fixedSlots);
+                            if (gapsWith.every(isGapPackable)) continue;
+                            const others = fixedSlots.filter(o => o !== s);
+                            const gapsWithout = computeGapsAround(containing, others);
+                            if (!gapsWithout.every(isGapPackable)) continue;
+                            // Eviction is beneficial: removing s makes the period packable.
+                            evictedBlocks.push({
+                                grade, bunk: String(bunk),
+                                name: s.event || s._assignedSpecial || '(unknown)',
+                                type: t, startMin: s.startMin, endMin: s.endMin,
+                                reason: 'remainder gap unpackable (floor=' + floor + ')'
+                            });
+                            if (Array.isArray(bunkTimelines[bunk])) {
+                                bunkTimelines[bunk] = bunkTimelines[bunk].filter(b =>
+                                    !(b.startMin === s.startMin && b.endMin === s.endMin)
+                                );
+                            }
+                            fixedSlots = others;
+                            changed = true;
+                            break; // restart loop with updated fixedSlots
+                        }
+                    }
                     const periodSlots = [];
                     periods.forEach(period => {
                         if (period.startMin >= period.endMin) return;
@@ -9407,12 +9483,13 @@
                     multiSegSlots + ' periods split into multi-segment)');
             }
             if (evictedBlocks.length > 0) {
-                warn('[2.75] Evicted ' + evictedBlocks.length + ' pre-placed block(s) that crossed period boundaries:');
+                warn('[2.75] Evicted ' + evictedBlocks.length + ' pre-placed block(s):');
                 evictedBlocks.forEach(e => {
                     warn('  - ' + e.grade + '/' + e.bunk + ': ' + e.name + ' (' + e.type + ') @ ' +
-                         minutesToTimeLabel(e.startMin) + '-' + minutesToTimeLabel(e.endMin));
+                         minutesToTimeLabel(e.startMin) + '-' + minutesToTimeLabel(e.endMin) +
+                         '  [' + (e.reason || 'unknown') + ']');
                 });
-                warnings.push('Bell schedule: ' + evictedBlocks.length + ' pre-placed activity/activities removed for crossing period boundaries (see console).');
+                warnings.push('Bell schedule: ' + evictedBlocks.length + ' pre-placed activity/activities removed (period violation or unpackable remainder).');
             }
         } catch (e) {
             warn('[2.75] Period override failed: ' + e.message);
