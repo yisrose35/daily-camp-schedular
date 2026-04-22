@@ -9223,11 +9223,17 @@
             const segDursCache = {};
             const computeSegDurs = (grade, dur) => {
                 const key = grade + '_' + dur;
-                if (segDursCache[key]) return segDursCache[key];
+                if (segDursCache[key] !== undefined) return segDursCache[key];
                 const floor = computeFloorForGrade(grade);
+                // Sub-floor or non-step gaps are dropped: emitting a slot
+                // shorter than the layer's minimum would let the solver place
+                // an undersized activity. Better to leave the time empty.
+                if (dur < floor || dur % PACKER_STEP !== 0) {
+                    segDursCache[key] = [];
+                    return [];
+                }
                 let result = [dur];
                 do {
-                    if (dur < floor || dur % PACKER_STEP !== 0) break;
                     if (typeof window.PeriodPacker?.pack !== 'function') break;
                     const cands = buildPeriodCandidates(grade);
                     if (!cands.length) break;
@@ -9285,6 +9291,12 @@
                 if (!periods || periods.length === 0) return;
                 const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
                 if (!pbs) return;
+                // Diagnostic: show what floor + candidate pool this grade
+                // is using so it's obvious if a stray small-min layer is
+                // pulling the floor down below user expectation.
+                const _floorDiag = computeFloorForGrade(grade);
+                const _candsDiag = buildPeriodCandidates(grade).map(c => c.durationMin);
+                log('[2.75] ' + grade + ' floor=' + _floorDiag + 'min, candidates=[' + _candsDiag.join(',') + ']');
                 // Pre-compute period boundary points for "crosses boundary" test
                 const boundaries = [];
                 periods.forEach(p => { boundaries.push(p.startMin); boundaries.push(p.endMin); });
