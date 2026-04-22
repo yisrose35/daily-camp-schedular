@@ -185,6 +185,130 @@
     });
   }
 
+  // ─── Copy modal ────────────────────────────────────────────────────────────
+
+  function showCopyModal(sourceGrade, onApply) {
+    const divisions = window.divisions || {};
+    const grades = Object.keys(divisions)
+      .filter(d => !divisions[d].isParent && d !== sourceGrade)
+      .sort((a, b) => {
+        const na = parseInt(a), nb = parseInt(b);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return a.localeCompare(b);
+      });
+    if (grades.length === 0) {
+      alert('No other grades to copy to.');
+      return;
+    }
+    const sourcePeriods = window.campPeriods[sourceGrade] || [];
+    if (sourcePeriods.length === 0) {
+      alert('Source grade has no periods to copy.');
+      return;
+    }
+
+    // Remove any existing modal
+    document.querySelectorAll('.pe-copy-overlay').forEach(el => el.remove());
+
+    const overlay = document.createElement('div');
+    overlay.className = 'pe-copy-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'background:#fff;border-radius:12px;max-width:460px;width:100%;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;';
+    overlay.appendChild(modal);
+
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:20px 24px 4px;';
+    header.innerHTML = `
+      <h3 style="margin:0 0 4px;font-size:16px;color:#1e293b;">Copy Bell Schedule</h3>
+      <p style="margin:0;font-size:13px;color:#64748b;">
+        Copy <strong>${sourcePeriods.length}</strong> period${sourcePeriods.length !== 1 ? 's' : ''}
+        from <strong>Grade ${sourceGrade}</strong> to:
+      </p>
+    `;
+    modal.appendChild(header);
+
+    const body = document.createElement('div');
+    body.style.cssText = 'padding:12px 24px;flex:1;overflow-y:auto;';
+    modal.appendChild(body);
+
+    const selected = new Set();
+
+    grades.forEach(g => {
+      const existingCount = (window.campPeriods[g] || []).length;
+      const row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;user-select:none;margin-bottom:6px;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.style.cssText = 'width:16px;height:16px;accent-color:#3b82f6;';
+      cb.onchange = () => {
+        if (cb.checked) selected.add(g); else selected.delete(g);
+        applyBtn.disabled = selected.size === 0;
+      };
+      const label = document.createElement('span');
+      label.style.cssText = 'font-size:14px;color:#1f2937;flex:1;';
+      label.textContent = `Grade ${g}`;
+      row.appendChild(cb);
+      row.appendChild(label);
+      if (existingCount > 0) {
+        const warn = document.createElement('span');
+        warn.style.cssText = 'font-size:11px;color:#d97706;';
+        warn.textContent = `${existingCount} period${existingCount !== 1 ? 's' : ''} (will be replaced)`;
+        row.appendChild(warn);
+      }
+      body.appendChild(row);
+    });
+
+    // Select-all link
+    const selectAllRow = document.createElement('div');
+    selectAllRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:4px;';
+    const selectAllBtn = document.createElement('button');
+    selectAllBtn.textContent = 'Select All';
+    selectAllBtn.style.cssText = 'font-size:12px;color:#3b82f6;background:none;border:none;cursor:pointer;text-decoration:underline;font-weight:600;';
+    selectAllBtn.onclick = () => {
+      body.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = true;
+        selected.add(cb.parentElement.querySelector('span').textContent.replace('Grade ', ''));
+      });
+      applyBtn.disabled = false;
+    };
+    selectAllRow.appendChild(selectAllBtn);
+    body.appendChild(selectAllRow);
+
+    const footer = document.createElement('div');
+    footer.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;padding:14px 24px;border-top:1px solid #e5e7eb;background:#f8fafc;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = 'background:#fff;color:#1e293b;border:1px solid #cbd5e1;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;';
+    cancelBtn.onclick = () => overlay.remove();
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = 'Copy';
+    applyBtn.disabled = true;
+    applyBtn.style.cssText = 'background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;';
+    applyBtn.onclick = () => {
+      if (selected.size === 0) return;
+      // Deep-copy source periods, regenerate ids per target so each grade
+      // has its own period instances.
+      selected.forEach(targetGrade => {
+        const copies = sourcePeriods.map(p => ({
+          id: uid(),
+          name: p.name,
+          startMin: p.startMin,
+          endMin: p.endMin
+        }));
+        setPeriodsForDiv(targetGrade, copies);
+      });
+      overlay.remove();
+      if (typeof onApply === 'function') onApply();
+    };
+    footer.appendChild(cancelBtn);
+    footer.appendChild(applyBtn);
+    modal.appendChild(footer);
+
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.body.appendChild(overlay);
+  }
+
   // ─── Editor UI ─────────────────────────────────────────────────────────────
 
   function renderEditor(containerEl) {
@@ -262,10 +386,13 @@
       `;
       detail.appendChild(hdr);
 
-      // Add period button
+      // Action row: Add + Copy
+      const actionRow = document.createElement('div');
+      actionRow.style.cssText = 'display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;';
+
       const addBtn = document.createElement('button');
       addBtn.textContent = '+ Add Period';
-      addBtn.style.cssText = 'background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:16px;';
+      addBtn.style.cssText = 'background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;';
       addBtn.onclick = () => {
         // Default: place after last period or start of division
         const lastPeriod = periods[periods.length - 1];
@@ -280,7 +407,20 @@
         renderGradeDetail();
         renderGradeSidebar();
       };
-      detail.appendChild(addBtn);
+      actionRow.appendChild(addBtn);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.textContent = 'Copy to Grades…';
+      copyBtn.style.cssText = 'background:#fff;color:#1e293b;border:1px solid #cbd5e1;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;';
+      copyBtn.disabled = periods.length === 0 || grades.length < 2;
+      if (copyBtn.disabled) copyBtn.style.opacity = '0.5';
+      copyBtn.onclick = () => showCopyModal(activeGrade, () => {
+        renderGradeSidebar();
+        renderGradeDetail();
+      });
+      actionRow.appendChild(copyBtn);
+
+      detail.appendChild(actionRow);
 
       if (periods.length === 0) {
         const empty = document.createElement('p');
