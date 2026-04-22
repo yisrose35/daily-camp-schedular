@@ -4623,7 +4623,9 @@ let _toastTimer = null;
 
         // ── Bus allocation per ZIP ──
         var busTrueEffCaps = buses.map(function(b) {
-            var bid  = b.busId || b.id;
+            // If already a vehicle object (has busId), capacity is pre-computed effective
+            if (b.busId) return Math.max(1, b.capacity || 44);
+            var bid  = b.id;
             var mon  = (D.monitors  || []).find(function(m) { return m.assignedBus === bid; });
             var cous = (D.counselors || []).filter(function(c) { return c.assignedBus === bid; });
             var brs  = (b.reserveMode === 'custom' && b.reserveSeats != null) ? b.reserveSeats : (reserveSeats || 0);
@@ -5820,7 +5822,7 @@ async function generateRoutes() {
             // Buses never cross ZIP boundaries → no cross-zone routing.
             if (googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours) {
                 const googleZipRoutes = await buildRoutesByZipGoogle(
-                    allStops, shiftBuses, campLat, campLng, reserveSeats, {
+                    allStops, shiftVehicles, campLat, campLng, reserveSeats, {
                         googleKey:      googleKey,
                         googleProjId:   googleProjId,
                         isArrival:      isArrival,
