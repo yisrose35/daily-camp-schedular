@@ -1555,7 +1555,12 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   html += '</div>'; // relative container
   
   gridEl.innerHTML = html;
-  
+
+  // Overlay period blocks from bell schedule
+  if (typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+    window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+  }
+
   // Bind events
   bindDAWEvents(gridEl, globalStart, globalEnd, { layerSource, onSave, onRender, isExternal });
 }
@@ -3364,6 +3369,15 @@ window.MasterSchedulerInternal = {
   DAW_LAYER_TYPES: DAW_LAYER_TYPES,
   DAW_PIXELS_PER_MINUTE: DAW_PIXELS_PER_MINUTE,
 };
+
+  // Re-overlay period blocks whenever the bell schedule changes
+  window.addEventListener('campistry-periods-changed', function() {
+    const gridEl = document.getElementById('daw-grid');
+    if (gridEl && typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+      window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+    }
+  });
+
   // Listen for mode changes from Setup & Config
   window.addEventListener('campistry-builder-mode-changed', (e) => {
     const newMode = e.detail?.mode;

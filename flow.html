@@ -248,6 +248,9 @@
                     </button>
 
                     <div class="sidebar-label" style="margin-top:12px;">Scheduling</div>
+                    <button class="sidebar-item" data-tab="bell-schedule">
+                        <span class="sidebar-dot"></span> Bell Schedule
+                    </button>
                     <button class="sidebar-item" data-tab="master-scheduler">
                         <span class="sidebar-dot"></span> Master Scheduler
                     </button>
@@ -422,6 +425,14 @@
                 <div id="leagues" class="tab-content"></div>
                <div id="specialty-leagues" class="tab-content"></div>
                 <div id="rules" class="tab-content"></div>
+
+                <div id="bell-schedule" class="tab-content" style="display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;">
+                    <div style="padding:20px 24px 12px;border-bottom:1px solid #e2e8f0;flex-shrink:0;">
+                        <h3 style="margin:0 0 4px;font-size:16px;color:#1e293b;">Bell Schedule</h3>
+                        <p style="margin:0;font-size:13px;color:#64748b;">Define period start/end times per grade. The auto-builder will pack activities into each period exactly.</p>
+                    </div>
+                    <div id="bell-schedule-content" style="flex:1;overflow:hidden;display:flex;"></div>
+                </div>
 
                 <div id="master-scheduler" class="tab-content">
                     <!-- MULTI-SCHEDULER: Subdivision Status Panel will be inserted here -->
@@ -652,6 +663,7 @@
 <script src="specialty_leagues.js"></script>
 <script src="master_schedule_builder.js"></script>
     <script src="auto_field_locks.js"></script>
+<script src="period_editor.js"></script>
 <script src="auto_segment_model.js"></script>
 <script src="period_packer.js"></script>
 <script src="auto_solver_engine.js"></script>
@@ -728,6 +740,10 @@ function showTab(id) {
     );
 
     if (id === "setup") window.initApp1?.();
+    if (id === "bell-schedule") {
+        const bsContent = document.getElementById('bell-schedule-content');
+        if (bsContent) window.PeriodEditor?.renderEditor(bsContent);
+    }
     if (id === "facilities") window.initFacilitiesTab?.();
     if (id === "zones") window.initZonesTab?.();
     if (id === "leagues") window.initLeagues?.();

@@ -1906,6 +1906,12 @@ function renderDAWTimeline(gridEl) {
   overlayTripsOnDAW(gridEl);
   requestAnimationFrame(function() { overlayTripsOnDAW(gridEl); });
   setTimeout(function() { overlayTripsOnDAW(gridEl); }, 200);
+
+  // ★ Overlay period blocks from bell schedule
+  if (typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+    window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+    requestAnimationFrame(function() { window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl); });
+  }
 }
 
 function overlayTripsOnDAW(gridEl) {
