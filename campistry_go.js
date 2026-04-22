@@ -4219,7 +4219,7 @@ let _toastTimer = null;
     //
     // Returns null if no ZIP data is available (caller falls back to buildGreedyZones).
     // =========================================================================
-    function buildZipBasedZones(allStops, buses, campLat, campLng, reserveSeats) {
+    async function buildZipBasedZones(allStops, buses, campLat, campLng, reserveSeats, geoapifyKey) {
         if (!allStops.length || !buses.length) return null;
 
         // ── Helper: get ZIP for a corner stop (majority vote on campers) ──
@@ -4246,43 +4246,86 @@ let _toastTimer = null;
             };
         }
 
-        // ── Helper: K-means sub-cluster within a single ZIP ──
-        function geoSubCluster(stops, k, maxCap) {
+        // ── Helper: road distance matrix via Geoapify ──
+        // Returns matrix[seedIdx][stopIdx] = driving seconds (Infinity on error).
+        // Coordinates are [lng, lat] per GeoJSON convention.
+        async function getRoadDistMatrix(seedStops, allStops, apiKey) {
+            const body = {
+                mode: 'drive',
+                sources: seedStops.map(s => ({ location: [s.lng, s.lat] })),
+                targets: allStops.map(s => ({ location: [s.lng, s.lat] }))
+            };
+            const resp = await fetch(
+                'https://api.geoapify.com/v1/routematrix?apiKey=' + encodeURIComponent(apiKey),
+                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+            );
+            if (!resp.ok) throw new Error('Matrix API ' + resp.status);
+            const data = await resp.json();
+            return (data.sources_to_targets || []).map(row =>
+                (row || []).map(cell => (cell && cell.time != null ? cell.time : Infinity))
+            );
+        }
+
+        // ── Helper: K-medoids sub-cluster within a single ZIP using road distances ──
+        // Falls back to haversine if Geoapify matrix unavailable.
+        async function geoSubCluster(stops, k, geoapifyKey) {
             if (stops.length <= k) return stops.map(s => [s]);
-            // Farthest-point seed initialization
-            const seeds = [{ lat: stops[0].lat, lng: stops[0].lng }];
+
+            // Farthest-point seed initialization (haversine — just for initial placement)
+            let seeds = [stops[0]];
             while (seeds.length < k) {
                 let farthest = null, farthestDist = -1;
                 for (const stop of stops) {
+                    if (seeds.includes(stop)) continue;
                     const minDist = Math.min(...seeds.map(s => haversineMi(stop.lat, stop.lng, s.lat, s.lng)));
                     if (minDist > farthestDist) { farthestDist = minDist; farthest = stop; }
                 }
-                if (farthest) seeds.push({ lat: farthest.lat, lng: farthest.lng });
-                else break;
+                if (farthest) seeds.push(farthest); else break;
             }
-            // K-means iterations
+
             let assignments = new Array(stops.length).fill(0);
-            for (let iter = 0; iter < 20; iter++) {
+
+            // Up to 3 iterations using real road distances from Geoapify matrix
+            for (let iter = 0; iter < 3; iter++) {
+                // Get road distances: seeds → all stops
+                let distMatrix = null;
+                if (geoapifyKey) {
+                    try {
+                        distMatrix = await getRoadDistMatrix(seeds, stops, geoapifyKey);
+                    } catch (e) {
+                        console.warn('[Go] Road matrix failed (ZIP sub-cluster), using haversine:', e.message);
+                    }
+                }
+
+                // Assign each stop to nearest seed
                 let changed = false;
                 for (let i = 0; i < stops.length; i++) {
                     let best = 0, bestDist = Infinity;
                     for (let c = 0; c < seeds.length; c++) {
-                        const d = haversineMi(stops[i].lat, stops[i].lng, seeds[c].lat, seeds[c].lng);
+                        const d = distMatrix
+                            ? (distMatrix[c]?.[i] ?? Infinity)
+                            : haversineMi(stops[i].lat, stops[i].lng, seeds[c].lat, seeds[c].lng);
                         if (d < bestDist) { bestDist = d; best = c; }
                     }
                     if (assignments[i] !== best) { assignments[i] = best; changed = true; }
                 }
                 if (!changed) break;
-                // Recompute centroids
+
+                // Recompute seeds: geographic centroid → nearest actual stop in that cluster
                 for (let c = 0; c < k; c++) {
                     const cs = stops.filter((_, i) => assignments[i] === c);
                     if (!cs.length) continue;
-                    seeds[c] = {
-                        lat: cs.reduce((s, st) => s + st.lat, 0) / cs.length,
-                        lng: cs.reduce((s, st) => s + st.lng, 0) / cs.length
-                    };
+                    const avgLat = cs.reduce((s, st) => s + st.lat, 0) / cs.length;
+                    const avgLng = cs.reduce((s, st) => s + st.lng, 0) / cs.length;
+                    let nearest = cs[0], nearestD = Infinity;
+                    for (const st of cs) {
+                        const d = haversineMi(st.lat, st.lng, avgLat, avgLng);
+                        if (d < nearestD) { nearestD = d; nearest = st; }
+                    }
+                    seeds[c] = nearest;
                 }
             }
+
             const clusters = Array.from({ length: k }, () => []);
             for (let i = 0; i < stops.length; i++) clusters[assignments[i]].push(stops[i]);
             return clusters.filter(c => c.length > 0);
@@ -4377,7 +4420,7 @@ let _toastTimer = null;
             if (numBusesForZip <= 1 || group.stops.length <= 1) {
                 allZones.push({ stops: group.stops.slice(), camperCount: group.camperCount, zip: group.zip });
             } else {
-                const subClusters = geoSubCluster(group.stops, numBusesForZip, effectiveCap);
+                const subClusters = await geoSubCluster(group.stops, numBusesForZip, geoapifyKey);
                 for (const cluster of subClusters) {
                     allZones.push({
                         stops:       cluster,
@@ -5515,7 +5558,7 @@ async function generateRoutes() {
             showProgress((shift.label || 'Shift ' + (si + 1)) + ': clustering stops into bus zones...', pctBase + 25);
 
             // Try ZIP-first clustering; fall back to K-medoids if no ZIP data
-            const zones = buildZipBasedZones(allStops, shiftBuses, campLat, campLng, reserveSeats)
+            const zones = await buildZipBasedZones(allStops, shiftBuses, campLat, campLng, reserveSeats, geoapifyKey)
                        || buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
             const clusterMethod = zones[0]?.zip ? 'ZIP-based' : 'K-medoids';
             console.log('[Go] ' + clusterMethod + ': ' + zones.length + ' geographic zones from ' + allStops.length + ' stops');
