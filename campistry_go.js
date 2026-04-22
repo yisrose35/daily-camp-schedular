@@ -2348,6 +2348,11 @@ let _toastTimer = null;
                 return null;
             })();
 
+            // USPS carrier route — e.g. "C006" (city), "R014" (rural), "H003" (highway)
+            // This is the USPS-defined delivery zone: one carrier, one shift, density-adaptive.
+            // C routes = dense urban (a few blocks), R routes = suburban/rural (many miles).
+            const carrierRoute = usps.carrierRoute || null;
+
             return {
                 lat, lng,
                 confidence:  Math.min(Math.max(confidence, 0), 1),
@@ -2357,6 +2362,7 @@ let _toastTimer = null;
                 zip:         retZip,
                 corrected,
                 neighborhood,
+                carrierRoute,
                 _dpv:        dpv,
                 _granularity: gran
             };
@@ -2489,7 +2495,8 @@ let _toastTimer = null;
         a._geocodePrecision = result.precision || 'unknown';
         a._crossValidated = result._crossValidated || false;
         a._zipMismatch = (result.zipMatch === false);
-        if (result.neighborhood) a.neighborhood = result.neighborhood;
+        if (result.neighborhood)   a.neighborhood   = result.neighborhood;
+        if (result.carrierRoute)   a.carrierRoute   = result.carrierRoute;
         if (result._dpv === 'N') {
             a._geocodeWarning = 'USPS: address not found — verify address is real and deliverable';
         } else if (result._dpv === 'S' || result._dpv === 'D') {
@@ -4278,137 +4285,80 @@ let _toastTimer = null;
             );
         }
 
-        // ── Helper: GEOGRAPHIC K-medoids sub-cluster with capacity balancing ──
-        // Phase 1: Pure geographic k-means → natural, compact geographic clusters.
-        // Phase 2: Capacity balancing — only moves BOUNDARY stops (closest to another
-        //          cluster) from overfull clusters to underfull ones, preserving the
-        //          geographic shape of each cluster as much as possible.
-        async function geoSubCluster(stops, k, geoapifyKey) {
-            if (stops.length <= k) return stops.map(s => [s]);
+        // ── Helper: Ward's HAC sub-cluster (replaces K-means for ZIP fallback path) ──
+        // See wardSubCluster() in buildRoutesByZipGoogle for the canonical implementation.
+        // This wrapper makes it async-compatible for the legacy ZIP path.
+        async function geoSubCluster(stops, k) {
+            return wardZipSubCluster(stops, k);
+        }
 
-            const totalCampers  = stops.reduce((s, st) => s + (st.campers || []).length, 0);
-            const maxPerCluster = Math.ceil(totalCampers / k); // capacity target per sub-cluster
-
-            // ── Phase 1: Geographic k-means to convergence ──
-
-            // Farthest-point seed initialization (haversine — initial placement only)
-            let seeds = [stops[0]];
-            while (seeds.length < k) {
-                let farthest = null, farthestDist = -1;
-                for (const stop of stops) {
-                    if (seeds.includes(stop)) continue;
-                    const minDist = Math.min(...seeds.map(s => haversineMi(stop.lat, stop.lng, s.lat, s.lng)));
-                    if (minDist > farthestDist) { farthestDist = minDist; farthest = stop; }
-                }
-                if (farthest) seeds.push(farthest); else break;
-            }
-
-            let assignments = new Array(stops.length).fill(0);
-
-            // Fetch road distance matrix once (seeds → all stops)
-            let distMatrix = null;
-            if (geoapifyKey) {
-                try {
-                    distMatrix = await getRoadDistMatrix(seeds, stops, geoapifyKey);
-                } catch (e) {
-                    console.warn('[Go] Road matrix failed (ZIP sub-cluster), using haversine:', e.message);
-                }
-            }
-
-            const getDist = (seedIdx, stopIdx) => distMatrix
-                ? (distMatrix[seedIdx]?.[stopIdx] ?? Infinity)
-                : haversineMi(stops[stopIdx].lat, stops[stopIdx].lng, seeds[seedIdx].lat, seeds[seedIdx].lng);
-
-            // Unconstrained geographic assignment — up to 8 iterations until stable
-            for (let iter = 0; iter < 8; iter++) {
-                let changed = false;
-                for (let i = 0; i < stops.length; i++) {
-                    let best = 0, bestDist = Infinity;
-                    for (let c = 0; c < seeds.length; c++) {
-                        const d = getDist(c, i);
-                        if (d < bestDist) { bestDist = d; best = c; }
-                    }
-                    if (assignments[i] !== best) { assignments[i] = best; changed = true; }
-                }
-                if (!changed) break;
-
-                // Recompute seeds: geographic centroid → nearest actual stop in that cluster
-                const newSeeds = seeds.slice();
-                for (let c = 0; c < k; c++) {
-                    const cs = stops.filter((_, i) => assignments[i] === c);
-                    if (!cs.length) continue;
-                    const avgLat = cs.reduce((s, st) => s + st.lat, 0) / cs.length;
-                    const avgLng = cs.reduce((s, st) => s + st.lng, 0) / cs.length;
-                    let nearest = cs[0], nearestD = Infinity;
-                    for (const st of cs) {
-                        const d = haversineMi(st.lat, st.lng, avgLat, avgLng);
-                        if (d < nearestD) { nearestD = d; nearest = st; }
-                    }
-                    newSeeds[c] = nearest;
-                }
-
-                // Re-fetch matrix if seeds moved significantly
-                if (geoapifyKey && newSeeds.some((ns, c) => ns !== seeds[c])) {
-                    seeds = newSeeds;
-                    try {
-                        distMatrix = await getRoadDistMatrix(seeds, stops, geoapifyKey);
-                    } catch (e) { /* keep old matrix */ }
-                } else {
-                    seeds = newSeeds;
-                }
-            }
-
-            // ── Phase 2: Capacity balancing (boundary-stop transfers only) ──
-            // Moves stops from overfull → underfull clusters, always picking the stop
-            // that is closest to the destination cluster (boundary stop).
-            // This preserves the geographic core of each cluster.
-            for (let pass = 0; pass < stops.length; pass++) {
-                const camperCounts = Array.from({ length: k }, (_, c) =>
-                    stops.filter((_, i) => assignments[i] === c)
-                         .reduce((s, st) => s + (st.campers || []).length, 0));
-
-                // Find most-overfull cluster
-                let srcCluster = -1, maxExcess = 0;
-                for (let c = 0; c < k; c++) {
-                    const excess = camperCounts[c] - maxPerCluster;
-                    if (excess > maxExcess) { maxExcess = excess; srcCluster = c; }
-                }
-                if (srcCluster === -1) break; // all clusters within capacity
-
-                // Find underfull clusters (have room)
-                const underfull = Array.from({ length: k }, (_, c) => c)
-                    .filter(c => camperCounts[c] < maxPerCluster);
-                if (!underfull.length) break; // nowhere to move stops
-
-                // Gather stops in overfull cluster, ranked by proximity to any underfull cluster
-                const candidates = stops
-                    .map((st, i) => ({ i, kidCount: (st.campers || []).length }))
-                    .filter(x => assignments[x.i] === srcCluster)
-                    .map(x => ({
-                        ...x,
-                        nearestUnderfull: underfull
-                            .map(c => ({ c, d: getDist(c, x.i) }))
-                            .sort((a, b) => a.d - b.d)[0]
-                    }))
-                    .sort((a, b) => a.nearestUnderfull.d - b.nearestUnderfull.d); // boundary stops first
-
-                let moved = false;
-                for (const cand of candidates) {
-                    const target = underfull.find(c =>
-                        camperCounts[c] + cand.kidCount <= maxPerCluster &&
-                        getDist(c, cand.i) < Infinity);
-                    if (target !== undefined) {
-                        assignments[cand.i] = target;
-                        moved = true;
-                        break;
+        function wardZipSubCluster(stops, k) {
+            if (stops.length <= k) return stops.map(function(s) { return [s]; });
+            var totalCampers     = stops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
+            var targetPerCluster = Math.ceil(totalCampers / k);
+            var clusters = stops.map(function(s) {
+                var w = Math.max(1, (s.campers || []).length);
+                return { stops: [s], w: w, cx: s.lat, cy: s.lng };
+            });
+            while (clusters.length > k) {
+                var bestI = -1, bestJ = -1, bestWard = Infinity;
+                for (var i = 0; i < clusters.length; i++) {
+                    for (var j = i + 1; j < clusters.length; j++) {
+                        var A = clusters[i], B = clusters[j];
+                        var cosLat = Math.cos((A.cx + B.cx) * 0.5 * Math.PI / 180);
+                        var dlat = (A.cx - B.cx) * 111000;
+                        var dlng = (A.cy - B.cy) * 111000 * cosLat;
+                        var ward = (A.w * B.w) / (A.w + B.w) * (dlat * dlat + dlng * dlng);
+                        if (ward < bestWard) { bestWard = ward; bestI = i; bestJ = j; }
                     }
                 }
-                if (!moved) break; // can't balance further
+                if (bestI === -1) break;
+                var A = clusters[bestI], B = clusters[bestJ];
+                var newW = A.w + B.w;
+                clusters[bestI] = {
+                    stops: A.stops.concat(B.stops), w: newW,
+                    cx: (A.cx * A.w + B.cx * B.w) / newW,
+                    cy: (A.cy * A.w + B.cy * B.w) / newW
+                };
+                clusters.splice(bestJ, 1);
             }
-
-            const clusters = Array.from({ length: k }, () => []);
-            for (let i = 0; i < stops.length; i++) clusters[assignments[i]].push(stops[i]);
-            return clusters.filter(c => c.length > 0);
+            // Capacity balancing
+            for (var pass = 0; pass < stops.length * 2; pass++) {
+                var srcIdx = -1, maxExcess = 0;
+                for (var i = 0; i < clusters.length; i++) {
+                    var ex = clusters[i].w - targetPerCluster;
+                    if (ex > maxExcess) { maxExcess = ex; srcIdx = i; }
+                }
+                if (srcIdx === -1) break;
+                var underfullIdxs = [];
+                for (var i = 0; i < clusters.length; i++) {
+                    if (clusters[i].w < targetPerCluster) underfullIdxs.push(i);
+                }
+                if (!underfullIdxs.length) break;
+                var src = clusters[srcIdx];
+                var bestSi = -1, bestD = Infinity, bestTi = -1;
+                for (var si = 0; si < src.stops.length; si++) {
+                    var st = src.stops[si], stW = Math.max(1, (st.campers || []).length);
+                    for (var ui = 0; ui < underfullIdxs.length; ui++) {
+                        var tgt = clusters[underfullIdxs[ui]];
+                        if (tgt.w + stW > targetPerCluster * 1.15) continue;
+                        var d = haversineMi(st.lat, st.lng, tgt.cx, tgt.cy);
+                        if (d < bestD) { bestD = d; bestSi = si; bestTi = underfullIdxs[ui]; }
+                    }
+                }
+                if (bestSi === -1) break;
+                var ms = src.stops[bestSi], mw = Math.max(1, (ms.campers || []).length);
+                src.stops.splice(bestSi, 1); src.w -= mw;
+                if (src.stops.length) {
+                    src.cx = src.stops.reduce(function(s, st) { return s + st.lat; }, 0) / src.stops.length;
+                    src.cy = src.stops.reduce(function(s, st) { return s + st.lng; }, 0) / src.stops.length;
+                }
+                var tgt2 = clusters[bestTi];
+                tgt2.stops.push(ms); tgt2.w += mw;
+                tgt2.cx = tgt2.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgt2.stops.length;
+                tgt2.cy = tgt2.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt2.stops.length;
+            }
+            return clusters.filter(function(c) { return c.stops.length > 0; }).map(function(c) { return c.stops; });
         }
 
         // ── Step 1: Group stops by ZIP ──
@@ -4604,18 +4554,146 @@ let _toastTimer = null;
             return entries.sort(function(a, b) { return b[1] - a[1]; })[0][0];
         }
 
-        // Returns a sub-zone key: "ZIP:NeighborhoodName" if available,
-        // "ZIP:h3:CELLID" via H3 library (res 7 ≈ 1.2 km hex) if loaded,
-        // or "ZIP:GX:GY" grid cell fallback (~0.55 mi cells).
+        // Majority-vote carrier route across all campers at this stop.
+        // Returns e.g. "C006" (city route), "R014" (rural), "H003" (highway).
+        function getCarrierRouteForStop(stop) {
+            var crCounts = {};
+            for (var i = 0; i < (stop.campers || []).length; i++) {
+                var cr = ((D.addresses[(stop.campers[i] || {}).name] || {}).carrierRoute || '').trim();
+                if (cr) crCounts[cr] = (crCounts[cr] || 0) + 1;
+            }
+            var entries = Object.entries(crCounts);
+            if (!entries.length) return null;
+            return entries.sort(function(a, b) { return b[1] - a[1]; })[0][0];
+        }
+
+        // Sub-zone key hierarchy (most → least specific):
+        //   Tier 1 — USPS carrier route  "11210:C006"   density-adaptive, USPS-defined
+        //   Tier 2 — Named neighborhood  "11210:Flatbush"  Google address component
+        //   Tier 3 — H3 hex cell         "11210:h3:abc123"  ~1.2 km hex
+        //   Tier 4 — Grid cell fallback  "11210:4527:7216"  ~0.55 mi grid
         function getSubZoneKey(stop) {
-            var zip  = getZipForStop(stop) || 'NOZIP';
+            var zip = getZipForStop(stop) || 'NOZIP';
+
+            // Tier 1: USPS carrier route — one route = what one carrier covers in one shift
+            var cr = getCarrierRouteForStop(stop);
+            if (cr) return zip + ':' + cr;
+
+            // Tier 2: named neighborhood (Flatbush, Midwood, etc.)
             var nbhd = getNeighborhoodForStop(stop);
             if (nbhd) return zip + ':' + nbhd;
+
+            // Tier 3: H3 hexagonal cell
             var h3fn = window.H3 && (window.H3.latLngToCell || window.H3.geoToH3);
             if (h3fn) return zip + ':h3:' + h3fn(stop.lat, stop.lng, 7);
+
+            // Tier 4: grid fallback
             var gx = Math.round(stop.lat / 0.008);
             var gy = Math.round(stop.lng / 0.008);
             return zip + ':' + gx + ':' + gy;
+        }
+
+        // ── Ward's Hierarchical Agglomerative Clustering ──
+        // Builds k compact geographic neighborhoods bottom-up: starts with every stop
+        // as its own cluster, then repeatedly merges the pair whose combination
+        // minimises total within-cluster spread (Ward's criterion, weighted by camper
+        // count).  Guarantees non-overlapping, compact patches — no Voronoi artifacts,
+        // no interleaving buses on the same street.
+        function wardSubCluster(stops, k) {
+            if (stops.length <= k) return stops.map(function(s) { return [s]; });
+
+            var totalCampers = stops.reduce(function(s, st) {
+                return s + (st.campers || []).length;
+            }, 0);
+            var targetPerCluster = Math.ceil(totalCampers / k);
+
+            // Initialise: one cluster per stop, weighted by camper count
+            var clusters = stops.map(function(s) {
+                var w = Math.max(1, (s.campers || []).length);
+                return { stops: [s], w: w, cx: s.lat, cy: s.lng };
+            });
+
+            // Bottom-up merge until k clusters remain
+            while (clusters.length > k) {
+                var bestI = -1, bestJ = -1, bestWard = Infinity;
+                for (var i = 0; i < clusters.length; i++) {
+                    for (var j = i + 1; j < clusters.length; j++) {
+                        var A = clusters[i], B = clusters[j];
+                        // Convert degree offsets to metres for consistent scaling
+                        var cosLat = Math.cos((A.cx + B.cx) * 0.5 * Math.PI / 180);
+                        var dlat   = (A.cx - B.cx) * 111000;
+                        var dlng   = (A.cy - B.cy) * 111000 * cosLat;
+                        var distSq = dlat * dlat + dlng * dlng;
+                        // Ward's distance: (wA·wB / (wA+wB)) × ||centA−centB||²
+                        var ward = (A.w * B.w) / (A.w + B.w) * distSq;
+                        if (ward < bestWard) { bestWard = ward; bestI = i; bestJ = j; }
+                    }
+                }
+                if (bestI === -1) break;
+
+                // Merge bestJ into bestI, updating weighted centroid
+                var A = clusters[bestI], B = clusters[bestJ];
+                var newW = A.w + B.w;
+                clusters[bestI] = {
+                    stops: A.stops.concat(B.stops),
+                    w:     newW,
+                    cx:    (A.cx * A.w + B.cx * B.w) / newW,
+                    cy:    (A.cy * A.w + B.cy * B.w) / newW
+                };
+                clusters.splice(bestJ, 1);
+            }
+
+            // Post-hoc capacity balancing: move boundary stops from overfull → underfull
+            for (var pass = 0; pass < stops.length * 2; pass++) {
+                // Find most overfull cluster
+                var srcIdx = -1, maxExcess = 0;
+                for (var i = 0; i < clusters.length; i++) {
+                    var excess = clusters[i].w - targetPerCluster;
+                    if (excess > maxExcess) { maxExcess = excess; srcIdx = i; }
+                }
+                if (srcIdx === -1) break;
+
+                // Collect underfull clusters
+                var underfullIdxs = [];
+                for (var i = 0; i < clusters.length; i++) {
+                    if (clusters[i].w < targetPerCluster) underfullIdxs.push(i);
+                }
+                if (!underfullIdxs.length) break;
+
+                // Find the boundary stop in srcCluster closest to any underfull centroid
+                var src = clusters[srcIdx];
+                var bestStopSi = -1, bestMoveD = Infinity, bestTgtIdx = -1;
+                for (var si = 0; si < src.stops.length; si++) {
+                    var st  = src.stops[si];
+                    var stW = Math.max(1, (st.campers || []).length);
+                    for (var ui = 0; ui < underfullIdxs.length; ui++) {
+                        var tgt = clusters[underfullIdxs[ui]];
+                        if (tgt.w + stW > targetPerCluster * 1.15) continue; // don't overfill
+                        var d = haversineMi(st.lat, st.lng, tgt.cx, tgt.cy);
+                        if (d < bestMoveD) { bestMoveD = d; bestStopSi = si; bestTgtIdx = underfullIdxs[ui]; }
+                    }
+                }
+                if (bestStopSi === -1) break;
+
+                // Move the stop
+                var movingStop = src.stops[bestStopSi];
+                var movingW    = Math.max(1, (movingStop.campers || []).length);
+                src.stops.splice(bestStopSi, 1);
+                src.w -= movingW;
+                if (src.stops.length) {
+                    src.cx = src.stops.reduce(function(s, st) { return s + st.lat; }, 0) / src.stops.length;
+                    src.cy = src.stops.reduce(function(s, st) { return s + st.lng; }, 0) / src.stops.length;
+                }
+                var tgt = clusters[bestTgtIdx];
+                tgt.stops.push(movingStop);
+                tgt.w += movingW;
+                tgt.cx = tgt.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgt.stops.length;
+                tgt.cy = tgt.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt.stops.length;
+            }
+
+            return clusters
+                .filter(function(c) { return c.stops.length > 0; })
+                .map(function(c) { return c.stops; });
         }
 
         // ── Group stops by sub-zone ──
@@ -4661,41 +4739,7 @@ let _toastTimer = null;
             });
         }
 
-        // ── Merge sub-zones down to ≤ bus count ──
-        // Grid/H3 fallback can produce 100+ tiny cells; merge smallest into nearest
-        // neighbour until zone count ≤ available buses so every bus gets assigned.
-        (function mergeSubZones() {
-            function centroidOf(grp) {
-                if (!grp.stops.length) return { lat: 0, lng: 0 };
-                return {
-                    lat: grp.stops.reduce(function(s, st) { return s + st.lat; }, 0) / grp.stops.length,
-                    lng: grp.stops.reduce(function(s, st) { return s + st.lng; }, 0) / grp.stops.length
-                };
-            }
-            while (subZoneGroups.size > buses.length) {
-                var smallest = null;
-                subZoneGroups.forEach(function(g) {
-                    if (!smallest || g.camperCount < smallest.camperCount) smallest = g;
-                });
-                if (!smallest) break;
-                var sc = centroidOf(smallest);
-                var nearestKey = null, nearestDist = Infinity;
-                subZoneGroups.forEach(function(g, key) {
-                    if (key === smallest.zoneKey) return;
-                    var c = centroidOf(g);
-                    var d = haversineMi(sc.lat, sc.lng, c.lat, c.lng);
-                    if (d < nearestDist) { nearestDist = d; nearestKey = key; }
-                });
-                if (!nearestKey) break;
-                var nearest = subZoneGroups.get(nearestKey);
-                nearest.stops       = nearest.stops.concat(smallest.stops);
-                nearest.camperCount += smallest.camperCount;
-                subZoneGroups.delete(smallest.zoneKey);
-            }
-            console.log('[Go] Sub-zones after merge: ' + subZoneGroups.size + ' zone(s) for ' + buses.length + ' buses');
-        })();
-
-        // ── Bus allocation per sub-zone ──
+        // ── Pre-compute effective capacity (needed by both merge phases) ──
         var busTrueEffCaps = buses.map(function(b) {
             // If already a vehicle object (has busId), capacity is pre-computed effective
             if (b.busId) return Math.max(1, b.capacity || 44);
@@ -4708,6 +4752,69 @@ let _toastTimer = null;
         var effectiveCap = Math.max(1, Math.floor(
             busTrueEffCaps.reduce(function(s, c) { return s + c; }, 0) / buses.length
         ));
+
+        // ── Merge sub-zones in two phases ──
+        // Phase 1: collapse count down to ≤ buses.length (handles 100+ H3/grid cells)
+        // Phase 2: keep merging until totalAlloc ≤ buses.length so every zone gets at
+        //          least one bus and the trim loop never hits the "cannot trim" wall.
+        (function mergeSubZones() {
+            function centroidOf(grp) {
+                if (!grp.stops.length) return { lat: 0, lng: 0 };
+                return {
+                    lat: grp.stops.reduce(function(s, st) { return s + st.lat; }, 0) / grp.stops.length,
+                    lng: grp.stops.reduce(function(s, st) { return s + st.lng; }, 0) / grp.stops.length
+                };
+            }
+
+            // Core helper — merge smallest zone into its nearest neighbour.
+            // Returns false if nothing can be merged.
+            function mergeSmallestIntoNearest() {
+                var smallest = null;
+                subZoneGroups.forEach(function(g) {
+                    if (!smallest || g.camperCount < smallest.camperCount) smallest = g;
+                });
+                if (!smallest) return false;
+                var sc = centroidOf(smallest);
+                var nearestKey = null, nearestDist = Infinity;
+                subZoneGroups.forEach(function(g, key) {
+                    if (key === smallest.zoneKey) return;
+                    var c = centroidOf(g);
+                    var d = haversineMi(sc.lat, sc.lng, c.lat, c.lng);
+                    if (d < nearestDist) { nearestDist = d; nearestKey = key; }
+                });
+                if (!nearestKey) return false;
+                var nearest = subZoneGroups.get(nearestKey);
+                nearest.stops       = nearest.stops.concat(smallest.stops);
+                nearest.camperCount += smallest.camperCount;
+                subZoneGroups.delete(smallest.zoneKey);
+                return true;
+            }
+
+            // Helper — compute how many total buses all current zones would need.
+            function computeTotalAlloc() {
+                var t = 0;
+                subZoneGroups.forEach(function(g) {
+                    t += Math.max(1, Math.ceil(g.camperCount / effectiveCap));
+                });
+                return t;
+            }
+
+            // Phase 1: collapse to at most buses.length zones
+            while (subZoneGroups.size > buses.length) {
+                if (!mergeSmallestIntoNearest()) break;
+            }
+
+            // Phase 2: keep merging until every zone can be served within the bus budget
+            // (i.e. sum of ceil(campers/cap) ≤ buses.length)
+            var phase2iters = 0;
+            while (computeTotalAlloc() > buses.length && subZoneGroups.size > 1) {
+                if (!mergeSmallestIntoNearest()) break;
+                phase2iters++;
+            }
+
+            var finalAlloc = computeTotalAlloc();
+            console.log('[Go] Sub-zones after merge: ' + subZoneGroups.size + ' zone(s), totalAlloc=' + finalAlloc + ' for ' + buses.length + ' buses (phase2 iters=' + phase2iters + ')');
+        })();
 
         var zoneList  = Array.from(subZoneGroups.values()).sort(function(a, b) { return b.camperCount - a.camperCount; });
         var busAlloc  = new Map();
@@ -4754,38 +4861,65 @@ let _toastTimer = null;
 
             if (!group.stops.length || !zipBuses.length) continue;
 
-            showProgress(shiftLabel + ': ' + group.zoneKey + ' → Google (' +
-                group.stops.length + ' stops, ' + zipBuses.length + ' bus' + (zipBuses.length > 1 ? 'es' : '') + ')...',
-                pctBase + 25 + Math.round(gi / zoneList.length * 30));
+            // ── Ward's sub-clustering: split multi-bus zones into compact neighborhoods ──
+            // Each resulting sub-cluster gets exactly one bus and one Google call.
+            // This prevents buses from interleaving on the same streets.
+            var subClusters;
+            if (numBusesForZip > 1) {
+                subClusters = wardSubCluster(group.stops, numBusesForZip);
+                console.log('[Go] Ward: "' + group.zoneKey + '" → ' + subClusters.length +
+                    ' neighborhoods (' + subClusters.map(function(c) {
+                        return c.reduce(function(s, st) { return s + (st.campers || []).length; }, 0) + ' kids';
+                    }).join(', ') + ')');
+            } else {
+                subClusters = [group.stops];
+            }
 
-            console.log('[Go] ZIP+Google: "' + group.zoneKey + '" — ' + group.stops.length +
-                ' stops, ' + group.camperCount + ' kids, ' + zipBuses.length + ' bus(es)');
+            for (var sci = 0; sci < subClusters.length; sci++) {
+                var subStops = subClusters[sci];
+                var subBus   = zipBuses[sci] || zipBuses[zipBuses.length - 1];
+                var subKids  = subStops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
 
-            try {
-                var zipRoutes = await window.GoGoogleOptimizer.optimizeTours({
-                    stops:          group.stops,
-                    vehicles:       zipBuses,
-                    campLat:        campLat,
-                    campLng:        campLng,
-                    departureTime:  departureTime,
-                    isArrival:      isArrival,
-                    serviceTimeSec: serviceTime,
-                    apiKey:         googleKey,
-                    projectId:      googleProjId,
-                    maxRideTimeSec: maxRideTimeSec,
-                    supabaseUrl:    supabaseUrl,
-                    accessToken:    accessToken,
-                    anonKey:        anonKey
-                });
+                if (!subStops.length) continue;
 
-                if (zipRoutes && zipRoutes.length) {
-                    allRoutes.push.apply(allRoutes, zipRoutes);
-                    console.log('[Go] ZIP+Google: "' + group.zoneKey + '" → ' + zipRoutes.length + ' route(s) built');
-                } else {
-                    console.warn('[Go] ZIP+Google: "' + group.zoneKey + '" returned no routes');
+                showProgress(shiftLabel + ': ' + group.zoneKey +
+                    (subClusters.length > 1 ? ' [' + (sci + 1) + '/' + subClusters.length + ']' : '') +
+                    ' → Google (' + subStops.length + ' stops)...',
+                    pctBase + 25 + Math.round((gi * subClusters.length + sci) / (zoneList.length * Math.max(numBusesForZip, 1)) * 30));
+
+                console.log('[Go] ZIP+Google: "' + group.zoneKey + '"' +
+                    (subClusters.length > 1 ? ' nbhd ' + (sci + 1) + '/' + subClusters.length : '') +
+                    ' — ' + subStops.length + ' stops, ' + subKids + ' kids → ' + (subBus.busName || subBus.busId));
+
+                try {
+                    var zipRoutes = await window.GoGoogleOptimizer.optimizeTours({
+                        stops:          subStops,
+                        vehicles:       [subBus],
+                        campLat:        campLat,
+                        campLng:        campLng,
+                        departureTime:  departureTime,
+                        isArrival:      isArrival,
+                        serviceTimeSec: serviceTime,
+                        apiKey:         googleKey,
+                        projectId:      googleProjId,
+                        maxRideTimeSec: maxRideTimeSec,
+                        supabaseUrl:    supabaseUrl,
+                        accessToken:    accessToken,
+                        anonKey:        anonKey
+                    });
+
+                    if (zipRoutes && zipRoutes.length) {
+                        allRoutes.push.apply(allRoutes, zipRoutes);
+                        console.log('[Go] ZIP+Google: "' + group.zoneKey + '"' +
+                            (subClusters.length > 1 ? ' nbhd ' + (sci + 1) : '') +
+                            ' → ' + zipRoutes.length + ' route(s) built');
+                    } else {
+                        console.warn('[Go] ZIP+Google: "' + group.zoneKey + '" nbhd ' + (sci + 1) + ' returned no routes');
+                    }
+                } catch (e) {
+                    console.warn('[Go] ZIP+Google: "' + group.zoneKey + '" nbhd ' + (sci + 1) +
+                        ' failed (' + e.message + ') — neighborhood will be missing');
                 }
-            } catch (e) {
-                console.warn('[Go] ZIP+Google: "' + group.zoneKey + '" failed (' + e.message + ') — this zone will be missing');
             }
         }
 
