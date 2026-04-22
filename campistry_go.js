@@ -4683,12 +4683,15 @@ let _toastTimer = null;
         }
 
         function assignAll() {
-            // For each stop, compute corridor distance to every anchor, sort
+            // For each stop, compute direct distance to every anchor (Voronoi assignment).
+            // Using corridor distance caused stops surrounded by Zone A's stops to be
+            // assigned to Zone B because they happened to be near Zone B's corridor line,
+            // forcing buses to drive through each other's territory.
             var stopPrefs = [];
             for (var si = 0; si < numStops; si++) {
                 var distances = [];
                 for (var ki = 0; ki < seeds.length; ki++) {
-                    distances.push({ k: ki, d: distToCorridor(si, seeds[ki]) });
+                    distances.push({ k: ki, d: sd(si, seeds[ki]) });
                 }
                 distances.sort(function(a, b) { return a.d - b.d; });
                 stopPrefs.push({ stop: si, prefs: distances, nearestDist: distances[0].d });
@@ -4794,8 +4797,8 @@ let _toastTimer = null;
                         var dOther = sd(si5, seeds[otherC]);
                         if (dOther < bestOtherDist) { bestOtherDist = dOther; bestOther = otherC; }
                     }
-                    // Swap if other is significantly closer (>10%)
-                    if (bestOther >= 0 && bestOtherDist < distOwn * 0.9) {
+                    // Swap if other is significantly closer (>25%)
+                    if (bestOther >= 0 && bestOtherDist < distOwn * 0.75) {
                         clusters[ownC].splice(mIdx, 1);
                         clusterKids[ownC] -= kidCount[si5];
                         clusters[bestOther].push(si5);
