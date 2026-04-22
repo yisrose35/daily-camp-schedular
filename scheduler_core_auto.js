@@ -10756,6 +10756,8 @@
             }
         };
 
+        try { window.AutoSegmentModel?.rebuildFromAssignments(); } catch (_e) { warn('Segment rebuild failed: ' + _e.message); }
+
         return { success: true, warnings, elapsed, blocksScheduled: solverBlocks.length, specialBlocksLocked: specialWriteCount };
     };
 
