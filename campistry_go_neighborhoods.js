@@ -322,14 +322,20 @@ window.CampistryGoNeighborhoods = (function () {
     function findCommunities(graph, trunkTier) {
         const { nodes, edges } = graph;
 
-        // Adjacency for interior edges only (hwClass rank > trunkTier)
+        // Adjacency for interior edges only (hwClass rank > trunkTier).
+        // NOTE: stringify node IDs so the `to` field matches what Object.keys(adj)
+        // yields. Otherwise `seen` gets populated with numbers (from nb.to) but
+        // checked with strings (from outer loop) → BFS restarts on already-
+        // visited nodes, emitting duplicate components that share edges.
         const adj = {};
         const interiorEdges = [];
         for (const e of edges) {
             if (e.rank <= trunkTier) continue;
             interiorEdges.push(e);
-            (adj[e.fromNodeId] ||= []).push({ to: e.toNodeId, edgeId: e.id });
-            (adj[e.toNodeId] ||= []).push({ to: e.fromNodeId, edgeId: e.id });
+            const fromKey = String(e.fromNodeId);
+            const toKey = String(e.toNodeId);
+            (adj[fromKey] ||= []).push({ to: toKey, edgeId: e.id });
+            (adj[toKey] ||= []).push({ to: fromKey, edgeId: e.id });
         }
 
         // BFS over interior subgraph
@@ -508,18 +514,24 @@ window.CampistryGoNeighborhoods = (function () {
         const edgeById = {};
         for (const e of graph.edges) if (segIds.has(e.id)) edgeById[e.id] = e;
 
-        // Adjacency restricted to this neighborhood
+        // Adjacency restricted to this neighborhood.
+        // Stringify node IDs (same reason as findCommunities) so queue/seenNodes
+        // stay consistent.
         const adj = {};
         for (const e of Object.values(edgeById)) {
-            (adj[e.fromNodeId] ||= []).push({ to: e.toNodeId, edgeId: e.id });
-            (adj[e.toNodeId] ||= []).push({ to: e.fromNodeId, edgeId: e.id });
+            const fromKey = String(e.fromNodeId);
+            const toKey = String(e.toNodeId);
+            (adj[fromKey] ||= []).push({ to: toKey, edgeId: e.id });
+            (adj[toKey] ||= []).push({ to: fromKey, edgeId: e.id });
         }
 
-        // Entry = node in this neighborhood with the best trunk edge touching it
+        // Entry = node in this neighborhood with the best trunk edge touching it.
+        // neighborhood.nodeIds are strings; graph edges carry numeric OSM ids —
+        // compare via String().
         let entryId = null, bestTrunkRank = 99;
         for (const nid of neighborhood.nodeIds) {
             for (const e of graph.edges) {
-                if (e.fromNodeId !== nid && e.toNodeId !== nid) continue;
+                if (String(e.fromNodeId) !== nid && String(e.toNodeId) !== nid) continue;
                 if (segIds.has(e.id)) continue; // interior edge, not a trunk
                 if (e.rank < bestTrunkRank) { bestTrunkRank = e.rank; entryId = nid; }
             }
