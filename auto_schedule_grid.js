@@ -958,10 +958,17 @@
                         blk.appendChild(subEl);
                     }
                     if (blockH >= 55) {
+                        var timeEl = document.createElement('div');
+                        timeEl.className = 'asg-block-sub';
+                        timeEl.style.color = style.text;
+                        timeEl.textContent = toLabel(act.startMin) + ' – ' + toLabel(act.endMin);
+                        blk.appendChild(timeEl);
+                    }
+                    if (blockH >= 72) {
                         var durEl = document.createElement('div');
                         durEl.className = 'asg-block-sub';
                         durEl.style.color = style.text;
-                        durEl.textContent = act.duration + 'min';
+                        durEl.textContent = act.duration + ' min';
                         blk.appendChild(durEl);
                     }
                 } else if (blockH >= 22) {
