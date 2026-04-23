@@ -468,16 +468,18 @@
         return html;
     }
 
-    function buildRow(leftLabel, trackHtml, isAlternate) {
+    function buildRow(leftLabel, trackHtml, isAlternate, rowKey) {
         const rowBg = isAlternate ? '#fafafa' : '#fff';
+        const rk = (rowKey || leftLabel).replace(/[^a-z0-9]/gi, '_');
         return `
-            <div style="display:flex;align-items:stretch;border-bottom:1px solid #f1f5f9;min-height:46px;">
-                <div style="width:168px;min-width:168px;padding:0 14px;display:flex;align-items:center;
+            <div class="gantt-row" data-row="${rk}" style="display:flex;align-items:stretch;border-bottom:1px solid #f1f5f9;min-height:46px;transition:background 0.1s;">
+                <div class="gantt-label" data-row="${rk}" style="width:168px;min-width:168px;padding:0 14px;display:flex;align-items:center;
                             font-size:0.8rem;font-weight:500;color:#374151;letter-spacing:0.01em;
-                            border-right:1px solid #e9ecef;background:${rowBg};flex-shrink:0;overflow:hidden;" title="${leftLabel}">
+                            border-right:1px solid #e9ecef;background:${rowBg};flex-shrink:0;overflow:hidden;
+                            position:sticky;left:0;z-index:4;cursor:pointer;" title="${leftLabel}">
                     <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${leftLabel}</span>
                 </div>
-                <div style="flex:1;position:relative;background:#f8fafc;overflow:hidden;">
+                <div class="gantt-track" data-row="${rk}" style="flex:1;position:relative;background:#f8fafc;overflow:hidden;">
                     ${trackHtml}
                 </div>
             </div>`;
@@ -516,6 +518,183 @@
             }
         });
         area.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    }
+
+    function bindChartInteractions(area, items, campStart, campEnd, viewType) {
+        const outer      = area.querySelector('#gantt-scroll-outer');
+        const body       = area.querySelector('#gantt-body');
+        const cursor     = area.querySelector('#gantt-cursor');
+        const cursorLbl  = area.querySelector('#gantt-cursor-label');
+        const pinLine    = area.querySelector('#gantt-pin-line');
+        if (!body || !cursor) return;
+
+        const LABEL_W = 168;
+        const totalMin = campEnd - campStart;
+
+        function getAbsX(e) {
+            const rect = body.getBoundingClientRect();
+            return (e.clientX - rect.left) + (outer ? outer.scrollLeft : 0);
+        }
+        function absXToMin(absX) {
+            const trackW = Math.max(1, body.scrollWidth - LABEL_W);
+            return campStart + Math.max(0, Math.min(1, (absX - LABEL_W) / trackW)) * totalMin;
+        }
+
+        body.addEventListener('mousemove', e => {
+            const absX  = getAbsX(e);
+            const trackW = body.scrollWidth - LABEL_W;
+            if (absX - LABEL_W < 0 || absX - LABEL_W > trackW) { cursor.style.display = 'none'; return; }
+            cursor.style.left    = absX + 'px';
+            cursor.style.display = 'block';
+            if (cursorLbl) cursorLbl.textContent = minutesToTimeLabel(Math.round(absXToMin(absX)));
+            const rowEl = e.target.closest('.gantt-row');
+            body.querySelectorAll('.gantt-row').forEach(r => { r.style.background = r === rowEl ? 'rgba(37,99,235,0.05)' : ''; });
+        });
+
+        body.addEventListener('mouseleave', () => {
+            cursor.style.display = 'none';
+            body.querySelectorAll('.gantt-row').forEach(r => { r.style.background = ''; });
+        });
+
+        body.addEventListener('click', e => {
+            if (e.target.closest('.gantt-label') && viewType === 'bunk') return;
+            const absX = getAbsX(e);
+            if (absX - LABEL_W < 0) return;
+            const pinnedMin = Math.round(absXToMin(absX));
+            if (pinLine) { pinLine.style.left = absX + 'px'; pinLine.style.display = 'block'; }
+            renderPinPanel(area, pinnedMin, items, campStart, campEnd, viewType);
+        });
+
+        const freeNowBtn = area.querySelector('#gantt-free-now-btn');
+        if (freeNowBtn) {
+            freeNowBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                const now = new Date();
+                const nowMin = now.getHours() * 60 + now.getMinutes();
+                const trackW = body.scrollWidth - LABEL_W;
+                const absX = LABEL_W + ((nowMin - campStart) / totalMin) * trackW;
+                if (pinLine) { pinLine.style.left = absX + 'px'; pinLine.style.display = 'block'; }
+                renderPinPanel(area, nowMin, items, campStart, campEnd, viewType);
+                area.querySelector('#gantt-pin-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+        }
+
+        if (viewType === 'bunk') {
+            body.querySelectorAll('.gantt-label').forEach(lbl => {
+                lbl.addEventListener('click', e => {
+                    e.stopPropagation();
+                    const rk = lbl.dataset.row;
+                    const allRows = body.querySelectorAll('.gantt-row');
+                    const focused = lbl.dataset.focused === '1';
+                    if (focused) {
+                        allRows.forEach(r => { r.style.opacity = ''; });
+                        lbl.dataset.focused = '';
+                    } else {
+                        body.querySelectorAll('.gantt-label').forEach(l => { l.dataset.focused = ''; });
+                        allRows.forEach(r => { r.style.opacity = r.dataset.row === rk ? '1' : '0.2'; });
+                        lbl.dataset.focused = '1';
+                    }
+                });
+            });
+        }
+    }
+
+    function renderPinPanel(area, timeMin, items, campStart, campEnd, viewType) {
+        const panel = area.querySelector('#gantt-pin-panel');
+        if (!panel) return;
+        panel.style.display = 'block';
+        const timeLabel = minutesToTimeLabel(timeMin);
+        const closeBtn = `<button onclick="document.getElementById('gantt-pin-panel').style.display='none';"
+            style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.85rem;padding:2px 6px;line-height:1;">✕</button>`;
+
+        if (viewType === 'field') {
+            const gs = window.loadGlobalSettings?.() || {};
+            const allRes = [
+                ...(gs.app1?.fields || []).map(f => f.name),
+                ...(gs.app1?.specialActivities || []).map(s => s.name)
+            ].sort();
+            const free = [], taken = [];
+            allRes.forEach(name => {
+                const hits = items.filter(it => (it.field === name || it.activity === name) && it.startMin <= timeMin && it.endMin > timeMin);
+                if (hits.length) taken.push({ name, by: hits.map(u => u.bunk).join(', ') });
+                else free.push(name);
+            });
+            panel.innerHTML = `
+                <div style="border:1px solid #e2e8f0;border-radius:8px;padding:13px 16px;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06);">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                        <span style="font-size:0.83rem;font-weight:700;color:#1e293b;">Snapshot at ${timeLabel}</span>${closeBtn}
+                    </div>
+                    <div style="display:flex;gap:20px;flex-wrap:wrap;">
+                        <div style="flex:1;min-width:130px;">
+                            <div style="font-size:0.69rem;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Free (${free.length})</div>
+                            ${free.length ? free.map(f => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${f}</div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
+                        </div>
+                        <div style="flex:1;min-width:130px;">
+                            <div style="font-size:0.69rem;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Taken (${taken.length})</div>
+                            ${taken.length ? taken.map(t => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${t.name} <span style="color:#94a3b8;font-size:0.72rem;">— ${t.by}</span></div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
+                        </div>
+                    </div>
+                </div>`;
+        } else {
+            const active = items.filter(it => it.startMin <= timeMin && it.endMin > timeMin);
+            panel.innerHTML = `
+                <div style="border:1px solid #e2e8f0;border-radius:8px;padding:13px 16px;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06);">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                        <span style="font-size:0.83rem;font-weight:700;color:#1e293b;">Snapshot at ${timeLabel}</span>${closeBtn}
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:5px;">
+                        ${active.length ? active.map(a => `<span style="padding:3px 9px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1e40af;">${a.bunk} — ${a.activity}${a.field ? ' @ ' + a.field : ''}</span>`).join('') : '<span style="font-size:0.78rem;color:#94a3b8;">All bunks free at this time</span>'}
+                    </div>
+                </div>`;
+        }
+    }
+
+    function bindFindSlot(area, items, campStart, campEnd) {
+        let selectedDur = null;
+        area.querySelectorAll('.slot-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                area.querySelectorAll('.slot-chip').forEach(c => { c.style.background='#fff'; c.style.color='#475569'; c.style.borderColor='#cbd5e1'; });
+                chip.style.background = '#1e40af'; chip.style.color = '#fff'; chip.style.borderColor = '#1e40af';
+                selectedDur = parseInt(chip.dataset.dur);
+            });
+        });
+        const searchBtn = area.querySelector('#slot-search-btn');
+        if (searchBtn) {
+            searchBtn.addEventListener('click', () => {
+                const resultsEl = area.querySelector('#slot-results');
+                if (!selectedDur) { if (resultsEl) resultsEl.innerHTML = '<div style="font-size:0.8rem;color:#dc2626;">Select a duration first.</div>'; return; }
+                const actFilter = (area.querySelector('#slot-activity-input')?.value || '').trim().toLowerCase();
+                renderSlotResults(area, findFreeWindows(selectedDur, items, campStart, campEnd, actFilter), selectedDur);
+            });
+        }
+    }
+
+    function findFreeWindows(durationMin, items, campStart, campEnd, actFilter) {
+        const gs = window.loadGlobalSettings?.() || {};
+        let fields = (gs.app1?.fields || []).map(f => ({ name: f.name, activities: f.activities || [] }));
+        if (actFilter) fields = fields.filter(f => f.activities.some(a => a.toLowerCase().includes(actFilter)));
+        return fields.reduce((acc, field) => {
+            const merged = mergeIntervals(items.filter(it => it.field === field.name));
+            let cur = campStart;
+            const gaps = [];
+            merged.forEach(iv => { if (iv.startMin - cur >= durationMin) gaps.push({ start: cur, end: iv.startMin }); cur = iv.endMin; });
+            if (campEnd - cur >= durationMin) gaps.push({ start: cur, end: campEnd });
+            if (gaps.length) acc.push({ field: field.name, gaps });
+            return acc;
+        }, []);
+    }
+
+    function renderSlotResults(area, windows, dur) {
+        const cont = area.querySelector('#slot-results');
+        if (!cont) return;
+        if (!windows.length) { cont.innerHTML = `<div style="padding:8px 0;color:#94a3b8;font-size:0.82rem;text-align:center;">No fields have a free ${dur}-minute window.</div>`; return; }
+        cont.innerHTML = windows.map(w => `
+            <div style="padding:7px 12px;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:5px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;background:#fff;">
+                <span style="font-size:0.8rem;font-weight:700;color:#1e293b;min-width:110px;">${w.field}</span>
+                <div style="display:flex;flex-wrap:wrap;gap:5px;">
+                    ${w.gaps.map(g => `<span style="padding:2px 8px;background:#dcfce7;border:1px solid #86efac;border-radius:999px;font-size:0.72rem;color:#15803d;font-weight:600;">${minutesToTimeLabel(g.start)} – ${minutesToTimeLabel(g.end)} (${g.end - g.start}m)</span>`).join('')}
+                </div>
+            </div>`).join('');
     }
 
     function buildLegendItem(color, label) {
@@ -571,15 +750,21 @@
                </span>`
             : '';
         const filterBadge = activityFilter
-            ? `<span style="margin-left:auto;padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
-            : '<span style="margin-left:auto;font-size:0.73rem;color:#94a3b8;">Hover a block for details</span>';
+            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
+            : '<span style="font-size:0.73rem;color:#94a3b8;">Hover or click timeline for details</span>';
+        const freeNowBtn = showNow
+            ? `<button id="gantt-free-now-btn" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;font-size:0.74rem;font-weight:600;cursor:pointer;white-space:nowrap;">What's free now?</button>`
+            : '';
 
         const keyBar = `
-            <div style="display:flex;align-items:center;gap:20px;padding:11px 18px;border-bottom:1px solid #e9ecef;background:#fff;">
+            <div style="display:flex;align-items:center;gap:16px;padding:11px 18px;border-bottom:1px solid #e9ecef;background:#fff;flex-wrap:wrap;">
                 ${buildLegendItem(COLOR_AVAIL, 'Available')}
                 ${buildLegendItem(COLOR_TAKEN, 'Taken')}
                 ${nowLegend}
-                ${filterBadge}
+                <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+                    ${freeNowBtn}
+                    ${filterBadge}
+                </div>
             </div>`;
 
         let rows = '';
@@ -590,22 +775,42 @@
             rows += buildRow(r.name, track, i % 2 === 1);
         });
 
-        const axisHtml = `<div style="display:flex;padding-top:14px;padding-bottom:6px;">
-            <div style="width:168px;min-width:168px;flex-shrink:0;"></div>
-            <div style="flex:1;position:relative;">
-                ${buildTimeAxis(campStart, campEnd, totalMin)}
-            </div>
-        </div>`;
+        const axisRow = `
+            <div style="display:flex;padding:14px 0 6px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:168px;min-width:168px;flex-shrink:0;position:sticky;left:0;z-index:5;background:#fff;"></div>
+                <div style="flex:1;position:relative;">${buildTimeAxis(campStart, campEnd, totalMin)}</div>
+            </div>`;
 
         area.innerHTML = `
-            <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06),0 4px 16px rgba(15,23,42,0.04);">
+            <div id="gantt-card" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06),0 4px 16px rgba(15,23,42,0.04);">
                 ${keyBar}
-                <div style="padding:0 18px 16px;">
-                    ${axisHtml}
-                    ${rows}
+                <div id="gantt-scroll-outer" style="overflow-x:auto;">
+                    <div id="gantt-body" style="position:relative;min-width:560px;padding-bottom:12px;cursor:crosshair;">
+                        ${axisRow}
+                        ${rows}
+                        <div id="gantt-cursor" style="display:none;position:absolute;top:0;bottom:0;left:200px;width:0;pointer-events:none;z-index:25;">
+                            <div id="gantt-cursor-label" style="position:absolute;top:3px;left:0;transform:translateX(-50%);background:#334155;color:#f8fafc;font-size:0.64rem;font-weight:600;padding:1px 5px;border-radius:2px;white-space:nowrap;"></div>
+                            <div style="position:absolute;top:22px;bottom:0;left:0;width:1px;background:#94a3b8;opacity:0.65;"></div>
+                        </div>
+                        <div id="gantt-pin-line" style="display:none;position:absolute;top:0;bottom:0;left:200px;width:2px;background:#1e40af;pointer-events:none;z-index:24;opacity:0.8;"></div>
+                    </div>
                 </div>
+            </div>
+            <div id="gantt-pin-panel" style="display:none;margin-top:10px;"></div>
+            <div id="gantt-find-slot-wrap" style="margin-top:10px;border:1px solid #e2e8f0;border-radius:8px;padding:14px 18px;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06);">
+                <div style="font-size:0.82rem;font-weight:700;color:#1e293b;margin-bottom:10px;">Find me a free slot</div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <div style="display:flex;gap:5px;">
+                        ${[15,30,45,60,90].map(d => `<button class="slot-chip" data-dur="${d}" style="padding:4px 11px;border:1px solid #cbd5e1;border-radius:999px;font-size:0.76rem;font-weight:600;cursor:pointer;background:#fff;color:#475569;">${d}m</button>`).join('')}
+                    </div>
+                    <input id="slot-activity-input" type="text" placeholder="Activity filter (optional)" style="padding:5px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem;min-width:150px;flex:1;" />
+                    <button id="slot-search-btn" style="padding:5px 14px;background:#1e40af;color:#fff;border:none;border-radius:4px;font-size:0.8rem;font-weight:600;cursor:pointer;">Search</button>
+                </div>
+                <div id="slot-results" style="margin-top:10px;"></div>
             </div>`;
         bindTooltip(area);
+        bindChartInteractions(area, items, campStart, campEnd, 'field');
+        bindFindSlot(area, items, campStart, campEnd);
     }
 
     // ========================================================================
@@ -636,7 +841,7 @@
             anyBunk = true;
 
             rows += `<div style="display:flex;border-bottom:1px solid #f1f5f9;">
-                <div style="width:168px;min-width:168px;padding:5px 14px;font-size:0.67rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-right:1px solid #e9ecef;background:#fafafa;display:flex;align-items:center;">${divName}</div>
+                <div style="width:168px;min-width:168px;padding:5px 14px;font-size:0.67rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-right:1px solid #e9ecef;background:#fafafa;display:flex;align-items:center;position:sticky;left:0;z-index:4;">${divName}</div>
                 <div style="flex:1;background:#fafafa;"></div>
             </div>`;
 
@@ -661,33 +866,41 @@
                </span>`
             : '';
         const filterBadge = activityFilter
-            ? `<span style="margin-left:auto;padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
-            : '<span style="margin-left:auto;font-size:0.73rem;color:#94a3b8;">Hover a block for details</span>';
+            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
+            : '<span style="font-size:0.73rem;color:#94a3b8;">Click a bunk label to focus it</span>';
 
         const keyBar = `
-            <div style="display:flex;align-items:center;gap:20px;padding:11px 18px;border-bottom:1px solid #e9ecef;background:#fff;">
+            <div style="display:flex;align-items:center;gap:16px;padding:11px 18px;border-bottom:1px solid #e9ecef;background:#fff;flex-wrap:wrap;">
                 ${buildLegendItem(COLOR_AVAIL, 'Available')}
                 ${buildLegendItem(COLOR_TAKEN, 'Taken')}
                 ${nowLegend}
-                ${filterBadge}
+                <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">${filterBadge}</div>
             </div>`;
 
-        const axisHtml = `<div style="display:flex;padding-top:14px;padding-bottom:6px;">
-            <div style="width:168px;min-width:168px;flex-shrink:0;"></div>
-            <div style="flex:1;position:relative;">
-                ${buildTimeAxis(campStart, campEnd, totalMin)}
-            </div>
-        </div>`;
+        const axisRow = `
+            <div style="display:flex;padding:14px 0 6px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:168px;min-width:168px;flex-shrink:0;position:sticky;left:0;z-index:5;background:#fff;"></div>
+                <div style="flex:1;position:relative;">${buildTimeAxis(campStart, campEnd, totalMin)}</div>
+            </div>`;
 
         area.innerHTML = `
-            <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06),0 4px 16px rgba(15,23,42,0.04);">
+            <div id="gantt-card" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06),0 4px 16px rgba(15,23,42,0.04);">
                 ${keyBar}
-                <div style="padding:0 18px 16px;">
-                    ${axisHtml}
-                    ${rows}
+                <div id="gantt-scroll-outer" style="overflow-x:auto;">
+                    <div id="gantt-body" style="position:relative;min-width:560px;padding-bottom:12px;cursor:crosshair;">
+                        ${axisRow}
+                        ${rows}
+                        <div id="gantt-cursor" style="display:none;position:absolute;top:0;bottom:0;left:200px;width:0;pointer-events:none;z-index:25;">
+                            <div id="gantt-cursor-label" style="position:absolute;top:3px;left:0;transform:translateX(-50%);background:#334155;color:#f8fafc;font-size:0.64rem;font-weight:600;padding:1px 5px;border-radius:2px;white-space:nowrap;"></div>
+                            <div style="position:absolute;top:22px;bottom:0;left:0;width:1px;background:#94a3b8;opacity:0.65;"></div>
+                        </div>
+                        <div id="gantt-pin-line" style="display:none;position:absolute;top:0;bottom:0;left:200px;width:2px;background:#1e40af;pointer-events:none;z-index:24;opacity:0.8;"></div>
+                    </div>
                 </div>
-            </div>`;
+            </div>
+            <div id="gantt-pin-panel" style="display:none;margin-top:10px;"></div>`;
         bindTooltip(area);
+        bindChartInteractions(area, items, campStart, campEnd, 'bunk');
     }
 
     // ========================================================================
