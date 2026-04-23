@@ -1648,11 +1648,12 @@ function renderMultiPartSettings(item) {
                 nameInp.value = part.name || '';
                 nameInp.style.cssText = 'flex:1.5; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem;';
                 nameInp.onchange = function() { mp.parts[pidx].name = nameInp.value.trim(); item.multiPart = mp; saveData(); };
-                var locInp = document.createElement('input');
-                locInp.type = 'text'; locInp.placeholder = 'Location';
-                locInp.value = part.location || '';
-                locInp.style.cssText = 'flex:1; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem;';
-                locInp.onchange = function() { mp.parts[pidx].location = locInp.value.trim(); item.multiPart = mp; saveData(); };
+                var locInp = document.createElement('select');
+                locInp.style.cssText = 'flex:1; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem; background:#fff;';
+                var _bOpt = document.createElement('option'); _bOpt.value = ''; _bOpt.textContent = '— same location —'; locInp.appendChild(_bOpt);
+                var _facs = window.getFacilities ? window.getFacilities() : [];
+                _facs.forEach(function(f) { var o = document.createElement('option'); o.value = f.name; o.textContent = f.name; if (f.name === (part.location || '')) o.selected = true; locInp.appendChild(o); });
+                locInp.onchange = function() { mp.parts[pidx].location = locInp.value; item.multiPart = mp; saveData(); };
                 partRow.appendChild(num); partRow.appendChild(nameInp); partRow.appendChild(locInp);
                 if (pidx > 0) {
                     var prereq = document.createElement('span');

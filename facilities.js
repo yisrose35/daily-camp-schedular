@@ -2529,12 +2529,18 @@ function renderSpecialMultiPart(saData) {
                 nameInp.value = part.name || '';
                 nameInp.style.cssText = "flex:1.5; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem;";
                 nameInp.onchange = function() { mp.parts[i].name = nameInp.value.trim(); saveSpecialData(saData); };
-                var locInp = document.createElement("input");
-                locInp.type = "text"; locInp.placeholder = "Location (optional)";
-                locInp.value = part.location || '';
-                locInp.style.cssText = "flex:1; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem;";
-                locInp.onchange = function() { mp.parts[i].location = locInp.value.trim(); saveSpecialData(saData); };
-                partRow.appendChild(numBadge); partRow.appendChild(nameInp); partRow.appendChild(locInp);
+                var locSel = document.createElement("select");
+                locSel.style.cssText = "flex:1; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; background:#fff;";
+                var _blankOpt = document.createElement("option"); _blankOpt.value = ""; _blankOpt.textContent = "— same location —";
+                locSel.appendChild(_blankOpt);
+                var _facs = (window.getFacilities ? window.getFacilities() : []);
+                _facs.forEach(function(f) {
+                    var opt = document.createElement("option"); opt.value = f.name; opt.textContent = f.name;
+                    if (f.name === (part.location || '')) opt.selected = true;
+                    locSel.appendChild(opt);
+                });
+                locSel.onchange = function() { mp.parts[i].location = locSel.value; saveSpecialData(saData); };
+                partRow.appendChild(numBadge); partRow.appendChild(nameInp); partRow.appendChild(locSel);
                 if (i > 0) {
                     var prereq = document.createElement("span");
                     prereq.style.cssText = "font-size:0.7rem; color:#92400e; white-space:nowrap;";
