@@ -447,6 +447,21 @@
         return html;
     }
 
+    function buildPeriodLines(periods, campStart, campEnd, totalMin) {
+        if (!periods || !periods.length) return '';
+        const seen = new Set();
+        let lines = '';
+        periods.forEach(p => {
+            [p.startMin, p.endMin].forEach(m => {
+                if (m < campStart || m > campEnd || seen.has(m)) return;
+                seen.add(m);
+                const l = ((m - campStart) / totalMin * 100).toFixed(3);
+                lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:1.5px;background:#c8d0dc;pointer-events:none;z-index:3;"></div>`;
+            });
+        });
+        return lines;
+    }
+
     function buildPeriodBands(periods, campStart, campEnd, totalMin) {
         if (!periods || !periods.length) return '';
         let html = '';
@@ -489,7 +504,9 @@
     function buildTrack(usages, campStart, campEnd, totalMin, labelFn, periods) {
         const merged = mergeIntervals(usages);
         let html = buildPeriodBands(periods, campStart, campEnd, totalMin);
-        html += buildGridLines(campStart, campEnd, totalMin);
+        html += (periods && periods.length)
+            ? buildPeriodLines(periods, campStart, campEnd, totalMin)
+            : buildGridLines(campStart, campEnd, totalMin);
         let cursor = campStart;
 
         const block = (s, e, color, tip) => {
