@@ -1093,35 +1093,45 @@
         }
 
         const allDaily = window.loadAllDailyData?.() || {};
-        const global = window.loadGlobalSettings?.() || {};
-        const manualOffsets = global.manualUsageOffsets || {};
-        const rawCounts = global.historicalCounts || {};
-        const lastDone = {};
+        const manualOffsets = (window.loadGlobalSettings?.() || {}).manualUsageOffsets || {};
 
-        const rotHist = window.loadRotationHistory?.() || { bunks: {} };
+        // Compute counts and lastDone live from schedule data so they always
+        // reflect the current state of allDaily (no stale historicalCounts cache).
+        const liveCounts = {};
+        const lastDone   = {};
+
         Object.keys(allDaily).sort().forEach(dateKey => {
             const sched = allDaily[dateKey]?.scheduleAssignments || {};
-            Object.keys(sched).forEach(bunk => {
-                if (!bunks.includes(bunk)) return;
+            bunks.forEach(bunk => {
                 (sched[bunk] || []).forEach(entry => {
-                    if (entry && entry._activity && !entry.continuation) {
-                        const act = entry._activity;
-                        if (act === 'Free' || act.toLowerCase().includes('transition')) return;
-                        lastDone[bunk] = lastDone[bunk] || {};
+                    if (!entry || entry.continuation || entry._isTransition) return;
+                    const act = entry._activity || entry.activity || entry.sport || '';
+                    if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
+
+                    liveCounts[bunk]       = liveCounts[bunk] || {};
+                    liveCounts[bunk][act]  = (liveCounts[bunk][act] || 0) + 1;
+
+                    lastDone[bunk]         = lastDone[bunk] || {};
+                    // Sorted date iteration → later dates naturally overwrite
+                    if (!lastDone[bunk][act] || dateKey > lastDone[bunk][act]) {
                         lastDone[bunk][act] = dateKey;
                     }
                 });
             });
         });
 
+        // Merge rotation history as a secondary source for lastDone
+        const rotHist = window.loadRotationHistory?.() || { bunks: {} };
         bunks.forEach(bunk => {
             const bunkRotHist = rotHist.bunks?.[bunk] || {};
             Object.keys(bunkRotHist).forEach(act => {
                 const ts = bunkRotHist[act];
                 if (!ts) return;
-                const d = new Date(ts).toISOString().split('T')[0];
-                lastDone[bunk] = lastDone[bunk] || {};
-                if (!lastDone[bunk][act] || d > lastDone[bunk][act]) lastDone[bunk][act] = d;
+                try {
+                    const d = new Date(ts).toISOString().split('T')[0];
+                    lastDone[bunk] = lastDone[bunk] || {};
+                    if (!lastDone[bunk][act] || d > lastDone[bunk][act]) lastDone[bunk][act] = d;
+                } catch (_) {}
             });
         });
 
@@ -1147,7 +1157,7 @@
             let isFirstRow = true;
             const bunkBg = bunkIdx % 2 === 0 ? '#ffffff' : '#fafafa';
             filteredActivities.forEach(act => {
-                const hist = rawCounts[bunk]?.[act.name] || 0;
+                const hist = liveCounts[bunk]?.[act.name] || 0;
                 const offset = manualOffsets[bunk]?.[act.name] || 0;
                 const total = Math.max(0, hist + offset);
                 const limit = act.max > 0 ? act.max : '∞';
@@ -1162,11 +1172,6 @@
                 if (act.max > 0 && total >= act.max) { rowBg = '#fee2e2'; totalStyle += 'color:#b91c1c;'; }
                 else if (total === 0) totalStyle += 'color:#d97706;';
 
-                const typeTag = act.type === 'special'
-                    ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">SP</span>'
-                    : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">SP</span>';
-
-                // Correct type labels
                 const typeLabel = act.type === 'special'
                     ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Special</span>'
                     : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Sport</span>';
@@ -1190,7 +1195,7 @@
         });
 
         html += `</tbody></table></div></div>`;
-        html += buildRotationSummary(filteredBunks, filteredActivities, rawCounts, manualOffsets);
+        html += buildRotationSummary(filteredBunks, filteredActivities, liveCounts, manualOffsets);
         cont.innerHTML = html;
 
         cont.querySelectorAll('.rotation-adj-input').forEach(inp => {
