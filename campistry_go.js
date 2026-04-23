@@ -8724,6 +8724,76 @@ async function generateRoutes() {
         pinNeighborhood: function(nhId, busId) { return window.GoNhPersistence?.pin(nhId, busId); },
         unpinNeighborhood: function(nhId) { return window.GoNhPersistence?.unpin(nhId); },
         loadNeighborhoodState: function() { return window.GoNhPersistence?.load(); },
+        checkNeighborhoodSetup: async function () {
+            const line = function (label, ok, detail) {
+                console.log('%c' + (ok ? '✓' : '✗') + ' ' + label,
+                    'color:' + (ok ? '#22c55e' : '#ef4444') + ';font-weight:bold',
+                    detail || '');
+            };
+            console.log('%c── Neighborhood mode preflight ──', 'font-weight:bold;font-size:13px');
+
+            line('CampistryGoNeighborhoods loaded', !!window.CampistryGoNeighborhoods);
+            line('GoNhPersistence loaded', !!window.GoNhPersistence);
+            line('GoCloudSync loaded', !!window.GoCloudSync);
+
+            const cfg = window.__CAMPISTRY_SUPABASE__;
+            line('Supabase config present', !!(cfg?.url && cfg?.anonKey), cfg?.url || '(missing)');
+
+            let token = '';
+            try {
+                const sess = await window.supabase?.auth?.getSession?.();
+                token = sess?.data?.session?.access_token || '';
+            } catch (_) {}
+            line('Logged in (access token)', !!token);
+
+            const cb = document.getElementById('useNeighborhoodMode');
+            line('UI checkbox rendered', !!cb, cb ? ('checked=' + cb.checked) : '(open Routes tab first)');
+
+            line('Feature flag stored', !!D.setup, 'useNeighborhoodMode=' + !!D.setup?.useNeighborhoodMode);
+
+            if (!token || !cfg?.url) {
+                line('Edge function round-trip', false, 'skipped — not logged in / no supabase');
+                return;
+            }
+            try {
+                const t0 = performance.now();
+                const resp = await fetch(cfg.url + '/functions/v1/overpass-proxy', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'apikey': cfg.anonKey,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        query: '[out:json][timeout:10];node(around:50,40.7128,-74.0060);out;'
+                    })
+                });
+                const ms = Math.round(performance.now() - t0);
+                if (!resp.ok) {
+                    const bodyTxt = await resp.text().catch(function () { return ''; });
+                    const hint = resp.status === 404 ? 'function not deployed'
+                        : resp.status === 401 ? 'JWT rejected'
+                        : bodyTxt.slice(0, 200);
+                    line('Edge function round-trip', false, 'HTTP ' + resp.status + ' after ' + ms + 'ms — ' + hint);
+                } else {
+                    const data = await resp.json();
+                    const mirror = resp.headers.get('X-Overpass-Mirror') || '(unknown)';
+                    line('Edge function round-trip', true,
+                        (data.elements?.length || 0) + ' elements in ' + ms + 'ms via ' + mirror);
+                }
+            } catch (e) {
+                line('Edge function round-trip', false, e.message);
+            }
+
+            try {
+                const payload = await window.GoNhPersistence?.load();
+                const nhCount = Object.keys(payload?.neighborhoods || {}).length;
+                line('Persistence load', true,
+                    nhCount + ' neighborhood(s) stored, savedAt=' + (payload?.savedAt || 'never'));
+            } catch (e) {
+                line('Persistence load', false, e.message);
+            }
+        },
         renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         setAddressPinMode, toggleHideRoutes, toggleZones,
         toggleAddressPins, showAddressesOnMap, locateCamper,
