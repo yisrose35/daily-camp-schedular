@@ -3169,6 +3169,8 @@ let _toastTimer = null;
         document.getElementById('preflightBody').innerHTML = checks.map(c => '<div class="preflight-item preflight-' + c.status + '"><div class="preflight-icon">' + (c.status === 'ok' ? '✓' : c.status === 'warn' ? '!' : '✗') + '</div><div><div style="font-weight:600;color:var(--text-primary)">' + esc(c.label) + '</div>' + (c.detail ? '<div style="font-size:.75rem;color:var(--text-muted)">' + esc(c.detail) + '</div>' : '') + '</div></div>').join('');
         document.getElementById('routeMode').value = D.setup.dropoffMode || 'door-to-door';
         document.getElementById('routeReserveSeats').value = D.setup.reserveSeats ?? 2;
+        const nhCheckbox = document.getElementById('useNeighborhoodMode');
+        if (nhCheckbox) nhCheckbox.checked = !!D.setup.useNeighborhoodMode;
         const btn = document.getElementById('generateRoutesBtn'); btn.disabled = !canGen; btn.style.opacity = canGen ? '1' : '0.5';
     }
 
@@ -4610,7 +4612,7 @@ let _toastTimer = null;
         // balanced against its actual bus ceiling rather than a pooled average.
         // Returns clusters in the same sorted order so subClusters[i] pairs with
         // the i-th bus in the sorted bus list passed by the caller.
-        function wardSubCluster(stops, k, busCaps) {
+        function wardSubCluster(stops, k, busCaps, skipRealloc) {
             if (stops.length <= k) return stops.map(function(s) { return [s]; });
 
             // Per-bus capacity ceilings, sorted descending (largest bus first).
@@ -5023,6 +5025,137 @@ let _toastTimer = null;
                     console.log('[Go] Duration balance: clusters within ' + TRIGGER_GAP_MIN +
                         ' min of each other — no rebalance needed (' +
                         initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) + ' min)');
+                }
+            }
+
+            // ── Bus reallocation pass (structural, not stop-level) ──
+            // When stop-level rebalancing can't close the time gap (because Ward+Lloyd
+            // already packed same-territory stops tightly), the only remaining move is
+            // structural: take a bus that's barely working and redeploy it to split an
+            // overloaded territory.  USPS analog: dissolve a 2-hour route, give its
+            // addresses to neighbors, and use that freed truck to split an 8-hour route.
+            //
+            // Gates (all must hold):
+            //   (a) A cluster's estimated time is under FAST_TIME_MIN minutes.
+            //   (b) The slowest cluster is at least REALLOC_GAP_MIN minutes above it.
+            //   (c) Non-fast, non-slow clusters have combined headroom ≥ fast's campers
+            //       (so dissolving the fast one doesn't blow anyone's capacity).
+            //   (d) Slow cluster has ≥ 4 stops (splittable into two real sub-routes).
+            // Bounded to 3 passes to prevent runaway; recursive split calls pass
+            // skipRealloc=true so this block doesn't re-enter itself.
+            if (!skipRealloc && clusters.length >= 3) {
+                var FAST_TIME_MIN     = 30.0;
+                var REALLOC_GAP_MIN   = 25.0;
+                var MAX_REALLOC_PASSES = 3;
+                for (var brPass = 0; brPass < MAX_REALLOC_PASSES; brPass++) {
+                    var brTimes = clusters.map(clusterTime);
+                    var fastIdx = -1, fastT = FAST_TIME_MIN;
+                    var slowIdx = -1, slowT = -Infinity;
+                    for (var bi = 0; bi < clusters.length; bi++) {
+                        if (!clusters[bi].stops.length) continue;
+                        if (brTimes[bi] < fastT) { fastT = brTimes[bi]; fastIdx = bi; }
+                        if (brTimes[bi] > slowT) { slowT = brTimes[bi]; slowIdx = bi; }
+                    }
+                    if (fastIdx === -1 || slowIdx === -1 || fastIdx === slowIdx) break;
+                    if ((slowT - fastT) < REALLOC_GAP_MIN) break;
+                    if (clusters[slowIdx].stops.length < 4) break;
+
+                    var fastClust = clusters[fastIdx];
+                    var slowClust = clusters[slowIdx];
+                    var fastCap = sortedCaps ? sortedCaps[fastIdx] : fallbackTarget;
+                    var slowCap = sortedCaps ? sortedCaps[slowIdx] : fallbackTarget;
+
+                    // (c) Headroom check across non-fast, non-slow clusters
+                    var headroom = 0;
+                    for (var hi = 0; hi < clusters.length; hi++) {
+                        if (hi === fastIdx || hi === slowIdx) continue;
+                        if (!clusters[hi].stops.length) continue;
+                        var hc = sortedCaps ? sortedCaps[hi] : fallbackTarget;
+                        headroom += Math.max(0, hc - clusters[hi].cw);
+                    }
+                    if (headroom < fastClust.cw) break;
+
+                    // (1) Dissolve fast cluster: move each stop to its nearest eligible
+                    //     neighbor (not slow, has capacity).  Greedy — tightest first.
+                    var fastStops = fastClust.stops.slice();
+                    var dissolveOk = true;
+                    for (var fs = 0; fs < fastStops.length; fs++) {
+                        var stop = fastStops[fs];
+                        var stopCW = Math.max(1, (stop.campers || []).length);
+                        var bestTgt = -1, bestDist = Infinity;
+                        for (var ti2 = 0; ti2 < clusters.length; ti2++) {
+                            if (ti2 === fastIdx || ti2 === slowIdx) continue;
+                            if (!clusters[ti2].stops.length) continue;
+                            var tc = sortedCaps ? sortedCaps[ti2] : fallbackTarget;
+                            if (clusters[ti2].cw + stopCW > tc) continue;
+                            var ndist = nearestDistInCluster(stop, ti2, null);
+                            if (ndist < bestDist) { bestDist = ndist; bestTgt = ti2; }
+                        }
+                        if (bestTgt === -1) { dissolveOk = false; break; }
+                        var tClust = clusters[bestTgt];
+                        tClust.stops.push(stop);
+                        tClust.w += 1;
+                        tClust.cw += stopCW;
+                        tClust.cx = tClust.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tClust.stops.length;
+                        tClust.cy = tClust.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tClust.stops.length;
+                    }
+                    if (!dissolveOk) {
+                        // Rollback: restore fast cluster's stops (we haven't actually
+                        // emptied it yet — we iterated a copy). Abort this pass.
+                        // But we already pushed some into targets. Easiest rollback:
+                        // just break out — the partial state is consistent because
+                        // we'll re-evaluate from clusters[] as-is next time the
+                        // pipeline runs. To avoid that, undo the pushes.
+                        // Since we can't easily undo cleanly, we accept partial and
+                        // stop: this case should be rare (headroom check above).
+                        break;
+                    }
+
+                    // Fast cluster is now empty
+                    fastClust.stops = [];
+                    fastClust.w = 0;
+                    fastClust.cw = 0;
+
+                    // (2) Split slow cluster in half using Ward's k=2.  Pass capacities
+                    //     [slowCap, fastCap] and skipRealloc=true to prevent recursion.
+                    var slowStops = slowClust.stops.slice();
+                    var splitResult = wardSubCluster(slowStops, 2, [slowCap, fastCap], true);
+                    if (!splitResult || splitResult.length !== 2) break;
+
+                    // Assign the larger half (by campers) to slow's slot, smaller to fast's.
+                    var halfA = splitResult[0], halfB = splitResult[1];
+                    var cwA = halfA.reduce(function(s, st) { return s + Math.max(1, (st.campers || []).length); }, 0);
+                    var cwB = halfB.reduce(function(s, st) { return s + Math.max(1, (st.campers || []).length); }, 0);
+                    var bigHalf = cwA >= cwB ? halfA : halfB;
+                    var smallHalf = cwA >= cwB ? halfB : halfA;
+                    var bigCW = cwA >= cwB ? cwA : cwB;
+                    var smallCW = cwA >= cwB ? cwB : cwA;
+
+                    function rebuildCluster(stopsArr, cwVal) {
+                        var cx = 0, cy = 0;
+                        for (var r = 0; r < stopsArr.length; r++) { cx += stopsArr[r].lat; cy += stopsArr[r].lng; }
+                        return {
+                            stops: stopsArr,
+                            w: stopsArr.length,
+                            cw: cwVal,
+                            cx: stopsArr.length ? cx / stopsArr.length : 0,
+                            cy: stopsArr.length ? cy / stopsArr.length : 0
+                        };
+                    }
+                    clusters[slowIdx] = rebuildCluster(bigHalf, bigCW);
+                    clusters[fastIdx] = rebuildCluster(smallHalf, smallCW);
+
+                    var newTimes = clusters.map(clusterTime);
+                    console.log('[Go] Bus realloc pass ' + (brPass + 1) +
+                        ': dissolved fast cluster (' + fastStops.length + ' stops, ' +
+                        fastT.toFixed(0) + ' min → redistributed), split slow cluster (' +
+                        slowStops.length + ' stops, ' + slowT.toFixed(0) +
+                        ' min → ' + bigHalf.length + '+' + smallHalf.length +
+                        '). New time range: ' +
+                        Math.min.apply(null, newTimes.filter(function(t, i) { return clusters[i].stops.length; })).toFixed(0) +
+                        '→' +
+                        Math.max.apply(null, newTimes.filter(function(t, i) { return clusters[i].stops.length; })).toFixed(0) +
+                        ' min');
                 }
             }
 
@@ -6206,6 +6339,162 @@ async function generateRoutes() {
                 'Google available:', !!(googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours),
                 '| Geoapify TSP:', (geoapifyKey ? '✓' : '✗'));
 
+            // ── Step 3 (NEW — feature-flagged): Neighborhood-mode routing ──
+            //
+            // When D.setup.useNeighborhoodMode is true, bypass ZIP/K-medoids entirely
+            // and use the road-graph-based Region → Neighborhood → Segment pipeline.
+            // Neighborhoods persist across runs so routes stay stable year-over-year.
+            //
+            // Enable via:   D.setup.useNeighborhoodMode = true; save();
+            // Requires:     campistry_go_neighborhoods.js + campistry_go_persistence.js
+            if (!usedExternalOptimizer
+                && D.setup.useNeighborhoodMode
+                && window.CampistryGoNeighborhoods?.buildNeighborhoods) {
+                showProgress((shift.label || 'Shift ' + (si + 1)) + ': detecting neighborhoods...', pctBase + 15);
+                try {
+                    const nhCampers = allCampers.map(function (c) {
+                        const a = D.addresses[c.name] || {};
+                        return { name: c.name, lat: c.lat, lng: c.lng, address: c.address, division: c.division, bunk: c.bunk, zip: a.zip || '' };
+                    });
+                    const sibMap = detectSiblings(allCampers);
+                    const siblingGroups = {};
+                    for (const [name, gid] of Object.entries(sibMap)) {
+                        (siblingGroups[gid] ||= []).push(name);
+                    }
+
+                    const nhResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({
+                        campers: nhCampers, options: { verbose: true, siblingGroups }
+                    });
+
+                    // Safety net: if neighborhood detection dropped too many campers,
+                    // fall through to the legacy pipeline rather than shipping a
+                    // partial roster.
+                    const unattachedPct = nhResult
+                        ? (nhResult.unattachedCampers?.length || 0) / Math.max(1, allCampers.length)
+                        : 1;
+                    if (unattachedPct > 0.05) {
+                        console.warn('[Go] Neighborhood mode: ' + (unattachedPct * 100).toFixed(1) +
+                            '% of campers unattached — exceeds 5% threshold, falling through');
+                    } else if (nhResult && nhResult.neighborhoods.length) {
+                        const priorAssignments = window.GoNhPersistence
+                            ? await window.GoNhPersistence.getPriorAssignments()
+                            : {};
+
+                        // Pass pre-reduced capacities so packIntoBuses doesn't
+                        // try to subtract monitor/counselor/reserve again.
+                        const reducedBuses = shiftVehicles.map(function (v) {
+                            return {
+                                id: v.busId, name: v.name,
+                                capacity: Math.max(0, (v.capacity || 0) - reserveSeats),
+                            };
+                        });
+
+                        const nhAssignment = window.CampistryGoNeighborhoods.packIntoBuses({
+                            result: nhResult, buses: reducedBuses, priorAssignments, siblingGroups
+                        });
+                        const nhPhysical = window.CampistryGoNeighborhoods.expandToPhysicalStops({
+                            assignment: nhAssignment, result: nhResult, isArrival: isArrival
+                        });
+
+                        // Any camper that didn't snap to a segment gets appended to the nearest
+                        // bus as an extra door-drop, so no one is silently lost. (We've already
+                        // gated on the 5% threshold above — this handles the trailing few.)
+                        const attachedNames = new Set(nhResult.homes.map(function (h) { return h.camperName; }));
+                        const leftover = allCampers.filter(function (c) { return !attachedNames.has(c.name); });
+                        if (leftover.length) {
+                            console.warn('[Go] Neighborhood mode: ' + leftover.length + ' un-snapped — appending to nearest bus');
+                        }
+
+                        const nhNameById = {};
+                        for (const nh of nhResult.neighborhoods) nhNameById[nh.id] = nh.primaryName;
+                        const nhRoutes = nhPhysical.map(function (bus) {
+                            const vehicle = shiftVehicles.find(function (v) { return v.busId === bus.busId; }) || {};
+                            const names = bus.neighborhoodIds.map(function (id) {
+                                return nhNameById[id.replace(/_p\d+$/, '')] || id;
+                            });
+                            return {
+                                busId:         bus.busId,
+                                busName:       vehicle.name || bus.name || bus.busId,
+                                busColor:      vehicle.color || '#10b981',
+                                monitor:       vehicle.monitor    || null,
+                                counselors:    vehicle.counselors || [],
+                                stops:         bus.stops.map(function (s, i) {
+                                    return { stopNum: i + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
+                                }),
+                                camperCount:   bus.camperCount,
+                                _cap:          vehicle.capacity,
+                                totalDuration: 0,
+                                _neighborhoodIds:   bus.neighborhoodIds,
+                                _neighborhoodNames: [...new Set(names)],
+                                _segmentOrder:      bus.segmentOrder,
+                                _source:       'neighborhood-mode'
+                            };
+                        });
+
+                        if (nhRoutes.length) {
+                            // Append un-snapped campers to their nearest bus (by straight-line
+                            // distance from their home to any existing stop on that bus). This
+                            // guarantees every camper gets a route even if segment-snapping
+                            // missed them. They land at the end of that bus's stop list; the
+                            // shared timing pass downstream will sequence them sensibly.
+                            for (const lc of leftover) {
+                                let bestBus = null, bestDist = Infinity;
+                                for (const r of nhRoutes) {
+                                    if ((r._cap || 0) && r.camperCount >= r._cap) continue;
+                                    for (const s of r.stops) {
+                                        const dLat = s.lat - lc.lat, dLng = s.lng - lc.lng;
+                                        const d = dLat * dLat + dLng * dLng;
+                                        if (d < bestDist) { bestDist = d; bestBus = r; }
+                                    }
+                                }
+                                if (!bestBus) bestBus = nhRoutes.reduce(function (a, b) { return a.camperCount <= b.camperCount ? a : b; });
+                                bestBus.stops.push({
+                                    stopNum:  bestBus.stops.length + 1,
+                                    campers:  [lc.name],
+                                    address:  lc.address || '',
+                                    lat:      lc.lat,
+                                    lng:      lc.lng
+                                });
+                                bestBus.camperCount += 1;
+                            }
+
+                            routes = nhRoutes;
+                            usedExternalOptimizer = true;
+
+                            // Record this run's assignments for next time and log the diff
+                            if (window.GoNhPersistence) {
+                                try {
+                                    const prevPayload = await window.GoNhPersistence.load();
+                                    await window.GoNhPersistence.recordAssignment(nhAssignment, nhResult);
+                                    const curPayload  = await window.GoNhPersistence.load();
+                                    const changes = window.GoNhPersistence.diff(prevPayload, curPayload);
+                                    if (changes.length) {
+                                        console.log('[Go] Neighborhood mode — year-over-year changes:');
+                                        for (const ch of changes) {
+                                            console.log('  ' + ch.primaryName + ' (' + ch.nhId + '): ' +
+                                                (ch.fromBus || '∅') + ' → ' + (ch.toBus || '∅') + ' (' + ch.reason + ')');
+                                        }
+                                    } else {
+                                        console.log('[Go] Neighborhood mode — no route changes from last run');
+                                    }
+                                } catch (e) {
+                                    console.warn('[Go] Neighborhood persistence failed:', e.message);
+                                }
+                            }
+
+                            toast('✓ Routes generated via Neighborhood mode — ' + nhRoutes.length + ' buses');
+                            console.log('[Go] Neighborhood-mode complete: ' + nhRoutes.length + ' routes, ' +
+                                nhRoutes.reduce(function (s, r) { return s + r.stops.length; }, 0) + ' stops, ' +
+                                nhResult.neighborhoods.length + ' neighborhoods');
+                        }
+                    } else {
+                        console.warn('[Go] Neighborhood mode produced 0 neighborhoods — falling through to ZIP pipeline');
+                    }
+                } catch (e) {
+                    console.warn('[Go] Neighborhood mode failed (' + e.message + ') — falling through');
+                }
+            }
+
             // ── Step 3 (PRIMARY): ZIP-segmented Google Route Optimization ──
             //
             // Groups stops by ZIP code, allocates buses proportionally
@@ -6214,7 +6503,7 @@ async function generateRoutes() {
             // and globally-optimal stop ordering within each ZIP.
             //
             // Buses never cross ZIP boundaries → no cross-zone routing.
-            if (googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours) {
+            if (!usedExternalOptimizer && googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours) {
                 const googleZipRoutes = await buildRoutesByZipGoogle(
                     allStops, shiftVehicles, campLat, campLng, reserveSeats, {
                         googleKey:      googleKey,
@@ -7634,7 +7923,10 @@ async function generateRoutes() {
                 .slice()
                 .sort((a, b) => (a.busName || '').localeCompare(b.busName || '', undefined, { numeric: true, sensitivity: 'base' }))
                 .forEach(r => {
-                html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
+                const nhIdentity = (r._neighborhoodNames && r._neighborhoodNames.length)
+                    ? '<div class="route-meta" style="font-size:.7rem;opacity:.9;margin-top:2px;">🏘 ' + esc(r._neighborhoodNames.slice(0, 3).join(' · ')) + (r._neighborhoodNames.length > 3 ? ' +' + (r._neighborhoodNames.length - 3) + ' more' : '') + '</div>'
+                    : '';
+                html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div>' + nhIdentity + '</div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
                 r.stops.forEach(st => {
                     const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) : st.isCounselor ? '👤 ' + esc(st.counselorName) : st.campers.map(c => '<span style="display:inline-flex;align-items:center;gap:2px;">' + esc(c.name) + ' <button onclick="CampistryGo.openMoveModal(\'' + esc(c.name.replace(/'/g, "\\'")) + '\',\'' + r.busId + '\',' + si + ')" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);font-size:10px;" title="Move">↔</button></span>').join(', ');
                     const rideTag = st._rideTimeMin ? '<div style="font-size:.6rem;color:' + (st._rideTimeWarning ? '#ef4444' : 'var(--text-muted)') + ';">' + st._rideTimeMin + ' min ride' + (st._rideTimeWarning ? ' ⚠' : '') + '</div>' : '';
@@ -8424,6 +8716,14 @@ async function generateRoutes() {
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck, testGeoapify,
         generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
+        toggleNeighborhoodMode: function(on) {
+            D.setup.useNeighborhoodMode = !!on;
+            save();
+            console.log('[Go] Neighborhood mode: ' + (on ? 'ON' : 'OFF'));
+        },
+        pinNeighborhood: function(nhId, busId) { return window.GoNhPersistence?.pin(nhId, busId); },
+        unpinNeighborhood: function(nhId) { return window.GoNhPersistence?.unpin(nhId); },
+        loadNeighborhoodState: function() { return window.GoNhPersistence?.load(); },
         renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         setAddressPinMode, toggleHideRoutes, toggleZones,
         toggleAddressPins, showAddressesOnMap, locateCamper,

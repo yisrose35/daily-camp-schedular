@@ -271,6 +271,10 @@
                 <div class="action-spacer"></div>
                 <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
                     <select class="form-select" id="routeMode" style="width:auto;font-size:.75rem;padding:.3rem .6rem;"><option value="door-to-door">Door-to-Door (every house)</option><option value="optimized-stops">Optimized Stops (walking distance)</option><option value="corner-stops">Corner Stops (nearest intersection)</option></select>
+                    <label style="font-size:.75rem;color:var(--text-muted);display:flex;align-items:center;gap:.3rem;cursor:pointer;" title="Road-graph-based Region → Neighborhood → Segment routing. Persists across runs.">
+                        <input type="checkbox" id="useNeighborhoodMode" onchange="window.CampistryGo && CampistryGo.toggleNeighborhoodMode && CampistryGo.toggleNeighborhoodMode(this.checked)" style="cursor:pointer;">
+                        <span>🏘 Neighborhood (beta)</span>
+                    </label>
                     <label style="font-size:.75rem;color:var(--text-muted);">Reserve:</label>
                     <input type="number" class="form-input" id="routeReserveSeats" value="2" min="0" max="20" style="width:50px;font-size:.75rem;padding:.3rem .5rem;">
                     <button class="btn btn-secondary btn-sm" onclick="CampistryGo.exportRoutesCsv()">CSV</button>
@@ -459,6 +463,8 @@
 <script src="campistry_go_google.js"></script>
 <script src="campistry_go_geoapify.js"></script>
 <script src="campistry_go_ors_optimizer.js"></script>
+<script src="campistry_go_neighborhoods.js"></script>
+<script src="campistry_go_persistence.js"></script>
 <script src="campistry_go.js"></script>
     <script src="campistry_go_map_editor.js"></script>
 <script>
