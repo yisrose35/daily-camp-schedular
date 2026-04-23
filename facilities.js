@@ -1653,12 +1653,10 @@ function summarySpecialWeather(s) {
 function summarySpecialSchedulingMode(s) {
     if (s.fullGrade) return "Full Grade — entire grade together";
     const rules = s.sharableWith;
-    if (!rules || rules.type === 'not_sharable') return "Individual bunks — 1 at a time";
-    if (rules.type === 'cross_division') {
-        const pc = Object.keys(rules.allowedPairs || {}).filter(k => rules.allowedPairs[k]).length;
-        return 'Individual bunks — grade pairs (' + (pc > 0 ? pc + ' pair' + (pc !== 1 ? 's' : '') : 'none set') + ')';
-    }
-    return `Individual bunks — up to ${parseInt(rules.capacity) || 2} at once (same grade)`;
+    if (!rules || rules.type === 'not_sharable') return "Individual bunks — no sharing";
+    const pc = Object.keys(rules.allowedPairs || {}).filter(k => rules.allowedPairs[k]).length;
+    const cap = parseInt(rules.capacity) || 2;
+    return 'Individual bunks — sharing on' + (pc > 0 ? ', ' + pc + ' pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
 }
 function summarySpecialUsage(s) {
     var parts = [];
@@ -1995,26 +1993,24 @@ function renderSpecialSchedulingMode(saData) {
         if (el) el.textContent = summarySpecialSchedulingMode(saData);
     };
 
+    function pk(a, b) { return [a, b].sort().join('|'); }
+
     const renderContent = () => {
         container.innerHTML = "";
 
-        // Top-level toggle: Full Grade vs Individual Bunks
+        // ── Step 1: Full Grade vs Individual ─────────────────────
         const modeWrap = document.createElement("div");
         modeWrap.style.cssText = "display:flex; gap:0; margin-bottom:16px; border-radius:10px; overflow:hidden; border:1px solid #E5E7EB;";
 
         const btnFull = document.createElement("button");
         btnFull.innerHTML = '<strong>Full Grade</strong><span style="display:block;font-size:0.75rem;font-weight:400;margin-top:2px;opacity:0.8;">Entire grade together</span>';
         btnFull.style.cssText = 'flex:1; padding:12px 8px; border:none; cursor:pointer; text-align:center; font-size:0.85rem; transition:all 0.15s; line-height:1.3; '
-            + (saData.fullGrade
-                ? 'background:#0F5F6E; color:white;'
-                : 'background:#fff; color:#6B7280;');
+            + (saData.fullGrade ? 'background:#0F5F6E; color:white;' : 'background:#fff; color:#6B7280;');
 
         const btnIndiv = document.createElement("button");
         btnIndiv.innerHTML = '<strong>Individual Bunks</strong><span style="display:block;font-size:0.75rem;font-weight:400;margin-top:2px;opacity:0.8;">Assigned per bunk</span>';
         btnIndiv.style.cssText = 'flex:1; padding:12px 8px; border:none; cursor:pointer; text-align:center; font-size:0.85rem; transition:all 0.15s; line-height:1.3; border-left:1px solid #E5E7EB; '
-            + (!saData.fullGrade
-                ? 'background:#0F5F6E; color:white;'
-                : 'background:#fff; color:#6B7280;');
+            + (!saData.fullGrade ? 'background:#0F5F6E; color:white;' : 'background:#fff; color:#6B7280;');
 
         btnFull.onclick = () => { saData.fullGrade = true; saveSpecialData(saData); renderContent(); updateSummary(); };
         btnIndiv.onclick = () => { saData.fullGrade = false; saveSpecialData(saData); renderContent(); updateSummary(); };
@@ -2036,142 +2032,140 @@ function renderSpecialSchedulingMode(saData) {
             return;
         }
 
-        // Individual bunks — sharing controls
-        const rules = saData.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
+        // ── Step 2: Allow sharing? ────────────────────────────────
+        const rules = saData.sharableWith || { type: 'not_sharable', capacity: 2 };
         if (!rules.allowedPairs || typeof rules.allowedPairs !== 'object') rules.allowedPairs = {};
+
+        // Silently migrate same_division → cross_division with self-pairs populated
+        if (rules.type === 'same_division') {
+            rules.type = 'cross_division';
+            const migDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            migDivs.forEach(g => { rules.allowedPairs[pk(g, g)] = true; });
+            saData.sharableWith = rules;
+            saveSpecialData(saData);
+        }
+
         saData.sharableWith = rules;
+        const isSharable = rules.type !== 'not_sharable';
 
-        function pk(a, b) { return [a, b].sort().join('|'); }
+        const sharingHdr = document.createElement("div");
+        sharingHdr.style.cssText = "font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:8px;";
+        sharingHdr.textContent = "Allow sharing?";
+        container.appendChild(sharingHdr);
 
-        const sharingLabel = document.createElement("div");
-        sharingLabel.style.cssText = "font-size:0.85rem; font-weight:500; color:#374151; margin-bottom:10px;";
-        sharingLabel.textContent = "Who can share this activity at the same time?";
-        container.appendChild(sharingLabel);
+        const shareToggle = document.createElement("div");
+        shareToggle.style.cssText = "display:flex; gap:0; margin-bottom:14px; border-radius:8px; overflow:hidden; border:1px solid #E5E7EB;";
 
-        // ── Mode button row ───────────────────────────────────────
-        const modeRow = document.createElement('div');
-        modeRow.style.cssText = 'display:flex; gap:0; margin-bottom:14px; border-radius:8px; overflow:hidden; border:1px solid #E5E7EB;';
-        const modeDefs = [
-            { id: 'not_sharable',   label: 'No Sharing' },
-            { id: 'same_division',  label: 'Same Grade' },
-            { id: 'cross_division', label: 'Grade Pairs' }
-        ];
-        modeDefs.forEach((m, i) => {
-            const btn = document.createElement('button');
-            btn.textContent = m.label;
-            const active = rules.type === m.id;
-            btn.style.cssText = 'flex:1; padding:9px 4px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s;'
-                + (i > 0 ? 'border-left:1px solid #E5E7EB;' : '')
-                + (active ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#374151;');
-            btn.onclick = () => {
-                rules.type = m.id;
-                if (m.id === 'not_sharable') rules.capacity = 1;
-                else if (!rules.capacity || rules.capacity < 2) rules.capacity = 2;
-                if (m.id !== 'cross_division') rules.allowedPairs = {};
-                saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
-            };
-            modeRow.appendChild(btn);
-        });
-        container.appendChild(modeRow);
+        const btnNo = document.createElement("button");
+        btnNo.textContent = "No — 1 bunk only";
+        btnNo.style.cssText = 'flex:1; padding:9px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; '
+            + (!isSharable ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#6B7280;');
 
-        if (rules.type === 'not_sharable') {
+        const btnYes = document.createElement("button");
+        btnYes.textContent = "Yes — allow sharing";
+        btnYes.style.cssText = 'flex:1; padding:9px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; border-left:1px solid #E5E7EB; '
+            + (isSharable ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#6B7280;');
+
+        btnNo.onclick = () => {
+            rules.type = 'not_sharable'; rules.capacity = 1; rules.allowedPairs = {};
+            saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
+        };
+        btnYes.onclick = () => {
+            rules.type = 'cross_division';
+            if (!rules.capacity || rules.capacity < 2) rules.capacity = 2;
+            saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
+        };
+
+        shareToggle.appendChild(btnNo);
+        shareToggle.appendChild(btnYes);
+        container.appendChild(shareToggle);
+
+        if (!isSharable) {
             const nNote = document.createElement('div');
-            nNote.style.cssText = 'color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px;';
-            nNote.textContent = 'Only 1 bunk can use this activity at a time.';
+            nNote.style.cssText = 'color:#6B7280; font-size:0.82rem; padding:10px; background:#F9FAFB; border-radius:8px;';
+            nNote.textContent = 'Only 1 bunk will be assigned to this activity at a time.';
             container.appendChild(nNote);
             return;
         }
 
-        // ── Detail panel ──────────────────────────────────────────
-        const det = document.createElement('div');
-        det.style.cssText = 'padding-left:12px; border-left:2px solid #147D91;';
-
-        const capRow = document.createElement('div');
-        capRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:12px;';
-        const capLbl = document.createElement('span'); capLbl.style.cssText = 'font-size:0.85rem; color:#374151;';
+        // ── Step 3: Capacity ──────────────────────────────────────
+        const capWrap = document.createElement('div');
+        capWrap.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:16px;';
+        const capLbl = document.createElement('span');
+        capLbl.style.cssText = 'font-size:0.84rem; color:#374151;';
         capLbl.textContent = 'Max bunks at once:';
         const capIn = document.createElement('input');
         capIn.type = 'number'; capIn.min = '2'; capIn.max = '20'; capIn.value = rules.capacity || 2;
-        capIn.style.cssText = 'width:60px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+        capIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.9rem; font-weight:600;';
         capIn.onchange = () => {
             rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
             capIn.value = rules.capacity;
             saData.sharableWith = rules; saveSpecialData(saData); updateSummary();
         };
-        capRow.appendChild(capLbl); capRow.appendChild(capIn);
-        det.appendChild(capRow);
+        capWrap.appendChild(capLbl);
+        capWrap.appendChild(capIn);
+        container.appendChild(capWrap);
 
-        if (rules.type === 'same_division') {
-            const sdNote = document.createElement('div');
-            sdNote.style.cssText = 'color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;';
-            sdNote.innerHTML = 'Up to <strong>' + (rules.capacity || 2) + '</strong> bunks <strong>within the same grade</strong> can share this slot.';
-            det.appendChild(sdNote);
+        // ── Step 4: Grade pairing ─────────────────────────────────
+        const allDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+
+        if (allDivs.length < 2) {
+            const noGr = document.createElement('div');
+            noGr.style.cssText = 'font-size:0.82rem; color:#6B7280; padding:10px; background:#F9FAFB; border-radius:8px;';
+            noGr.textContent = 'No grades configured yet.';
+            container.appendChild(noGr);
+            return;
         }
 
-        if (rules.type === 'cross_division') {
-            const allDivs = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+        const pairHdr = document.createElement('div');
+        pairHdr.style.cssText = 'font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:10px;';
+        pairHdr.textContent = 'Which grades can share with each other?';
+        container.appendChild(pairHdr);
 
-            const matrixLbl = document.createElement('div');
-            matrixLbl.style.cssText = 'font-size:0.82rem; color:#374151; font-weight:500; margin-bottom:8px;';
-            matrixLbl.textContent = 'Which grade combinations can share this activity at the same time?';
-            det.appendChild(matrixLbl);
+        const gridWrap = document.createElement('div');
+        gridWrap.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
 
-            if (allDivs.length < 2) {
-                const noGr = document.createElement('div');
-                noGr.style.cssText = 'font-size:0.8rem; color:#6B7280; padding:8px; background:#F9FAFB; border-radius:6px;';
-                noGr.textContent = 'No grades configured yet.';
-                det.appendChild(noGr);
-            } else {
-                const pairCount = Object.keys(rules.allowedPairs).filter(k => rules.allowedPairs[k]).length;
-                const pairWrap = document.createElement('div');
-                pairWrap.style.cssText = 'display:flex; flex-direction:column; gap:8px; margin-bottom:8px;';
+        allDivs.forEach(rowGrade => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
 
-                allDivs.forEach((rowGrade, ri) => {
-                    const colGrades = allDivs.slice(ri);
-                    if (colGrades.length === 0) return;
+            const lbl = document.createElement('span');
+            lbl.style.cssText = 'font-size:0.82rem; color:#374151; font-weight:600; min-width:64px; flex-shrink:0;';
+            lbl.textContent = rowGrade + ':';
+            row.appendChild(lbl);
 
-                    const row = document.createElement('div');
-                    row.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
+            // Other grades first, then (same grade) at end
+            [...allDivs.filter(g => g !== rowGrade), rowGrade].forEach(colGrade => {
+                const isSame = colGrade === rowGrade;
+                const key = pk(rowGrade, colGrade);
+                const isOn = rules.allowedPairs[key] === true;
 
-                    const rowLbl = document.createElement('span');
-                    rowLbl.style.cssText = 'font-size:0.8rem; color:#374151; font-weight:500; flex-shrink:0; white-space:nowrap;';
-                    rowLbl.textContent = rowGrade + ':';
-                    row.appendChild(rowLbl);
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.textContent = isSame ? '(same grade)' : colGrade;
+                chip.style.cssText = 'padding:4px 10px; border-radius:20px; font-size:0.8rem; cursor:pointer; transition:all 0.12s; border:1px solid '
+                    + (isOn ? '#0F5F6E' : '#D1D5DB') + '; background:'
+                    + (isOn ? '#e6f4f7' : '#fff') + '; color:'
+                    + (isOn ? '#0F5F6E' : '#6B7280') + '; font-weight:' + (isOn ? '600' : '400') + ';';
+                if (isSame) chip.style.cssText += 'font-style:italic;';
 
-                    colGrades.forEach(colGrade => {
-                        const key = pk(rowGrade, colGrade);
-                        const isOn = rules.allowedPairs[key] === true;
-                        const chip = document.createElement('button');
-                        chip.type = 'button';
-                        const isSame = rowGrade === colGrade;
-                        chip.textContent = isSame ? '(same grade)' : colGrade;
-                        chip.style.cssText = 'padding:4px 10px; border-radius:20px; font-size:0.78rem; cursor:pointer; transition:all 0.12s; border:1px solid '
-                            + (isOn ? '#0F5F6E' : '#D1D5DB') + '; background:'
-                            + (isOn ? '#e6f4f7' : '#F9FAFB') + '; color:'
-                            + (isOn ? '#0F5F6E' : '#6B7280') + '; font-weight:' + (isOn ? '600' : '400') + ';';
-                        if (isSame) chip.style.cssText += 'font-style:italic;';
-                        chip.onclick = () => {
-                            if (rules.allowedPairs[key]) delete rules.allowedPairs[key];
-                            else rules.allowedPairs[key] = true;
-                            saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
-                        };
-                        row.appendChild(chip);
-                    });
-                    pairWrap.appendChild(row);
-                });
-                det.appendChild(pairWrap);
+                chip.onclick = () => {
+                    if (rules.allowedPairs[key]) delete rules.allowedPairs[key];
+                    else rules.allowedPairs[key] = true;
+                    saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                };
+                row.appendChild(chip);
+            });
 
-                const countNote = document.createElement('div');
-                countNote.style.cssText = 'font-size:0.75rem; padding:7px 10px; border-radius:6px; '
-                    + (pairCount > 0 ? 'color:#0369a1; background:#e0f2fe;' : 'color:#92400E; background:#fffbeb;');
-                countNote.textContent = pairCount > 0
-                    ? pairCount + ' pair' + (pairCount !== 1 ? 's' : '') + ' allowed to share simultaneously.'
-                    : 'No pairs selected — effectively the same as No Sharing.';
-                det.appendChild(countNote);
-            }
-        }
+            gridWrap.appendChild(row);
+        });
 
-        container.appendChild(det);
+        container.appendChild(gridWrap);
+
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:0.75rem; color:#9CA3AF; margin-top:10px; line-height:1.5;';
+        hint.textContent = 'Sharing is always mutual — if Grade 1 can share with Grade 2, Grade 2 automatically can share with Grade 1.';
+        container.appendChild(hint);
     };
 
     renderContent();
