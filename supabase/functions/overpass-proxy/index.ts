@@ -71,6 +71,15 @@ serve(async (req: Request) => {
     });
   }
 
+  // Overpass's usage policy requires a descriptive User-Agent identifying the
+  // app; anonymous/default Deno traffic gets throttled with 406/429. Referer
+  // gives the sysadmin a way to reach us if we misbehave.
+  const UPSTREAM_HEADERS = {
+    "User-Agent": "CampistryGo/1.0 (camp bus routing; https://github.com/yisrose35/daily-camp-schedular)",
+    "Referer": "https://github.com/yisrose35/daily-camp-schedular",
+    "Accept": "application/json",
+  };
+
   const errors: { url: string; status?: number; message: string }[] = [];
 
   for (const url of MIRRORS) {
@@ -79,7 +88,10 @@ serve(async (req: Request) => {
     try {
       const upstream = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: {
+          ...UPSTREAM_HEADERS,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
         body: "data=" + encodeURIComponent(query),
         signal: controller.signal,
       });
