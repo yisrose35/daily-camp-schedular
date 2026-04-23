@@ -90,10 +90,9 @@
         { bg: '#fff0f6', border: '#be185d', text: '#831843' },
     ];
 
-    const FREE_BG     = '#f0fdf4';
-    const FREE_BORDER = '#4ade80';
-    const FREE_TEXT   = '#15803d';
-    const NOW_COLOR   = '#dc2626';
+    const COLOR_AVAIL = '#4ade80';  // green — available
+    const COLOR_TAKEN = '#f87171';  // red   — taken
+    const NOW_COLOR   = '#1d4ed8';  // blue  — current time line
 
     // ========================================================================
     // MASTER DATA
@@ -370,28 +369,21 @@
 
     // 15-minute time axis: bold labels at :00, lighter at :30, tick marks at :15/:45
     function buildTimeAxis(campStart, campEnd, totalMin) {
-        let labels = '';
-        let ticks  = '';
+        let labels = '', ticks = '';
         const first15 = Math.ceil(campStart / 15) * 15;
-
         for (let m = first15; m <= campEnd; m += 15) {
             const l = ((m - campStart) / totalMin * 100).toFixed(3);
             const mod = m % 60;
-
             if (mod === 0) {
-                // Hour mark — bold label + tall tick
                 labels += `<span style="position:absolute;left:${l}%;transform:translateX(-50%);font-size:0.72rem;font-weight:700;color:#1e293b;white-space:nowrap;">${minutesToShortLabel(m)}</span>`;
                 ticks  += `<div style="position:absolute;bottom:0;left:${l}%;width:1px;height:10px;background:#94a3b8;"></div>`;
             } else if (mod === 30) {
-                // Half-hour — medium label + medium tick
                 labels += `<span style="position:absolute;left:${l}%;transform:translateX(-50%);font-size:0.64rem;font-weight:500;color:#64748b;white-space:nowrap;">${minutesToShortLabel(m)}</span>`;
                 ticks  += `<div style="position:absolute;bottom:0;left:${l}%;width:1px;height:7px;background:#cbd5e1;"></div>`;
             } else {
-                // Quarter mark — tick only, no label
-                ticks += `<div style="position:absolute;bottom:0;left:${l}%;width:1px;height:4px;background:#e2e8f0;"></div>`;
+                ticks  += `<div style="position:absolute;bottom:0;left:${l}%;width:1px;height:4px;background:#e2e8f0;"></div>`;
             }
         }
-
         return `
             <div style="display:flex;margin-bottom:2px;">
                 <div style="width:160px;min-width:160px;flex-shrink:0;"></div>
@@ -403,20 +395,15 @@
             </div>`;
     }
 
-    // 15-minute vertical grid lines at 3 opacity levels
+    // Subtle vertical grid lines at 15-min intervals
     function buildGridLines(campStart, campEnd, totalMin) {
         let lines = '';
         const first15 = Math.ceil(campStart / 15) * 15;
-
         for (let m = first15; m <= campEnd; m += 15) {
             const l = ((m - campStart) / totalMin * 100).toFixed(3);
             const mod = m % 60;
-            let color;
-            if (mod === 0)       color = 'rgba(15,23,42,0.14)';
-            else if (mod === 30) color = 'rgba(15,23,42,0.07)';
-            else                 color = 'rgba(15,23,42,0.03)';
-
-            lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:1px;background:${color};pointer-events:none;z-index:0;"></div>`;
+            const opacity = mod === 0 ? '0.13' : mod === 30 ? '0.07' : '0.03';
+            lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:1px;background:rgba(15,23,42,${opacity});pointer-events:none;z-index:0;"></div>`;
         }
         return lines;
     }
@@ -442,77 +429,104 @@
         return merged;
     }
 
-    // Free blocks — show available time window rather than just "FREE"
-    function buildFreeBlocks(usages, campStart, campEnd, totalMin) {
+    // Build the full track as red (taken) + green (available) solid blocks.
+    // Each block carries a data-tip attribute for the hover tooltip.
+    function buildTrack(usages, campStart, campEnd, totalMin, labelFn) {
         const merged = mergeIntervals(usages);
-        let html = '';
+        let html = buildGridLines(campStart, campEnd, totalMin);
         let cursor = campStart;
 
-        const addFreeBlock = (s, e) => {
-            if (e <= s) return;
-            const dur = e - s;
+        const block = (s, e, color, tip) => {
+            if (e <= s) return '';
             const l = ((s - campStart) / totalMin * 100).toFixed(3);
-            const w = ((dur) / totalMin * 100).toFixed(3);
-            const timeRange = `${minutesToTimeLabel(s)} – ${minutesToTimeLabel(e)}`;
-            const tip = `Available: ${timeRange} (${dur} min)`;
-
-            // Show the time window if there's room (~40 min+), otherwise just color
-            const showTime = dur >= 40;
-            const showShort = !showTime && dur >= 20;
-
-            html += `
-                <div title="${tip}" style="position:absolute;top:3px;bottom:3px;left:${l}%;width:${w}%;
-                        background:${FREE_BG};border-left:3px solid ${FREE_BORDER};
-                        display:flex;align-items:center;padding:0 6px;
-                        box-sizing:border-box;overflow:hidden;z-index:1;">
-                    ${showTime
-                        ? `<span style="font-size:0.64rem;font-weight:600;color:${FREE_TEXT};white-space:nowrap;">${timeRange}</span>`
-                        : showShort
-                        ? `<span style="font-size:0.58rem;color:${FREE_TEXT};white-space:nowrap;">${minutesToShortLabel(s)}–${minutesToShortLabel(e)}</span>`
-                        : ''}
-                </div>`;
+            const w = Math.max(0.2, ((e - s) / totalMin * 100)).toFixed(3);
+            return `<div data-tip="${tip.replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}"
+                         style="position:absolute;top:0;bottom:0;left:${l}%;width:${w}%;
+                                background:${color};box-sizing:border-box;z-index:1;cursor:default;"></div>`;
         };
 
-        merged.forEach(interval => { addFreeBlock(cursor, interval.startMin); cursor = interval.endMin; });
-        addFreeBlock(cursor, campEnd);
+        merged.forEach(interval => {
+            // Green: available gap before this busy block
+            const dur = interval.startMin - cursor;
+            if (dur > 0) {
+                html += block(cursor, interval.startMin, COLOR_AVAIL,
+                    `Available\n${minutesToTimeLabel(cursor)} – ${minutesToTimeLabel(interval.startMin)} (${dur} min)`);
+            }
+            // Red: taken block
+            const bDur = interval.endMin - interval.startMin;
+            const label = usages
+                .filter(u => u.startMin < interval.endMin && u.endMin > interval.startMin)
+                .map(u => labelFn(u)).join(', ');
+            html += block(interval.startMin, interval.endMin, COLOR_TAKEN,
+                `Taken — ${minutesToTimeLabel(interval.startMin)} – ${minutesToTimeLabel(interval.endMin)} (${bDur} min)\n${label}`);
+            cursor = interval.endMin;
+        });
+
+        // Green: remaining free time after last busy block
+        if (cursor < campEnd) {
+            const dur = campEnd - cursor;
+            html += block(cursor, campEnd, COLOR_AVAIL,
+                `Available\n${minutesToTimeLabel(cursor)} – ${minutesToTimeLabel(campEnd)} (${dur} min)`);
+        }
+
         return html;
     }
 
-    function buildBusyBlock(item, campStart, totalMin, label, color) {
-        const l = ((item.startMin - campStart) / totalMin * 100).toFixed(3);
-        const w = Math.max(0.3, ((item.endMin - item.startMin) / totalMin * 100)).toFixed(3);
-        const dur = item.endMin - item.startMin;
-        const tip = `${item.bunk}: ${item.activity}${item.field ? ' @ ' + item.field : ''}\n${minutesToTimeLabel(item.startMin)} – ${minutesToTimeLabel(item.endMin)} (${dur} min)`;
-        return `
-            <div title="${tip.replace(/"/g, '&quot;')}"
-                 style="position:absolute;top:3px;bottom:3px;left:${l}%;width:${w}%;
-                        background:${color.bg};border-left:3px solid ${color.border};
-                        display:flex;align-items:center;padding:0 6px;overflow:hidden;
-                        cursor:default;box-sizing:border-box;min-width:2px;z-index:2;">
-                <span style="font-size:0.69rem;font-weight:600;color:${color.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</span>
-            </div>`;
-    }
-
-    function buildRow(leftLabel, trackHtml, isAlternate, labelBold) {
+    function buildRow(leftLabel, trackHtml, isAlternate) {
         const rowBg   = isAlternate ? '#f8fafc' : '#fff';
-        const trackBg = isAlternate ? '#f1f5f9' : '#f8fafc';
+        const trackBg = '#e2e8f0'; // neutral base — covered by colored blocks
         return `
-            <div style="display:flex;align-items:stretch;margin-bottom:1px;min-height:44px;">
-                <div style="width:160px;min-width:160px;padding:0 10px;display:flex;align-items:center;
-                            font-size:0.78rem;font-weight:${labelBold ? '700' : '500'};color:#1e293b;
+            <div style="display:flex;align-items:stretch;margin-bottom:2px;min-height:40px;">
+                <div style="width:160px;min-width:160px;padding:0 12px;display:flex;align-items:center;
+                            font-size:0.78rem;font-weight:500;color:#1e293b;
                             border-right:1px solid #e2e8f0;background:${rowBg};flex-shrink:0;overflow:hidden;" title="${leftLabel}">
                     <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${leftLabel}</span>
                 </div>
-                <div style="flex:1;position:relative;background:${trackBg};min-height:44px;overflow:hidden;">
+                <div style="flex:1;position:relative;background:${trackBg};min-height:40px;overflow:hidden;">
                     ${trackHtml}
                 </div>
             </div>`;
     }
 
-    function buildLegendItem(bg, border, label) {
-        return `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:16px;">
-                    <span style="width:12px;height:12px;background:${bg};border-left:3px solid ${border};flex-shrink:0;"></span>
-                    <span style="font-size:0.73rem;color:#64748b;">${label}</span>
+    // Tooltip — created once, reused on every mousemove via event delegation
+    function ensureTooltip() {
+        let tip = document.getElementById('analytics-gantt-tip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'analytics-gantt-tip';
+            tip.style.cssText = [
+                'position:fixed', 'z-index:9999', 'pointer-events:none', 'display:none',
+                'background:#1e293b', 'color:#f1f5f9', 'border-radius:5px',
+                'padding:8px 12px', 'font-size:0.78rem', 'line-height:1.55',
+                'white-space:pre', 'box-shadow:0 4px 14px rgba(0,0,0,0.25)'
+            ].join(';');
+            document.body.appendChild(tip);
+        }
+        return tip;
+    }
+
+    function bindTooltip(area) {
+        const tip = ensureTooltip();
+        area.addEventListener('mousemove', e => {
+            const block = e.target.closest('[data-tip]');
+            if (block) {
+                tip.textContent = block.dataset.tip;
+                tip.style.display = 'block';
+                const x = e.clientX + 16, y = e.clientY - 10;
+                // Keep within viewport
+                tip.style.left = (x + tip.offsetWidth > window.innerWidth ? x - tip.offsetWidth - 20 : x) + 'px';
+                tip.style.top  = (y + tip.offsetHeight > window.innerHeight ? y - tip.offsetHeight : y) + 'px';
+            } else {
+                tip.style.display = 'none';
+            }
+        });
+        area.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    }
+
+    function buildLegendItem(color, label) {
+        return `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;">
+                    <span style="width:14px;height:14px;background:${color};border-radius:2px;flex-shrink:0;"></span>
+                    <span style="font-size:0.73rem;color:#64748b;font-weight:500;">${label}</span>
                 </span>`;
     }
 
@@ -558,60 +572,32 @@
         let html = buildTimeAxis(campStart, campEnd, totalMin);
 
         if (activityFilter) {
-            html += `<div style="margin-bottom:8px;padding:3px 10px;display:inline-block;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1d4ed8;font-weight:600;">
-                Filtered: ${activityFilter}
-            </div>`;
+            html += `<div style="margin-bottom:8px;padding:3px 10px;display:inline-block;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</div>`;
         }
 
         resources.forEach((r, i) => {
             const usages = r.type === 'field' ? (byField[r.name] || []) : (bySpecial[r.name] || []);
-            const typeTag = r.type === 'special'
-                ? `<span style="font-size:0.6rem;font-weight:700;color:#7c3aed;background:#f3e8ff;padding:1px 5px;border-radius:3px;margin-left:5px;flex-shrink:0;">SP</span>`
-                : '';
-
-            let track = buildGridLines(campStart, campEnd, totalMin);
-            track += buildFreeBlocks(usages, campStart, campEnd, totalMin);
-            usages.forEach(item => track += buildBusyBlock(item, campStart, totalMin, item.bunk, getDivisionColor(item.division)));
+            // In field view, tooltip label shows: bunk + activity
+            let track = buildTrack(usages, campStart, campEnd, totalMin,
+                u => `${u.bunk}  ·  ${u.activity}`);
             if (showNow) track += buildNowLine(campStart, totalMin);
-
-            // Left label with type badge inline
-            const labelHtml = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.name}</span>${typeTag}`;
-            const allFree = usages.length === 0;
-
-            const rowBg   = i % 2 === 1 ? '#f8fafc' : '#fff';
-            const trackBg = i % 2 === 1 ? '#f1f5f9' : '#f8fafc';
-            html += `
-                <div style="display:flex;align-items:stretch;margin-bottom:1px;min-height:44px;">
-                    <div style="width:160px;min-width:160px;padding:0 10px;display:flex;align-items:center;gap:0;
-                                font-size:0.78rem;font-weight:600;color:${allFree ? FREE_TEXT : '#1e293b'};
-                                border-right:1px solid #e2e8f0;background:${rowBg};flex-shrink:0;overflow:hidden;" title="${r.name}">
-                        ${labelHtml}
-                    </div>
-                    <div style="flex:1;position:relative;background:${trackBg};min-height:44px;overflow:hidden;">
-                        ${track}
-                    </div>
-                </div>`;
+            html += buildRow(r.name, track, i % 2 === 1);
         });
 
-        // Legend
-        const divNames = Object.keys(divisionsDat).sort();
-        const divLegend = divNames.map((d, i) => {
-            const c = DIV_COLORS[i % DIV_COLORS.length];
-            return buildLegendItem(c.bg, c.border, d);
-        }).join('');
         const nowLegend = showNow
-            ? `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:16px;"><span style="width:2px;height:14px;background:${NOW_COLOR};flex-shrink:0;border-radius:1px;"></span><span style="font-size:0.73rem;color:#64748b;">Now</span></span>`
+            ? `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;"><span style="width:2px;height:14px;background:${NOW_COLOR};flex-shrink:0;border-radius:1px;"></span><span style="font-size:0.73rem;color:#64748b;font-weight:500;">Now</span></span>`
             : '';
 
         area.innerHTML = `
             <div style="border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;background:#fff;">
-                <div style="padding:14px 16px 12px;">${html}</div>
-                <div style="padding:8px 16px 12px;border-top:1px solid #f1f5f9;display:flex;flex-wrap:wrap;align-items:center;">
-                    ${buildLegendItem(FREE_BG, FREE_BORDER, 'Available')}
+                <div style="padding:14px 18px 12px;">${html}</div>
+                <div style="padding:8px 18px 12px;border-top:1px solid #f1f5f9;display:flex;flex-wrap:wrap;align-items:center;">
+                    ${buildLegendItem(COLOR_AVAIL, 'Available')}
+                    ${buildLegendItem(COLOR_TAKEN, 'Taken')}
                     ${nowLegend}
-                    ${divLegend ? '<span style="width:1px;height:14px;background:#e2e8f0;margin:0 8px 0 0;"></span>' + divLegend : ''}
                 </div>
             </div>`;
+        bindTooltip(area);
     }
 
     // ========================================================================
@@ -627,9 +613,6 @@
             (bunkMap[item.bunk] = bunkMap[item.bunk] || []).push(item);
         });
 
-        const sportColor   = { bg: '#eff6ff', border: '#2563eb', text: '#1e3a8a' };
-        const specialColor = { bg: '#fdf4ff', border: '#7c3aed', text: '#4c1d95' };
-
         const divs = divFilter
             ? (divisionsDat[divFilter] ? { [divFilter]: divisionsDat[divFilter] } : {})
             : divisionsDat;
@@ -637,9 +620,7 @@
         let html = buildTimeAxis(campStart, campEnd, totalMin);
 
         if (activityFilter) {
-            html += `<div style="margin-bottom:8px;padding:3px 10px;display:inline-block;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1d4ed8;font-weight:600;">
-                Filtered: ${activityFilter}
-            </div>`;
+            html += `<div style="margin-bottom:8px;padding:3px 10px;display:inline-block;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</div>`;
         }
 
         let rowCount = 0;
@@ -651,18 +632,14 @@
             if (!bunks.length) return;
             anyBunk = true;
 
-            html += `<div style="padding:6px 0 3px;font-size:0.68rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid #e2e8f0;margin-bottom:1px;">${divName}</div>`;
+            html += `<div style="padding:6px 0 3px;font-size:0.68rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid #e2e8f0;margin-bottom:2px;">${divName}</div>`;
 
             bunks.forEach(bunk => {
                 const usages = bunkMap[bunk] || [];
-                let track = buildGridLines(campStart, campEnd, totalMin);
-                track += buildFreeBlocks(usages, campStart, campEnd, totalMin);
-                usages.forEach(item => {
-                    const color = item.isSpecial ? specialColor : sportColor;
-                    track += buildBusyBlock(item, campStart, totalMin, item.activity, color);
-                });
+                // In bunk view, tooltip label shows the activity name
+                let track = buildTrack(usages, campStart, campEnd, totalMin, u => u.activity);
                 if (showNow) track += buildNowLine(campStart, totalMin);
-                html += buildRow(bunk, track, rowCount % 2 === 1, false);
+                html += buildRow(bunk, track, rowCount % 2 === 1);
                 rowCount++;
             });
         });
@@ -673,20 +650,19 @@
         }
 
         const nowLegend = showNow
-            ? `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:16px;"><span style="width:2px;height:14px;background:${NOW_COLOR};flex-shrink:0;border-radius:1px;"></span><span style="font-size:0.73rem;color:#64748b;">Now</span></span>`
+            ? `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;"><span style="width:2px;height:14px;background:${NOW_COLOR};flex-shrink:0;border-radius:1px;"></span><span style="font-size:0.73rem;color:#64748b;font-weight:500;">Now</span></span>`
             : '';
-
-        const legend =
-            buildLegendItem(FREE_BG, FREE_BORDER, 'Available') +
-            buildLegendItem('#eff6ff', '#2563eb', 'Sport') +
-            buildLegendItem('#fdf4ff', '#7c3aed', 'Special') +
-            nowLegend;
 
         area.innerHTML = `
             <div style="border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;background:#fff;">
-                <div style="padding:14px 16px 12px;">${html}</div>
-                <div style="padding:8px 16px 12px;border-top:1px solid #f1f5f9;display:flex;flex-wrap:wrap;align-items:center;">${legend}</div>
+                <div style="padding:14px 18px 12px;">${html}</div>
+                <div style="padding:8px 18px 12px;border-top:1px solid #f1f5f9;display:flex;flex-wrap:wrap;align-items:center;">
+                    ${buildLegendItem(COLOR_AVAIL, 'Available')}
+                    ${buildLegendItem(COLOR_TAKEN, 'Taken')}
+                    ${nowLegend}
+                </div>
             </div>`;
+        bindTooltip(area);
     }
 
     // ========================================================================
