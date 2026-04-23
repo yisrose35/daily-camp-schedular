@@ -367,21 +367,19 @@
     // SHARED GANTT PRIMITIVES
     // ========================================================================
 
-    // 15-minute time axis: bold labels at :00, lighter at :30, tick marks at :15/:45
+    // Time axis: bold labels at :00, lighter at :30
     function buildTimeAxis(campStart, campEnd, totalMin) {
         let labels = '', ticks = '';
-        const first15 = Math.ceil(campStart / 15) * 15;
-        for (let m = first15; m <= campEnd; m += 15) {
+        const first30 = Math.ceil(campStart / 30) * 30;
+        for (let m = first30; m <= campEnd; m += 30) {
             const l = ((m - campStart) / totalMin * 100).toFixed(3);
             const mod = m % 60;
             if (mod === 0) {
                 labels += `<span style="position:absolute;left:${l}%;transform:translateX(-50%);font-size:0.72rem;font-weight:700;color:#1e293b;white-space:nowrap;">${minutesToShortLabel(m)}</span>`;
                 ticks  += `<div style="position:absolute;bottom:0;left:${l}%;width:1px;height:10px;background:#94a3b8;"></div>`;
-            } else if (mod === 30) {
+            } else {
                 labels += `<span style="position:absolute;left:${l}%;transform:translateX(-50%);font-size:0.64rem;font-weight:500;color:#64748b;white-space:nowrap;">${minutesToShortLabel(m)}</span>`;
                 ticks  += `<div style="position:absolute;bottom:0;left:${l}%;width:1px;height:7px;background:#cbd5e1;"></div>`;
-            } else {
-                ticks  += `<div style="position:absolute;bottom:0;left:${l}%;width:1px;height:4px;background:#e2e8f0;"></div>`;
             }
         }
         return `
@@ -389,19 +387,80 @@
             <div style="position:relative;height:10px;margin-bottom:2px;">${ticks}</div>`;
     }
 
-    // Vertical grid lines at 15-min intervals — visible enough to orient at a glance
+    // Vertical grid lines at hour + half-hour only
     function buildGridLines(campStart, campEnd, totalMin) {
         let lines = '';
-        const first15 = Math.ceil(campStart / 15) * 15;
-        for (let m = first15; m <= campEnd; m += 15) {
+        const first30 = Math.ceil(campStart / 30) * 30;
+        for (let m = first30; m <= campEnd; m += 30) {
             const l = ((m - campStart) / totalMin * 100).toFixed(3);
             const mod = m % 60;
-            // Hour: solid medium gray | half-hour: lighter | quarter: faintest
-            const color = mod === 0 ? '#c8d0dc' : mod === 30 ? '#dde2ea' : '#eaecf0';
+            const color = mod === 0 ? '#c8d0dc' : '#dde2ea';
             const width  = mod === 0 ? '1.5px' : '1px';
             lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:${width};background:${color};pointer-events:none;z-index:3;"></div>`;
         }
         return lines;
+    }
+
+    // -----------------------------------------------------------------------
+    // BELL SCHEDULE HELPERS
+    // -----------------------------------------------------------------------
+
+    const PERIOD_COLORS = [
+        { bg: '#dbeafe', text: '#1d4ed8' },
+        { bg: '#dcfce7', text: '#15803d' },
+        { bg: '#fef9c3', text: '#854d0e' },
+        { bg: '#fce7f3', text: '#be185d' },
+        { bg: '#ede9fe', text: '#6d28d9' },
+        { bg: '#e0f2fe', text: '#0369a1' },
+    ];
+    const PERIOD_BAND_COLORS = ['', 'rgba(219,234,254,0.38)', 'rgba(220,252,231,0.3)', 'rgba(254,249,195,0.3)', 'rgba(252,231,243,0.25)', 'rgba(237,233,254,0.3)', 'rgba(224,242,254,0.3)'];
+
+    function getBellPeriods(divName) {
+        const cp = window.campPeriods || window.loadGlobalSettings?.('campPeriods') || {};
+        let raw;
+        if (divName) {
+            raw = cp[divName] || [];
+        } else {
+            const all = Object.values(cp);
+            raw = all.reduce((best, cur) => cur.length >= best.length ? cur : best, []);
+        }
+        return [...raw].sort((a, b) => a.startMin - b.startMin);
+    }
+
+    function buildPeriodHeader(periods, campStart, campEnd, totalMin) {
+        if (!periods || !periods.length) return '';
+        let html = '<div style="position:relative;height:22px;overflow:hidden;border-bottom:1px solid #e2e8f0;">';
+        periods.forEach((p, i) => {
+            if (p.endMin <= campStart || p.startMin >= campEnd) return;
+            const s = Math.max(p.startMin, campStart);
+            const e = Math.min(p.endMin, campEnd);
+            const l = ((s - campStart) / totalMin * 100).toFixed(3);
+            const w = ((e - s) / totalMin * 100).toFixed(3);
+            const c = PERIOD_COLORS[i % PERIOD_COLORS.length];
+            html += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:${w}%;background:${c.bg};
+                                 display:flex;align-items:center;justify-content:center;
+                                 border-right:1px solid rgba(148,163,184,0.35);overflow:hidden;">
+                         <span style="font-size:0.63rem;font-weight:700;color:${c.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 5px;">${p.name}</span>
+                     </div>`;
+        });
+        html += '</div>';
+        return html;
+    }
+
+    function buildPeriodBands(periods, campStart, campEnd, totalMin) {
+        if (!periods || !periods.length) return '';
+        let html = '';
+        periods.forEach((p, i) => {
+            if (p.endMin <= campStart || p.startMin >= campEnd) return;
+            const bg = PERIOD_BAND_COLORS[(i + 1) % PERIOD_BAND_COLORS.length];
+            if (!bg) return;
+            const s = Math.max(p.startMin, campStart);
+            const e = Math.min(p.endMin, campEnd);
+            const l = ((s - campStart) / totalMin * 100).toFixed(3);
+            const w = ((e - s) / totalMin * 100).toFixed(3);
+            html += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:${w}%;background:${bg};pointer-events:none;z-index:0;"></div>`;
+        });
+        return html;
     }
 
     function buildNowLine(campStart, totalMin) {
@@ -427,9 +486,10 @@
 
     // Build the full track as red (taken) + green (available) solid blocks.
     // Each block carries a data-tip attribute for the hover tooltip.
-    function buildTrack(usages, campStart, campEnd, totalMin, labelFn) {
+    function buildTrack(usages, campStart, campEnd, totalMin, labelFn, periods) {
         const merged = mergeIntervals(usages);
-        let html = buildGridLines(campStart, campEnd, totalMin);
+        let html = buildPeriodBands(periods, campStart, campEnd, totalMin);
+        html += buildGridLines(campStart, campEnd, totalMin);
         let cursor = campStart;
 
         const block = (s, e, color, tip) => {
@@ -767,18 +827,23 @@
                 </div>
             </div>`;
 
+        const fieldPeriods = getBellPeriods();
         let rows = '';
         resources.forEach((r, i) => {
             const usages = r.type === 'field' ? (byField[r.name] || []) : (bySpecial[r.name] || []);
-            let track = buildTrack(usages, campStart, campEnd, totalMin, u => `${u.bunk}  ·  ${u.activity}`);
+            let track = buildTrack(usages, campStart, campEnd, totalMin, u => `${u.bunk}  ·  ${u.activity}`, fieldPeriods);
             if (showNow) track += buildNowLine(campStart, totalMin);
             rows += buildRow(r.name, track, i % 2 === 1);
         });
 
+        const hasPeriods = fieldPeriods.length > 0;
         const axisRow = `
-            <div style="display:flex;padding:14px 0 6px;border-bottom:1px solid #f1f5f9;">
-                <div style="width:168px;min-width:168px;flex-shrink:0;position:sticky;left:0;z-index:5;background:#fff;"></div>
-                <div style="flex:1;position:relative;">${buildTimeAxis(campStart, campEnd, totalMin)}</div>
+            <div style="display:flex;padding:${hasPeriods ? '0' : '14px'} 0 6px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:168px;min-width:168px;flex-shrink:0;position:sticky;left:0;z-index:5;background:#fff;${hasPeriods ? 'border-bottom:1px solid #e2e8f0;' : ''}"></div>
+                <div style="flex:1;position:relative;">
+                    ${hasPeriods ? buildPeriodHeader(fieldPeriods, campStart, campEnd, totalMin) : ''}
+                    <div style="padding-top:${hasPeriods ? '6px' : '0'};">${buildTimeAxis(campStart, campEnd, totalMin)}</div>
+                </div>
             </div>`;
 
         area.innerHTML = `
@@ -845,9 +910,10 @@
                 <div style="flex:1;background:#fafafa;"></div>
             </div>`;
 
+            const divPeriods = getBellPeriods(divName);
             bunks.forEach(bunk => {
                 const usages = bunkMap[bunk] || [];
-                let track = buildTrack(usages, campStart, campEnd, totalMin, u => u.activity);
+                let track = buildTrack(usages, campStart, campEnd, totalMin, u => u.activity, divPeriods);
                 if (showNow) track += buildNowLine(campStart, totalMin);
                 rows += buildRow(bunk, track, rowCount % 2 === 1);
                 rowCount++;
@@ -877,10 +943,15 @@
                 <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">${filterBadge}</div>
             </div>`;
 
+        const globalPeriods = getBellPeriods();
+        const hasBunkPeriods = globalPeriods.length > 0;
         const axisRow = `
-            <div style="display:flex;padding:14px 0 6px;border-bottom:1px solid #f1f5f9;">
-                <div style="width:168px;min-width:168px;flex-shrink:0;position:sticky;left:0;z-index:5;background:#fff;"></div>
-                <div style="flex:1;position:relative;">${buildTimeAxis(campStart, campEnd, totalMin)}</div>
+            <div style="display:flex;padding:${hasBunkPeriods ? '0' : '14px'} 0 6px;border-bottom:1px solid #f1f5f9;">
+                <div style="width:168px;min-width:168px;flex-shrink:0;position:sticky;left:0;z-index:5;background:#fff;${hasBunkPeriods ? 'border-bottom:1px solid #e2e8f0;' : ''}"></div>
+                <div style="flex:1;position:relative;">
+                    ${hasBunkPeriods ? buildPeriodHeader(globalPeriods, campStart, campEnd, totalMin) : ''}
+                    <div style="padding-top:${hasBunkPeriods ? '6px' : '0'};">${buildTimeAxis(campStart, campEnd, totalMin)}</div>
+                </div>
             </div>`;
 
         area.innerHTML = `
