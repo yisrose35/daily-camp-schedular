@@ -70,11 +70,16 @@ window.CampistryGoNeighborhoods = (function () {
         return { dist: haversineMi(pLat, pLng, snapLat, snapLng), snapLat, snapLng, t };
     }
 
-    // djb2 → short hex. Stable across runs given same input.
+    // Two djb2 passes with different seeds → 64-bit-effective, collision-resistant
+    // at our scale (10k+ segments, 10k+ communities). Stable across runs.
     function hash(s) {
-        let h = 5381;
-        for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-        return h.toString(16).padStart(8, '0');
+        let h1 = 5381, h2 = 52711;
+        for (let i = 0; i < s.length; i++) {
+            const c = s.charCodeAt(i);
+            h1 = ((h1 << 5) + h1 + c) >>> 0;
+            h2 = ((h2 << 5) + h2 ^ c) >>> 0;
+        }
+        return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
     }
 
     function parseHouseNum(address) {
@@ -673,6 +678,21 @@ window.CampistryGoNeighborhoods = (function () {
             if (reg) reg.neighborhoodIds.push(nh.id);
         }
 
+        // Audit: confirm camperCount sum matches actual home count BEFORE merge.
+        {
+            const pre = neighborhoods.reduce((s, n) => s + (n.camperCount || 0), 0);
+            const segOwners = {};
+            let segDupes = 0;
+            for (const nh of neighborhoods) {
+                for (const sid of nh.segmentIds) {
+                    if (segOwners[sid] && segOwners[sid] !== nh.id) segDupes++;
+                    segOwners[sid] = nh.id;
+                }
+            }
+            console.log('[Go-NH] pre-merge audit: ' + neighborhoods.length + ' NHs, ' +
+                pre + ' campers (expected ' + homes.length + '), ' + segDupes + ' cross-NH seg dupes');
+        }
+
         // 8. Merge tiny neighborhoods into nearby larger ones. Community detection
         // cuts aggressively (each cul-de-sac becomes its own component), producing
         // 100s of 1-camper "neighborhoods" that are useless for routing. Absorb
@@ -761,6 +781,20 @@ window.CampistryGoNeighborhoods = (function () {
             if (verbose) {
                 console.log('[Go-NH] Merged ' + mergedCount + ' tiny neighborhoods (< ' + minSize +
                     ' campers, < ' + maxMergeMi + 'mi apart); ' + isolatedIds.size + ' isolated tinies retained');
+            }
+            // Post-merge audit — catch any drift in camperCount sum or segment overlap.
+            {
+                const post = neighborhoods.reduce((s, n) => s + (n.camperCount || 0), 0);
+                const segOwners = {};
+                let segDupes = 0;
+                for (const nh of neighborhoods) {
+                    for (const sid of nh.segmentIds) {
+                        if (segOwners[sid] && segOwners[sid] !== nh.id) segDupes++;
+                        segOwners[sid] = nh.id;
+                    }
+                }
+                console.log('[Go-NH] post-merge audit: ' + neighborhoods.length + ' NHs, ' +
+                    post + ' campers (expected ' + homes.length + '), ' + segDupes + ' cross-NH seg dupes');
             }
         }
 
