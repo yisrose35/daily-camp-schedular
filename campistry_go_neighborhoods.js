@@ -997,15 +997,21 @@ window.CampistryGoNeighborhoods = (function () {
             });
         }
 
+        // "Start a new bus" cost: if the closest non-empty bus is farther than
+        // this, open an empty bus instead of ballooning the distant one.
+        // 2.5mi ≈ a typical neighborhood diameter — bigger than that and you're
+        // spanning two distinct pockets, which is what caused the 5-hour rides.
+        const EMPTY_BUS_START_COST_MI = 2.5;
+
         for (const nh of unassigned) {
             const c = nhCentroids[nh.id];
             let target = null, targetScore = Infinity;
             for (const bus of assignments) {
                 if (bus.camperCount + nh.camperCount > bus.capacity) continue;
                 const bc = busCentroid(bus);
-                // Non-empty bus → score by miles. Empty bus → penalty constant
-                // so non-empty nearby buses win; empty buses are fallback.
-                const score = (bc && c) ? haversineMi(c.lat, c.lng, bc.lat, bc.lng) : 999;
+                const score = (bc && c)
+                    ? haversineMi(c.lat, c.lng, bc.lat, bc.lng)
+                    : EMPTY_BUS_START_COST_MI;
                 if (score < targetScore) { targetScore = score; target = bus; }
             }
             if (!target) {
@@ -1015,6 +1021,32 @@ window.CampistryGoNeighborhoods = (function () {
                     ' campers) — placed on least-full bus ' + target.busId);
             }
             assignToBus(nh, target);
+        }
+
+        // Diagnostic: per-bus max intra-bus spread (farthest pair of NH centroids
+        // on the same bus). Big numbers here = the cluster-packing failed.
+        {
+            const spreads = [];
+            for (const bus of assignments) {
+                if (bus.neighborhoodIds.length < 2) continue;
+                let maxD = 0;
+                for (let i = 0; i < bus.neighborhoodIds.length; i++) {
+                    const ci = nhCentroids[bus.neighborhoodIds[i]];
+                    if (!ci) continue;
+                    for (let j = i + 1; j < bus.neighborhoodIds.length; j++) {
+                        const cj = nhCentroids[bus.neighborhoodIds[j]];
+                        if (!cj) continue;
+                        const d = haversineMi(ci.lat, ci.lng, cj.lat, cj.lng);
+                        if (d > maxD) maxD = d;
+                    }
+                }
+                spreads.push({ bus: bus.busId, nhs: bus.neighborhoodIds.length, spreadMi: +maxD.toFixed(2) });
+            }
+            spreads.sort((a, b) => b.spreadMi - a.spreadMi);
+            if (spreads.length) {
+                console.log('[Go-NH] bus spread (worst 5): ' +
+                    spreads.slice(0, 5).map(s => s.bus + '=' + s.spreadMi + 'mi/' + s.nhs + 'NH').join(' '));
+            }
         }
 
         // --- 3. Within-bus ordering: group segments by NH, order NHs via NN from depot ---
