@@ -195,11 +195,68 @@ window.GoOrsOptimizer = (function () {
     //   Even depth → angular wedges by compass bearing from camp
     //   Odd depth  → inner/outer rings by distance from camp
     // -------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+     // _buildAtoms — merge close-by stops into indivisible neighborhood atoms.
+     // Any two stops within NEIGHBORHOOD_EPS_MI of each other (single-link chain)
+     // belong to the same atom, so splits never tear a dense block apart.
+     // Returns an array of { stops:[...], kids:N, lat, lng } grouped objects.
+     // -------------------------------------------------------------------------
+    function _buildAtoms(stops) {
+        var NEIGHBORHOOD_EPS_MI = 0.08; // ~420 ft — single block radius
+        var n = stops.length;
+        var parent = new Array(n);
+        for (var i = 0; i < n; i++) parent[i] = i;
+        function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+        function union(a, b) { var ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+        for (var i = 0; i < n; i++) {
+            for (var j = i + 1; j < n; j++) {
+                if (_hav(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= NEIGHBORHOOD_EPS_MI) {
+                    union(i, j);
+                }
+            }
+        }
+        var groups = {};
+        for (var i = 0; i < n; i++) {
+            var r = find(i);
+            (groups[r] = groups[r] || []).push(stops[i]);
+        }
+        return Object.values(groups).map(function (grp) {
+            var kids = grp.reduce(function (s, st) { return s + st.campers.length; }, 0);
+            var lat = grp.reduce(function (s, st) { return s + st.lat; }, 0) / grp.length;
+            var lng = grp.reduce(function (s, st) { return s + st.lng; }, 0) / grp.length;
+            return { stops: grp, kids: kids, lat: lat, lng: lng };
+        });
+    }
+
+    // -------------------------------------------------------------------------
+     // _principalAxis — 2×2 lat/lng covariance eigen-analysis, returns the unit
+     // vector along the direction of maximum spread. Projecting onto this axis
+     // gives the shape-aware 1-D coordinate used for balanced bisection.
+     // -------------------------------------------------------------------------
+    function _principalAxis(atoms) {
+        var mLat = 0, mLng = 0, total = 0;
+        atoms.forEach(function (a) { mLat += a.lat * a.kids; mLng += a.lng * a.kids; total += a.kids; });
+        if (total <= 0) return { ax: 1, ay: 0, mLat: 0, mLng: 0 };
+        mLat /= total; mLng /= total;
+        var sxx = 0, syy = 0, sxy = 0;
+        atoms.forEach(function (a) {
+            var dx = a.lng - mLng, dy = a.lat - mLat, w = a.kids;
+            sxx += w * dx * dx; syy += w * dy * dy; sxy += w * dx * dy;
+        });
+        // Eigenvector of max eigenvalue of [[sxx,sxy],[sxy,syy]]
+        var tr = sxx + syy, det = sxx * syy - sxy * sxy;
+        var lam = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - det));
+        var ax, ay;
+        if (Math.abs(sxy) > 1e-12) { ax = lam - syy; ay = sxy; }
+        else if (sxx >= syy)       { ax = 1;        ay = 0;   }
+        else                        { ax = 0;        ay = 1;   }
+        var mag = Math.sqrt(ax * ax + ay * ay) || 1;
+        return { ax: ax / mag, ay: ay / mag, mLat: mLat, mLng: mLng };
+    }
+
     async function _recursiveSplit(options, key, depth) {
         var stops    = options.stops;
         var vehicles = options.vehicles;
-        var campLat  = options.campLat;
-        var campLng  = options.campLng;
         var prefix   = '[OrsVroom][d=' + depth + '] ';
 
         var totalKids = stops.reduce(function (s, st) { return s + st.campers.length; }, 0);
@@ -216,34 +273,39 @@ window.GoOrsOptimizer = (function () {
             return await _singleRequest(options, key);
         }
 
-        var axis = depth % 2 === 0 ? 'bearing' : 'distance';
-        console.log(prefix + stops.length + ' stops / ' + totalKids + ' kids / ' +
-            vehicles.length + ' buses — bisecting by ' + axis);
+        // Build neighborhood atoms so tightly-clustered stops never split across
+        // buses regardless of which axis we pick.
+        var atoms = _buildAtoms(stops);
 
-        // Sort stops by alternating axis
-        var sorted;
-        if (depth % 2 === 0) {
-            // Angular sweep: creates geographic wedge sub-regions around camp
-            sorted = stops.slice().sort(function (a, b) {
-                return Math.atan2(a.lng - campLng, a.lat - campLat)
-                     - Math.atan2(b.lng - campLng, b.lat - campLat);
-            });
-        } else {
-            // Distance rings: splits near vs far stops from camp
-            sorted = stops.slice().sort(function (a, b) {
-                return _hav(campLat, campLng, a.lat, a.lng)
-                     - _hav(campLat, campLng, b.lat, b.lng);
-            });
-        }
+        // Project atom centroids onto the principal axis of the camper-weighted
+        // point cloud. The split is taken perpendicular to the direction of
+        // maximum spread, producing compact halves that follow the actual shape
+        // of the service area (unlike bearing-from-camp wedges).
+        var pa = _principalAxis(atoms);
+        atoms.forEach(function (a) {
+            a._proj = (a.lng - pa.mLng) * pa.ax + (a.lat - pa.mLat) * pa.ay;
+        });
+        atoms.sort(function (a, b) { return a._proj - b._proj; });
 
-        // Find split index that balances camper count (not stop count) between halves
-        var half = totalKids / 2, cum = 0, splitIdx = Math.ceil(sorted.length / 2);
-        for (var i = 0; i < sorted.length; i++) {
-            cum += sorted[i].campers.length;
+        console.log(prefix + stops.length + ' stops (' + atoms.length + ' atoms) / ' +
+            totalKids + ' kids / ' + vehicles.length + ' buses — bisecting along principal axis');
+
+        // Balanced split on atoms by camper count
+        var half = totalKids / 2, cum = 0, splitIdx = Math.ceil(atoms.length / 2);
+        for (var i = 0; i < atoms.length; i++) {
+            cum += atoms[i].kids;
             if (cum >= half) { splitIdx = i + 1; break; }
         }
+        // Guarantee both sides non-empty
+        if (splitIdx <= 0) splitIdx = 1;
+        if (splitIdx >= atoms.length) splitIdx = atoms.length - 1;
 
-        var stopGroups    = [sorted.slice(0, splitIdx), sorted.slice(splitIdx)];
+        function flatten(atomSlice) {
+            var out = [];
+            atomSlice.forEach(function (a) { out.push.apply(out, a.stops); });
+            return out;
+        }
+        var stopGroups    = [flatten(atoms.slice(0, splitIdx)), flatten(atoms.slice(splitIdx))];
         var vehicleGroups = _allocateVehicles(vehicles, stopGroups);
 
         var allRoutes = [];
@@ -294,21 +356,43 @@ window.GoOrsOptimizer = (function () {
     // _singleRequest — build and send one ORS optimization request
     // -------------------------------------------------------------------------
     async function _singleRequest(options, key) {
-        const { stops, vehicles, campLat, campLng, isArrival, serviceTimeSec } = options;
+        const { stops, vehicles, campLat, campLng, isArrival, serviceTimeSec, departureTime, maxRideTimeSec } = options;
 
         const svcSec   = Math.round(serviceTimeSec || 120);
         const campCoord = [campLng, campLat]; // Vroom: [lng, lat] !
 
+        // Parse "HH:MM" → seconds from midnight. Used below to impose a vehicle
+        // time_window so Vroom pegs arrivals to bell time (arrival) or departures
+        // from camp to bell time (dismissal), mirroring Transfinder behavior.
+        var bellSec = null;
+        if (typeof departureTime === 'string' && /^\d{1,2}:\d{2}$/.test(departureTime)) {
+            var parts = departureTime.split(':');
+            bellSec = (parseInt(parts[0], 10) * 3600) + (parseInt(parts[1], 10) * 60);
+        }
+        var rideSec = Math.max(60, (maxRideTimeSec || 45 * 60) | 0);
+
         // ── Build jobs array — one per stop, 1-indexed ──
         // amount: [N] is a 1-dimensional capacity vector (seats needed).
         // service: dwell time in seconds Vroom adds to the stop visit.
+        // priority (0-100): higher = more preferred by Vroom when it must drop jobs.
+        //   Grandfathered stops get a boost so they stick to last year's pattern.
+        // skills:  used for hard bus pins. A stop whose campers are all forced onto
+        //   one bus gets a unique skill; only that vehicle declares that skill.
         const jobs = stops.map(function (stop, idx) {
-            return {
-                id:       idx + 1,                       // 1-indexed for easy reverse-lookup
-                location: [stop.lng, stop.lat],          // [lng, lat] — Vroom order!
+            var job = {
+                id:       idx + 1,
+                location: [stop.lng, stop.lat],
                 amount:   [stop.campers.length],
                 service:  svcSec
             };
+            if (typeof stop._priority === 'number') {
+                job.priority = Math.max(0, Math.min(100, stop._priority | 0));
+            }
+            if (stop._forcedBusIdx != null) {
+                // Skill id 1000+idx encodes the forced vehicle index
+                job.skills = [1000 + (stop._forcedBusIdx | 0)];
+            }
+            return job;
         });
 
         // ── Build vehicles array — one per bus, 1-indexed ──
@@ -321,8 +405,12 @@ window.GoOrsOptimizer = (function () {
 
             const veh = {
                 id:       idx + 1,            // 1-indexed
-                profile:  'driving-car',
-                capacity: [effectiveCap]      // must match jobs[].amount dimensionality
+                // HGV = heavy-goods-vehicle. Closest ORS profile to a school bus:
+                // respects truck turn restrictions, avoids low bridges and roads
+                // posted against heavy vehicles, and applies lower free-flow speeds.
+                profile:  'driving-hgv',
+                capacity: [effectiveCap],     // must match jobs[].amount dimensionality
+                skills:   [1000 + idx]        // identity skill — supports hard "pin to bus" via job.skills
             };
 
             if (isArrival) {
@@ -333,6 +421,16 @@ window.GoOrsOptimizer = (function () {
                 // Dismissal mode: bus starts at camp (loaded with campers),
                 // ends at last drop-off (no fixed end).
                 veh.start = campCoord;
+            }
+
+            // Vehicle time_window pegs the shift to bell time.
+            //   Arrival:   must land at camp by bell → window = [bell - rideSec, bell]
+            //   Dismissal: must leave camp at bell    → window = [bell, bell + rideSec]
+            // Vroom also enforces this as a per-job upper bound via route completion.
+            if (bellSec != null) {
+                veh.time_window = isArrival
+                    ? [Math.max(0, bellSec - rideSec), bellSec]
+                    : [bellSec, bellSec + rideSec];
             }
 
             return veh;

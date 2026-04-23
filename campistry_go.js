@@ -350,6 +350,43 @@ let _toastTimer = null;
     }
 
     /**
+     * Pick the safest corner of an intersection for a bus stop, Transfinder-style.
+     * Generates 4 diagonal corner candidates (~10m offsets) around the intersection,
+     * hard-rejects any corner where more than `unsafeThreshold` of cluster kids would
+     * have to cross a major road to reach it, and returns the lowest-total-walk survivor.
+     *
+     * Returns { lat, lng, corner, crossings, totalWalkMi } or null if no corner is safe.
+     *   corner ∈ 'NE' | 'NW' | 'SE' | 'SW'
+     */
+    function pickIntersectionCorner(intersection, cluster, unsafeThreshold) {
+        if (!intersection || !cluster || !cluster.length) return null;
+        if (unsafeThreshold == null) unsafeThreshold = 0.3;
+        const lat0 = intersection.lat, lng0 = intersection.lng;
+        // ~10m offset: 1° lat ≈ 111km → 10m ≈ 9e-5°. Close enough for corner-picking.
+        const d = 0.00009;
+        const candidates = [
+            { corner: 'NE', lat: lat0 + d, lng: lng0 + d },
+            { corner: 'NW', lat: lat0 + d, lng: lng0 - d },
+            { corner: 'SE', lat: lat0 - d, lng: lng0 + d },
+            { corner: 'SW', lat: lat0 - d, lng: lng0 - d },
+        ];
+        let best = null;
+        candidates.forEach(cand => {
+            let crossings = 0;
+            let totalWalkMi = 0;
+            cluster.forEach(kid => {
+                if (crossesMajorRoad(kid.lat, kid.lng, cand.lat, cand.lng)) crossings++;
+                totalWalkMi += manhattanMi(kid.lat, kid.lng, cand.lat, cand.lng);
+            });
+            if (crossings / cluster.length > unsafeThreshold) return; // hard reject
+            if (!best || totalWalkMi < best.totalWalkMi) {
+                best = { lat: cand.lat, lng: cand.lng, corner: cand.corner, crossings, totalWalkMi };
+            }
+        });
+        return best;
+    }
+
+    /**
      * Street-aware cluster distance (in miles, approximate).
      * Base: driving distance (from cache or haversine×factor).
      * Multipliers for street awareness:
@@ -6253,6 +6290,49 @@ async function generateRoutes() {
             })();
             console.log('[Go] Step 2: ' + allStops.length + ' stops from ' + allCampers.length + ' campers (mode: ' + mode + ')');
 
+            // ── Seed grandfather flags from prior-season camper history ──
+            if (window.GoStopMaster) {
+                try {
+                    const gf = await window.GoStopMaster.getGrandfatherMap();
+                    let seeded = 0;
+                    Object.keys(gf).forEach(function (name) {
+                        if (!D.addresses[name]) return;
+                        if (D.addresses[name]._grandfather === false) return; // user opt-out respected
+                        if (!D.addresses[name]._grandfather) { D.addresses[name]._grandfather = true; seeded++; }
+                    });
+                    if (seeded) console.log('[Go] Grandfather: seeded ' + seeded + ' campers from prior season');
+                } catch (e) { console.warn('[Go] Grandfather seed failed: ' + e.message); }
+            }
+
+            // ── Solver hints: grandfather priority + hard bus pins ──
+            // Reads per-camper overrides from D.addresses[name]:
+            //   ._forcedBusId  — hard pin onto a specific bus (skill in VROOM)
+            //   ._grandfather  — prior-year sticky (priority boost in VROOM)
+            // Stops inherit the strongest hint across their campers.
+            (function applySolverHints() {
+                const busIdxById = {};
+                shiftVehicles.forEach(function(v, i) { busIdxById[v.busId] = i; });
+                let pinned = 0, boosted = 0, conflicts = 0;
+                allStops.forEach(function(st) {
+                    if (st.isMonitor || st.isCounselor) return;
+                    let pin = null, anyGrandfather = false;
+                    (st.campers || []).forEach(function(c) {
+                        const a = D.addresses[c.name]; if (!a) return;
+                        if (a._forcedBusId && busIdxById[a._forcedBusId] != null) {
+                            if (pin == null) pin = busIdxById[a._forcedBusId];
+                            else if (pin !== busIdxById[a._forcedBusId]) conflicts++;
+                        }
+                        if (a._grandfather) anyGrandfather = true;
+                    });
+                    if (pin != null) { st._forcedBusIdx = pin; pinned++; }
+                    if (anyGrandfather) { st._priority = 80; boosted++; }
+                });
+                if (pinned || boosted || conflicts) {
+                    console.log('[Go] Solver hints: ' + pinned + ' pinned, ' + boosted +
+                        ' grandfathered' + (conflicts ? ', ' + conflicts + ' conflicting pins skipped' : ''));
+                }
+            })();
+
             // ══════════════════════════════════════════════════════════════
             // STEP 3: Build zones using driving-distance clustering
             // STEP 4: VROOM per-zone TSP → 2-opt fallback
@@ -6699,6 +6779,8 @@ async function generateRoutes() {
                         campLng:        campLng,
                         isArrival:      isArrival,
                         serviceTimeSec: serviceTime,
+                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
+                        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
                         apiKey:         D.setup.orsKey || window.__CAMPISTRY_ORS_KEY__
                     });
                     if (orsRoutes && orsRoutes.length > 0) {
@@ -6748,6 +6830,85 @@ async function generateRoutes() {
 
 
             console.log('[Go] All routes complete: ' + routes.length + ' bus routes');
+
+            // ── Sibling repair pass (Transfinder-parity) ──
+            // After the solver places campers, any sibling group split across
+            // multiple buses is reconsidered: minority-bus siblings are moved
+            // to the majority bus when (a) the majority bus has capacity, and
+            // (b) the minority camper's home is within maxWalkMi of the
+            // majority sibling's stop. Otherwise the split is left alone
+            // (geography trumps togetherness — matches observed Transfinder splits).
+            if (usedExternalOptimizer && routes.length > 1) {
+                try {
+                    const sibMapRepair = detectSiblings(allCampers);
+                    const maxWalkMi = Math.max(0.05, (D.setup.maxWalkDistance || 0.2));
+                    // Build: camperName → {route, stop, routeIdx, stopIdx}
+                    const camperLoc = {};
+                    routes.forEach((r, ri) => {
+                        r.stops.forEach((st, si2) => {
+                            if (st.isMonitor || st.isCounselor) return;
+                            (st.campers || []).forEach(c => { camperLoc[c.name] = { r, st, ri, si2 }; });
+                        });
+                    });
+                    // Bucket siblings per family by bus
+                    const byFamily = {};
+                    Object.keys(sibMapRepair).forEach(name => {
+                        const gid = sibMapRepair[name];
+                        const loc = camperLoc[name]; if (!loc) return;
+                        (byFamily[gid] = byFamily[gid] || []).push({ name, loc });
+                    });
+                    let moves = 0, splitsLeft = 0;
+                    Object.values(byFamily).forEach(members => {
+                        if (members.length < 2) return;
+                        const byBus = {};
+                        members.forEach(m => { (byBus[m.loc.ri] = byBus[m.loc.ri] || []).push(m); });
+                        const busIds = Object.keys(byBus);
+                        if (busIds.length < 2) return; // already together
+                        // Majority bus = bus with most siblings
+                        busIds.sort((a, b) => byBus[b].length - byBus[a].length);
+                        const majRi = +busIds[0];
+                        const majRoute = routes[majRi];
+                        const majStops = byBus[majRi].map(m => m.loc.st);
+                        // Capacity headroom
+                        const cap = majRoute.capacity || 44;
+                        const currentLoad = majRoute.stops.reduce((s, st) => s + ((st.campers || []).filter(c => !c.isMonitor && !c.isCounselor).length), 0);
+                        let headroom = cap - currentLoad;
+                        // Try to move each minority sibling
+                        for (let b = 1; b < busIds.length; b++) {
+                            const minRi = +busIds[b];
+                            byBus[minRi].forEach(m => {
+                                if (headroom <= 0) { splitsLeft++; return; }
+                                // Find nearest majority sibling stop to this camper's home
+                                const hLat = m.loc.st.lat, hLng = m.loc.st.lng;
+                                let target = null, bestD = Infinity;
+                                majStops.forEach(ms => {
+                                    const d = haversineMi(hLat, hLng, ms.lat, ms.lng);
+                                    if (d < bestD) { bestD = d; target = ms; }
+                                });
+                                if (!target || bestD > maxWalkMi) { splitsLeft++; return; }
+                                // Move camper: remove from current stop, append to target stop
+                                const srcStop = m.loc.st;
+                                const camperObj = (srcStop.campers || []).find(c => c.name === m.name);
+                                if (!camperObj) { splitsLeft++; return; }
+                                srcStop.campers = srcStop.campers.filter(c => c.name !== m.name);
+                                target.campers = target.campers || [];
+                                target.campers.push(camperObj);
+                                headroom--;
+                                moves++;
+                            });
+                        }
+                        // Drop any now-empty stops (non-staff)
+                        routes.forEach(r => {
+                            r.stops = r.stops.filter(st => (st.isMonitor || st.isCounselor) || (st.campers && st.campers.length));
+                        });
+                    });
+                    if (moves || splitsLeft) {
+                        console.log('[Go] Sibling repair: ' + moves + ' kids moved together, ' + splitsLeft + ' splits kept (geography)');
+                    }
+                } catch (e) {
+                    console.warn('[Go] Sibling repair failed: ' + e.message);
+                }
+            }
 
             // ── Staff suggestions: find closest stop for "no stop" staff ──
             // For each staff member without a dedicated stop, find the closest
@@ -6966,6 +7127,26 @@ async function generateRoutes() {
 
         D.savedRoutes = allShiftResults;
         save();
+
+        // ── Stop Master + camper-stop history (for grandfathering next season) ──
+        if (window.GoStopMaster) {
+            try {
+                const flatStops = [];
+                const flatRoutes = [];
+                allShiftResults.forEach(sr => {
+                    sr.routes.forEach(r => {
+                        flatRoutes.push(r);
+                        (r.stops || []).forEach(st => {
+                            if (!st.isMonitor && !st.isCounselor) flatStops.push(st);
+                        });
+                    });
+                });
+                const seasonLabel = (D.setup.seasonLabel || new Date().getFullYear().toString());
+                window.GoStopMaster.upsertStops(flatStops);
+                window.GoStopMaster.recordSeason(seasonLabel, flatRoutes);
+            } catch (e) { console.warn('[Go] Stop Master persist failed: ' + e.message); }
+        }
+
         const elapsed = Math.round((Date.now() - _routeProgStart) / 1000);
         const elapsedStr = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm ' + (elapsed % 60) + 's';
         const totalCampers = allShiftResults.reduce((s, sr) => s + sr.camperCount, 0);
@@ -7250,33 +7431,70 @@ async function generateRoutes() {
     // STOP CREATION
     // =========================================================================
 
-    /** Detect sibling groups: same last name + addresses within ~100ft */
+    /** Normalize a phone string to digits only; returns '' if fewer than 7 digits. */
+    function _normPhone(p) {
+        var d = String(p || '').replace(/\D/g, '');
+        return d.length >= 7 ? d.slice(-10) : '';
+    }
+
+    /**
+     * Detect sibling groups. Union-find over three signals, in priority order:
+     *   1. Shared parent phone number (strongest — cross-surname siblings e.g. blended families)
+     *   2. Same last name + addresses within ~100ft
+     *   3. Explicit D.addresses[name].rideWith partner
+     */
     function detectSiblings(campers) {
-        const byLastName = {};
+        // Union-find
+        var parent = {};
+        function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+        function union(a, b) { var ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+        campers.forEach(c => { parent[c.name] = c.name; });
+
+        // Phone-based linking
+        var byPhone = {};
         campers.forEach(c => {
-            const parts = (c.name || '').trim().split(/\s+/);
-            const lastName = parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
-            if (!lastName) return;
-            if (!byLastName[lastName]) byLastName[lastName] = [];
-            byLastName[lastName].push(c);
+            var ph = _normPhone(c.phone || (D.addresses[c.name] && D.addresses[c.name].phone));
+            if (!ph) return;
+            (byPhone[ph] = byPhone[ph] || []).push(c);
         });
-        const sibMap = {};
-        let gid = 0;
+        Object.values(byPhone).forEach(group => {
+            if (group.length < 2) return;
+            for (var i = 1; i < group.length; i++) union(group[0].name, group[i].name);
+        });
+
+        // Last-name + proximity linking
+        var byLastName = {};
+        campers.forEach(c => {
+            var parts = (c.name || '').trim().split(/\s+/);
+            var lastName = parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
+            if (!lastName) return;
+            (byLastName[lastName] = byLastName[lastName] || []).push(c);
+        });
         Object.values(byLastName).forEach(group => {
             if (group.length < 2) return;
-            const used = new Set();
-            group.forEach(c => {
-                if (used.has(c.name)) return;
-                const family = [c]; used.add(c.name);
-                group.forEach(o => {
-                    if (used.has(o.name)) return;
-                    if (haversineMi(c.lat, c.lng, o.lat, o.lng) < 0.02) { family.push(o); used.add(o.name); }
-                });
-                if (family.length >= 2) {
-                    const id = 'sib_' + gid++;
-                    family.forEach(k => { sibMap[k.name] = id; });
+            for (var i = 0; i < group.length; i++) {
+                for (var j = i + 1; j < group.length; j++) {
+                    if (haversineMi(group[i].lat, group[i].lng, group[j].lat, group[j].lng) < 0.02) {
+                        union(group[i].name, group[j].name);
+                    }
                 }
-            });
+            }
+        });
+
+        // Explicit rideWith partner
+        campers.forEach(c => {
+            var a = D.addresses[c.name];
+            if (a && a.rideWith && parent[a.rideWith] != null) union(c.name, a.rideWith);
+        });
+
+        // Materialize groups where root has ≥2 members
+        var groupsByRoot = {};
+        campers.forEach(c => { var r = find(c.name); (groupsByRoot[r] = groupsByRoot[r] || []).push(c.name); });
+        var sibMap = {}; var gid = 0;
+        Object.values(groupsByRoot).forEach(names => {
+            if (names.length < 2) return;
+            var id = 'sib_' + gid++;
+            names.forEach(n => { sibMap[n] = id; });
         });
         if (Object.keys(sibMap).length) console.log('[Go] Siblings: ' + Object.keys(sibMap).length + ' kids in ' + gid + ' families');
         return sibMap;
@@ -7497,6 +7715,12 @@ async function generateRoutes() {
             }
 
             let stopName = '', stopLat = fallbackLat, stopLng = fallbackLng;
+            // Corner-aware fields (Transfinder parity). Populated only when we successfully
+            // snap to an OSM intersection AND find a safe corner.
+            let chosenCorner = null;       // 'NE'|'NW'|'SE'|'SW' or null
+            let intersectionLat = null;    // canonical intersection center (for Stop Master)
+            let intersectionLng = null;
+            let intersectionStreets = null; // ['Main St', 'Cross Rd']
 
             if (mainStreet && crossStreet) {
                 stopName = crossStreet + ' & ' + mainStreet;
@@ -7532,6 +7756,9 @@ async function generateRoutes() {
                         stopLat = bestInter.lat;
                         stopLng = bestInter.lng;
                         stopName = bestInter.name;
+                        intersectionLat = bestInter.lat;
+                        intersectionLng = bestInter.lng;
+                        intersectionStreets = bestInter.streets || null;
                         console.log('[Go]   Best corner: ' + bestInter.name + ' (score ' + bestScore.toFixed(1) + ', total walk ' + (totalWalkTo(bestInter.lat, bestInter.lng) * 5280).toFixed(0) + 'ft)');
                     } else {
                         // No street-matched intersection — find nearest of ANY kind
@@ -7543,6 +7770,9 @@ async function generateRoutes() {
                         if (nearestInter) {
                             stopLat = nearestInter.lat; stopLng = nearestInter.lng;
                             stopName = nearestInter.name;
+                            intersectionLat = nearestInter.lat;
+                            intersectionLng = nearestInter.lng;
+                            intersectionStreets = nearestInter.streets || null;
                             console.log('[Go]   No match for ' + mainStreet + '/' + crossStreet + ' — nearest: ' + nearestInter.name + ' (' + (nearestDist * 5280).toFixed(0) + 'ft)');
                         }
                     }
@@ -7580,15 +7810,49 @@ async function generateRoutes() {
                         }
                     }
 
-                    if (bestInter) { stopLat = bestInter.lat; stopLng = bestInter.lng; stopName = bestInter.name; }
+                    if (bestInter) {
+                        stopLat = bestInter.lat; stopLng = bestInter.lng; stopName = bestInter.name;
+                        intersectionLat = bestInter.lat;
+                        intersectionLng = bestInter.lng;
+                        intersectionStreets = bestInter.streets || null;
+                    }
                 }
             } else {
                 stopName = 'Stop';
             }
 
+            // ── Corner selection (Transfinder-style [SW]/[NE]/...) ──
+            // Only runs when we successfully snapped to an intersection AND major-road
+            // data is loaded. Picks the corner that minimizes total walk while rejecting
+            // corners that would force >30% of cluster kids to cross a major road.
+            if (intersectionLat != null && _majorRoadSegments && _majorRoadSegments.length) {
+                const pick = pickIntersectionCorner(
+                    { lat: intersectionLat, lng: intersectionLng },
+                    cluster,
+                    0.3
+                );
+                if (pick) {
+                    stopLat = pick.lat;
+                    stopLng = pick.lng;
+                    chosenCorner = pick.corner;
+                    stopName = stopName + ' [' + pick.corner + ']';
+                    if (pick.crossings > 0) {
+                        console.log('[Go]   Corner ' + pick.corner + ' accepted (' + pick.crossings + '/' + cluster.length + ' kids cross a major road)');
+                    } else {
+                        console.log('[Go]   Corner ' + pick.corner + ' selected (0 major-road crossings, walk ' + (pick.totalWalkMi * 5280).toFixed(0) + 'ft)');
+                    }
+                } else {
+                    console.warn('[Go]   All 4 corners at ' + stopName + ' would force >30% of kids to cross a major road — keeping intersection center');
+                }
+            }
+
             return {
                 lat: stopLat, lng: stopLng, address: stopName,
-                campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }))
+                campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })),
+                corner: chosenCorner,
+                intersectionLat: intersectionLat,
+                intersectionLng: intersectionLng,
+                intersectionStreets: intersectionStreets
             };
         });
 
@@ -7596,6 +7860,7 @@ async function generateRoutes() {
         // FIX 6: Use manhattanMi for merge distance check too
         // Merge tiny stops (≤2 kids) only into nearby stops within half walk distance
         // Using full walkMi was pulling distant stops together and stretching routes
+        // Transfinder parity: never merge across a major road — that undoes corner safety.
         const mergeRadius = walkMi * 0.5;
         let didMerge = true;
         while (didMerge) {
@@ -7607,6 +7872,8 @@ async function generateRoutes() {
                     if (j === i) continue;
                     // Don't merge into a stop that would exceed capacity
                     if (stops[j].campers.length + stops[i].campers.length > MAX_STOP_CAPACITY) continue;
+                    // Don't merge across a major road
+                    if (crossesMajorRoad(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng)) continue;
                     const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
                     if (d < bestDist) { bestDist = d; bestJ = j; }
                 }
