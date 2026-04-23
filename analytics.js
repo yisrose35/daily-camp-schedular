@@ -90,8 +90,8 @@
         { bg: '#fff0f6', border: '#be185d', text: '#831843' },
     ];
 
-    const COLOR_AVAIL = '#22c55e';  // green — available
-    const COLOR_TAKEN = '#ef4444';  // red   — taken
+    const COLOR_AVAIL = '#86efac';  // muted green — available
+    const COLOR_TAKEN = '#fca5a5';  // muted red   — taken
     const NOW_COLOR   = '#2563eb';  // blue  — current time line
 
     // ========================================================================
@@ -389,15 +389,17 @@
             <div style="position:relative;height:10px;margin-bottom:2px;">${ticks}</div>`;
     }
 
-    // Subtle vertical grid lines at 15-min intervals
+    // Vertical grid lines at 15-min intervals — visible enough to orient at a glance
     function buildGridLines(campStart, campEnd, totalMin) {
         let lines = '';
         const first15 = Math.ceil(campStart / 15) * 15;
         for (let m = first15; m <= campEnd; m += 15) {
             const l = ((m - campStart) / totalMin * 100).toFixed(3);
             const mod = m % 60;
-            const opacity = mod === 0 ? '0.13' : mod === 30 ? '0.07' : '0.03';
-            lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:1px;background:rgba(15,23,42,${opacity});pointer-events:none;z-index:0;"></div>`;
+            // Hour: solid medium gray | half-hour: lighter | quarter: faintest
+            const color = mod === 0 ? '#c8d0dc' : mod === 30 ? '#dde2ea' : '#eaecf0';
+            const width  = mod === 0 ? '1.5px' : '1px';
+            lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:${width};background:${color};pointer-events:none;z-index:3;"></div>`;
         }
         return lines;
     }
@@ -438,8 +440,8 @@
             return `<div data-tip="${tip.replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}"
                          style="position:absolute;top:6px;bottom:6px;left:calc(${l}% + 1px);width:calc(${w}% - 2px);
                                 background:${color};border-radius:3px;
-                                box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);
-                                box-sizing:border-box;z-index:1;cursor:default;"></div>`;
+                                box-shadow:inset 0 1px 0 rgba(255,255,255,0.25);
+                                box-sizing:border-box;z-index:2;cursor:default;"></div>`;
         };
 
         merged.forEach(interval => {
