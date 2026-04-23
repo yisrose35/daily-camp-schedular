@@ -6390,10 +6390,12 @@ async function generateRoutes() {
                         });
 
                         const nhAssignment = window.CampistryGoNeighborhoods.packIntoBuses({
-                            result: nhResult, buses: reducedBuses, priorAssignments, siblingGroups
+                            result: nhResult, buses: reducedBuses, priorAssignments, siblingGroups,
+                            depot: { lat: campLat, lng: campLng }
                         });
                         const nhPhysical = window.CampistryGoNeighborhoods.expandToPhysicalStops({
-                            assignment: nhAssignment, result: nhResult, isArrival: isArrival
+                            assignment: nhAssignment, result: nhResult, isArrival: isArrival,
+                            dropoffMode: mode
                         });
 
                         // Any camper that didn't snap to a segment gets appended to the nearest
@@ -6432,12 +6434,23 @@ async function generateRoutes() {
                         });
 
                         if (nhRoutes.length) {
+                            // Build the set of names already placed on a bus BEFORE we
+                            // append leftovers, so a name that somehow showed up twice
+                            // in the expanded stops won't get re-appended on top.
+                            const placedNames = new Set();
+                            for (const r of nhRoutes) {
+                                for (const st of r.stops) {
+                                    for (const cc of (st.campers || [])) {
+                                        const n = typeof cc === 'string' ? cc : cc.name;
+                                        if (n) placedNames.add(n);
+                                    }
+                                }
+                            }
+
                             // Append un-snapped campers to their nearest bus (by straight-line
-                            // distance from their home to any existing stop on that bus). This
-                            // guarantees every camper gets a route even if segment-snapping
-                            // missed them. They land at the end of that bus's stop list; the
-                            // shared timing pass downstream will sequence them sensibly.
+                            // distance from their home to any existing stop on that bus).
                             for (const lc of leftover) {
+                                if (placedNames.has(lc.name)) continue;
                                 let bestBus = null, bestDist = Infinity;
                                 for (const r of nhRoutes) {
                                     if ((r._cap || 0) && r.camperCount >= r._cap) continue;
@@ -6450,13 +6463,37 @@ async function generateRoutes() {
                                 if (!bestBus) bestBus = nhRoutes.reduce(function (a, b) { return a.camperCount <= b.camperCount ? a : b; });
                                 bestBus.stops.push({
                                     stopNum:  bestBus.stops.length + 1,
-                                    campers:  [lc.name],
+                                    campers:  [{ name: lc.name, division: lc.division, bunk: lc.bunk }],
                                     address:  lc.address || '',
                                     lat:      lc.lat,
                                     lng:      lc.lng
                                 });
                                 bestBus.camperCount += 1;
+                                placedNames.add(lc.name);
                             }
+
+                            // Defensive: strip any camper appearing on more than one bus.
+                            // Keep first occurrence; remove subsequent; drop emptied stops.
+                            (function dedupAcrossBuses() {
+                                const seen = new Set();
+                                let removed = 0;
+                                for (const r of nhRoutes) {
+                                    for (const st of r.stops) {
+                                        const keep = [];
+                                        for (const cc of (st.campers || [])) {
+                                            const n = typeof cc === 'string' ? cc : cc.name;
+                                            if (!n || seen.has(n)) { removed++; continue; }
+                                            seen.add(n);
+                                            keep.push(cc);
+                                        }
+                                        st.campers = keep;
+                                    }
+                                    r.stops = r.stops.filter(function (s) { return s.campers.length > 0; });
+                                    r.stops.forEach(function (s, i) { s.stopNum = i + 1; });
+                                    r.camperCount = r.stops.reduce(function (sum, s) { return sum + s.campers.length; }, 0);
+                                }
+                                if (removed) console.warn('[Go] Neighborhood mode: removed ' + removed + ' duplicate camper(s) across buses');
+                            })();
 
                             routes = nhRoutes;
                             usedExternalOptimizer = true;

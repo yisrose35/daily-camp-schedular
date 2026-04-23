@@ -429,9 +429,12 @@ window.CampistryGoNeighborhoods = (function () {
         const homes = [];
         const segmentHomes = {}; // segId -> [homes]
         const unattachedCampers = [];
+        const seenCamperNames = new Set();
 
         for (const c of campers) {
             if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) { unattachedCampers.push(c); continue; }
+            if (seenCamperNames.has(c.name)) continue; // defensive: each name at most once
+            seenCamperNames.add(c.name);
 
             // Search expanding rings of cells
             let bestEdge = null, bestDist = Infinity, bestSnap = null;
@@ -466,10 +469,16 @@ window.CampistryGoNeighborhoods = (function () {
 
             if (!bestEdge) { unattachedCampers.push(c); continue; }
 
+            // If the closest edge is a trunk (motorway/trunk/primary/secondary),
+            // it's not interior to any neighborhood — treat as unattached so
+            // the caller's leftover-append picks the camper up.
+            const nhForEdge = segToNh[bestEdge.id];
+            if (!nhForEdge) { unattachedCampers.push(c); continue; }
+
             const home = {
                 camperName: c.name,
                 segmentId: bestEdge.id,
-                neighborhoodId: segToNh[bestEdge.id] || null,
+                neighborhoodId: nhForEdge,
                 lat: c.lat, lng: c.lng,
                 snapLat: bestSnap.snapLat, snapLng: bestSnap.snapLng,
                 t: bestSnap.t,
@@ -664,6 +673,97 @@ window.CampistryGoNeighborhoods = (function () {
             if (reg) reg.neighborhoodIds.push(nh.id);
         }
 
+        // 8. Merge tiny neighborhoods into nearby larger ones. Community detection
+        // cuts aggressively (each cul-de-sac becomes its own component), producing
+        // 100s of 1-camper "neighborhoods" that are useless for routing. Absorb
+        // any neighborhood below minSize into its geographically nearest neighbor
+        // within maxDistMi. Repeat until stable.
+        const minSize   = options.minNeighborhoodSize ?? 5;
+        const maxMergeMi = options.maxMergeDistMi ?? 0.6;
+        {
+            const centroids = {};
+            for (const nh of neighborhoods) {
+                const nhHomes = homes.filter(h => h.neighborhoodId === nh.id);
+                if (!nhHomes.length) continue;
+                centroids[nh.id] = {
+                    lat: nhHomes.reduce((s, h) => s + h.lat, 0) / nhHomes.length,
+                    lng: nhHomes.reduce((s, h) => s + h.lng, 0) / nhHomes.length,
+                };
+            }
+            let mergedCount = 0, pass = 0;
+            const isolatedIds = new Set(); // tinies with no nearby neighbor — skip
+            while (pass++ < 2000) {
+                // Find the smallest still-mergeable neighborhood below minSize
+                let target = null;
+                for (const nh of neighborhoods) {
+                    if (nh.camperCount >= minSize) continue;
+                    if (isolatedIds.has(nh.id)) continue;
+                    if (!target || nh.camperCount < target.camperCount) target = nh;
+                }
+                if (!target) break;
+
+                const tc = centroids[target.id];
+                if (!tc) {
+                    const idx = neighborhoods.indexOf(target);
+                    if (idx >= 0) neighborhoods.splice(idx, 1);
+                    continue;
+                }
+
+                // Nearest other neighborhood within maxMergeMi
+                let best = null, bestDist = Infinity;
+                for (const other of neighborhoods) {
+                    if (other.id === target.id) continue;
+                    const oc = centroids[other.id];
+                    if (!oc) continue;
+                    const d = haversineMi(tc.lat, tc.lng, oc.lat, oc.lng);
+                    if (d < bestDist) { bestDist = d; best = other; }
+                }
+                if (!best || bestDist > maxMergeMi) {
+                    isolatedIds.add(target.id);
+                    continue;
+                }
+
+                // Reassign segments & homes from target → best
+                for (const sid of target.segmentIds) {
+                    if (segmentsById[sid]) segmentsById[sid].neighborhoodId = best.id;
+                }
+                for (const h of homes) {
+                    if (h.neighborhoodId === target.id) h.neighborhoodId = best.id;
+                }
+                // Concatenate spine orders. The merged NH may be disconnected
+                // across a trunk edge — that's fine, within-bus NN ordering
+                // in packIntoBuses reorders by geography anyway.
+                const bestSegSet = new Set(best.segmentIds);
+                for (const sid of target.segmentIds) {
+                    if (!bestSegSet.has(sid)) best.segmentIds.push(sid);
+                }
+                const bestNodeSet = new Set(best.nodeIds);
+                for (const nid of target.nodeIds) {
+                    if (!bestNodeSet.has(nid)) best.nodeIds.push(nid);
+                }
+
+                // Update camper counts + centroid (weighted)
+                const totalBefore = best.camperCount + target.camperCount;
+                centroids[best.id] = {
+                    lat: (centroids[best.id].lat * best.camperCount + tc.lat * target.camperCount) / totalBefore,
+                    lng: (centroids[best.id].lng * best.camperCount + tc.lng * target.camperCount) / totalBefore,
+                };
+                best.camperCount = totalBefore;
+
+                // Remove target
+                const idx = neighborhoods.indexOf(target);
+                if (idx >= 0) neighborhoods.splice(idx, 1);
+                const reg = regions.find(r => r.neighborhoodIds.includes(target.id));
+                if (reg) reg.neighborhoodIds = reg.neighborhoodIds.filter(id => id !== target.id);
+                delete centroids[target.id];
+                mergedCount++;
+            }
+            if (verbose) {
+                console.log('[Go-NH] Merged ' + mergedCount + ' tiny neighborhoods (< ' + minSize +
+                    ' campers, < ' + maxMergeMi + 'mi apart); ' + isolatedIds.size + ' isolated tinies retained');
+            }
+        }
+
         const segments = Object.values(segmentsById).filter(s => s.neighborhoodId && s.homes.length > 0);
         stats.neighborhoodCount = neighborhoods.length;
         stats.segmentCount = segments.length;
@@ -687,25 +787,24 @@ window.CampistryGoNeighborhoods = (function () {
     }
 
     // -------------------------------------------------------------------------
-    // packIntoBuses — bin-pack neighborhoods into buses respecting capacity.
+    // packIntoBuses — bin-pack neighborhoods into buses with geographic locality.
     //
     // Strategy:
-    //   1. Pre-split: any neighborhood with camperCount > maxBusCap is halved
-    //      along its spine (minimum-cut) until each piece fits.
-    //   2. Pre-merge: adjacent tiny neighborhoods (sharing a trunk intersection)
-    //      are merged until the merged result is near-full.
-    //   3. Sort neighborhoods by size descending; first-fit-decreasing into buses,
-    //      with prior-year bus preference when capacity allows.
-    //   4. Respect sibling atoms: a segment that contains one sibling must keep
-    //      all siblings (handled implicitly by not splitting segments, plus a
-    //      post-check that warns if a split put siblings on different buses).
+    //   1. Pre-split oversize neighborhoods along spine.
+    //   2. Prior-year pass: keep known NH → bus mapping when capacity allows.
+    //   3. Spatial-sweep pass: unassigned NHs, sorted by angle from the global
+    //      centroid, placed into the bus whose current centroid is closest
+    //      (empty buses score last). This keeps neighborhoods on the same bus
+    //      geographically clustered, which is what prevents the 5hr zigzag runs.
+    //   4. Within-bus ordering: segments are grouped by their NH and NHs are
+    //      reordered via NN from the depot (camp), so the bus drives outward
+    //      from camp in a sensible sequence instead of back-tracking.
+    //   5. Overflow: if no bus fits, place on least-full (+warn) rather than
+    //      silently dropping the neighborhood's campers.
     // -------------------------------------------------------------------------
-    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {} }) {
+    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null }) {
         if (!result || !result.neighborhoods.length) return [];
 
-        // Caller is responsible for passing already-effective capacity
-        // (monitor/counselor/reserve already subtracted). Keeping the math here
-        // was producing double-subtraction when called from generateRoutes().
         const vehicles = buses.map(b => ({
             busId: b.id || b.busId,
             name: b.name || ('Bus ' + (b.id || b.busId)),
@@ -713,11 +812,21 @@ window.CampistryGoNeighborhoods = (function () {
         }));
         const maxCap = Math.max(...vehicles.map(v => v.capacity));
 
+        // Neighborhood centroid = mean of its homes' coords
+        const nhCentroids = {};
+        for (const nh of result.neighborhoods) {
+            const nhHomes = result.homes.filter(h => h.neighborhoodId === nh.id);
+            if (!nhHomes.length) continue;
+            nhCentroids[nh.id] = {
+                lat: nhHomes.reduce((s, h) => s + h.lat, 0) / nhHomes.length,
+                lng: nhHomes.reduce((s, h) => s + h.lng, 0) / nhHomes.length,
+            };
+        }
+
         // --- 1. Pre-split oversize neighborhoods along spine ---
         const workNhs = [];
         for (const nh of result.neighborhoods) {
             if (nh.camperCount <= maxCap) { workNhs.push(nh); continue; }
-            // Split along spine until each piece fits
             const segCamperCounts = nh.segmentIds.map(sid => {
                 const s = result.segments.find(x => x.id === sid);
                 return { sid, count: s ? s.homes.length : 0 };
@@ -735,97 +844,230 @@ window.CampistryGoNeighborhoods = (function () {
             if (cur.segIds.length) pieces.push(cur);
 
             pieces.forEach((p, i) => {
+                const pieceId = nh.id + '_p' + i;
                 workNhs.push({
                     ...nh,
-                    id: nh.id + '_p' + i,
+                    id: pieceId,
                     parentId: nh.id,
                     segmentIds: p.segIds,
                     camperCount: p.count,
                     splitReason: 'oversize',
                 });
+                // Inherit parent centroid so spatial sweep has a location
+                if (nhCentroids[nh.id]) nhCentroids[pieceId] = nhCentroids[nh.id];
             });
         }
 
-        // --- 2. Sort by size descending (first-fit-decreasing bin-packing) ---
-        workNhs.sort((a, b) => b.camperCount - a.camperCount);
-
-        // --- 3. Assign to buses ---
+        // --- 2. Set up buses with running centroid tracking ---
         const assignments = vehicles.map(v => ({
             busId: v.busId, name: v.name, capacity: v.capacity,
             neighborhoodIds: [], segmentIds: [], camperCount: 0,
+            _centroidSum: { lat: 0, lng: 0, w: 0 },
         }));
         const busById = Object.fromEntries(assignments.map(a => [a.busId, a]));
 
-        for (const nh of workNhs) {
-            // 3a. Prior-year preference
-            const preferredBusId = priorAssignments[nh.parentId || nh.id];
-            let target = null;
-            if (preferredBusId && busById[preferredBusId] &&
-                busById[preferredBusId].camperCount + nh.camperCount <= busById[preferredBusId].capacity) {
-                target = busById[preferredBusId];
+        function assignToBus(nh, bus) {
+            bus.neighborhoodIds.push(nh.id);
+            bus.segmentIds.push(...nh.segmentIds);
+            bus.camperCount += nh.camperCount;
+            const c = nhCentroids[nh.id];
+            if (c) {
+                bus._centroidSum.lat += c.lat * nh.camperCount;
+                bus._centroidSum.lng += c.lng * nh.camperCount;
+                bus._centroidSum.w += nh.camperCount;
             }
-            // 3b. First-fit by remaining capacity (prefer fullest bus that still fits)
+        }
+        function busCentroid(bus) {
+            if (bus._centroidSum.w === 0) return null;
+            return { lat: bus._centroidSum.lat / bus._centroidSum.w, lng: bus._centroidSum.lng / bus._centroidSum.w };
+        }
+
+        // --- 2a. Pass 1: prior-year preference (size-DESC for priority) ---
+        const sortedBySize = [...workNhs].sort((a, b) => b.camperCount - a.camperCount);
+        const assignedIds = new Set();
+        let priorHits = 0;
+        for (const nh of sortedBySize) {
+            const pid = nh.parentId || nh.id;
+            const preferredBusId = priorAssignments[pid];
+            if (!preferredBusId) continue;
+            const bus = busById[preferredBusId];
+            if (bus && bus.camperCount + nh.camperCount <= bus.capacity) {
+                assignToBus(nh, bus);
+                assignedIds.add(nh.id);
+                priorHits++;
+            }
+        }
+
+        // --- 2b. Pass 2: spatial-sweep + proximity-aware for the rest ---
+        const unassigned = sortedBySize.filter(nh => !assignedIds.has(nh.id));
+
+        // Global centroid (weighted by camperCount)
+        let globalCentroid = null;
+        {
+            let sL = 0, sG = 0, w = 0;
+            for (const nh of workNhs) {
+                const c = nhCentroids[nh.id]; if (!c) continue;
+                sL += c.lat * nh.camperCount; sG += c.lng * nh.camperCount; w += nh.camperCount;
+            }
+            if (w > 0) globalCentroid = { lat: sL / w, lng: sG / w };
+        }
+
+        // Sort unassigned by sweep angle from global centroid, ties by size DESC
+        if (globalCentroid) {
+            unassigned.sort((a, b) => {
+                const ca = nhCentroids[a.id], cb = nhCentroids[b.id];
+                if (!ca && !cb) return b.camperCount - a.camperCount;
+                if (!ca) return 1; if (!cb) return -1;
+                const angA = Math.atan2(ca.lat - globalCentroid.lat, ca.lng - globalCentroid.lng);
+                const angB = Math.atan2(cb.lat - globalCentroid.lat, cb.lng - globalCentroid.lng);
+                if (angA !== angB) return angA - angB;
+                return b.camperCount - a.camperCount;
+            });
+        }
+
+        for (const nh of unassigned) {
+            const c = nhCentroids[nh.id];
+            let target = null, targetScore = Infinity;
+            for (const bus of assignments) {
+                if (bus.camperCount + nh.camperCount > bus.capacity) continue;
+                const bc = busCentroid(bus);
+                // Non-empty bus → score by miles. Empty bus → penalty constant
+                // so non-empty nearby buses win; empty buses are fallback.
+                const score = (bc && c) ? haversineMi(c.lat, c.lng, bc.lat, bc.lng) : 999;
+                if (score < targetScore) { targetScore = score; target = bus; }
+            }
             if (!target) {
-                let best = null, bestSlack = Infinity;
-                for (const a of assignments) {
-                    const slack = a.capacity - a.camperCount - nh.camperCount;
-                    if (slack >= 0 && slack < bestSlack) { bestSlack = slack; best = a; }
+                // Overflow to least-full rather than silently drop
+                target = assignments.reduce((a, b) => a.camperCount <= b.camperCount ? a : b);
+                console.warn('[Go-NH] Overflow: no bus had room for ' + nh.id + ' (' + nh.camperCount +
+                    ' campers) — placed on least-full bus ' + target.busId);
+            }
+            assignToBus(nh, target);
+        }
+
+        // --- 3. Within-bus ordering: group segments by NH, order NHs via NN from depot ---
+        const segById = Object.fromEntries(result.segments.map(s => [s.id, s]));
+        for (const bus of assignments) {
+            if (!bus.neighborhoodIds.length) continue;
+
+            // Group segmentIds by the ORIGINAL neighborhood id (so split pieces
+            // of the same NH stay contiguous), preserving spine order within.
+            const nhSegOrder = {};
+            const seenSegs = new Set();
+            for (const sid of bus.segmentIds) {
+                if (seenSegs.has(sid)) continue;
+                seenSegs.add(sid);
+                const seg = segById[sid];
+                const key = (seg && seg.neighborhoodId) || 'orphan';
+                (nhSegOrder[key] ||= []).push(sid);
+            }
+
+            // NN ordering of NHs within this bus, starting from depot (or the
+            // NH closest to depot if no depot given)
+            const nhIds = Object.keys(nhSegOrder);
+            const remaining = new Set(nhIds);
+            const orderedNhIds = [];
+            let curLat = depot?.lat ?? null, curLng = depot?.lng ?? null;
+            while (remaining.size) {
+                let nextId = null, nextDist = Infinity;
+                for (const nhid of remaining) {
+                    const c = nhCentroids[nhid];
+                    if (!c) continue;
+                    const d = (curLat != null && curLng != null)
+                        ? haversineMi(curLat, curLng, c.lat, c.lng)
+                        : 0;
+                    if (d < nextDist) { nextDist = d; nextId = nhid; }
                 }
-                target = best;
+                if (!nextId) nextId = [...remaining][0];
+                remaining.delete(nextId);
+                orderedNhIds.push(nextId);
+                const c = nhCentroids[nextId];
+                if (c) { curLat = c.lat; curLng = c.lng; }
             }
-            if (!target) {
-                console.warn('[Go-NH] No bus has room for neighborhood ' + nh.id + ' (' + nh.camperCount + ' campers)');
-                continue;
-            }
-            target.neighborhoodIds.push(nh.id);
-            target.segmentIds.push(...nh.segmentIds);
-            target.camperCount += nh.camperCount;
+
+            bus.segmentIds = orderedNhIds.flatMap(nhid => nhSegOrder[nhid] || []);
         }
 
         // --- 4. Sibling split warning ---
         for (const group of Object.values(siblingGroups)) {
-            const buses = new Set();
+            const busesHit = new Set();
             for (const name of group) {
                 const home = result.homes.find(h => h.camperName === name);
                 if (!home) continue;
                 for (const a of assignments) {
-                    if (a.segmentIds.includes(home.segmentId)) { buses.add(a.busId); break; }
+                    if (a.segmentIds.includes(home.segmentId)) { busesHit.add(a.busId); break; }
                 }
             }
-            if (buses.size > 1) {
-                console.warn('[Go-NH] ⚠ Siblings ' + group.join(',') + ' split across buses ' + [...buses].join(','));
+            if (busesHit.size > 1) {
+                console.warn('[Go-NH] ⚠ Siblings ' + group.join(',') + ' split across buses ' + [...busesHit].join(','));
             }
         }
 
-        return assignments.filter(a => a.neighborhoodIds.length > 0);
+        // --- 5. Strip bookkeeping fields before returning ---
+        return assignments
+            .filter(a => a.neighborhoodIds.length > 0)
+            .map(a => {
+                delete a._centroidSum;
+                return a;
+            });
     }
 
     // -------------------------------------------------------------------------
-    // expandToPhysicalStops — turn each bus's segment list into per-home drops.
-    // Each home is a physical stop in the same shape as createHouseStops()
-    // so the Google optimizer can consume the output unchanged.
+    // expandToPhysicalStops — turn each bus's segment list into physical drops.
+    //
+    // dropoffMode = 'door-to-door' (default): one stop per home, ordered along
+    //   the segment (parameter t). Mirrors createHouseStops() shape.
+    // dropoffMode = 'corner-stops': all homes on the same segment merge into
+    //   ONE stop at the mean home location, with every camper on that segment
+    //   bundled into its `campers` array. Mirrors createCornerStops() shape.
     // -------------------------------------------------------------------------
-    function expandToPhysicalStops({ assignment, result, isArrival = false }) {
+    function expandToPhysicalStops({ assignment, result, isArrival = false, dropoffMode = 'door-to-door' }) {
+        const corner = dropoffMode === 'corner-stops';
         return assignment.map(bus => {
             const segById = Object.fromEntries(result.segments.map(s => [s.id, s]));
             const stops = [];
-            // Walk segments in the order they were added (which is spine order
-            // within each neighborhood). Within each segment, sort homes by
-            // position along the segment (parameter t), so drops happen as the
-            // bus drives past. Reverse for arrival (AM) to mirror the PM route.
-            const orderedSegIds = isArrival ? [...bus.segmentIds].reverse() : bus.segmentIds;
+            // Dedup segment IDs inside a single bus so a segment listed twice
+            // (from overlapping NH pieces, say) can't duplicate its homes.
+            const uniqueSegIds = [];
+            const seenOnBus = new Set();
+            for (const sid of bus.segmentIds) {
+                if (seenOnBus.has(sid)) continue;
+                seenOnBus.add(sid);
+                uniqueSegIds.push(sid);
+            }
+            const orderedSegIds = isArrival ? [...uniqueSegIds].reverse() : uniqueSegIds;
             for (const sid of orderedSegIds) {
                 const seg = segById[sid];
                 if (!seg || seg.homes.length === 0) continue;
                 const ordered = [...seg.homes].sort((a, b) => (a.t - b.t) * (isArrival ? -1 : 1));
-                for (const h of ordered) {
+                if (corner) {
+                    // Collapse all homes on this segment into one corner stop
+                    // at the mean home location. Campers array holds everyone.
+                    const meanLat = ordered.reduce((s, h) => s + h.lat, 0) / ordered.length;
+                    const meanLng = ordered.reduce((s, h) => s + h.lng, 0) / ordered.length;
+                    const addrCount = {};
+                    for (const h of ordered) {
+                        const a = h.address || (seg.name || 'unnamed');
+                        addrCount[a] = (addrCount[a] || 0) + 1;
+                    }
+                    const topAddr = Object.entries(addrCount).sort((a, b) => b[1] - a[1])[0][0];
                     stops.push({
-                        lat: h.lat, lng: h.lng,
-                        address: h.address || (h.houseNum + ' ' + (seg.name || 'unnamed')),
+                        lat: meanLat, lng: meanLng,
+                        address: (seg.name || topAddr) + ' corner',
                         segmentId: sid,
                         neighborhoodId: seg.neighborhoodId,
-                        campers: [{ name: h.camperName, division: h.division, bunk: h.bunk }],
+                        campers: ordered.map(h => ({ name: h.camperName, division: h.division, bunk: h.bunk })),
                     });
+                } else {
+                    for (const h of ordered) {
+                        stops.push({
+                            lat: h.lat, lng: h.lng,
+                            address: h.address || (h.houseNum + ' ' + (seg.name || 'unnamed')),
+                            segmentId: sid,
+                            neighborhoodId: seg.neighborhoodId,
+                            campers: [{ name: h.camperName, division: h.division, bunk: h.bunk }],
+                        });
+                    }
                 }
             }
             return {
