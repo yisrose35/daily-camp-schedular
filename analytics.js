@@ -1,5 +1,5 @@
 // ============================================================================
-// analytics.js v3.0
+// analytics.js v3.1
 // Gantt-chart availability grid + Bunk Rotation report
 // ============================================================================
 
@@ -85,19 +85,26 @@
     let allActivities = [];
     let availableDivisions = [];
     let divisionsDat = {};
+    let allFieldsDat = []; // raw field objects with .activities array
     let selectedDate = null;
     let currentView = 'field';
+    let activityFilter = '';
+    let _activityFilterTimer = null;
 
     const DIV_COLORS = [
         { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af' },
-        { bg: '#dcfce7', border: '#16a34a', text: '#15803d' },
         { bg: '#fce7f3', border: '#db2777', text: '#9d174d' },
         { bg: '#fef9c3', border: '#ca8a04', text: '#854d0e' },
         { bg: '#ffe4e6', border: '#f43f5e', text: '#9f1239' },
         { bg: '#f3e8ff', border: '#9333ea', text: '#7e22ce' },
         { bg: '#ffedd5', border: '#ea580c', text: '#9a3412' },
         { bg: '#cffafe', border: '#0891b2', text: '#164e63' },
+        { bg: '#dcfce7', border: '#16a34a', text: '#15803d' },
     ];
+
+    const FREE_COLOR  = { bg: '#dcfce7', border: '#86efac', text: '#15803d' };
+    const BUSY_TRACK  = '#ffffff';
+    const NOW_COLOR   = '#ef4444';
 
     // ========================================================================
     // MASTER DATA
@@ -109,11 +116,11 @@
             divisionsDat = window.divisions || {};
             availableDivisions = (window.availableDivisions || Object.keys(divisionsDat)).sort();
 
-            const fields = g.app1?.fields || [];
+            allFieldsDat = g.app1?.fields || [];
             const specials = g.app1?.specialActivities || [];
 
             allActivities = [
-                ...fields.flatMap(f => (f.activities || []).map(a => ({ name: a, type: 'sport', max: 0 }))),
+                ...allFieldsDat.flatMap(f => (f.activities || []).map(a => ({ name: a, type: 'sport', max: 0 }))),
                 ...specials.map(s => ({ name: s.name, type: 'special', max: s.maxUsage || 0 }))
             ];
 
@@ -151,9 +158,6 @@
 
     // ========================================================================
     // DATA BUILDER
-    // Primary fix: read _startMin/_endMin directly from each entry instead of
-    // relying on a slot-index lookup in divisionTimes (which fails when the
-    // division lookup returns null or per-bunk slots are in use).
     // ========================================================================
 
     function buildUsageData(dateKey) {
@@ -178,7 +182,7 @@
             schedule.forEach((entry, idx) => {
                 if (!entry || entry.continuation || entry._isTransition) return;
 
-                // Use times embedded on the entry first; fall back to divisionTimes by index
+                // Use times embedded on the entry first (auto-build); fall back to divisionTimes (manual mode)
                 let startMin = entry._startMin;
                 let endMin = entry._endMin;
 
@@ -199,7 +203,7 @@
 
                 if (startMin === undefined || endMin === undefined) return;
 
-                // Extend through continuation slots to get the real block end time
+                // Extend through continuation slots to get real block end time
                 for (let i = idx + 1; i < schedule.length; i++) {
                     const next = schedule[i];
                     if (!next?.continuation) break;
@@ -209,8 +213,7 @@
                         const ns = times[i];
                         if (ns?.endMin !== undefined) endMin = ns.endMin;
                         else if (ns?.end) {
-                            const ed = new Date(ns.end);
-                            endMin = ed.getHours() * 60 + ed.getMinutes();
+                            endMin = new Date(ns.end).getHours() * 60 + new Date(ns.end).getMinutes();
                         }
                     }
                 }
@@ -221,7 +224,7 @@
 
                 const fRaw = entry.field;
                 let fName = typeof fRaw === 'object' ? (fRaw?.name || '') : (fRaw || '');
-                // Manual mode stores field as "Field – Activity" composite; extract the field part
+                // Manual mode stores "Field – Activity" composite; extract field part
                 if (fName.includes(' – ')) fName = fName.split(' – ')[0].trim();
                 else if (fName.includes(' - ')) fName = fName.split(' - ')[0].trim();
                 const hasField = fName && fName !== 'Free' && fName !== 'No Field';
@@ -252,6 +255,7 @@
         loadMasterData();
         selectedDate = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
         currentView = 'field';
+        activityFilter = '';
 
         container.innerHTML = `
             <div class="league-nav" style="background:#e3f2fd;border-color:#90caf9;padding:10px;margin-bottom:15px;border-radius:8px;">
@@ -299,6 +303,7 @@
 
         wrapper.innerHTML = `
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:12px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;">
+
                 <div style="display:flex;align-items:center;gap:8px;">
                     <label style="font-size:0.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;white-space:nowrap;">Date</label>
                     <select id="gantt-date-select" style="padding:6px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.84rem;background:#fff;">
@@ -318,6 +323,16 @@
                         ${divOptions}
                     </select>
                 </div>
+
+                <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:160px;">
+                    <label style="font-size:0.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;white-space:nowrap;">Activity</label>
+                    <div style="position:relative;flex:1;">
+                        <input id="gantt-activity-filter" type="text" placeholder="e.g. Basketball"
+                            style="width:100%;padding:6px 30px 6px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.84rem;background:#fff;box-sizing:border-box;" />
+                        <button id="gantt-activity-clear" title="Clear" style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:0.85rem;color:#9ca3af;padding:0;line-height:1;">✕</button>
+                    </div>
+                </div>
+
             </div>
 
             <div id="gantt-chart-area"></div>
@@ -333,6 +348,23 @@
 
         const divSel = document.getElementById('gantt-div-select');
         if (divSel) divSel.onchange = () => renderGantt();
+
+        const actInput = document.getElementById('gantt-activity-filter');
+        const actClear = document.getElementById('gantt-activity-clear');
+
+        actInput.oninput = () => {
+            activityFilter = actInput.value.trim().toLowerCase();
+            actClear.style.display = activityFilter ? 'block' : 'none';
+            clearTimeout(_activityFilterTimer);
+            _activityFilterTimer = setTimeout(() => renderGantt(), 250);
+        };
+
+        actClear.onclick = () => {
+            actInput.value = '';
+            activityFilter = '';
+            actClear.style.display = 'none';
+            renderGantt();
+        };
 
         renderGantt();
     }
@@ -373,11 +405,14 @@
             return;
         }
 
+        const today = new Date().toLocaleDateString('en-CA');
+        const showNow = selectedDate === today;
+
         if (currentView === 'field') {
-            renderFieldGantt(area, items, startMin, endMin);
+            renderFieldGantt(area, items, startMin, endMin, showNow);
         } else {
             const divFilter = document.getElementById('gantt-div-select')?.value || '';
-            renderBunkGantt(area, items, startMin, endMin, divFilter);
+            renderBunkGantt(area, items, startMin, endMin, divFilter, showNow);
         }
     }
 
@@ -410,38 +445,95 @@
             const m = h * 60;
             if (m < campStart || m > campEnd) continue;
             const l = ((m - campStart) / totalMin * 100).toFixed(3);
-            lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:1px;background:rgba(0,0,0,0.06);pointer-events:none;"></div>`;
+            lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:1px;background:rgba(0,0,0,0.07);pointer-events:none;z-index:0;"></div>`;
         }
         return lines;
     }
 
-    function buildBlock(item, campStart, totalMin, label, color) {
+    function buildNowLine(campStart, totalMin) {
+        const now = new Date();
+        const nowMin = now.getHours() * 60 + now.getMinutes();
+        const l = ((nowMin - campStart) / totalMin * 100).toFixed(3);
+        return `
+            <div style="position:absolute;top:0;bottom:0;left:${l}%;width:2px;background:${NOW_COLOR};z-index:20;pointer-events:none;">
+                <div style="position:absolute;top:-1px;left:50%;transform:translateX(-50%);width:7px;height:7px;background:${NOW_COLOR};border-radius:50%;border:1.5px solid #fff;"></div>
+            </div>`;
+    }
+
+    // Merge overlapping intervals so free-gap computation is correct
+    function mergeIntervals(usages) {
+        if (!usages.length) return [];
+        const sorted = [...usages].sort((a, b) => a.startMin - b.startMin);
+        const merged = [{ startMin: sorted[0].startMin, endMin: sorted[0].endMin }];
+        for (let i = 1; i < sorted.length; i++) {
+            const last = merged[merged.length - 1];
+            if (sorted[i].startMin <= last.endMin) {
+                last.endMin = Math.max(last.endMin, sorted[i].endMin);
+            } else {
+                merged.push({ startMin: sorted[i].startMin, endMin: sorted[i].endMin });
+            }
+        }
+        return merged;
+    }
+
+    // Build explicit green FREE blocks for the gaps between busy blocks
+    function buildFreeBlocks(usages, campStart, campEnd, totalMin) {
+        const merged = mergeIntervals(usages);
+        let html = '';
+        let cursor = campStart;
+
+        const addFreeBlock = (s, e) => {
+            if (e <= s) return;
+            const l = ((s - campStart) / totalMin * 100).toFixed(3);
+            const w = ((e - s) / totalMin * 100).toFixed(3);
+            const tip = `FREE: ${minutesToTimeLabel(s)} – ${minutesToTimeLabel(e)} (${e - s} min)`;
+            // Only show FREE label if block is wide enough to fit it (~30 min = ~7%)
+            const wide = (e - s) >= 30;
+            html += `
+                <div title="${tip}"
+                     style="position:absolute;top:4px;bottom:4px;left:${l}%;width:${w}%;
+                            background:${FREE_COLOR.bg};border:1.5px solid ${FREE_COLOR.border};
+                            border-radius:5px;display:flex;align-items:center;justify-content:center;
+                            box-sizing:border-box;overflow:hidden;z-index:1;">
+                    ${wide ? `<span style="font-size:0.65rem;font-weight:700;color:${FREE_COLOR.text};white-space:nowrap;letter-spacing:0.04em;">FREE</span>` : ''}
+                </div>`;
+        };
+
+        merged.forEach(interval => {
+            addFreeBlock(cursor, interval.startMin);
+            cursor = interval.endMin;
+        });
+        addFreeBlock(cursor, campEnd);
+
+        return html;
+    }
+
+    function buildBusyBlock(item, campStart, totalMin, label, color) {
         const l = ((item.startMin - campStart) / totalMin * 100).toFixed(3);
         const w = Math.max(0.4, ((item.endMin - item.startMin) / totalMin * 100)).toFixed(3);
         const dur = item.endMin - item.startMin;
         const tip = `${item.bunk}: ${item.activity}${item.field ? ' @ ' + item.field : ''}\n${minutesToTimeLabel(item.startMin)} – ${minutesToTimeLabel(item.endMin)} (${dur} min)`;
         return `
             <div title="${tip.replace(/"/g, '&quot;')}"
-                 style="position:absolute;top:5px;bottom:5px;left:${l}%;width:${w}%;
+                 style="position:absolute;top:4px;bottom:4px;left:${l}%;width:${w}%;
                         background:${color.bg};border:1.5px solid ${color.border};border-radius:5px;
                         display:flex;align-items:center;padding:0 6px;overflow:hidden;
-                        cursor:default;box-sizing:border-box;min-width:2px;">
-                <span style="font-size:0.68rem;font-weight:700;color:${color.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</span>
+                        cursor:default;box-sizing:border-box;min-width:2px;z-index:2;">
+                <span style="font-size:0.69rem;font-weight:700;color:${color.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</span>
             </div>`;
     }
 
-    function buildRow(leftLabel, trackHtml, isAlternate) {
-        const rowBg = isAlternate ? '#fafafa' : '#ffffff';
-        const trackBg = isAlternate ? '#f5f6f7' : '#f3f4f6';
+    function buildRow(leftLabel, trackHtml, isAlternate, extraLabelStyle) {
+        const rowBg = isAlternate ? '#f9fafb' : '#ffffff';
         return `
-            <div style="display:flex;align-items:stretch;margin-bottom:2px;min-height:42px;">
+            <div style="display:flex;align-items:stretch;margin-bottom:2px;min-height:44px;">
                 <div style="width:160px;min-width:160px;padding:0 12px;display:flex;align-items:center;
                             font-size:0.78rem;font-weight:600;color:#374151;
                             border-right:2px solid #e9ecef;background:${rowBg};flex-shrink:0;
-                            overflow:hidden;" title="${leftLabel}">
+                            overflow:hidden;${extraLabelStyle || ''}" title="${leftLabel}">
                     <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${leftLabel}</span>
                 </div>
-                <div style="flex:1;position:relative;background:${trackBg};min-height:42px;overflow:hidden;">
+                <div style="flex:1;position:relative;background:${BUSY_TRACK};min-height:44px;overflow:hidden;border-bottom:1px solid #f3f4f6;">
                     ${trackHtml}
                 </div>
             </div>`;
@@ -458,20 +550,41 @@
     // BY FIELD GANTT
     // ========================================================================
 
-    function renderFieldGantt(area, items, campStart, campEnd) {
+    function renderFieldGantt(area, items, campStart, campEnd, showNow) {
         const gs = window.loadGlobalSettings?.() || {};
-        const fields = (gs.app1?.fields || []).map(f => ({ name: f.name, type: 'field' }));
-        const specials = (gs.app1?.specialActivities || []).map(s => ({ name: s.name, type: 'special' }));
-        const resources = [...fields, ...specials].sort((a, b) => a.name.localeCompare(b.name));
+        const rawFields = gs.app1?.fields || [];
+        const rawSpecials = gs.app1?.specialActivities || [];
+
+        // Build resources, applying activity filter to fields
+        let fieldResources = rawFields.map(f => ({ name: f.name, type: 'field', activities: f.activities || [] }));
+        let specialResources = rawSpecials.map(s => ({ name: s.name, type: 'special', activities: [] }));
+
+        if (activityFilter) {
+            // Filter fields: keep those whose activities list includes the search term
+            fieldResources = fieldResources.filter(f =>
+                f.activities.some(a => a.toLowerCase().includes(activityFilter))
+            );
+            // For specials, match on the name itself
+            specialResources = specialResources.filter(s =>
+                s.name.toLowerCase().includes(activityFilter)
+            );
+        }
+
+        const resources = [...fieldResources, ...specialResources].sort((a, b) => a.name.localeCompare(b.name));
 
         if (!resources.length) {
-            area.innerHTML = `<div style="padding:32px;text-align:center;color:#9ca3af;">No fields or activities configured.</div>`;
+            area.innerHTML = `
+                <div style="padding:40px;text-align:center;color:#9ca3af;background:#f9fafb;border:1px dashed #d1d5db;border-radius:12px;">
+                    <div style="font-size:1.8rem;margin-bottom:8px;">🔍</div>
+                    <div style="font-size:0.9rem;font-weight:600;color:#6b7280;">No fields match "${activityFilter}"</div>
+                    <div style="font-size:0.8rem;margin-top:4px;">Try a different activity name.</div>
+                </div>`;
             return;
         }
 
         const totalMin = campEnd - campStart;
 
-        // Index items by field name and by special-activity name
+        // Index items by field name and special name
         const byField = {};
         const bySpecial = {};
         items.forEach(item => {
@@ -487,29 +600,47 @@
 
         let html = buildTimeAxis(campStart, campEnd, totalMin);
 
+        // Show filter badge if active
+        if (activityFilter) {
+            html += `<div style="margin-bottom:10px;display:inline-flex;align-items:center;gap:6px;padding:4px 12px;background:#eff6ff;border:1px solid #93c5fd;border-radius:999px;font-size:0.78rem;color:#1d4ed8;font-weight:600;">
+                🔍 Showing fields with: <strong>${activityFilter}</strong>
+            </div>`;
+        }
+
         resources.forEach((r, i) => {
             const usages = r.type === 'field' ? (byField[r.name] || []) : (bySpecial[r.name] || []);
             const icon = r.type === 'special' ? '⭐ ' : '🏟️ ';
+            const allFree = usages.length === 0;
 
             let track = buildGridLines(campStart, campEnd, totalMin);
+            track += buildFreeBlocks(usages, campStart, campEnd, totalMin);
             usages.forEach(item => {
-                track += buildBlock(item, campStart, totalMin, item.bunk, getDivisionColor(item.division));
+                track += buildBusyBlock(item, campStart, totalMin, item.bunk, getDivisionColor(item.division));
             });
+            if (showNow) track += buildNowLine(campStart, totalMin);
 
-            html += buildRow(icon + r.name, track, i % 2 === 1);
+            // Highlight label green if entirely free
+            const labelExtra = allFree ? 'color:#15803d;' : '';
+            html += buildRow(icon + r.name, track, i % 2 === 1, labelExtra);
         });
 
-        // Division colour legend
+        // Legend: divisions + free/now
         const divNames = Object.keys(divisionsDat).sort();
-        const legend = divNames.map((d, i) => {
+        const divLegend = divNames.map((d, i) => {
             const c = DIV_COLORS[i % DIV_COLORS.length];
             return buildLegendSwatch(c.bg, c.border, d);
         }).join('');
 
+        const staticLegend =
+            buildLegendSwatch(FREE_COLOR.bg, FREE_COLOR.border, 'Free') +
+            (showNow ? `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;"><span style="width:2px;height:14px;background:${NOW_COLOR};border-radius:1px;flex-shrink:0;"></span><span style="font-size:0.74rem;color:#6b7280;">Now</span></span>` : '');
+
         area.innerHTML = `
-            <div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+            <div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,0.05);">
                 <div style="padding:16px 20px 14px;">${html}</div>
-                ${legend ? `<div style="padding:10px 20px 14px;border-top:1px solid #f3f4f6;display:flex;flex-wrap:wrap;align-items:center;gap:2px;">${legend}</div>` : ''}
+                <div style="padding:10px 20px 14px;border-top:1px solid #f3f4f6;display:flex;flex-wrap:wrap;align-items:center;gap:2px;">
+                    ${staticLegend}${divLegend ? '<span style="width:1px;height:16px;background:#e5e7eb;margin:0 8px;"></span>' + divLegend : ''}
+                </div>
             </div>`;
     }
 
@@ -517,11 +648,13 @@
     // BY BUNK GANTT
     // ========================================================================
 
-    function renderBunkGantt(area, items, campStart, campEnd, divFilter) {
+    function renderBunkGantt(area, items, campStart, campEnd, divFilter, showNow) {
         const totalMin = campEnd - campStart;
 
         const bunkMap = {};
         items.forEach(item => {
+            // Apply activity filter: only include matching activity blocks
+            if (activityFilter && !item.activity.toLowerCase().includes(activityFilter)) return;
             (bunkMap[item.bunk] = bunkMap[item.bunk] || []).push(item);
         });
 
@@ -533,6 +666,13 @@
             : divisionsDat;
 
         let html = buildTimeAxis(campStart, campEnd, totalMin);
+
+        if (activityFilter) {
+            html += `<div style="margin-bottom:10px;display:inline-flex;align-items:center;gap:6px;padding:4px 12px;background:#eff6ff;border:1px solid #93c5fd;border-radius:999px;font-size:0.78rem;color:#1d4ed8;font-weight:600;">
+                🔍 Showing: <strong>${activityFilter}</strong>
+            </div>`;
+        }
+
         let rowCount = 0;
         let anyBunk = false;
 
@@ -542,20 +682,17 @@
             if (!bunks.length) return;
             anyBunk = true;
 
-            html += `
-                <div style="margin:8px 0 4px;padding:3px 0;font-size:0.68rem;font-weight:700;
-                            color:#9ca3af;text-transform:uppercase;letter-spacing:0.08em;
-                            border-bottom:1px solid #e9ecef;">
-                    ${divName}
-                </div>`;
+            html += `<div style="margin:8px 0 4px;padding:3px 0;font-size:0.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid #e9ecef;">${divName}</div>`;
 
             bunks.forEach(bunk => {
                 const usages = bunkMap[bunk] || [];
                 let track = buildGridLines(campStart, campEnd, totalMin);
+                track += buildFreeBlocks(usages, campStart, campEnd, totalMin);
                 usages.forEach(item => {
                     const color = item.isSpecial ? specialColor : sportColor;
-                    track += buildBlock(item, campStart, totalMin, item.activity, color);
+                    track += buildBusyBlock(item, campStart, totalMin, item.activity, color);
                 });
+                if (showNow) track += buildNowLine(campStart, totalMin);
                 html += buildRow(bunk, track, rowCount % 2 === 1);
                 rowCount++;
             });
@@ -567,11 +704,13 @@
         }
 
         const legend =
+            buildLegendSwatch(FREE_COLOR.bg, FREE_COLOR.border, 'Free') +
             buildLegendSwatch('#dbeafe', '#3b82f6', 'Sport') +
-            buildLegendSwatch('#f3e8ff', '#9333ea', 'Special');
+            buildLegendSwatch('#f3e8ff', '#9333ea', 'Special') +
+            (showNow ? `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;"><span style="width:2px;height:14px;background:${NOW_COLOR};border-radius:1px;flex-shrink:0;"></span><span style="font-size:0.74rem;color:#6b7280;">Now</span></span>` : '');
 
         area.innerHTML = `
-            <div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+            <div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,0.05);">
                 <div style="padding:16px 20px 14px;">${html}</div>
                 <div style="padding:10px 20px 14px;border-top:1px solid #f3f4f6;display:flex;flex-wrap:wrap;align-items:center;">${legend}</div>
             </div>`;
