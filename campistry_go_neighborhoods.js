@@ -128,12 +128,17 @@ window.CampistryGoNeighborhoods = (function () {
             'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street)$"](' + bbox + ');' +
             'out body;>;out skel qt;';
 
+        // Prefer the Supabase edge proxy (dodges browser CORS + retries mirrors
+        // server-side). Fall through to direct calls for local/dev usage where
+        // Supabase may not be wired in.
+        const data = await fetchOverpassViaProxy(query, options);
+        if (data) return data;
+
         const endpoints = [
             'https://overpass-api.de/api/interpreter',
             'https://overpass.kumi.systems/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
         ];
-
         for (const url of endpoints) {
             try {
                 const controller = new AbortController();
@@ -141,15 +146,54 @@ window.CampistryGoNeighborhoods = (function () {
                 const resp = await fetch(url + '?data=' + encodeURIComponent(query), { signal: controller.signal });
                 clearTimeout(timeoutId);
                 if (!resp.ok) continue;
-                const data = await resp.json();
-                if (options.verbose) console.log('[Go-NH] Overpass: ' + (data.elements?.length || 0) + ' elements from ' + url);
-                return data;
+                const direct = await resp.json();
+                if (options.verbose) console.log('[Go-NH] Overpass (direct): ' + (direct.elements?.length || 0) + ' elements from ' + url);
+                return direct;
             } catch (e) {
                 if (options.verbose) console.warn('[Go-NH] Overpass error at ' + url + ':', e.message);
             }
         }
-        console.warn('[Go-NH] All Overpass mirrors failed');
+        console.warn('[Go-NH] All Overpass routes failed (proxy + direct)');
         return null;
+    }
+
+    async function fetchOverpassViaProxy(query, options) {
+        const cfg = window.__CAMPISTRY_SUPABASE__;
+        if (!cfg?.url || !cfg?.anonKey) return null;
+        let token = '';
+        try {
+            const sess = await window.supabase?.auth?.getSession?.();
+            token = sess?.data?.session?.access_token || '';
+        } catch (_) { /* ignore */ }
+        if (!token) return null;
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 50000);
+            const resp = await fetch(cfg.url + '/functions/v1/overpass-proxy', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'apikey': cfg.anonKey,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ query: query }),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (!resp.ok) {
+                if (options.verbose) console.warn('[Go-NH] Overpass proxy HTTP ' + resp.status);
+                return null;
+            }
+            const data = await resp.json();
+            if (options.verbose) {
+                const mirror = resp.headers.get('X-Overpass-Mirror') || '(unknown)';
+                console.log('[Go-NH] Overpass (proxy): ' + (data.elements?.length || 0) + ' elements via ' + mirror);
+            }
+            return data;
+        } catch (e) {
+            if (options.verbose) console.warn('[Go-NH] Overpass proxy error:', e.message);
+            return null;
+        }
     }
 
     // -------------------------------------------------------------------------
