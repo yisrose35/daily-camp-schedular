@@ -1662,12 +1662,25 @@ function summarySpecialSchedulingMode(s) {
     return `Individual bunks — up to ${parseInt(rules.capacity) || 2} at once`;
 }
 function summarySpecialUsage(s) {
-    const parts = [];
-    if (s.maxUsage) parts.push(`Max ${s.maxUsage} per ${s.maxUsagePeriod || 'half'}`);
-    const days = parseInt(s.frequencyDays || s.frequencyWeeks || 0, 10);
-    if (days > 0) parts.push(`Min ${days}d between`);
-    if (s.rotationCohort?.enabled && Array.isArray(s.rotationCohort.grades) && s.rotationCohort.grades.length > 0) {
-        parts.push(`Equal visits across ${s.rotationCohort.grades.join(', ')}`);
+    var parts = [];
+    var m = parseInt(s.maxUsage) || 0;
+    if (m > 0) {
+        var period = s.maxUsagePeriod || 'half';
+        var plabels = { half: 'per half', week: 'per week', '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks' };
+        parts.push('Max ' + m + ' ' + (plabels[period] || 'per half'));
+        var maxGradeCount = Object.keys(s.maxUsagePerGrade || {}).filter(function(k) { return (s.maxUsagePerGrade[k] || 0) > 0; }).length;
+        if (maxGradeCount > 0) parts.push(maxGradeCount + ' max-grade override' + (maxGradeCount > 1 ? 's' : ''));
+    }
+    var minF = parseInt(s.minFrequency) || 0;
+    if (minF > 0) {
+        parts.push('Min ' + minF + 'x ' + (s.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+        var minGradeCount = Object.keys(s.minFrequencyPerGrade || {}).filter(function(k) { return (s.minFrequencyPerGrade[k] || 0) > 0; }).length;
+        if (minGradeCount > 0) parts.push(minGradeCount + ' min-grade override' + (minGradeCount > 1 ? 's' : ''));
+    }
+    var days = parseInt(s.frequencyDays || s.frequencyWeeks || 0, 10);
+    if (days > 0) parts.push('Min ' + days + 'd between');
+    if (s.rotationCohort && s.rotationCohort.enabled && Array.isArray(s.rotationCohort.grades) && s.rotationCohort.grades.length > 0) {
+        parts.push('Equal visits across ' + s.rotationCohort.grades.join(', '));
     }
     return parts.length > 0 ? parts.join(' • ') : 'No limit';
 }
@@ -2161,158 +2174,346 @@ function renderSpecialSchedulingMode(saData) {
 
 // -- Usage & Frequency --
 function renderSpecialUsage(saData) {
-    const container = document.createElement("div");
+    var container = document.createElement('div');
 
-    // One-time legacy migration: copy frequencyWeeks → frequencyDays if
-    // the new field is missing. The validator already does this on read,
-    // but mirror it on the live object so saves persist the new key.
     if (saData.frequencyDays == null && saData.frequencyWeeks != null) {
         saData.frequencyDays = parseInt(saData.frequencyWeeks, 10) || 0;
     }
     if (!saData.rotationCohort || typeof saData.rotationCohort !== 'object') {
         saData.rotationCohort = { enabled: false, grades: [] };
     }
+    if (!saData.maxUsagePerGrade || typeof saData.maxUsagePerGrade !== 'object') saData.maxUsagePerGrade = {};
+    if (!saData.minFrequencyPerGrade || typeof saData.minFrequencyPerGrade !== 'object') saData.minFrequencyPerGrade = {};
 
-    const updateSummary = () => {
-        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+    var updateSummary = function() {
+        var el = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
         if (el) el.textContent = summarySpecialUsage(saData);
     };
 
-    const renderContent = () => {
+    var renderContent = function() {
         container.innerHTML = '';
 
-        // ── Max usage row ───────────────────────────────────────
-        const maxRow = document.createElement('div');
-        maxRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;';
-        maxRow.innerHTML = `
-            <span style="font-size:0.85rem;">Max usage per</span>
-            <select id="fac-sa-usage-period" style="border-radius:6px; border:1px solid #D1D5DB; padding:4px;">
-                <option value="half" ${saData.maxUsagePeriod === 'half' ? 'selected' : ''}>Half Summer</option>
-                <option value="week" ${saData.maxUsagePeriod === 'week' ? 'selected' : ''}>Week</option>
-            </select>
-            <span style="font-size:0.85rem;">:</span>
-            <input type="number" id="fac-sa-max-usage" min="0" placeholder="No limit" value="${saData.maxUsage || ''}"
-                style="width:70px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-        `;
-        container.appendChild(maxRow);
+        // ── A: MAXIMUM (CEILING) ──────────────────────────────────────────
+        var ceilLabel = document.createElement('div');
+        ceilLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        ceilLabel.textContent = 'Maximum (ceiling)';
+        container.appendChild(ceilLabel);
 
-        // ── Min frequency (days between) ────────────────────────
-        const freqRow = document.createElement('div');
-        freqRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:18px; flex-wrap:wrap;';
-        freqRow.innerHTML = `
-            <span style="font-size:0.85rem;">Min frequency (days between):</span>
-            <input type="number" id="fac-sa-freq" min="0" value="${saData.frequencyDays || 0}"
-                style="width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-        `;
-        container.appendChild(freqRow);
+        var ceilEnabled = (parseInt(saData.maxUsage) || 0) > 0;
 
-        // ── Equal visits across grades (cohort round-robin) ─────
-        const cohortBox = document.createElement('div');
-        cohortBox.style.cssText = 'border-top:1px dashed #E5E7EB; padding-top:14px;';
+        var ceilTogRow = document.createElement('div');
+        ceilTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (ceilEnabled ? '12px' : '4px') + ';';
+        var ceilTog = document.createElement('label'); ceilTog.className = 'switch';
+        var ceilCb = document.createElement('input'); ceilCb.type = 'checkbox'; ceilCb.checked = ceilEnabled;
+        var ceilSl = document.createElement('span'); ceilSl.className = 'slider';
+        ceilTog.appendChild(ceilCb); ceilTog.appendChild(ceilSl);
+        var ceilLbl = document.createElement('span');
+        ceilLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        ceilLbl.textContent = 'Limit how many times a bunk can do this';
+        ceilTogRow.appendChild(ceilTog); ceilTogRow.appendChild(ceilLbl);
+        container.appendChild(ceilTogRow);
+        ceilCb.onchange = function() { saData.maxUsage = ceilCb.checked ? 1 : null; saveSpecialData(saData); renderContent(); updateSummary(); };
 
-        const cohortLabel = document.createElement('div');
-        cohortLabel.style.cssText = 'font-size:0.85rem; font-weight:600; color:#374151; margin-bottom:6px;';
-        cohortLabel.textContent = 'Equal visits across grades';
-        cohortBox.appendChild(cohortLabel);
+        if (ceilEnabled) {
+            var ceilDetail = document.createElement('div');
+            ceilDetail.style.cssText = 'padding-left:12px; border-left:2px solid #147D91; margin-bottom:14px;';
 
-        const cohortHelp = document.createElement('div');
-        cohortHelp.style.cssText = 'font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;';
-        cohortHelp.textContent = 'Every bunk in the chosen grades visits this activity the same number of times before any bunk visits again. Useful when supplies for the next round arrive only after every bunk has had a turn.';
-        cohortBox.appendChild(cohortHelp);
+            var countRow = document.createElement('div');
+            countRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;';
+            var countLbl = document.createElement('span'); countLbl.style.cssText = 'font-size:0.85rem; color:#374151;'; countLbl.textContent = 'Max:';
+            var countIn = document.createElement('input');
+            countIn.type = 'number'; countIn.min = '1'; countIn.max = '99'; countIn.value = parseInt(saData.maxUsage) || 1;
+            countIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            countIn.onchange = function() { saData.maxUsage = Math.max(1, parseInt(countIn.value) || 1); saveSpecialData(saData); updateSummary(); };
 
-        const rc = saData.rotationCohort;
-
-        const modeWrap = document.createElement('div');
-        modeWrap.style.cssText = 'display:flex; gap:8px; margin-bottom:12px;';
-
-        const btnOff = document.createElement('button');
-        btnOff.textContent = 'Off';
-        btnOff.style.cssText = `flex:1; padding:7px; border-radius:6px; border:1px solid ${!rc.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${!rc.enabled ? '#e6f4f7' : '#fff'}; font-weight:${!rc.enabled ? '600' : '400'}; font-size:0.85rem;`;
-
-        const btnOn = document.createElement('button');
-        btnOn.textContent = 'Take turns by bunk';
-        btnOn.style.cssText = `flex:1; padding:7px; border-radius:6px; border:1px solid ${rc.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rc.enabled ? '#e6f4f7' : '#fff'}; font-weight:${rc.enabled ? '600' : '400'}; font-size:0.85rem;`;
-
-        btnOff.onclick = () => {
-            rc.enabled = false;
-            saveSpecialData(saData);
-            renderContent(); updateSummary();
-        };
-        btnOn.onclick = () => {
-            rc.enabled = true;
-            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.limitUsage?.enabled) {
-                rc.grades = Object.keys(saData.limitUsage.divisions || {});
-            }
-            saveSpecialData(saData);
-            renderContent(); updateSummary();
-        };
-
-        modeWrap.appendChild(btnOff);
-        modeWrap.appendChild(btnOn);
-        cohortBox.appendChild(modeWrap);
-
-        if (rc.enabled) {
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
-            if (!Array.isArray(rc.grades)) rc.grades = [];
-
-            const chipLabel = document.createElement('div');
-            chipLabel.style.cssText = 'font-size:0.78rem; color:#374151; margin-bottom:6px;';
-            chipLabel.textContent = 'Grades sharing the rotation:';
-            cohortBox.appendChild(chipLabel);
-
-            const chipWrap = document.createElement('div');
-            chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:4px;';
-            allDivs.forEach(divName => {
-                const isOn = rc.grades.includes(divName);
-                const c = document.createElement('span');
-                c.className = 'chip ' + (isOn ? 'active' : 'inactive');
-                c.textContent = divName;
-                c.onclick = () => {
-                    if (isOn) rc.grades = rc.grades.filter(g => g !== divName);
-                    else rc.grades.push(divName);
-                    saveSpecialData(saData);
-                    renderContent(); updateSummary();
-                };
-                chipWrap.appendChild(c);
+            var periodSel = document.createElement('select');
+            periodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'half', label:'per half' }, { value:'week', label:'per week' },
+             { value:'2weeks', label:'per 2 weeks' }, { value:'3weeks', label:'per 3 weeks' },
+             { value:'4weeks', label:'per 4 weeks' }].forEach(function(p) {
+                var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((saData.maxUsagePeriod || 'half') === p.value) opt.selected = true;
+                periodSel.appendChild(opt);
             });
-            cohortBox.appendChild(chipWrap);
+            periodSel.onchange = function() { saData.maxUsagePeriod = periodSel.value; saveSpecialData(saData); updateSummary(); };
+            countRow.appendChild(countLbl); countRow.appendChild(countIn); countRow.appendChild(periodSel);
+            ceilDetail.appendChild(countRow);
 
-            if (rc.grades.length === 0) {
-                const warn = document.createElement('div');
-                warn.style.cssText = 'font-size:0.75rem; color:#D97706; margin-top:8px;';
-                warn.textContent = 'No grades selected — rotation has no effect.';
-                cohortBox.appendChild(warn);
-            }
+            // per-grade max toggle
+            var ceilPgTogRow = document.createElement('div');
+            ceilPgTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:10px 0 6px 0;';
+            var ceilPgTog = document.createElement('label'); ceilPgTog.className = 'switch';
+            var ceilPgCb = document.createElement('input'); ceilPgCb.type = 'checkbox';
+            var hasMaxGradeOverrides = Object.keys(saData.maxUsagePerGrade).length > 0;
+            ceilPgCb.checked = hasMaxGradeOverrides;
+            var ceilPgSl = document.createElement('span'); ceilPgSl.className = 'slider';
+            ceilPgTog.appendChild(ceilPgCb); ceilPgTog.appendChild(ceilPgSl);
+            var ceilPgLbl = document.createElement('span');
+            ceilPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            ceilPgLbl.textContent = 'Different max per grade';
+            ceilPgTogRow.appendChild(ceilPgTog); ceilPgTogRow.appendChild(ceilPgLbl);
+            ceilDetail.appendChild(ceilPgTogRow);
+
+            var ceilGradeGrid = document.createElement('div');
+            ceilGradeGrid.style.display = hasMaxGradeOverrides ? 'flex' : 'none';
+            ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            var allDivs = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            allDivs.forEach(function(div) {
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                var lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                var inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(saData.maxUsage) || 1);
+                var gv = saData.maxUsagePerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = (function(d) { return function() {
+                    var v = parseInt(inp.value);
+                    if (v > 0) saData.maxUsagePerGrade[d] = v;
+                    else delete saData.maxUsagePerGrade[d];
+                    saveSpecialData(saData); updateSummary();
+                }; })(div);
+                var clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = function() { clrBtn.style.color = '#9CA3AF'; };
+                clrBtn.onmouseout = function() { clrBtn.style.color = '#D1D5DB'; };
+                clrBtn.onclick = (function(d, i) { return function() { i.value = ''; delete saData.maxUsagePerGrade[d]; saveSpecialData(saData); updateSummary(); }; })(div, inp);
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                ceilGradeGrid.appendChild(row);
+            });
+            ceilPgCb.onchange = function() {
+                if (!ceilPgCb.checked) { saData.maxUsagePerGrade = {}; saveSpecialData(saData); updateSummary(); }
+                ceilGradeGrid.style.display = ceilPgCb.checked ? 'flex' : 'none';
+                ceilGradeGrid.style.flexDirection = 'column';
+                ceilGradeGrid.style.gap = '5px';
+                ceilGradeGrid.style.marginTop = '6px';
+            };
+            ceilDetail.appendChild(ceilGradeGrid);
+            container.appendChild(ceilDetail);
         }
 
-        container.appendChild(cohortBox);
+        // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
+        var divider = document.createElement('div');
+        divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(divider);
 
-        // ── Bind inputs ─────────────────────────────────────────
-        const maxInput = container.querySelector('#fac-sa-max-usage');
-        const periodSel = container.querySelector('#fac-sa-usage-period');
-        const freqInput = container.querySelector('#fac-sa-freq');
+        var floorLabel = document.createElement('div');
+        floorLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        floorLabel.textContent = 'Minimum (floor)';
+        container.appendChild(floorLabel);
 
-        if (maxInput) maxInput.onchange = () => {
-            const v = maxInput.value.trim();
-            saData.maxUsage = v ? parseInt(v) || null : null;
-            saveSpecialData(saData); updateSummary();
-        };
-        if (periodSel) periodSel.onchange = () => {
-            saData.maxUsagePeriod = periodSel.value;
-            saveSpecialData(saData); updateSummary();
-        };
-        if (freqInput) freqInput.onchange = () => {
-            saData.frequencyDays = parseInt(freqInput.value) || 0;
-            // Clear legacy field so writes only use the new key
+        var minF = parseInt(saData.minFrequency) || 0;
+        var minEnabled = minF > 0;
+
+        var minTogRow = document.createElement('div');
+        minTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (minEnabled ? '12px' : '4px') + ';';
+        var minTog = document.createElement('label'); minTog.className = 'switch';
+        var minCb = document.createElement('input'); minCb.type = 'checkbox'; minCb.checked = minEnabled;
+        var minSl = document.createElement('span'); minSl.className = 'slider';
+        minTog.appendChild(minCb); minTog.appendChild(minSl);
+        var minLbl = document.createElement('span');
+        minLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        minLbl.textContent = 'Require a minimum frequency for every bunk';
+        minTogRow.appendChild(minTog); minTogRow.appendChild(minLbl);
+        container.appendChild(minTogRow);
+        minCb.onchange = function() { saData.minFrequency = minCb.checked ? 1 : null; saveSpecialData(saData); renderContent(); updateSummary(); };
+
+        if (minEnabled) {
+            var minDetail = document.createElement('div');
+            minDetail.style.cssText = 'padding-left:12px; border-left:2px solid #0ea5e9; margin-bottom:4px;';
+
+            var minRow = document.createElement('div');
+            minRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;';
+            var minAtLeast = document.createElement('span'); minAtLeast.style.cssText = 'font-size:0.85rem; color:#374151;'; minAtLeast.textContent = 'At least:';
+            var minIn = document.createElement('input');
+            minIn.type = 'number'; minIn.min = '1'; minIn.max = '14'; minIn.value = minF || 1;
+            minIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            var minSuffix = document.createElement('span');
+            minSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            minSuffix.textContent = 'time(s) per';
+            var minPeriodSel = document.createElement('select');
+            minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+                var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((saData.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
+                minPeriodSel.appendChild(opt);
+            });
+            minIn.onchange = function() { saData.minFrequency = Math.max(1, parseInt(minIn.value) || 1); saveSpecialData(saData); updateSummary(); };
+            minPeriodSel.onchange = function() { saData.minFrequencyPeriod = minPeriodSel.value; saveSpecialData(saData); updateSummary(); };
+            minRow.appendChild(minAtLeast); minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
+            minDetail.appendChild(minRow);
+
+            var minNote = document.createElement('div');
+            minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
+                (saData.minFrequency || 1) + 'x</strong> ' +
+                (saData.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+            minDetail.appendChild(minNote);
+
+            // per-grade min toggle
+            var minPgTogRow = document.createElement('div');
+            minPgTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            var minPgTog = document.createElement('label'); minPgTog.className = 'switch';
+            var minPgCb = document.createElement('input'); minPgCb.type = 'checkbox';
+            var hasMinGradeOverrides = Object.keys(saData.minFrequencyPerGrade || {}).length > 0;
+            minPgCb.checked = hasMinGradeOverrides;
+            var minPgSl = document.createElement('span'); minPgSl.className = 'slider';
+            minPgTog.appendChild(minPgCb); minPgTog.appendChild(minPgSl);
+            var minPgLbl = document.createElement('span');
+            minPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            minPgLbl.textContent = 'Different minimum per grade';
+            minPgTogRow.appendChild(minPgTog); minPgTogRow.appendChild(minPgLbl);
+            minDetail.appendChild(minPgTogRow);
+
+            var minGradeGrid = document.createElement('div');
+            minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
+            minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            var allDivs2 = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            if (!saData.minFrequencyPerGrade) saData.minFrequencyPerGrade = {};
+            allDivs2.forEach(function(div) {
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                var lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                var inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(saData.minFrequency) || 1);
+                var gv = saData.minFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = (function(d) { return function() {
+                    var v = parseInt(inp.value);
+                    if (v > 0) saData.minFrequencyPerGrade[d] = v;
+                    else delete saData.minFrequencyPerGrade[d];
+                    saveSpecialData(saData); updateSummary();
+                }; })(div);
+                var clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = function() { clrBtn.style.color = '#9CA3AF'; };
+                clrBtn.onmouseout = function() { clrBtn.style.color = '#D1D5DB'; };
+                clrBtn.onclick = (function(d, i) { return function() { i.value = ''; delete saData.minFrequencyPerGrade[d]; saveSpecialData(saData); updateSummary(); }; })(div, inp);
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                minGradeGrid.appendChild(row);
+            });
+            minPgCb.onchange = function() {
+                if (!minPgCb.checked) { saData.minFrequencyPerGrade = {}; saveSpecialData(saData); updateSummary(); }
+                minGradeGrid.style.display = minPgCb.checked ? 'flex' : 'none';
+                minGradeGrid.style.flexDirection = 'column';
+                minGradeGrid.style.gap = '5px';
+                minGradeGrid.style.marginTop = '6px';
+            };
+            minDetail.appendChild(minGradeGrid);
+            container.appendChild(minDetail);
+        }
+
+        // ── C: Days between visits ────────────────────────────────────────
+        var div2 = document.createElement('div');
+        div2.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(div2);
+
+        var freqLabel = document.createElement('div');
+        freqLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        freqLabel.textContent = 'Cooldown (days between visits)';
+        container.appendChild(freqLabel);
+
+        var freqRow = document.createElement('div');
+        freqRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap;';
+        var freqLblSpan = document.createElement('span'); freqLblSpan.style.cssText = 'font-size:0.85rem; color:#374151;'; freqLblSpan.textContent = 'Min days between visits:';
+        var freqIn = document.createElement('input');
+        freqIn.type = 'number'; freqIn.min = '0'; freqIn.value = parseInt(saData.frequencyDays) || 0;
+        freqIn.style.cssText = 'width:60px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+        var freqHint = document.createElement('span'); freqHint.style.cssText = 'font-size:0.78rem; color:#6B7280;'; freqHint.textContent = '(0 = no cooldown)';
+        freqIn.onchange = function() {
+            saData.frequencyDays = parseInt(freqIn.value) || 0;
             if (saData.frequencyWeeks != null) delete saData.frequencyWeeks;
             saveSpecialData(saData); updateSummary();
         };
+        freqRow.appendChild(freqLblSpan); freqRow.appendChild(freqIn); freqRow.appendChild(freqHint);
+        container.appendChild(freqRow);
+
+        // ── D: Equal visits across grades (cohort round-robin) ─────────
+        var cohortDiv = document.createElement('div');
+        cohortDiv.style.cssText = 'border-top:1px dashed #E5E7EB; padding-top:14px; margin-top:16px;';
+
+        var cohortLabel = document.createElement('div');
+        cohortLabel.style.cssText = 'font-size:0.85rem; font-weight:600; color:#374151; margin-bottom:6px;';
+        cohortLabel.textContent = 'Equal visits across grades';
+        cohortDiv.appendChild(cohortLabel);
+
+        var cohortHelp = document.createElement('div');
+        cohortHelp.style.cssText = 'font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;';
+        cohortHelp.textContent = 'Every bunk in the chosen grades visits this activity the same number of times before any bunk visits again.';
+        cohortDiv.appendChild(cohortHelp);
+
+        var rc = saData.rotationCohort;
+        var modeWrap = document.createElement('div');
+        modeWrap.style.cssText = 'display:flex; gap:8px; margin-bottom:12px;';
+
+        var btnOff = document.createElement('button');
+        btnOff.textContent = 'Off';
+        btnOff.style.cssText = 'flex:1; padding:7px; border-radius:6px; border:1px solid ' + (!rc.enabled ? '#147D91' : '#E5E7EB') + '; cursor:pointer; background:' + (!rc.enabled ? '#e6f4f7' : '#fff') + '; font-weight:' + (!rc.enabled ? '600' : '400') + '; font-size:0.85rem;';
+
+        var btnOn = document.createElement('button');
+        btnOn.textContent = 'Take turns by bunk';
+        btnOn.style.cssText = 'flex:1; padding:7px; border-radius:6px; border:1px solid ' + (rc.enabled ? '#147D91' : '#E5E7EB') + '; cursor:pointer; background:' + (rc.enabled ? '#e6f4f7' : '#fff') + '; font-weight:' + (rc.enabled ? '600' : '400') + '; font-size:0.85rem;';
+
+        btnOff.onclick = function() { rc.enabled = false; saveSpecialData(saData); renderContent(); updateSummary(); };
+        btnOn.onclick = function() {
+            rc.enabled = true;
+            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.limitUsage && saData.limitUsage.enabled) {
+                rc.grades = Object.keys(saData.limitUsage.divisions || {});
+            }
+            saveSpecialData(saData); renderContent(); updateSummary();
+        };
+
+        modeWrap.appendChild(btnOff); modeWrap.appendChild(btnOn);
+        cohortDiv.appendChild(modeWrap);
+
+        if (rc.enabled) {
+            var allDivs3 = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            if (!Array.isArray(rc.grades)) rc.grades = [];
+
+            var chipLabel = document.createElement('div');
+            chipLabel.style.cssText = 'font-size:0.78rem; color:#374151; margin-bottom:6px;';
+            chipLabel.textContent = 'Grades sharing the rotation:';
+            cohortDiv.appendChild(chipLabel);
+
+            var chipWrap = document.createElement('div');
+            chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:4px;';
+            allDivs3.forEach(function(divName) {
+                var isOn = rc.grades.includes(divName);
+                var c = document.createElement('span');
+                c.className = 'chip ' + (isOn ? 'active' : 'inactive');
+                c.textContent = divName;
+                c.onclick = (function(dn, on) { return function() {
+                    if (on) rc.grades = rc.grades.filter(function(g) { return g !== dn; });
+                    else rc.grades.push(dn);
+                    saveSpecialData(saData); renderContent(); updateSummary();
+                }; })(divName, isOn);
+                chipWrap.appendChild(c);
+            });
+            cohortDiv.appendChild(chipWrap);
+
+            if (rc.grades.length === 0) {
+                var warn = document.createElement('div');
+                warn.style.cssText = 'font-size:0.75rem; color:#D97706; margin-top:8px;';
+                warn.textContent = 'No grades selected — rotation has no effect.';
+                cohortDiv.appendChild(warn);
+            }
+        }
+
+        container.appendChild(cohortDiv);
     };
 
     renderContent();
     return container;
 }
-
 // -- Prep Duration --
 function renderSpecialDuration(saData) {
     const container = document.createElement("div");

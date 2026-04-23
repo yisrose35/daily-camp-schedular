@@ -179,6 +179,8 @@ function validateSpecialActivity(activity, activityName) {
         minFrequencyPeriod: activity.minFrequencyPeriod || 'week',
        maxUsagePerGrade: (activity.maxUsagePerGrade && typeof activity.maxUsagePerGrade === 'object')
             ? activity.maxUsagePerGrade : {},
+        minFrequencyPerGrade: (activity.minFrequencyPerGrade && typeof activity.minFrequencyPerGrade === 'object')
+            ? activity.minFrequencyPerGrade : {},
         availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
             ? activity.availableDays : [],
         // Canonical duration storage: `durations` is an array of allowed durations
@@ -219,7 +221,7 @@ function createDefaultActivity(name) {
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
-        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, availableDays: [] };
+        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, minFrequencyPerGrade: {}, availableDays: [] };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
