@@ -848,7 +848,7 @@ window.CampistryGoNeighborhoods = (function () {
     //   5. Overflow: if no bus fits, place on least-full (+warn) rather than
     //      silently dropping the neighborhood's campers.
     // -------------------------------------------------------------------------
-    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 3 }) {
+    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6 }) {
         if (!result || !result.neighborhoods.length) return [];
 
         // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
@@ -954,21 +954,36 @@ window.CampistryGoNeighborhoods = (function () {
             return { lat: bus._centroidSum.lat / bus._centroidSum.w, lng: bus._centroidSum.lng / bus._centroidSum.w };
         }
 
+        // Spread cap used by all placement passes. Defined up here so
+        // the prior-year pass can respect it too (otherwise last year's
+        // wide buses stick permanently).
+        const MAX_BUS_SPREAD_MI = 3.0;
+        const EMPTY_BUS_START_COST_MI = 2.5;
+        function wouldSpreadExceed(bus, nh, capMi) {
+            const c = nhCentroids[nh.id]; if (!c) return false;
+            for (const existingId of bus.neighborhoodIds) {
+                const ec = nhCentroids[existingId]; if (!ec) continue;
+                if (haversineMi(c.lat, c.lng, ec.lat, ec.lng) > capMi) return true;
+            }
+            return false;
+        }
+
         // --- 2a. Pass 1: prior-year preference (size-DESC for priority) ---
         const sortedBySize = [...workNhs].sort((a, b) => b.camperCount - a.camperCount);
         const assignedIds = new Set();
-        let priorHits = 0;
+        let priorHits = 0, priorSpreadSkips = 0;
         for (const nh of sortedBySize) {
             const pid = nh.parentId || nh.id;
             const preferredBusId = priorAssignments[pid];
             if (!preferredBusId) continue;
             const bus = busById[preferredBusId];
-            if (bus && bus.camperCount + nh.camperCount <= bus.capacity) {
-                assignToBus(nh, bus);
-                assignedIds.add(nh.id);
-                priorHits++;
-            }
+            if (!bus || bus.camperCount + nh.camperCount > bus.capacity) continue;
+            if (wouldSpreadExceed(bus, nh, MAX_BUS_SPREAD_MI)) { priorSpreadSkips++; continue; }
+            assignToBus(nh, bus);
+            assignedIds.add(nh.id);
+            priorHits++;
         }
+        if (priorSpreadSkips) console.log('[Go-NH] Prior-year pass: skipped ' + priorSpreadSkips + ' NH(s) that would exceed spread cap');
 
         // --- 2b. Pass 2: spatial-sweep + proximity-aware for the rest ---
         const unassigned = sortedBySize.filter(nh => !assignedIds.has(nh.id));
@@ -1001,22 +1016,6 @@ window.CampistryGoNeighborhoods = (function () {
         // this, open an empty bus instead of ballooning the distant one.
         // 2.5mi ≈ a typical neighborhood diameter — bigger than that and you're
         // spanning two distinct pockets, which is what caused the 5-hour rides.
-        const EMPTY_BUS_START_COST_MI = 2.5;
-        // Hard cap on the farthest pair of NH centroids on any one bus. Buses
-        // that span more than this balloon ride times (we saw 6.46mi/7NH buses
-        // producing 200–290min first-pickup rides). Empty buses absorb the NH
-        // instead of stretching a distant bus.
-        const MAX_BUS_SPREAD_MI = 3.5;
-
-        function wouldSpreadExceed(bus, nh, capMi) {
-            const c = nhCentroids[nh.id]; if (!c) return false;
-            for (const existingId of bus.neighborhoodIds) {
-                const ec = nhCentroids[existingId]; if (!ec) continue;
-                if (haversineMi(c.lat, c.lng, ec.lat, ec.lng) > capMi) return true;
-            }
-            return false;
-        }
-
         for (const nh of unassigned) {
             const c = nhCentroids[nh.id];
             let target = null, targetScore = Infinity;
@@ -1066,10 +1065,13 @@ window.CampistryGoNeighborhoods = (function () {
             }
         }
 
-        // --- 2c. Ride-time rebalance pass ---
-        // Estimate each bus's ride time via NN tour length (depot → NH centroids)
-        // × pace + per-stop service. If > maxRideMin, peel the farthest NH and
-        // move it to the bus with the most slack (capacity + spread cap).
+        // --- 2c. Spread + ride-time rebalance pass ---
+        // Two triggers:
+        //  (1) bus spread > MAX_BUS_SPREAD_MI — initial placement's cap-honor
+        //      fallback can still produce wide buses; peel until under cap
+        //  (2) estimated bus ride time > maxRideMin — NN tour × pace + stops
+        // Peel the centroid-outlier NH (or farthest-from-depot) and move to
+        // a bus with capacity + spread headroom.
         function estimateBusRideMin(bus) {
             if (!bus.neighborhoodIds.length) return 0;
             const remaining = new Set(bus.neighborhoodIds);
@@ -1099,6 +1101,37 @@ window.CampistryGoNeighborhoods = (function () {
             }
             return bestId;
         }
+        function busMaxSpreadMi(bus) {
+            let maxD = 0;
+            const ids = bus.neighborhoodIds;
+            for (let i = 0; i < ids.length; i++) {
+                const ci = nhCentroids[ids[i]]; if (!ci) continue;
+                for (let j = i + 1; j < ids.length; j++) {
+                    const cj = nhCentroids[ids[j]]; if (!cj) continue;
+                    const d = haversineMi(ci.lat, ci.lng, cj.lat, cj.lng);
+                    if (d > maxD) maxD = d;
+                }
+            }
+            return maxD;
+        }
+        function outlierNh(bus) {
+            // NH that contributes most to spread = one with max mean-distance
+            // to other NHs on the bus. Falls back to farthest-from-depot.
+            const ids = bus.neighborhoodIds; if (ids.length < 2) return ids[0];
+            let worstId = null, worstMean = -1;
+            for (const id of ids) {
+                const ci = nhCentroids[id]; if (!ci) continue;
+                let sum = 0, n = 0;
+                for (const other of ids) {
+                    if (other === id) continue;
+                    const co = nhCentroids[other]; if (!co) continue;
+                    sum += haversineMi(ci.lat, ci.lng, co.lat, co.lng); n++;
+                }
+                const mean = n ? sum / n : 0;
+                if (mean > worstMean) { worstMean = mean; worstId = id; }
+            }
+            return worstId || farthestNhFromDepot(bus);
+        }
         function unassign(nhId, bus) {
             const workNh = workNhs.find(n => n.id === nhId); if (!workNh) return null;
             bus.neighborhoodIds = bus.neighborhoodIds.filter(x => x !== nhId);
@@ -1114,15 +1147,20 @@ window.CampistryGoNeighborhoods = (function () {
         }
         {
             let rebalanceMoves = 0;
-            for (let pass = 0; pass < 4; pass++) {
+            const isOverloaded = (b) => b.neighborhoodIds.length >= 2 && (
+                busMaxSpreadMi(b) > MAX_BUS_SPREAD_MI ||
+                estimateBusRideMin(b) > maxRideMin
+            );
+            for (let pass = 0; pass < 8; pass++) {
                 let moved = false;
                 const overloaded = assignments
-                    .filter(b => b.neighborhoodIds.length >= 2 && estimateBusRideMin(b) > maxRideMin)
-                    .sort((a, b) => estimateBusRideMin(b) - estimateBusRideMin(a));
+                    .filter(isOverloaded)
+                    .sort((a, b) => busMaxSpreadMi(b) - busMaxSpreadMi(a));
                 for (const src of overloaded) {
-                    const nhId = farthestNhFromDepot(src); if (!nhId) continue;
+                    const nhId = outlierNh(src); if (!nhId) continue;
                     const workNh = workNhs.find(n => n.id === nhId); if (!workNh) continue;
-                    // Find best recipient: has capacity, passes spread cap, lowest resulting ride time
+                    // Find best recipient: has capacity, passes spread cap (relaxed
+                    // slightly so we don't deadlock), lowest resulting centroid delta.
                     let best = null, bestScore = Infinity;
                     for (const dst of assignments) {
                         if (dst === src) continue;
@@ -1133,14 +1171,21 @@ window.CampistryGoNeighborhoods = (function () {
                         if (score < bestScore) { bestScore = score; best = dst; }
                     }
                     if (!best) continue;
+                    // Don't move if recipient would itself become over-spread after the move
                     unassign(nhId, src);
                     assignToBus(workNh, best);
+                    if (busMaxSpreadMi(best) > MAX_BUS_SPREAD_MI) {
+                        // undo
+                        unassign(nhId, best);
+                        assignToBus(workNh, src);
+                        continue;
+                    }
                     rebalanceMoves++;
                     moved = true;
                 }
                 if (!moved) break;
             }
-            if (rebalanceMoves) console.log('[Go-NH] Ride-time rebalance: ' + rebalanceMoves + ' NH move(s)');
+            if (rebalanceMoves) console.log('[Go-NH] Spread/ride rebalance: ' + rebalanceMoves + ' NH move(s)');
         }
 
         // --- 3. Within-bus ordering: group segments by NH, order NHs via NN from depot ---
