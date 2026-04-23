@@ -6471,7 +6471,9 @@ async function generateRoutes() {
 
                         const nhAssignment = window.CampistryGoNeighborhoods.packIntoBuses({
                             result: nhResult, buses: reducedBuses, priorAssignments, siblingGroups,
-                            depot: { lat: campLat, lng: campLng }
+                            depot: { lat: campLat, lng: campLng },
+                            maxRideMin: D.setup.maxRideTime || 45,
+                            avgStopMin: D.setup.avgStopTime || 2,
                         });
                         const nhPhysical = window.CampistryGoNeighborhoods.expandToPhysicalStops({
                             assignment: nhAssignment, result: nhResult, isArrival: isArrival,
@@ -6838,7 +6840,7 @@ async function generateRoutes() {
             // (b) the minority camper's home is within maxWalkMi of the
             // majority sibling's stop. Otherwise the split is left alone
             // (geography trumps togetherness — matches observed Transfinder splits).
-            if (usedExternalOptimizer && routes.length > 1) {
+            if (routes.length > 1) {
                 try {
                     const sibMapRepair = detectSiblings(allCampers);
                     const maxWalkMi = Math.max(0.05, (D.setup.maxWalkDistance || 0.2));

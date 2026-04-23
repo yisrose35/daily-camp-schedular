@@ -848,7 +848,7 @@ window.CampistryGoNeighborhoods = (function () {
     //   5. Overflow: if no bus fits, place on least-full (+warn) rather than
     //      silently dropping the neighborhood's campers.
     // -------------------------------------------------------------------------
-    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null }) {
+    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 3 }) {
         if (!result || !result.neighborhoods.length) return [];
 
         // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
@@ -1002,20 +1002,37 @@ window.CampistryGoNeighborhoods = (function () {
         // 2.5mi ≈ a typical neighborhood diameter — bigger than that and you're
         // spanning two distinct pockets, which is what caused the 5-hour rides.
         const EMPTY_BUS_START_COST_MI = 2.5;
+        // Hard cap on the farthest pair of NH centroids on any one bus. Buses
+        // that span more than this balloon ride times (we saw 6.46mi/7NH buses
+        // producing 200–290min first-pickup rides). Empty buses absorb the NH
+        // instead of stretching a distant bus.
+        const MAX_BUS_SPREAD_MI = 3.5;
+
+        function wouldSpreadExceed(bus, nh, capMi) {
+            const c = nhCentroids[nh.id]; if (!c) return false;
+            for (const existingId of bus.neighborhoodIds) {
+                const ec = nhCentroids[existingId]; if (!ec) continue;
+                if (haversineMi(c.lat, c.lng, ec.lat, ec.lng) > capMi) return true;
+            }
+            return false;
+        }
 
         for (const nh of unassigned) {
             const c = nhCentroids[nh.id];
             let target = null, targetScore = Infinity;
+            let fallbackTarget = null, fallbackScore = Infinity;  // ignores spread cap
             for (const bus of assignments) {
                 if (bus.camperCount + nh.camperCount > bus.capacity) continue;
                 const bc = busCentroid(bus);
                 const score = (bc && c)
                     ? haversineMi(c.lat, c.lng, bc.lat, bc.lng)
                     : EMPTY_BUS_START_COST_MI;
+                if (score < fallbackScore) { fallbackScore = score; fallbackTarget = bus; }
+                if (wouldSpreadExceed(bus, nh, MAX_BUS_SPREAD_MI)) continue;
                 if (score < targetScore) { targetScore = score; target = bus; }
             }
+            if (!target) target = fallbackTarget;  // spread-cap couldn't be honored
             if (!target) {
-                // Overflow to least-full rather than silently drop
                 target = assignments.reduce((a, b) => a.camperCount <= b.camperCount ? a : b);
                 console.warn('[Go-NH] Overflow: no bus had room for ' + nh.id + ' (' + nh.camperCount +
                     ' campers) — placed on least-full bus ' + target.busId);
@@ -1047,6 +1064,83 @@ window.CampistryGoNeighborhoods = (function () {
                 console.log('[Go-NH] bus spread (worst 5): ' +
                     spreads.slice(0, 5).map(s => s.bus + '=' + s.spreadMi + 'mi/' + s.nhs + 'NH').join(' '));
             }
+        }
+
+        // --- 2c. Ride-time rebalance pass ---
+        // Estimate each bus's ride time via NN tour length (depot → NH centroids)
+        // × pace + per-stop service. If > maxRideMin, peel the farthest NH and
+        // move it to the bus with the most slack (capacity + spread cap).
+        function estimateBusRideMin(bus) {
+            if (!bus.neighborhoodIds.length) return 0;
+            const remaining = new Set(bus.neighborhoodIds);
+            let curLat = depot?.lat ?? null, curLng = depot?.lng ?? null;
+            let mi = 0;
+            while (remaining.size) {
+                let nextId = null, nextD = Infinity;
+                for (const id of remaining) {
+                    const c = nhCentroids[id]; if (!c) continue;
+                    const d = (curLat != null) ? haversineMi(curLat, curLng, c.lat, c.lng) : 0;
+                    if (d < nextD) { nextD = d; nextId = id; }
+                }
+                if (!nextId) break;
+                mi += isFinite(nextD) ? nextD : 0;
+                const c = nhCentroids[nextId];
+                if (c) { curLat = c.lat; curLng = c.lng; }
+                remaining.delete(nextId);
+            }
+            return mi * paceMinPerMi + bus.neighborhoodIds.length * avgStopMin;
+        }
+        function farthestNhFromDepot(bus) {
+            let bestId = null, bestD = -1;
+            for (const id of bus.neighborhoodIds) {
+                const c = nhCentroids[id]; if (!c || !depot) continue;
+                const d = haversineMi(depot.lat, depot.lng, c.lat, c.lng);
+                if (d > bestD) { bestD = d; bestId = id; }
+            }
+            return bestId;
+        }
+        function unassign(nhId, bus) {
+            const workNh = workNhs.find(n => n.id === nhId); if (!workNh) return null;
+            bus.neighborhoodIds = bus.neighborhoodIds.filter(x => x !== nhId);
+            bus.segmentIds = bus.segmentIds.filter(sid => !workNh.segmentIds.includes(sid));
+            bus.camperCount -= workNh.camperCount;
+            const c = nhCentroids[nhId];
+            if (c && bus._centroidSum.w > 0) {
+                bus._centroidSum.lat -= c.lat * workNh.camperCount;
+                bus._centroidSum.lng -= c.lng * workNh.camperCount;
+                bus._centroidSum.w  -= workNh.camperCount;
+            }
+            return workNh;
+        }
+        {
+            let rebalanceMoves = 0;
+            for (let pass = 0; pass < 4; pass++) {
+                let moved = false;
+                const overloaded = assignments
+                    .filter(b => b.neighborhoodIds.length >= 2 && estimateBusRideMin(b) > maxRideMin)
+                    .sort((a, b) => estimateBusRideMin(b) - estimateBusRideMin(a));
+                for (const src of overloaded) {
+                    const nhId = farthestNhFromDepot(src); if (!nhId) continue;
+                    const workNh = workNhs.find(n => n.id === nhId); if (!workNh) continue;
+                    // Find best recipient: has capacity, passes spread cap, lowest resulting ride time
+                    let best = null, bestScore = Infinity;
+                    for (const dst of assignments) {
+                        if (dst === src) continue;
+                        if (dst.camperCount + workNh.camperCount > dst.capacity) continue;
+                        if (wouldSpreadExceed(dst, workNh, MAX_BUS_SPREAD_MI)) continue;
+                        const dstC = busCentroid(dst), nhC = nhCentroids[nhId];
+                        const score = (dstC && nhC) ? haversineMi(nhC.lat, nhC.lng, dstC.lat, dstC.lng) : EMPTY_BUS_START_COST_MI;
+                        if (score < bestScore) { bestScore = score; best = dst; }
+                    }
+                    if (!best) continue;
+                    unassign(nhId, src);
+                    assignToBus(workNh, best);
+                    rebalanceMoves++;
+                    moved = true;
+                }
+                if (!moved) break;
+            }
+            if (rebalanceMoves) console.log('[Go-NH] Ride-time rebalance: ' + rebalanceMoves + ' NH move(s)');
         }
 
         // --- 3. Within-bus ordering: group segments by NH, order NHs via NN from depot ---
