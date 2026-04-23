@@ -932,7 +932,7 @@ function renderSpecialConfig(container, fac) {
         const saBody = document.createElement("div");
         saBody.style.cssText = "padding:12px;";
 
-        saBody.appendChild(section("Grade Access", summarySpecialAccess(saData),
+        saBody.appendChild(section("Access", summarySpecialAccess(saData),
             () => renderSpecialAccess(saData)));
 
         saBody.appendChild(section("Duration", summarySpecialDuration(saData),
@@ -1627,8 +1627,19 @@ function renderComboSettings(fieldItem) {
 // -- Summaries --
 function summarySpecialAccess(s) {
     if (!s.limitUsage?.enabled) return "Open to all grades";
-    const count = Object.keys(s.limitUsage.divisions || {}).length;
-    return count === 0 ? "Restricted (none selected)" : `${count} grade${count !== 1 ? 's' : ''} allowed`;
+    const divs = s.limitUsage.divisions || {};
+    const gradeKeys = Object.keys(divs);
+    if (gradeKeys.length === 0) return "Restricted (none selected)";
+    const parts = [];
+    let totalBunks = 0, hasBunkFilter = false;
+    gradeKeys.forEach(g => {
+        const list = Array.isArray(divs[g]) ? divs[g] : [];
+        if (list.length === 0) parts.push(g);
+        else { parts.push(g + ' (' + list.length + ')'); totalBunks += list.length; hasBunkFilter = true; }
+    });
+    return hasBunkFilter
+        ? parts.join(', ')
+        : `${gradeKeys.length} grade${gradeKeys.length !== 1 ? 's' : ''} allowed`;
 }
 function summarySpecialTime(s) { return s.timeRules?.length ? `${s.timeRules.length} rule(s)` : "Available all day"; }
 function summarySpecialDays(s) {
@@ -1719,7 +1730,7 @@ function saveSpecialData(saData) {
     saveFacilitiesMetadata();
 }
 
-// -- Grade Access --
+// -- Access (per-grade with optional per-bunk filter) --
 function renderSpecialAccess(saData) {
     const container = document.createElement("div");
     const updateSummary = () => {
@@ -1729,6 +1740,9 @@ function renderSpecialAccess(saData) {
     const renderContent = () => {
         container.innerHTML = "";
         const rules = saData.limitUsage || { enabled: false, divisions: {}, priorityList: [] };
+        if (!rules.divisions || typeof rules.divisions !== 'object' || Array.isArray(rules.divisions)) {
+            rules.divisions = {};
+        }
 
         const modeWrap = document.createElement("div");
         modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:16px;";
@@ -1738,7 +1752,7 @@ function renderSpecialAccess(saData) {
         btnAll.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${!rules.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${!rules.enabled ? '#e6f4f7' : '#fff'}; font-weight:${!rules.enabled ? '600' : '400'};`;
 
         const btnRes = document.createElement("button");
-        btnRes.textContent = "Specific Grades";
+        btnRes.textContent = "Specific Grades / Bunks";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${rules.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rules.enabled ? '#e6f4f7' : '#fff'}; font-weight:${rules.enabled ? '600' : '400'};`;
 
         btnAll.onclick = () => { rules.enabled = false; saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
@@ -1747,26 +1761,93 @@ function renderSpecialAccess(saData) {
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
-        if (rules.enabled) {
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
-            const chipWrap = document.createElement("div");
-            chipWrap.style.cssText = "display:flex; flex-wrap:wrap; gap:4px;";
-
-            allDivs.forEach(divName => {
-                const isAllowed = !!rules.divisions[divName];
-                const c = document.createElement("span");
-                c.className = "chip " + (isAllowed ? "active" : "inactive");
-                c.textContent = divName;
-                c.onclick = () => {
-                    if (isAllowed) delete rules.divisions[divName];
-                    else rules.divisions[divName] = [];
-                    saData.limitUsage = rules;
-                    saveSpecialData(saData); renderContent(); updateSummary();
-                };
-                chipWrap.appendChild(c);
-            });
-            container.appendChild(chipWrap);
+        if (!rules.enabled) {
+            renderContent._done = true;
+            return;
         }
+
+        const divisions = window.loadGlobalSettings?.()?.divisions || {};
+        const allDivs = Object.keys(divisions);
+
+        const help = document.createElement("div");
+        help.style.cssText = "font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;";
+        help.innerHTML = 'Click a <strong>grade</strong> to allow/disallow it. Once a grade is allowed, click "All bunks" to switch to per-bunk picking and choose specific bunks (e.g., for a teacher-tied class).';
+        container.appendChild(help);
+
+        allDivs.forEach(divName => {
+            const isAllowed = rules.divisions[divName] !== undefined;
+            const bunkList = Array.isArray(rules.divisions[divName]) ? rules.divisions[divName] : [];
+            const allBunksInGrade = (divisions[divName]?.bunks || []).map(String);
+
+            const gradeRow = document.createElement('div');
+            gradeRow.style.cssText = 'border:1px solid #E5E7EB; border-radius:8px; padding:8px 10px; margin-bottom:6px; background:' +
+                (isAllowed ? '#f0f9fb' : '#fff') + ';';
+
+            // Grade header (chip + bunk-mode toggle)
+            const headRow = document.createElement('div');
+            headRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
+
+            const gChip = document.createElement('span');
+            gChip.className = 'chip ' + (isAllowed ? 'active' : 'inactive');
+            gChip.textContent = divName;
+            gChip.style.cursor = 'pointer';
+            gChip.onclick = () => {
+                if (isAllowed) delete rules.divisions[divName];
+                else rules.divisions[divName] = [];
+                saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+            };
+            headRow.appendChild(gChip);
+
+            if (isAllowed && allBunksInGrade.length > 0) {
+                const isAllBunks = bunkList.length === 0;
+                const modeBtn = document.createElement('button');
+                modeBtn.textContent = isAllBunks ? 'All bunks ▾' : `${bunkList.length} of ${allBunksInGrade.length} bunks ▾`;
+                modeBtn.style.cssText = 'background:#fff; color:#0F5F6E; border:1px solid #B2DCE6; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:0.78rem; font-weight:500;';
+                modeBtn.onclick = () => {
+                    if (isAllBunks) {
+                        // Switch to per-bunk: start with all bunks selected
+                        rules.divisions[divName] = allBunksInGrade.slice();
+                    } else {
+                        // Switch back to "all bunks" mode
+                        rules.divisions[divName] = [];
+                    }
+                    saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                };
+                headRow.appendChild(modeBtn);
+            }
+
+            gradeRow.appendChild(headRow);
+
+            // Bunk chips when in per-bunk mode
+            if (isAllowed && bunkList.length > 0 && allBunksInGrade.length > 0) {
+                const bunkWrap = document.createElement('div');
+                bunkWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; padding-top:8px; border-top:1px dashed #CBD5E1;';
+                allBunksInGrade.forEach(bunkName => {
+                    const isOn = bunkList.includes(bunkName);
+                    const bChip = document.createElement('span');
+                    bChip.className = 'chip ' + (isOn ? 'active' : 'inactive');
+                    bChip.textContent = bunkName;
+                    bChip.style.cursor = 'pointer';
+                    bChip.style.fontSize = '0.75rem';
+                    bChip.onclick = () => {
+                        if (isOn) rules.divisions[divName] = bunkList.filter(b => b !== bunkName);
+                        else rules.divisions[divName] = bunkList.concat([bunkName]);
+                        saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                    };
+                    bunkWrap.appendChild(bChip);
+                });
+                gradeRow.appendChild(bunkWrap);
+
+                if (rules.divisions[divName].length === 0) {
+                    const warn = document.createElement('div');
+                    warn.style.cssText = 'font-size:0.72rem; color:#D97706; margin-top:6px;';
+                    warn.textContent = 'No bunks selected — no one in this grade can use this activity.';
+                    gradeRow.appendChild(warn);
+                }
+            }
+
+            container.appendChild(gradeRow);
+        });
     };
     renderContent();
     return container;
