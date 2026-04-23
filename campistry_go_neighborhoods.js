@@ -805,6 +805,32 @@ window.CampistryGoNeighborhoods = (function () {
     function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null }) {
         if (!result || !result.neighborhoods.length) return [];
 
+        // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
+        // segmentIds across different NHs, is a detection-pass bug we want to
+        // see rather than silently absorb downstream.
+        {
+            const nhIdCounts = {};
+            for (const nh of result.neighborhoods) nhIdCounts[nh.id] = (nhIdCounts[nh.id] || 0) + 1;
+            const dupeNhIds = Object.entries(nhIdCounts).filter(([, c]) => c > 1);
+            if (dupeNhIds.length) {
+                console.warn('[Go-NH] ⚠ duplicate NH ids in result.neighborhoods: ' +
+                    dupeNhIds.slice(0, 5).map(([id, c]) => id + '×' + c).join(' '));
+            }
+            const segOwner = {};
+            let crossNhSegDupes = 0;
+            for (const nh of result.neighborhoods) {
+                for (const sid of nh.segmentIds) {
+                    if (segOwner[sid] && segOwner[sid] !== nh.id) crossNhSegDupes++;
+                    segOwner[sid] = nh.id;
+                }
+            }
+            if (crossNhSegDupes) {
+                console.warn('[Go-NH] ⚠ ' + crossNhSegDupes + ' segment(s) appear in >1 neighborhood (should be 0)');
+            }
+            const totalCampers = result.neighborhoods.reduce((s, n) => s + (n.camperCount || 0), 0);
+            console.log('[Go-NH] packIntoBuses input: ' + result.neighborhoods.length + ' NHs, ' + totalCampers + ' campers');
+        }
+
         const vehicles = buses.map(b => ({
             busId: b.id || b.busId,
             name: b.name || ('Bus ' + (b.id || b.busId)),
@@ -1003,6 +1029,29 @@ window.CampistryGoNeighborhoods = (function () {
             }
         }
 
+        // --- 4b. Diagnostics: detect segments assigned to more than one bus,
+        // and report the input-vs-output camper totals. Any divergence here
+        // is the root cause of downstream cross-bus camper duplication. ---
+        {
+            const segToBuses = {};
+            for (const a of assignments) {
+                const uniq = new Set(a.segmentIds);
+                for (const sid of uniq) {
+                    (segToBuses[sid] ||= []).push(a.busId);
+                }
+            }
+            const dupedSegs = Object.entries(segToBuses).filter(([, bs]) => bs.length > 1);
+            if (dupedSegs.length) {
+                const sample = dupedSegs.slice(0, 5).map(([sid, bs]) => sid + '→[' + bs.join(',') + ']').join(' ');
+                console.warn('[Go-NH] ⚠ ' + dupedSegs.length + ' segments assigned to >1 bus — sample: ' + sample);
+            }
+            const inTotal = workNhs.reduce((s, n) => s + (n.camperCount || 0), 0);
+            const outTotal = assignments.reduce((s, a) => s + a.camperCount, 0);
+            if (inTotal !== outTotal) {
+                console.warn('[Go-NH] ⚠ camper total mismatch: workNhs=' + inTotal + ' assignments=' + outTotal);
+            }
+        }
+
         // --- 5. Strip bookkeeping fields before returning ---
         return assignments
             .filter(a => a.neighborhoodIds.length > 0)
@@ -1023,6 +1072,24 @@ window.CampistryGoNeighborhoods = (function () {
     // -------------------------------------------------------------------------
     function expandToPhysicalStops({ assignment, result, isArrival = false, dropoffMode = 'door-to-door' }) {
         const corner = dropoffMode === 'corner-stops';
+        // Diagnostic: detect homes attached to segments that appear on more
+        // than one bus. This is the precise upstream cause of cross-bus
+        // camper duplication.
+        {
+            const segToBuses = {};
+            for (const bus of assignment) {
+                const uniq = new Set(bus.segmentIds);
+                for (const sid of uniq) (segToBuses[sid] ||= new Set()).add(bus.busId);
+            }
+            let dupedHomeCount = 0;
+            for (const seg of result.segments) {
+                const bs = segToBuses[seg.id];
+                if (bs && bs.size > 1) dupedHomeCount += seg.homes.length * (bs.size - 1);
+            }
+            if (dupedHomeCount > 0) {
+                console.warn('[Go-NH] ⚠ expandToPhysicalStops: ' + dupedHomeCount + ' would-be duplicated home emissions (segments on multiple buses)');
+            }
+        }
         return assignment.map(bus => {
             const segById = Object.fromEntries(result.segments.map(s => [s.id, s]));
             const stops = [];
