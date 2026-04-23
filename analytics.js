@@ -1,11 +1,6 @@
 // ============================================================================
-// analytics.js
-//
-// SUPERCHARGED VERSION v2:
-// - Enhanced Field Availability Grid with clear partial availability display
-// - Time slots on TOP (columns), Fields/Specials on SIDE (rows)
-// - Bunk Rotation Report with activity counts + last done + manual adjustments
-// - Matches site theme styling
+// analytics.js v3.0
+// Gantt-chart availability grid + Bunk Rotation report
 // ============================================================================
 
 (function () {
@@ -15,10 +10,6 @@
     // TIME HELPERS
     // ========================================================================
 
-    /**
-     * Parse time string to minutes since midnight
-     * Supports: "9:00am", "9:00 AM", "09:00", "9:00"
-     */
     function parseTimeToMinutes(timeStr) {
         if (window.SchedulerCoreUtils?.parseTimeToMinutes) {
             return window.SchedulerCoreUtils.parseTimeToMinutes(timeStr);
@@ -35,9 +26,6 @@
         return h * 60 + m;
     }
 
-    /**
-     * Convert minutes to time label (e.g., 570 → "9:30 AM")
-     */
     function minutesToTimeLabel(mins) {
         if (window.SchedulerCoreUtils?.minutesToTimeLabel) {
             return window.SchedulerCoreUtils.minutesToTimeLabel(mins);
@@ -49,40 +37,21 @@
         return `${h}:${m < 10 ? '0' + m : m} ${ap}`;
     }
 
-    /**
-     * Convert minutes to short label (e.g., 570 → "9:30a")
-     */
     function minutesToShortLabel(mins) {
         let h = Math.floor(mins / 60);
         const m = mins % 60;
         const ap = h >= 12 ? 'p' : 'a';
         h = h % 12 || 12;
-        return `${h}:${m < 10 ? '0' + m : m}${ap}`;
+        return `${h}${m > 0 ? ':' + (m < 10 ? '0' + m : m) : ''}${ap}`;
     }
 
-    /**
-     * Get field label (handle object vs string)
-     */
-    function fieldLabel(f) {
-        if (window.SchedulerCoreUtils?.fieldLabel) {
-            return window.SchedulerCoreUtils.fieldLabel(f);
-        }
-        if (!f) return '';
-        return typeof f === 'object' ? (f.name || f.field || '') : f;
-    }
-
-    /**
-     * Get camp start/end times - finds EARLIEST start and LATEST end
-     * from division times, unified times, or config
-     */
     function getCampTimes() {
         const gs = window.loadGlobalSettings?.() || {};
         const app1 = gs.app1 || window.app1 || {};
-        
+
         let earliestStart = Infinity;
         let latestEnd = 0;
 
-        // Check division times first
         const divisionTimes = window.divisionTimes || {};
         Object.values(divisionTimes).forEach(slots => {
             if (!Array.isArray(slots)) return;
@@ -102,56 +71,10 @@
             });
         });
 
-        // Check unified times as fallback
-        const unifiedTimes = window.unifiedTimes || [];
-        unifiedTimes.forEach(slot => {
-            let sMin, eMin;
-            if (slot.startMin !== undefined) {
-                sMin = slot.startMin;
-                eMin = slot.endMin;
-            } else if (slot.start) {
-                const sd = new Date(slot.start);
-                const ed = new Date(slot.end);
-                sMin = sd.getHours() * 60 + sd.getMinutes();
-                eMin = ed.getHours() * 60 + ed.getMinutes();
-            }
-            if (sMin !== undefined && sMin < earliestStart) earliestStart = sMin;
-            if (eMin !== undefined && eMin > latestEnd) latestEnd = eMin;
-        });
+        if (earliestStart === Infinity) earliestStart = parseTimeToMinutes(app1.startTime || '9:00am') || 540;
+        if (latestEnd === 0) latestEnd = parseTimeToMinutes(app1.endTime || '4:00pm') || 960;
 
-        // Fallback to config
-        if (earliestStart === Infinity) {
-            earliestStart = parseTimeToMinutes(app1.startTime || "9:00am") || 540;
-        }
-        if (latestEnd === 0) {
-            latestEnd = parseTimeToMinutes(app1.endTime || "4:00pm") || 960;
-        }
-
-        return { 
-            startMin: earliestStart, 
-            endMin: latestEnd, 
-            startTime: minutesToTimeLabel(earliestStart), 
-            endTime: minutesToTimeLabel(latestEnd) 
-        };
-    }
-
-    /**
-     * Generate 30-minute time slots from camp start to end
-     */
-    function generate30MinSlots() {
-        const { startMin, endMin } = getCampTimes();
-        const slots = [];
-        
-        for (let min = startMin; min < endMin; min += 30) {
-            slots.push({
-                startMin: min,
-                endMin: min + 30,
-                label: minutesToTimeLabel(min),
-                shortLabel: minutesToShortLabel(min)
-            });
-        }
-        
-        return slots;
+        return { startMin: earliestStart, endMin: latestEnd };
     }
 
     // ========================================================================
@@ -161,568 +84,505 @@
     let container = null;
     let allActivities = [];
     let availableDivisions = [];
-    let divisions = {};
+    let divisionsDat = {};
+    let selectedDate = null;
+    let currentView = 'field';
+
+    const DIV_COLORS = [
+        { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af' },
+        { bg: '#dcfce7', border: '#16a34a', text: '#15803d' },
+        { bg: '#fce7f3', border: '#db2777', text: '#9d174d' },
+        { bg: '#fef9c3', border: '#ca8a04', text: '#854d0e' },
+        { bg: '#ffe4e6', border: '#f43f5e', text: '#9f1239' },
+        { bg: '#f3e8ff', border: '#9333ea', text: '#7e22ce' },
+        { bg: '#ffedd5', border: '#ea580c', text: '#9a3412' },
+        { bg: '#cffafe', border: '#0891b2', text: '#164e63' },
+    ];
 
     // ========================================================================
-    // REPORT TAB INITIALIZER
-    // ========================================================================
-
-    function initReportTab() {
-        container = document.getElementById("report-content");
-        if (!container) return;
-
-        container.innerHTML = `
-            <div class="league-nav" style="background:#e3f2fd;border-color:#90caf9;padding:10px;margin-bottom:15px;border-radius:8px;">
-                <label for="report-view-select" style="color:#1565c0;font-weight:bold;">Select Report:</label>
-
-                <select id="report-view-select" style="font-size:1em;padding:5px;">
-                    <option value="availability">Field Availability Grid</option>
-                    <option value="rotation">Bunk Rotation & Usage</option>
-                </select>
-            </div>
-
-            <div id="report-availability-content" class="league-content-pane active"></div>
-            <div id="report-rotation-content" class="league-content-pane" style="display:none;"></div>
-        `;
-
-        loadMasterData();
-        renderFieldAvailabilityGrid();
-        renderBunkRotationUI();
-
-        const select = document.getElementById("report-view-select");
-        if (select) {
-            select.onchange = (e) => {
-                const val = e.target.value;
-
-                document.querySelectorAll(".league-content-pane")
-                    .forEach(el => el.style.display = "none");
-
-                document.getElementById(`report-${val}-content`).style.display = "block";
-
-                if (val === "availability") renderFieldAvailabilityGrid();
-                else if (val === "rotation") renderBunkRotationUI();
-            };
-        }
-    }
-
-    // ========================================================================
-    // MASTER DATA LOADING
+    // MASTER DATA
     // ========================================================================
 
     function loadMasterData() {
         try {
             const g = window.loadGlobalSettings?.() || {};
-
-            divisions = window.divisions || {};
-            availableDivisions = (window.availableDivisions || []).sort();
+            divisionsDat = window.divisions || {};
+            availableDivisions = (window.availableDivisions || Object.keys(divisionsDat)).sort();
 
             const fields = g.app1?.fields || [];
             const specials = g.app1?.specialActivities || [];
 
             allActivities = [
-                // Sports from fields
-                ...fields.flatMap(f =>
-                    (f.activities || []).map(a => ({
-                        name: a,
-                        type: "sport",
-                        max: 0
-                    }))
-                ),
-                // Special activities with limits
-                ...specials.map(s => ({
-                    name: s.name,
-                    type: "special",
-                    max: s.maxUsage || 0
-                }))
+                ...fields.flatMap(f => (f.activities || []).map(a => ({ name: a, type: 'sport', max: 0 }))),
+                ...specials.map(s => ({ name: s.name, type: 'special', max: s.maxUsage || 0 }))
             ];
 
-            // Deduplicate by name
             const seen = new Set();
             allActivities = allActivities.filter(a => {
                 if (seen.has(a.name)) return false;
                 seen.add(a.name);
                 return true;
             });
-
         } catch (e) {
-            console.error('[Analytics] Error loading master data:', e);
+            console.error('[Analytics] loadMasterData error:', e);
             allActivities = [];
         }
     }
 
-    // ========================================================================
-    // FIELD AVAILABILITY GRID - SUPERCHARGED v2
-    // Time on TOP, Fields/Specials on SIDE
-    // ========================================================================
-
-    function renderFieldAvailabilityGrid() {
-        const wrapper = document.getElementById("report-availability-content");
-        if (!wrapper) return;
-
-        const { startTime, endTime } = getCampTimes();
-
-        wrapper.innerHTML = `
-            <div class="setup-card" style="margin-bottom:16px;">
-                <div class="setup-card-header">
-                    <div class="setup-step-pill">Availability</div>
-                    <div class="setup-card-text">
-                        <h3 style="margin:0;">Field & Activity Availability</h3>
-                        <p style="margin:2px 0 0;font-size:0.8rem;color:#6b7280;">
-                            Camp hours: <strong>${startTime}</strong> to <strong>${endTime}</strong> (30-min slots)
-                        </p>
-                    </div>
-                </div>
-                
-                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;padding:12px;background:#f9fafb;border-radius:12px;border:1px solid #e5e7eb;">
-                    <div style="flex:1;min-width:180px;">
-                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Search Field/Activity</label>
-                        <select id="avail-field-search" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
-                            <option value="">-- Select --</option>
-                        </select>
-                    </div>
-                    <div style="flex:1;min-width:140px;">
-                        <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Time Slot</label>
-                        <select id="avail-time-search" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
-                            <option value="">-- Select --</option>
-                        </select>
-                    </div>
-                    <button id="avail-search-btn" style="padding:8px 20px;background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;border:none;border-radius:999px;font-size:0.85rem;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(37,99,235,0.3);">
-                        Check
-                    </button>
-                </div>
-                
-                <div id="avail-search-result" style="display:none;margin-bottom:14px;"></div>
-                
-                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
-                    <select id="avail-type-filter" style="padding:6px 14px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;">
-                        <option value="all">All Resources</option>
-                        <option value="field">Fields Only</option>
-                        <option value="special">Special Activities Only</option>
-                    </select>
-                    
-                    <div style="display:flex;gap:12px;font-size:0.8rem;color:#4b5563;">
-                        <span style="display:flex;align-items:center;gap:4px;">
-                            <span style="width:18px;height:18px;background:#d1fae5;border:2px solid #10b981;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#047857;">✓</span>
-                            Free
-                        </span>
-                        <span style="display:flex;align-items:center;gap:4px;">
-                            <span style="width:18px;height:18px;background:#fee2e2;border:2px solid #ef4444;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#b91c1c;">✗</span>
-                            In Use
-                        </span>
-                        <span style="display:flex;align-items:center;gap:4px;">
-                            <span style="width:36px;height:18px;background:linear-gradient(90deg,#fee2e2 50%,#d1fae5 50%);border:2px solid #6b7280;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;color:#374151;">→</span>
-                            Partial
-                        </span>
-                    </div>
-                </div>
-            </div>
-
-            <div id="avail-grid-wrapper" class="schedule-view-wrapper" style="border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;"></div>
-        `;
-
-        populateAvailabilityDropdowns();
-        buildAvailabilityGrid();
-
-        document.getElementById("avail-type-filter").onchange = buildAvailabilityGrid;
-        document.getElementById("avail-search-btn").onclick = performAvailabilitySearch;
+    function getDivisionColor(divName) {
+        const names = Object.keys(divisionsDat).sort();
+        const idx = names.indexOf(divName);
+        return DIV_COLORS[Math.max(0, idx) % DIV_COLORS.length];
     }
 
-    /**
-     * Populate the search dropdowns with fields and times
-     */
-    function populateAvailabilityDropdowns() {
-        const gs = window.loadGlobalSettings?.().app1 || {};
-        const fields = (gs.fields || []).map(f => ({ name: f.name, type: 'field' }));
-        const specials = (gs.specialActivities || []).map(s => ({ name: s.name, type: 'special' }));
-        const resources = [...fields, ...specials].sort((a, b) => a.name.localeCompare(b.name));
-
-        const fieldSelect = document.getElementById("avail-field-search");
-        resources.forEach(r => {
-            const opt = document.createElement('option');
-            opt.value = r.name;
-            opt.textContent = r.name;
-            fieldSelect.appendChild(opt);
-        });
-
-        const timeSelect = document.getElementById("avail-time-search");
-        const slots = generate30MinSlots();
-        slots.forEach(slot => {
-            const opt = document.createElement('option');
-            opt.value = slot.startMin;
-            opt.textContent = slot.label;
-            timeSelect.appendChild(opt);
-        });
+    function isSpecialByName(name) {
+        return allActivities.some(a => a.name === name && a.type === 'special');
     }
 
-    /**
-     * Perform quick availability search
-     */
-    function performAvailabilitySearch() {
-        const fieldName = document.getElementById("avail-field-search").value;
-        const timeVal = document.getElementById("avail-time-search").value;
-        const resultDiv = document.getElementById("avail-search-result");
-
-        if (!fieldName || !timeVal) {
-            resultDiv.style.display = 'block';
-            resultDiv.innerHTML = `<div style="padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;color:#92400e;font-size:0.85rem;">⚠️ Please select both a field/activity and a time slot.</div>`;
-            return;
-        }
-
-        const slotStartMin = parseInt(timeVal, 10);
-        const slotEndMin = slotStartMin + 30;
-        const usageData = buildDetailedUsageMap();
-        const resourceUsage = usageData[fieldName] || [];
-
-        const overlapping = resourceUsage.filter(u => u.startMin < slotEndMin && u.endMin > slotStartMin);
-
-        resultDiv.style.display = 'block';
-
-        if (overlapping.length === 0) {
-            resultDiv.innerHTML = `
-                <div style="padding:12px 16px;background:#d1fae5;border:2px solid #10b981;border-radius:12px;color:#047857;font-size:0.9rem;">
-                    ✅ <strong>${fieldName}</strong> is <strong>AVAILABLE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}
-                </div>`;
-        } else {
-            const fullyBlocked = overlapping.some(u => u.startMin <= slotStartMin && u.endMin >= slotEndMin);
-            
-            if (fullyBlocked) {
-                const usage = overlapping[0];
-                resultDiv.innerHTML = `
-                    <div style="padding:12px 16px;background:#fee2e2;border:2px solid #ef4444;border-radius:12px;color:#b91c1c;font-size:0.9rem;">
-                        ❌ <strong>${fieldName}</strong> is <strong>IN USE</strong> from ${minutesToTimeLabel(slotStartMin)} to ${minutesToTimeLabel(slotEndMin)}<br>
-                        <span style="font-size:0.85em;color:#7f1d1d;">Used by: <strong>${usage.bunk}</strong> → ${usage.activity} (${minutesToTimeLabel(usage.startMin)} - ${minutesToTimeLabel(usage.endMin)})</span>
-                    </div>`;
-            } else {
-                let details = overlapping.map(u => 
-                    `• <strong>${u.bunk}</strong>: ${u.activity} (${minutesToTimeLabel(u.startMin)} - ${minutesToTimeLabel(u.endMin)})`
-                ).join('<br>');
-                
-                resultDiv.innerHTML = `
-                    <div style="padding:12px 16px;background:#fef3c7;border:2px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.9rem;">
-                        ⚠️ <strong>${fieldName}</strong> is <strong>PARTIALLY AVAILABLE</strong><br>
-                        <span style="font-size:0.85em;">${details}</span>
-                    </div>`;
-            }
-        }
-    }
-
-    /**
-     * Build detailed usage map with exact times
-     */
-    function buildDetailedUsageMap() {
-        const usageMap = {};
-        const assignments = window.scheduleAssignments || 
-                           window.loadCurrentDailyData?.().scheduleAssignments || {};
-        
-        const divisionTimes = window.divisionTimes || {};
-        const unifiedTimes = window.unifiedTimes || [];
-
-        Object.entries(assignments).forEach(([bunk, schedule]) => {
-            if (!Array.isArray(schedule)) return;
-
-            const divName = getDivisionForBunk(bunk);
-            const times = divisionTimes[divName] || unifiedTimes || [];
-
-            schedule.forEach((entry, idx) => {
-                if (!entry || entry.continuation) return;
-                
-                const field = entry.field || entry._field;
-                const activity = entry._activity || entry.activity;
-                
-                if (!field || field === 'Free' || field === 'No Field') return;
-
-                const fName = fieldLabel(field);
-                if (!usageMap[fName]) usageMap[fName] = [];
-
-                const slotInfo = times[idx];
-                let startMin, endMin;
-
-                if (slotInfo) {
-                    if (slotInfo.startMin !== undefined) {
-                        startMin = slotInfo.startMin;
-                        endMin = slotInfo.endMin;
-                    } else if (slotInfo.start) {
-                        const startDate = new Date(slotInfo.start);
-                        const endDate = new Date(slotInfo.end);
-                        startMin = startDate.getHours() * 60 + startDate.getMinutes();
-                        endMin = endDate.getHours() * 60 + endDate.getMinutes();
-                    }
-                }
-
-                // Handle multi-slot activities
-                let actualEndMin = endMin;
-                for (let i = idx + 1; i < schedule.length; i++) {
-                    const nextEntry = schedule[i];
-                    if (nextEntry && nextEntry.continuation && 
-                        fieldLabel(nextEntry.field || nextEntry._field) === fName) {
-                        const nextSlot = times[i];
-                        if (nextSlot) {
-                            if (nextSlot.endMin !== undefined) {
-                                actualEndMin = nextSlot.endMin;
-                            } else if (nextSlot.end) {
-                                const d = new Date(nextSlot.end);
-                                actualEndMin = d.getHours() * 60 + d.getMinutes();
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-
-                if (startMin !== undefined) {
-                    usageMap[fName].push({
-                        bunk,
-                        activity: activity || 'Unknown',
-                        startMin,
-                        endMin: actualEndMin || endMin
-                    });
-                }
-            });
-        });
-
-        // Also check special activities usage
-        Object.entries(assignments).forEach(([bunk, schedule]) => {
-            if (!Array.isArray(schedule)) return;
-
-            const divName = getDivisionForBunk(bunk);
-            const times = divisionTimes[divName] || unifiedTimes || [];
-
-            schedule.forEach((entry, idx) => {
-                if (!entry || entry.continuation) return;
-                
-                const activity = entry._activity || entry.activity;
-                if (!activity || activity === 'Free') return;
-
-                const isSpecial = allActivities.some(a => a.name === activity && a.type === 'special');
-                if (!isSpecial) return;
-
-                if (!usageMap[activity]) usageMap[activity] = [];
-
-                const slotInfo = times[idx];
-                let startMin, endMin;
-
-                if (slotInfo) {
-                    if (slotInfo.startMin !== undefined) {
-                        startMin = slotInfo.startMin;
-                        endMin = slotInfo.endMin;
-                    } else if (slotInfo.start) {
-                        const startDate = new Date(slotInfo.start);
-                        const endDate = new Date(slotInfo.end);
-                        startMin = startDate.getHours() * 60 + startDate.getMinutes();
-                        endMin = endDate.getHours() * 60 + endDate.getMinutes();
-                    }
-                }
-
-                let actualEndMin = endMin;
-                for (let i = idx + 1; i < schedule.length; i++) {
-                    const nextEntry = schedule[i];
-                    if (nextEntry && nextEntry.continuation && 
-                        (nextEntry._activity || nextEntry.activity) === activity) {
-                        const nextSlot = times[i];
-                        if (nextSlot) {
-                            if (nextSlot.endMin !== undefined) {
-                                actualEndMin = nextSlot.endMin;
-                            } else if (nextSlot.end) {
-                                const d = new Date(nextSlot.end);
-                                actualEndMin = d.getHours() * 60 + d.getMinutes();
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-
-                if (startMin !== undefined) {
-                    const exists = usageMap[activity].some(u => 
-                        u.bunk === bunk && u.startMin === startMin);
-                    if (!exists) {
-                        usageMap[activity].push({
-                            bunk,
-                            activity,
-                            startMin,
-                            endMin: actualEndMin || endMin
-                        });
-                    }
-                }
-            });
-        });
-
-        return usageMap;
-    }
-
-    /**
-     * Get division name for a bunk
-     */
     function getDivisionForBunk(bunkName) {
         if (window.SchedulerCoreUtils?.getDivisionForBunk) {
             return window.SchedulerCoreUtils.getDivisionForBunk(bunkName);
         }
-        for (const [divName, divData] of Object.entries(divisions)) {
+        for (const [divName, divData] of Object.entries(divisionsDat)) {
             if (divData.bunks?.includes(bunkName)) return divName;
         }
         return null;
     }
 
-    /**
-     * Build the availability grid - TIME on TOP, RESOURCES on SIDE
-     */
-    function buildAvailabilityGrid() {
-        const gridDiv = document.getElementById("avail-grid-wrapper");
-        const filter = document.getElementById("avail-type-filter")?.value || 'all';
+    // ========================================================================
+    // DATA BUILDER
+    // Primary fix: read _startMin/_endMin directly from each entry instead of
+    // relying on a slot-index lookup in divisionTimes (which fails when the
+    // division lookup returns null or per-bunk slots are in use).
+    // ========================================================================
 
-        const gs = window.loadGlobalSettings?.().app1 || {};
-        const fields = (gs.fields || []).map(f => ({ ...f, type: 'field' }));
-        const specials = (gs.specialActivities || []).map(s => ({ ...s, type: 'special' }));
+    function buildUsageData(dateKey) {
+        const allDaily = window.loadAllDailyData?.() || {};
+        let assignments;
 
-        let resources = [...fields, ...specials].sort((a, b) => a.name.localeCompare(b.name));
-        if (filter === 'field') resources = fields;
-        if (filter === 'special') resources = specials;
+        if (dateKey && allDaily[dateKey]) {
+            assignments = allDaily[dateKey].scheduleAssignments || {};
+        } else {
+            assignments = window.scheduleAssignments ||
+                          window.loadCurrentDailyData?.()?.scheduleAssignments || {};
+        }
 
-        if (!resources.length) {
-            gridDiv.innerHTML = "<p style='color:#6b7280;padding:20px;text-align:center;'>No resources configured.</p>";
+        const dTimes = window.divisionTimes || {};
+        const items = [];
+
+        Object.entries(assignments).forEach(([bunk, schedule]) => {
+            if (!Array.isArray(schedule)) return;
+            const divName = getDivisionForBunk(bunk) || 'Unknown';
+            const times = dTimes[divName] || [];
+
+            schedule.forEach((entry, idx) => {
+                if (!entry || entry.continuation || entry._isTransition) return;
+
+                // Use times embedded on the entry first; fall back to divisionTimes by index
+                let startMin = entry._startMin;
+                let endMin = entry._endMin;
+
+                if (startMin === undefined || endMin === undefined) {
+                    const slotInfo = times[idx];
+                    if (slotInfo) {
+                        if (slotInfo.startMin !== undefined) {
+                            startMin = slotInfo.startMin;
+                            endMin = slotInfo.endMin;
+                        } else if (slotInfo.start) {
+                            const sd = new Date(slotInfo.start);
+                            const ed = new Date(slotInfo.end);
+                            startMin = sd.getHours() * 60 + sd.getMinutes();
+                            endMin = ed.getHours() * 60 + ed.getMinutes();
+                        }
+                    }
+                }
+
+                if (startMin === undefined || endMin === undefined) return;
+
+                // Extend through continuation slots to get the real block end time
+                for (let i = idx + 1; i < schedule.length; i++) {
+                    const next = schedule[i];
+                    if (!next?.continuation) break;
+                    if (next._endMin !== undefined) {
+                        endMin = next._endMin;
+                    } else {
+                        const ns = times[i];
+                        if (ns?.endMin !== undefined) endMin = ns.endMin;
+                        else if (ns?.end) {
+                            const ed = new Date(ns.end);
+                            endMin = ed.getHours() * 60 + ed.getMinutes();
+                        }
+                    }
+                }
+
+                const activity = entry._activity || entry.activity || entry.sport || '';
+                if (!activity || activity === 'Free') return;
+                if (activity.toLowerCase().includes('transition')) return;
+
+                const fRaw = entry.field;
+                let fName = typeof fRaw === 'object' ? (fRaw?.name || '') : (fRaw || '');
+                // Manual mode stores field as "Field – Activity" composite; extract the field part
+                if (fName.includes(' – ')) fName = fName.split(' – ')[0].trim();
+                else if (fName.includes(' - ')) fName = fName.split(' - ')[0].trim();
+                const hasField = fName && fName !== 'Free' && fName !== 'No Field';
+
+                items.push({
+                    bunk,
+                    division: divName,
+                    field: hasField ? fName : null,
+                    activity,
+                    startMin,
+                    endMin,
+                    isSpecial: isSpecialByName(activity)
+                });
+            });
+        });
+
+        return items;
+    }
+
+    // ========================================================================
+    // REPORT TAB INITIALIZER
+    // ========================================================================
+
+    function initReportTab() {
+        container = document.getElementById('report-content');
+        if (!container) return;
+
+        loadMasterData();
+        selectedDate = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
+        currentView = 'field';
+
+        container.innerHTML = `
+            <div class="league-nav" style="background:#e3f2fd;border-color:#90caf9;padding:10px;margin-bottom:15px;border-radius:8px;">
+                <label for="report-view-select" style="color:#1565c0;font-weight:bold;">Select Report:</label>
+                <select id="report-view-select" style="font-size:1em;padding:5px;">
+                    <option value="availability">Field Availability</option>
+                    <option value="rotation">Bunk Rotation & Usage</option>
+                </select>
+            </div>
+            <div id="report-availability-content" class="league-content-pane active"></div>
+            <div id="report-rotation-content" class="league-content-pane" style="display:none;"></div>
+        `;
+
+        renderAvailabilityShell();
+        renderBunkRotationUI();
+
+        const sel = document.getElementById('report-view-select');
+        if (sel) {
+            sel.onchange = (e) => {
+                const val = e.target.value;
+                document.querySelectorAll('.league-content-pane').forEach(el => el.style.display = 'none');
+                document.getElementById(`report-${val}-content`).style.display = 'block';
+                if (val === 'availability') renderGantt();
+                else if (val === 'rotation') renderBunkRotationUI();
+            };
+        }
+    }
+
+    // ========================================================================
+    // AVAILABILITY SHELL
+    // ========================================================================
+
+    function renderAvailabilityShell() {
+        const wrapper = document.getElementById('report-availability-content');
+        if (!wrapper) return;
+
+        const allDaily = window.loadAllDailyData?.() || {};
+        const dates = Object.keys(allDaily).sort().reverse();
+
+        const dateOptions = dates.length
+            ? dates.map(d => `<option value="${d}" ${d === selectedDate ? 'selected' : ''}>${formatDateDisplay(d)}</option>`).join('')
+            : `<option value="${selectedDate}">${formatDateDisplay(selectedDate)}</option>`;
+
+        const divOptions = availableDivisions.map(d => `<option value="${d}">${d}</option>`).join('');
+
+        wrapper.innerHTML = `
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:12px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <label style="font-size:0.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;white-space:nowrap;">Date</label>
+                    <select id="gantt-date-select" style="padding:6px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.84rem;background:#fff;">
+                        ${dateOptions}
+                    </select>
+                </div>
+
+                <div style="display:flex;background:#e5e7eb;border-radius:999px;padding:3px;gap:2px;flex-shrink:0;">
+                    <button id="gantt-btn-field" style="padding:5px 16px;border:none;border-radius:999px;font-size:0.8rem;font-weight:600;cursor:pointer;background:#fff;color:#1e40af;box-shadow:0 1px 4px rgba(0,0,0,0.12);">By Field</button>
+                    <button id="gantt-btn-bunk" style="padding:5px 16px;border:none;border-radius:999px;font-size:0.8rem;font-weight:600;cursor:pointer;background:transparent;color:#6b7280;box-shadow:none;">By Bunk</button>
+                </div>
+
+                <div id="gantt-div-filter-wrap" style="display:none;align-items:center;gap:8px;">
+                    <label style="font-size:0.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;white-space:nowrap;">Division</label>
+                    <select id="gantt-div-select" style="padding:6px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.84rem;background:#fff;">
+                        <option value="">All Divisions</option>
+                        ${divOptions}
+                    </select>
+                </div>
+            </div>
+
+            <div id="gantt-chart-area"></div>
+        `;
+
+        document.getElementById('gantt-date-select').onchange = e => {
+            selectedDate = e.target.value;
+            renderGantt();
+        };
+
+        document.getElementById('gantt-btn-field').onclick = () => setView('field');
+        document.getElementById('gantt-btn-bunk').onclick = () => setView('bunk');
+
+        const divSel = document.getElementById('gantt-div-select');
+        if (divSel) divSel.onchange = () => renderGantt();
+
+        renderGantt();
+    }
+
+    function setView(v) {
+        currentView = v;
+        ['field', 'bunk'].forEach(key => {
+            const btn = document.getElementById(`gantt-btn-${key}`);
+            if (!btn) return;
+            const active = key === v;
+            btn.style.background = active ? '#fff' : 'transparent';
+            btn.style.color = active ? '#1e40af' : '#6b7280';
+            btn.style.boxShadow = active ? '0 1px 4px rgba(0,0,0,0.12)' : 'none';
+        });
+        const divWrap = document.getElementById('gantt-div-filter-wrap');
+        if (divWrap) divWrap.style.display = v === 'bunk' ? 'flex' : 'none';
+        renderGantt();
+    }
+
+    // ========================================================================
+    // GANTT DISPATCH
+    // ========================================================================
+
+    function renderGantt() {
+        const area = document.getElementById('gantt-chart-area');
+        if (!area) return;
+
+        const items = buildUsageData(selectedDate);
+        const { startMin, endMin } = getCampTimes();
+
+        if (!items.length) {
+            area.innerHTML = `
+                <div style="padding:56px 32px;text-align:center;color:#9ca3af;background:#f9fafb;border:1px dashed #d1d5db;border-radius:12px;">
+                    <div style="font-size:2.5rem;margin-bottom:10px;">📋</div>
+                    <div style="font-size:0.95rem;font-weight:600;color:#6b7280;">No schedule data for ${formatDateDisplay(selectedDate)}</div>
+                    <div style="font-size:0.8rem;margin-top:6px;">Build or load a schedule first, then come back here.</div>
+                </div>`;
             return;
         }
 
-        const slots = generate30MinSlots();
-        const usageMap = buildDetailedUsageMap();
-
-        // TIME on TOP (columns), RESOURCES on SIDE (rows)
-        let html = `
-            <table style="border-collapse:collapse;width:100%;font-size:0.8rem;">
-                <thead>
-                    <tr style="background:linear-gradient(135deg,#f3f4f6,#e5e7eb);">
-                        <th style="position:sticky;left:0;z-index:10;background:#f3f4f6;padding:10px 12px;border:1px solid #d1d5db;min-width:140px;text-align:left;font-weight:600;color:#374151;">
-                            Resource
-                        </th>
-        `;
-
-        // Time headers
-        slots.forEach(slot => {
-            html += `<th style="padding:8px 4px;border:1px solid #d1d5db;min-width:60px;font-weight:600;color:#374151;white-space:nowrap;font-size:0.75rem;">${slot.shortLabel}</th>`;
-        });
-        html += `</tr></thead><tbody>`;
-
-        // Resource rows
-        resources.forEach((r, rowIdx) => {
-            const resourceUsage = usageMap[r.name] || [];
-            const rowBg = rowIdx % 2 === 0 ? '#ffffff' : '#fafafa';
-            const typeIcon = r.type === 'special' ? '⭐' : '🏟️';
-            
-            html += `
-                <tr style="background:${rowBg};">
-                    <td style="position:sticky;left:0;background:${rowBg};padding:8px 10px;border:1px solid #d1d5db;font-weight:600;color:#111827;white-space:nowrap;">
-                        <span style="margin-right:4px;">${typeIcon}</span>${r.name}
-                    </td>
-            `;
-
-            slots.forEach(slot => {
-                const cellData = getCellAvailability(slot.startMin, slot.endMin, resourceUsage);
-                html += renderAvailabilityCell(cellData, slot);
-            });
-
-            html += `</tr>`;
-        });
-
-        html += `</tbody></table>`;
-        gridDiv.innerHTML = html;
-    }
-
-    /**
-     * Determine availability status for a cell
-     */
-    function getCellAvailability(slotStart, slotEnd, usageList) {
-        const overlapping = usageList.filter(u => u.startMin < slotEnd && u.endMin > slotStart);
-
-        if (overlapping.length === 0) {
-            return { status: 'available' };
-        }
-
-        const fullyBlocked = overlapping.some(u => u.startMin <= slotStart && u.endMin >= slotEnd);
-        if (fullyBlocked) {
-            return { status: 'unavailable', usage: overlapping[0] };
-        }
-
-        const usage = overlapping[0];
-        
-        if (usage.startMin > slotStart && usage.startMin < slotEnd) {
-            return {
-                status: 'partial',
-                transitionTime: usage.startMin,
-                transitionType: 'starts',
-                usage
-            };
-        } else if (usage.endMin > slotStart && usage.endMin < slotEnd) {
-            return {
-                status: 'partial',
-                transitionTime: usage.endMin,
-                transitionType: 'ends',
-                usage
-            };
-        }
-
-        return { status: 'unavailable', usage };
-    }
-
-    /**
-     * Render a single availability cell with improved visuals
-     */
-    function renderAvailabilityCell(cellData, slot) {
-        const { status, transitionTime, transitionType, usage } = cellData;
-
-        if (status === 'available') {
-            return `<td style="background:#d1fae5;text-align:center;padding:6px 2px;border:1px solid #d1d5db;">
-                <span style="color:#047857;font-weight:700;font-size:1em;">✓</span>
-            </td>`;
-        }
-
-        if (status === 'unavailable') {
-            const title = usage ? `${usage.bunk}: ${usage.activity}` : '';
-            return `<td style="background:#fee2e2;text-align:center;padding:6px 2px;border:1px solid #d1d5db;" title="${title}">
-                <span style="color:#b91c1c;font-weight:700;font-size:1em;">✗</span>
-            </td>`;
-        }
-
-        // Partial availability - clearer design
-        const timeLabel = minutesToShortLabel(transitionTime);
-        const title = usage ? `${usage.bunk}: ${usage.activity}` : '';
-
-        if (transitionType === 'ends') {
-            // Busy until transitionTime, then free
-            return `
-                <td style="padding:0;border:1px solid #d1d5db;position:relative;height:36px;" title="${title}: Free from ${timeLabel}">
-                    <div style="display:flex;height:100%;">
-                        <div style="flex:1;background:#fee2e2;display:flex;align-items:center;justify-content:center;">
-                            <span style="color:#b91c1c;font-weight:700;font-size:0.85em;">✗</span>
-                        </div>
-                        <div style="flex:1;background:#d1fae5;display:flex;align-items:center;justify-content:center;">
-                            <span style="color:#047857;font-weight:700;font-size:0.85em;">✓</span>
-                        </div>
-                    </div>
-                    <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:600;color:#374151;background:rgba(255,255,255,0.95);padding:0 3px;border-radius:2px;white-space:nowrap;">${timeLabel}</div>
-                </td>`;
+        if (currentView === 'field') {
+            renderFieldGantt(area, items, startMin, endMin);
         } else {
-            // Free until transitionTime, then busy
-            return `
-                <td style="padding:0;border:1px solid #d1d5db;position:relative;height:36px;" title="${title}: In use from ${timeLabel}">
-                    <div style="display:flex;height:100%;">
-                        <div style="flex:1;background:#d1fae5;display:flex;align-items:center;justify-content:center;">
-                            <span style="color:#047857;font-weight:700;font-size:0.85em;">✓</span>
-                        </div>
-                        <div style="flex:1;background:#fee2e2;display:flex;align-items:center;justify-content:center;">
-                            <span style="color:#b91c1c;font-weight:700;font-size:0.85em;">✗</span>
-                        </div>
-                    </div>
-                    <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);font-size:8px;font-weight:600;color:#374151;background:rgba(255,255,255,0.95);padding:0 3px;border-radius:2px;white-space:nowrap;">${timeLabel}</div>
-                </td>`;
+            const divFilter = document.getElementById('gantt-div-select')?.value || '';
+            renderBunkGantt(area, items, startMin, endMin, divFilter);
         }
     }
 
     // ========================================================================
-    // BUNK ROTATION REPORT - WITH USAGE MANAGER MERGED
+    // SHARED GANTT PRIMITIVES
+    // ========================================================================
+
+    function buildTimeAxis(campStart, campEnd, totalMin) {
+        const firstHour = Math.ceil(campStart / 60);
+        const lastHour = Math.floor(campEnd / 60);
+        let markers = '';
+        for (let h = firstHour; h <= lastHour; h++) {
+            const m = h * 60;
+            if (m < campStart || m > campEnd) continue;
+            const l = ((m - campStart) / totalMin * 100).toFixed(3);
+            markers += `<span style="position:absolute;left:${l}%;transform:translateX(-50%);font-size:0.68rem;font-weight:600;color:#9ca3af;white-space:nowrap;">${minutesToShortLabel(m)}</span>`;
+        }
+        return `
+            <div style="display:flex;margin-bottom:8px;">
+                <div style="width:160px;min-width:160px;flex-shrink:0;"></div>
+                <div style="flex:1;position:relative;height:16px;">${markers}</div>
+            </div>`;
+    }
+
+    function buildGridLines(campStart, campEnd, totalMin) {
+        const firstHour = Math.ceil(campStart / 60);
+        const lastHour = Math.floor(campEnd / 60);
+        let lines = '';
+        for (let h = firstHour; h <= lastHour; h++) {
+            const m = h * 60;
+            if (m < campStart || m > campEnd) continue;
+            const l = ((m - campStart) / totalMin * 100).toFixed(3);
+            lines += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:1px;background:rgba(0,0,0,0.06);pointer-events:none;"></div>`;
+        }
+        return lines;
+    }
+
+    function buildBlock(item, campStart, totalMin, label, color) {
+        const l = ((item.startMin - campStart) / totalMin * 100).toFixed(3);
+        const w = Math.max(0.4, ((item.endMin - item.startMin) / totalMin * 100)).toFixed(3);
+        const dur = item.endMin - item.startMin;
+        const tip = `${item.bunk}: ${item.activity}${item.field ? ' @ ' + item.field : ''}\n${minutesToTimeLabel(item.startMin)} – ${minutesToTimeLabel(item.endMin)} (${dur} min)`;
+        return `
+            <div title="${tip.replace(/"/g, '&quot;')}"
+                 style="position:absolute;top:5px;bottom:5px;left:${l}%;width:${w}%;
+                        background:${color.bg};border:1.5px solid ${color.border};border-radius:5px;
+                        display:flex;align-items:center;padding:0 6px;overflow:hidden;
+                        cursor:default;box-sizing:border-box;min-width:2px;">
+                <span style="font-size:0.68rem;font-weight:700;color:${color.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</span>
+            </div>`;
+    }
+
+    function buildRow(leftLabel, trackHtml, isAlternate) {
+        const rowBg = isAlternate ? '#fafafa' : '#ffffff';
+        const trackBg = isAlternate ? '#f5f6f7' : '#f3f4f6';
+        return `
+            <div style="display:flex;align-items:stretch;margin-bottom:2px;min-height:42px;">
+                <div style="width:160px;min-width:160px;padding:0 12px;display:flex;align-items:center;
+                            font-size:0.78rem;font-weight:600;color:#374151;
+                            border-right:2px solid #e9ecef;background:${rowBg};flex-shrink:0;
+                            overflow:hidden;" title="${leftLabel}">
+                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${leftLabel}</span>
+                </div>
+                <div style="flex:1;position:relative;background:${trackBg};min-height:42px;overflow:hidden;">
+                    ${trackHtml}
+                </div>
+            </div>`;
+    }
+
+    function buildLegendSwatch(bg, border, label) {
+        return `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;">
+                    <span style="width:12px;height:12px;background:${bg};border:1.5px solid ${border};border-radius:3px;flex-shrink:0;"></span>
+                    <span style="font-size:0.74rem;color:#6b7280;">${label}</span>
+                </span>`;
+    }
+
+    // ========================================================================
+    // BY FIELD GANTT
+    // ========================================================================
+
+    function renderFieldGantt(area, items, campStart, campEnd) {
+        const gs = window.loadGlobalSettings?.() || {};
+        const fields = (gs.app1?.fields || []).map(f => ({ name: f.name, type: 'field' }));
+        const specials = (gs.app1?.specialActivities || []).map(s => ({ name: s.name, type: 'special' }));
+        const resources = [...fields, ...specials].sort((a, b) => a.name.localeCompare(b.name));
+
+        if (!resources.length) {
+            area.innerHTML = `<div style="padding:32px;text-align:center;color:#9ca3af;">No fields or activities configured.</div>`;
+            return;
+        }
+
+        const totalMin = campEnd - campStart;
+
+        // Index items by field name and by special-activity name
+        const byField = {};
+        const bySpecial = {};
+        items.forEach(item => {
+            if (item.field) {
+                (byField[item.field] = byField[item.field] || []).push(item);
+            }
+            if (item.isSpecial) {
+                const arr = (bySpecial[item.activity] = bySpecial[item.activity] || []);
+                const dup = arr.some(x => x.bunk === item.bunk && x.startMin === item.startMin);
+                if (!dup) arr.push(item);
+            }
+        });
+
+        let html = buildTimeAxis(campStart, campEnd, totalMin);
+
+        resources.forEach((r, i) => {
+            const usages = r.type === 'field' ? (byField[r.name] || []) : (bySpecial[r.name] || []);
+            const icon = r.type === 'special' ? '⭐ ' : '🏟️ ';
+
+            let track = buildGridLines(campStart, campEnd, totalMin);
+            usages.forEach(item => {
+                track += buildBlock(item, campStart, totalMin, item.bunk, getDivisionColor(item.division));
+            });
+
+            html += buildRow(icon + r.name, track, i % 2 === 1);
+        });
+
+        // Division colour legend
+        const divNames = Object.keys(divisionsDat).sort();
+        const legend = divNames.map((d, i) => {
+            const c = DIV_COLORS[i % DIV_COLORS.length];
+            return buildLegendSwatch(c.bg, c.border, d);
+        }).join('');
+
+        area.innerHTML = `
+            <div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+                <div style="padding:16px 20px 14px;">${html}</div>
+                ${legend ? `<div style="padding:10px 20px 14px;border-top:1px solid #f3f4f6;display:flex;flex-wrap:wrap;align-items:center;gap:2px;">${legend}</div>` : ''}
+            </div>`;
+    }
+
+    // ========================================================================
+    // BY BUNK GANTT
+    // ========================================================================
+
+    function renderBunkGantt(area, items, campStart, campEnd, divFilter) {
+        const totalMin = campEnd - campStart;
+
+        const bunkMap = {};
+        items.forEach(item => {
+            (bunkMap[item.bunk] = bunkMap[item.bunk] || []).push(item);
+        });
+
+        const sportColor   = { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af' };
+        const specialColor = { bg: '#f3e8ff', border: '#9333ea', text: '#7e22ce' };
+
+        const divs = divFilter
+            ? (divisionsDat[divFilter] ? { [divFilter]: divisionsDat[divFilter] } : {})
+            : divisionsDat;
+
+        let html = buildTimeAxis(campStart, campEnd, totalMin);
+        let rowCount = 0;
+        let anyBunk = false;
+
+        Object.entries(divs).forEach(([divName, divData]) => {
+            if (!divData) return;
+            const bunks = divData.bunks || [];
+            if (!bunks.length) return;
+            anyBunk = true;
+
+            html += `
+                <div style="margin:8px 0 4px;padding:3px 0;font-size:0.68rem;font-weight:700;
+                            color:#9ca3af;text-transform:uppercase;letter-spacing:0.08em;
+                            border-bottom:1px solid #e9ecef;">
+                    ${divName}
+                </div>`;
+
+            bunks.forEach(bunk => {
+                const usages = bunkMap[bunk] || [];
+                let track = buildGridLines(campStart, campEnd, totalMin);
+                usages.forEach(item => {
+                    const color = item.isSpecial ? specialColor : sportColor;
+                    track += buildBlock(item, campStart, totalMin, item.activity, color);
+                });
+                html += buildRow(bunk, track, rowCount % 2 === 1);
+                rowCount++;
+            });
+        });
+
+        if (!anyBunk) {
+            area.innerHTML = `<div style="padding:32px;text-align:center;color:#9ca3af;">No bunks found for the selected division.</div>`;
+            return;
+        }
+
+        const legend =
+            buildLegendSwatch('#dbeafe', '#3b82f6', 'Sport') +
+            buildLegendSwatch('#f3e8ff', '#9333ea', 'Special');
+
+        area.innerHTML = `
+            <div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,0.04);">
+                <div style="padding:16px 20px 14px;">${html}</div>
+                <div style="padding:10px 20px 14px;border-top:1px solid #f3f4f6;display:flex;flex-wrap:wrap;align-items:center;">${legend}</div>
+            </div>`;
+    }
+
+    // ========================================================================
+    // BUNK ROTATION REPORT (unchanged logic)
     // ========================================================================
 
     function renderBunkRotationUI() {
-        const wrapper = document.getElementById("report-rotation-content");
+        const wrapper = document.getElementById('report-rotation-content');
         if (!wrapper) return;
 
         wrapper.innerHTML = `
@@ -736,7 +596,7 @@
                         </p>
                     </div>
                 </div>
-                
+
                 <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;">
                     <div style="flex:1;min-width:160px;">
                         <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Division</label>
@@ -768,92 +628,75 @@
             <div id="rotation-table-container"></div>
         `;
 
-        const divSelect = document.getElementById("rotation-div-select");
+        const divSelect = document.getElementById('rotation-div-select');
         availableDivisions.forEach(d => {
             divSelect.innerHTML += `<option value="${d}">${d}</option>`;
         });
 
-        // When division changes, repopulate bunk dropdown then re-render
         divSelect.onchange = () => {
             populateRotationBunkFilter(divSelect.value);
             renderRotationTable(divSelect.value);
         };
-        document.getElementById("rotation-type-filter").onchange = () => renderRotationTable(divSelect.value);
-        document.getElementById("rotation-bunk-filter").onchange = () => renderRotationTable(divSelect.value);
+        document.getElementById('rotation-type-filter').onchange = () => renderRotationTable(divSelect.value);
+        document.getElementById('rotation-bunk-filter').onchange = () => renderRotationTable(divSelect.value);
 
-        // Debounced activity search
-        let _activityFilterTimer = null;
-        document.getElementById("rotation-activity-filter").oninput = () => {
-            clearTimeout(_activityFilterTimer);
-            _activityFilterTimer = setTimeout(() => renderRotationTable(divSelect.value), 300);
+        let _timer = null;
+        document.getElementById('rotation-activity-filter').oninput = () => {
+            clearTimeout(_timer);
+            _timer = setTimeout(() => renderRotationTable(divSelect.value), 300);
         };
     }
 
-    /**
-     * Populate bunk filter dropdown for the selected division
-     */
     function populateRotationBunkFilter(divName) {
-        const bunkSelect = document.getElementById("rotation-bunk-filter");
-        if (!bunkSelect) return;
-        bunkSelect.innerHTML = '<option value="">All Bunks</option>';
+        const sel = document.getElementById('rotation-bunk-filter');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">All Bunks</option>';
         if (!divName) return;
-        const bunks = divisions[divName]?.bunks || [];
-        bunks.forEach(b => {
-            bunkSelect.innerHTML += `<option value="${b}">${b}</option>`;
+        (divisionsDat[divName]?.bunks || []).forEach(b => {
+            sel.innerHTML += `<option value="${b}">${b}</option>`;
         });
     }
 
-    /**
-     * Render the rotation table for a division
-     */
     function renderRotationTable(divName) {
-        const container = document.getElementById("rotation-table-container");
+        const cont = document.getElementById('rotation-table-container');
         if (!divName) {
-            container.innerHTML = `<div style="padding:30px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;border:1px dashed #d1d5db;">
+            cont.innerHTML = `<div style="padding:30px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;border:1px dashed #d1d5db;">
                 <span style="font-size:1.5em;">📋</span><br>
                 <span style="font-size:0.9rem;">Select a division to view rotation data</span>
             </div>`;
             return;
         }
 
-        const bunks = divisions[divName]?.bunks || [];
+        const bunks = divisionsDat[divName]?.bunks || [];
         if (!bunks.length) {
-            container.innerHTML = `<div style="padding:20px;text-align:center;color:#b91c1c;background:#fee2e2;border-radius:12px;">No bunks in this division.</div>`;
+            cont.innerHTML = `<div style="padding:20px;text-align:center;color:#b91c1c;background:#fee2e2;border-radius:12px;">No bunks in this division.</div>`;
             return;
         }
 
-        // Type filter (sport/special/all)
-        const filter = document.getElementById("rotation-type-filter")?.value || 'all';
+        const filter = document.getElementById('rotation-type-filter')?.value || 'all';
         let filteredActivities = allActivities;
         if (filter === 'sport') filteredActivities = allActivities.filter(a => a.type === 'sport');
         if (filter === 'special') filteredActivities = allActivities.filter(a => a.type === 'special');
 
-        // Activity name search filter
-        const activitySearch = (document.getElementById("rotation-activity-filter")?.value || '').trim().toLowerCase();
-        if (activitySearch) {
-            filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(activitySearch));
-        }
+        const actSearch = (document.getElementById('rotation-activity-filter')?.value || '').trim().toLowerCase();
+        if (actSearch) filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
 
         if (!filteredActivities.length) {
-            container.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No activities match the filter.</div>`;
+            cont.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No activities match the filter.</div>`;
             return;
         }
 
-        // Bunk filter
-        const bunkFilter = document.getElementById("rotation-bunk-filter")?.value || '';
+        const bunkFilter = document.getElementById('rotation-bunk-filter')?.value || '';
         const filteredBunks = bunkFilter ? bunks.filter(b => b === bunkFilter) : bunks;
 
         if (!filteredBunks.length) {
-            container.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No bunks match the filter.</div>`;
+            cont.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No bunks match the filter.</div>`;
             return;
         }
 
-        // Load data
         const allDaily = window.loadAllDailyData?.() || {};
         const global = window.loadGlobalSettings?.() || {};
         const manualOffsets = global.manualUsageOffsets || {};
-
-        // Compute raw historical counts and last done dates
         const rawCounts = global.historicalCounts || {};
         const lastDone = {};
 
@@ -861,17 +704,13 @@
         const sortedDates = Object.keys(allDaily).sort();
 
         sortedDates.forEach(dateKey => {
-            const day = allDaily[dateKey];
-            const sched = day?.scheduleAssignments || {};
-
+            const sched = allDaily[dateKey]?.scheduleAssignments || {};
             Object.keys(sched).forEach(bunk => {
                 if (!bunks.includes(bunk)) return;
-
                 (sched[bunk] || []).forEach(entry => {
                     if (entry && entry._activity && !entry.continuation) {
                         const act = entry._activity;
                         if (act === 'Free' || act.toLowerCase().includes('transition')) return;
-
                         lastDone[bunk] = lastDone[bunk] || {};
                         lastDone[bunk][act] = dateKey;
                     }
@@ -884,15 +723,12 @@
             Object.keys(bunkRotHist).forEach(act => {
                 const ts = bunkRotHist[act];
                 if (!ts) return;
-                const dateFromTs = new Date(ts).toISOString().split('T')[0];
+                const d = new Date(ts).toISOString().split('T')[0];
                 lastDone[bunk] = lastDone[bunk] || {};
-                if (!lastDone[bunk][act] || dateFromTs > lastDone[bunk][act]) {
-                    lastDone[bunk][act] = dateFromTs;
-                }
+                if (!lastDone[bunk][act] || d > lastDone[bunk][act]) lastDone[bunk][act] = d;
             });
         });
 
-        // Build table with themed styling
         let html = `
             <div style="border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;box-shadow:0 4px 12px rgba(15,23,42,0.06);">
                 <div style="overflow-x:auto;">
@@ -923,18 +759,15 @@
                 const limit = act.max > 0 ? act.max : '∞';
                 const lastDate = lastDone[bunk]?.[act.name] || '';
                 const lastDateFormatted = lastDate ? formatDateDisplay(lastDate) : '—';
-                
+
                 let daysSince = '';
                 if (lastDate) {
-                    const last = new Date(lastDate);
-                    const today = new Date();
-                    const diffDays = Math.floor((today - last) / (1000 * 60 * 60 * 24));
-                    if (diffDays === 0) daysSince = 'Today';
-                    else if (diffDays === 1) daysSince = 'Yesterday';
-                    else daysSince = `${diffDays}d ago`;
+                    const diff = Math.floor((new Date() - new Date(lastDate)) / 86400000);
+                    if (diff === 0) daysSince = 'Today';
+                    else if (diff === 1) daysSince = 'Yesterday';
+                    else daysSince = `${diff}d ago`;
                 }
 
-                // Row styling based on status
                 let rowBg = bunkBg;
                 let totalStyle = 'font-weight:600;';
                 if (act.max > 0 && total >= act.max) {
@@ -944,9 +777,9 @@
                     totalStyle += 'color:#d97706;';
                 }
 
-                const typeIcon = act.type === 'special' ? 
-                    '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">⭐</span>' : 
-                    '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">🏟️</span>';
+                const typeIcon = act.type === 'special'
+                    ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">⭐</span>'
+                    : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">🏟️</span>';
 
                 html += `
                     <tr style="background:${rowBg};">
@@ -957,14 +790,9 @@
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;">${typeIcon}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;">${hist}</td>
                         <td style="padding:4px 6px;border:1px solid #e5e7eb;text-align:center;">
-                            <input
-                                type="number"
-                                class="rotation-adj-input"
-                                data-bunk="${bunk}"
-                                data-act="${act.name}"
-                                value="${offset}"
-                                style="width:45px;text-align:center;padding:4px;border:1px solid #d1d5db;border-radius:999px;font-size:0.8rem;"
-                            />
+                            <input type="number" class="rotation-adj-input"
+                                data-bunk="${bunk}" data-act="${act.name}" value="${offset}"
+                                style="width:45px;text-align:center;padding:4px;border:1px solid #d1d5db;border-radius:999px;font-size:0.8rem;" />
                         </td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${totalStyle}">${total}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;font-size:0.85em;">
@@ -973,71 +801,39 @@
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${act.max > 0 && total >= act.max ? 'color:#b91c1c;font-weight:600;' : 'color:#6b7280;'}">${limit}</td>
                     </tr>
                 `;
-
                 isFirstRow = false;
             });
         });
 
         html += `</tbody></table></div></div>`;
-
-        // Summary stats
         html += buildRotationSummary(filteredBunks, filteredActivities, rawCounts, manualOffsets);
+        cont.innerHTML = html;
 
-        container.innerHTML = html;
-
-        // Bind input handlers
-        container.querySelectorAll(".rotation-adj-input").forEach(inp => {
+        cont.querySelectorAll('.rotation-adj-input').forEach(inp => {
             inp.onchange = (e) => {
-                const bunk = e.target.dataset.bunk;
-                const act = e.target.dataset.act;
+                const b = e.target.dataset.bunk;
+                const a = e.target.dataset.act;
                 const val = parseInt(e.target.value) || 0;
-
-                const globalSettings = window.loadGlobalSettings?.() || {};
-                if (!globalSettings.manualUsageOffsets) globalSettings.manualUsageOffsets = {};
-                if (!globalSettings.manualUsageOffsets[bunk]) globalSettings.manualUsageOffsets[bunk] = {};
-
-                globalSettings.manualUsageOffsets[bunk][act] = val;
-
-                if (val === 0) delete globalSettings.manualUsageOffsets[bunk][act];
-
-                window.saveGlobalSettings("manualUsageOffsets", globalSettings.manualUsageOffsets);
+                const gs = window.loadGlobalSettings?.() || {};
+                if (!gs.manualUsageOffsets) gs.manualUsageOffsets = {};
+                if (!gs.manualUsageOffsets[b]) gs.manualUsageOffsets[b] = {};
+                if (val === 0) delete gs.manualUsageOffsets[b][a];
+                else gs.manualUsageOffsets[b][a] = val;
+                window.saveGlobalSettings('manualUsageOffsets', gs.manualUsageOffsets);
                 renderRotationTable(divName);
             };
         });
     }
 
-    /**
-     * Format date for display (YYYY-MM-DD → readable)
-     */
-    function formatDateDisplay(dateKey) {
-        if (!dateKey) return '';
-        try {
-            const d = new Date(dateKey + 'T12:00:00');
-            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        } catch (e) {
-            return dateKey;
-        }
-    }
-
-    /**
-     * Build summary statistics for rotation report
-     */
     function buildRotationSummary(bunks, activities, rawCounts, manualOffsets) {
         const neverDone = [];
         const atLimit = [];
 
         bunks.forEach(bunk => {
             activities.forEach(act => {
-                const hist = rawCounts[bunk]?.[act.name] || 0;
-                const offset = manualOffsets[bunk]?.[act.name] || 0;
-                const total = Math.max(0, hist + offset);
-
-                if (total === 0) {
-                    neverDone.push({ bunk, activity: act.name });
-                }
-                if (act.max > 0 && total >= act.max) {
-                    atLimit.push({ bunk, activity: act.name, total, limit: act.max });
-                }
+                const total = Math.max(0, (rawCounts[bunk]?.[act.name] || 0) + (manualOffsets[bunk]?.[act.name] || 0));
+                if (total === 0) neverDone.push({ bunk, activity: act.name });
+                if (act.max > 0 && total >= act.max) atLimit.push({ bunk, activity: act.name, total, limit: act.max });
             });
         });
 
@@ -1045,35 +841,26 @@
             <div class="setup-card" style="margin-top:16px;">
                 <div class="setup-card-header">
                     <div class="setup-step-pill setup-step-pill-muted">Summary</div>
-                    <div class="setup-card-text">
-                        <h3 style="margin:0;font-size:0.95rem;">Quick Stats</h3>
-                    </div>
+                    <div class="setup-card-text"><h3 style="margin:0;font-size:0.95rem;">Quick Stats</h3></div>
                 </div>
         `;
 
         if (neverDone.length > 0) {
-            html += `
-                <div style="margin-bottom:10px;padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;">
-                    <strong style="color:#92400e;">⚠️ Never Done (${neverDone.length}):</strong>
-                    <span style="font-size:0.85em;color:#78350f;margin-left:6px;">
-                        ${neverDone.slice(0, 8).map(n => `${n.bunk}→${n.activity}`).join(', ')}${neverDone.length > 8 ? '...' : ''}
-                    </span>
-                </div>`;
+            html += `<div style="margin-bottom:10px;padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;">
+                <strong style="color:#92400e;">⚠️ Never Done (${neverDone.length}):</strong>
+                <span style="font-size:0.85em;color:#78350f;margin-left:6px;">${neverDone.slice(0, 8).map(n => `${n.bunk}→${n.activity}`).join(', ')}${neverDone.length > 8 ? '...' : ''}</span>
+            </div>`;
         } else {
-            html += `
-                <div style="margin-bottom:10px;padding:10px 12px;background:#d1fae5;border:1px solid #10b981;border-radius:999px;">
-                    <strong style="color:#047857;">✅ All bunks have done all activities at least once!</strong>
-                </div>`;
+            html += `<div style="margin-bottom:10px;padding:10px 12px;background:#d1fae5;border:1px solid #10b981;border-radius:999px;">
+                <strong style="color:#047857;">✅ All bunks have done all activities at least once!</strong>
+            </div>`;
         }
 
         if (atLimit.length > 0) {
-            html += `
-                <div style="padding:10px 12px;background:#fee2e2;border:1px solid #ef4444;border-radius:999px;">
-                    <strong style="color:#b91c1c;">🛑 At Limit (${atLimit.length}):</strong>
-                    <span style="font-size:0.85em;color:#7f1d1d;margin-left:6px;">
-                        ${atLimit.map(a => `${a.bunk}→${a.activity}`).join(', ')}
-                    </span>
-                </div>`;
+            html += `<div style="padding:10px 12px;background:#fee2e2;border:1px solid #ef4444;border-radius:999px;">
+                <strong style="color:#b91c1c;">🛑 At Limit (${atLimit.length}):</strong>
+                <span style="font-size:0.85em;color:#7f1d1d;margin-left:6px;">${atLimit.map(a => `${a.bunk}→${a.activity}`).join(', ')}</span>
+            </div>`;
         }
 
         html += `</div>`;
@@ -1081,15 +868,26 @@
     }
 
     // ========================================================================
-    // EXPORT
+    // DATE FORMATTER
+    // ========================================================================
+
+    function formatDateDisplay(dateKey) {
+        if (!dateKey) return '';
+        try {
+            return new Date(dateKey + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        } catch (e) {
+            return dateKey;
+        }
+    }
+
+    // ========================================================================
+    // EXPORTS
     // ========================================================================
 
     window.initReportTab = initReportTab;
 
-    // Debug exports
     window.debugAnalytics = {
-        buildDetailedUsageMap,
-        generate30MinSlots,
+        buildUsageData,
         getCampTimes
     };
 
