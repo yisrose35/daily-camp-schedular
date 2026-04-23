@@ -1835,6 +1835,28 @@
                     }
                 }
 
+                // Multi-part: enforce daysBetween gap between consecutive parts
+                const mpCfg = (activityProperties[s.name] || s).multiPart || s.multiPart;
+                if (mpCfg && mpCfg.enabled && mpCfg.daysBetween > 0) {
+                    const sortedKeys = Object.keys(allDailyData).sort();
+                    let lastDone = null;
+                    for (let _dk = sortedKeys.length - 1; _dk >= 0; _dk--) {
+                        if (sortedKeys[_dk] >= currentDate) continue;
+                        const _slots = allDailyData[sortedKeys[_dk]]?.scheduleAssignments?.[String(bunk)];
+                        if (Array.isArray(_slots) && _slots.some(e => e && !e.continuation && (e._activity === s.name || e.field === s.name))) {
+                            lastDone = sortedKeys[_dk]; break;
+                        }
+                    }
+                    if (lastDone) {
+                        const msPerDay = 86400000;
+                        const daysDiff = Math.floor((new Date(currentDate) - new Date(lastDone)) / msPerDay);
+                        if (daysDiff < mpCfg.daysBetween) {
+                            log('[multiPart] skip ' + s.name + ' for ' + bunk + ' (only ' + daysDiff + 'd since last, need ' + mpCfg.daysBetween + 'd)');
+                            return;
+                        }
+                    }
+                }
+
                 const specificDuration = getSpecialDuration(s.name, activityProperties, globalSettings);
                 const cfg = getSpecialConfig(s.name, globalSettings);
                 const location = getLocationForSpecial(s.name, activityProperties, globalSettings);

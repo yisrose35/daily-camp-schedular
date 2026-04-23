@@ -162,11 +162,17 @@ function validateSpecialActivity(activity, activityName) {
         // ★ v3.7: Multi-Part Special support (simple N parts)
 
 
-        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
-            enabled: activity.multiPart.enabled === true,
-            totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
-            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
-         } : { enabled: false, totalParts: 2, daysBetween: 3 },
+        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? (function() {
+            var tp = parseInt(activity.multiPart.totalParts, 10); if (isNaN(tp) || tp < 2 || tp > 10) tp = 2;
+            var db = parseInt(activity.multiPart.daysBetween, 10); if (isNaN(db) || db < 1 || db > 14) db = 3;
+            var existingParts = Array.isArray(activity.multiPart.parts) ? activity.multiPart.parts : [];
+            var parts = [];
+            for (var _pi = 0; _pi < tp; _pi++) {
+                var ep = existingParts[_pi] || {};
+                parts.push({ name: typeof ep.name === 'string' ? ep.name : '', location: typeof ep.location === 'string' ? ep.location : '' });
+            }
+            return { enabled: activity.multiPart.enabled === true, totalParts: tp, daysBetween: db, parts: parts };
+        })() : { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
         minFrequency: (activity.minFrequency != null && parseInt(activity.minFrequency, 10) > 0)
             ? parseInt(activity.minFrequency, 10) : null,
         minFrequencyPeriod: activity.minFrequencyPeriod || 'week',
@@ -1616,6 +1622,49 @@ function renderMultiPartSettings(item) {
         daysRow.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">days before the scheduler starts pushing the next part</span>');
         configPanel.appendChild(daysRow);
 
+        // Per-part configuration
+        if (!Array.isArray(mp.parts) || mp.parts.length !== mp.totalParts) {
+            var existParts = Array.isArray(mp.parts) ? mp.parts : [];
+            mp.parts = [];
+            for (var _mpi = 0; _mpi < mp.totalParts; _mpi++) {
+                var _mep = existParts[_mpi] || {};
+                mp.parts.push({ name: _mep.name || '', location: _mep.location || '' });
+            }
+            item.multiPart = mp;
+        }
+        var partsSection = document.createElement('div');
+        partsSection.style.cssText = 'margin-bottom:16px;';
+        partsSection.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:8px; color:#374151;">Part Details <span style="font-weight:400; color:#6B7280;">(optional: custom name &amp; location per part)</span></div>';
+        for (var _pci = 0; _pci < mp.totalParts; _pci++) {
+            (function(pidx) {
+                var part = mp.parts[pidx];
+                var partRow = document.createElement('div');
+                partRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px; padding:8px 10px; border:1px solid #E5E7EB; border-radius:8px; background:#F9FAFB;';
+                var num = document.createElement('span');
+                num.style.cssText = 'width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.72rem; flex-shrink:0; color:#fff; background:#147D91;';
+                num.textContent = pidx + 1;
+                var nameInp = document.createElement('input');
+                nameInp.type = 'text'; nameInp.placeholder = 'Part ' + (pidx+1) + ' name';
+                nameInp.value = part.name || '';
+                nameInp.style.cssText = 'flex:1.5; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem;';
+                nameInp.onchange = function() { mp.parts[pidx].name = nameInp.value.trim(); item.multiPart = mp; saveData(); };
+                var locInp = document.createElement('input');
+                locInp.type = 'text'; locInp.placeholder = 'Location';
+                locInp.value = part.location || '';
+                locInp.style.cssText = 'flex:1; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem;';
+                locInp.onchange = function() { mp.parts[pidx].location = locInp.value.trim(); item.multiPart = mp; saveData(); };
+                partRow.appendChild(num); partRow.appendChild(nameInp); partRow.appendChild(locInp);
+                if (pidx > 0) {
+                    var prereq = document.createElement('span');
+                    prereq.style.cssText = 'font-size:0.68rem; color:#92400e; white-space:nowrap;';
+                    prereq.textContent = 'after ' + pidx;
+                    partRow.appendChild(prereq);
+                }
+                partsSection.appendChild(partRow);
+            })(_pci);
+        }
+        configPanel.appendChild(partsSection);
+
         // Preview
         var preview = document.createElement("div");
         preview.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
@@ -1629,10 +1678,14 @@ function renderMultiPartSettings(item) {
             step.appendChild(badge);
             var label = document.createElement("span");
             label.style.cssText = "font-size:0.85rem; color:#374151;";
-            label.textContent = escapeHtml(item.name) + " " + i + "/" + mp.totalParts;
+            var pvName = (mp.parts && mp.parts[i-1] && mp.parts[i-1].name) ? mp.parts[i-1].name : (escapeHtml(item.name) + " " + i + "/" + mp.totalParts);
+            label.textContent = pvName;
+            if (mp.parts && mp.parts[i-1] && mp.parts[i-1].location) {
+                label.textContent += " • " + mp.parts[i-1].location;
+            }
             step.appendChild(label);
             if (i === 1) { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#6B7280;">No prerequisite</span>'); }
-            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires ' + (i-1) + '/' + mp.totalParts + ' done</span>'); }
+            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires part ' + (i-1) + ' done</span>'); }
             preview.appendChild(step);
             if (i < mp.totalParts) {
                 var arrow = document.createElement("div");
