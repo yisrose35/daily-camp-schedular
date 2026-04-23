@@ -90,9 +90,9 @@
         { bg: '#fff0f6', border: '#be185d', text: '#831843' },
     ];
 
-    const COLOR_AVAIL = '#4ade80';  // green — available
-    const COLOR_TAKEN = '#f87171';  // red   — taken
-    const NOW_COLOR   = '#1d4ed8';  // blue  — current time line
+    const COLOR_AVAIL = '#22c55e';  // green — available
+    const COLOR_TAKEN = '#ef4444';  // red   — taken
+    const NOW_COLOR   = '#2563eb';  // blue  — current time line
 
     // ========================================================================
     // MASTER DATA
@@ -385,14 +385,8 @@
             }
         }
         return `
-            <div style="display:flex;margin-bottom:2px;">
-                <div style="width:160px;min-width:160px;flex-shrink:0;"></div>
-                <div style="flex:1;position:relative;height:18px;">${labels}</div>
-            </div>
-            <div style="display:flex;margin-bottom:4px;">
-                <div style="width:160px;min-width:160px;flex-shrink:0;"></div>
-                <div style="flex:1;position:relative;height:10px;">${ticks}</div>
-            </div>`;
+            <div style="position:relative;height:18px;margin-bottom:2px;">${labels}</div>
+            <div style="position:relative;height:10px;margin-bottom:2px;">${ticks}</div>`;
     }
 
     // Subtle vertical grid lines at 15-min intervals
@@ -438,21 +432,22 @@
 
         const block = (s, e, color, tip) => {
             if (e <= s) return '';
-            const l = ((s - campStart) / totalMin * 100).toFixed(3);
-            const w = Math.max(0.2, ((e - s) / totalMin * 100)).toFixed(3);
+            // 1px inset on each side so adjacent blocks have a hairline gap
+            const l = ((s - campStart) / totalMin * 100).toFixed(4);
+            const w = Math.max(0.2, ((e - s) / totalMin * 100)).toFixed(4);
             return `<div data-tip="${tip.replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}"
-                         style="position:absolute;top:0;bottom:0;left:${l}%;width:${w}%;
-                                background:${color};box-sizing:border-box;z-index:1;cursor:default;"></div>`;
+                         style="position:absolute;top:6px;bottom:6px;left:calc(${l}% + 1px);width:calc(${w}% - 2px);
+                                background:${color};border-radius:3px;
+                                box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);
+                                box-sizing:border-box;z-index:1;cursor:default;"></div>`;
         };
 
         merged.forEach(interval => {
-            // Green: available gap before this busy block
             const dur = interval.startMin - cursor;
             if (dur > 0) {
                 html += block(cursor, interval.startMin, COLOR_AVAIL,
                     `Available\n${minutesToTimeLabel(cursor)} – ${minutesToTimeLabel(interval.startMin)} (${dur} min)`);
             }
-            // Red: taken block
             const bDur = interval.endMin - interval.startMin;
             const label = usages
                 .filter(u => u.startMin < interval.endMin && u.endMin > interval.startMin)
@@ -462,7 +457,6 @@
             cursor = interval.endMin;
         });
 
-        // Green: remaining free time after last busy block
         if (cursor < campEnd) {
             const dur = campEnd - cursor;
             html += block(cursor, campEnd, COLOR_AVAIL,
@@ -473,16 +467,15 @@
     }
 
     function buildRow(leftLabel, trackHtml, isAlternate) {
-        const rowBg   = isAlternate ? '#f8fafc' : '#fff';
-        const trackBg = '#e2e8f0'; // neutral base — covered by colored blocks
+        const rowBg = isAlternate ? '#fafafa' : '#fff';
         return `
-            <div style="display:flex;align-items:stretch;margin-bottom:2px;min-height:40px;">
-                <div style="width:160px;min-width:160px;padding:0 12px;display:flex;align-items:center;
-                            font-size:0.78rem;font-weight:500;color:#1e293b;
-                            border-right:1px solid #e2e8f0;background:${rowBg};flex-shrink:0;overflow:hidden;" title="${leftLabel}">
+            <div style="display:flex;align-items:stretch;border-bottom:1px solid #f1f5f9;min-height:46px;">
+                <div style="width:168px;min-width:168px;padding:0 14px;display:flex;align-items:center;
+                            font-size:0.8rem;font-weight:500;color:#374151;letter-spacing:0.01em;
+                            border-right:1px solid #e9ecef;background:${rowBg};flex-shrink:0;overflow:hidden;" title="${leftLabel}">
                     <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${leftLabel}</span>
                 </div>
-                <div style="flex:1;position:relative;background:${trackBg};min-height:40px;overflow:hidden;">
+                <div style="flex:1;position:relative;background:#f8fafc;overflow:hidden;">
                     ${trackHtml}
                 </div>
             </div>`;
@@ -524,9 +517,9 @@
     }
 
     function buildLegendItem(color, label) {
-        return `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;">
-                    <span style="width:14px;height:14px;background:${color};border-radius:2px;flex-shrink:0;"></span>
-                    <span style="font-size:0.73rem;color:#64748b;font-weight:500;">${label}</span>
+        return `<span style="display:inline-flex;align-items:center;gap:7px;">
+                    <span style="width:14px;height:14px;background:${color};border-radius:3px;flex-shrink:0;box-shadow:inset 0 1px 0 rgba(255,255,255,0.2);"></span>
+                    <span style="font-size:0.78rem;font-weight:500;color:#374151;">${label}</span>
                 </span>`;
     }
 
@@ -569,32 +562,45 @@
             }
         });
 
-        let html = buildTimeAxis(campStart, campEnd, totalMin);
+        const nowLegend = showNow
+            ? `<span style="display:inline-flex;align-items:center;gap:7px;">
+                   <span style="width:2px;height:15px;background:${NOW_COLOR};border-radius:1px;flex-shrink:0;"></span>
+                   <span style="font-size:0.78rem;font-weight:500;color:#374151;">Current time</span>
+               </span>`
+            : '';
+        const filterBadge = activityFilter
+            ? `<span style="margin-left:auto;padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
+            : '<span style="margin-left:auto;font-size:0.73rem;color:#94a3b8;">Hover a block for details</span>';
 
-        if (activityFilter) {
-            html += `<div style="margin-bottom:8px;padding:3px 10px;display:inline-block;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</div>`;
-        }
+        const keyBar = `
+            <div style="display:flex;align-items:center;gap:20px;padding:11px 18px;border-bottom:1px solid #e9ecef;background:#fff;">
+                ${buildLegendItem(COLOR_AVAIL, 'Available')}
+                ${buildLegendItem(COLOR_TAKEN, 'Taken')}
+                ${nowLegend}
+                ${filterBadge}
+            </div>`;
 
+        let rows = '';
         resources.forEach((r, i) => {
             const usages = r.type === 'field' ? (byField[r.name] || []) : (bySpecial[r.name] || []);
-            // In field view, tooltip label shows: bunk + activity
-            let track = buildTrack(usages, campStart, campEnd, totalMin,
-                u => `${u.bunk}  ·  ${u.activity}`);
+            let track = buildTrack(usages, campStart, campEnd, totalMin, u => `${u.bunk}  ·  ${u.activity}`);
             if (showNow) track += buildNowLine(campStart, totalMin);
-            html += buildRow(r.name, track, i % 2 === 1);
+            rows += buildRow(r.name, track, i % 2 === 1);
         });
 
-        const nowLegend = showNow
-            ? `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;"><span style="width:2px;height:14px;background:${NOW_COLOR};flex-shrink:0;border-radius:1px;"></span><span style="font-size:0.73rem;color:#64748b;font-weight:500;">Now</span></span>`
-            : '';
+        const axisHtml = `<div style="display:flex;padding-top:14px;padding-bottom:6px;">
+            <div style="width:168px;min-width:168px;flex-shrink:0;"></div>
+            <div style="flex:1;position:relative;">
+                ${buildTimeAxis(campStart, campEnd, totalMin)}
+            </div>
+        </div>`;
 
         area.innerHTML = `
-            <div style="border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;background:#fff;">
-                <div style="padding:14px 18px 12px;">${html}</div>
-                <div style="padding:8px 18px 12px;border-top:1px solid #f1f5f9;display:flex;flex-wrap:wrap;align-items:center;">
-                    ${buildLegendItem(COLOR_AVAIL, 'Available')}
-                    ${buildLegendItem(COLOR_TAKEN, 'Taken')}
-                    ${nowLegend}
+            <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06),0 4px 16px rgba(15,23,42,0.04);">
+                ${keyBar}
+                <div style="padding:0 18px 16px;">
+                    ${axisHtml}
+                    ${rows}
                 </div>
             </div>`;
         bindTooltip(area);
@@ -617,14 +623,9 @@
             ? (divisionsDat[divFilter] ? { [divFilter]: divisionsDat[divFilter] } : {})
             : divisionsDat;
 
-        let html = buildTimeAxis(campStart, campEnd, totalMin);
-
-        if (activityFilter) {
-            html += `<div style="margin-bottom:8px;padding:3px 10px;display:inline-block;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</div>`;
-        }
-
         let rowCount = 0;
         let anyBunk = false;
+        let rows = '';
 
         Object.entries(divs).forEach(([divName, divData]) => {
             if (!divData) return;
@@ -632,14 +633,16 @@
             if (!bunks.length) return;
             anyBunk = true;
 
-            html += `<div style="padding:6px 0 3px;font-size:0.68rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid #e2e8f0;margin-bottom:2px;">${divName}</div>`;
+            rows += `<div style="display:flex;border-bottom:1px solid #f1f5f9;">
+                <div style="width:168px;min-width:168px;padding:5px 14px;font-size:0.67rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-right:1px solid #e9ecef;background:#fafafa;display:flex;align-items:center;">${divName}</div>
+                <div style="flex:1;background:#fafafa;"></div>
+            </div>`;
 
             bunks.forEach(bunk => {
                 const usages = bunkMap[bunk] || [];
-                // In bunk view, tooltip label shows the activity name
                 let track = buildTrack(usages, campStart, campEnd, totalMin, u => u.activity);
                 if (showNow) track += buildNowLine(campStart, totalMin);
-                html += buildRow(bunk, track, rowCount % 2 === 1);
+                rows += buildRow(bunk, track, rowCount % 2 === 1);
                 rowCount++;
             });
         });
@@ -650,16 +653,36 @@
         }
 
         const nowLegend = showNow
-            ? `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;"><span style="width:2px;height:14px;background:${NOW_COLOR};flex-shrink:0;border-radius:1px;"></span><span style="font-size:0.73rem;color:#64748b;font-weight:500;">Now</span></span>`
+            ? `<span style="display:inline-flex;align-items:center;gap:7px;">
+                   <span style="width:2px;height:15px;background:${NOW_COLOR};border-radius:1px;flex-shrink:0;"></span>
+                   <span style="font-size:0.78rem;font-weight:500;color:#374151;">Current time</span>
+               </span>`
             : '';
+        const filterBadge = activityFilter
+            ? `<span style="margin-left:auto;padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
+            : '<span style="margin-left:auto;font-size:0.73rem;color:#94a3b8;">Hover a block for details</span>';
+
+        const keyBar = `
+            <div style="display:flex;align-items:center;gap:20px;padding:11px 18px;border-bottom:1px solid #e9ecef;background:#fff;">
+                ${buildLegendItem(COLOR_AVAIL, 'Available')}
+                ${buildLegendItem(COLOR_TAKEN, 'Taken')}
+                ${nowLegend}
+                ${filterBadge}
+            </div>`;
+
+        const axisHtml = `<div style="display:flex;padding-top:14px;padding-bottom:6px;">
+            <div style="width:168px;min-width:168px;flex-shrink:0;"></div>
+            <div style="flex:1;position:relative;">
+                ${buildTimeAxis(campStart, campEnd, totalMin)}
+            </div>
+        </div>`;
 
         area.innerHTML = `
-            <div style="border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;background:#fff;">
-                <div style="padding:14px 18px 12px;">${html}</div>
-                <div style="padding:8px 18px 12px;border-top:1px solid #f1f5f9;display:flex;flex-wrap:wrap;align-items:center;">
-                    ${buildLegendItem(COLOR_AVAIL, 'Available')}
-                    ${buildLegendItem(COLOR_TAKEN, 'Taken')}
-                    ${nowLegend}
+            <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.06),0 4px 16px rgba(15,23,42,0.04);">
+                ${keyBar}
+                <div style="padding:0 18px 16px;">
+                    ${axisHtml}
+                    ${rows}
                 </div>
             </div>`;
         bindTooltip(area);
