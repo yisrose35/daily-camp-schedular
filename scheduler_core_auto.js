@@ -233,22 +233,39 @@
         return 2;
     }
 
+    // ═══ CROSS-DIVISION helper ══════════════════════════════════════════
+    // A single-entry check: can newGrade join a slot containing existingGrades
+    // under cross_division pair rules?  Every existing grade must be in an
+    // allowed pair with newGrade (pairs are sorted "A|B" keys).
+    function isCrossDivAllowed(newGrade, existingGrades, allowedPairs) {
+        const pairs = allowedPairs || {};
+        if (!existingGrades || existingGrades.length === 0) return true;
+        for (let i = 0; i < existingGrades.length; i++) {
+            const eg = existingGrades[i];
+            const key = [newGrade, eg].sort().join('|');
+            if (pairs[key] !== true) return false;
+        }
+        return true;
+    }
+
     function getSpecialSharingInfo(specialName, activityProperties, gs) {
-        let shareType = 'not_sharable', cap = 1, allowedDivs = [];
+        let shareType = 'not_sharable', cap = 1, allowedDivs = [], allowedPairs = {};
         const props = activityProperties && activityProperties[specialName];
         if (props && props.sharableWith && props.sharableWith.type) {
             shareType = props.sharableWith.type;
             cap = parseInt(props.sharableWith.capacity) || (shareType === 'not_sharable' ? 1 : 2);
             allowedDivs = props.sharableWith.divisions || [];
+            allowedPairs = props.sharableWith.allowedPairs || {};
         } else {
             const cfg = getSpecialConfig(specialName, gs);
             if (cfg && cfg.sharableWith && cfg.sharableWith.type) {
                 shareType = cfg.sharableWith.type;
                 cap = parseInt(cfg.sharableWith.capacity) || (shareType === 'not_sharable' ? 1 : 2);
                 allowedDivs = cfg.sharableWith.divisions || [];
+                allowedPairs = cfg.sharableWith.allowedPairs || {};
             }
         }
-        return { shareType, capacity: cap, allowedDivisions: allowedDivs };
+        return { shareType, capacity: cap, allowedDivisions: allowedDivs, allowedPairs };
     }
 
     function isScarce(specialName, dayName, gs) {
@@ -712,7 +729,7 @@
             }
         }
 
-        function rtCanUse(type, name, grade, startMin, endMin, shareType, capacity, allowedDivisions) {
+        function rtCanUse(type, name, grade, startMin, endMin, shareType, capacity, allowedDivisions, allowedPairs) {
             const key = _rtKey(type, name);
             const buckets = _resourceBuckets[key];
             if (!buckets) return true;
@@ -724,16 +741,23 @@
                 // Capacity check — universal
                 if (b.count >= capacity) return false;
 
-                // Cross-division enforcement
-                if (b.grades.size > 0 && !b.grades.has(grade)) {
-                    if (shareType === 'not_sharable') return false;
-                    if (shareType === 'same_division') return false;
-                    if (shareType === 'custom') {
-                        const existing = [...b.grades];
-                        const allOk = existing.every(g => allowedDivisions.includes(g)) && allowedDivisions.includes(grade);
-                        if (!allOk) return false;
+                // Sharing compatibility
+                if (b.grades.size > 0) {
+                    if (shareType === 'cross_division') {
+                        // Pair-wise check for every grade present (including same-grade)
+                        const gradesArr = [...b.grades];
+                        if (!isCrossDivAllowed(grade, gradesArr, allowedPairs)) return false;
+                    } else if (!b.grades.has(grade)) {
+                        // Cross-grade and not in cross_division mode
+                        if (shareType === 'not_sharable') return false;
+                        if (shareType === 'same_division') return false;
+                        if (shareType === 'custom') {
+                            const existing = [...b.grades];
+                            const allOk = existing.every(g => allowedDivisions.includes(g)) && allowedDivisions.includes(grade);
+                            if (!allOk) return false;
+                        }
+                       // shareType === 'all' → no cross-div restriction, only capacity
                     }
-                   // shareType === 'all' → no cross-div restriction, only capacity
                 }
             }
 
@@ -771,7 +795,7 @@
         function canUseSpecialAtTime(specialName, grade, startMin, endMin) {
             const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
             return rtCanUse('special', specialName, grade, startMin, endMin,
-                info.shareType, info.capacity, info.allowedDivisions);
+                info.shareType, info.capacity, info.allowedDivisions, info.allowedPairs);
         }
 
         function registerPoolUsage(grade, startMin, endMin) {
@@ -1023,7 +1047,8 @@
 
                fieldLedger[field.name] = {
                     name: field.name, capacity, shareType,
-                    allowedDivisions: props.sharableWith?.divisions || [],
+                    allowedDivisions: props.sharableWith?.divisions || field.sharableWith?.divisions || [],
+                    allowedPairs: props.sharableWith?.allowedPairs || field.sharableWith?.allowedPairs || {},
                     isIndoor: field.isIndoor || false,
                     timeRules, unavailableRules,
                     disabledSports: dailyDisabledSports[field.name] || [],
@@ -1041,6 +1066,8 @@
                     fieldLedger[location] = {
                         name: location, capacity: cap,
                         shareType: cfg?.sharableWith?.type || 'not_sharable',
+                        allowedDivisions: cfg?.sharableWith?.divisions || [],
+                        allowedPairs: cfg?.sharableWith?.allowedPairs || {},
                         isIndoor: true,
                         timeRules: [{ startMin: 540, endMin: 990, divisions: null }],
                         activities: [special.name], claims: [],
@@ -1091,6 +1118,10 @@
                 } else {
                     if (overlapping.some(c => c.grade !== grade)) return false;
                 }
+            }
+            if (ledger.shareType === 'cross_division') {
+                // Every existing claim grade must be pair-compatible with new grade
+                if (!isCrossDivAllowed(grade, overlapping.map(c => c.grade), ledger.allowedPairs)) return false;
             }
 
             // ★ EXACT TIME MATCH (now OPT-IN): Some camps require that bunks
@@ -1967,6 +1998,14 @@
             function canAssignSpecialToGrade(specialName, grade, startMin, endMin) {
                 var info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
                 var existing = globalSpecialUsage[specialName] || [];
+                // cross_division: pair-check ALL overlapping entries (incl same-grade)
+                if (info.shareType === 'cross_division') {
+                    var xdOverlap = existing.filter(function(x) {
+                        return x.startMin < endMin && x.endMin > startMin;
+                    });
+                    if (!isCrossDivAllowed(grade, xdOverlap.map(function(c) { return c.grade; }), info.allowedPairs)) return false;
+                    if (xdOverlap.length >= info.capacity) return false;
+                } else {
                 for (var i = 0; i < existing.length; i++) {
                     var e = existing[i];
                     if (e.endMin <= startMin || e.startMin >= endMin) continue;
@@ -1989,6 +2028,7 @@
                         }).length;
                         if (totalCount >= info.capacity) return false;
                     }
+                }
                 }
                 return true;
             }
@@ -2468,9 +2508,13 @@
             function canDraftSpecialForGrade(specialName, grade) {
                 const existing = draftSpecialGrades[specialName];
                 if (!existing || existing.size === 0) return true;
-                if (existing.has(grade)) return true; // same grade = OK
-                // Check sharing rules
                 const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
+                // cross_division: must pair-check even same-grade (no automatic pass)
+                if (info.shareType === 'cross_division') {
+                    const existingGrades = [...existing];
+                    return isCrossDivAllowed(grade, existingGrades, info.allowedPairs);
+                }
+                if (existing.has(grade)) return true; // same grade = OK (other modes)
                 if (info.shareType === 'not_sharable') return false;
                 // ★ FIX: same_division means "only same-grade bunks can share AT THE SAME TIME"
                 // It does NOT mean the special is exclusive to one grade all day.
@@ -2588,6 +2632,12 @@
             function canAssignSpecialToGrade(specialName, grade, startMin, endMin) {
                 const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
                 const existing = globalSpecialUsage[specialName] || [];
+                if (info.shareType === 'cross_division') {
+                    const xdOverlap = existing.filter(x => x.startMin < endMin && x.endMin > startMin);
+                    if (!isCrossDivAllowed(grade, xdOverlap.map(c => c.grade), info.allowedPairs)) return false;
+                    if (xdOverlap.length >= info.capacity) return false;
+                    return true;
+                }
                 for (const e of existing) {
                     if (e.endMin <= startMin || e.startMin >= endMin) continue;
                     if (e.grade === grade) {
@@ -2976,6 +3026,9 @@
                             const notAllowed = overlapping.length > 0 && allowed.length > 0 && !allowed.includes(grade);
                             if (blockedCross || notAllowed) remaining = 0;
                             else remaining = Math.max(0, ledger.capacity - overlapping.length);
+                        } else if (ledger.shareType === 'cross_division') {
+                            if (!isCrossDivAllowed(grade, overlapping.map(c => c.grade), ledger.allowedPairs)) remaining = 0;
+                            else remaining = Math.max(0, ledger.capacity - overlapping.length);
                         } else {
                             remaining = Math.max(0, ledger.capacity - overlapping.length);
                         }
@@ -3044,6 +3097,10 @@
                             const blockedCross = overlap.some(c => c.grade !== grade && (allowed.length === 0 || !allowed.includes(c.grade)));
                             const notAllowed = overlap.length > 0 && allowed.length > 0 && !allowed.includes(grade);
                             remaining = (blockedCross || notAllowed) ? 0 : Math.max(0, ledger.capacity - overlap.length);
+                        } else if (ledger.shareType === 'cross_division') {
+                            remaining = isCrossDivAllowed(grade, overlap.map(c => c.grade), ledger.allowedPairs)
+                                ? Math.max(0, ledger.capacity - overlap.length)
+                                : 0;
                         } else {
                             remaining = Math.max(0, ledger.capacity - overlap.length);
                         }
@@ -5077,6 +5134,9 @@
                         var crossGrade = claims.some(function(c) { return c.grade !== cGrade; });
                         if (ledger.shareType === 'not_sharable') { if (claims.length === 0) supply += 1; }
                         else if (ledger.shareType === 'same_division') { if (!crossGrade) supply += Math.max(0, ledger.capacity - claims.filter(function(c) { return c.grade === cGrade; }).length); }
+                        else if (ledger.shareType === 'cross_division') {
+                            if (isCrossDivAllowed(cGrade, claims.map(function(c) { return c.grade; }), ledger.allowedPairs)) supply += Math.max(0, ledger.capacity - claims.length);
+                        }
                         else { supply += Math.max(0, ledger.capacity - claims.length); }
                     });
                     contentionMap[ct + ':' + cGrade] = { supply: supply, demand: 0, bunks: [] };
@@ -7772,6 +7832,8 @@
                             if (claims.length === 0) supply += 1;
                         } else if (ledger.shareType === 'same_division') {
                             if (!crossGrade) supply += Math.max(0, ledger.capacity - claims.filter(c => c.grade === grade).length);
+                        } else if (ledger.shareType === 'cross_division') {
+                            if (isCrossDivAllowed(grade, claims.map(c => c.grade), ledger.allowedPairs)) supply += Math.max(0, ledger.capacity - claims.length);
                         } else {
                             supply += Math.max(0, ledger.capacity - claims.length);
                         }
@@ -8889,6 +8951,9 @@
                                         } else {
                                             if (overlapping.some(e => e.grade !== grade)) blocked = true;
                                         }
+                                        if (!blocked && overlapping.length >= cap) blocked = true;
+                                    } else if (st === 'cross_division') {
+                                        if (!isCrossDivAllowed(grade, overlapping.map(e => e.grade), ledger.allowedPairs)) blocked = true;
                                         if (!blocked && overlapping.length >= cap) blocked = true;
                                     } else {
                                         if (overlapping.length >= cap) blocked = true;
@@ -10431,13 +10496,14 @@
                 const sw = f.sharableWith || {};
                 let type = sw.type || 'not_sharable';
                 const divs = Array.isArray(sw.divisions) ? sw.divisions : [];
-                // Normalize orphaned types
+                // Normalize orphaned types (cross_division is preserved)
                 if (type === 'custom' && divs.length === 0) type = 'same_division';
                 if (type === 'all') type = 'same_division';
                 _csweepFieldMap.set(f.name.toLowerCase().trim(), {
                     type,
                     capacity: parseInt(sw.capacity) || (type === 'not_sharable' ? 1 : 2),
-                    divisions: divs
+                    divisions: divs,
+                    allowedPairs: sw.allowedPairs || {}
                 });
             });
 
@@ -10514,6 +10580,9 @@
                         } else {
                             if (overlapping.some(o => o.grade !== u.grade)) violation = true;
                         }
+                    }
+                    if (!violation && shareType === 'cross_division') {
+                        if (!isCrossDivAllowed(u.grade, overlapping.map(o => o.grade), fieldSharing.allowedPairs)) violation = true;
                     }
                     if (violation) {
                         console.log('[4.5-VIOLATION] ' + fieldNorm + ': bunk ' + u.bunk + ' (' + u.grade + ') @ ' + u.startMin + '-' + u.endMin +
@@ -10634,6 +10703,7 @@
                 var _perfFields = _perfGS.app1?.fields || _perfGS.fields || [];
                 var fieldCap = 1;
                 var fieldShareType = 'not_sharable';
+                var fieldAllowedPairs = {};
                 for (var fi = 0; fi < _perfFields.length; fi++) {
                     var pf = _perfFields[fi];
                     if (!pf || !pf.name) continue;
@@ -10641,6 +10711,7 @@
                         var sw = pf.sharableWith || {};
                         fieldShareType = sw.type || 'not_sharable';
                         fieldCap = parseInt(sw.capacity) || (fieldShareType === 'not_sharable' ? 1 : 2);
+                        fieldAllowedPairs = sw.allowedPairs || {};
                         break;
                     }
                 }
@@ -10667,6 +10738,10 @@
                             // Cross-grade check: not_sharable and same_division block cross-grade sharing
                             if (fieldShareType === 'not_sharable') return false;
                             if (fieldShareType === 'same_division' && og !== ownerGrade) return false;
+                            if (fieldShareType === 'cross_division') {
+                                var pk = [ownerGrade, og].sort().join('|');
+                                if ((fieldAllowedPairs || {})[pk] !== true) return false;
+                            }
                             conflictCount++;
                             if (conflictCount + 1 > fieldCap) return false;
                         }
