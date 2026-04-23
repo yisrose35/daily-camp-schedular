@@ -1863,6 +1863,9 @@
                 const scarce = isScarce(s.name, dayName, globalSettings);
                 const timeWindow = getSpecialTimeWindow(cfg);
                 const prepDuration = cfg?.prepDuration || 0;
+                const prepCfgEntry = cfg?.prepConfig || null;
+                const prepAttached = !prepCfgEntry || prepCfgEntry.timing !== 'flexible';
+                const effectivePrepDur = prepAttached ? prepDuration : 0;
 
                 specialPriorityList.push({
                     name: s.name, type: 'special', rotationScore: score,
@@ -1874,9 +1877,10 @@
                     capacity: getSpecialCapacity(s.name, activityProperties, globalSettings),
                     location, isScarce: scarce,
                     isIndoor: !isSpecialOnField(s.name, activityProperties, globalSettings),
-                    prepDuration,
-                    totalDuration: (specificDuration || specialConstraints.dIdeal) + prepDuration,
-                    timeWindow, _linkedPair: prepDuration > 0,
+                    prepDuration: effectivePrepDur,
+                    totalDuration: (specificDuration || specialConstraints.dIdeal) + effectivePrepDur,
+                    timeWindow, _linkedPair: prepAttached && prepDuration > 0,
+                    _flexPrep: (!prepAttached && prepDuration > 0) ? { duration: prepDuration, location: prepCfgEntry.location || null, sync: prepCfgEntry.sync || 'staggered' } : null,
                     _layer: specialLayer
                 });
             });
@@ -3667,6 +3671,7 @@
                     _assignedSpecial: opts._assignedSpecial || null,
                     _specialLocation: opts._specialLocation || null,
                     _specialDuration: opts._specialDuration || null,
+                    _flexPrep: opts._flexPrep || null,
                     _gradeWide: opts._gradeWide || false, _noBacktrack: opts._noBacktrack || false,
                     _sportFallbacks: opts._sportFallbacks || null,
                     _customActivity: opts._customActivity || null,
@@ -9654,6 +9659,90 @@
                 });
             });
         });
+
+
+        // Flexible Prep Injection: place prep slots before the activity for bunks
+        // with prepConfig.timing==='flexible'. Staggered=per bunk, Synchronized=whole grade.
+        (function() {
+            var flexPrepMap = {};
+            todaysSpecials.forEach(function(s) {
+                var _c2 = getSpecialConfig(s.name, globalSettings);
+                var _p2 = _c2 && _c2.prepConfig;
+                if (_p2 && _p2.timing === 'flexible' && (_c2.prepDuration || 0) > 0) {
+                    flexPrepMap[s.name] = { duration: _c2.prepDuration, location: _p2.location || null, sync: _p2.sync || 'staggered' };
+                }
+            });
+            if (!Object.keys(flexPrepMap).length) return;
+            var syncedDone = {};
+            allGrades.forEach(function(grade) {
+                var pbs = window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots;
+                if (!pbs) return;
+                var gradeBunks = getBunksForGrade(grade, divisions);
+                // Synchronized: find common slot for all grade bunks
+                Object.keys(flexPrepMap).forEach(function(actName) {
+                    var pi = flexPrepMap[actName];
+                    if (pi.sync !== 'synchronized') return;
+                    var key = grade + '||' + actName;
+                    if (syncedDone[key]) return;
+                    syncedDone[key] = true;
+                    var bunkStarts = {};
+                    gradeBunks.forEach(function(bunk) {
+                        var asgn = window.scheduleAssignments[String(bunk)];
+                        var arr = pbs[String(bunk)] || [];
+                        if (!asgn) return;
+                        for (var si = 0; si < asgn.length; si++) {
+                            if (asgn[si] && asgn[si]._activity === actName) { bunkStarts[bunk] = arr[si] ? arr[si].startMin : Infinity; break; }
+                        }
+                    });
+                    var affected = Object.keys(bunkStarts);
+                    if (!affected.length) return;
+                    var deadline = Math.min.apply(null, affected.map(function(b) { return bunkStarts[b]; }));
+                    var refArr = pbs[String(affected[0])] || [];
+                    var bestSi = -1;
+                    for (var si2 = refArr.length - 1; si2 >= 0; si2--) {
+                        var slot2 = refArr[si2];
+                        if (!slot2 || slot2.endMin > deadline) continue;
+                        if ((slot2.endMin - slot2.startMin) < pi.duration) continue;
+                        if (affected.every(function(b) { return !window.scheduleAssignments[String(b)][si2]; })) { bestSi = si2; break; }
+                    }
+                    if (bestSi < 0) { log('[flexPrep] no common slot for sync ' + actName + ' grade ' + grade); return; }
+                    affected.forEach(function(bunk) {
+                        var sl3 = pbs[String(bunk)] && pbs[String(bunk)][bestSi];
+                        if (!sl3) return;
+                        window.scheduleAssignments[String(bunk)][bestSi] = { field: pi.location || null, sport: null, _activity: actName + ' (Prep)', _isPrep: true, _prepFor: actName, _fixed: true, _bunkOverride: true, _activityLocked: true, _autoSpecial: true, _autoMode: true, continuation: false, _startMin: sl3.startMin, _endMin: sl3.endMin };
+                        if (pi.location && window.AutoFieldLocks) window.AutoFieldLocks.lockField(pi.location, sl3.startMin, sl3.endMin, grade, actName + ' Prep', 'auto_prep');
+                    });
+                    log('[flexPrep] synced ' + actName + ' prep at slot ' + bestSi + ' for ' + affected.length + ' bunks in ' + grade);
+                });
+                // Staggered: per-bunk, closest free slot before the activity
+                gradeBunks.forEach(function(bunk) {
+                    var asgn = window.scheduleAssignments[String(bunk)];
+                    var arr = pbs[String(bunk)] || [];
+                    if (!asgn) return;
+                    Object.keys(flexPrepMap).forEach(function(actName) {
+                        var pi = flexPrepMap[actName];
+                        if (pi.sync !== 'staggered') return;
+                        var actIdx = -1, actStart = Infinity;
+                        for (var si4 = 0; si4 < asgn.length; si4++) {
+                            if (asgn[si4] && asgn[si4]._activity === actName) { actIdx = si4; actStart = arr[si4] ? arr[si4].startMin : Infinity; break; }
+                        }
+                        if (actIdx < 0) return;
+                        var bestSi2 = -1;
+                        for (var si5 = actIdx - 1; si5 >= 0; si5--) {
+                            var sl4 = arr[si5];
+                            if (!sl4 || sl4.endMin > actStart) continue;
+                            if ((sl4.endMin - sl4.startMin) < pi.duration) continue;
+                            if (!asgn[si5]) { bestSi2 = si5; break; }
+                        }
+                        if (bestSi2 < 0) { log('[flexPrep] no slot for staggered ' + actName + ' prep bunk ' + bunk); return; }
+                        var sl5 = arr[bestSi2];
+                        asgn[bestSi2] = { field: pi.location || null, sport: null, _activity: actName + ' (Prep)', _isPrep: true, _prepFor: actName, _fixed: true, _bunkOverride: true, _activityLocked: true, _autoSpecial: true, _autoMode: true, continuation: false, _startMin: sl5.startMin, _endMin: sl5.endMin };
+                        if (pi.location && window.AutoFieldLocks) window.AutoFieldLocks.lockField(pi.location, sl5.startMin, sl5.endMin, grade, actName + ' Prep', 'auto_prep');
+                        log('[flexPrep] staggered ' + actName + ' prep bunk ' + bunk + ' slot ' + bestSi2);
+                    });
+                });
+            });
+        })();
 
         // Write rotation event blocks (camp-wide pass-through activities)
         let rotationEventWriteCount = 0;

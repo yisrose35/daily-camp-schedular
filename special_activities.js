@@ -154,6 +154,7 @@ function validateSpecialActivity(activity, activityName) {
         frequencyDays: parseInt(activity.frequencyDays, 10) || parseInt(activity.frequencyWeeks, 10) || 0,
         rainyDayExclusive: activity.rainyDayExclusive === true,
         rainyDayOnly: activity.rainyDayOnly === true, prepDuration: parseInt(activity.prepDuration, 10) || 0,
+        prepConfig: (function() { var pc = activity.prepConfig && typeof activity.prepConfig === 'object' ? activity.prepConfig : {}; return { timing: ['attached','flexible'].includes(pc.timing) ? pc.timing : 'attached', location: typeof pc.location === 'string' ? pc.location : '', sync: ['staggered','synchronized'].includes(pc.sync) ? pc.sync : 'staggered' }; })(),
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
@@ -214,7 +215,7 @@ function validateSpecialActivity(activity, activityName) {
 function createDefaultActivity(name) {
     return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
-        maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0,
+        maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
@@ -678,7 +679,11 @@ function renderDurationSettings(item) {
     return container;
 }
     function summaryPrepDuration(item) {
-    return (item.prepDuration || 0) > 0 ? item.prepDuration + 'min prep' : 'None';
+    if (!(item.prepDuration > 0)) return 'None';
+    var timing = (item.prepConfig && item.prepConfig.timing === 'flexible') ? 'spread out' : 'back to back';
+    var sync = (item.prepConfig && item.prepConfig.sync === 'synchronized') ? ', synced' : '';
+    var loc = (item.prepConfig && item.prepConfig.location) ? ', @' + item.prepConfig.location : '';
+    return item.prepDuration + 'min (' + timing + sync + loc + ')';
 }
 function summaryDays(item) {
     const days = item.availableDays;
@@ -1535,13 +1540,147 @@ function renderWeatherSettings(item) {
     return container;
 }
 function renderPrepDurationSettings(item) {
-    const container = document.createElement("div");
-    const hp = (item.prepDuration||0) > 0;
-    container.innerHTML = '<div style="margin-bottom:16px;"><p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30min practice + 60min performance.</p><div style="background:' + (hp?'#faf5ff':'#f9fafb') + '; border:1px solid ' + (hp?'#d8b4fe':'#e5e7eb') + '; border-radius:10px; padding:14px;"><div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp?'12px':'0') + ';"><div style="flex:1;"><div style="font-weight:600; color:' + (hp?'#6b21a8':'#374151') + ';">' + (hp?'Has Prep Phase':'Single Phase') + '</div><div style="font-size:0.8rem; color:' + (hp?'#7c3aed':'#6b7280') + ';">' + (hp?item.prepDuration+' min prep + main':'No prep needed') + '</div></div><label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp?'checked':'') + '><span class="slider"></span></label></div><div id="prep-duration-config" style="display:' + (hp?'block':'none') + ';"><div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;"><label style="font-size:0.85rem;">Prep time:</label><input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration||30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;"><span style="font-size:0.85rem; color:#64748b;">minutes</span></div></div></div></div>';
-    const pt = container.querySelector("#prep-duration-toggle");
-    if (pt) { pt.addEventListener("change", function() { const c = container.querySelector("#prep-duration-config"); if(this.checked){c.style.display="block";item.prepDuration=parseInt(container.querySelector("#prep-duration-input").value,10)||30;}else{c.style.display="none";item.prepDuration=0;} saveData(); const s=container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s)s.textContent=(item.prepDuration>0)?item.prepDuration+'min prep':'None'; }); }
-    const di = container.querySelector("#prep-duration-input");
-    if (di) { di.addEventListener("change", function() { const v=parseInt(this.value,10); if(!isNaN(v)&&v>=5&&v<=120){item.prepDuration=v;saveData();const s=container.closest('.detail-section')?.querySelector('.detail-section-summary');if(s)s.textContent=v+'min prep';} }); }
+    if (!item.prepConfig) item.prepConfig = { timing: 'attached', location: '', sync: 'staggered' };
+    var container = document.createElement('div');
+    container.style.cssText = 'padding:0;';
+
+    var updateSum = function() {
+        var s = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryPrepDuration(item);
+    };
+
+    var renderContent = function() {
+        container.innerHTML = '';
+        var hp = (item.prepDuration || 0) > 0;
+
+        // Toggle row
+        var toggleWrap = document.createElement('div');
+        toggleWrap.style.cssText = 'display:flex; align-items:center; gap:12px; padding:14px; background:' + (hp ? '#faf5ff' : '#f9fafb') + '; border:1px solid ' + (hp ? '#d8b4fe' : '#e5e7eb') + '; border-radius:10px; margin-bottom:' + (hp ? '12px' : '0') + ';';
+        var togInfo = document.createElement('div'); togInfo.style.cssText = 'flex:1;';
+        var togTitle = document.createElement('div'); togTitle.style.cssText = 'font-weight:600; color:' + (hp ? '#6b21a8' : '#374151') + ';'; togTitle.textContent = hp ? 'Has Prep Phase' : 'Single Phase';
+        var togSub = document.createElement('div'); togSub.style.cssText = 'font-size:0.8rem; color:' + (hp ? '#7c3aed' : '#6b7280') + ';'; togSub.textContent = hp ? (item.prepDuration + ' min prep + main') : 'No prep needed';
+        togInfo.appendChild(togTitle); togInfo.appendChild(togSub);
+        var tog = document.createElement('label'); tog.className = 'switch';
+        var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = hp;
+        cb.onchange = function() {
+            item.prepDuration = this.checked ? 30 : 0;
+            saveData(); renderContent(); updateSum();
+        };
+        var sl = document.createElement('span'); sl.className = 'slider';
+        tog.appendChild(cb); tog.appendChild(sl);
+        toggleWrap.appendChild(togInfo); toggleWrap.appendChild(tog);
+        container.appendChild(toggleWrap);
+
+        if (!hp) return;
+
+        var config = document.createElement('div');
+        config.style.cssText = 'display:flex; flex-direction:column; gap:12px;';
+
+        // Duration
+        var durRow = document.createElement('div');
+        durRow.style.cssText = 'display:flex; align-items:center; gap:10px; padding:10px; background:#fff; border-radius:8px; border:1px solid #e9d5ff;';
+        var durLbl = document.createElement('label'); durLbl.style.cssText = 'font-size:0.85rem;'; durLbl.textContent = 'Prep time:';
+        var durIn = document.createElement('input'); durIn.type = 'number'; durIn.min = '5'; durIn.max = '120'; durIn.step = '5'; durIn.value = item.prepDuration || 30;
+        durIn.style.cssText = 'width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;';
+        durIn.onchange = function() { var v = parseInt(this.value, 10); if (!isNaN(v) && v >= 5) { item.prepDuration = v; saveData(); updateSum(); } };
+        var durNote = document.createElement('span'); durNote.style.cssText = 'font-size:0.85rem; color:#64748b;'; durNote.textContent = 'minutes';
+        durRow.appendChild(durLbl); durRow.appendChild(durIn); durRow.appendChild(durNote);
+        config.appendChild(durRow);
+
+        // Timing mode
+        var timingCard = document.createElement('div');
+        timingCard.style.cssText = 'background:#fff; border-radius:8px; border:1px solid #e9d5ff; overflow:hidden;';
+        var timingHeader = document.createElement('div');
+        timingHeader.style.cssText = 'padding:8px 12px; font-size:0.82rem; font-weight:600; color:#6b21a8; background:#faf5ff; border-bottom:1px solid #e9d5ff;';
+        timingHeader.textContent = 'Timing';
+        timingCard.appendChild(timingHeader);
+
+        var timingBody = document.createElement('div');
+        timingBody.style.cssText = 'padding:10px 12px; display:flex; flex-direction:column; gap:8px;';
+
+        var mkTimingOpt = function(value, label, desc) {
+            var row = document.createElement('label');
+            row.style.cssText = 'display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:8px; border-radius:6px; transition:background 0.1s;';
+            var r = document.createElement('input'); r.type = 'radio'; r.name = 'prep-timing-' + item.name.replace(/s/g,'_'); r.value = value;
+            r.checked = (item.prepConfig.timing === value);
+            r.style.cssText = 'margin-top:2px; flex-shrink:0;';
+            r.onchange = function() {
+                item.prepConfig.timing = value;
+                saveData(); renderContent(); updateSum();
+            };
+            var txt = document.createElement('div');
+            var tTitle = document.createElement('div'); tTitle.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;'; tTitle.textContent = label;
+            var tDesc = document.createElement('div'); tDesc.style.cssText = 'font-size:0.75rem; color:#6b7280; line-height:1.4; margin-top:2px;'; tDesc.textContent = desc;
+            txt.appendChild(tTitle); txt.appendChild(tDesc);
+            row.appendChild(r); row.appendChild(txt);
+            if (item.prepConfig.timing === value) row.style.background = '#f5f3ff';
+            return row;
+        };
+
+        timingBody.appendChild(mkTimingOpt('attached', 'Back to back', 'Prep immediately precedes the activity — combined into one ' + ((item.prepDuration||30) + (parseInt(item.duration)||60)) + '-min block.'));
+        timingBody.appendChild(mkTimingOpt('flexible', 'Spread out', 'Scheduler places prep anywhere earlier in the same day, before the activity starts.'));
+        timingCard.appendChild(timingBody);
+        config.appendChild(timingCard);
+
+        // Prep location
+        var locCard = document.createElement('div');
+        locCard.style.cssText = 'background:#fff; border-radius:8px; border:1px solid #e9d5ff;';
+        var locHeader = document.createElement('div');
+        locHeader.style.cssText = 'padding:8px 12px; font-size:0.82rem; font-weight:600; color:#6b21a8; background:#faf5ff; border-bottom:1px solid #e9d5ff;';
+        locHeader.textContent = 'Prep Location';
+        locCard.appendChild(locHeader);
+        var locBody = document.createElement('div');
+        locBody.style.cssText = 'padding:10px 12px; display:flex; align-items:center; gap:8px;';
+        var locLbl = document.createElement('span'); locLbl.style.cssText = 'font-size:0.85rem;'; locLbl.textContent = 'Location:';
+        var locSel = document.createElement('select');
+        locSel.style.cssText = 'flex:1; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;';
+        var blankOpt = document.createElement('option'); blankOpt.value = ''; blankOpt.textContent = '— same as activity —'; locSel.appendChild(blankOpt);
+        var facs = window.getFacilities ? window.getFacilities() : [];
+        facs.forEach(function(f) {
+            var o = document.createElement('option'); o.value = f.name; o.textContent = f.name;
+            if (f.name === item.prepConfig.location) o.selected = true;
+            locSel.appendChild(o);
+        });
+        locSel.onchange = function() { item.prepConfig.location = locSel.value; saveData(); updateSum(); };
+        locBody.appendChild(locLbl); locBody.appendChild(locSel);
+        locCard.appendChild(locBody);
+        config.appendChild(locCard);
+
+        // Sync (only for flexible)
+        if (item.prepConfig.timing === 'flexible') {
+            var syncCard = document.createElement('div');
+            syncCard.style.cssText = 'background:#fff; border-radius:8px; border:1px solid #e9d5ff; overflow:hidden;';
+            var syncHeader = document.createElement('div');
+            syncHeader.style.cssText = 'padding:8px 12px; font-size:0.82rem; font-weight:600; color:#6b21a8; background:#faf5ff; border-bottom:1px solid #e9d5ff;';
+            syncHeader.textContent = 'Who does prep together?';
+            syncCard.appendChild(syncHeader);
+            var syncBody = document.createElement('div');
+            syncBody.style.cssText = 'padding:10px 12px; display:flex; flex-direction:column; gap:8px;';
+            var mkSyncOpt = function(value, label, desc) {
+                var row = document.createElement('label');
+                row.style.cssText = 'display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:8px; border-radius:6px;';
+                var r = document.createElement('input'); r.type = 'radio'; r.name = 'prep-sync-' + item.name.replace(/s/g,'_'); r.value = value;
+                r.checked = (item.prepConfig.sync === value);
+                r.style.cssText = 'margin-top:2px; flex-shrink:0;';
+                r.onchange = function() { item.prepConfig.sync = value; saveData(); updateSum(); };
+                var txt = document.createElement('div');
+                var tTitle = document.createElement('div'); tTitle.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;'; tTitle.textContent = label;
+                var tDesc = document.createElement('div'); tDesc.style.cssText = 'font-size:0.75rem; color:#6b7280; line-height:1.4; margin-top:2px;'; tDesc.textContent = desc;
+                txt.appendChild(tTitle); txt.appendChild(tDesc);
+                row.appendChild(r); row.appendChild(txt);
+                if (item.prepConfig.sync === value) row.style.background = '#f5f3ff';
+                return row;
+            };
+            syncBody.appendChild(mkSyncOpt('staggered', 'Staggered', 'Each bunk does prep on its own, at any free time before the activity. Works even when the activity itself is full-grade.'));
+            syncBody.appendChild(mkSyncOpt('synchronized', 'Synchronized', 'All bunks in the grade do prep at exactly the same time — like a camp-wide event leading into the activity.'));
+            syncCard.appendChild(syncBody);
+            config.appendChild(syncCard);
+        }
+
+        container.appendChild(config);
+    };
+
+    renderContent();
     return container;
 }
 

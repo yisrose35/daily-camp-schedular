@@ -1687,7 +1687,13 @@ function summarySpecialDuration(s) {
     const prep = parseInt(s.prepDuration) || 0;
     return prep > 0 ? `${label} (+${prep} prep)` : label;
 }
-function summarySpecialPrep(s) { return s.prepDuration ? `${s.prepDuration} min` : "None"; }
+function summarySpecialPrep(s) {
+    if (!(s.prepDuration > 0)) return "None";
+    var timing = (s.prepConfig && s.prepConfig.timing === 'flexible') ? 'spread out' : 'back to back';
+    var sync = (s.prepConfig && s.prepConfig.sync === 'synchronized') ? ', synced' : '';
+    var loc = (s.prepConfig && s.prepConfig.location) ? ', @' + s.prepConfig.location : '';
+    return s.prepDuration + "min (" + timing + sync + loc + ")";
+}
 function summarySpecialMultiPart(s) {
     if (!s.multiPart?.enabled) return "Single session";
     var _hasN = Array.isArray(s.multiPart.parts) && s.multiPart.parts.some(function(p){return p.name;});
@@ -2419,32 +2425,108 @@ function renderSpecialDuration(saData) {
 }
 
 function renderSpecialPrep(saData) {
-    const container = document.createElement("div");
-    const updateSummary = () => {
-        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+    if (!saData.prepConfig) saData.prepConfig = { timing: 'attached', location: '', sync: 'staggered' };
+    var container = document.createElement("div");
+
+    var updateSummary = function() {
+        var el = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
         if (el) el.textContent = summarySpecialPrep(saData);
     };
 
-    container.innerHTML = `
-        <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-size:0.85rem;">Setup time before activity:</span>
-            <input type="number" id="fac-sa-prep" min="0" max="60" value="${saData.prepDuration || 0}"
-                style="width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-            <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
-        </div>`;
+    var renderContent = function() {
+        container.innerHTML = "";
+        var hp = (saData.prepDuration || 0) > 0;
 
-    setTimeout(() => {
-        const input = container.querySelector('#fac-sa-prep');
-        if (input) input.onchange = () => {
-            saData.prepDuration = Math.max(0, Math.min(60, parseInt(input.value) || 0));
-            saveSpecialData(saData); updateSummary();
+        // Toggle
+        var toggleWrap = document.createElement("div");
+        toggleWrap.style.cssText = "display:flex; align-items:center; gap:12px; padding:14px; background:" + (hp ? "#faf5ff" : "#f9fafb") + "; border:1px solid " + (hp ? "#d8b4fe" : "#e5e7eb") + "; border-radius:10px; margin-bottom:" + (hp ? "12px" : "0") + ";";
+        var togInfo = document.createElement("div"); togInfo.style.cssText = "flex:1;";
+        var togTitle = document.createElement("div"); togTitle.style.cssText = "font-weight:600; color:" + (hp ? "#6b21a8" : "#374151") + ";"; togTitle.textContent = hp ? "Has Prep Phase" : "Single Phase";
+        var togSub = document.createElement("div"); togSub.style.cssText = "font-size:0.8rem; color:" + (hp ? "#7c3aed" : "#6b7280") + ";"; togSub.textContent = hp ? (saData.prepDuration + " min prep + main") : "No prep needed";
+        togInfo.appendChild(togTitle); togInfo.appendChild(togSub);
+        var tog = document.createElement("label"); tog.className = "switch";
+        var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = hp;
+        cb.onchange = function() { saData.prepDuration = this.checked ? 30 : 0; saveSpecialData(saData); renderContent(); updateSummary(); };
+        var sl = document.createElement("span"); sl.className = "slider";
+        tog.appendChild(cb); tog.appendChild(sl);
+        toggleWrap.appendChild(togInfo); toggleWrap.appendChild(tog);
+        container.appendChild(toggleWrap);
+
+        if (!hp) return;
+
+        var config = document.createElement("div");
+        config.style.cssText = "display:flex; flex-direction:column; gap:12px;";
+
+        // Duration
+        var durRow = document.createElement("div");
+        durRow.style.cssText = "display:flex; align-items:center; gap:10px; padding:10px; background:#fff; border-radius:8px; border:1px solid #e9d5ff;";
+        var durLbl = document.createElement("label"); durLbl.style.cssText = "font-size:0.85rem;"; durLbl.textContent = "Prep time:";
+        var durIn = document.createElement("input"); durIn.type = "number"; durIn.min = "5"; durIn.max = "120"; durIn.step = "5"; durIn.value = saData.prepDuration || 30;
+        durIn.style.cssText = "width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;";
+        durIn.onchange = function() { var v = parseInt(this.value, 10); if (!isNaN(v) && v >= 5) { saData.prepDuration = v; saveSpecialData(saData); updateSummary(); renderContent(); } };
+        var durNote = document.createElement("span"); durNote.style.cssText = "font-size:0.85rem; color:#64748b;"; durNote.textContent = "minutes";
+        durRow.appendChild(durLbl); durRow.appendChild(durIn); durRow.appendChild(durNote);
+        config.appendChild(durRow);
+
+        // Timing mode card
+        var mkCard = function(title) {
+            var card = document.createElement("div");
+            card.style.cssText = "background:#fff; border-radius:8px; border:1px solid #e9d5ff; overflow:hidden;";
+            var hdr = document.createElement("div"); hdr.style.cssText = "padding:8px 12px; font-size:0.82rem; font-weight:600; color:#6b21a8; background:#faf5ff; border-bottom:1px solid #e9d5ff;"; hdr.textContent = title;
+            card.appendChild(hdr);
+            var body = document.createElement("div"); body.style.cssText = "padding:10px 12px; display:flex; flex-direction:column; gap:8px;";
+            card.appendChild(body);
+            return { card: card, body: body };
         };
-    }, 0);
 
+        var mkRadio = function(name, value, checked, label, desc, onChange) {
+            var row = document.createElement("label");
+            row.style.cssText = "display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:8px; border-radius:6px;" + (checked ? "background:#f5f3ff;" : "");
+            var r = document.createElement("input"); r.type = "radio"; r.name = name; r.value = value; r.checked = checked;
+            r.style.cssText = "margin-top:2px; flex-shrink:0;";
+            r.onchange = onChange;
+            var txt = document.createElement("div");
+            var tT = document.createElement("div"); tT.style.cssText = "font-size:0.85rem; font-weight:500; color:#374151;"; tT.textContent = label;
+            var tD = document.createElement("div"); tD.style.cssText = "font-size:0.75rem; color:#6b7280; line-height:1.4; margin-top:2px;"; tD.textContent = desc;
+            txt.appendChild(tT); txt.appendChild(tD);
+            row.appendChild(r); row.appendChild(txt);
+            return row;
+        };
+
+        var rng = Date.now(); // unique radio group name
+        var tc = mkCard("Timing");
+        tc.body.appendChild(mkRadio("pt-" + rng, "attached", saData.prepConfig.timing !== "flexible", "Back to back", "Prep immediately precedes the activity — combined into one block.", function() { saData.prepConfig.timing = "attached"; saveSpecialData(saData); updateSummary(); renderContent(); }));
+        tc.body.appendChild(mkRadio("pt-" + rng, "flexible", saData.prepConfig.timing === "flexible", "Spread out", "Scheduler places prep anywhere earlier in the same day, before the activity starts.", function() { saData.prepConfig.timing = "flexible"; saveSpecialData(saData); updateSummary(); renderContent(); }));
+        config.appendChild(tc.card);
+
+        // Prep location dropdown
+        var lc = mkCard("Prep Location");
+        var locRow = document.createElement("div"); locRow.style.cssText = "display:flex; align-items:center; gap:8px;";
+        var locLbl = document.createElement("span"); locLbl.style.cssText = "font-size:0.85rem;"; locLbl.textContent = "Location:";
+        var locSel = document.createElement("select"); locSel.style.cssText = "flex:1; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;";
+        var bOpt = document.createElement("option"); bOpt.value = ""; bOpt.textContent = "— same as activity —"; locSel.appendChild(bOpt);
+        var facs = window.getFacilities ? window.getFacilities() : [];
+        facs.forEach(function(f) { var o = document.createElement("option"); o.value = f.name; o.textContent = f.name; if (f.name === saData.prepConfig.location) o.selected = true; locSel.appendChild(o); });
+        locSel.onchange = function() { saData.prepConfig.location = locSel.value; saveSpecialData(saData); updateSummary(); };
+        locRow.appendChild(locLbl); locRow.appendChild(locSel);
+        lc.body.appendChild(locRow);
+        config.appendChild(lc.card);
+
+        // Sync option (only for flexible)
+        if (saData.prepConfig.timing === "flexible") {
+            var sc = mkCard("Who does prep together?");
+            sc.body.appendChild(mkRadio("ps-" + rng, "staggered", saData.prepConfig.sync !== "synchronized", "Staggered", "Each bunk does prep on its own, at any free time before the activity. Works even when the activity itself is full-grade.", function() { saData.prepConfig.sync = "staggered"; saveSpecialData(saData); updateSummary(); }));
+            sc.body.appendChild(mkRadio("ps-" + rng, "synchronized", saData.prepConfig.sync === "synchronized", "Synchronized", "All bunks do prep at exactly the same time slot — like a camp-wide event leading into the activity.", function() { saData.prepConfig.sync = "synchronized"; saveSpecialData(saData); updateSummary(); }));
+            config.appendChild(sc.card);
+        }
+
+        container.appendChild(config);
+    };
+
+    renderContent();
     return container;
 }
 
-// -- Multi-Part --
 function renderSpecialMultiPart(saData) {
     if (!saData.multiPart) saData.multiPart = { enabled: false, totalParts: 2, daysBetween: 3, parts: [] };
     var mp = saData.multiPart;
