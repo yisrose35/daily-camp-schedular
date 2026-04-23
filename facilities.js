@@ -2045,6 +2045,13 @@ function renderSpecialSchedulingMode(saData) {
             saveSpecialData(saData);
         }
 
+        // Default same-grade sharing on for existing cross_division data with no pairs set
+        if (rules.type === 'cross_division' && Object.keys(rules.allowedPairs).length === 0) {
+            const defDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            defDivs.forEach(g => { rules.allowedPairs[pk(g, g)] = true; });
+            saveSpecialData(saData);
+        }
+
         saData.sharableWith = rules;
         const isSharable = rules.type !== 'not_sharable';
 
@@ -2073,6 +2080,9 @@ function renderSpecialSchedulingMode(saData) {
         btnYes.onclick = () => {
             rules.type = 'cross_division';
             if (!rules.capacity || rules.capacity < 2) rules.capacity = 2;
+            // Default: every grade can share with itself
+            const defDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            defDivs.forEach(g => { if (rules.allowedPairs[pk(g, g)] === undefined) rules.allowedPairs[pk(g, g)] = true; });
             saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
 
