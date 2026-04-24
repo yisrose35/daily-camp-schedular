@@ -4168,6 +4168,55 @@ async function _trySpatialSortPipeline({
         (Math.min(...initTimes) / 60).toFixed(1) + 'min');
 
     let rebalanceMoves = 0;
+    let capacityMoves = 0;
+    // Phase 5a: Capacity relief — push excess from any cluster over capacity
+    // to its nearest geographic neighbor with room. Direction-agnostic.
+    for (let pass = 0; pass < 300; pass++) {
+        clusterMeta.forEach(m => { m.cent = bucketCentroid(busBuckets[m.idx]); });
+
+        let overMI = -1, overBy = 0;
+        for (let mi = 0; mi < clusterMeta.length; mi++) {
+            const ov = bucketSize(busBuckets[clusterMeta[mi].idx]) - avgCapacity;
+            if (ov > overBy) { overBy = ov; overMI = mi; }
+        }
+        if (overMI < 0) break;
+
+        const fromC = clusterMeta[overMI];
+        let bestToMI = -1, bestToDist = Infinity;
+        for (let mi = 0; mi < clusterMeta.length; mi++) {
+            if (mi === overMI) continue;
+            const to = clusterMeta[mi];
+            if (bucketSize(busBuckets[to.idx]) >= avgCapacity) continue;
+            const d = haversineMi(fromC.cent.lat, fromC.cent.lng, to.cent.lat, to.cent.lng);
+            if (d < bestToDist) { bestToDist = d; bestToMI = mi; }
+        }
+        if (bestToMI < 0) break;
+
+        const toC = clusterMeta[bestToMI];
+        let bestAI = -1, bestADist = Infinity;
+        for (let ai = 0; ai < busBuckets[fromC.idx].length; ai++) {
+            const a = busBuckets[fromC.idx][ai];
+            if (bucketSize(busBuckets[fromC.idx]) - a.size < MIN_BUS_THRESHOLD) continue;
+            if (bucketSize(busBuckets[toC.idx]) + a.size > avgCapacity) continue;
+            const dToReceiver = haversineMi(a.lat, a.lng, toC.cent.lat, toC.cent.lng);
+            let closerToOther = false;
+            for (let ci = 0; ci < clusterMeta.length; ci++) {
+                if (ci === overMI || ci === bestToMI) continue;
+                const other = clusterMeta[ci];
+                const dToOther = haversineMi(a.lat, a.lng, other.cent.lat, other.cent.lng);
+                if (dToOther < dToReceiver) { closerToOther = true; break; }
+            }
+            if (closerToOther) continue;
+            if (dToReceiver < bestADist) { bestADist = dToReceiver; bestAI = ai; }
+        }
+        if (bestAI < 0) break;
+
+        const atom = busBuckets[fromC.idx].splice(bestAI, 1)[0];
+        busBuckets[toC.idx].push(atom);
+        capacityMoves++;
+    }
+
+    // Phase 5b: Time cascade — push from over-time-cap clusters inward
     for (let pass = 0; pass < 200; pass++) {
         clusterMeta.forEach(m => { m.cent = bucketCentroid(busBuckets[m.idx]); });
         const times = clusterMeta.map(m => estTime(m.idx));
@@ -4222,7 +4271,8 @@ async function _trySpatialSortPipeline({
     }
 
     const finalTimes = clusterMeta.map(m => estTime(m.idx));
-    console.log('[Go v6] Cascade: moved ' + rebalanceMoves + ' atoms inward');
+    console.log('[Go v6] Capacity relief: ' + capacityMoves + ' atoms moved out of over-capacity clusters');
+    console.log('[Go v6] Time cascade: ' + rebalanceMoves + ' atoms moved inward');
     console.log('[Go v6] Final: median ' + (median(finalTimes) / 60).toFixed(1) +
         'min, max ' + (Math.max(...finalTimes) / 60).toFixed(1) + 'min, min ' +
         (Math.min(...finalTimes) / 60).toFixed(1) + 'min');
