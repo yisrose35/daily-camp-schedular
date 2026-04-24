@@ -4249,30 +4249,75 @@ async function _trySpatialSortPipeline({
     // Remove any empty buckets
     busBuckets = busBuckets.filter(b => b.length > 0);
 
-    // ── F. Phase 5: Global even rebalance ──
-    // Pool all atoms and re-split into exactly k buses targeting totalCampers/k each.
-    // Uses spatial snake sort so geographic locality is preserved.
-    showProgress(shiftLabel + ': phase 5 — global even rebalance...', pctBase + 55);
+    // ── F. Phase 5: Local rebalance between neighboring clusters ──
+    // Move edge atoms from oversized clusters to undersized neighbors.
+    // Preserves geographic shape — only shifts boundary atoms.
+    showProgress(shiftLabel + ': phase 5 — local rebalance...', pctBase + 55);
 
-    const allAtoms = busBuckets.flatMap(b => b);
-    const totalForBalance = allAtoms.reduce((s, a) => s + a.size, 0);
-    const targetPerBus = Math.ceil(totalForBalance / k);
+    const totalForBalance = busBuckets.reduce((s, b) => s + bucketSize(b), 0);
+    const targetPerBus = Math.round(totalForBalance / k);
 
     console.log('[Go v6] ═══════════════════════════════════════');
-    console.log('[Go v6] PHASE 5: Global rebalance — ' + totalForBalance +
-        ' campers / ' + k + ' buses = ~' + targetPerBus + ' per bus');
+    console.log('[Go v6] PHASE 5: Local rebalance — target ~' + targetPerBus + ' per bus');
     console.log('[Go v6] ═══════════════════════════════════════');
 
-    const lats = allAtoms.map(a => a.lat);
-    const lngs = allAtoms.map(a => a.lng);
-    const latSpread = (Math.max(...lats) - Math.min(...lats)) * 69;
-    const avgLt = lats.reduce((s, l) => s + l, 0) / lats.length;
-    const lngSpread = (Math.max(...lngs) - Math.min(...lngs)) * Math.cos(avgLt * Math.PI / 180) * 69;
-    console.log('[Go v6] Spread: ' + latSpread.toFixed(1) + 'mi N/S, ' +
-        lngSpread.toFixed(1) + 'mi E/W → splitting by ' +
-        (latSpread >= lngSpread ? 'LONGITUDE (vertical slices)' : 'LATITUDE (horizontal slices)'));
+    let rebalanceMoves = 0;
+    for (let pass = 0; pass < 20; pass++) {
+        let moved = false;
 
-    busBuckets = evenSpatialSplit(allAtoms, k);
+        // Find the most oversized cluster
+        let bigIdx = -1, bigOver = 0;
+        for (let i = 0; i < busBuckets.length; i++) {
+            const over = bucketSize(busBuckets[i]) - targetPerBus;
+            if (over > bigOver) { bigOver = over; bigIdx = i; }
+        }
+        if (bigIdx < 0 || bigOver <= 2) break;
+
+        // Find its nearest neighbor that's under target
+        const bigCent = bucketCentroid(busBuckets[bigIdx]);
+        let bestNeighbor = -1, bestDist = Infinity;
+        for (let i = 0; i < busBuckets.length; i++) {
+            if (i === bigIdx) continue;
+            if (bucketSize(busBuckets[i]) >= targetPerBus) continue;
+            const c = bucketCentroid(busBuckets[i]);
+            if (!c) continue;
+            const d = haversineMi(bigCent.lat, bigCent.lng, c.lat, c.lng);
+            if (d < bestDist) { bestDist = d; bestNeighbor = i; }
+        }
+        if (bestNeighbor < 0) break;
+
+        const neighborCent = bucketCentroid(busBuckets[bestNeighbor]);
+        const neighborRoom = targetPerBus - bucketSize(busBuckets[bestNeighbor]);
+
+        // Move atoms closest to the neighbor, one at a time
+        while (bucketSize(busBuckets[bigIdx]) > targetPerBus && busBuckets[bigIdx].length > 1) {
+            const room = targetPerBus - bucketSize(busBuckets[bestNeighbor]);
+            if (room <= 0) break;
+
+            // Find atom in big cluster closest to neighbor
+            let closestIdx = -1, closestDist = Infinity;
+            for (let ai = 0; ai < busBuckets[bigIdx].length; ai++) {
+                const a = busBuckets[bigIdx][ai];
+                if (a.size > room) continue;
+                const d = haversineMi(a.lat, a.lng, neighborCent.lat, neighborCent.lng);
+                if (d < closestDist) { closestDist = d; closestIdx = ai; }
+            }
+            if (closestIdx < 0) break;
+
+            const atom = busBuckets[bigIdx].splice(closestIdx, 1)[0];
+            busBuckets[bestNeighbor].push(atom);
+            rebalanceMoves++;
+            moved = true;
+        }
+
+        if (!moved) break;
+    }
+
+    if (rebalanceMoves > 0) {
+        console.log('[Go v6] Rebalance: moved ' + rebalanceMoves + ' atoms between neighbors');
+    } else {
+        console.log('[Go v6] Rebalance: clusters already balanced');
+    }
 
     // ── G. Log final cluster results ──
     console.log('[Go v6] ═══════════════════════════════════════');
