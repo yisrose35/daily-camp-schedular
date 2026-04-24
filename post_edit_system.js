@@ -745,6 +745,9 @@
                     </select>
                 </div>
                 <div id="post-edit-conflict" style="display:none;"></div>
+                <div style="display:flex;gap:10px;margin-top:4px;">
+                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill</button>
+                </div>
                 <div style="display:flex;gap:10px;margin-top:8px;">
                     <button id="post-edit-cancel" style="flex:1;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:1rem;cursor:pointer;font-weight:500;">Cancel</button>
                     <button id="post-edit-delete" style="padding:12px 16px;border:none;border-radius:8px;background:#fef2f2;color:#dc2626;font-size:1rem;cursor:pointer;font-weight:600;border:1px solid #fca5a5;">Delete</button>
@@ -754,7 +757,23 @@
         
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
-        
+
+        document.getElementById('post-edit-autofill').onclick = () => {
+            const divName = peiGetDivForBunk(bunk);
+            const pick = peiAutoFill(bunk, divName, startMin, endMin);
+            if (!pick) { alert('No suitable activity found based on current constraints.'); return; }
+            document.getElementById('post-edit-activity').value = pick.activity;
+            const loc = document.getElementById('post-edit-location');
+            if (pick.field) {
+                for (let i = 0; i < loc.options.length; i++) {
+                    if (loc.options[i].value === pick.field) { loc.selectedIndex = i; break; }
+                }
+            } else {
+                loc.selectedIndex = 0;
+            }
+            checkAndShowConflicts();
+        };
+
         // Delete button
         document.getElementById('post-edit-delete').onclick = () => {
             const divName = peiGetDivForBunk(bunk);
