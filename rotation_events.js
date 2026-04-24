@@ -285,6 +285,11 @@ function getAssignmentsForDate(dateKey, opts = {}) {
                     if (slot) {
                         group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: slot.startMin, endMin: slot.endMin }));
                         slot.used++;
+                    } else if (isLastDay && slots.length > 0) {
+                        // Must schedule today — fall back to least-loaded slot ignoring conflicts
+                        const fallback = slots.reduce((best, s) => s.used < best.used ? s : best, slots[0]);
+                        group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: fallback.startMin, endMin: fallback.endMin }));
+                        fallback.used++;
                     }
                 }
             });
@@ -293,12 +298,21 @@ function getAssignmentsForDate(dateKey, opts = {}) {
             // Individual + sequence: each bunk placed adjacent to its own target slot
             for (const bunkInfo of todayQueue) {
                 const targetEntry = findTargetEntry(bunkInfo.bunk);
-                if (!targetEntry) continue;
-                const tStart = targetEntry._startMin ?? targetEntry.startMin ?? null;
-                const tEnd = targetEntry._endMin ?? targetEntry.endMin ?? null;
-                if (tStart == null || tEnd == null) continue;
-                const time = tryAdjacent(bunkInfo.bunk, tStart, tEnd);
-                if (time) assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, ...time });
+                const tStart = targetEntry ? (targetEntry._startMin ?? targetEntry.startMin ?? null) : null;
+                const tEnd   = targetEntry ? (targetEntry._endMin   ?? targetEntry.endMin   ?? null) : null;
+                const time   = (tStart != null && tEnd != null) ? tryAdjacent(bunkInfo.bunk, tStart, tEnd) : null;
+                if (time) {
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, ...time });
+                } else if (isLastDay && slots.length > 0) {
+                    // Adjacency failed on last day — fall back to any open slot, then least-loaded
+                    const slot = slots.find(s =>
+                        s.used < effectiveConcurrency &&
+                        !hasBunkConflict(bunkInfo.bunk, s.startMin, s.endMin, scheduleAssignments, opts.timelines)
+                    );
+                    const chosen = slot || slots.reduce((best, s) => s.used < best.used ? s : best, slots[0]);
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: chosen.startMin, endMin: chosen.endMin });
+                    chosen.used++;
+                }
             }
 
         } else {
@@ -311,8 +325,12 @@ function getAssignmentsForDate(dateKey, opts = {}) {
                 if (slot) {
                     assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: slot.startMin, endMin: slot.endMin });
                     slot.used++;
+                } else if (isLastDay && slots.length > 0) {
+                    // Must schedule today — fall back to least-loaded slot ignoring conflicts
+                    const fallback = slots.reduce((best, s) => s.used < best.used ? s : best, slots[0]);
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: fallback.startMin, endMin: fallback.endMin });
+                    fallback.used++;
                 }
-                // else: no open slot → bunk overflows to next day
             }
         }
 
