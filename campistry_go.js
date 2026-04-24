@@ -4057,7 +4057,34 @@ async function _trySpatialSortPipeline({
             ' (needs ' + neededBuses + ' buses, using ' + busesToUse + ' freed buses)');
 
         const clusterAtoms = busBuckets[largestIdx];
-        const subBuckets = runKMeans(clusterAtoms, splitInto);
+
+        // Even spatial split: sort atoms by lat then snake by lng, cut into equal chunks
+        const bandCount = Math.ceil(Math.sqrt(splitInto));
+        clusterAtoms.sort((a, b) => a.lat - b.lat);
+        const bandSize = Math.ceil(clusterAtoms.length / bandCount);
+        const sorted = [];
+        for (let b = 0; b < bandCount; b++) {
+            const band = clusterAtoms.slice(b * bandSize, (b + 1) * bandSize);
+            if (b % 2 === 1) band.sort((a, bb) => bb.lng - a.lng);
+            else band.sort((a, bb) => a.lng - bb.lng);
+            sorted.push(...band);
+        }
+
+        // Cut sorted list into equal-sized sub-buckets by camper count
+        const targetPerBus = Math.ceil(largestSize / splitInto);
+        const subBuckets = [];
+        let current = [];
+        let currentSize = 0;
+        for (const atom of sorted) {
+            if (currentSize + atom.size > targetPerBus && current.length > 0 && subBuckets.length < splitInto - 1) {
+                subBuckets.push(current);
+                current = [];
+                currentSize = 0;
+            }
+            current.push(atom);
+            currentSize += atom.size;
+        }
+        if (current.length) subBuckets.push(current);
 
         // Replace the original cluster with the sub-clusters
         busBuckets.splice(largestIdx, 1, ...subBuckets);
