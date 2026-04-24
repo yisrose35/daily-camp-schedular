@@ -3840,10 +3840,11 @@ async function _tryNeighborhoodPipeline({
 
 
 // =============================================================================
-// SPATIAL SORT PIPELINE — Pure lat/lng k-means clustering
+// SPATIAL SORT PIPELINE — Two-Phase Density-Aware Clustering
 //
-// Clusters campers into k=numBuses groups based solely on coordinates.
-// No capacity balancing, no stops, no routes — just clustering for review.
+// Phase 1: K-means into k=numBuses clusters on pure lat/lng
+// Phase 2: Dissolve clusters under MIN_BUS_THRESHOLD (75% capacity = 34)
+//          and re-cluster the dense areas with freed-up buses
 // =============================================================================
 async function _trySpatialSortPipeline({
     shift, shiftLabel, pctBase,
@@ -3856,6 +3857,70 @@ async function _trySpatialSortPipeline({
     serviceTimeSec,
     shiftIdx
 }) {
+    const MIN_BUS_THRESHOLD = 34;
+
+    // ── Helper: run k-means on a set of atoms with given k ──
+    function runKMeans(atomSet, numClusters) {
+        if (!atomSet.length || numClusters <= 0) return [];
+
+        // K-means++ seeding
+        const cents = [];
+        const firstIdx = Math.floor(Math.random() * atomSet.length);
+        cents.push({ lat: atomSet[firstIdx].lat, lng: atomSet[firstIdx].lng });
+
+        while (cents.length < numClusters) {
+            let bestIdx = -1, bestDist = -1;
+            for (let i = 0; i < atomSet.length; i++) {
+                let minDist = Infinity;
+                for (const c of cents) {
+                    const d = (atomSet[i].lat - c.lat) ** 2 + (atomSet[i].lng - c.lng) ** 2;
+                    if (d < minDist) minDist = d;
+                }
+                if (minDist > bestDist) { bestDist = minDist; bestIdx = i; }
+            }
+            cents.push({ lat: atomSet[bestIdx].lat, lng: atomSet[bestIdx].lng });
+        }
+
+        // Iterate
+        const asgn = new Array(atomSet.length).fill(0);
+        for (let iter = 0; iter < 30; iter++) {
+            let changed = false;
+            for (let i = 0; i < atomSet.length; i++) {
+                let bestC = 0, bestD = Infinity;
+                for (let ci = 0; ci < numClusters; ci++) {
+                    const d = (atomSet[i].lat - cents[ci].lat) ** 2 +
+                              (atomSet[i].lng - cents[ci].lng) ** 2;
+                    if (d < bestD) { bestD = d; bestC = ci; }
+                }
+                if (asgn[i] !== bestC) { asgn[i] = bestC; changed = true; }
+            }
+            if (!changed) break;
+            for (let ci = 0; ci < numClusters; ci++) {
+                let sLat = 0, sLng = 0, n = 0;
+                for (let i = 0; i < atomSet.length; i++) {
+                    if (asgn[i] === ci) { sLat += atomSet[i].lat; sLng += atomSet[i].lng; n++; }
+                }
+                if (n > 0) { cents[ci].lat = sLat / n; cents[ci].lng = sLng / n; }
+            }
+        }
+
+        const buckets = [];
+        for (let ci = 0; ci < numClusters; ci++) buckets.push([]);
+        for (let i = 0; i < atomSet.length; i++) buckets[asgn[i]].push(atomSet[i]);
+        return buckets;
+    }
+
+    function bucketSize(bucket) {
+        return bucket.reduce((s, a) => s + a.size, 0);
+    }
+
+    function bucketCentroid(bucket) {
+        if (!bucket.length) return null;
+        let sLat = 0, sLng = 0;
+        for (const a of bucket) { sLat += a.lat; sLng += a.lng; }
+        return { lat: sLat / bucket.length, lng: sLng / bucket.length };
+    }
+
     showProgress(shiftLabel + ': clustering — building atoms...', pctBase + 10);
 
     // ── A. Build sibling atoms ──
@@ -3892,95 +3957,101 @@ async function _trySpatialSortPipeline({
     console.log('[Go v6] Clustering: ' + atoms.length + ' atoms from ' +
         allCampers.length + ' campers (' + Object.keys(sibGroups).length + ' sibling groups)');
 
-    // ── B. K-means clustering: k = numBuses ──
-    showProgress(shiftLabel + ': clustering — k-means on lat/lng...', pctBase + 20);
+    // ── B. Phase 1: Initial k-means with k = numBuses ──
+    showProgress(shiftLabel + ': phase 1 — initial k-means...', pctBase + 15);
 
     const k = shiftVehicles.length;
+    let busBuckets = runKMeans(atoms, k);
 
-    // K-means++ seeding
-    const centroids = [];
-    const firstIdx = Math.floor(Math.random() * atoms.length);
-    centroids.push({ lat: atoms[firstIdx].lat, lng: atoms[firstIdx].lng });
-
-    while (centroids.length < k) {
-        let bestIdx = -1, bestDist = -1;
-        for (let i = 0; i < atoms.length; i++) {
-            let minDist = Infinity;
-            for (const c of centroids) {
-                const d = (atoms[i].lat - c.lat) ** 2 + (atoms[i].lng - c.lng) ** 2;
-                if (d < minDist) minDist = d;
-            }
-            if (minDist > bestDist) { bestDist = minDist; bestIdx = i; }
-        }
-        centroids.push({ lat: atoms[bestIdx].lat, lng: atoms[bestIdx].lng });
-    }
-
-    // Iterate k-means
-    let assignments = new Array(atoms.length).fill(0);
-    for (let iter = 0; iter < 30; iter++) {
-        let changed = false;
-        for (let i = 0; i < atoms.length; i++) {
-            let bestC = 0, bestD = Infinity;
-            for (let ci = 0; ci < k; ci++) {
-                const d = (atoms[i].lat - centroids[ci].lat) ** 2 +
-                          (atoms[i].lng - centroids[ci].lng) ** 2;
-                if (d < bestD) { bestD = d; bestC = ci; }
-            }
-            if (assignments[i] !== bestC) { assignments[i] = bestC; changed = true; }
-        }
-        if (!changed) {
-            console.log('[Go v6] K-means converged after ' + (iter + 1) + ' iterations');
-            break;
-        }
-        for (let ci = 0; ci < k; ci++) {
-            let sLat = 0, sLng = 0, n = 0;
-            for (let i = 0; i < atoms.length; i++) {
-                if (assignments[i] === ci) {
-                    sLat += atoms[i].lat;
-                    sLng += atoms[i].lng;
-                    n++;
-                }
-            }
-            if (n > 0) {
-                centroids[ci].lat = sLat / n;
-                centroids[ci].lng = sLng / n;
-            }
-        }
-    }
-
-    // Build bus buckets from k-means assignments
-    const busBuckets = shiftVehicles.map(() => []);
-    for (let i = 0; i < atoms.length; i++) {
-        busBuckets[assignments[i]].push(atoms[i]);
-    }
-
-    // ── C. Log cluster results (no modifications) ──
     console.log('[Go v6] ═══════════════════════════════════════');
-    console.log('[Go v6] PURE K-MEANS CLUSTERS (no capacity balancing)');
+    console.log('[Go v6] PHASE 1: Initial k-means (' + k + ' clusters)');
     console.log('[Go v6] ═══════════════════════════════════════');
     for (let i = 0; i < busBuckets.length; i++) {
-        const count = busBuckets[i].reduce((s, a) => s + a.size, 0);
+        const count = bucketSize(busBuckets[i]);
+        console.log('[Go v6]   Cluster ' + (i + 1) + ': ' + count + ' campers' +
+            (count < MIN_BUS_THRESHOLD ? ' ← DISSOLVE' : ''));
+    }
+
+    // ── C. Phase 2: Dissolve small clusters, re-cluster dense areas ──
+    showProgress(shiftLabel + ': phase 2 — dissolving small clusters...', pctBase + 25);
+
+    const survivingBuckets = [];
+    const dissolvedAtoms = [];
+
+    for (let i = 0; i < busBuckets.length; i++) {
+        if (bucketSize(busBuckets[i]) >= MIN_BUS_THRESHOLD) {
+            survivingBuckets.push(busBuckets[i]);
+        } else {
+            for (const atom of busBuckets[i]) dissolvedAtoms.push(atom);
+            console.log('[Go v6] Dissolved cluster ' + (i + 1) + ' (' +
+                bucketSize(busBuckets[i]) + ' campers) — atoms will be absorbed');
+        }
+    }
+
+    // Absorb dissolved atoms into nearest surviving cluster
+    let absorbed = 0;
+    for (const atom of dissolvedAtoms) {
+        let bestIdx = -1, bestDist = Infinity;
+        for (let si = 0; si < survivingBuckets.length; si++) {
+            const cent = bucketCentroid(survivingBuckets[si]);
+            if (!cent) continue;
+            const d = haversineMi(atom.lat, atom.lng, cent.lat, cent.lng);
+            if (d < bestDist) { bestDist = d; bestIdx = si; }
+        }
+        if (bestIdx >= 0) {
+            survivingBuckets[bestIdx].push(atom);
+            absorbed++;
+        }
+    }
+
+    const freedBuses = k - survivingBuckets.length;
+    console.log('[Go v6] Absorbed ' + absorbed + ' atoms into surviving clusters');
+    console.log('[Go v6] Freed ' + freedBuses + ' buses for dense areas');
+
+    if (freedBuses <= 0) {
+        console.log('[Go v6] No clusters dissolved — all had ' + MIN_BUS_THRESHOLD + '+ campers');
+        busBuckets = survivingBuckets;
+    } else {
+        // Re-cluster: collect all atoms from surviving clusters,
+        // re-run k-means with full bus count
+        showProgress(shiftLabel + ': phase 2 — re-clustering with ' + k + ' buses...', pctBase + 35);
+
+        const allAtoms = survivingBuckets.flatMap(b => b);
+        busBuckets = runKMeans(allAtoms, k);
+
+        console.log('[Go v6] ═══════════════════════════════════════');
+        console.log('[Go v6] PHASE 2: Re-clustered with all ' + k + ' buses');
+        console.log('[Go v6] ═══════════════════════════════════════');
+    }
+
+    // ── D. Log final cluster results ──
+    console.log('[Go v6] ═══════════════════════════════════════');
+    console.log('[Go v6] FINAL CLUSTERS');
+    console.log('[Go v6] ═══════════════════════════════════════');
+    for (let i = 0; i < busBuckets.length; i++) {
+        const count = bucketSize(busBuckets[i]);
         const lats = busBuckets[i].map(a => a.lat);
         const lngs = busBuckets[i].map(a => a.lng);
         if (lats.length) {
             const spread = haversineMi(
                 Math.min(...lats), Math.min(...lngs),
                 Math.max(...lats), Math.max(...lngs));
-            console.log('[Go v6] Cluster ' + (i + 1) + ' (' + shiftVehicles[i].name + '): ' +
+            const cent = bucketCentroid(busBuckets[i]);
+            console.log('[Go v6] Cluster ' + (i + 1) + ': ' +
                 count + ' campers, ' + busBuckets[i].length + ' atoms, ' +
                 spread.toFixed(2) + 'mi spread, centroid: ' +
-                centroids[i].lat.toFixed(5) + ',' + centroids[i].lng.toFixed(5));
+                cent.lat.toFixed(5) + ',' + cent.lng.toFixed(5));
         } else {
-            console.log('[Go v6] Cluster ' + (i + 1) + ' (' + shiftVehicles[i].name + '): EMPTY');
+            console.log('[Go v6] Cluster ' + (i + 1) + ': EMPTY');
         }
     }
-    const totalCampers = busBuckets.reduce((s, b) => s + b.reduce((s2, a) => s2 + a.size, 0), 0);
-    console.log('[Go v6] Total: ' + totalCampers + ' campers in ' + k + ' clusters');
+    const totalCampers = busBuckets.reduce((s, b) => s + bucketSize(b), 0);
+    console.log('[Go v6] Total: ' + totalCampers + ' campers in ' + busBuckets.length + ' clusters');
     console.log('[Go v6] ═══════════════════════════════════════');
 
-    // ── D. Build minimal route objects so the UI can display clusters on the map ──
+    // ── E. Build minimal route objects for map display ──
     const routes = busBuckets.map((bucket, bi) => {
-        const vehicle = shiftVehicles[bi];
+        const vehicle = shiftVehicles[bi] || shiftVehicles[0];
         const campers = bucket.flatMap(a => a.members);
         return {
             busId:        vehicle.busId,
@@ -4001,7 +4072,7 @@ async function _trySpatialSortPipeline({
         };
     });
 
-    toast('✓ Clustering complete — ' + k + ' clusters (pure lat/lng, no capacity balancing)');
+    toast('✓ Clustering complete — ' + busBuckets.length + ' clusters (density-aware)');
     return routes;
 }
 
