@@ -4128,25 +4128,28 @@ async function _trySpatialSortPipeline({
     showProgress(shiftLabel + ': phase 5 — distance-based rebalance...', pctBase + 55);
 
     const totalForBalance = busBuckets.reduce((s, b) => s + bucketSize(b), 0);
-    const TIME_BUDGET_SEC = 45 * 60;
-    const SEC_PER_PICKUP = 90;
+    const nBuckets = busBuckets.length;
+    const floorTarget = MIN_BUS_THRESHOLD;
+    const avgTarget = totalForBalance / nBuckets;
+    const ceilTarget = Math.min(avgCapacity, Math.round(2 * avgTarget - floorTarget));
 
     const clusterMeta = busBuckets.map((bucket, idx) => {
         const cent = bucketCentroid(bucket);
         const distSec = drivingDist(campLat, campLng, cent.lat, cent.lng);
-        const availableSec = Math.max(SEC_PER_PICKUP * 2, TIME_BUDGET_SEC - 2 * distSec);
-        return { idx, cent, distSec, availableSec, size: bucketSize(bucket) };
+        return { idx, cent, distSec, size: bucketSize(bucket) };
     });
 
-    const totalAvailable = clusterMeta.reduce((s, m) => s + m.availableSec, 0);
-    clusterMeta.forEach(m => {
-        m.target = Math.round((m.availableSec / totalAvailable) * totalForBalance);
+    clusterMeta.sort((a, b) => a.distSec - b.distSec);
+    clusterMeta.forEach((m, rank) => {
+        const t = nBuckets > 1 ? rank / (nBuckets - 1) : 0.5;
+        m.target = Math.round(ceilTarget - t * (ceilTarget - floorTarget));
     });
 
     const targetSum = clusterMeta.reduce((s, m) => s + m.target, 0);
     if (targetSum !== totalForBalance) {
-        clusterMeta.sort((a, b) => b.target - a.target);
-        clusterMeta[0].target += (totalForBalance - targetSum);
+        const diff = totalForBalance - targetSum;
+        const mid = Math.floor(nBuckets / 2);
+        clusterMeta[mid].target += diff;
     }
 
     clusterMeta.sort((a, b) => b.distSec - a.distSec);
