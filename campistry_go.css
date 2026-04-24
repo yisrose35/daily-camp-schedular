@@ -616,3 +616,156 @@ button:focus-visible, .btn:focus-visible {
 @media (max-width: 480px) {
     .stats-grid { grid-template-columns: 1fr; }
 }
+
+
+/* ==================== DISPATCHER DASHBOARD (Phase 3) ==================== */
+
+.dispatch-summary {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--gray-50, #f9fafb);
+    flex-wrap: wrap;
+}
+.dispatch-summary-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 80px;
+}
+.dispatch-num {
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    line-height: 1;
+    color: var(--text-primary);
+}
+.dispatch-lbl {
+    font-size: .6875rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    font-weight: 600;
+    margin-top: .25rem;
+}
+.dispatch-summary-actions {
+    margin-left: auto;
+    display: flex;
+    gap: .5rem;
+}
+.dispatch-shift {
+    padding: 0;
+    border-bottom: 1px solid var(--border-light);
+}
+.dispatch-shift:last-child { border-bottom: none; }
+.dispatch-shift-header {
+    padding: .625rem 1.25rem;
+    background: var(--bg-tertiary, #f3f4f6);
+    font-size: .8125rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-light);
+}
+.dispatch-routes { display: flex; flex-direction: column; }
+.dispatch-route {
+    padding: .75rem 1.25rem;
+    border-bottom: 1px solid var(--gray-100, #f3f4f6);
+    transition: background var(--duration-fast);
+}
+.dispatch-route:last-child { border-bottom: none; }
+.dispatch-route:hover { background: var(--gray-50, #f9fafb); }
+.dispatch-route-header {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+}
+.dispatch-route-title {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex: 1;
+    font-size: .875rem;
+    min-width: 0;
+}
+.dispatch-route-summary {
+    color: var(--text-muted);
+    font-size: .75rem;
+    font-weight: 400;
+    margin-left: .5rem;
+}
+.dispatch-route-actions {
+    display: flex;
+    align-items: center;
+    gap: .375rem;
+    flex-shrink: 0;
+}
+.dispatch-status-dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .75rem;
+    font-weight: 800;
+    color: #fff;
+    flex-shrink: 0;
+}
+.dispatch-status-ok       { background: #10b981; }
+.dispatch-status-approved { background: #10b981; }
+.dispatch-status-warn     { background: #f59e0b; }
+.dispatch-status-error    { background: #ef4444; }
+.dispatch-route-approved  { background: rgba(16,185,129,0.04); border-left: 3px solid #10b981; }
+.dispatch-route-error     { background: rgba(239,68,68,0.04);  border-left: 3px solid #ef4444; }
+.dispatch-route-warn      { background: rgba(245,158,11,0.04); border-left: 3px solid #f59e0b; }
+.dispatch-route-ok        { border-left: 3px solid transparent; }
+.dispatch-flag-badge {
+    font-size: .6875rem;
+    padding: .2rem .5rem;
+    border-radius: 100px;
+    background: #fef3c7;
+    color: #92400e;
+    font-weight: 700;
+}
+.dispatch-issues {
+    list-style: none;
+    padding: 0;
+    margin: .5rem 0 0 2.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+}
+.dispatch-issue {
+    font-size: .75rem;
+    padding: .3rem .625rem;
+    border-radius: 6px;
+    color: var(--text-secondary);
+}
+.dispatch-issue-error { background: #fee2e2; color: #991b1b; font-weight: 600; }
+.dispatch-issue-warn  { background: #fef3c7; color: #78350f; }
+.dispatch-issue-info  { background: var(--gray-100,#f3f4f6); color: var(--text-secondary); }
+.dispatch-anchor {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    margin: .5rem 0 0 2.25rem;
+    padding: .4rem .625rem;
+    font-size: .75rem;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary,#f3f4f6);
+    border-radius: 6px;
+    flex-wrap: wrap;
+}
+.dispatch-anchor-icon { font-size: .9rem; }
+.dispatch-anchor-badge {
+    padding: .15rem .5rem;
+    border-radius: 100px;
+    background: var(--gray-200);
+    color: var(--text-secondary);
+    font-size: .6875rem;
+    font-weight: 600;
+}
+.dispatch-anchor-badge.dispatch-anchor-pinned { background: #dbeafe; color: #1e40af; }

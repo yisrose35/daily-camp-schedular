@@ -159,6 +159,7 @@ window.GoGoogleOptimizer = (function () {
 
         const serviceTimeSec = Math.max(30, Math.round(serviceTime || 120));
         const maxRideSec = Math.max(300, Math.round(maxRideTimeSec || 45 * 60));
+        const pinnedAnchorIndex = options.pinnedAnchorIndex;
 
         // ── Time anchor for the shift ──
         const { h: defH, m: defM } = _parseHHMM(
@@ -309,6 +310,23 @@ window.GoGoogleOptimizer = (function () {
             populatePolylines:           true,
             populateTravelStepPolylines: false
         };
+
+        if (pinnedAnchorIndex != null && shipments.length >= 2) {
+            const rules = [];
+            for (let i = 0; i < shipments.length; i++) {
+                if (i === pinnedAnchorIndex) continue;
+                if (isArrival) {
+                    rules.push({ firstIndex: pinnedAnchorIndex, firstIsDelivery: false,
+                                 secondIndex: i, secondIsDelivery: false, offsetDuration: '0s' });
+                } else {
+                    rules.push({ firstIndex: i, firstIsDelivery: true,
+                                 secondIndex: pinnedAnchorIndex, secondIsDelivery: true, offsetDuration: '0s' });
+                }
+            }
+            body.model.precedenceRules = rules;
+            console.log('[GoGoogle v5.3] Anchor pinned: shipment ' + pinnedAnchorIndex +
+                ' (' + rules.length + ' precedence rules added)');
+        }
 
         console.log('[GoGoogle v5.2] Sending ' + shipments.length +
             ' paired shipments + ' + modelVehicles.length +

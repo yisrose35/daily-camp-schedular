@@ -3351,6 +3351,10 @@ async function generateRoutes() {
     // SHIFT LOOP
     // -------------------------------------------------------------------------
     const allShiftResults = [];
+
+    // Phase 3: load persistent flags before the shift loop
+    if (window.GoFlagPersistence) await _ensureFlags();
+
     const shifts = D.shifts.length ? D.shifts : [{
         id: '__all__', label: 'All Campers', divisions: [],
         departureTime: isArrival ? '07:00' : '16:00', _isVirtual: true
@@ -3443,7 +3447,8 @@ async function generateRoutes() {
                     isArrival,
                     googleAvailable, googleKey, googleProjId,
                     _supabaseUrl, _googleProxyToken,
-                    serviceTimeSec: avgStopMin * 60
+                    serviceTimeSec: avgStopMin * 60,
+                    shiftIdx: si
                 });
                 if (routes) routeSource = 'neighborhood';
             } catch (e) {
@@ -3598,7 +3603,8 @@ async function _tryNeighborhoodPipeline({
     isArrival,
     googleAvailable, googleKey, googleProjId,
     _supabaseUrl, _googleProxyToken,
-    serviceTimeSec
+    serviceTimeSec,
+    shiftIdx
 }) {
     showProgress(shiftLabel + ': detecting neighborhoods...', pctBase + 10);
 
@@ -3773,7 +3779,8 @@ async function _tryNeighborhoodPipeline({
                     serviceTimeSec,
                     googleKey, googleProjId,
                     _supabaseUrl, _googleProxyToken,
-                    shift
+                    shift,
+                    shiftIdx
                 });
                 if (tspResult) {
                     r.stops = tspResult.stops;
@@ -3884,7 +3891,8 @@ async function _perBusGoogleTSP({
     isArrival, serviceTimeSec,
     googleKey, googleProjId,
     _supabaseUrl, _googleProxyToken,
-    shift
+    shift,
+    shiftIdx    // NEW PHASE 3: the shift index for anchor lookup
 }) {
     if (!window.GoGoogleOptimizer?.optimizeTours) return null;
 
@@ -3892,7 +3900,7 @@ async function _perBusGoogleTSP({
         busId:    route.busId,
         name:     route.busName,
         color:    route.busColor,
-        capacity: Math.max(route.camperCount + 10, 1000), // effectively unbounded
+        capacity: Math.max(route.camperCount + 10, 1000),
         monitor:  route.monitor,
         counselors: route.counselors
     }];
@@ -3900,9 +3908,6 @@ async function _perBusGoogleTSP({
     const avgSpeedMph = D.setup.avgSpeed || 25;
     const avgStopMin  = D.setup.avgStopTime || 2;
 
-    // Back-solve per-bus time window from this zone's stops' mean distance
-    // to camp.  This is Phase 2's core addition: the solver doesn't just
-    // optimize the sequence, it also respects the time envelope.
     const shiftTarget = shift.departureTime || (isArrival ? '08:00' : '16:00');
     const zw = computeZoneTimeWindow(
         route.stops, campLat, campLng, isArrival,
@@ -3916,7 +3921,16 @@ async function _perBusGoogleTSP({
         endTime:        zw.endHHMM
     }];
 
-    console.log('[Go v5.2] Per-bus TSP ' + route.busName +
+    // NEW PHASE 3: look up a user-pinned anchor, if any.
+    // Requires _ensureFlags() to have been called at least once; the caller
+    // (generateRoutes) ensures this before entering the shift loop.
+    const pinnedIdx = _getPinnedAnchorIndex(route, shiftIdx);
+    if (pinnedIdx != null) {
+        console.log('[Go v5.3] Pinned anchor for ' + route.busName + ': stop #' +
+            (pinnedIdx + 1) + ' (' + route.stops[pinnedIdx].address + ')');
+    }
+
+    console.log('[Go v5.3] Per-bus TSP ' + route.busName +
         ' (' + route.stops.length + ' stops, ' + route.camperCount + ' campers): ' +
         (isArrival
             ? 'pickup ' + (zw.startHHMM || '?') + ' → camp ' + (zw.endHHMM || '?')
@@ -3931,6 +3945,7 @@ async function _perBusGoogleTSP({
         departureTime: shiftTarget,
         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
         vehicleTimeWindows,
+        pinnedAnchorIndex: pinnedIdx,  // NEW PHASE 3
         googleKey, googleProjId,
         supabaseUrl: _supabaseUrl,
         accessToken: _googleProxyToken,
@@ -3938,19 +3953,13 @@ async function _perBusGoogleTSP({
     });
 
     if (!result || !result.length || !result[0].stops?.length) {
-        // If the per-bus TSP returns nothing, it's usually because the hard
-        // ride-time constraint is infeasible for this bus's zone.  Log it
-        // loudly but don't fail the route — fall back to NH-spine ordering.
-        console.warn('[Go v5.2] Per-bus TSP ' + route.busName +
-            ' infeasible under ' + (D.setup.maxRideTime || 45) + 'min ride cap — ' +
-            'retaining spine ordering');
+        console.warn('[Go v5.3] Per-bus TSP ' + route.busName + ' infeasible — retaining spine');
         return null;
     }
 
     const r = result[0];
 
-    // Sanity: the per-bus TSP must return the SAME campers (by name).
-    // If it dropped or added anyone, that's a bug — log and skip.
+    // Sanity: same campers in and out
     const inNames = new Set();
     for (const s of route.stops) for (const c of s.campers) {
         inNames.add(typeof c === 'string' ? c : c.name);
@@ -3961,9 +3970,8 @@ async function _perBusGoogleTSP({
     }
     if (inNames.size !== outNames.size ||
         [...inNames].some(n => !outNames.has(n))) {
-        console.error('[Go v5.2] Per-bus TSP altered camper set for ' + route.busName +
-            ' (in: ' + inNames.size + ', out: ' + outNames.size +
-            ') — rejecting result, keeping spine order');
+        console.error('[Go v5.3] Per-bus TSP altered camper set for ' + route.busName +
+            ' — rejecting, keeping spine order');
         return null;
     }
 
@@ -3974,6 +3982,7 @@ async function _perBusGoogleTSP({
         tspLegTimes:   r._tspLegTimes  || null
     };
 }
+
 
 
 // =============================================================================
@@ -5215,6 +5224,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
 
     function renderRouteResults(allShifts) {
         document.getElementById('routeResults').style.display = '';
+        renderDispatcherDashboard(allShifts);
         const btnLabel = document.getElementById('generateBtnLabel');
         if (btnLabel) btnLabel.textContent = 'Regenerate Routes';
 
@@ -6021,7 +6031,578 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
     }
 
-    // =========================================================================
+
+window.GoFlagPersistence = (function () {
+    'use strict';
+
+    const DATA_TYPE = 'route_flags';
+    const LS_KEY = 'campistry_go_flags_v1';
+    const VERSION = 1;
+
+    const EMPTY = () => ({
+        version: VERSION, savedAt: null,
+        flags: { stops: {}, buses: {}, approvals: {}, anchors: {} }
+    });
+
+    function cloudAvailable() { return !!window.GoCloudSync; }
+
+    async function _loadFromCloud() {
+        if (!cloudAvailable()) return null;
+        try {
+            const all = await window.GoCloudSync.loadAll();
+            return all?.[DATA_TYPE] || null;
+        } catch (e) {
+            console.warn('[GoFlagPersistence] cloud load failed:', e.message);
+            return null;
+        }
+    }
+
+    async function _saveToCloud(payload) {
+        if (!cloudAvailable()) return { ok: false, reason: 'no-cloud' };
+        try { return await window.GoCloudSync.save(DATA_TYPE, payload); }
+        catch (e) { return { ok: false, error: e }; }
+    }
+
+    function _loadLocal() {
+        try {
+            const raw = localStorage.getItem(LS_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (_) { return null; }
+    }
+
+    function _saveLocal(payload) {
+        try { localStorage.setItem(LS_KEY, JSON.stringify(payload)); return true; }
+        catch (_) { return false; }
+    }
+
+    async function load() {
+        const cloud = await _loadFromCloud();
+        if (cloud && cloud.version === VERSION) { _saveLocal(cloud); return cloud; }
+        const local = _loadLocal();
+        if (local && local.version === VERSION) return local;
+        return EMPTY();
+    }
+
+    async function save(payload) {
+        payload.savedAt = new Date().toISOString();
+        payload.version = VERSION;
+        _saveLocal(payload);
+        const res = await _saveToCloud(payload);
+        return res.ok || !cloudAvailable();
+    }
+
+    // Key helpers — normalize so regeneration doesn't orphan flags
+    function _stopKey(shiftIdx, address) {
+        const norm = (address || '').toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+        return shiftIdx + ':' + norm;
+    }
+    function _busKey(shiftIdx, busId) {
+        return shiftIdx + ':' + busId;
+    }
+
+    return {
+        load, save,
+        EMPTY,
+        _stopKey, _busKey
+    };
+})();
+
+
+// =============================================================================
+// IN-MEMORY FLAG CACHE
+//
+// Loaded on first use, re-saved when mutated. Prevents every click from
+// hitting Supabase.
+// =============================================================================
+let _flagCache = null;
+
+async function _ensureFlags() {
+    if (_flagCache) return _flagCache;
+    _flagCache = await window.GoFlagPersistence.load();
+    return _flagCache;
+}
+
+async function _persistFlags() {
+    if (!_flagCache) return;
+    await window.GoFlagPersistence.save(_flagCache);
+}
+
+
+// =============================================================================
+// PUBLIC FLAG API — called from the dashboard UI
+// =============================================================================
+async function flagStop(shiftIdx, stopAddress, reason, notes) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._stopKey(shiftIdx, stopAddress);
+    _flagCache.flags.stops[key] = {
+        reason:    reason || 'review',
+        notes:     notes || '',
+        flaggedAt: new Date().toISOString()
+    };
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') toast('Stop flagged for review');
+}
+
+async function unflagStop(shiftIdx, stopAddress) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._stopKey(shiftIdx, stopAddress);
+    delete _flagCache.flags.stops[key];
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+}
+
+async function flagRoute(shiftIdx, busId, reason, notes) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    _flagCache.flags.buses[key] = {
+        reason:    reason || 'review',
+        notes:     notes || '',
+        flaggedAt: new Date().toISOString()
+    };
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') toast('Route flagged for review');
+}
+
+async function unflagRoute(shiftIdx, busId) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    delete _flagCache.flags.buses[key];
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+}
+
+async function approveRoute(shiftIdx, busId) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    _flagCache.flags.approvals[key] = {
+        approvedAt: new Date().toISOString()
+    };
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') toast('Route approved');
+}
+
+async function unapproveRoute(shiftIdx, busId) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    delete _flagCache.flags.approvals[key];
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+}
+
+async function approveAllRoutes() {
+    if (!_generatedRoutes) return;
+    await _ensureFlags();
+    _generatedRoutes.forEach((sr, si) => {
+        sr.routes.forEach(r => {
+            if (r.stops.length === 0) return;
+            const key = window.GoFlagPersistence._busKey(si, r.busId);
+            _flagCache.flags.approvals[key] = {
+                approvedAt: new Date().toISOString()
+            };
+        });
+    });
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') toast('All routes approved');
+}
+
+async function pinAnchor(shiftIdx, busId, stopAddress, lat, lng) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    _flagCache.flags.anchors[key] = {
+        stopAddress, lat, lng,
+        pinnedAt: new Date().toISOString()
+    };
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') {
+        toast('Anchor pinned — will take effect on next regenerate');
+    }
+}
+
+async function unpinAnchor(shiftIdx, busId) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    delete _flagCache.flags.anchors[key];
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+}
+
+
+// =============================================================================
+// ANCHOR DETECTION
+//
+// LSTA's "keystone stop" heuristic: within a bus's zone, find the stop that
+//   1. is farthest from camp (represents the route's outer edge)
+//   2. has the most kids (is a real mega-cluster worth anchoring on)
+//
+// Score = (distFromCamp in miles) * (kids at stop).  This naturally prefers
+// a 15-kid stop 10 miles out over a 2-kid stop 12 miles out.
+//
+// For arrival mode: the anchor is the FIRST stop (bus starts there, drives in)
+// For dismissal mode: the anchor is the LAST stop (bus ends there, closing out)
+//
+// NOTE: For Phase 3 we only RECOMMEND the anchor. The dispatcher must click
+// "Pin anchor" in the dashboard to make it a hard constraint on next regen.
+// This prevents the anchor from hurting routes where the solver already
+// chose a different (and equally-good or better) stop order.
+// =============================================================================
+function _detectAnchorForRoute(route, campLat, campLng) {
+    if (!route.stops || route.stops.length < 2) return null;
+
+    let best = null, bestScore = -Infinity;
+    for (const st of route.stops) {
+        if (!st.lat || !st.lng) continue;
+        if (st.isMonitor || st.isCounselor) continue;
+        const distMi = haversineMi(st.lat, st.lng, campLat, campLng);
+        const kidCount = (st.campers || []).length;
+        const score = distMi * Math.max(1, kidCount);
+        if (score > bestScore) {
+            bestScore = score;
+            best = { stop: st, distMi, kidCount, score };
+        }
+    }
+    return best;
+}
+
+// Called from Phase 2's _perBusGoogleTSP to look up any user-pinned anchor.
+// Returns the stop INDEX in route.stops if one is pinned, else null.
+function _getPinnedAnchorIndex(route, shiftIdx) {
+    if (!_flagCache) return null; // not loaded yet → no pin
+    const key = window.GoFlagPersistence._busKey(shiftIdx ?? 0, route.busId);
+    const anchor = _flagCache.flags.anchors[key];
+    if (!anchor) return null;
+
+    // Find the stop in route.stops whose address matches the pinned anchor.
+    // We match on address because stop order may have changed since pin.
+    const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const target = norm(anchor.stopAddress);
+    for (let i = 0; i < route.stops.length; i++) {
+        if (norm(route.stops[i].address) === target) return i;
+    }
+    // No match — the pinned anchor stop no longer exists on this route.
+    // Don't fall back, just ignore (the dispatcher can re-pin if needed).
+    return null;
+}
+
+
+// =============================================================================
+// ROUTE QUALITY HEURISTIC (LSTA-style)
+//
+// Returns an object describing potential issues with a route. Used by the
+// dashboard to surface problems. These are advisory — some "problems" may
+// be intentional (e.g. single-rider stops for outliers).
+//
+// Checks:
+//   - oversized:   > 55 kids
+//   - undersized:  < 15 kids (may indicate bus can be dropped)
+//   - too-long:    > maxRideTime minutes total duration
+//   - too-many-singleton-stops: >40% of stops have 1 kid (inefficient)
+//   - ride-time-violations:  any stop with _rideTimeWarning
+//   - no-mega-stop: no stop has 5+ kids (likely a low-density zone but worth
+//     flagging for review)
+//   - anchor-mismatch: solver's first (AM) / last (PM) stop differs from the
+//     detected mega-cluster (informational)
+// =============================================================================
+function _analyzeRoute(route, shiftIdx, campLat, campLng, maxRideMin, isArrival) {
+    const issues = [];
+    const details = {};
+
+    // Basic size checks
+    if (route.camperCount > 55) {
+        issues.push({ type: 'oversized', severity: 'warn',
+            msg: route.camperCount + ' campers (over 55 LSTA guideline)' });
+    }
+    if (route.camperCount < 15 && route.camperCount > 0) {
+        issues.push({ type: 'undersized', severity: 'info',
+            msg: 'Only ' + route.camperCount + ' campers (may be mergeable)' });
+    }
+    if (route.totalDuration > (maxRideMin + 15)) {
+        issues.push({ type: 'too-long', severity: 'warn',
+            msg: 'Route takes ' + route.totalDuration + ' min' });
+    }
+
+    // Stop-distribution checks
+    const stopCount = route.stops.filter(s => !s.isMonitor && !s.isCounselor).length;
+    const singletonStops = route.stops
+        .filter(s => !s.isMonitor && !s.isCounselor && s.campers.length === 1).length;
+    if (stopCount > 0 && singletonStops / stopCount > 0.5) {
+        issues.push({ type: 'too-many-singletons', severity: 'info',
+            msg: singletonStops + ' of ' + stopCount + ' stops have only 1 kid' });
+    }
+
+    const maxStopSize = Math.max(0,
+        ...route.stops
+            .filter(s => !s.isMonitor && !s.isCounselor)
+            .map(s => s.campers.length)
+    );
+    if (maxStopSize < 3 && route.camperCount >= 15) {
+        issues.push({ type: 'no-mega-stop', severity: 'warn',
+            msg: 'Largest stop has ' + maxStopSize +
+                ' kids (no anchor cluster — route may be too spread out)' });
+    }
+    details.maxStopSize = maxStopSize;
+
+    // Ride-time violations (solver-detected)
+    const rideViolations = route.stops
+        .filter(s => s._rideTimeWarning).length;
+    if (rideViolations > 0) {
+        issues.push({ type: 'ride-violations', severity: 'error',
+            msg: rideViolations + ' stop(s) over ' + maxRideMin + ' min ride' });
+    }
+
+    // Anchor analysis
+    const anchor = _detectAnchorForRoute(route, campLat, campLng);
+    if (anchor && anchor.kidCount >= 3) {
+        details.detectedAnchor = {
+            address: anchor.stop.address,
+            kidCount: anchor.kidCount,
+            distMi: anchor.distMi
+        };
+
+        // For arrival mode: bus should START at anchor
+        // For dismissal mode: bus should END at anchor
+        const solverExtremeIdx = isArrival ? 0 : route.stops.length - 1;
+        const solverExtreme = route.stops[solverExtremeIdx];
+        if (solverExtreme && solverExtreme.address !== anchor.stop.address) {
+            // Only flag if the current extreme has significantly fewer kids
+            const extremeKids = solverExtreme.campers.length;
+            if (anchor.kidCount > extremeKids + 2) {
+                issues.push({ type: 'anchor-mismatch', severity: 'info',
+                    msg: (isArrival ? 'First' : 'Last') + ' stop has ' + extremeKids +
+                        ' kid(s); mega-cluster has ' + anchor.kidCount +
+                        ' at ' + anchor.stop.address });
+            }
+        }
+    }
+
+    // Check for a pinned anchor on this route
+    const pinKey = window.GoFlagPersistence?._busKey(shiftIdx, route.busId);
+    const pinned = _flagCache?.flags?.anchors?.[pinKey];
+    if (pinned) {
+        details.pinnedAnchor = pinned;
+    }
+
+    return { issues, details };
+}
+
+
+// =============================================================================
+// DISPATCHER DASHBOARD RENDERER
+//
+// Injects the dashboard into the existing #dispatcherDashboard container.
+// Lists every active route with: status indicator, quality summary, issues,
+// and action buttons (flag, approve, pin anchor).
+//
+// Called from renderRouteResults after the route cards are built.
+// =============================================================================
+async function renderDispatcherDashboard(allShifts) {
+    const container = document.getElementById('dispatcherDashboard');
+    if (!container) return; // dashboard not yet added to HTML
+
+    if (!allShifts || !allShifts.length) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+
+    // Load flags if not already
+    await _ensureFlags();
+
+    const campLat = D.setup.campLat || _campCoordsCache?.lat || 0;
+    const campLng = D.setup.campLng || _campCoordsCache?.lng || 0;
+    const maxRideMin = D.setup.maxRideTime || 45;
+    const isArrival = D.activeMode === 'arrival';
+
+    // Count buckets across all shifts
+    let approved = 0, flagged = 0, issues = 0, total = 0;
+    const perShift = [];
+
+    allShifts.forEach((sr, si) => {
+        const activeRoutes = sr.routes.filter(r => r.stops.length > 0);
+        const shiftData = { shiftIdx: si, shift: sr.shift, routes: [] };
+
+        activeRoutes.forEach(r => {
+            const analysis = _analyzeRoute(r, si, campLat, campLng, maxRideMin, isArrival);
+
+            const approveKey = window.GoFlagPersistence._busKey(si, r.busId);
+            const flagKey = approveKey;
+            const isApproved = !!_flagCache.flags.approvals[approveKey];
+            const isFlagged  = !!_flagCache.flags.buses[flagKey];
+
+            // Also count stop-level flags for this route
+            const stopFlagCount = r.stops.filter(s => {
+                const k = window.GoFlagPersistence._stopKey(si, s.address);
+                return !!_flagCache.flags.stops[k];
+            }).length;
+
+            total++;
+            if (isApproved) approved++;
+            if (isFlagged || stopFlagCount > 0) flagged++;
+            if (analysis.issues.length > 0) issues++;
+
+            shiftData.routes.push({
+                route: r,
+                analysis,
+                isApproved,
+                isFlagged,
+                stopFlagCount
+            });
+        });
+
+        perShift.push(shiftData);
+    });
+
+    // Top-level summary bar
+    let html = '<div class="dispatch-summary">' +
+        '<div class="dispatch-summary-cell">' +
+            '<div class="dispatch-num">' + total + '</div>' +
+            '<div class="dispatch-lbl">Total routes</div>' +
+        '</div>' +
+        '<div class="dispatch-summary-cell">' +
+            '<div class="dispatch-num" style="color:#10b981">' + approved + '</div>' +
+            '<div class="dispatch-lbl">Approved</div>' +
+        '</div>' +
+        '<div class="dispatch-summary-cell">' +
+            '<div class="dispatch-num" style="color:#f59e0b">' + issues + '</div>' +
+            '<div class="dispatch-lbl">Have issues</div>' +
+        '</div>' +
+        '<div class="dispatch-summary-cell">' +
+            '<div class="dispatch-num" style="color:#ef4444">' + flagged + '</div>' +
+            '<div class="dispatch-lbl">Flagged</div>' +
+        '</div>' +
+        '<div class="dispatch-summary-actions">' +
+            '<button class="btn btn-primary btn-sm" onclick="CampistryGo.approveAllRoutes()">' +
+                'Approve all' +
+            '</button>' +
+        '</div>' +
+    '</div>';
+
+    // Per-shift, per-route detail table
+    perShift.forEach(shiftData => {
+        const { shift, routes } = shiftData;
+        html += '<div class="dispatch-shift">' +
+            '<div class="dispatch-shift-header">' +
+                esc(shift.label || 'Shift ' + (shiftData.shiftIdx + 1)) +
+                ' <span style="color:var(--text-muted);font-weight:400;font-size:.75rem;">' +
+                    routes.length + ' routes' +
+                '</span>' +
+            '</div>' +
+            '<div class="dispatch-routes">';
+
+        routes.forEach(rd => {
+            const { route: r, analysis, isApproved, isFlagged, stopFlagCount } = rd;
+            const totalFlags = (isFlagged ? 1 : 0) + stopFlagCount;
+
+            const statusClass = isApproved ? 'approved'
+                : analysis.issues.some(i => i.severity === 'error') ? 'error'
+                : analysis.issues.some(i => i.severity === 'warn') ? 'warn'
+                : 'ok';
+            const statusIcon = isApproved ? '✓'
+                : statusClass === 'error' ? '✗'
+                : statusClass === 'warn'  ? '!'
+                : '·';
+
+            html += '<div class="dispatch-route dispatch-route-' + statusClass + '">' +
+                '<div class="dispatch-route-header">' +
+                    '<div class="dispatch-route-title">' +
+                        '<span class="dispatch-status-dot dispatch-status-' + statusClass + '">' +
+                            statusIcon +
+                        '</span>' +
+                        '<span style="background:' + esc(r.busColor) +
+                            ';width:10px;height:10px;border-radius:50%;display:inline-block;"></span>' +
+                        '<strong>' + esc(r.busName) + '</strong>' +
+                        '<span class="dispatch-route-summary">' +
+                            r.camperCount + ' kids · ' + r.stops.length + ' stops · ' +
+                            r.totalDuration + ' min' +
+                        '</span>' +
+                    '</div>' +
+                    '<div class="dispatch-route-actions">';
+
+            if (totalFlags > 0) {
+                html += '<span class="dispatch-flag-badge">' + totalFlags +
+                    ' flag' + (totalFlags === 1 ? '' : 's') + '</span>';
+            }
+
+            if (isApproved) {
+                html += '<button class="btn btn-ghost btn-sm"' +
+                    ' onclick="CampistryGo.unapproveRoute(' + shiftData.shiftIdx + ',\'' +
+                        esc(r.busId) + '\')">' +
+                    'Unapprove</button>';
+            } else {
+                html += '<button class="btn btn-secondary btn-sm"' +
+                    ' onclick="CampistryGo.flagRoute(' + shiftData.shiftIdx + ',\'' +
+                        esc(r.busId) + '\',\'review\',\'\')">' +
+                    'Flag</button>' +
+                    '<button class="btn btn-primary btn-sm"' +
+                    ' onclick="CampistryGo.approveRoute(' + shiftData.shiftIdx + ',\'' +
+                        esc(r.busId) + '\')">' +
+                    'Approve</button>';
+            }
+            html += '</div></div>';
+
+            // Issues list
+            if (analysis.issues.length > 0) {
+                html += '<ul class="dispatch-issues">';
+                analysis.issues.forEach(iss => {
+                    html += '<li class="dispatch-issue dispatch-issue-' + iss.severity + '">' +
+                        esc(iss.msg) + '</li>';
+                });
+                html += '</ul>';
+            }
+
+            // Anchor info + pin/unpin control
+            if (analysis.details.detectedAnchor) {
+                const da = analysis.details.detectedAnchor;
+                const pa = analysis.details.pinnedAnchor;
+                const isPinned = !!pa;
+                const pinnedMatches = isPinned && pa.stopAddress === da.address;
+
+                html += '<div class="dispatch-anchor">' +
+                    '<span class="dispatch-anchor-icon">📍</span>' +
+                    '<span>Mega-cluster: <strong>' + esc(da.address) + '</strong> ' +
+                        '(' + da.kidCount + ' kids, ' + da.distMi.toFixed(1) + ' mi from camp)' +
+                    '</span>';
+
+                if (isPinned && !pinnedMatches) {
+                    html += '<span class="dispatch-anchor-badge">pinned: ' +
+                        esc(pa.stopAddress) + '</span>' +
+                        '<button class="btn btn-ghost btn-sm"' +
+                        ' onclick="CampistryGo.unpinAnchor(' + shiftData.shiftIdx + ',\'' +
+                            esc(r.busId) + '\')">' +
+                        'Unpin</button>';
+                } else if (isPinned) {
+                    html += '<span class="dispatch-anchor-badge dispatch-anchor-pinned">📌 pinned</span>' +
+                        '<button class="btn btn-ghost btn-sm"' +
+                        ' onclick="CampistryGo.unpinAnchor(' + shiftData.shiftIdx + ',\'' +
+                            esc(r.busId) + '\')">' +
+                        'Unpin</button>';
+                } else {
+                    html += '<button class="btn btn-ghost btn-sm"' +
+                        ' onclick="CampistryGo.pinAnchor(' + shiftData.shiftIdx + ',\'' +
+                            esc(r.busId) + '\',\'' + esc(da.address) + '\',' +
+                            da.kidCount /* unused but keeps API parity */ + ',' + 0 + ')">' +
+                        'Pin as anchor' +
+                        '</button>';
+                }
+                html += '</div>';
+            }
+
+            html += '</div>'; // end dispatch-route
+        });
+
+        html += '</div></div>'; // end dispatch-routes, dispatch-shift
+    });
+
+    container.innerHTML = html;
+    container.style.display = '';
+}
+// =========================================================================
     // PUBLIC API
     // =========================================================================
     window.CampistryGo = {
@@ -6056,7 +6637,14 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             }
         },
         _getRouteGeomCache: function() { return _routeGeomCache; },
-        _clearGeomCache: function(key) { if (key) delete _routeGeomCache[key]; else _routeGeomCache = {}; }
+        _clearGeomCache: function(key) { if (key) delete _routeGeomCache[key]; else _routeGeomCache = {}; },
+
+        // Phase 3 dispatcher API
+        flagStop, unflagStop,
+        flagRoute, unflagRoute,
+        approveRoute, unapproveRoute, approveAllRoutes,
+        pinAnchor, unpinAnchor,
+        renderDispatcherDashboard
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 

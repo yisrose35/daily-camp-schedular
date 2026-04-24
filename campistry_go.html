@@ -262,6 +262,27 @@
                 <summary class="card-header" style="cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;justify-content:space-between"><h2 style="display:flex;align-items:center;gap:8px">Pre-Flight Checklist <span style="font-size:.7rem;color:var(--text-muted);font-weight:400">▼</span></h2><span class="badge badge-neutral" id="preflightStatus">—</span></summary>
                 <div class="card-body" id="preflightBody"></div>
             </details>
+
+            <!-- Dispatcher Review Dashboard (Phase 3) -->
+            <details class="collapsible-card" id="dispatcherDashboardCard" open>
+                <summary class="collapsible-header">
+                    <span style="display:flex;align-items:center;gap:.5rem;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2">
+                            <path d="M9 11l3 3L22 4"/>
+                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                        </svg>
+                        Dispatcher Review
+                    </span>
+                    <span style="font-size:.7rem;color:var(--text-muted);font-weight:400;">
+                        review &amp; sign off before publishing
+                    </span>
+                </summary>
+                <div class="collapsible-body" id="dispatcherDashboard" style="padding:0;display:none;">
+                    <!-- populated by renderDispatcherDashboard() -->
+                </div>
+            </details>
+
             <!-- Action bar -->
             <div class="action-bar" style="margin-bottom:1rem;">
                 <button class="btn btn-primary" id="generateRoutesBtn" onclick="CampistryGo.generateRoutes()" disabled>
