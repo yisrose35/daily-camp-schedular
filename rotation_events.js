@@ -172,17 +172,20 @@ function getAssignmentsForDate(dateKey, opts = {}) {
         // Determine which bunks to schedule today
         let todayQueue;
         if (opts.manualBunks && opts.manualBunks[evt.id]) {
-            // Semi-auto: user picked specific bunks
             const picked = new Set(opts.manualBunks[evt.id]);
             todayQueue = remaining.filter(b => picked.has(b.bunk));
         } else if (opts.autoFill !== false) {
-            // Auto: take as many as can fit
             todayQueue = [...remaining];
         } else {
-            return; // No bunks selected and auto disabled
+            return;
         }
 
-        // Sort by grade for grouping, then by bunk name within grade
+        // Grade filter
+        const allowedGrades = Array.isArray(evt.grades) && evt.grades.length > 0 ? new Set(evt.grades) : null;
+        if (allowedGrades) todayQueue = todayQueue.filter(b => allowedGrades.has(b.grade));
+        if (todayQueue.length === 0) return;
+
+        // Sort by grade, then bunk number
         todayQueue.sort((a, b) => {
             if (a.grade !== b.grade) return a.grade.localeCompare(b.grade);
             const numA = parseInt(a.bunk.match(/\d+/)?.[0] || 0);
@@ -195,50 +198,103 @@ function getAssignmentsForDate(dateKey, opts = {}) {
         const duration = evt.durationPerBunk;
         const concurrency = evt.concurrency || 1;
         const assignments = [];
-
-        // Get existing schedules for conflict checking
         const scheduleAssignments = window.scheduleAssignments || {};
 
         const sequenceTarget = evt.sequence?.targetActivity || '';
+        const sequencePosition = evt.sequence?.position || 'either';
+        const gradeMode = evt.gradeMode || 'individual';
 
-        if (sequenceTarget) {
-            // ── Sequence mode: place each bunk immediately before or after its target activity ──
-            for (let i = 0; i < todayQueue.length; i++) {
-                const bunkInfo = todayQueue[i];
-                const bunkSchedule = scheduleAssignments[bunkInfo.bunk] || [];
+        // Find the target activity's slot for a bunk — checks timelines (in-progress) then persisted assignments
+        function findTargetEntry(bunkName) {
+            const combined = [...(opts.timelines?.[bunkName] || []), ...(scheduleAssignments[bunkName] || [])];
+            return combined.find(e =>
+                e && !e.continuation && !e._isTransition &&
+                (e._activity === sequenceTarget || e.sport === sequenceTarget ||
+                 e.field === sequenceTarget || e.displayName === sequenceTarget)
+            ) || null;
+        }
 
-                // Find the target activity's slot for this bunk today
-                const targetEntry = bunkSchedule.find(e =>
-                    e && !e.continuation &&
-                    (e._activity === sequenceTarget || e.sport === sequenceTarget || e.field === sequenceTarget)
-                );
-                if (!targetEntry) continue; // target not on this bunk's schedule today → skip
+        // Try to place a single bunk adjacent to its target entry
+        function tryAdjacent(bunkName, tStart, tEnd) {
+            if ((sequencePosition === 'either' || sequencePosition === 'after') &&
+                !hasBunkConflict(bunkName, tEnd, tEnd + duration, scheduleAssignments, opts.timelines)) {
+                return { startMin: tEnd, endMin: tEnd + duration };
+            }
+            if ((sequencePosition === 'either' || sequencePosition === 'before') &&
+                tStart - duration >= 0 &&
+                !hasBunkConflict(bunkName, tStart - duration, tStart, scheduleAssignments, opts.timelines)) {
+                return { startMin: tStart - duration, endMin: tStart };
+            }
+            return null;
+        }
 
+        if (gradeMode === 'whole_grade') {
+            // Group by grade; all bunks in a grade share one time slot
+            const gradeGroups = {};
+            todayQueue.forEach(b => {
+                if (!gradeGroups[b.grade]) gradeGroups[b.grade] = [];
+                gradeGroups[b.grade].push(b);
+            });
+
+            Object.values(gradeGroups).forEach(group => {
+                if (sequenceTarget) {
+                    // Find shared target time — scan group until one bunk has it
+                    let tStart = null, tEnd = null;
+                    for (const b of group) {
+                        const e = findTargetEntry(b.bunk);
+                        if (!e) continue;
+                        const s = e._startMin ?? e.startMin ?? null;
+                        const t = e._endMin ?? e.endMin ?? null;
+                        if (s != null && t != null) { tStart = s; tEnd = t; break; }
+                    }
+                    if (tStart == null) return; // target not found → skip grade today
+
+                    let time = null;
+                    if ((sequencePosition === 'either' || sequencePosition === 'after') &&
+                        group.every(b => !hasBunkConflict(b.bunk, tEnd, tEnd + duration, scheduleAssignments, opts.timelines))) {
+                        time = { startMin: tEnd, endMin: tEnd + duration };
+                    } else if ((sequencePosition === 'either' || sequencePosition === 'before') &&
+                        tStart - duration >= 0 &&
+                        group.every(b => !hasBunkConflict(b.bunk, tStart - duration, tStart, scheduleAssignments, opts.timelines))) {
+                        time = { startMin: tStart - duration, endMin: tStart };
+                    }
+                    if (!time) return; // can't fit entire grade → skip today
+                    group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: time.startMin, endMin: time.endMin }));
+                } else {
+                    // No sequence: find a window slot free for the entire grade
+                    const totalSlots = Math.floor((windowEnd - windowStart) / duration);
+                    for (let s = 0; s < totalSlots; s++) {
+                        const slotStart = windowStart + s * duration;
+                        const slotEnd = slotStart + duration;
+                        if (group.every(b => !hasBunkConflict(b.bunk, slotStart, slotEnd, scheduleAssignments, opts.timelines))) {
+                            group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: slotStart, endMin: slotEnd }));
+                            break;
+                        }
+                    }
+                }
+            });
+
+        } else if (sequenceTarget) {
+            // Individual + sequence: each bunk placed adjacent to its own target slot
+            for (const bunkInfo of todayQueue) {
+                const targetEntry = findTargetEntry(bunkInfo.bunk);
+                if (!targetEntry) continue;
                 const tStart = targetEntry._startMin ?? targetEntry.startMin ?? null;
                 const tEnd = targetEntry._endMin ?? targetEntry.endMin ?? null;
                 if (tStart == null || tEnd == null) continue;
-
-                // Try immediately after target, then immediately before
-                if (!hasBunkConflict(bunkInfo.bunk, tEnd, tEnd + duration, scheduleAssignments, opts.timelines)) {
-                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: tEnd, endMin: tEnd + duration });
-                } else if (tStart - duration >= 0 && !hasBunkConflict(bunkInfo.bunk, tStart - duration, tStart, scheduleAssignments, opts.timelines)) {
-                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: tStart - duration, endMin: tStart });
-                }
-                // else: no adjacent slot free — hard constraint, skip this bunk today
+                const time = tryAdjacent(bunkInfo.bunk, tStart, tEnd);
+                if (time) assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, ...time });
             }
-        } else {
-            // ── Standard mode: sequential slots within the daily window ──
-            const totalSlots = Math.floor((windowEnd - windowStart) / duration);
-            let slotIdx = 0;
-            let concurrencySlot = 0;
 
+        } else {
+            // Individual + no sequence: original sequential slot logic
+            const totalSlots = Math.floor((windowEnd - windowStart) / duration);
+            let slotIdx = 0, concurrencySlot = 0;
             for (let i = 0; i < todayQueue.length && slotIdx < totalSlots; i++) {
                 const bunkInfo = todayQueue[i];
                 const slotStart = windowStart + slotIdx * duration;
                 const slotEnd = slotStart + duration;
-
                 if (hasBunkConflict(bunkInfo.bunk, slotStart, slotEnd, scheduleAssignments, opts.timelines)) {
-                    // Try next slots for this bunk
                     let placed = false;
                     for (let s = slotIdx + 1; s < totalSlots; s++) {
                         const altStart = windowStart + s * duration;
@@ -249,16 +305,12 @@ function getAssignmentsForDate(dateKey, opts = {}) {
                             break;
                         }
                     }
-                    if (!placed) continue; // overflow to next day
+                    if (!placed) continue;
                 } else {
                     assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: slotStart, endMin: slotEnd });
                 }
-
                 concurrencySlot++;
-                if (concurrencySlot >= concurrency) {
-                    concurrencySlot = 0;
-                    slotIdx++;
-                }
+                if (concurrencySlot >= concurrency) { concurrencySlot = 0; slotIdx++; }
             }
         }
 
@@ -652,7 +704,7 @@ async function showCreateEventModal(containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
     const allBunks = getAllBunks();
-
+    const allGrades = [...new Set(allBunks.map(b => b.grade))].sort();
     const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
@@ -668,10 +720,20 @@ async function showCreateEventModal(containerEl) {
             { name: 'endDate', label: 'End Date (MM/DD/YYYY)', type: 'text', placeholder: 'MM/DD/YYYY' },
             { name: 'windowStart', label: 'Daily Window Start', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', placeholder: 'e.g., 1:00pm' },
-            { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', placeholder: 'e.g., 10' },
+            { name: 'duration', label: 'Duration Per Bunk / Grade (minutes)', type: 'text', placeholder: 'e.g., 10' },
             { name: 'concurrency', label: 'Bunks at a Time', type: 'text', placeholder: 'e.g., 2', default: '2' },
+            { name: 'gradeMode', label: 'Scheduling Mode', type: 'select', options: [
+                { value: 'individual', label: 'Individual bunks (staggered)' },
+                { value: 'whole_grade', label: 'Whole grade at once (like leagues)' }
+            ]},
+            { name: 'grades', label: 'Grades (leave all unchecked = all grades)', type: 'checkbox-group', options: allGrades.map(g => ({ value: g, label: g })) },
             { name: 'location', label: 'Location (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] },
-            { name: 'adjacentTo', label: 'Must be adjacent to (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allActivityNames.map(a => ({ value: a, label: a }))] }
+            { name: 'adjacentTo', label: 'Must be adjacent to (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allActivityNames.map(a => ({ value: a, label: a }))] },
+            { name: 'adjacentPosition', label: 'Position', type: 'select', options: [
+                { value: 'either', label: 'Before or after (scheduler decides)' },
+                { value: 'after', label: 'Immediately after' },
+                { value: 'before', label: 'Immediately before' }
+            ]}
         ],
         confirmText: 'Create'
     });
@@ -714,7 +776,9 @@ async function showCreateEventModal(containerEl) {
         durationPerBunk: duration,
         concurrency,
         location: result.location || null,
-        sequence: { targetActivity: result.adjacentTo || '' },
+        gradeMode: result.gradeMode || 'individual',
+        grades: Array.isArray(result.grades) ? result.grades : [],
+        sequence: { targetActivity: result.adjacentTo || '', position: result.adjacentPosition || 'either' },
         gradeGrouping: true,
         excludedBunks: [],
         completedBunks: {},
@@ -745,6 +809,8 @@ async function showCreateEventModal(containerEl) {
 async function showEditEventModal(evt, containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
+    const allBunksForEdit = getAllBunks();
+    const allGradesForEdit = [...new Set(allBunksForEdit.map(b => b.grade))].sort();
     const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
@@ -759,10 +825,20 @@ async function showEditEventModal(evt, containerEl) {
             { name: 'endDate', label: 'End Date (MM/DD/YYYY)', type: 'text', default: formatDate(evt.dateRange.end) },
             { name: 'windowStart', label: 'Daily Window Start', type: 'text', default: minutesToTime(evt.dailyWindow.startMin) },
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', default: minutesToTime(evt.dailyWindow.endMin) },
-            { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', default: String(evt.durationPerBunk) },
+            { name: 'duration', label: 'Duration Per Bunk / Grade (minutes)', type: 'text', default: String(evt.durationPerBunk) },
             { name: 'concurrency', label: 'Bunks at a Time', type: 'text', default: String(evt.concurrency || 2) },
+            { name: 'gradeMode', label: 'Scheduling Mode', type: 'select', default: evt.gradeMode || 'individual', options: [
+                { value: 'individual', label: 'Individual bunks (staggered)' },
+                { value: 'whole_grade', label: 'Whole grade at once (like leagues)' }
+            ]},
+            { name: 'grades', label: 'Grades (leave all unchecked = all grades)', type: 'checkbox-group', default: Array.isArray(evt.grades) ? evt.grades : [], options: allGradesForEdit.map(g => ({ value: g, label: g })) },
             { name: 'location', label: 'Location (optional)', type: 'select', default: evt.location || '', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] },
-            { name: 'adjacentTo', label: 'Must be adjacent to (optional)', type: 'select', default: evt.sequence?.targetActivity || '', options: [{ value: '', label: '-- None --' }, ...allActivityNames.map(a => ({ value: a, label: a }))] }
+            { name: 'adjacentTo', label: 'Must be adjacent to (optional)', type: 'select', default: evt.sequence?.targetActivity || '', options: [{ value: '', label: '-- None --' }, ...allActivityNames.map(a => ({ value: a, label: a }))] },
+            { name: 'adjacentPosition', label: 'Position', type: 'select', default: evt.sequence?.position || 'either', options: [
+                { value: 'either', label: 'Before or after (scheduler decides)' },
+                { value: 'after', label: 'Immediately after' },
+                { value: 'before', label: 'Immediately before' }
+            ]}
         ],
         confirmText: 'Save Changes'
     });
@@ -788,7 +864,9 @@ async function showEditEventModal(evt, containerEl) {
         durationPerBunk: parseInt(result.duration) || evt.durationPerBunk,
         concurrency: Math.max(1, parseInt(result.concurrency) || evt.concurrency),
         location: result.location || null,
-        sequence: { targetActivity: result.adjacentTo || '' }
+        gradeMode: result.gradeMode || 'individual',
+        grades: Array.isArray(result.grades) ? result.grades : [],
+        sequence: { targetActivity: result.adjacentTo || '', position: result.adjacentPosition || 'either' }
     });
 
     renderRotationEventsPane(containerEl);
