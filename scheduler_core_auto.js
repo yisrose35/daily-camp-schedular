@@ -8549,16 +8549,36 @@
                             return true;
                         };
 
-                        // Scan every 5-min offset in the daily window to find the earliest
-                        // `dur`-minute placement where all bunks in the grade are free.
-                        // Avoids other grades' already-chosen placements (not_sharable).
-                        const findGradeSlot = (bunks, placements) => {
+                        // Find a placement for this grade. If the grade has bell-schedule
+                        // periods (window.campPeriods[grade]), use period boundaries as
+                        // candidates — otherwise Step 2.75 will evict any non-aligned
+                        // rotation_event wall as "soft-fixed straddling boundary". Fall
+                        // back to 5-min scan when no periods are defined for the grade.
+                        const findGradeSlot = (bunks, grade, placements) => {
+                            const tryWindow = (t, tEnd) => {
+                                if (tEnd > winEnd || t < winStart) return false;
+                                if (placements.some(p => t < p.endMin && tEnd > p.startMin)) return false;
+                                return bunks.every(b => isWindowFreeForBunk(t, tEnd, b));
+                            };
+                            const gradePeriods = (window.campPeriods || {})[grade] || [];
+                            if (gradePeriods.length > 0) {
+                                // Align placement to period starts, event keeps its own duration.
+                                // Period must fit entirely within the daily window and be long
+                                // enough to hold the event without spilling across boundary.
+                                const viable = gradePeriods
+                                    .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.endMin <= winEnd)
+                                    .sort((a, b) => a.startMin - b.startMin);
+                                for (const p of viable) {
+                                    if (tryWindow(p.startMin, p.startMin + dur)) {
+                                        return { startMin: p.startMin, endMin: p.startMin + dur };
+                                    }
+                                }
+                                return null;
+                            }
+                            // No periods defined: 5-min scan
                             for (let t = winStart; t + dur <= winEnd; t += 5) {
-                                const tEnd = t + dur;
-                                const conflicts = placements.some(p => t < p.endMin && tEnd > p.startMin);
-                                if (conflicts) continue;
-                                if (bunks.every(b => isWindowFreeForBunk(t, tEnd, b))) {
-                                    return { startMin: t, endMin: tEnd };
+                                if (tryWindow(t, t + dur)) {
+                                    return { startMin: t, endMin: t + dur };
                                 }
                             }
                             return null;
@@ -8591,14 +8611,21 @@
                             _rotWallCount++;
                         };
 
-                        // Sort grades most-constrained-first: count how many viable 5-min
-                        // offsets exist for each grade (ignoring cross-grade conflicts).
-                        // Grades with fewer options go first so tight grades aren't crowded
-                        // out by flexible ones.
+                        // Sort grades most-constrained-first. Viable count uses period
+                        // boundaries when the grade has them (Step 2.75 would evict any
+                        // non-period-aligned placement anyway), else 5-min scan.
                         const gradeEntries = Object.entries(bunksByGrade).map(([g, bks]) => {
                             let viable = 0;
-                            for (let t = winStart; t + dur <= winEnd; t += 5) {
-                                if (bks.every(b => isWindowFreeForBunk(t, t + dur, b))) viable++;
+                            const gPeriods = (window.campPeriods || {})[g] || [];
+                            if (gPeriods.length > 0) {
+                                gPeriods.forEach(p => {
+                                    if (p.startMin < winStart || p.startMin + dur > p.endMin || p.endMin > winEnd) return;
+                                    if (bks.every(b => isWindowFreeForBunk(p.startMin, p.startMin + dur, b))) viable++;
+                                });
+                            } else {
+                                for (let t = winStart; t + dur <= winEnd; t += 5) {
+                                    if (bks.every(b => isWindowFreeForBunk(t, t + dur, b))) viable++;
+                                }
                             }
                             return { grade: g, bunks: bks, viable };
                         }).sort((a, b) => a.viable - b.viable);
@@ -8613,7 +8640,7 @@
 
                         const placements = []; // { startMin, endMin, grade }
                         gradeEntries.forEach(({ grade, bunks, viable }) => {
-                            const slot = findGradeSlot(bunks, placements);
+                            const slot = findGradeSlot(bunks, grade, placements);
                             if (slot) {
                                 placements.push({ startMin: slot.startMin, endMin: slot.endMin, grade });
                                 bunks.forEach(b => placeWall(b, grade, slot));
