@@ -4285,7 +4285,7 @@ async function _trySpatialSortPipeline({
     // and below median time. No hardcoded minutes — only relative ratios.
     showProgress(shiftLabel + ': phase 5 — time-bounded cascade...', pctBase + 55);
 
-    const MAX_TIME_RATIO = 2.0;
+    const MAX_TIME_RATIO = 1.4;
     const STOP_WEIGHT = 120;
     const INTRA_WEIGHT = 120;
 
@@ -4345,7 +4345,7 @@ async function _trySpatialSortPipeline({
             if (mi === worstMI) continue;
             const inner = clusterMeta[mi];
             if (inner.distSec >= outer.distSec) continue;
-            if (times[mi] >= med) continue;
+            if (times[mi] >= cap) continue;
             if (bucketSize(busBuckets[inner.idx]) >= SOFT_CAPACITY) continue;
             const d = haversineMi(outer.cent.lat, outer.cent.lng, inner.cent.lat, inner.cent.lng);
             if (d < bestDist) { bestDist = d; bestInnerMI = mi; }
