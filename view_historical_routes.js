@@ -95,91 +95,79 @@
         return;
     }
 
-    const w = window.open('', 'historical', 'width=1200,height=800');
-    if (!w) { alert('Popup blocked. Allow popups and run again.'); return; }
+    if (!window.L) { alert('Leaflet not loaded in this page. Open the map tab in the app first.'); return; }
+    const L = window.L;
 
-    // Build minimal HTML shell, then inject Leaflet via DOM with onload callback
-    w.document.open();
-    w.document.write('<!DOCTYPE html><html><head><title>Last Year Routes</title><style>body{margin:0;font-family:system-ui,sans-serif}#map{position:absolute;top:0;left:280px;right:0;bottom:0}#side{position:absolute;top:0;left:0;width:280px;bottom:0;background:#f9fafb;border-right:1px solid #e5e7eb;overflow-y:auto;padding:12px;box-sizing:border-box}h2{margin:0 0 8px 0;font-size:16px}.route{display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:pointer;border-radius:4px;margin-bottom:2px;font-size:13px}.route:hover{background:#e5e7eb}.route.off{opacity:.3}.dot{width:14px;height:14px;border-radius:50%;border:1px solid #555;flex-shrink:0}.count{margin-left:auto;color:#666;font-size:12px}button{margin:8px 4px 4px 0;padding:4px 10px;font-size:12px;cursor:pointer}#status{padding:20px;color:#666}</style></head><body><div id="status">Loading Leaflet...</div></body></html>');
-    w.document.close();
+    // Remove any existing overlay
+    document.getElementById('historical-overlay')?.remove();
 
-    // Wait for popup body to be ready
-    await new Promise(r => setTimeout(r, 100));
+    // Build fullscreen overlay in the current page (uses already-loaded Leaflet)
+    const overlay = document.createElement('div');
+    overlay.id = 'historical-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;display:flex;font-family:system-ui,sans-serif';
+    overlay.innerHTML =
+        '<div style="width:280px;background:#f9fafb;border-right:1px solid #e5e7eb;overflow-y:auto;padding:12px;box-sizing:border-box">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h2 style="margin:0;font-size:16px">Last Year Routes</h2><button id="hist-close" style="padding:4px 10px;cursor:pointer">✕ Close</button></div>' +
+            '<div><button id="hist-all" style="padding:4px 10px;cursor:pointer;margin-right:4px">All</button><button id="hist-none" style="padding:4px 10px;cursor:pointer">None</button></div>' +
+            '<div id="hist-list" style="margin-top:8px"></div>' +
+        '</div>' +
+        '<div id="hist-map" style="flex:1"></div>';
+    document.body.appendChild(overlay);
 
-    // Inject Leaflet CSS
-    const link = w.document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-    w.document.head.appendChild(link);
+    const styleEl = document.createElement('style');
+    styleEl.textContent = '.hist-route{display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:pointer;border-radius:4px;margin-bottom:2px;font-size:13px}.hist-route:hover{background:#e5e7eb}.hist-route.off{opacity:.3}.hist-dot{width:14px;height:14px;border-radius:50%;border:1px solid #555;flex-shrink:0}.hist-count{margin-left:auto;color:#666;font-size:12px}';
+    document.head.appendChild(styleEl);
 
-    // Inject Leaflet JS, then init when loaded
-    const script = w.document.createElement('script');
-    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    script.onload = function() {
-        const L = w.L;
-        if (!L) { w.document.body.innerHTML = '<div id="status">Leaflet failed to load.</div>'; return; }
+    const map = L.map(document.getElementById('hist-map')).setView([40.08, -74.22], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
-        w.document.body.innerHTML =
-            '<div id="side"><h2>Last Year Routes</h2><div><button id="allBtn">All</button><button id="noneBtn">None</button></div><div id="list"></div></div>' +
-            '<div id="map"></div>';
-
-        const map = L.map(w.document.getElementById('map')).setView([40.08, -74.22], 11);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-
-        const layers = {};
-        const visible = {};
-        const allBounds = [];
-        for (const color of Object.keys(matched)) {
-            const lg = L.layerGroup();
-            matched[color].forEach(c => {
-                const m = L.circleMarker([c.lat, c.lng], {
-                    radius: 5, color: '#222', weight: 1,
-                    fillColor: COLORS[color], fillOpacity: 0.85
-                });
-                m.bindPopup('<b>' + color + '</b><br>' + c.name);
-                m.addTo(lg);
-                allBounds.push([c.lat, c.lng]);
+    const layers = {};
+    const visible = {};
+    const allBounds = [];
+    for (const color of Object.keys(matched)) {
+        const lg = L.layerGroup();
+        matched[color].forEach(c => {
+            const m = L.circleMarker([c.lat, c.lng], {
+                radius: 5, color: '#222', weight: 1,
+                fillColor: COLORS[color], fillOpacity: 0.85
             });
-            layers[color] = lg;
-            visible[color] = true;
-            lg.addTo(map);
-        }
-        if (allBounds.length) map.fitBounds(allBounds, { padding: [20, 20] });
-
-        const list = w.document.getElementById('list');
-        for (const color of Object.keys(matched)) {
-            const div = w.document.createElement('div');
-            div.className = 'route';
-            div.innerHTML = '<span class="dot" style="background:' + COLORS[color] + '"></span><span>' + color + '</span><span class="count">' + matched[color].length + '</span>';
-            div.addEventListener('click', () => toggle(color, div));
-            list.appendChild(div);
-        }
-        function toggle(color, div) {
-            visible[color] = !visible[color];
-            if (visible[color]) { layers[color].addTo(map); div.classList.remove('off'); }
-            else { map.removeLayer(layers[color]); div.classList.add('off'); }
-        }
-        w.document.getElementById('allBtn').addEventListener('click', () => {
-            w.document.querySelectorAll('.route').forEach((div, i) => {
-                const c = Object.keys(matched)[i];
-                if (!visible[c]) toggle(c, div);
-            });
+            m.bindPopup('<b>' + color + '</b><br>' + c.name);
+            m.addTo(lg);
+            allBounds.push([c.lat, c.lng]);
         });
-        w.document.getElementById('noneBtn').addEventListener('click', () => {
-            w.document.querySelectorAll('.route').forEach((div, i) => {
-                const c = Object.keys(matched)[i];
-                if (visible[c]) toggle(c, div);
-            });
+        layers[color] = lg;
+        visible[color] = true;
+        lg.addTo(map);
+    }
+    if (allBounds.length) map.fitBounds(allBounds, { padding: [20, 20] });
+
+    const list = document.getElementById('hist-list');
+    for (const color of Object.keys(matched)) {
+        const div = document.createElement('div');
+        div.className = 'hist-route';
+        div.innerHTML = '<span class="hist-dot" style="background:' + COLORS[color] + '"></span><span>' + color + '</span><span class="hist-count">' + matched[color].length + '</span>';
+        div.addEventListener('click', () => toggle(color, div));
+        list.appendChild(div);
+    }
+    function toggle(color, div) {
+        visible[color] = !visible[color];
+        if (visible[color]) { layers[color].addTo(map); div.classList.remove('off'); }
+        else { map.removeLayer(layers[color]); div.classList.add('off'); }
+    }
+    document.getElementById('hist-all').onclick = () => {
+        document.querySelectorAll('.hist-route').forEach((div, i) => {
+            const c = Object.keys(matched)[i];
+            if (!visible[c]) toggle(c, div);
         });
-
-        // Force Leaflet to recompute size after layout
-        setTimeout(() => map.invalidateSize(), 200);
-        console.log('[Historical] Map rendered.');
     };
-    script.onerror = function() {
-        w.document.body.innerHTML = '<div id="status">Failed to load Leaflet from CDN. Check internet connection.</div>';
+    document.getElementById('hist-none').onclick = () => {
+        document.querySelectorAll('.hist-route').forEach((div, i) => {
+            const c = Object.keys(matched)[i];
+            if (visible[c]) toggle(c, div);
+        });
     };
-    w.document.head.appendChild(script);
+    document.getElementById('hist-close').onclick = () => overlay.remove();
 
-    console.log('[Historical] Popup opened with ' + totalMatched + ' campers across ' + Object.keys(matched).length + ' routes.');
+    setTimeout(() => map.invalidateSize(), 100);
+    console.log('[Historical] Overlay rendered with ' + totalMatched + ' campers across ' + Object.keys(matched).length + ' routes.');
 })();
