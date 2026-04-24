@@ -637,15 +637,28 @@ function removeCompletion(eventId, bunkName) {
 // UI: Create / Edit Event Modal
 // =================================================================
 
+function buildAllActivityNames(g) {
+    const seen = new Set();
+    // Sports (from field activity lists)
+    (g.app1?.fields || []).forEach(f => { (f.activities || []).forEach(a => { if (a) seen.add(a); }); });
+    // General activities (Swim, Lunch, etc. configured per field)
+    (g.app1?.fields || []).forEach(f => {
+        (f.generalActivities || []).forEach(ga => {
+            const n = typeof ga === 'string' ? ga : ga.name;
+            if (n) seen.add(n);
+        });
+    });
+    // Special activities
+    (window.getAllSpecialActivities?.() || []).forEach(s => { if (s.name) seen.add(s.name); });
+    return [...seen].sort();
+}
+
 async function showCreateEventModal(containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
     const allBunks = getAllBunks();
 
-    const _sportsSet = new Set();
-    (g.app1?.fields || []).forEach(f => { (f.activities || []).forEach(a => _sportsSet.add(a)); });
-    const _specials = (window.getAllSpecialActivities?.() || []).map(s => s.name);
-    const allActivityNames = [...new Set([..._sportsSet, ..._specials])].sort();
+    const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
     if (!showModal) { alert('Modal system not available'); return; }
@@ -737,11 +750,7 @@ async function showCreateEventModal(containerEl) {
 async function showEditEventModal(evt, containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
-
-    const _sportsSet = new Set();
-    (g.app1?.fields || []).forEach(f => { (f.activities || []).forEach(a => _sportsSet.add(a)); });
-    const _specials = (window.getAllSpecialActivities?.() || []).map(s => s.name);
-    const allActivityNames = [...new Set([..._sportsSet, ..._specials])].sort();
+    const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
     if (!showModal) return;
