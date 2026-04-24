@@ -1399,22 +1399,100 @@
                 // ★ v4.0: Pool exclusivity for pinned swim
                 if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
 
-                // Swim change-time blocks are created separately as pinned
-                // layers by master_schedule_builder.js when the user configures
-                // preChangeMin / postChangeMin, so the scheduler does NOT add
-                // change blocks here — doing so would duplicate them.
-                targetBunks.forEach(bunk => {
-                    bunkTimelines[bunk].push({
-                        startMin: blockStart, endMin: blockEnd,
-                        type: isCustom ? 'custom' : (layer.type || 'pinned'),
-                        event: eventName, layer,
-                        _classification: 'pinned', _committed: true, _fixed: true,
-                        _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
-                        _noBacktrack: isGradeWide,
-                        _customActivity: isCustom ? layer.customActivity : null,
-                        _customField: isCustom ? layer.customField : null,
-                        _customBunks: isCustom ? layer.customBunks : null
+                // ── Swim change-time expansion ────────────────────────────
+                // If the swim layer has preChangeMin / postChangeMin, the change
+                // blocks are treated as SEPARATE activities that must come
+                // immediately before / after swim. They borrow time from the
+                // adjacent period's tail (pre) or head (post), so swim itself
+                // gets to use its full layer window. Example: swim 11:30-12:10
+                // with 10min preChange → Change 11:20-11:30, Swim 11:30-12:10.
+                //
+                // Fallback: if the outside window overlaps an existing wall for
+                // any target bunk, change eats from swim's own block (legacy
+                // behavior) so nothing collides.
+                const _preChange  = (t === 'swim' && layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
+                const _postChange = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+
+                const _rangeFreeForAll = (rStart, rEnd) => {
+                    if (rStart < 0 || rEnd <= rStart) return false;
+                    return targetBunks.every(bunk => {
+                        const tl = bunkTimelines[bunk] || [];
+                        for (let i = 0; i < tl.length; i++) {
+                            const b = tl[i];
+                            if (!b) continue;
+                            const bs = b.startMin, be = b.endMin;
+                            if (bs == null || be == null) continue;
+                            if (bs < rEnd && be > rStart) return false;
+                        }
+                        return true;
                     });
+                };
+
+                const _preOutside  = _preChange  > 0 && _rangeFreeForAll(blockStart - _preChange, blockStart);
+                const _postOutside = _postChange > 0 && _rangeFreeForAll(blockEnd, blockEnd + _postChange);
+
+                const _swimStart = _preOutside  ? blockStart : blockStart + _preChange;
+                const _swimEnd   = _postOutside ? blockEnd   : blockEnd   - _postChange;
+                const _preStart  = _preOutside  ? blockStart - _preChange : blockStart;
+                const _preEnd    = _preOutside  ? blockStart              : _swimStart;
+                const _postStart = _postOutside ? blockEnd                : _swimEnd;
+                const _postEnd   = _postOutside ? blockEnd + _postChange  : blockEnd;
+
+                targetBunks.forEach(bunk => {
+                    if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
+                        // Pre-change block. Intentionally uses layer:null so
+                        // ensureTimelineIntegrity doesn't clamp the block into
+                        // swim's window (which would evict outside placements
+                        // like 11:20-11:30 that live before the swim window).
+                        if (_preChange > 0) {
+                            bunkTimelines[bunk].push({
+                                startMin: _preStart, endMin: _preEnd,
+                                type: 'pre-change', event: 'Change',
+                                layer: null,
+                                dMin: _preEnd - _preStart, dMax: _preEnd - _preStart,
+                                _classification: 'pinned', _committed: true,
+                                _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                                _activityLocked: true, _noBacktrack: isGradeWide,
+                                _changeOutside: _preOutside,
+                                _source: 'post-gap-forced'
+                            });
+                        }
+                        // Swim block
+                        bunkTimelines[bunk].push({
+                            startMin: _swimStart, endMin: _swimEnd,
+                            type: 'swim', event: eventName,
+                            layer, _classification: 'pinned', _committed: true,
+                            _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                            _activityLocked: true, _noBacktrack: isGradeWide
+                        });
+                        // Post-change block (layer:null, same reasoning as pre-change)
+                        if (_postChange > 0) {
+                            bunkTimelines[bunk].push({
+                                startMin: _postStart, endMin: _postEnd,
+                                type: 'post-change', event: 'Change',
+                                layer: null,
+                                dMin: _postEnd - _postStart, dMax: _postEnd - _postStart,
+                                _classification: 'pinned', _committed: true,
+                                _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                                _activityLocked: true, _noBacktrack: isGradeWide,
+                                _changeOutside: _postOutside,
+                                _source: 'post-gap-forced'
+                            });
+                        }
+                    } else {
+                        // No change time — single block as before
+                        bunkTimelines[bunk].push({
+                            startMin: blockStart, endMin: blockEnd,
+                            type: isCustom ? 'custom' : (layer.type || 'pinned'),
+                            event: eventName, layer,
+                            _classification: 'pinned', _committed: true, _fixed: true,
+                            _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
+                            _noBacktrack: isGradeWide,
+                            _customActivity: isCustom ? layer.customActivity : null,
+                            _customField: isCustom ? layer.customField : null,
+                            _customBunks: isCustom ? layer.customBunks : null
+                        });
+                    }
                     count++;
                 });
 
@@ -3568,8 +3646,81 @@
             var allTemplates = {};
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
-            // Swim change-time blocks are created as separate pinned layers
-            // by master_schedule_builder.js — no helper needed here.
+            // Helper: attach pre/post change blocks to a just-placed swim block.
+            // Mirrors Phase 0 logic: try outside (borrow from adjacent period),
+            // fall back to inside (eat from swim's duration) if outside overlaps
+            // an existing wall. Mutates `swimBlk` in place when going inside.
+            function attachSwimChangeBlocks(swimBlk, template) {
+                if (!swimBlk || swimBlk.type !== 'swim') return;
+                var layer = swimBlk.layer;
+                if (!layer) return;
+                var preChange = layer.preChangeMin > 0 ? layer.preChangeMin : 0;
+                var postChange = layer.postChangeMin > 0 ? layer.postChangeMin : 0;
+                if (preChange <= 0 && postChange <= 0) return;
+
+                var swimStart = swimBlk.startMin;
+                var swimEnd = swimBlk.endMin;
+                var rangeHasConflict = function(rStart, rEnd) {
+                    if (rStart < 0 || rEnd <= rStart) return true;
+                    for (var i = 0; i < template.length; i++) {
+                        var b = template[i];
+                        if (!b || b === swimBlk) continue;
+                        var bs = b.startMin, be = b.endMin;
+                        if (bs == null || be == null) continue;
+                        if (bs < rEnd && be > rStart) return true;
+                    }
+                    return false;
+                };
+
+                var preOutside = preChange > 0 && !rangeHasConflict(swimStart - preChange, swimStart);
+                var postOutside = postChange > 0 && !rangeHasConflict(swimEnd, swimEnd + postChange);
+
+                // Inside fallbacks: shrink swim's block so change fits at its edges.
+                // Only shrink if swim stays at least 5 min after the reduction.
+                var newStart = swimStart, newEnd = swimEnd;
+                if (preChange > 0 && !preOutside && (swimEnd - swimStart - preChange) >= 5) {
+                    newStart = swimStart + preChange;
+                }
+                if (postChange > 0 && !postOutside && (newEnd - newStart - postChange) >= 5) {
+                    newEnd = swimEnd - postChange;
+                }
+                swimBlk.startMin = newStart;
+                swimBlk.endMin = newEnd;
+                if (swimBlk._startMin != null) swimBlk._startMin = newStart;
+                if (swimBlk._endMin != null) swimBlk._endMin = newEnd;
+
+                // Pre-change block. layer:null avoids ensureTimelineIntegrity
+                // clamping the block to swim's window; post-gap-forced source
+                // tells integrity pass to respect the exact dMin we set.
+                if (preChange > 0) {
+                    var pStart = preOutside ? swimStart - preChange : swimStart;
+                    var pEnd   = preOutside ? swimStart              : newStart;
+                    if (pEnd > pStart) {
+                        var preBlk = makeBlock({
+                            startMin: pStart, endMin: pEnd,
+                            type: 'pre-change', event: 'Change',
+                            layer: null, dMin: pEnd - pStart, dMax: pEnd - pStart,
+                            _fixed: true, _source: 'post-gap-forced',
+                            _activityLocked: true, _final: true
+                        });
+                        if (preBlk) template.push(preBlk);
+                    }
+                }
+                if (postChange > 0) {
+                    var qStart = postOutside ? swimEnd                : newEnd;
+                    var qEnd   = postOutside ? swimEnd + postChange   : swimEnd;
+                    if (qEnd > qStart) {
+                        var postBlk = makeBlock({
+                            startMin: qStart, endMin: qEnd,
+                            type: 'post-change', event: 'Change',
+                            layer: null, dMin: qEnd - qStart, dMax: qEnd - qStart,
+                            _fixed: true, _source: 'post-gap-forced',
+                            _activityLocked: true, _final: true
+                        });
+                        if (postBlk) template.push(postBlk);
+                    }
+                }
+            }
 
             // ★ Smart rotation: compute daily quotas (resets each iteration)
             var rotationQuotas = null;
@@ -4522,7 +4673,15 @@
                                 _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
                                 _rotationEventColor: need._rotationEventColor || null, _final: true
                             });
-                            if (blk) template.push(blk);
+                            if (blk) {
+                                template.push(blk);
+                                // Swim pre/post change attachment (mirror of Phase 0 behavior):
+                                // when the swim layer configures preChangeMin/postChangeMin, place
+                                // them as separate blocks — outside swim's window if the adjacent
+                                // range is free, otherwise eat from swim's duration. Any bunk-level
+                                // swim (whether full-period or partial) gets the change buffer.
+                                attachSwimChangeBlocks(blk, template);
+                            }
                             // ★ Rotation quota: increment placed counter on successful CSP placement
                             if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
                                 var _rq = rotationQuotas[need._rotationEventId];
@@ -4611,7 +4770,10 @@
                                     var _rq2 = rotationQuotas[need._rotationEventId];
                                     if (_rq2) _rq2.placed++;
                                 }
-                                if (blk) template.push(blk);
+                                if (blk) {
+                                    template.push(blk);
+                                    attachSwimChangeBlocks(blk, template);
+                                }
                                 if (relaxationType) log('[Phase3] CSP-Relax: ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' via ' + relaxationDetail);
                             } else {
                                 log('[Phase3] CSP: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' (even with relaxation)');
