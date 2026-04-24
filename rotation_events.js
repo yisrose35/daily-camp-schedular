@@ -1078,6 +1078,7 @@ function getNeedsForBunk(bunkName, dateKey) {
     if (!events.length) return [];
 
     const bunkStr = String(bunkName);
+    const bunkGrade = getBunkGrade(bunkStr);
     const needs = [];
 
     events.forEach(evt => {
@@ -1085,6 +1086,11 @@ function getNeedsForBunk(bunkName, dateKey) {
 
         // Excluded?
         if (Array.isArray(evt.excludedBunks) && evt.excludedBunks.includes(bunkStr)) return;
+
+        // Grade filter — if the event restricts to specific grades, skip other grades
+        if (Array.isArray(evt.grades) && evt.grades.length > 0) {
+            if (!bunkGrade || !evt.grades.includes(bunkGrade)) return;
+        }
 
         // Already completed (any day in the range)?
         const completed = getCompletedBunks(evt);
@@ -1095,6 +1101,24 @@ function getNeedsForBunk(bunkName, dateKey) {
         const winStart = evt.dailyWindow?.startMin;
         const winEnd = evt.dailyWindow?.endMin;
         if (winStart == null || winEnd == null || winEnd - winStart < dur) return;
+
+        // On the last day every remaining bunk must be scheduled.
+        // With `not_sharable`, different grades can't share a slot, so same-grade
+        // bunks must stack (up to concurrency). Scale concurrency to gradeRemaining
+        // so all bunks in this grade fit into one shared slot rather than each
+        // claiming its own slot and starving later grades.
+        const baseConcurrency = parseInt(evt.concurrency) || 1;
+        const allDates = getDatesBetween(evt.dateRange.start, evt.dateRange.end);
+        const todayIdx = allDates.indexOf(dateKey);
+        const daysLeft = allDates.length - Math.max(0, todayIdx);
+        const isLastDay = daysLeft <= 1;
+
+        let effectiveConcurrency = baseConcurrency;
+        if (isLastDay && bunkGrade) {
+            const remaining = getRemainingBunks(evt);
+            const gradeRemaining = remaining.filter(b => b.grade === bunkGrade).length;
+            if (gradeRemaining > baseConcurrency) effectiveConcurrency = gradeRemaining;
+        }
 
         needs.push({
             type: 'rotation_event',
@@ -1116,7 +1140,7 @@ function getNeedsForBunk(bunkName, dateKey) {
             _activityLocked: true,
             _source: 'rotation_event',
             _rotationEventId: evt.id,
-            _rotationEventConcurrency: parseInt(evt.concurrency) || 1,
+            _rotationEventConcurrency: effectiveConcurrency,
             _rotationEventColor: evt.color || '#F59E0B',
             _rotationEventLocation: evt.location || null
         });
