@@ -3983,6 +3983,49 @@ async function _trySpatialSortPipeline({
         return buckets;
     }
 
+    // Capacity-preserving boundary-swap rebalance.
+    // For each atom, if another cluster's centroid is closer than its current,
+    // swap with the most "misplaced" atom in that other cluster (one whose own
+    // best move is back to ours). Cluster sizes never change. Iterate until stable.
+    function rebalanceToNearest(buckets, maxIter) {
+        if (buckets.length < 2) return 0;
+        let totalSwaps = 0;
+        for (let iter = 0; iter < (maxIter || 8); iter++) {
+            const cents = buckets.map(b => bucketCentroid(b));
+            let swaps = 0;
+            for (let bi = 0; bi < buckets.length; bi++) {
+                if (!cents[bi]) continue;
+                for (let ai = 0; ai < buckets[bi].length; ai++) {
+                    const atom = buckets[bi][ai];
+                    let bestB = bi, bestD = haversineMi(atom.lat, atom.lng, cents[bi].lat, cents[bi].lng);
+                    for (let bj = 0; bj < buckets.length; bj++) {
+                        if (bj === bi || !cents[bj]) continue;
+                        const d = haversineMi(atom.lat, atom.lng, cents[bj].lat, cents[bj].lng);
+                        if (d < bestD) { bestD = d; bestB = bj; }
+                    }
+                    if (bestB === bi) continue;
+                    // Find swap partner in bestB whose nearest is bi (or improvement is largest)
+                    let partnerIdx = -1, partnerGain = 0;
+                    for (let pj = 0; pj < buckets[bestB].length; pj++) {
+                        const p = buckets[bestB][pj];
+                        const dHere = haversineMi(p.lat, p.lng, cents[bestB].lat, cents[bestB].lng);
+                        const dThere = haversineMi(p.lat, p.lng, cents[bi].lat, cents[bi].lng);
+                        const gain = dHere - dThere;
+                        if (gain > partnerGain) { partnerGain = gain; partnerIdx = pj; }
+                    }
+                    if (partnerIdx < 0) continue;
+                    const tmp = buckets[bi][ai];
+                    buckets[bi][ai] = buckets[bestB][partnerIdx];
+                    buckets[bestB][partnerIdx] = tmp;
+                    swaps++;
+                }
+            }
+            totalSwaps += swaps;
+            if (swaps === 0) break;
+        }
+        return totalSwaps;
+    }
+
     showProgress(shiftLabel + ': clustering — building atoms...', pctBase + 10);
 
     // ── A. Build sibling atoms ──
@@ -4024,9 +4067,10 @@ async function _trySpatialSortPipeline({
 
     const k = shiftVehicles.length;
     let busBuckets = runKMeans(atoms, k);
+    const p1Swaps = rebalanceToNearest(busBuckets, 8);
 
     console.log('[Go v6] ═══════════════════════════════════════');
-    console.log('[Go v6] PHASE 1: Initial k-means (' + k + ' clusters)');
+    console.log('[Go v6] PHASE 1: Initial k-means (' + k + ' clusters, ' + p1Swaps + ' rebalance swaps)');
     console.log('[Go v6] ═══════════════════════════════════════');
     for (let i = 0; i < busBuckets.length; i++) {
         const count = bucketSize(busBuckets[i]);
@@ -4080,8 +4124,10 @@ async function _trySpatialSortPipeline({
     busBuckets = busBuckets.filter(b => b.length > 0);
     let unusedBuses = k - busBuckets.length;
     if (round > 0) {
+        const p2Swaps = rebalanceToNearest(busBuckets, 8);
         console.log('[Go v6] Dissolve complete: ' + round + ' merges, ' +
-            busBuckets.length + ' clusters remain, ' + unusedBuses + ' buses to redistribute');
+            busBuckets.length + ' clusters remain, ' + unusedBuses + ' buses to redistribute, ' +
+            p2Swaps + ' rebalance swaps');
     } else {
         console.log('[Go v6] No clusters dissolved — all had ' + MIN_BUS_THRESHOLD + '+ campers');
     }
@@ -4202,8 +4248,10 @@ async function _trySpatialSortPipeline({
     }
 
     if (splitRound > 0) {
+        const p3Swaps = rebalanceToNearest(busBuckets, 12);
         console.log('[Go v6] Split complete: ' + splitRound + ' splits, ' +
-            busBuckets.length + ' total clusters, ' + unusedBuses + ' buses still unused');
+            busBuckets.length + ' total clusters, ' + unusedBuses + ' buses still unused, ' +
+            p3Swaps + ' rebalance swaps');
     }
 
     // Remove any empty buckets
