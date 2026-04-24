@@ -228,8 +228,15 @@ function getAssignmentsForDate(dateKey, opts = {}) {
             return null;
         }
 
+        // Pre-build time slots with per-slot usage tracking.
+        // This ensures concurrency is correctly maintained regardless of conflicts.
+        const slots = [];
+        for (let t = windowStart; t + duration <= windowEnd; t += duration) {
+            slots.push({ startMin: t, endMin: t + duration, used: 0 });
+        }
+
         if (gradeMode === 'whole_grade') {
-            // Group by grade; all bunks in a grade share one time slot
+            // Group by grade; concurrency here = how many grades go at the same time
             const gradeGroups = {};
             todayQueue.forEach(b => {
                 if (!gradeGroups[b.grade]) gradeGroups[b.grade] = [];
@@ -247,7 +254,7 @@ function getAssignmentsForDate(dateKey, opts = {}) {
                         const t = e._endMin ?? e.endMin ?? null;
                         if (s != null && t != null) { tStart = s; tEnd = t; break; }
                     }
-                    if (tStart == null) return; // target not found → skip grade today
+                    if (tStart == null) return;
 
                     let time = null;
                     if ((sequencePosition === 'either' || sequencePosition === 'after') &&
@@ -258,18 +265,17 @@ function getAssignmentsForDate(dateKey, opts = {}) {
                         group.every(b => !hasBunkConflict(b.bunk, tStart - duration, tStart, scheduleAssignments, opts.timelines))) {
                         time = { startMin: tStart - duration, endMin: tStart };
                     }
-                    if (!time) return; // can't fit entire grade → skip today
+                    if (!time) return;
                     group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: time.startMin, endMin: time.endMin }));
                 } else {
-                    // No sequence: find a window slot free for the entire grade
-                    const totalSlots = Math.floor((windowEnd - windowStart) / duration);
-                    for (let s = 0; s < totalSlots; s++) {
-                        const slotStart = windowStart + s * duration;
-                        const slotEnd = slotStart + duration;
-                        if (group.every(b => !hasBunkConflict(b.bunk, slotStart, slotEnd, scheduleAssignments, opts.timelines))) {
-                            group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: slotStart, endMin: slotEnd }));
-                            break;
-                        }
+                    // Find first slot with remaining capacity that clears every bunk in grade
+                    const slot = slots.find(s =>
+                        s.used < concurrency &&
+                        group.every(b => !hasBunkConflict(b.bunk, s.startMin, s.endMin, scheduleAssignments, opts.timelines))
+                    );
+                    if (slot) {
+                        group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: slot.startMin, endMin: slot.endMin }));
+                        slot.used++;
                     }
                 }
             });
@@ -287,30 +293,17 @@ function getAssignmentsForDate(dateKey, opts = {}) {
             }
 
         } else {
-            // Individual + no sequence: original sequential slot logic
-            const totalSlots = Math.floor((windowEnd - windowStart) / duration);
-            let slotIdx = 0, concurrencySlot = 0;
-            for (let i = 0; i < todayQueue.length && slotIdx < totalSlots; i++) {
-                const bunkInfo = todayQueue[i];
-                const slotStart = windowStart + slotIdx * duration;
-                const slotEnd = slotStart + duration;
-                if (hasBunkConflict(bunkInfo.bunk, slotStart, slotEnd, scheduleAssignments, opts.timelines)) {
-                    let placed = false;
-                    for (let s = slotIdx + 1; s < totalSlots; s++) {
-                        const altStart = windowStart + s * duration;
-                        const altEnd = altStart + duration;
-                        if (!hasBunkConflict(bunkInfo.bunk, altStart, altEnd, scheduleAssignments, opts.timelines)) {
-                            assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: altStart, endMin: altEnd });
-                            placed = true;
-                            break;
-                        }
-                    }
-                    if (!placed) continue;
-                } else {
-                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: slotStart, endMin: slotEnd });
+            // Individual + no sequence: each bunk fills the first slot with room and no conflict
+            for (const bunkInfo of todayQueue) {
+                const slot = slots.find(s =>
+                    s.used < concurrency &&
+                    !hasBunkConflict(bunkInfo.bunk, s.startMin, s.endMin, scheduleAssignments, opts.timelines)
+                );
+                if (slot) {
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: slot.startMin, endMin: slot.endMin });
+                    slot.used++;
                 }
-                concurrencySlot++;
-                if (concurrencySlot >= concurrency) { concurrencySlot = 0; slotIdx++; }
+                // else: no open slot → bunk overflows to next day
             }
         }
 
