@@ -3270,6 +3270,9 @@ if (bypassStatus.highlight) {
                 </details>
                 <div id="post-edit-conflict" style="display:none;"></div>
                 <div style="display:flex;gap:10px;margin-top:4px;">
+                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill</button>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:8px;">
                     <button id="post-edit-cancel" style="flex:1;padding:11px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Cancel</button>
                     <button id="post-edit-save" style="flex:1;padding:11px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:0.95rem;cursor:pointer;font-weight:600;">Save Changes</button>
                 </div>
@@ -3277,6 +3280,14 @@ if (bypassStatus.highlight) {
 
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
+
+        document.getElementById('post-edit-autofill').onclick = () => {
+            const pick = window.PostEditInteractions?.autoFillActivity?.(bunk, divName, startMin, endMin);
+            if (!pick) { alert('No suitable activity found based on current constraints.'); return; }
+            actInput.value = pick.activity;
+            clearTimeout(_searchTimer);
+            runActivitySearch();
+        };
 
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea  = document.getElementById('post-edit-conflict');
