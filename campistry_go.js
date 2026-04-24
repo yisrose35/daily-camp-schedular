@@ -3988,39 +3988,44 @@ async function _trySpatialSortPipeline({
         }
     }
 
-    // Absorb dissolved atoms into nearest surviving cluster
-    let absorbed = 0;
-    for (const atom of dissolvedAtoms) {
-        let bestIdx = -1, bestDist = Infinity;
-        for (let si = 0; si < survivingBuckets.length; si++) {
-            const cent = bucketCentroid(survivingBuckets[si]);
-            if (!cent) continue;
-            const d = haversineMi(atom.lat, atom.lng, cent.lat, cent.lng);
-            if (d < bestDist) { bestDist = d; bestIdx = si; }
-        }
-        if (bestIdx >= 0) {
-            survivingBuckets[bestIdx].push(atom);
-            absorbed++;
-        }
-    }
-
     const freedBuses = k - survivingBuckets.length;
-    console.log('[Go v6] Absorbed ' + absorbed + ' atoms into surviving clusters');
+    console.log('[Go v6] Dissolved ' + dissolvedAtoms.length + ' atoms (' +
+        dissolvedAtoms.reduce((s, a) => s + a.size, 0) + ' campers) from ' +
+        freedBuses + ' small clusters');
     console.log('[Go v6] Freed ' + freedBuses + ' buses for dense areas');
 
     if (freedBuses <= 0) {
         console.log('[Go v6] No clusters dissolved — all had ' + MIN_BUS_THRESHOLD + '+ campers');
         busBuckets = survivingBuckets;
     } else {
-        // Re-cluster: collect all atoms from surviving clusters,
-        // re-run k-means with full bus count
-        showProgress(shiftLabel + ': phase 2 — re-clustering with ' + k + ' buses...', pctBase + 35);
+        // Re-cluster ONLY the dense atoms with all k buses.
+        // Outlier atoms are held aside and stitched back after.
+        showProgress(shiftLabel + ': phase 2 — re-clustering dense areas with ' + k + ' buses...', pctBase + 35);
 
-        const allAtoms = survivingBuckets.flatMap(b => b);
-        busBuckets = runKMeans(allAtoms, k);
+        const denseAtoms = survivingBuckets.flatMap(b => b);
+        console.log('[Go v6] Re-clustering ' + denseAtoms.length + ' dense atoms into ' + k + ' clusters');
+
+        busBuckets = runKMeans(denseAtoms, k);
+
+        // Stitch outlier atoms back onto whichever new cluster is closest
+        let stitched = 0;
+        for (const atom of dissolvedAtoms) {
+            let bestIdx = -1, bestDist = Infinity;
+            for (let ci = 0; ci < busBuckets.length; ci++) {
+                const cent = bucketCentroid(busBuckets[ci]);
+                if (!cent) continue;
+                const d = haversineMi(atom.lat, atom.lng, cent.lat, cent.lng);
+                if (d < bestDist) { bestDist = d; bestIdx = ci; }
+            }
+            if (bestIdx >= 0) {
+                busBuckets[bestIdx].push(atom);
+                stitched++;
+            }
+        }
+        console.log('[Go v6] Stitched ' + stitched + ' outlier atoms back onto nearest clusters');
 
         console.log('[Go v6] ═══════════════════════════════════════');
-        console.log('[Go v6] PHASE 2: Re-clustered with all ' + k + ' buses');
+        console.log('[Go v6] PHASE 2: Re-clustered dense areas + stitched outliers');
         console.log('[Go v6] ═══════════════════════════════════════');
     }
 
