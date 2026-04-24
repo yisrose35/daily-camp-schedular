@@ -3860,9 +3860,9 @@ async function _trySpatialSortPipeline({
     const avgCapacity = shiftVehicles.length
         ? Math.floor(shiftVehicles.reduce((s, v) => s + (v.capacity || 0), 0) / shiftVehicles.length)
         : 48;
-    const MIN_BUS_THRESHOLD = Math.ceil(avgCapacity * 0.30);
+    const MIN_BUS_THRESHOLD = 0;
     console.log('[Go v6] Fleet avg capacity: ' + avgCapacity +
-        ', min cluster threshold (30%): ' + MIN_BUS_THRESHOLD);
+        ', min cluster threshold: none (time-priority mode)');
 
     // ── Helper: run k-means on a set of atoms with given k ──
     function runKMeans(atomSet, numClusters) {
@@ -4111,6 +4111,16 @@ async function _trySpatialSortPipeline({
                 const c = bucketCentroid(busBuckets[i]);
                 const d = haversineMi(sCent.lat, sCent.lng, c.lat, c.lng);
                 if (d < nearDist) { nearDist = d; nearIdx = i; }
+            }
+            // If no merge target keeps capacity, allow over-capacity merge —
+            // the outer loop will then split the resulting oversized cluster.
+            if (nearIdx < 0) {
+                for (let i = 0; i < busBuckets.length; i++) {
+                    if (i === smallIdx || i === largestIdx) continue;
+                    const c = bucketCentroid(busBuckets[i]);
+                    const d = haversineMi(sCent.lat, sCent.lng, c.lat, c.lng);
+                    if (d < nearDist) { nearDist = d; nearIdx = i; }
+                }
             }
             if (nearIdx < 0) break;
 
