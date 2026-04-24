@@ -4129,20 +4129,26 @@ async function _trySpatialSortPipeline({
 
     const totalForBalance = busBuckets.reduce((s, b) => s + bucketSize(b), 0);
     const nBuckets = busBuckets.length;
-    const TIME_BUDGET_SEC = 45 * 60;
-    const SEC_PER_STOP = 150;
 
     const clusterMeta = busBuckets.map((bucket, idx) => {
         const cent = bucketCentroid(bucket);
         const distSec = drivingDist(campLat, campLng, cent.lat, cent.lng);
-        const availableSec = Math.max(SEC_PER_STOP * 2, TIME_BUDGET_SEC - 2 * distSec);
-        return { idx, cent, distSec, availableSec, size: bucketSize(bucket) };
+        return { idx, cent, distSec, size: bucketSize(bucket) };
     });
 
-    const totalAvailable = clusterMeta.reduce((s, m) => s + m.availableSec, 0);
+    const minDist = Math.min(...clusterMeta.map(m => m.distSec));
+    const maxDist = Math.max(...clusterMeta.map(m => m.distSec));
+    const distRange = maxDist - minDist || 1;
+
     clusterMeta.forEach(m => {
-        const raw = (m.availableSec / totalAvailable) * totalForBalance;
-        m.target = Math.round(Math.max(MIN_BUS_THRESHOLD, Math.min(avgCapacity, raw)));
+        const t = (m.distSec - minDist) / distRange;
+        m.rawTarget = avgCapacity - t * (avgCapacity - MIN_BUS_THRESHOLD);
+    });
+
+    const rawSum = clusterMeta.reduce((s, m) => s + m.rawTarget, 0);
+    const scale = totalForBalance / rawSum;
+    clusterMeta.forEach(m => {
+        m.target = Math.round(m.rawTarget * scale);
     });
 
     let targetSum = clusterMeta.reduce((s, m) => s + m.target, 0);
@@ -4150,13 +4156,10 @@ async function _trySpatialSortPipeline({
     while (targetSum !== totalForBalance && safety++ < 50) {
         const diff = totalForBalance - targetSum;
         const step = diff > 0 ? 1 : -1;
-        const adjustable = clusterMeta.filter(m =>
-            step > 0 ? m.target < avgCapacity : m.target > MIN_BUS_THRESHOLD);
-        if (!adjustable.length) break;
-        adjustable.sort((a, b) => step > 0
-            ? b.availableSec - a.availableSec
-            : a.availableSec - b.availableSec);
-        adjustable[0].target += step;
+        clusterMeta.sort((a, b) => step > 0
+            ? (b.rawTarget - b.target) - (a.rawTarget - a.target)
+            : (a.rawTarget - a.target) - (b.rawTarget - b.target));
+        clusterMeta[0].target += step;
         targetSum += step;
     }
 
