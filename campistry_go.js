@@ -4096,6 +4096,8 @@ async function _trySpatialSortPipeline({
 
         // If we don't have enough freed buses, free more by merging smallest clusters
         // into their nearest neighbor (as long as the merge doesn't exceed capacity).
+        // If no valid pair exists, absorb nearest small cluster INTO the largest and
+        // re-split the bigger result. Keeps cluster count balanced.
         while (unusedBuses < extraBuses) {
             let smallIdx = -1, smallSize = Infinity;
             for (let i = 0; i < busBuckets.length; i++) {
@@ -4103,28 +4105,56 @@ async function _trySpatialSortPipeline({
                 const sz = bucketSize(busBuckets[i]);
                 if (sz < smallSize) { smallSize = sz; smallIdx = i; }
             }
-            if (smallIdx < 0) break;
 
-            const sCent = bucketCentroid(busBuckets[smallIdx]);
-            let nearIdx = -1, nearDist = Infinity;
-            for (let i = 0; i < busBuckets.length; i++) {
-                if (i === smallIdx || i === largestIdx) continue;
-                if (bucketSize(busBuckets[i]) + smallSize > avgCapacity) continue;
-                const c = bucketCentroid(busBuckets[i]);
-                const d = haversineMi(sCent.lat, sCent.lng, c.lat, c.lng);
-                if (d < nearDist) { nearDist = d; nearIdx = i; }
+            let merged = false;
+            if (smallIdx >= 0) {
+                const sCent = bucketCentroid(busBuckets[smallIdx]);
+                let nearIdx = -1, nearDist = Infinity;
+                for (let i = 0; i < busBuckets.length; i++) {
+                    if (i === smallIdx || i === largestIdx) continue;
+                    if (bucketSize(busBuckets[i]) + smallSize > avgCapacity) continue;
+                    const c = bucketCentroid(busBuckets[i]);
+                    const d = haversineMi(sCent.lat, sCent.lng, c.lat, c.lng);
+                    if (d < nearDist) { nearDist = d; nearIdx = i; }
+                }
+
+                if (nearIdx >= 0) {
+                    console.log('[Go v6] Free-up merge: cluster ' + (smallIdx + 1) +
+                        ' (' + smallSize + ' campers) → cluster ' + (nearIdx + 1) +
+                        ' (' + bucketSize(busBuckets[nearIdx]) + ' → ' +
+                        (bucketSize(busBuckets[nearIdx]) + smallSize) + ' campers)');
+                    busBuckets[nearIdx] = busBuckets[nearIdx].concat(busBuckets[smallIdx]);
+                    busBuckets.splice(smallIdx, 1);
+                    if (smallIdx < largestIdx) largestIdx--;
+                    unusedBuses++;
+                    merged = true;
+                }
             }
-            if (nearIdx < 0) break;
 
-            console.log('[Go v6] Free-up merge: cluster ' + (smallIdx + 1) +
-                ' (' + smallSize + ' campers) → cluster ' + (nearIdx + 1) +
-                ' (' + bucketSize(busBuckets[nearIdx]) + ' → ' +
-                (bucketSize(busBuckets[nearIdx]) + smallSize) + ' campers)');
+            if (!merged) {
+                // Fallback: absorb geographically nearest cluster INTO the largest,
+                // then re-compute extras (since largest just grew).
+                const lCent = bucketCentroid(busBuckets[largestIdx]);
+                let absorbIdx = -1, absorbDist = Infinity;
+                for (let i = 0; i < busBuckets.length; i++) {
+                    if (i === largestIdx) continue;
+                    const c = bucketCentroid(busBuckets[i]);
+                    const d = haversineMi(lCent.lat, lCent.lng, c.lat, c.lng);
+                    if (d < absorbDist) { absorbDist = d; absorbIdx = i; }
+                }
+                if (absorbIdx < 0) break;
 
-            busBuckets[nearIdx] = busBuckets[nearIdx].concat(busBuckets[smallIdx]);
-            busBuckets.splice(smallIdx, 1);
-            if (smallIdx < largestIdx) largestIdx--;
-            unusedBuses++;
+                const absorbSize = bucketSize(busBuckets[absorbIdx]);
+                console.log('[Go v6] Absorb-and-split: cluster ' + (absorbIdx + 1) +
+                    ' (' + absorbSize + ' campers) → cluster ' + (largestIdx + 1) +
+                    ' (' + largestSize + ' → ' + (largestSize + absorbSize) + ' campers)');
+                busBuckets[largestIdx] = busBuckets[largestIdx].concat(busBuckets[absorbIdx]);
+                busBuckets.splice(absorbIdx, 1);
+                if (absorbIdx < largestIdx) largestIdx--;
+                unusedBuses++;
+                largestSize = bucketSize(busBuckets[largestIdx]);
+                extraBuses = Math.ceil(largestSize / avgCapacity) - 1;
+            }
         }
 
         const busesToUse = Math.min(extraBuses, unusedBuses);
