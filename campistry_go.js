@@ -3965,8 +3965,10 @@ async function _trySpatialSortPipeline({
         busBuckets[assignments[i]].push(atoms[i]);
     }
 
-    // ── C. Capacity fix-up ──
-    // Move farthest atoms from overloaded clusters to nearest underloaded cluster
+    // ── C. Cascading capacity fix-up ──
+    // Overloaded bus pushes to its NEAREST neighbor only. If neighbor
+    // overflows, IT pushes to ITS nearest neighbor. No skipping — each
+    // bus only talks to its geographic neighbor, preserving tight clusters.
     showProgress(shiftLabel + ': clustering — capacity fix-up...', pctBase + 30);
 
     function busCentroid(bucket) {
@@ -3976,71 +3978,93 @@ async function _trySpatialSortPipeline({
         return { lat: sLat / bucket.length, lng: sLng / bucket.length };
     }
 
-    let capMoves = 0;
-    for (let pass = 0; pass < 20; pass++) {
-        let moved = false;
-        for (let bi = 0; bi < busBuckets.length; bi++) {
-            const used = busBuckets[bi].reduce((s, a) => s + a.size, 0);
-            if (used <= busCapacities[bi]) continue;
+    function busUsed(bi) {
+        return busBuckets[bi].reduce((s, a) => s + a.size, 0);
+    }
 
-            // Find farthest atom from this cluster's centroid
-            const cent = busCentroid(busBuckets[bi]);
-            let farthestIdx = -1, farthestDist = -1;
+    function nearestBus(bi, exclude) {
+        const cent = busCentroid(busBuckets[bi]);
+        if (!cent) return -1;
+        let best = -1, bestDist = Infinity;
+        for (let ti = 0; ti < busBuckets.length; ti++) {
+            if (ti === bi || exclude.has(ti)) continue;
+            const tc = busCentroid(busBuckets[ti]);
+            if (!tc) continue;
+            const d = haversineMi(cent.lat, cent.lng, tc.lat, tc.lng);
+            if (d < bestDist) { bestDist = d; best = ti; }
+        }
+        return best;
+    }
+
+    let capMoves = 0;
+    const cascadeVisited = new Set();
+
+    function cascadeOverflow(bi) {
+        if (cascadeVisited.has(bi)) return;
+        cascadeVisited.add(bi);
+
+        let lastNeighbor = -1;
+        while (busUsed(bi) > busCapacities[bi] && busBuckets[bi].length > 1) {
+            const neighbor = nearestBus(bi, cascadeVisited);
+            if (neighbor < 0) break;
+
+            const neighborCent = busCentroid(busBuckets[neighbor]);
+            if (!neighborCent) break;
+
+            let closestIdx = -1, closestDist = Infinity;
             for (let ai = 0; ai < busBuckets[bi].length; ai++) {
                 const a = busBuckets[bi][ai];
-                const d = haversineMi(a.lat, a.lng, cent.lat, cent.lng);
-                if (d > farthestDist) { farthestDist = d; farthestIdx = ai; }
+                const d = haversineMi(a.lat, a.lng, neighborCent.lat, neighborCent.lng);
+                if (d < closestDist) { closestDist = d; closestIdx = ai; }
             }
-            if (farthestIdx < 0) continue;
+            if (closestIdx < 0) break;
 
-            const outlier = busBuckets[bi][farthestIdx];
-
-            // Find nearest cluster with capacity
-            let bestTarget = -1, bestDist = Infinity;
-            for (let ti = 0; ti < busBuckets.length; ti++) {
-                if (ti === bi) continue;
-                const tUsed = busBuckets[ti].reduce((s, a) => s + a.size, 0);
-                if (tUsed + outlier.size > busCapacities[ti]) continue;
-                const tc = busCentroid(busBuckets[ti]);
-                if (!tc) continue;
-                const d = haversineMi(outlier.lat, outlier.lng, tc.lat, tc.lng);
-                if (d < bestDist) { bestDist = d; bestTarget = ti; }
-            }
-            if (bestTarget >= 0) {
-                busBuckets[bi].splice(farthestIdx, 1);
-                busBuckets[bestTarget].push(outlier);
-                capMoves++;
-                moved = true;
-            }
+            const atom = busBuckets[bi].splice(closestIdx, 1)[0];
+            busBuckets[neighbor].push(atom);
+            capMoves++;
+            lastNeighbor = neighbor;
         }
-        if (!moved) break;
+
+        if (lastNeighbor >= 0 && busUsed(lastNeighbor) > busCapacities[lastNeighbor]) {
+            cascadeOverflow(lastNeighbor);
+        }
     }
-    if (capMoves) console.log('[Go v6] Capacity fix-up: moved ' + capMoves + ' atom(s)');
+
+    // Process each overloaded bus
+    for (let bi = 0; bi < busBuckets.length; bi++) {
+        if (busUsed(bi) > busCapacities[bi]) {
+            cascadeVisited.clear();
+            cascadeOverflow(bi);
+        }
+    }
+    if (capMoves) console.log('[Go v6] Capacity fix-up: cascaded ' + capMoves + ' atom(s)');
 
     // Log cluster assignment
     for (let i = 0; i < busBuckets.length; i++) {
-        const count = busBuckets[i].reduce((s, a) => s + a.size, 0);
+        const count = busUsed(i);
         const lats = busBuckets[i].map(a => a.lat);
         const lngs = busBuckets[i].map(a => a.lng);
         if (lats.length) {
             const spread = haversineMi(
                 Math.min(...lats), Math.min(...lngs),
                 Math.max(...lats), Math.max(...lngs));
+            const overFlag = count > busCapacities[i] ? ' ⚠ OVER' : '';
             console.log('[Go v6] Bus ' + (i + 1) + ' (' + shiftVehicles[i].name + '): ' +
                 count + '/' + busCapacities[i] + ' campers, ' +
-                spread.toFixed(2) + 'mi spread');
+                spread.toFixed(2) + 'mi spread' + overFlag);
         }
     }
 
     // ── D. Sanity check: travel-time gap detection ──
+    // Atoms that get moved are marked so they can't ping-pong back
     showProgress(shiftLabel + ': clustering — sanity check...', pctBase + 40);
 
+    const movedAtoms = new Set();
     let sanityMoves = 0;
     for (let bi = 0; bi < busBuckets.length; bi++) {
         const bucket = busBuckets[bi];
         if (bucket.length < 2) continue;
 
-        // Sort bucket atoms by distance from centroid for consecutive gap check
         const cent = busCentroid(bucket);
         if (!cent) continue;
         bucket.sort((a, b) =>
@@ -4048,27 +4072,28 @@ async function _trySpatialSortPipeline({
             haversineMi(b.lat, b.lng, cent.lat, cent.lng));
 
         for (let ai = bucket.length - 1; ai >= 0; ai--) {
-            const gap = drivingDist(cent.lat, cent.lng,
-                                    bucket[ai].lat, bucket[ai].lng);
+            const atom = bucket[ai];
+            if (movedAtoms.has(atom)) continue;
+
+            const gap = drivingDist(cent.lat, cent.lng, atom.lat, atom.lng);
             if (gap <= SANITY_GAP_SEC) continue;
 
-            const outlier = bucket[ai];
             let bestTarget = -1, bestDist = Infinity;
             for (let ti = 0; ti < busBuckets.length; ti++) {
                 if (ti === bi) continue;
-                const used = busBuckets[ti].reduce((s, a) => s + a.size, 0);
-                if (used + outlier.size > busCapacities[ti]) continue;
+                if (busUsed(ti) + atom.size > busCapacities[ti]) continue;
                 const c = busCentroid(busBuckets[ti]);
                 if (!c) continue;
-                const d = haversineMi(outlier.lat, outlier.lng, c.lat, c.lng);
+                const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
                 if (d < bestDist) { bestDist = d; bestTarget = ti; }
             }
             if (bestTarget >= 0) {
                 bucket.splice(ai, 1);
-                busBuckets[bestTarget].push(outlier);
+                busBuckets[bestTarget].push(atom);
+                movedAtoms.add(atom);
                 sanityMoves++;
-                console.log('[Go v6] Sanity: moved ' + outlier.members[0].name +
-                    ' (+' + (outlier.size - 1) + ') from Bus ' + (bi + 1) +
+                console.log('[Go v6] Sanity: moved ' + atom.members[0].name +
+                    ' (+' + (atom.size - 1) + ') from Bus ' + (bi + 1) +
                     ' to Bus ' + (bestTarget + 1) +
                     ' (gap: ' + Math.round(gap) + 's)');
             }
