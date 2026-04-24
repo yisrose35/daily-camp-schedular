@@ -25,23 +25,51 @@
     }
     const saved = window.CampistryGo?._getSavedRoutes?.();
     if (!saved) { alert('Generate routes first so I have camper coordinates.'); return; }
-    function walk(node) {
-        if (!node) return;
-        if (Array.isArray(node)) { node.forEach(walk); return; }
-        if (typeof node !== 'object') return;
-        if (node.lat && node.lng && Array.isArray(node.members)) {
-            node.members.forEach(m => addCamper(m.name || m.camperName || m, node.lat, node.lng));
+    console.log('[Historical] saved type:', Array.isArray(saved) ? 'array(' + saved.length + ')' : typeof saved);
+    if (saved && typeof saved === 'object') {
+        const keys = Array.isArray(saved) ? Object.keys(saved[0] || {}) : Object.keys(saved);
+        console.log('[Historical] top-level keys:', keys);
+    }
+    // Aggressive walk — find ANY object with lat/lng, look at every sibling for a name
+    const visited = new WeakSet();
+    function walk(node, parentLat, parentLng) {
+        if (!node || typeof node !== 'object') return;
+        if (visited.has(node)) return;
+        visited.add(node);
+
+        const myLat = (typeof node.lat === 'number') ? node.lat : parentLat;
+        const myLng = (typeof node.lng === 'number') ? node.lng : parentLng;
+
+        // If this node has lat/lng AND a name field, register it
+        if (myLat && myLng) {
+            const nm = node.name || node.camperName || node.camper || node.fullName;
+            if (typeof nm === 'string' && nm.length > 1) addCamper(nm, myLat, myLng);
+            // Also handle members array
+            if (Array.isArray(node.members)) {
+                node.members.forEach(m => {
+                    if (typeof m === 'string') addCamper(m, myLat, myLng);
+                    else if (m && typeof m === 'object') addCamper(m.name || m.camperName || m.fullName, myLat, myLng);
+                });
+            }
+            if (Array.isArray(node.campers)) {
+                node.campers.forEach(c => {
+                    if (typeof c === 'string') addCamper(c, myLat, myLng);
+                    else if (c && typeof c === 'object') addCamper(c.name || c.camperName || c.fullName, myLat, myLng);
+                });
+            }
         }
-        if (node.lat && node.lng && (node.name || node.camperName)) {
-            addCamper(node.name || node.camperName, node.lat, node.lng);
+
+        if (Array.isArray(node)) { node.forEach(n => walk(n, myLat, myLng)); return; }
+        for (const k of Object.keys(node)) {
+            const v = node[k];
+            if (v && typeof v === 'object') walk(v, myLat, myLng);
         }
-        if (node.stops) walk(node.stops);
-        if (node.buses) walk(node.buses);
-        if (node.shifts) walk(node.shifts);
-        if (node.routes) walk(node.routes);
     }
     walk(saved);
     console.log('[Historical] Coords found:', Object.keys(coords).length);
+    if (Object.keys(coords).length === 0) {
+        console.log('[Historical] Sample saved structure:', JSON.stringify(saved).slice(0, 500));
+    }
 
     // For each route, compute stop centroids by averaging matched campers' coords
     const routeStops = {};
