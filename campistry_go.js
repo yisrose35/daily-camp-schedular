@@ -4102,8 +4102,8 @@ async function _trySpatialSortPipeline({
         }
         if (largestIdx < 0 || largestSize <= SOFT_CAPACITY) break;
 
-        const neededBuses = Math.ceil(largestSize / avgCapacity);
-        const extraBuses = neededBuses - 1;
+        let neededBuses = Math.ceil(largestSize / avgCapacity);
+        let extraBuses = neededBuses - 1;
         if (extraBuses <= 0) break;
 
         // If we don't have enough freed buses, free more by merging smallest clusters
