@@ -229,11 +229,20 @@ function getAssignmentsForDate(dateKey, opts = {}) {
         }
 
         // Pre-build time slots with per-slot usage tracking.
-        // This ensures concurrency is correctly maintained regardless of conflicts.
         const slots = [];
         for (let t = windowStart; t + duration <= windowEnd; t += duration) {
             slots.push({ startMin: t, endMin: t + duration, used: 0 });
         }
+
+        // On the last day of the event everyone remaining must be scheduled today.
+        // Auto-scale concurrency so the available slots can hold the full queue.
+        const isLastDay = slots.length > 0 && dateKey >= evt.dateRange.end;
+        const unitCount = gradeMode === 'whole_grade'
+            ? Object.keys(todayQueue.reduce((m, b) => { m[b.grade] = 1; return m; }, {})).length
+            : todayQueue.length;
+        const effectiveConcurrency = isLastDay && slots.length > 0
+            ? Math.max(concurrency, Math.ceil(unitCount / slots.length))
+            : concurrency;
 
         if (gradeMode === 'whole_grade') {
             // Group by grade; concurrency here = how many grades go at the same time
@@ -270,7 +279,7 @@ function getAssignmentsForDate(dateKey, opts = {}) {
                 } else {
                     // Find first slot with remaining capacity that clears every bunk in grade
                     const slot = slots.find(s =>
-                        s.used < concurrency &&
+                        s.used < effectiveConcurrency &&
                         group.every(b => !hasBunkConflict(b.bunk, s.startMin, s.endMin, scheduleAssignments, opts.timelines))
                     );
                     if (slot) {
@@ -296,7 +305,7 @@ function getAssignmentsForDate(dateKey, opts = {}) {
             // Individual + no sequence: each bunk fills the first slot with room and no conflict
             for (const bunkInfo of todayQueue) {
                 const slot = slots.find(s =>
-                    s.used < concurrency &&
+                    s.used < effectiveConcurrency &&
                     !hasBunkConflict(bunkInfo.bunk, s.startMin, s.endMin, scheduleAssignments, opts.timelines)
                 );
                 if (slot) {
