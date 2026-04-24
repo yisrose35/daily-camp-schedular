@@ -4102,7 +4102,180 @@ async function _trySpatialSortPipeline({
             busBuckets.length + ' total clusters, ' + unusedBuses + ' buses still unused');
     }
 
-    // ── E. Log final cluster results ──
+    // ── E. Phase 4: Consolidate adjacent clusters to recover wasted seats ──
+    // Grow a region from the most over-capacity cluster by chaining nearest
+    // neighbors. At each step check if ceil(totalCampers/capacity) < groupSize.
+    // If yes, recombine and re-split — freed buses go back to the pool and
+    // get used to split remaining oversized clusters.
+    showProgress(shiftLabel + ': phase 4 — consolidating regions...', pctBase + 45);
+
+    let consolidateRound = 0;
+    let consolidateChanged = true;
+    while (consolidateChanged) {
+        consolidateChanged = false;
+
+        // Find the most over-capacity cluster to seed from
+        let seedIdx = -1, seedOver = 0;
+        for (let i = 0; i < busBuckets.length; i++) {
+            const over = bucketSize(busBuckets[i]) - avgCapacity;
+            if (over > seedOver) { seedOver = over; seedIdx = i; }
+        }
+        if (seedIdx < 0) break;
+
+        // Grow region by chaining nearest neighbors
+        const regionIndices = [seedIdx];
+        const inRegion = new Set([seedIdx]);
+
+        let bestSavings = 0;
+        let bestRegionSize = 0;
+
+        for (let step = 0; step < busBuckets.length - 1; step++) {
+            // Find nearest cluster to the region that isn't in it
+            let nearestIdx = -1, nearestDist = Infinity;
+            for (const ri of regionIndices) {
+                const rc = bucketCentroid(busBuckets[ri]);
+                if (!rc) continue;
+                for (let i = 0; i < busBuckets.length; i++) {
+                    if (inRegion.has(i) || busBuckets[i].length === 0) continue;
+                    const c = bucketCentroid(busBuckets[i]);
+                    if (!c) continue;
+                    const d = haversineMi(rc.lat, rc.lng, c.lat, c.lng);
+                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+                }
+            }
+            if (nearestIdx < 0) break;
+
+            regionIndices.push(nearestIdx);
+            inRegion.add(nearestIdx);
+
+            const totalInRegion = regionIndices.reduce((s, ri) => s + bucketSize(busBuckets[ri]), 0);
+            const optimalBuses = Math.ceil(totalInRegion / avgCapacity);
+            const currentBuses = regionIndices.length;
+            const savings = currentBuses - optimalBuses;
+
+            if (savings > bestSavings) {
+                bestSavings = savings;
+                bestRegionSize = regionIndices.length;
+            }
+        }
+
+        if (bestSavings <= 0) break;
+
+        // Trim region back to the size that gave best savings
+        const finalRegion = regionIndices.slice(0, bestRegionSize);
+        const totalCampersInRegion = finalRegion.reduce((s, ri) => s + bucketSize(busBuckets[ri]), 0);
+        const optimalBuses = Math.ceil(totalCampersInRegion / avgCapacity);
+
+        consolidateRound++;
+        console.log('[Go v6] Consolidate ' + consolidateRound + ': ' +
+            finalRegion.length + ' adjacent clusters (' + totalCampersInRegion +
+            ' campers) → ' + optimalBuses + ' buses (saving ' + bestSavings + ')');
+
+        // Pool all atoms from the region
+        const pooledAtoms = [];
+        for (const ri of finalRegion) {
+            for (const atom of busBuckets[ri]) pooledAtoms.push(atom);
+        }
+
+        // Even spatial split into optimal bus count
+        const bandCount = Math.ceil(Math.sqrt(optimalBuses));
+        pooledAtoms.sort((a, b) => a.lat - b.lat);
+        const bandSz = Math.ceil(pooledAtoms.length / bandCount);
+        const sorted = [];
+        for (let b = 0; b < bandCount; b++) {
+            const band = pooledAtoms.slice(b * bandSz, (b + 1) * bandSz);
+            if (b % 2 === 1) band.sort((a, bb) => bb.lng - a.lng);
+            else band.sort((a, bb) => a.lng - bb.lng);
+            sorted.push(...band);
+        }
+
+        const targetPerBus = Math.ceil(totalCampersInRegion / optimalBuses);
+        const newBuckets = [];
+        let cur = [], curSz = 0;
+        for (const atom of sorted) {
+            if (curSz + atom.size > targetPerBus && cur.length > 0 && newBuckets.length < optimalBuses - 1) {
+                newBuckets.push(cur);
+                cur = []; curSz = 0;
+            }
+            cur.push(atom);
+            curSz += atom.size;
+        }
+        if (cur.length) newBuckets.push(cur);
+
+        // Replace the region's clusters with the new ones
+        // Sort indices descending so splicing doesn't shift later indices
+        const sortedRegion = [...finalRegion].sort((a, b) => b - a);
+        for (const ri of sortedRegion) {
+            busBuckets.splice(ri, 1);
+        }
+        busBuckets.push(...newBuckets);
+
+        unusedBuses += bestSavings;
+        consolidateChanged = true;
+
+        for (let ni = 0; ni < newBuckets.length; ni++) {
+            console.log('[Go v6]   New cluster: ' + bucketSize(newBuckets[ni]) + ' campers');
+        }
+        console.log('[Go v6]   Buses freed so far: ' + unusedBuses);
+
+        // Now use freed buses to split remaining oversized clusters
+        while (unusedBuses > 0) {
+            let lgIdx = -1, lgSz = 0;
+            for (let i = 0; i < busBuckets.length; i++) {
+                const sz = bucketSize(busBuckets[i]);
+                if (sz > lgSz) { lgSz = sz; lgIdx = i; }
+            }
+            if (lgIdx < 0 || lgSz <= avgCapacity) break;
+
+            const needed = Math.ceil(lgSz / avgCapacity);
+            const extra = needed - 1;
+            if (extra <= 0) break;
+
+            const use = Math.min(extra, unusedBuses);
+            const into = use + 1;
+
+            console.log('[Go v6]   → Split cluster (' + lgSz + ' campers) into ' + into);
+
+            const cAtoms = busBuckets[lgIdx];
+            const bc = Math.ceil(Math.sqrt(into));
+            cAtoms.sort((a, b) => a.lat - b.lat);
+            const bs = Math.ceil(cAtoms.length / bc);
+            const s2 = [];
+            for (let b = 0; b < bc; b++) {
+                const band = cAtoms.slice(b * bs, (b + 1) * bs);
+                if (b % 2 === 1) band.sort((a, bb) => bb.lng - a.lng);
+                else band.sort((a, bb) => a.lng - bb.lng);
+                s2.push(...band);
+            }
+            const tgt = Math.ceil(lgSz / into);
+            const subs = [];
+            let c2 = [], c2s = 0;
+            for (const atom of s2) {
+                if (c2s + atom.size > tgt && c2.length > 0 && subs.length < into - 1) {
+                    subs.push(c2); c2 = []; c2s = 0;
+                }
+                c2.push(atom); c2s += atom.size;
+            }
+            if (c2.length) subs.push(c2);
+
+            busBuckets.splice(lgIdx, 1, ...subs);
+            unusedBuses -= use;
+
+            for (const sb of subs) {
+                console.log('[Go v6]     Sub: ' + bucketSize(sb) + ' campers');
+            }
+        }
+    }
+
+    if (consolidateRound > 0) {
+        console.log('[Go v6] Consolidation complete: ' + consolidateRound + ' rounds, ' +
+            busBuckets.length + ' clusters, ' + unusedBuses + ' buses unused');
+    }
+
+    // Remove any empty buckets
+    busBuckets = busBuckets.filter(b => b.length > 0);
+
+    // ── F. Log final cluster results ──
     console.log('[Go v6] ═══════════════════════════════════════');
     console.log('[Go v6] FINAL CLUSTERS');
     console.log('[Go v6] ═══════════════════════════════════════');
