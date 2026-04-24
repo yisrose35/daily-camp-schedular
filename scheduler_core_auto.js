@@ -1398,27 +1398,55 @@
                 if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
 
                 // ── Swim change-time expansion ────────────────────────────
-                // If the swim layer has preChangeMin / postChangeMin, split
-                // the block into three consecutive sub-blocks:
-                //   [Change] → [Swim] → [Change]
-                // The outer window (blockStart…blockEnd) covers all three.
-                // Pool usage is registered for the entire outer window so
-                // no other grade can overlap.
+                // If the swim layer has preChangeMin / postChangeMin, the change
+                // blocks are treated as SEPARATE activities that must come
+                // immediately before / after swim. They borrow time from the
+                // adjacent period's tail (pre) or head (post), so swim itself
+                // gets to use its full layer window. Example: swim 11:30-12:10
+                // with 10min preChange → Change 11:20-11:30, Swim 11:30-12:10.
+                //
+                // Fallback: if the outside window overlaps an existing wall for
+                // any target bunk, change eats from swim's own block (legacy
+                // behavior) so nothing collides.
                 const _preChange  = (t === 'swim' && layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
                 const _postChange = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
-                const _swimStart  = blockStart + _preChange;
-                const _swimEnd    = blockEnd   - _postChange;
+
+                const _rangeFreeForAll = (rStart, rEnd) => {
+                    if (rStart < 0 || rEnd <= rStart) return false;
+                    return targetBunks.every(bunk => {
+                        const tl = bunkTimelines[bunk] || [];
+                        for (let i = 0; i < tl.length; i++) {
+                            const b = tl[i];
+                            if (!b) continue;
+                            const bs = b.startMin, be = b.endMin;
+                            if (bs == null || be == null) continue;
+                            if (bs < rEnd && be > rStart) return false;
+                        }
+                        return true;
+                    });
+                };
+
+                const _preOutside  = _preChange  > 0 && _rangeFreeForAll(blockStart - _preChange, blockStart);
+                const _postOutside = _postChange > 0 && _rangeFreeForAll(blockEnd, blockEnd + _postChange);
+
+                const _swimStart = _preOutside  ? blockStart : blockStart + _preChange;
+                const _swimEnd   = _postOutside ? blockEnd   : blockEnd   - _postChange;
+                const _preStart  = _preOutside  ? blockStart - _preChange : blockStart;
+                const _preEnd    = _preOutside  ? blockStart              : _swimStart;
+                const _postStart = _postOutside ? blockEnd                : _swimEnd;
+                const _postEnd   = _postOutside ? blockEnd + _postChange  : blockEnd;
 
                 targetBunks.forEach(bunk => {
                     if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
                         // Pre-change block
                         if (_preChange > 0) {
                             bunkTimelines[bunk].push({
-                                startMin: blockStart, endMin: _swimStart,
+                                startMin: _preStart, endMin: _preEnd,
                                 type: 'pre-change', event: 'Change',
                                 layer, _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
-                                _activityLocked: true, _noBacktrack: isGradeWide
+                                _activityLocked: true, _noBacktrack: isGradeWide,
+                                _changeOutside: _preOutside
                             });
                         }
                         // Swim block
@@ -1432,11 +1460,12 @@
                         // Post-change block
                         if (_postChange > 0) {
                             bunkTimelines[bunk].push({
-                                startMin: _swimEnd, endMin: blockEnd,
+                                startMin: _postStart, endMin: _postEnd,
                                 type: 'post-change', event: 'Change',
                                 layer, _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
-                                _activityLocked: true, _noBacktrack: isGradeWide
+                                _activityLocked: true, _noBacktrack: isGradeWide,
+                                _changeOutside: _postOutside
                             });
                         }
                     } else {
