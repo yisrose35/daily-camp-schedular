@@ -639,15 +639,10 @@ function removeCompletion(eventId, bunkName) {
 
 function buildAllActivityNames(g) {
     const seen = new Set();
+    // General activities — canonical source (Swim, Lunch, Snack, etc.)
+    Object.keys(g.pinnedTileDefaults || {}).forEach(a => { if (a) seen.add(a); });
     // Sports (from field activity lists)
     (g.app1?.fields || []).forEach(f => { (f.activities || []).forEach(a => { if (a) seen.add(a); }); });
-    // General activities (Swim, Lunch, etc. configured per field)
-    (g.app1?.fields || []).forEach(f => {
-        (f.generalActivities || []).forEach(ga => {
-            const n = typeof ga === 'string' ? ga : ga.name;
-            if (n) seen.add(n);
-        });
-    });
     // Special activities
     (window.getAllSpecialActivities?.() || []).forEach(s => { if (s.name) seen.add(s.name); });
     return [...seen].sort();
