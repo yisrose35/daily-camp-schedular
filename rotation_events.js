@@ -194,56 +194,71 @@ function getAssignmentsForDate(dateKey, opts = {}) {
         const windowEnd = evt.dailyWindow.endMin;
         const duration = evt.durationPerBunk;
         const concurrency = evt.concurrency || 1;
-
-        // Build time slots
-        const totalSlots = Math.floor((windowEnd - windowStart) / duration);
         const assignments = [];
-        let slotIdx = 0;
-        let concurrencySlot = 0;
 
         // Get existing schedules for conflict checking
         const scheduleAssignments = window.scheduleAssignments || {};
 
-        for (let i = 0; i < todayQueue.length && slotIdx < totalSlots; i++) {
-            const bunkInfo = todayQueue[i];
-            const slotStart = windowStart + slotIdx * duration;
-            const slotEnd = slotStart + duration;
+        const sequenceTarget = evt.sequence?.targetActivity || '';
 
-            // Check conflict with existing fixed blocks
-            if (hasBunkConflict(bunkInfo.bunk, slotStart, slotEnd, scheduleAssignments, opts.timelines)) {
-                // Try next slots for this bunk
-                let placed = false;
-                for (let s = slotIdx + 1; s < totalSlots; s++) {
-                    const altStart = windowStart + s * duration;
-                    const altEnd = altStart + duration;
-                    if (!hasBunkConflict(bunkInfo.bunk, altStart, altEnd, scheduleAssignments, opts.timelines)) {
-                        assignments.push({
-                            bunk: bunkInfo.bunk,
-                            grade: bunkInfo.grade,
-                            startMin: altStart,
-                            endMin: altEnd
-                        });
-                        placed = true;
-                        break;
-                    }
+        if (sequenceTarget) {
+            // ── Sequence mode: place each bunk immediately before or after its target activity ──
+            for (let i = 0; i < todayQueue.length; i++) {
+                const bunkInfo = todayQueue[i];
+                const bunkSchedule = scheduleAssignments[bunkInfo.bunk] || [];
+
+                // Find the target activity's slot for this bunk today
+                const targetEntry = bunkSchedule.find(e =>
+                    e && !e.continuation &&
+                    (e._activity === sequenceTarget || e.sport === sequenceTarget || e.field === sequenceTarget)
+                );
+                if (!targetEntry) continue; // target not on this bunk's schedule today → skip
+
+                const tStart = targetEntry._startMin ?? targetEntry.startMin ?? null;
+                const tEnd = targetEntry._endMin ?? targetEntry.endMin ?? null;
+                if (tStart == null || tEnd == null) continue;
+
+                // Try immediately after target, then immediately before
+                if (!hasBunkConflict(bunkInfo.bunk, tEnd, tEnd + duration, scheduleAssignments, opts.timelines)) {
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: tEnd, endMin: tEnd + duration });
+                } else if (tStart - duration >= 0 && !hasBunkConflict(bunkInfo.bunk, tStart - duration, tStart, scheduleAssignments, opts.timelines)) {
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: tStart - duration, endMin: tStart });
                 }
-                if (!placed) {
-                    // Can't fit today — skip this bunk (overflow to next day)
-                    continue;
-                }
-            } else {
-                assignments.push({
-                    bunk: bunkInfo.bunk,
-                    grade: bunkInfo.grade,
-                    startMin: slotStart,
-                    endMin: slotEnd
-                });
+                // else: no adjacent slot free — hard constraint, skip this bunk today
             }
+        } else {
+            // ── Standard mode: sequential slots within the daily window ──
+            const totalSlots = Math.floor((windowEnd - windowStart) / duration);
+            let slotIdx = 0;
+            let concurrencySlot = 0;
 
-            concurrencySlot++;
-            if (concurrencySlot >= concurrency) {
-                concurrencySlot = 0;
-                slotIdx++;
+            for (let i = 0; i < todayQueue.length && slotIdx < totalSlots; i++) {
+                const bunkInfo = todayQueue[i];
+                const slotStart = windowStart + slotIdx * duration;
+                const slotEnd = slotStart + duration;
+
+                if (hasBunkConflict(bunkInfo.bunk, slotStart, slotEnd, scheduleAssignments, opts.timelines)) {
+                    // Try next slots for this bunk
+                    let placed = false;
+                    for (let s = slotIdx + 1; s < totalSlots; s++) {
+                        const altStart = windowStart + s * duration;
+                        const altEnd = altStart + duration;
+                        if (!hasBunkConflict(bunkInfo.bunk, altStart, altEnd, scheduleAssignments, opts.timelines)) {
+                            assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: altStart, endMin: altEnd });
+                            placed = true;
+                            break;
+                        }
+                    }
+                    if (!placed) continue; // overflow to next day
+                } else {
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: slotStart, endMin: slotEnd });
+                }
+
+                concurrencySlot++;
+                if (concurrencySlot >= concurrency) {
+                    concurrencySlot = 0;
+                    slotIdx++;
+                }
             }
         }
 
@@ -627,6 +642,11 @@ async function showCreateEventModal(containerEl) {
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
     const allBunks = getAllBunks();
 
+    const _sportsSet = new Set();
+    (g.app1?.fields || []).forEach(f => { (f.activities || []).forEach(a => _sportsSet.add(a)); });
+    const _specials = (window.getAllSpecialActivities?.() || []).map(s => s.name);
+    const allActivityNames = [...new Set([..._sportsSet, ..._specials])].sort();
+
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
     if (!showModal) { alert('Modal system not available'); return; }
 
@@ -642,7 +662,8 @@ async function showCreateEventModal(containerEl) {
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', placeholder: 'e.g., 1:00pm' },
             { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', placeholder: 'e.g., 10' },
             { name: 'concurrency', label: 'Bunks at a Time', type: 'text', placeholder: 'e.g., 2', default: '2' },
-            { name: 'location', label: 'Location (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] }
+            { name: 'location', label: 'Location (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] },
+            { name: 'adjacentTo', label: 'Must be adjacent to (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allActivityNames.map(a => ({ value: a, label: a }))] }
         ],
         confirmText: 'Create'
     });
@@ -685,6 +706,7 @@ async function showCreateEventModal(containerEl) {
         durationPerBunk: duration,
         concurrency,
         location: result.location || null,
+        sequence: { targetActivity: result.adjacentTo || '' },
         gradeGrouping: true,
         excludedBunks: [],
         completedBunks: {},
@@ -716,6 +738,11 @@ async function showEditEventModal(evt, containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
 
+    const _sportsSet = new Set();
+    (g.app1?.fields || []).forEach(f => { (f.activities || []).forEach(a => _sportsSet.add(a)); });
+    const _specials = (window.getAllSpecialActivities?.() || []).map(s => s.name);
+    const allActivityNames = [...new Set([..._sportsSet, ..._specials])].sort();
+
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
     if (!showModal) return;
 
@@ -730,7 +757,8 @@ async function showEditEventModal(evt, containerEl) {
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', default: minutesToTime(evt.dailyWindow.endMin) },
             { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', default: String(evt.durationPerBunk) },
             { name: 'concurrency', label: 'Bunks at a Time', type: 'text', default: String(evt.concurrency || 2) },
-            { name: 'location', label: 'Location (optional)', type: 'select', default: evt.location || '', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] }
+            { name: 'location', label: 'Location (optional)', type: 'select', default: evt.location || '', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] },
+            { name: 'adjacentTo', label: 'Must be adjacent to (optional)', type: 'select', default: evt.sequence?.targetActivity || '', options: [{ value: '', label: '-- None --' }, ...allActivityNames.map(a => ({ value: a, label: a }))] }
         ],
         confirmText: 'Save Changes'
     });
@@ -755,7 +783,8 @@ async function showEditEventModal(evt, containerEl) {
         dailyWindow: { startMin: windowStartMin, endMin: windowEndMin },
         durationPerBunk: parseInt(result.duration) || evt.durationPerBunk,
         concurrency: Math.max(1, parseInt(result.concurrency) || evt.concurrency),
-        location: result.location || null
+        location: result.location || null,
+        sequence: { targetActivity: result.adjacentTo || '' }
     });
 
     renderRotationEventsPane(containerEl);
