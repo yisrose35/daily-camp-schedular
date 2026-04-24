@@ -3857,7 +3857,12 @@ async function _trySpatialSortPipeline({
     serviceTimeSec,
     shiftIdx
 }) {
-    const MIN_BUS_THRESHOLD = 34;
+    const avgCapacity = shiftVehicles.length
+        ? Math.floor(shiftVehicles.reduce((s, v) => s + (v.capacity || 0), 0) / shiftVehicles.length)
+        : 48;
+    const MIN_BUS_THRESHOLD = Math.ceil(avgCapacity * 0.75);
+    console.log('[Go v6] Fleet avg capacity: ' + avgCapacity +
+        ', min cluster threshold (75%): ' + MIN_BUS_THRESHOLD);
 
     // ── Helper: run k-means on a set of atoms with given k ──
     function runKMeans(atomSet, numClusters) {
