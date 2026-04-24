@@ -3842,13 +3842,12 @@ async function _tryNeighborhoodPipeline({
 // =============================================================================
 // SPATIAL SORT PIPELINE — Cluster-First, Route-Second
 //
-// Replaces neighborhood detection + packIntoBuses with a coordinate-based
-// partitioning strategy:
+// Pure lat/lng k-means clustering into k=numBuses clusters:
 //   1. Build sibling atoms (indivisible units)
-//   2. Sort atoms spatially: lat bands + snake-pattern lng
-//   3. Bucket sequentially into buses by capacity
-//   4. Sanity check: detect driving-time gaps (water/highway) and move outliers
-//   5. Create stops per bus (corner or door-to-door)
+//   2. K-means on lat/lng → k geographic clusters
+//   3. Capacity fix-up: move farthest atoms from overloaded clusters
+//   4. Sanity check: detect driving-time gaps and move outliers
+//   5. Create corner stops per bus
 //   6. Per-bus Google TSP for optimal stop ordering
 // =============================================================================
 async function _trySpatialSortPipeline({
@@ -3864,7 +3863,7 @@ async function _trySpatialSortPipeline({
 }) {
     const SANITY_GAP_SEC = 300;
 
-    showProgress(shiftLabel + ': spatial sort — building atoms...', pctBase + 10);
+    showProgress(shiftLabel + ': clustering — building atoms...', pctBase + 10);
 
     // ── A. Build sibling atoms ──
     const sibMap = detectSiblings(allCampers);
@@ -3897,45 +3896,128 @@ async function _trySpatialSortPipeline({
         }
     });
 
-    console.log('[Go v6] Spatial sort: ' + atoms.length + ' atoms from ' +
+    console.log('[Go v6] Clustering: ' + atoms.length + ' atoms from ' +
         allCampers.length + ' campers (' + Object.keys(sibGroups).length + ' sibling groups)');
 
-    // ── B. Spatial sort: lat bands + snake-pattern lng ──
-    showProgress(shiftLabel + ': spatial sort — partitioning...', pctBase + 20);
+    // ── B. K-means clustering: k = numBuses ──
+    showProgress(shiftLabel + ': clustering — k-means on lat/lng...', pctBase + 20);
 
-    const numBuses = shiftVehicles.length;
-    const numBands = Math.ceil(Math.sqrt(numBuses));
-    atoms.sort((a, b) => a.lat - b.lat);
-    const bandSize = Math.ceil(atoms.length / numBands);
-
-    const sortedAtoms = [];
-    for (let bi = 0; bi < numBands; bi++) {
-        const start = bi * bandSize;
-        const end = Math.min(start + bandSize, atoms.length);
-        const band = atoms.slice(start, end);
-        band.sort((a, b) => (bi % 2 === 0 ? 1 : -1) * (a.lng - b.lng));
-        sortedAtoms.push(...band);
-    }
-
-    // ── C. Bucket into buses by capacity ──
-    showProgress(shiftLabel + ': spatial sort — bucketing into buses...', pctBase + 30);
-
+    const k = shiftVehicles.length;
     const busCapacities = shiftVehicles.map(v =>
         Math.max(0, (v.capacity || 0) - reserveSeats));
-    const busBuckets = shiftVehicles.map(() => []);
-    let busIdx = 0;
-    let busUsed = 0;
 
-    for (const atom of sortedAtoms) {
-        while (busIdx < busBuckets.length - 1 && busUsed + atom.size > busCapacities[busIdx]) {
-            busIdx++;
-            busUsed = busBuckets[busIdx].reduce((s, a) => s + a.size, 0);
+    // K-means++ seeding: pick initial centroids spread apart
+    const centroids = [];
+    const firstIdx = Math.floor(Math.random() * atoms.length);
+    centroids.push({ lat: atoms[firstIdx].lat, lng: atoms[firstIdx].lng });
+
+    while (centroids.length < k) {
+        let bestIdx = -1, bestDist = -1;
+        for (let i = 0; i < atoms.length; i++) {
+            let minDist = Infinity;
+            for (const c of centroids) {
+                const d = (atoms[i].lat - c.lat) ** 2 + (atoms[i].lng - c.lng) ** 2;
+                if (d < minDist) minDist = d;
+            }
+            if (minDist > bestDist) { bestDist = minDist; bestIdx = i; }
         }
-        busBuckets[busIdx].push(atom);
-        busUsed += atom.size;
+        centroids.push({ lat: atoms[bestIdx].lat, lng: atoms[bestIdx].lng });
     }
 
-    // Log initial assignment
+    // Iterate k-means: assign atoms to nearest centroid, recompute centroids
+    let assignments = new Array(atoms.length).fill(0);
+    for (let iter = 0; iter < 30; iter++) {
+        let changed = false;
+
+        // Assign each atom to nearest centroid
+        for (let i = 0; i < atoms.length; i++) {
+            let bestC = 0, bestD = Infinity;
+            for (let ci = 0; ci < k; ci++) {
+                const d = (atoms[i].lat - centroids[ci].lat) ** 2 +
+                          (atoms[i].lng - centroids[ci].lng) ** 2;
+                if (d < bestD) { bestD = d; bestC = ci; }
+            }
+            if (assignments[i] !== bestC) { assignments[i] = bestC; changed = true; }
+        }
+
+        if (!changed) break;
+
+        // Recompute centroids
+        for (let ci = 0; ci < k; ci++) {
+            let sLat = 0, sLng = 0, n = 0;
+            for (let i = 0; i < atoms.length; i++) {
+                if (assignments[i] === ci) {
+                    sLat += atoms[i].lat;
+                    sLng += atoms[i].lng;
+                    n++;
+                }
+            }
+            if (n > 0) {
+                centroids[ci].lat = sLat / n;
+                centroids[ci].lng = sLng / n;
+            }
+        }
+    }
+
+    // Build bus buckets from k-means assignments
+    const busBuckets = shiftVehicles.map(() => []);
+    for (let i = 0; i < atoms.length; i++) {
+        busBuckets[assignments[i]].push(atoms[i]);
+    }
+
+    // ── C. Capacity fix-up ──
+    // Move farthest atoms from overloaded clusters to nearest underloaded cluster
+    showProgress(shiftLabel + ': clustering — capacity fix-up...', pctBase + 30);
+
+    function busCentroid(bucket) {
+        if (!bucket.length) return null;
+        let sLat = 0, sLng = 0;
+        for (const a of bucket) { sLat += a.lat; sLng += a.lng; }
+        return { lat: sLat / bucket.length, lng: sLng / bucket.length };
+    }
+
+    let capMoves = 0;
+    for (let pass = 0; pass < 20; pass++) {
+        let moved = false;
+        for (let bi = 0; bi < busBuckets.length; bi++) {
+            const used = busBuckets[bi].reduce((s, a) => s + a.size, 0);
+            if (used <= busCapacities[bi]) continue;
+
+            // Find farthest atom from this cluster's centroid
+            const cent = busCentroid(busBuckets[bi]);
+            let farthestIdx = -1, farthestDist = -1;
+            for (let ai = 0; ai < busBuckets[bi].length; ai++) {
+                const a = busBuckets[bi][ai];
+                const d = haversineMi(a.lat, a.lng, cent.lat, cent.lng);
+                if (d > farthestDist) { farthestDist = d; farthestIdx = ai; }
+            }
+            if (farthestIdx < 0) continue;
+
+            const outlier = busBuckets[bi][farthestIdx];
+
+            // Find nearest cluster with capacity
+            let bestTarget = -1, bestDist = Infinity;
+            for (let ti = 0; ti < busBuckets.length; ti++) {
+                if (ti === bi) continue;
+                const tUsed = busBuckets[ti].reduce((s, a) => s + a.size, 0);
+                if (tUsed + outlier.size > busCapacities[ti]) continue;
+                const tc = busCentroid(busBuckets[ti]);
+                if (!tc) continue;
+                const d = haversineMi(outlier.lat, outlier.lng, tc.lat, tc.lng);
+                if (d < bestDist) { bestDist = d; bestTarget = ti; }
+            }
+            if (bestTarget >= 0) {
+                busBuckets[bi].splice(farthestIdx, 1);
+                busBuckets[bestTarget].push(outlier);
+                capMoves++;
+                moved = true;
+            }
+        }
+        if (!moved) break;
+    }
+    if (capMoves) console.log('[Go v6] Capacity fix-up: moved ' + capMoves + ' atom(s)');
+
+    // Log cluster assignment
     for (let i = 0; i < busBuckets.length; i++) {
         const count = busBuckets[i].reduce((s, a) => s + a.size, 0);
         const lats = busBuckets[i].map(a => a.lat);
@@ -3951,22 +4033,22 @@ async function _trySpatialSortPipeline({
     }
 
     // ── D. Sanity check: travel-time gap detection ──
-    showProgress(shiftLabel + ': spatial sort — sanity check...', pctBase + 40);
-
-    function busCentroid(bucket) {
-        if (!bucket.length) return null;
-        let sLat = 0, sLng = 0;
-        for (const a of bucket) { sLat += a.lat; sLng += a.lng; }
-        return { lat: sLat / bucket.length, lng: sLng / bucket.length };
-    }
+    showProgress(shiftLabel + ': clustering — sanity check...', pctBase + 40);
 
     let sanityMoves = 0;
     for (let bi = 0; bi < busBuckets.length; bi++) {
         const bucket = busBuckets[bi];
         if (bucket.length < 2) continue;
 
-        for (let ai = bucket.length - 1; ai >= 1; ai--) {
-            const gap = drivingDist(bucket[ai - 1].lat, bucket[ai - 1].lng,
+        // Sort bucket atoms by distance from centroid for consecutive gap check
+        const cent = busCentroid(bucket);
+        if (!cent) continue;
+        bucket.sort((a, b) =>
+            haversineMi(a.lat, a.lng, cent.lat, cent.lng) -
+            haversineMi(b.lat, b.lng, cent.lat, cent.lng));
+
+        for (let ai = bucket.length - 1; ai >= 0; ai--) {
+            const gap = drivingDist(cent.lat, cent.lng,
                                     bucket[ai].lat, bucket[ai].lng);
             if (gap <= SANITY_GAP_SEC) continue;
 
