@@ -3982,7 +3982,10 @@
                             _noBacktrack: b._noBacktrack || false,
                             _assignedSpecial: b._assignedSpecial || null,
                             _specialLocation: b._specialLocation || null,
-                            _specialDuration: b._specialDuration || null
+                            _specialDuration: b._specialDuration || null,
+                            _rotationEventId: b._rotationEventId || null,
+                            _rotationEventLocation: b._rotationEventLocation || null,
+                            _rotationEventColor: b._rotationEventColor || null
                         }));
                         if (bType === 'special' && b.event) placedSpecialNames.add(b.event);
                     }
@@ -5916,7 +5919,7 @@
                     var rhMeta = bunkMeta[rhBunk];
                     var rhTmpl = rhMeta.template;
                     // Check if bunk has a rotation event block already
-                    var rhHasRot = rhTmpl.some(function(b) { return b._source === 'rotation_event' && b._rotationEventId; });
+                    var rhHasRot = rhTmpl.some(function(b) { return b && b._rotationEventId; });
                     if (rhHasRot) continue;
                     // Get rotation needs for this bunk
                     try {
@@ -7793,7 +7796,7 @@
 
                 // ★ Missing rotation event penalty
                 if (rotationQuotasForScoring) {
-                    const hasRot = sorted.some(b => b._source === 'rotation_event' && b._rotationEventId);
+                    const hasRot = sorted.some(b => b && b._rotationEventId);
                     if (!hasRot) {
                         Object.values(rotationQuotasForScoring).forEach(q => {
                             if (q.remainingBunks && q.remainingBunks.has(String(bunk))) {
@@ -9295,7 +9298,7 @@
                     getBunksForGrade(grade, divisions).forEach(bunk => {
                         const tl = bunkTimelines[bunk] || [];
                         tl.forEach(b => {
-                            if (b && b._source === 'rotation_event' && b._rotationEventId) {
+                            if (b && b._rotationEventId) {
                                 if (!byEvent[b._rotationEventId]) byEvent[b._rotationEventId] = new Set();
                                 byEvent[b._rotationEventId].add(String(bunk));
                             }
@@ -10000,7 +10003,7 @@
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
-                (bunkTimelines[bunk] || []).filter(b => b._source === 'rotation_event').forEach(block => {
+                (bunkTimelines[bunk] || []).filter(b => b && b._rotationEventId).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1) return;
                    window.scheduleAssignments[String(bunk)][idx] = {
