@@ -8530,15 +8530,9 @@
                             if (gBunks.length > 0) bunksByGrade[grade] = gBunks;
                         });
                         if (Object.keys(bunksByGrade).length === 0) return;
+                        if (winEnd - winStart < dur) return;
 
-                        // Build slots across the daily window
-                        const slots = [];
-                        for (let t = winStart; t + dur <= winEnd; t += dur) {
-                            slots.push({ startMin: t, endMin: t + dur, usedByGrade: null });
-                        }
-                        if (slots.length === 0) return;
-
-                        const isSlotFreeForBunk = (slot, bunk) => {
+                        const isWindowFreeForBunk = (wStart, wEnd, bunk) => {
                             const tl = bunkTimelines[bunk] || [];
                             for (let i = 0; i < tl.length; i++) {
                                 const blk = tl[i];
@@ -8547,9 +8541,24 @@
                                 const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
                                 const bEnd = blk.endMin != null ? blk.endMin : blk._endMin;
                                 if (bStart == null || bEnd == null) continue;
-                                if (bStart < slot.endMin && bEnd > slot.startMin) return false;
+                                if (bStart < wEnd && bEnd > wStart) return false;
                             }
                             return true;
+                        };
+
+                        // Scan every 5-min offset in the daily window to find the earliest
+                        // `dur`-minute placement where all bunks in the grade are free.
+                        // Avoids other grades' already-chosen placements (not_sharable).
+                        const findGradeSlot = (bunks, placements) => {
+                            for (let t = winStart; t + dur <= winEnd; t += 5) {
+                                const tEnd = t + dur;
+                                const conflicts = placements.some(p => t < p.endMin && tEnd > p.startMin);
+                                if (conflicts) continue;
+                                if (bunks.every(b => isWindowFreeForBunk(t, tEnd, b))) {
+                                    return { startMin: t, endMin: tEnd };
+                                }
+                            }
+                            return null;
                         };
 
                         const placeWall = (bunk, grade, slot) => {
@@ -8579,19 +8588,23 @@
                             _rotWallCount++;
                         };
 
-                        // Sort grades most-constrained-first (fewest viable slots go first)
-                        // so a tight grade doesn't lose its only option to a flexible one.
+                        // Sort grades most-constrained-first: count how many viable 5-min
+                        // offsets exist for each grade (ignoring cross-grade conflicts).
+                        // Grades with fewer options go first so tight grades aren't crowded
+                        // out by flexible ones.
                         const gradeEntries = Object.entries(bunksByGrade).map(([g, bks]) => {
-                            const viable = slots.filter(s => bks.every(b => isSlotFreeForBunk(s, b))).length;
+                            let viable = 0;
+                            for (let t = winStart; t + dur <= winEnd; t += 5) {
+                                if (bks.every(b => isWindowFreeForBunk(t, t + dur, b))) viable++;
+                            }
                             return { grade: g, bunks: bks, viable };
                         }).sort((a, b) => a.viable - b.viable);
 
+                        const placements = []; // { startMin, endMin, grade }
                         gradeEntries.forEach(({ grade, bunks }) => {
-                            const slot = slots.find(s =>
-                                s.usedByGrade == null && bunks.every(b => isSlotFreeForBunk(s, b))
-                            );
+                            const slot = findGradeSlot(bunks, placements);
                             if (slot) {
-                                slot.usedByGrade = grade;
+                                placements.push({ startMin: slot.startMin, endMin: slot.endMin, grade });
                                 bunks.forEach(b => placeWall(b, grade, slot));
                             } else {
                                 _rotUnplaced.push(grade + '/' + evt.name);
