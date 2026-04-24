@@ -835,8 +835,35 @@
             rtRegister('rotevt', eventId, grade, startMin, endMin);
         }
 
+        // Returns { startMin, endMin } of the grade's existing placement for
+        // this event, or null if none yet. Used to force "one slot per grade":
+        // once a bunk of grade G is placed at time T for event E, every other
+        // bunk of grade G must use the same T. Prevents each grade from
+        // spreading across multiple slots and starving later grades.
+        function getGradeRotationPlacement(eventId, grade) {
+            const key = _rtKey('rotevt', eventId);
+            const buckets = _resourceBuckets[key];
+            if (!buckets) return null;
+            let minM = null, maxM = null;
+            for (const mStr in buckets) {
+                const b = buckets[mStr];
+                if (!b || !b.grades.has(grade)) continue;
+                const m = parseInt(mStr, 10);
+                if (minM == null || m < minM) minM = m;
+                if (maxM == null || m > maxM) maxM = m;
+            }
+            if (minM == null) return null;
+            return { startMin: minM, endMin: maxM + 5 };
+        }
+
         function canUseRotationSlotAtTime(eventId, concurrency, grade, startMin, endMin) {
             if (!eventId || !concurrency) return true;
+            // Force grade alignment: if the grade is already placed at a specific
+            // time for this event, reject any other time range.
+            const existing = getGradeRotationPlacement(eventId, grade);
+            if (existing && (existing.startMin !== startMin || existing.endMin !== endMin)) {
+                return false;
+            }
             // not_sharable = only same-grade bunks can share the slot
             return rtCanUse('rotevt', eventId, grade, startMin, endMin,
                 'not_sharable', concurrency, []);
@@ -8463,6 +8490,125 @@
                 }
             });
 
+            // ── Phase 2.4: Pre-place rotation events as walls (STRICT whole-grade) ──
+            // Rotation events (Scheduled Activities) are camp-wide — every bunk in
+            // the date range must pass through. Runs BEFORE Phase 2.5 so specials
+            // don't claim the rotation slot. Strict whole-grade: each grade gets
+            // exactly ONE slot, all bunks in that grade go to that slot. No per-bunk
+            // spreading (previously caused grades 1-2 to fill all 6 periods and
+            // starve grade 3 via not_sharable).
+            if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                try {
+                    const _rotEvents = window.RotationEvents.loadRotationEvents() || [];
+                    let _rotWallCount = 0;
+                    const _rotUnplaced = [];
+
+                    _rotEvents.forEach(evt => {
+                        if (!currentDate || !evt || !evt.dateRange) return;
+                        if (currentDate < evt.dateRange.start || currentDate > evt.dateRange.end) return;
+                        const dur = parseInt(evt.durationPerBunk) || 0;
+                        if (dur <= 0) return;
+                        const winStart = evt.dailyWindow && evt.dailyWindow.startMin;
+                        const winEnd = evt.dailyWindow && evt.dailyWindow.endMin;
+                        if (winStart == null || winEnd == null || winEnd - winStart < dur) return;
+
+                        const excluded = new Set(evt.excludedBunks || []);
+                        const completed = new Set();
+                        Object.values(evt.completedBunks || {}).forEach(arr => {
+                            if (Array.isArray(arr)) arr.forEach(b => completed.add(String(b)));
+                        });
+                        const allowedGrades = (Array.isArray(evt.grades) && evt.grades.length > 0)
+                            ? new Set(evt.grades) : null;
+
+                        const bunksByGrade = {};
+                        allGrades.forEach(grade => {
+                            if (allowedSet && !allowedSet.has(String(grade))) return;
+                            if (allowedGrades && !allowedGrades.has(grade)) return;
+                            const gBunks = getBunksForGrade(grade, divisions)
+                                .map(String)
+                                .filter(b => !excluded.has(b) && !completed.has(b));
+                            if (gBunks.length > 0) bunksByGrade[grade] = gBunks;
+                        });
+                        if (Object.keys(bunksByGrade).length === 0) return;
+
+                        // Build slots across the daily window
+                        const slots = [];
+                        for (let t = winStart; t + dur <= winEnd; t += dur) {
+                            slots.push({ startMin: t, endMin: t + dur, usedByGrade: null });
+                        }
+                        if (slots.length === 0) return;
+
+                        const isSlotFreeForBunk = (slot, bunk) => {
+                            const tl = bunkTimelines[bunk] || [];
+                            for (let i = 0; i < tl.length; i++) {
+                                const blk = tl[i];
+                                if (!blk) continue;
+                                if (!(blk._activityLocked || blk._fixed || blk._classification === 'pinned')) continue;
+                                const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
+                                const bEnd = blk.endMin != null ? blk.endMin : blk._endMin;
+                                if (bStart == null || bEnd == null) continue;
+                                if (bStart < slot.endMin && bEnd > slot.startMin) return false;
+                            }
+                            return true;
+                        };
+
+                        const placeWall = (bunk, grade, slot) => {
+                            const tl = bunkTimelines[bunk];
+                            if (!tl) return;
+                            if (tl.some(b => b && b._rotationEventId === evt.id)) return;
+                            const block = {
+                                startMin: slot.startMin, endMin: slot.endMin,
+                                type: 'rotation_event', event: evt.name,
+                                field: evt.location || null,
+                                layer: null,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: false,
+                                _source: 'phase0',
+                                _rotationEventId: evt.id,
+                                _rotationEventLocation: evt.location || null,
+                                _rotationEventColor: evt.color || '#F59E0B',
+                                _final: true
+                            };
+                            let insertIdx = tl.length;
+                            for (let k = 0; k < tl.length; k++) {
+                                const eStart = tl[k] && (tl[k].startMin != null ? tl[k].startMin : tl[k]._startMin);
+                                if (eStart != null && slot.startMin < eStart) { insertIdx = k; break; }
+                            }
+                            tl.splice(insertIdx, 0, block);
+                            registerRotationEventUsage(evt.id, grade, slot.startMin, slot.endMin);
+                            _rotWallCount++;
+                        };
+
+                        // Sort grades most-constrained-first (fewest viable slots go first)
+                        // so a tight grade doesn't lose its only option to a flexible one.
+                        const gradeEntries = Object.entries(bunksByGrade).map(([g, bks]) => {
+                            const viable = slots.filter(s => bks.every(b => isSlotFreeForBunk(s, b))).length;
+                            return { grade: g, bunks: bks, viable };
+                        }).sort((a, b) => a.viable - b.viable);
+
+                        gradeEntries.forEach(({ grade, bunks }) => {
+                            const slot = slots.find(s =>
+                                s.usedByGrade == null && bunks.every(b => isSlotFreeForBunk(s, b))
+                            );
+                            if (slot) {
+                                slot.usedByGrade = grade;
+                                bunks.forEach(b => placeWall(b, grade, slot));
+                            } else {
+                                _rotUnplaced.push(grade + '/' + evt.name);
+                            }
+                        });
+                    });
+
+                    if (_rotWallCount > 0) {
+                        log('[Phase2.4] ★ PRE-PLACED ' + _rotWallCount + ' rotation event blocks as walls');
+                        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => ensureTimelineIntegrity(bunk)));
+                    }
+                    if (_rotUnplaced.length > 0) {
+                        log('[Phase2.4] Grades with no compatible whole-grade slot: ' + _rotUnplaced.join(', ') + ' — Phase 3 will attempt');
+                    }
+                } catch (e) { console.warn('[Phase2.4] rotation pre-placement failed:', e); }
+            }
+
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
             // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
             // By converting these to immovable walls BEFORE the packer runs,
@@ -8775,133 +8921,6 @@
                 allGrades.forEach(grade => {
                     log('[Phase2.5]   Grade ' + grade + ': ' + preplacedByGrade[grade] + '/' + getBunksForGrade(grade, divisions).length + ' bunks got specials');
                 });
-            }
-
-            // ── Phase 2.6: Pre-place ALL rotation events as walls for ALL bunks ──
-            // Rotation events (Scheduled Activities) are camp-wide — every bunk in
-            // the date range must pass through. Letting Phase 3's CSP / self-heal
-            // handle them leaves bunks unscheduled when conflicts arise. Pre-placing
-            // as walls guarantees placement before the packer runs.
-            if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
-                try {
-                    const _rotEvents = window.RotationEvents.loadRotationEvents() || [];
-                    let _rotWallCount = 0;
-                    const _rotFallbackInfo = [];
-
-                    _rotEvents.forEach(evt => {
-                        if (!currentDate || !evt || !evt.dateRange) return;
-                        if (currentDate < evt.dateRange.start || currentDate > evt.dateRange.end) return;
-                        const dur = parseInt(evt.durationPerBunk) || 0;
-                        if (dur <= 0) return;
-                        const winStart = evt.dailyWindow && evt.dailyWindow.startMin;
-                        const winEnd = evt.dailyWindow && evt.dailyWindow.endMin;
-                        if (winStart == null || winEnd == null || winEnd - winStart < dur) return;
-
-                        const excluded = new Set(evt.excludedBunks || []);
-                        const completed = new Set();
-                        Object.values(evt.completedBunks || {}).forEach(arr => {
-                            if (Array.isArray(arr)) arr.forEach(b => completed.add(String(b)));
-                        });
-                        const allowedGrades = (Array.isArray(evt.grades) && evt.grades.length > 0)
-                            ? new Set(evt.grades) : null;
-
-                        const bunksByGrade = {};
-                        allGrades.forEach(grade => {
-                            if (allowedSet && !allowedSet.has(String(grade))) return;
-                            if (allowedGrades && !allowedGrades.has(grade)) return;
-                            const gBunks = getBunksForGrade(grade, divisions)
-                                .map(String)
-                                .filter(b => !excluded.has(b) && !completed.has(b));
-                            if (gBunks.length > 0) bunksByGrade[grade] = gBunks;
-                        });
-                        if (Object.keys(bunksByGrade).length === 0) return;
-
-                        // Build slots across the daily window
-                        const slots = [];
-                        for (let t = winStart; t + dur <= winEnd; t += dur) {
-                            slots.push({ startMin: t, endMin: t + dur, usedByGrade: null });
-                        }
-                        if (slots.length === 0) return;
-
-                        const isSlotFreeForBunk = (slot, bunk) => {
-                            const tl = bunkTimelines[bunk] || [];
-                            for (let i = 0; i < tl.length; i++) {
-                                const blk = tl[i];
-                                if (!blk) continue;
-                                if (!(blk._activityLocked || blk._fixed || blk._classification === 'pinned')) continue;
-                                const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
-                                const bEnd = blk.endMin != null ? blk.endMin : blk._endMin;
-                                if (bStart == null || bEnd == null) continue;
-                                if (bStart < slot.endMin && bEnd > slot.startMin) return false;
-                            }
-                            return true;
-                        };
-
-                        const placeWall = (bunk, grade, slot) => {
-                            const tl = bunkTimelines[bunk];
-                            if (!tl) return;
-                            // Skip if already placed (idempotency across iterations)
-                            if (tl.some(b => b && b._rotationEventId === evt.id)) return;
-                            const block = {
-                                startMin: slot.startMin, endMin: slot.endMin,
-                                type: 'rotation_event', event: evt.name,
-                                field: evt.location || null,
-                                layer: null,
-                                _classification: 'pinned', _committed: true, _fixed: true,
-                                _activityLocked: true, _noBacktrack: false,
-                                _source: 'phase0',
-                                _rotationEventId: evt.id,
-                                _rotationEventLocation: evt.location || null,
-                                _rotationEventColor: evt.color || '#F59E0B',
-                                _final: true
-                            };
-                            let insertIdx = tl.length;
-                            for (let k = 0; k < tl.length; k++) {
-                                const eStart = tl[k] && (tl[k].startMin != null ? tl[k].startMin : tl[k]._startMin);
-                                if (eStart != null && slot.startMin < eStart) { insertIdx = k; break; }
-                            }
-                            tl.splice(insertIdx, 0, block);
-                            registerRotationEventUsage(evt.id, grade, slot.startMin, slot.endMin);
-                            _rotWallCount++;
-                        };
-
-                        // Strategy: whole-grade first (all bunks share one slot).
-                        // If no slot fits every bunk in a grade, fall back to per-bunk.
-                        Object.entries(bunksByGrade).forEach(([grade, bunks]) => {
-                            const wholeSlot = slots.find(s =>
-                                s.usedByGrade == null && bunks.every(b => isSlotFreeForBunk(s, b))
-                            );
-                            if (wholeSlot) {
-                                wholeSlot.usedByGrade = grade;
-                                bunks.forEach(b => placeWall(b, grade, wholeSlot));
-                                return;
-                            }
-                            // Per-bunk fallback
-                            let fellBack = false;
-                            bunks.forEach(bunk => {
-                                const slot = slots.find(s =>
-                                    (s.usedByGrade == null || s.usedByGrade === grade) &&
-                                    isSlotFreeForBunk(s, bunk)
-                                );
-                                if (slot) {
-                                    if (slot.usedByGrade == null) slot.usedByGrade = grade;
-                                    placeWall(bunk, grade, slot);
-                                } else {
-                                    fellBack = true;
-                                }
-                            });
-                            if (fellBack) _rotFallbackInfo.push(grade + '/' + evt.name);
-                        });
-                    });
-
-                    if (_rotWallCount > 0) {
-                        log('[Phase2.6] ★ PRE-PLACED ' + _rotWallCount + ' rotation event blocks as walls');
-                        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => ensureTimelineIntegrity(bunk)));
-                    }
-                    if (_rotFallbackInfo.length > 0) {
-                        log('[Phase2.6] Unplaced (will retry in Phase 3): ' + _rotFallbackInfo.join(', '));
-                    }
-                } catch (e) { console.warn('[Phase2.6] rotation pre-placement failed:', e); }
             }
 
             // ── Phase 3: Time-sweep sport filler (v8.0) ──
