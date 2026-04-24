@@ -66,7 +66,8 @@
             googleMapsKey: '', googleProjectId: '',
             geoapifyKey: '',
             campLat: null, campLng: null,
-            routingPipeline: 'spatial-sort'
+            routingPipeline: 'spatial-sort',
+            clusterSoftCapPct: 112, clusterDissolvePct: 55, clusterFloorPct: 30
         },
         activeMode: 'dismissal',
         buses: [], shifts: [], monitors: [], counselors: [],
@@ -1254,6 +1255,9 @@ let _toastTimer = null;
         if (document.getElementById('dropoffMode')) document.getElementById('dropoffMode').value = s.dropoffMode || 'door-to-door';
         document.getElementById('avgStopTime').value = s.avgStopTime ?? 2;
         document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 375;
+        if (document.getElementById('clusterSoftCapPct')) document.getElementById('clusterSoftCapPct').value = s.clusterSoftCapPct ?? 112;
+        if (document.getElementById('clusterDissolvePct')) document.getElementById('clusterDissolvePct').value = s.clusterDissolvePct ?? 55;
+        if (document.getElementById('clusterFloorPct')) document.getElementById('clusterFloorPct').value = s.clusterFloorPct ?? 30;
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
@@ -1279,6 +1283,9 @@ let _toastTimer = null;
         D.setup.dropoffMode = el('dropoffMode')?.value || 'door-to-door';
         D.setup.avgStopTime = parseInt(el('avgStopTime')?.value) || 2;
         D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 375;
+        D.setup.clusterSoftCapPct = parseInt(el('clusterSoftCapPct')?.value) || 112;
+        D.setup.clusterDissolvePct = parseInt(el('clusterDissolvePct')?.value) || 55;
+        D.setup.clusterFloorPct = parseInt(el('clusterFloorPct')?.value) || 30;
         window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
@@ -3860,13 +3867,16 @@ async function _trySpatialSortPipeline({
     const avgCapacity = shiftVehicles.length
         ? Math.floor(shiftVehicles.reduce((s, v) => s + (v.capacity || 0), 0) / shiftVehicles.length)
         : 48;
-    const MIN_BUS_THRESHOLD = Math.ceil(avgCapacity * 0.55);
-    const CASCADE_FLOOR = Math.ceil(avgCapacity * 0.30);
-    const SOFT_CAPACITY = Math.ceil(avgCapacity * 1.125);
+    const _softPct = (D.setup.clusterSoftCapPct ?? 112) / 100;
+    const _dissPct = (D.setup.clusterDissolvePct ?? 55) / 100;
+    const _floorPct = (D.setup.clusterFloorPct ?? 30) / 100;
+    const SOFT_CAPACITY = Math.ceil(avgCapacity * _softPct);
+    const MIN_BUS_THRESHOLD = Math.ceil(avgCapacity * _dissPct);
+    const CASCADE_FLOOR = Math.ceil(avgCapacity * _floorPct);
     console.log('[Go v6] Fleet avg capacity: ' + avgCapacity +
-        ', soft cap: ' + SOFT_CAPACITY +
-        ', dissolve threshold: ' + MIN_BUS_THRESHOLD +
-        ', cascade floor: ' + CASCADE_FLOOR);
+        ', soft cap: ' + SOFT_CAPACITY + ' (' + Math.round(_softPct * 100) + '%)' +
+        ', dissolve threshold: ' + MIN_BUS_THRESHOLD + ' (' + Math.round(_dissPct * 100) + '%)' +
+        ', cascade floor: ' + CASCADE_FLOOR + ' (' + Math.round(_floorPct * 100) + '%)');
 
     // ── Helper: run k-means on a set of atoms with given k ──
     function runKMeans(atomSet, numClusters) {
