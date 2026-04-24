@@ -3975,58 +3975,53 @@ async function _trySpatialSortPipeline({
     // ── C. Phase 2: Dissolve small clusters, re-cluster dense areas ──
     showProgress(shiftLabel + ': phase 2 — dissolving small clusters...', pctBase + 25);
 
-    const survivingBuckets = [];
-    const dissolvedAtoms = [];
-
-    for (let i = 0; i < busBuckets.length; i++) {
-        if (bucketSize(busBuckets[i]) >= MIN_BUS_THRESHOLD) {
-            survivingBuckets.push(busBuckets[i]);
-        } else {
-            for (const atom of busBuckets[i]) dissolvedAtoms.push(atom);
-            console.log('[Go v6] Dissolved cluster ' + (i + 1) + ' (' +
-                bucketSize(busBuckets[i]) + ' campers) — atoms will be absorbed');
+    // ── C. Phase 2: Dissolve small clusters in rounds until all are 34+ ──
+    // Each round: find smallest cluster, merge into nearest neighbor.
+    // Repeat until every cluster has 34+ campers. Freed buses stay unused.
+    let round = 0;
+    while (true) {
+        let smallestIdx = -1, smallestSize = Infinity;
+        for (let i = 0; i < busBuckets.length; i++) {
+            const sz = bucketSize(busBuckets[i]);
+            if (sz > 0 && sz < MIN_BUS_THRESHOLD && sz < smallestSize) {
+                smallestSize = sz;
+                smallestIdx = i;
+            }
         }
+        if (smallestIdx < 0) break;
+
+        round++;
+        const cent = bucketCentroid(busBuckets[smallestIdx]);
+        let nearestIdx = -1, nearestDist = Infinity;
+        for (let i = 0; i < busBuckets.length; i++) {
+            if (i === smallestIdx || busBuckets[i].length === 0) continue;
+            const c = bucketCentroid(busBuckets[i]);
+            if (!c) continue;
+            const d = haversineMi(cent.lat, cent.lng, c.lat, c.lng);
+            if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+        }
+        if (nearestIdx < 0) break;
+
+        const fromSize = bucketSize(busBuckets[smallestIdx]);
+        const toSize = bucketSize(busBuckets[nearestIdx]);
+        for (const atom of busBuckets[smallestIdx]) {
+            busBuckets[nearestIdx].push(atom);
+        }
+        console.log('[Go v6] Round ' + round + ': merged cluster ' + (smallestIdx + 1) +
+            ' (' + fromSize + ' campers) → cluster ' + (nearestIdx + 1) +
+            ' (' + toSize + ' → ' + bucketSize(busBuckets[nearestIdx]) + ' campers, ' +
+            nearestDist.toFixed(2) + 'mi apart)');
+        busBuckets[smallestIdx] = [];
     }
 
-    const freedBuses = k - survivingBuckets.length;
-    console.log('[Go v6] Dissolved ' + dissolvedAtoms.length + ' atoms (' +
-        dissolvedAtoms.reduce((s, a) => s + a.size, 0) + ' campers) from ' +
-        freedBuses + ' small clusters');
-    console.log('[Go v6] Freed ' + freedBuses + ' buses for dense areas');
-
-    if (freedBuses <= 0) {
-        console.log('[Go v6] No clusters dissolved — all had ' + MIN_BUS_THRESHOLD + '+ campers');
-        busBuckets = survivingBuckets;
+    // Remove empty buckets
+    busBuckets = busBuckets.filter(b => b.length > 0);
+    const unusedBuses = k - busBuckets.length;
+    if (round > 0) {
+        console.log('[Go v6] Dissolve complete: ' + round + ' merges, ' +
+            busBuckets.length + ' clusters remain, ' + unusedBuses + ' buses unused');
     } else {
-        // Re-cluster ONLY the dense atoms with all k buses.
-        // Outlier atoms are held aside and stitched back after.
-        showProgress(shiftLabel + ': phase 2 — re-clustering dense areas with ' + k + ' buses...', pctBase + 35);
-
-        const denseAtoms = survivingBuckets.flatMap(b => b);
-        console.log('[Go v6] Re-clustering ' + denseAtoms.length + ' dense atoms into ' + k + ' clusters');
-
-        busBuckets = runKMeans(denseAtoms, k);
-
-        // Stitch outlier atoms back onto whichever new cluster is closest
-        let stitched = 0;
-        for (const atom of dissolvedAtoms) {
-            let bestIdx = -1, bestDist = Infinity;
-            for (let ci = 0; ci < busBuckets.length; ci++) {
-                const cent = bucketCentroid(busBuckets[ci]);
-                if (!cent) continue;
-                const d = haversineMi(atom.lat, atom.lng, cent.lat, cent.lng);
-                if (d < bestDist) { bestDist = d; bestIdx = ci; }
-            }
-            if (bestIdx >= 0) {
-                busBuckets[bestIdx].push(atom);
-                stitched++;
-            }
-        }
-        console.log('[Go v6] Stitched ' + stitched + ' outlier atoms back onto nearest clusters');
-
-        console.log('[Go v6] ═══════════════════════════════════════');
-        console.log('[Go v6] PHASE 2: Re-clustered dense areas + stitched outliers');
-        console.log('[Go v6] ═══════════════════════════════════════');
+        console.log('[Go v6] No clusters dissolved — all had ' + MIN_BUS_THRESHOLD + '+ campers');
     }
 
     // ── D. Log final cluster results ──
