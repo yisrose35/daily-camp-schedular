@@ -3860,9 +3860,11 @@ async function _trySpatialSortPipeline({
     const avgCapacity = shiftVehicles.length
         ? Math.floor(shiftVehicles.reduce((s, v) => s + (v.capacity || 0), 0) / shiftVehicles.length)
         : 48;
-    const MIN_BUS_THRESHOLD = Math.ceil(avgCapacity * 0.75);
+    const MIN_BUS_THRESHOLD = Math.ceil(avgCapacity * 0.55);
     const CASCADE_FLOOR = Math.ceil(avgCapacity * 0.30);
+    const SOFT_CAPACITY = Math.ceil(avgCapacity * 1.125);
     console.log('[Go v6] Fleet avg capacity: ' + avgCapacity +
+        ', soft cap: ' + SOFT_CAPACITY +
         ', dissolve threshold: ' + MIN_BUS_THRESHOLD +
         ', cascade floor: ' + CASCADE_FLOOR);
 
@@ -4088,7 +4090,7 @@ async function _trySpatialSortPipeline({
             const sz = bucketSize(busBuckets[i]);
             if (sz > largestSize) { largestSize = sz; largestIdx = i; }
         }
-        if (largestIdx < 0 || largestSize <= avgCapacity) break;
+        if (largestIdx < 0 || largestSize <= SOFT_CAPACITY) break;
 
         const neededBuses = Math.ceil(largestSize / avgCapacity);
         const extraBuses = neededBuses - 1;
@@ -4112,7 +4114,7 @@ async function _trySpatialSortPipeline({
                 let nearIdx = -1, nearDist = Infinity;
                 for (let i = 0; i < busBuckets.length; i++) {
                     if (i === smallIdx || i === largestIdx) continue;
-                    if (bucketSize(busBuckets[i]) + smallSize > avgCapacity) continue;
+                    if (bucketSize(busBuckets[i]) + smallSize > SOFT_CAPACITY) continue;
                     const c = bucketCentroid(busBuckets[i]);
                     const d = haversineMi(sCent.lat, sCent.lng, c.lat, c.lng);
                     if (d < nearDist) { nearDist = d; nearIdx = i; }
@@ -4255,7 +4257,7 @@ async function _trySpatialSortPipeline({
             const inner = clusterMeta[mi];
             if (inner.distSec >= outer.distSec) continue;
             if (times[mi] >= med) continue;
-            if (bucketSize(busBuckets[inner.idx]) >= avgCapacity) continue;
+            if (bucketSize(busBuckets[inner.idx]) >= SOFT_CAPACITY) continue;
             const d = haversineMi(outer.cent.lat, outer.cent.lng, inner.cent.lat, inner.cent.lng);
             if (d < bestDist) { bestDist = d; bestInnerMI = mi; }
         }
@@ -4268,7 +4270,7 @@ async function _trySpatialSortPipeline({
         for (let ai = 0; ai < busBuckets[outer.idx].length; ai++) {
             const a = busBuckets[outer.idx][ai];
             if (bucketSize(busBuckets[outer.idx]) - a.size < CASCADE_FLOOR) continue;
-            if (bucketSize(busBuckets[inner.idx]) + a.size > avgCapacity) continue;
+            if (bucketSize(busBuckets[inner.idx]) + a.size > SOFT_CAPACITY) continue;
             const dToInner = haversineMi(a.lat, a.lng, innerCent.lat, innerCent.lng);
             let closerToOther = false;
             for (let ci = 0; ci < clusterMeta.length; ci++) {
