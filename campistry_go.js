@@ -4275,7 +4275,46 @@ async function _trySpatialSortPipeline({
     // Remove any empty buckets
     busBuckets = busBuckets.filter(b => b.length > 0);
 
-    // ── F. Log final cluster results ──
+    // ── F. Phase 5: Global even rebalance ──
+    // Pool all atoms and re-split into exactly k buses targeting totalCampers/k each.
+    // Uses spatial snake sort so geographic locality is preserved.
+    showProgress(shiftLabel + ': phase 5 — global even rebalance...', pctBase + 55);
+
+    const allAtoms = busBuckets.flatMap(b => b);
+    const totalForBalance = allAtoms.reduce((s, a) => s + a.size, 0);
+    const targetPerBus = Math.ceil(totalForBalance / k);
+
+    console.log('[Go v6] ═══════════════════════════════════════');
+    console.log('[Go v6] PHASE 5: Global rebalance — ' + totalForBalance +
+        ' campers / ' + k + ' buses = ~' + targetPerBus + ' per bus');
+    console.log('[Go v6] ═══════════════════════════════════════');
+
+    // Spatial snake sort
+    const balanceBands = Math.ceil(Math.sqrt(k));
+    allAtoms.sort((a, b) => a.lat - b.lat);
+    const balanceBandSize = Math.ceil(allAtoms.length / balanceBands);
+    const balanceSorted = [];
+    for (let b = 0; b < balanceBands; b++) {
+        const band = allAtoms.slice(b * balanceBandSize, (b + 1) * balanceBandSize);
+        if (b % 2 === 1) band.sort((a, bb) => bb.lng - a.lng);
+        else band.sort((a, bb) => a.lng - bb.lng);
+        balanceSorted.push(...band);
+    }
+
+    // Cut into k even chunks
+    busBuckets = [];
+    let cur = [], curSz = 0;
+    for (const atom of balanceSorted) {
+        if (curSz + atom.size > targetPerBus && cur.length > 0 && busBuckets.length < k - 1) {
+            busBuckets.push(cur);
+            cur = []; curSz = 0;
+        }
+        cur.push(atom);
+        curSz += atom.size;
+    }
+    if (cur.length) busBuckets.push(cur);
+
+    // ── G. Log final cluster results ──
     console.log('[Go v6] ═══════════════════════════════════════');
     console.log('[Go v6] FINAL CLUSTERS');
     console.log('[Go v6] ═══════════════════════════════════════');
