@@ -1214,17 +1214,40 @@
         freeEl.style.cssText = `position:absolute;left:3px;right:3px;top:${topPx}px;height:${heightPx}px;border-radius:5px;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 4px,#f3f4f6 4px,#f3f4f6 8px);border:1px dashed #d1d5db;display:flex;align-items:center;justify-content:center;z-index:0;transition:border-color 0.2s;`;
 
         if (canEditBunk(bunk)) {
+            freeEl.style.gap = '6px';
+
             const addBtn = document.createElement('div');
             addBtn.className = 'pei-add-btn';
             addBtn.innerHTML = '+';
             addBtn.title = `Add activity (${gapDur}min)`;
-            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;';
+            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;flex-shrink:0;';
             freeEl.appendChild(addBtn);
-            freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; freeEl.style.borderColor = '#93c5fd'; });
-            freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; freeEl.style.borderColor = '#d1d5db'; });
+
+            const autoBtn = document.createElement('div');
+            autoBtn.className = 'pei-autofill-btn';
+            autoBtn.innerHTML = '⚡';
+            autoBtn.title = `Auto-fill this gap`;
+            autoBtn.style.cssText = 'padding:2px 8px;border-radius:999px;background:rgba(124,58,237,0.1);color:#7c3aed;font-size:0.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s;z-index:4;white-space:nowrap;flex-shrink:0;letter-spacing:0.01em;';
+            freeEl.appendChild(autoBtn);
+
+            freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; autoBtn.style.opacity = '1'; freeEl.style.borderColor = '#93c5fd'; });
+            freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; autoBtn.style.opacity = '0'; freeEl.style.borderColor = '#d1d5db'; });
+            addBtn.addEventListener('mouseenter', () => { addBtn.style.background = 'rgba(37,99,235,0.2)'; });
+            addBtn.addEventListener('mouseleave', () => { addBtn.style.background = 'rgba(37,99,235,0.1)'; });
+            autoBtn.addEventListener('mouseenter', () => { autoBtn.style.background = 'rgba(124,58,237,0.2)'; });
+            autoBtn.addEventListener('mouseleave', () => { autoBtn.style.background = 'rgba(124,58,237,0.1)'; });
+
             addBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 peiShowAddModal(bunk, divName, gapStart, gapEnd);
+            });
+
+            autoBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const pick = peiAutoFill(bunk, divName, gapStart, gapEnd);
+                if (!pick) { peiShowBanner('No suitable activity found for this gap', 'warning'); return; }
+                peiApplyNewBlock(bunk, divName, gapStart, gapEnd, pick.activity, pick.field || null);
+                peiShowBanner(`✓ Auto-filled: ${pick.activity}`, 'success', true);
             });
         }
 
