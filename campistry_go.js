@@ -3744,9 +3744,9 @@ async function _tryNeighborhoodPipeline({
     })();
 
     // ── Geographic spread re-balance ──
-    // packIntoBuses falls back to ignoring the spread cap when no other bus
-    // has capacity, leaving one bus serving neighborhoods miles apart.
-    // Move outlier stops to the bus whose centroid is actually closest.
+    // packIntoBuses falls back to ignoring the spread cap when no bus has
+    // capacity, leaving one bus spanning miles. Move outlier stops to the
+    // nearest bus that (a) has capacity AND (b) won't itself become over-spread.
     (function rebalanceSpread() {
         const MAX_SPREAD_MI = 3.5;
         const MAX_PASSES    = 8;
@@ -3766,6 +3766,12 @@ async function _tryNeighborhoodPipeline({
                                                     stops[j].lat, stops[j].lng));
             return max;
         }
+        // Would adding newStop to busStops push its spread beyond maxMi?
+        function wouldExceedSpread(busStops, newStop, maxMi) {
+            for (const s of busStops)
+                if (haversineMi(s.lat, s.lng, newStop.lat, newStop.lng) > maxMi) return true;
+            return false;
+        }
 
         let totalMoved = 0;
         for (let pass = 0; pass < MAX_PASSES; pass++) {
@@ -3775,7 +3781,7 @@ async function _tryNeighborhoodPipeline({
                 if (spreadMi(route.stops) <= MAX_SPREAD_MI) continue;
 
                 const c = stopCentroid(route.stops);
-                // Find the stop farthest from this bus's own centroid
+                // Find the stop farthest from this bus's centroid
                 let worstDist = 0, worstIdx = -1;
                 for (let i = 0; i < route.stops.length; i++) {
                     const d = haversineMi(route.stops[i].lat, route.stops[i].lng, c.lat, c.lng);
@@ -3785,12 +3791,13 @@ async function _tryNeighborhoodPipeline({
                 const outlier = route.stops[worstIdx];
                 const outlierCount = outlier.campers.length;
 
-                // Move to the bus whose centroid is closest to the outlier
-                let bestBus = null, bestDist = worstDist; // must be strictly better
+                // Find the nearest bus that can accept without becoming over-spread
+                let bestBus = null, bestDist = Infinity;
                 for (const other of routes) {
                     if (other === route || !other.stops.length) continue;
                     const cap = other._cap != null ? other._cap : 9999;
                     if ((other.camperCount || 0) + outlierCount > cap) continue;
+                    if (wouldExceedSpread(other.stops, outlier, MAX_SPREAD_MI)) continue;
                     const oc = stopCentroid(other.stops);
                     const d = haversineMi(outlier.lat, outlier.lng, oc.lat, oc.lng);
                     if (d < bestDist) { bestDist = d; bestBus = other; }
@@ -3810,11 +3817,13 @@ async function _tryNeighborhoodPipeline({
 
         // Re-number stops and log summary
         for (const r of routes) r.stops.forEach((s, i) => s.stopNum = i + 1);
-        if (totalMoved) {
-            const worstSpread = Math.max(...routes.map(r => spreadMi(r.stops))).toFixed(1);
+        const worstSpread = Math.max(...routes.map(r => spreadMi(r.stops))).toFixed(1);
+        if (totalMoved)
             console.log('[Go v5] Spread re-balance: moved ' + totalMoved +
                 ' stop(s), worst spread now ' + worstSpread + 'mi');
-        }
+        else
+            console.log('[Go v5] Spread re-balance: 0 moves (worst spread ' + worstSpread +
+                'mi — remaining spread is geographically unavoidable)');
     })();
 
     // ── Per-bus TSP re-ordering ──
