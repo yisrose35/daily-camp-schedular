@@ -350,43 +350,6 @@ let _toastTimer = null;
     }
 
     /**
-     * Pick the safest corner of an intersection for a bus stop, Transfinder-style.
-     * Generates 4 diagonal corner candidates (~10m offsets) around the intersection,
-     * hard-rejects any corner where more than `unsafeThreshold` of cluster kids would
-     * have to cross a major road to reach it, and returns the lowest-total-walk survivor.
-     *
-     * Returns { lat, lng, corner, crossings, totalWalkMi } or null if no corner is safe.
-     *   corner ∈ 'NE' | 'NW' | 'SE' | 'SW'
-     */
-    function pickIntersectionCorner(intersection, cluster, unsafeThreshold) {
-        if (!intersection || !cluster || !cluster.length) return null;
-        if (unsafeThreshold == null) unsafeThreshold = 0.3;
-        const lat0 = intersection.lat, lng0 = intersection.lng;
-        // ~10m offset: 1° lat ≈ 111km → 10m ≈ 9e-5°. Close enough for corner-picking.
-        const d = 0.00009;
-        const candidates = [
-            { corner: 'NE', lat: lat0 + d, lng: lng0 + d },
-            { corner: 'NW', lat: lat0 + d, lng: lng0 - d },
-            { corner: 'SE', lat: lat0 - d, lng: lng0 + d },
-            { corner: 'SW', lat: lat0 - d, lng: lng0 - d },
-        ];
-        let best = null;
-        candidates.forEach(cand => {
-            let crossings = 0;
-            let totalWalkMi = 0;
-            cluster.forEach(kid => {
-                if (crossesMajorRoad(kid.lat, kid.lng, cand.lat, cand.lng)) crossings++;
-                totalWalkMi += manhattanMi(kid.lat, kid.lng, cand.lat, cand.lng);
-            });
-            if (crossings / cluster.length > unsafeThreshold) return; // hard reject
-            if (!best || totalWalkMi < best.totalWalkMi) {
-                best = { lat: cand.lat, lng: cand.lng, corner: cand.corner, crossings, totalWalkMi };
-            }
-        });
-        return best;
-    }
-
-    /**
      * Street-aware cluster distance (in miles, approximate).
      * Base: driving distance (from cache or haversine×factor).
      * Multipliers for street awareness:
@@ -2375,21 +2338,6 @@ let _toastTimer = null;
                 corrected.zip    = pa.postalCode           || zip;
             }
 
-            const comps = (result.address && result.address.addressComponents) || [];
-            const neighborhood = (function() {
-                const prefer = ['neighborhood', 'sublocality_level_1', 'sublocality'];
-                for (let t = 0; t < prefer.length; t++) {
-                    const c = comps.find(c => c.componentType === prefer[t]);
-                    if (c && c.componentName && c.componentName.text) return c.componentName.text;
-                }
-                return null;
-            })();
-
-            // USPS carrier route — e.g. "C006" (city), "R014" (rural), "H003" (highway)
-            // This is the USPS-defined delivery zone: one carrier, one shift, density-adaptive.
-            // C routes = dense urban (a few blocks), R routes = suburban/rural (many miles).
-            const carrierRoute = usps.carrierRoute || null;
-
             return {
                 lat, lng,
                 confidence:  Math.min(Math.max(confidence, 0), 1),
@@ -2398,8 +2346,6 @@ let _toastTimer = null;
                 precision:   (gran === 'PREMISE' || gran === 'SUB_PREMISE') ? 'interpolated' : 'approximate',
                 zip:         retZip,
                 corrected,
-                neighborhood,
-                carrierRoute,
                 _dpv:        dpv,
                 _granularity: gran
             };
@@ -2532,8 +2478,6 @@ let _toastTimer = null;
         a._geocodePrecision = result.precision || 'unknown';
         a._crossValidated = result._crossValidated || false;
         a._zipMismatch = (result.zipMatch === false);
-        if (result.neighborhood)   a.neighborhood   = result.neighborhood;
-        if (result.carrierRoute)   a.carrierRoute   = result.carrierRoute;
         if (result._dpv === 'N') {
             a._geocodeWarning = 'USPS: address not found — verify address is real and deliverable';
         } else if (result._dpv === 'S' || result._dpv === 'D') {
@@ -2547,10 +2491,7 @@ let _toastTimer = null;
         } else {
             delete a._geocodeWarning;
         }
-        console.log('[Go] Geocoded ' + name + ': ' + result.source +
-            ' (' + Math.round(result.confidence * 100) + '% confidence, ' + (result.precision || '?') + ')' +
-            (a.carrierRoute ? ' [route ' + a.carrierRoute + ']' : ' [no carrier route]') +
-            (result._crossValidated ? ' [cross-validated]' : ''));
+        console.log('[Go] Geocoded ' + name + ': ' + result.source + ' (' + Math.round(result.confidence * 100) + '% confidence, ' + (result.precision || '?') + ')' + (result._crossValidated ? ' [cross-validated]' : ''));
     }
 
     // =========================================================================
@@ -2624,7 +2565,6 @@ let _toastTimer = null;
                 a._zipMismatch = false; a._geocodeConfidence = null;
                 a._geocodePrecision = null; a._crossValidated = false;
                 a._dpv = null; a._addressCorrected = null; a._geocodeSource = null;
-                a.carrierRoute = null; a.neighborhood = null; // clear zone-key fields so stale values don't persist
                 return true;
             }
             return !a.geocoded;
@@ -3206,8 +3146,6 @@ let _toastTimer = null;
         document.getElementById('preflightBody').innerHTML = checks.map(c => '<div class="preflight-item preflight-' + c.status + '"><div class="preflight-icon">' + (c.status === 'ok' ? '✓' : c.status === 'warn' ? '!' : '✗') + '</div><div><div style="font-weight:600;color:var(--text-primary)">' + esc(c.label) + '</div>' + (c.detail ? '<div style="font-size:.75rem;color:var(--text-muted)">' + esc(c.detail) + '</div>' : '') + '</div></div>').join('');
         document.getElementById('routeMode').value = D.setup.dropoffMode || 'door-to-door';
         document.getElementById('routeReserveSeats').value = D.setup.reserveSeats ?? 2;
-        const nhCheckbox = document.getElementById('useNeighborhoodMode');
-        if (nhCheckbox) nhCheckbox.checked = !!D.setup.useNeighborhoodMode;
         const btn = document.getElementById('generateRoutesBtn'); btn.disabled = !canGen; btn.style.opacity = canGen ? '1' : '0.5';
     }
 
@@ -3276,3886 +3214,976 @@ let _toastTimer = null;
     let _slicedZones = null; // result of sliceRegionsIntoZones()
     let _zonePreviewLayers = []; // Leaflet layers for zone preview
 
-    async function sliceRegionsIntoZones(regions, buses, reserveSeats) {
-        const roster = getRoster();
-        const allCampers = [];
-
-        // Gather all geocoded, bus-riding campers (filtered by active mode)
-        const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
-        Object.keys(roster).forEach(name => {
-            const a = D.addresses[name];
-            if (!a?.geocoded || !a.lat || !a.lng) return;
-            if (a._isStaff) return; // Staff are post-gen suggestions, not campers
-            if (a.transport === 'pickup') return;
-            if (a[modeKey] === false) return;
-            allCampers.push({
-                name, lat: a.lat, lng: a.lng,
-                address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '),
-                zip: (a.zip || '').trim(),
-                division: roster[name].division || '',
-                bunk: roster[name].bunk || ''
-            });
-        });
-
-        if (!allCampers.length) {
-            console.error('[Go] Zone: no geocoded campers');
-            return null;
-        }
-
-        // ── A. Compute capacity budget ──
-        const effectiveCaps = buses.map(b => {
-            const mon = D.monitors.find(m => m.assignedBus === b.id);
-            const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            const brs = b.reserveMode === 'custom' && b.reserveSeats != null ? b.reserveSeats : (reserveSeats || 0);
-            return Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs);
-        });
-        const totalCapacity = effectiveCaps.reduce((s, c) => s + c, 0);
-        let targetFillPct = 0.90;
-        if (allCampers.length > totalCapacity * targetFillPct) {
-            // Slide toward 100% until all kids fit
-            targetFillPct = Math.min(1.0, allCampers.length / totalCapacity);
-        }
-        if (allCampers.length > totalCapacity) {
-            const shortfall = allCampers.length - totalCapacity;
-            console.error('[Go] Zone: ABORT — ' + allCampers.length + ' campers but only ' + totalCapacity + ' total capacity (' + shortfall + ' short)');
-            toast('Cannot generate zones: ' + shortfall + ' more campers than bus seats', 'error');
-            return null;
-        }
-
-        const avgEffCap = totalCapacity / buses.length;
-        const targetFill = Math.floor(avgEffCap * targetFillPct);
-        console.log('[Go] Zone: target fill = ' + targetFill + ' per bus (' + Math.round(targetFillPct * 100) + '% of ' + Math.round(avgEffCap) + ' avg capacity)');
-
-        // ── Detect siblings for indivisible atoms ──
-        const sibMap = detectSiblings(allCampers);
-
-        // Build atom groups: siblings + same-house kids move together
-        function buildAtoms(campers) {
-            const atoms = [];
-            const assigned = new Set();
-            // Group by sibling ID first
-            const sibGroups = {};
-            campers.forEach(c => {
-                const sid = sibMap[c.name];
-                if (sid) {
-                    if (!sibGroups[sid]) sibGroups[sid] = [];
-                    sibGroups[sid].push(c);
-                }
-            });
-            Object.values(sibGroups).forEach(group => {
-                group.forEach(c => assigned.add(c.name));
-                atoms.push({ campers: group, size: group.length,
-                    lat: group.reduce((s, c) => s + c.lat, 0) / group.length,
-                    lng: group.reduce((s, c) => s + c.lng, 0) / group.length
-                });
-            });
-            // Same-house grouping (same lat/lng to 5 decimals)
-            const houseGroups = {};
-            campers.forEach(c => {
-                if (assigned.has(c.name)) return;
-                const key = Math.round(c.lat * 100000) + ',' + Math.round(c.lng * 100000);
-                if (!houseGroups[key]) houseGroups[key] = [];
-                houseGroups[key].push(c);
-            });
-            Object.values(houseGroups).forEach(group => {
-                group.forEach(c => assigned.add(c.name));
-                atoms.push({ campers: group, size: group.length,
-                    lat: group.reduce((s, c) => s + c.lat, 0) / group.length,
-                    lng: group.reduce((s, c) => s + c.lng, 0) / group.length
-                });
-            });
-            return atoms;
-        }
-
-        // ── B. Categorize each ZIP region ──
-        const wholeZips = [];  // fit in one bus
-        const bigZips = [];    // need 2+ buses → slice
-        const smallZips = [];  // < 60% of target → absorb
-
-        regions.forEach(reg => {
-            const count = reg.camperNames.length;
-            if (count === 0) return;
-            if (count <= targetFill) {
-                if (count < targetFill * 0.60) {
-                    smallZips.push(reg);
-                    console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → small ZIP, will absorb');
-                } else {
-                    wholeZips.push(reg);
-                    console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → whole ZIP, one zone');
-                }
-            } else {
-                bigZips.push(reg);
-                const k = Math.ceil(count / targetFill);
-                console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → big ZIP, slicing into ' + k);
-            }
-        });
-
-        // ── C. Slice big ZIPs using driving-time clustering ──
-        const zones = []; // final output: [{name, camperNames, centroidLat, centroidLng, busIdx, regionIds}]
-
-        // Build haversine-based duration matrix (seconds)
-        async function fetchLargeMatrix(coords) {
-            const n = coords.length;
-            const avgSpeedMph = D.setup.avgSpeed || 25;
-            return Array.from({ length: n }, (_, i) =>
-                Array.from({ length: n }, (_, j) => {
-                    if (i === j) return 0;
-                    return (haversineMi(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng) * ROAD_FACTOR / avgSpeedMph) * 3600;
-                })
-            );
-        }
-
-        // k-medoids with driving-time matrix
-        function kMedoids(atoms, durMatrix, k, useDriveTime) {
-            const n = atoms.length;
-            if (n <= k) return atoms.map((_, i) => [i]);
-
-            // dist helper
-            function dist(i, j) {
-                if (useDriveTime && durMatrix?.[i]?.[j] != null && durMatrix[i][j] >= 0) return durMatrix[i][j];
-                return drivingDist(atoms[i].lat, atoms[i].lng, atoms[j].lat, atoms[j].lng);
-            }
-
-            // Seed selection: first two = max pairwise drive time
-            const seeds = [];
-            let maxD = 0, s1 = 0, s2 = 1;
-            for (let i = 0; i < n; i++) {
-                for (let j = i + 1; j < n; j++) {
-                    const d = dist(i, j);
-                    if (d > maxD) { maxD = d; s1 = i; s2 = j; }
-                }
-            }
-            seeds.push(s1, s2);
-            // Greedy add remaining seeds
-            while (seeds.length < k) {
-                let bestIdx = -1, bestMinDist = -1;
-                for (let i = 0; i < n; i++) {
-                    if (seeds.includes(i)) continue;
-                    let minDist = Infinity;
-                    seeds.forEach(s => { const d = dist(i, s); if (d < minDist) minDist = d; });
-                    if (minDist > bestMinDist) { bestMinDist = minDist; bestIdx = i; }
-                }
-                if (bestIdx >= 0) seeds.push(bestIdx);
-                else break;
-            }
-
-            // Assign atoms to nearest medoid
-            let assignments = new Array(n).fill(0);
-            function assignAll() {
-                atoms.forEach((_, i) => {
-                    let bestM = 0, bestD = Infinity;
-                    seeds.forEach((s, mi) => {
-                        const d = dist(i, s);
-                        if (d < bestD) { bestD = d; bestM = mi; }
-                    });
-                    assignments[i] = bestM;
-                });
-            }
-            assignAll();
-
-            // Iterate: recompute medoids, reassign
-            for (let iter = 0; iter < 20; iter++) {
-                let changed = false;
-                // Recompute each medoid
-                for (let mi = 0; mi < k; mi++) {
-                    const members = [];
-                    assignments.forEach((a, i) => { if (a === mi) members.push(i); });
-                    if (!members.length) continue;
-                    // Find member that minimizes total drive time to all others
-                    let bestMed = seeds[mi], bestTotal = Infinity;
-                    members.forEach(cand => {
-                        let total = 0;
-                        members.forEach(m => { if (m !== cand) total += dist(cand, m); });
-                        if (total < bestTotal) { bestTotal = total; bestMed = cand; }
-                    });
-                    if (bestMed !== seeds[mi]) { seeds[mi] = bestMed; changed = true; }
-                }
-                if (!changed) break;
-                // Reassign
-                const oldAssign = [...assignments];
-                assignAll();
-                if (oldAssign.every((a, i) => a === assignments[i])) break;
-            }
-
-            // Build clusters
-            const clusters = Array.from({ length: k }, () => []);
-            assignments.forEach((a, i) => clusters[a].push(i));
-            return clusters;
-        }
-
-        // Process big ZIPs
-        for (const reg of bigZips) {
-            const regCampers = allCampers.filter(c => reg.camperNames.includes(c.name));
-            const atoms = buildAtoms(regCampers);
-            const k = Math.ceil(regCampers.length / targetFill);
-
-            // Build coords for matrix call
-            const coords = atoms.map(a => ({ lat: a.lat, lng: a.lng }));
-
-            let durMatrix = null;
-            let useDriveTime = true;
-            showProgress('Building zone matrix for ' + reg.name + '...', 12);
-
-            try {
-                durMatrix = await fetchLargeMatrix(coords);
-            } catch (e) {
-                console.warn('[Go] Zone: matrix failed for ' + reg.name + ':', e.message);
-            }
-
-            if (!durMatrix) {
-                useDriveTime = false;
-                toast('Zone optimization for ' + reg.name + ': road data unavailable, using approximate distances', 'error');
-                console.warn('[Go] Zone: falling back to haversine for ' + reg.name);
-            }
-
-            const clusters = kMedoids(atoms, durMatrix, k, useDriveTime);
-
-            clusters.forEach((cluster, ci) => {
-                const pocketCampers = [];
-                cluster.forEach(ai => atoms[ai].campers.forEach(c => pocketCampers.push(c)));
-                if (!pocketCampers.length) return;
-
-                const cLat = pocketCampers.reduce((s, c) => s + c.lat, 0) / pocketCampers.length;
-                const cLng = pocketCampers.reduce((s, c) => s + c.lng, 0) / pocketCampers.length;
-
-                // ── F. Naming: most common street or geographic descriptor ──
-                const streetCounts = {};
-                pocketCampers.forEach(c => {
-                    const p = parseAddress(c.address);
-                    if (p.street) {
-                        const ns = normalizeStreet(p.street);
-                        streetCounts[ns] = (streetCounts[ns] || { count: 0, raw: p.street });
-                        streetCounts[ns].count++;
-                    }
-                });
-                const sortedStreets = Object.values(streetCounts).sort((a, b) => b.count - a.count);
-                const regCity = reg.name.split(' (')[0];
-                let zoneName;
-                if (sortedStreets.length && sortedStreets[0].count >= pocketCampers.length * 0.25) {
-                    zoneName = regCity + ' (' + sortedStreets[0].raw + ' area)';
-                } else {
-                    // Geographic descriptor based on medoid position relative to ZIP centroid
-                    const dLat = cLat - reg.centroidLat;
-                    const dLng = cLng - reg.centroidLng;
-                    let dir = '';
-                    if (Math.abs(dLat) > Math.abs(dLng)) dir = dLat > 0 ? 'North' : 'South';
-                    else dir = dLng > 0 ? 'East' : 'West';
-                    zoneName = dir + ' ' + regCity;
-                }
-
-                zones.push({
-                    id: 'zone_' + (reg.zip || reg.id) + '_' + ci,
-                    name: zoneName,
-                    camperNames: pocketCampers.map(c => c.name),
-                    centroidLat: cLat,
-                    centroidLng: cLng,
-                    regionIds: [reg.id],
-                    sourceType: 'sliced',
-                    color: REGION_COLORS[zones.length % REGION_COLORS.length]
-                });
-                console.log('[Go] Zone: sliced ' + reg.name + ' pocket ' + ci + ' → "' + zoneName + '" (' + pocketCampers.length + ' kids)');
-            });
-        }
-
-        // Whole ZIPs become zones unchanged
-        wholeZips.forEach(reg => {
-            zones.push({
-                id: 'zone_' + (reg.zip || reg.id),
-                name: reg.name,
-                camperNames: [...reg.camperNames],
-                centroidLat: reg.centroidLat,
-                centroidLng: reg.centroidLng,
-                regionIds: [reg.id],
-                sourceType: 'whole',
-                color: REGION_COLORS[zones.length % REGION_COLORS.length]
-            });
-        });
-
-        // ── D. Border rebalance for over-capacity pockets ──
-        // Use hard bus cap (not targetFill) — we must fit in a single bus
-        const MAX_ABSORB_MI = 1.5; // max distance for absorbing/moving kids between zones (tighter = cleaner geographic zones)
-        const hardCap = Math.max(...effectiveCaps);
-        for (let pass = 0; pass < 50; pass++) {
-            let anyOver = false;
-            for (const zone of zones) {
-                if (zone.camperNames.length <= hardCap) continue;
-                anyOver = true;
-
-                // Rank campers by distance to zone centroid, farthest first
-                const campersWithDist = zone.camperNames.map(name => {
-                    const c = allCampers.find(x => x.name === name);
-                    if (!c) return { name, dist: 0 };
-                    return { name, dist: drivingDist(c.lat, c.lng, zone.centroidLat, zone.centroidLng) };
-                }).sort((a, b) => b.dist - a.dist);
-
-                // Median distance — interior threshold
-                const dists = campersWithDist.map(c => c.dist).sort((a, b) => a - b);
-                const medianDist = dists[Math.floor(dists.length / 2)];
-
-                // Try to move border kids (above median distance)
-                let moved = false;
-                for (const candidate of campersWithDist) {
-                    if (candidate.dist <= medianDist) break; // interior kid
-                    if (zone.camperNames.length <= targetFill) break;
-
-                    // Check if this is part of a sibling atom
-                    const atomNames = [candidate.name];
-                    const sid = sibMap[candidate.name];
-                    if (sid) {
-                        zone.camperNames.forEach(n => {
-                            if (n !== candidate.name && sibMap[n] === sid) atomNames.push(n);
-                        });
-                    }
-                    // Also check same-house
-                    const candCamper = allCampers.find(x => x.name === candidate.name);
-                    if (candCamper) {
-                        const houseKey = Math.round(candCamper.lat * 100000) + ',' + Math.round(candCamper.lng * 100000);
-                        zone.camperNames.forEach(n => {
-                            if (atomNames.includes(n)) return;
-                            const nc = allCampers.find(x => x.name === n);
-                            if (nc && Math.round(nc.lat * 100000) + ',' + Math.round(nc.lng * 100000) === houseKey) atomNames.push(n);
-                        });
-                    }
-
-                    // Find nearest under-capacity zone within reasonable distance
-                    // Don't move kids to a zone more than 3mi away — that stretches routes
-                    let bestZone = null, bestDist = Infinity;
-                    for (const tz of zones) {
-                        if (tz === zone) continue;
-                        if (tz.camperNames.length + atomNames.length > hardCap) continue;
-                        const d = candCamper ? drivingDistMi(candCamper.lat, candCamper.lng, tz.centroidLat, tz.centroidLng) : Infinity;
-                        if (d > MAX_ABSORB_MI) continue; // don't stretch zones across distant areas
-                        if (d < bestDist) { bestDist = d; bestZone = tz; }
-                    }
-
-                    if (bestZone) {
-                        atomNames.forEach(n => {
-                            zone.camperNames = zone.camperNames.filter(x => x !== n);
-                            bestZone.camperNames.push(n);
-                        });
-                        const familyLabel = atomNames.length > 1 ? atomNames[0].split(/\s+/).pop() + ' family + ' + (atomNames.length - 1) : atomNames[0];
-                        console.log('[Go] Zone: Moved ' + atomNames.length + ' border kid(s) (' + familyLabel + ') from ' + zone.name + ' to ' + bestZone.name + ' — ' + zone.name + ' was ' + (zone.camperNames.length + atomNames.length) + '/' + targetFill + ', ' + bestZone.name + ' had room at ' + (bestZone.camperNames.length - atomNames.length) + '/' + targetFill + ', drive time ' + bestDist.toFixed(2) + 'mi');
-                        moved = true;
-                        break;
-                    }
-                }
-                if (!moved) break;
-            }
-            if (!anyOver) break;
-        }
-
-        // ── E. Absorb small ZIPs — with max distance cap ──
-        // Without a distance cap, small ZIPs get absorbed into distant zones
-        // just because they have room, creating stretched routes across ZIP codes.
-
-        // Sort small ZIPs by size descending — absorb larger ones first so they
-        // get priority on nearby zones with room
-        const sortedSmallZips = [...smallZips].sort((a, b) => b.camperNames.length - a.camperNames.length);
-
-        const unabsorbed = []; // small ZIPs that couldn't be absorbed within distance cap
-
-        for (const smallReg of sortedSmallZips) {
-            const regCampers = allCampers.filter(c => smallReg.camperNames.includes(c.name));
-            if (!regCampers.length) continue;
-
-            const centLat = regCampers.reduce((s, c) => s + c.lat, 0) / regCampers.length;
-            const centLng = regCampers.reduce((s, c) => s + c.lng, 0) / regCampers.length;
-
-            // Try at 90%, 95%, 100% fill — but enforce max distance
-            let absorbed = false;
-            for (const tryPct of [targetFillPct, 0.95, 1.0]) {
-                const tryFill = Math.floor(avgEffCap * tryPct);
-                let bestZone = null, bestDist = Infinity;
-                for (const z of zones) {
-                    if (z.camperNames.length + smallReg.camperNames.length > tryFill) continue;
-                    const d = drivingDistMi(centLat, centLng, z.centroidLat, z.centroidLng);
-                    if (d > MAX_ABSORB_MI) continue; // too far — don't stretch the zone
-                    if (d < bestDist) { bestDist = d; bestZone = z; }
-                }
-                if (bestZone) {
-                    const oldName = bestZone.name;
-                    bestZone.camperNames.push(...smallReg.camperNames);
-                    bestZone.regionIds.push(smallReg.id);
-                    const allInZone = allCampers.filter(c => bestZone.camperNames.includes(c.name));
-                    if (allInZone.length) {
-                        bestZone.centroidLat = allInZone.reduce((s, c) => s + c.lat, 0) / allInZone.length;
-                        bestZone.centroidLng = allInZone.reduce((s, c) => s + c.lng, 0) / allInZone.length;
-                    }
-                    const parts = oldName.split(' + ');
-                    const smallCity = smallReg.name.split(' (')[0];
-                    if (parts.length >= 2) {
-                        bestZone.name = parts[0] + ' + ' + parts[1].split(' +')[0] + ' + others';
-                    } else {
-                        bestZone.name = oldName.split(' (')[0] + ' + ' + smallCity;
-                    }
-                    console.log('[Go] Zone: Absorbed ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids) into ' + oldName + ' → "' + bestZone.name + '" (' + bestZone.camperNames.length + ' kids, ' + bestDist.toFixed(2) + 'mi away)');
-                    console.log('[Go] Zone:   Parts: ' + bestZone.regionIds.map(id => regions.find(r => r.id === id)?.name || id).join(', '));
-                    absorbed = true;
-                    break;
-                }
-            }
-            if (!absorbed) {
-                unabsorbed.push(smallReg);
-            }
-        }
-
-        // Small ZIPs that were too far to absorb → make their own zones
-        // Better a small dedicated zone than a stretched multi-ZIP monster
-        for (const smallReg of unabsorbed) {
-            const regCampers = allCampers.filter(c => smallReg.camperNames.includes(c.name));
-            if (!regCampers.length) continue;
-            zones.push({
-                id: 'zone_' + (smallReg.zip || smallReg.id),
-                name: smallReg.name,
-                camperNames: [...smallReg.camperNames],
-                centroidLat: smallReg.centroidLat,
-                centroidLng: smallReg.centroidLng,
-                regionIds: [smallReg.id],
-                sourceType: 'small-standalone',
-                color: REGION_COLORS[zones.length % REGION_COLORS.length]
-            });
-            console.log('[Go] Zone: ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids) → standalone zone (no nearby zone within ' + MAX_ABSORB_MI + 'mi had room)');
-        }
-
-        // ── H. Invariant check ──
-        const allZonedNames = new Set();
-        let invariantFail = false;
-        zones.forEach(z => {
-            z.camperNames.forEach(n => {
-                if (allZonedNames.has(n)) {
-                    console.error('[Go] Zone INVARIANT FAIL: ' + n + ' appears in multiple zones!');
-                    invariantFail = true;
-                }
-                allZonedNames.add(n);
-            });
-        });
-        // Check every input camper is in exactly one zone
-        allCampers.forEach(c => {
-            if (!allZonedNames.has(c.name)) {
-                console.error('[Go] Zone INVARIANT FAIL: ' + c.name + ' missing from all zones!');
-                invariantFail = true;
-            }
-        });
-        // Check capacity — warn but don't fail (downstream capacity enforcement handles overflow)
-        const maxBusCap = Math.max(...effectiveCaps);
-        let overCapCount = 0;
-        zones.forEach(z => {
-            if (z.camperNames.length > maxBusCap) {
-                console.warn('[Go] Zone WARNING: ' + z.name + ' has ' + z.camperNames.length + ' kids but max bus cap is ' + maxBusCap + ' — capacity enforcement will handle overflow');
-                overCapCount++;
-            }
-        });
-        if (overCapCount > 0) {
-            console.log('[Go] Zone: ' + overCapCount + ' zone(s) slightly over capacity — route generation will rebalance');
-        }
-
-        if (invariantFail) {
-            console.error('[Go] Zone: invariant check FAILED (missing/duplicate campers) — falling back to raw ZIP regions');
-            toast('Zone optimization failed — using raw regions', 'error');
-            return null;
-        }
-
-        console.log('[Go] Zone: ' + zones.length + ' zones created from ' + regions.length + ' regions, ' + allCampers.length + ' campers');
-        zones.forEach(z => console.log('[Go] Zone:   ' + z.name + ': ' + z.camperNames.length + ' kids'));
-
-        _slicedZones = zones;
-        return zones;
-    }
-
-    // ── Dry-run preview: show zones on map before routing ──
-    function clearZonePreview() {
-        if (_map) {
-            _zonePreviewLayers.forEach(l => _map.removeLayer(l));
-        }
-        _zonePreviewLayers = [];
-        const banner = document.getElementById('zonePreviewBanner');
-        if (banner) banner.remove();
-    }
-
-    function renderZonePreview(zones) {
-        if (!_map || !zones?.length) return;
-        clearZonePreview();
-
-        const allLatLngs = [];
-        zones.forEach((zone, zi) => {
-            const roster = getRoster();
-            const camperCoords = zone.camperNames.map(n => {
-                const a = D.addresses[n];
-                return a?.lat ? [a.lat, a.lng] : null;
-            }).filter(Boolean);
-
-            if (!camperCoords.length) return;
-            allLatLngs.push(...camperCoords);
-
-            // Draw convex hull polygon
-            const hull = convexHull(camperCoords);
-            if (hull.length >= 3) {
-                const polygon = L.polygon(hull, {
-                    color: zone.color || REGION_COLORS[zi % REGION_COLORS.length],
-                    weight: 2,
-                    fillOpacity: 0.15,
-                    dashArray: '5, 5'
-                }).addTo(_map);
-                polygon.bindPopup('<strong>' + esc(zone.name) + '</strong><br>' + zone.camperNames.length + ' campers');
-                _zonePreviewLayers.push(polygon);
-            }
-
-            // Label at centroid
-            const labelIcon = L.divIcon({
-                html: '<div style="background:' + esc(zone.color || REGION_COLORS[zi % REGION_COLORS.length]) + ';color:#fff;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3);font-family:DM Sans,sans-serif;">' + esc(zone.name) + ' (' + zone.camperNames.length + ')</div>',
-                className: '',
-                iconAnchor: [60, 12]
-            });
-            const label = L.marker([zone.centroidLat, zone.centroidLng], { icon: labelIcon, interactive: false }).addTo(_map);
-            _zonePreviewLayers.push(label);
-
-            // Camper dots
-            camperCoords.forEach(([lat, lng]) => {
-                const dotIcon = L.divIcon({
-                    html: '<div style="width:6px;height:6px;background:' + esc(zone.color || REGION_COLORS[zi % REGION_COLORS.length]) + ';border:1px solid #fff;border-radius:50%;"></div>',
-                    className: '',
-                    iconSize: [6, 6],
-                    iconAnchor: [3, 3]
-                });
-                const dot = L.marker([lat, lng], { icon: dotIcon, interactive: false }).addTo(_map);
-                _zonePreviewLayers.push(dot);
-            });
-        });
-
-        if (allLatLngs.length) {
-            _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
-        }
-    }
-
-    // Simple convex hull (Graham scan)
-    function convexHull(points) {
-        if (points.length < 3) return points;
-        const pts = points.map(p => ({ x: p[1], y: p[0] })); // lng, lat
-        // Find bottom-most (then leftmost)
-        let start = 0;
-        for (let i = 1; i < pts.length; i++) {
-            if (pts[i].y < pts[start].y || (pts[i].y === pts[start].y && pts[i].x < pts[start].x)) start = i;
-        }
-        [pts[0], pts[start]] = [pts[start], pts[0]];
-        const p0 = pts[0];
-        pts.sort((a, b) => {
-            if (a === p0) return -1;
-            if (b === p0) return 1;
-            const cross = (a.x - p0.x) * (b.y - p0.y) - (a.y - p0.y) * (b.x - p0.x);
-            if (Math.abs(cross) < 1e-12) {
-                const dA = (a.x - p0.x) ** 2 + (a.y - p0.y) ** 2;
-                const dB = (b.x - p0.x) ** 2 + (b.y - p0.y) ** 2;
-                return dA - dB;
-            }
-            return -cross;
-        });
-        const stack = [pts[0], pts[1]];
-        for (let i = 2; i < pts.length; i++) {
-            while (stack.length > 1) {
-                const top = stack[stack.length - 1], sec = stack[stack.length - 2];
-                const cross = (top.x - sec.x) * (pts[i].y - sec.y) - (top.y - sec.y) * (pts[i].x - sec.x);
-                if (cross <= 0) stack.pop();
-                else break;
-            }
-            stack.push(pts[i]);
-        }
-        return stack.map(p => [p.y, p.x]); // back to [lat, lng]
-    }
-
-    // Show zone preview and wait for user confirmation
-    function showZonePreviewModal(zones) {
-        return new Promise((resolve) => {
-            // Ensure map is visible
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            document.querySelector('.tab-btn[data-tab="routes"]')?.classList.add('active');
-            document.getElementById('tab-routes')?.classList.add('active');
-
-            // Initialize map if needed
-            if (!_map) {
-                const container = document.getElementById('routeMap');
-                if (container) {
-                    _map = L.map(container, { scrollWheelZoom: true, zoomControl: true });
-                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 19 }).addTo(_map);
-                }
-            }
-            if (_map) {
-                setTimeout(() => _map.invalidateSize(), 100);
-            }
-
-            // Add camp marker
-            if (_map && _campCoordsCache) {
-                const campIcon = L.divIcon({ html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>', className: '', iconSize: [32, 32], iconAnchor: [16, 16] });
-                const campMarker = L.marker([_campCoordsCache.lat, _campCoordsCache.lng], { icon: campIcon, zIndexOffset: 1000 }).addTo(_map);
-                campMarker.bindPopup('<strong>' + esc(D.setup.campName || 'Camp') + '</strong>');
-                _zonePreviewLayers.push(campMarker);
-            }
-
-            // Render zones on map
-            setTimeout(() => renderZonePreview(zones), 200);
-
-            // Build zone summary
-            const zoneList = zones.map((z, i) => {
-                const color = z.color || REGION_COLORS[i % REGION_COLORS.length];
-                return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;">'
-                    + '<span style="width:12px;height:12px;border-radius:50%;background:' + esc(color) + ';flex-shrink:0;"></span>'
-                    + '<strong>' + esc(z.name) + '</strong>'
-                    + '<span style="margin-left:auto;font-weight:600;">' + z.camperNames.length + ' kids</span></div>';
-            }).join('');
-
-            // Create banner
-            const banner = document.createElement('div');
-            banner.id = 'zonePreviewBanner';
-            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:10000;background:var(--bg-primary,#fff);border-bottom:3px solid var(--blue-500,#3b82f6);box-shadow:0 4px 20px rgba(0,0,0,.15);padding:1rem 1.5rem;display:flex;align-items:flex-start;gap:1.5rem;';
-            banner.innerHTML = '<div style="flex:1;max-height:60vh;overflow-y:auto;">'
-                + '<h3 style="margin:0 0 .5rem;font-size:1.1rem;">Zone Preview — ' + zones.length + ' zones, ' + zones.reduce((s, z) => s + z.camperNames.length, 0) + ' campers</h3>'
-                + '<p style="margin:0 0 .75rem;font-size:.8125rem;color:var(--text-muted);">Review the proposed bus zones on the map. Each zone will be served by one bus.</p>'
-                + '<div style="max-height:300px;overflow-y:auto;">' + zoneList + '</div>'
-                + '</div>'
-                + '<div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0;">'
-                + '<button id="zonePreviewConfirm" style="padding:10px 24px;border-radius:8px;border:none;background:var(--blue-600,#2563eb);color:#fff;cursor:pointer;font-size:.9rem;font-weight:700;">Looks good — generate routes</button>'
-                + '<button id="zonePreviewCancel" style="padding:10px 24px;border-radius:8px;border:1px solid var(--border-primary,#d1d5db);background:var(--bg-primary,#fff);cursor:pointer;font-size:.9rem;">Cancel</button>'
-                + '</div>';
-            document.body.appendChild(banner);
-
-            document.getElementById('zonePreviewConfirm').addEventListener('click', () => {
-                clearZonePreview();
-                resolve(true);
-            });
-            document.getElementById('zonePreviewCancel').addEventListener('click', () => {
-                clearZonePreview();
-                resolve(false);
-            });
-        });
-    }
-
-    // =========================================================================
-    // GREEDY ZONE BUILDER — Stops-first, then bus-aware zones
-    //
-    // Algorithm:
-    //   1. All stops are already created (globally, not per-zone)
-    //   2. Sort buses by capacity (biggest first)
-    //   3. Pick the farthest unassigned stop from camp as seed
-    //   4. Greedily grab the nearest unassigned stop — but ONLY if
-    //      its kid count fits in the remaining capacity. If the
-    //      nearest stop has too many kids, STOP (don't skip it).
-    //   5. Move to the next bus and repeat from step 3
-    //   6. Any leftover stops go to the bus with most remaining capacity
-    // =========================================================================
-    // =========================================================================
-    // splitTourAtGaps(tourStops, buses)
-    //
-    // Takes a pre-ordered giant tour and splits it into K bus segments.
-    //
-    // Core algorithm — TIME-BALANCED splitting:
-    //   For each bus, estimate total remaining route time (camp → all remaining stops).
-    //   Target = remainingTime / busesLeft.  Walk the tour greedily, accumulating
-    //   estimated drive+service time; cut when the bus hits its time target.
-    //   This balances route DURATION — far buses get fewer stops, close buses get
-    //   more — so all buses finish at roughly the same time.
-    //
-    //   Hard capacity (seat count) is always enforced first.  If a stop overflows
-    //   capacity → skip logic:
-    //       1. Measure drive time to this stop from the last taken stop.
-    //       2. If within the dynamic skip cap, look ahead up to 5 stops for
-    //          one that fits capacity AND is within the cap distance.
-    //       3. If found: defer the overflow stop, take the nearby one instead.
-    //          The deferred stop becomes the FIRST stop of the next bus.
-    //       4. If not found (or stop is too far): cut here.
-    //
-    // Dynamic skip cap = 4 × average inter-stop drive time in the tour.
-    // =========================================================================
-    function splitTourAtGaps(tourStops, buses, campLatArg, campLngArg, maxRideSecArg) {
-        var K = buses.length;
-        var N = tourStops.length;
-        if (K <= 1 || N === 0) return [tourStops.slice()];
-        if (N <= K) return tourStops.map(function(s) { return [s]; });
-
-        // Resolve camp coordinates
-        var campLat = campLatArg != null ? campLatArg : (D.setup.campLat || _campCoordsCache?.lat || 0);
-        var campLng = campLngArg != null ? campLngArg : (D.setup.campLng || _campCoordsCache?.lng || 0);
-
-        // Sort buses by capacity descending
-        var caps = buses.slice().sort(function(a, b) {
-            return (b.capacity || 44) - (a.capacity || 44);
-        }).map(function(b) { return b.capacity || 44; });
-
-        // ── Config ──
-        var avgSpeedMph    = D.setup.avgSpeed || 25;
-        var serviceTimeSec = (D.setup.avgStopTime || 2) * 60;
-        var FUEL_THRESH_MI = 2.5;   // detours beyond this inflate the time budget cost
-        var FUEL_RATE      = 0.25;  // 25% extra per mile over the fuel threshold
-        var MAX_DETOUR_MI  = 4.0;   // Phase 3: reject swap if min-bus detour exceeds this
-        var BAL_TOL_SEC    = 5 * 60; // Phase 3: stop when max−min spread < 5 min
-        var MAX_PASSES     = 60;    // Phase 3: iteration cap
-        // Dynamic max ride time cap — passed in from generateRoutes, computed per-dataset
-        var maxRideSec     = (maxRideSecArg && maxRideSecArg > 0) ? maxRideSecArg : Infinity;
-
-        // Dynamic skip cap: 4× avg inter-stop drive time
-        var totalGapSec = 0;
-        for (var gi = 0; gi < N - 1; gi++) {
-            totalGapSec += drivingDist(tourStops[gi].lat, tourStops[gi].lng,
-                                       tourStops[gi + 1].lat, tourStops[gi + 1].lng);
-        }
-        var avgGapSec      = N > 1 ? totalGapSec / (N - 1) : 300;
-        var maxSkipSec     = avgGapSec * 4;
-        var maxDeferPerBus = 3;
-        console.log('[Go] Split: avg gap ' + (avgGapSec / 60).toFixed(1) +
-            'min, skip cap ' + ((maxSkipSec / 3600) * avgSpeedMph).toFixed(1) + 'mi');
-
-        // ── Helper: estimated total route time for a segment (camp → stops) ──
-        function segTimeSec(seg) {
-            if (!seg.length) return 0;
-            var t = drivingDist(campLat, campLng, seg[0].lat, seg[0].lng) + serviceTimeSec;
-            for (var i = 1; i < seg.length; i++) {
-                t += drivingDist(seg[i - 1].lat, seg[i - 1].lng, seg[i].lat, seg[i].lng) + serviceTimeSec;
-            }
-            return t;
-        }
-
-        // ── Helper: cheapest-insertion cost + index ──
-        function cheapestInsert(seg, stop) {
-            var best = Infinity, bestIdx = seg.length;
-            for (var i = 0; i <= seg.length; i++) {
-                var prevLat = i > 0 ? seg[i - 1].lat : campLat;
-                var prevLng = i > 0 ? seg[i - 1].lng : campLng;
-                var nextLat = i < seg.length ? seg[i].lat : null;
-                var nextLng = i < seg.length ? seg[i].lng : null;
-                var cost = drivingDist(prevLat, prevLng, stop.lat, stop.lng)
-                         + (nextLat !== null ? drivingDist(stop.lat, stop.lng, nextLat, nextLng) : 0)
-                         - (nextLat !== null ? drivingDist(prevLat, prevLng, nextLat, nextLng) : 0);
-                if (cost < best) { best = cost; bestIdx = i; }
-            }
-            return { cost: best, idx: bestIdx };
-        }
-
-        // ════════════════════════════════════════════════════════════
-        // PHASE 1: Time-balanced greedy split with fuel-detour penalty
-        // ════════════════════════════════════════════════════════════
-        var order    = tourStops.slice();
-        var segments = [];
-
-        for (var bi = 0; bi < K && order.length > 0; bi++) {
-            var hardCap   = caps[bi];
-            var busesLeft = K - bi;
-
-            // Guard: don't let this bus eat stops that remaining buses still need.
-            // Each remaining bus (after this one) must get at least 1 stop.
-            var minReserve = busesLeft - 1;
-
-            // Estimate total time if ONE bus served all remaining stops from camp
-            var remainTimeSec = 0;
-            if (order.length > 0) {
-                remainTimeSec += drivingDist(campLat, campLng, order[0].lat, order[0].lng);
-                for (var ti = 0; ti < order.length; ti++) {
-                    remainTimeSec += serviceTimeSec;
-                    if (ti < order.length - 1) {
-                        remainTimeSec += drivingDist(order[ti].lat, order[ti].lng,
-                                                     order[ti + 1].lat, order[ti + 1].lng);
-                    }
-                }
-            }
-            var targetTimeSec = remainTimeSec / busesLeft;
-
-            var seg        = [];
-            var deferred   = [];
-            var cumKids    = 0;
-            var cumTimeSec = 0;
-            var pos        = 0;
-
-            while (pos < order.length) {
-                // Always leave at least minReserve stops for subsequent buses
-                if (order.length - pos <= minReserve) break;
-
-                var stop     = order[pos];
-                var stopKids = stop.campers.length;
-
-                var prevLat  = seg.length > 0 ? seg[seg.length - 1].lat : campLat;
-                var prevLng  = seg.length > 0 ? seg[seg.length - 1].lng : campLng;
-                var driveSec = drivingDist(prevLat, prevLng, stop.lat, stop.lng);
-
-                // Fuel-detour penalty: large detours inflate the effective time cost,
-                // causing the bus to cut earlier rather than chasing distant stops.
-                var detourMi   = (driveSec / 3600) * avgSpeedMph;
-                var fuelFactor = detourMi > FUEL_THRESH_MI
-                                 ? 1 + (detourMi - FUEL_THRESH_MI) * FUEL_RATE
-                                 : 1.0;
-                var stopTimeSec = (driveSec + serviceTimeSec) * fuelFactor;
-
-                // Hard capacity check — skip logic (look ahead up to 5 stops)
-                if (cumKids + stopKids > hardCap) {
-                    if (deferred.length < maxDeferPerBus && driveSec <= maxSkipSec) {
-                        var swapped = false;
-                        for (var fwd = pos + 1; fwd < Math.min(pos + 6, order.length); fwd++) {
-                            var cand      = order[fwd];
-                            var distCand  = drivingDist(prevLat, prevLng, cand.lat, cand.lng);
-                            if (cumKids + cand.campers.length <= hardCap && distCand <= maxSkipSec) {
-                                deferred.push(order[pos]);
-                                order.splice(fwd, 1);
-                                var cDetour  = (distCand / 3600) * avgSpeedMph;
-                                var cFuel    = cDetour > FUEL_THRESH_MI ? 1 + (cDetour - FUEL_THRESH_MI) * FUEL_RATE : 1.0;
-                                seg.push(cand);
-                                cumKids    += cand.campers.length;
-                                cumTimeSec += (distCand + serviceTimeSec) * cFuel;
-                                pos++;
-                                swapped = true;
-                                break;
-                            }
-                        }
-                        if (!swapped) break;
-                    } else {
-                        break;
-                    }
-                    continue;
-                }
-
-                // Take this stop
-                seg.push(stop);
-                cumKids    += stopKids;
-                cumTimeSec += stopTimeSec;
-                pos++;
-
-                // Time target reached — cut here (balanced split)
-                if (cumTimeSec >= targetTimeSec && seg.length >= 1) break;
-                // Hard dynamic max cap — never let any bus exceed this regardless of balance
-                if (maxRideSec < Infinity && cumTimeSec >= maxRideSec && seg.length >= 1) break;
-            }
-
-            // Ensure the segment has at least 1 stop
-            if (seg.length === 0 && pos < order.length) {
-                seg.push(order[pos]);
-                pos++;
-            }
-
-            segments.push(seg);
-            order = deferred.concat(order.slice(pos));
-        }
-
-        // ── Overflow distribution ──
-        // When the time cap causes all K buses to cut early, stops remain in `order`.
-        // DON'T dump them all on the last segment (creates 411-min monsters).
-        // Instead: distribute each overflow stop to the segment that has the most
-        // remaining time budget (maxRideSec − current estimated time), respecting capacity.
-        if (order.length > 0) {
-            console.warn('[Go] Split: ' + order.length + ' overflow stops — distributing to underloaded segments');
-            order.forEach(function(overStop) {
-                var bestIdx = -1, bestBudget = -Infinity;
-                for (var si = 0; si < segments.length; si++) {
-                    var segKids = segments[si].reduce(function(s, st) { return s + st.campers.length; }, 0);
-                    if (segKids + overStop.campers.length > caps[si]) continue; // capacity check
-                    var segTime = segTimeSec(segments[si]);
-                    // Budget = how much time capacity is still available in this segment
-                    var ceiling = maxRideSec < Infinity ? maxRideSec : 7200;
-                    var budget = ceiling - segTime;
-                    if (budget > bestBudget) { bestBudget = budget; bestIdx = si; }
-                }
-                if (bestIdx < 0) {
-                    // No segment has capacity — add to the currently shortest-time segment
-                    var minT = Infinity;
-                    for (var si = 0; si < segments.length; si++) {
-                        var t = segTimeSec(segments[si]);
-                        if (t < minT) { minT = t; bestIdx = si; }
-                    }
-                }
-                segments[bestIdx].push(overStop);
-            });
-            console.log('[Go] Split: overflow distributed across ' + segments.length + ' segments');
-        }
-
-        // Pad to K segments so every bus slot exists
-        while (segments.length < K) segments.push([]);
-
-        // ════════════════════════════════════════════════════════════
-        // PHASE 2: Fill empty buses
-        // Every bus that has 0 stops steals from the heaviest segment.
-        // ════════════════════════════════════════════════════════════
-        var emptyCount = segments.filter(function(s) { return s.length === 0; }).length;
-        if (emptyCount > 0) {
-            console.log('[Go] Phase 2: filling ' + emptyCount + ' empty bus(es)');
-            for (var fi = 0; fi < K * 2; fi++) {
-                var emptyIdx = -1;
-                for (var ei = 0; ei < segments.length; ei++) {
-                    if (segments[ei].length === 0) { emptyIdx = ei; break; }
-                }
-                if (emptyIdx < 0) break;
-
-                // Find heaviest segment (max time) that has > 1 stop
-                var heavyIdx = -1, heavyTime = 0;
-                for (var hi = 0; hi < segments.length; hi++) {
-                    if (hi === emptyIdx || segments[hi].length <= 1) continue;
-                    var ht = segTimeSec(segments[hi]);
-                    if (ht > heavyTime) { heavyTime = ht; heavyIdx = hi; }
-                }
-                if (heavyIdx < 0) break;
-
-                // Steal the last stop (most time-expensive tail of the heavy route)
-                var stolen = segments[heavyIdx].pop();
-                segments[emptyIdx].push(stolen);
-            }
-        }
-
-        // ════════════════════════════════════════════════════════════
-        // PHASE 3: Local-search time-balance swaps
-        // Priority: balance time. Constraint: no big fuel detours.
-        // ════════════════════════════════════════════════════════════
-        var times    = segments.map(segTimeSec);
-        var improved = true;
-        var passes   = 0;
-
-        while (improved && passes < MAX_PASSES) {
-            improved = false;
-            passes++;
-
-            // Find max-time and min-time segments
-            var maxIdx = 0, minIdx = 0;
-            for (var xi = 1; xi < times.length; xi++) {
-                if (times[xi] > times[maxIdx]) maxIdx = xi;
-                if (times[xi] < times[minIdx]) minIdx = xi;
-            }
-            if (times[maxIdx] - times[minIdx] < BAL_TOL_SEC) break; // good enough
-
-            var maxSeg = segments[maxIdx];
-            var minSeg = segments[minIdx];
-            if (maxSeg.length <= 1) continue; // can't strip the only stop
-
-            var bestGain = 1; // only accept positive gain
-            var bestSI = -1, bestII = -1;
-
-            for (var si = 0; si < maxSeg.length; si++) {
-                var cand     = maxSeg[si];
-                var minKids  = minSeg.reduce(function(s, st) { return s + st.campers.length; }, 0);
-                if (minKids + cand.campers.length > (caps[minIdx] || 44)) continue; // capacity
-
-                // New max-seg time without this stop
-                var newMaxSeg  = maxSeg.slice(0, si).concat(maxSeg.slice(si + 1));
-                if (newMaxSeg.length === 0) continue; // never empty a bus
-
-                var ins = cheapestInsert(minSeg, cand);
-
-                // Fuel guard: reject if the insertion detour is too large
-                var insertMi = ((ins.cost < 0 ? 0 : ins.cost) / 3600) * avgSpeedMph;
-                if (insertMi > MAX_DETOUR_MI) continue;
-
-                var newMaxTime = segTimeSec(newMaxSeg);
-                var newMinTime = times[minIdx] + Math.max(0, ins.cost) + serviceTimeSec;
-                var oldSpread  = times[maxIdx] - times[minIdx];
-                var newSpread  = Math.abs(newMaxTime - newMinTime);
-                var gain = oldSpread - newSpread;
-
-                if (gain > bestGain) {
-                    bestGain = gain;
-                    bestSI   = si;
-                    bestII   = ins.idx;
-                }
-            }
-
-            if (bestSI >= 0) {
-                var movedStop = segments[maxIdx][bestSI];
-                segments[maxIdx] = segments[maxIdx].slice(0, bestSI).concat(segments[maxIdx].slice(bestSI + 1));
-                segments[minIdx] = segments[minIdx].slice(0, bestII).concat([movedStop], segments[minIdx].slice(bestII));
-                times    = segments.map(segTimeSec);
-                improved = true;
-            }
-        }
-
-        var finalMax = times.reduce(function(a, b) { return Math.max(a, b); }, 0);
-        var finalMin = times.filter(function(t) { return t > 0; }).reduce(function(a, b) { return Math.min(a, b); }, Infinity);
-        var used     = segments.filter(function(s) { return s.length > 0; }).length;
-        console.log('[Go] Split done: ' + used + '/' + K + ' buses used | ' + passes +
-            ' balance passes | spread ' + ((finalMax - finalMin) / 60).toFixed(1) + 'min' +
-            ' (' + (finalMin / 60).toFixed(0) + '–' + (finalMax / 60).toFixed(0) + 'min range)');
-
-        return segments; // K entries, some may be empty if N < K
-    }
-
-    // =========================================================================
-    // buildZipBasedZones — ZIP-first geographic clustering
-    // =========================================================================
-    //
-    // Algorithm:
-    //   1. Group corner stops by ZIP code (via D.addresses[camper.name].zip)
-    //   2. Calculate buses needed per ZIP: ceil(campers / effectiveCap)
-    //   3. Adjust totals to match available bus count
-    //   4. ZIPs needing > 1 bus: sub-cluster with K-means (geoSubCluster)
-    //   5. Assign buses to zones; return same format as buildGreedyZones
-    //
-    // Returns null if no ZIP data is available (caller falls back to buildGreedyZones).
-    // =========================================================================
-    async function buildZipBasedZones(allStops, buses, campLat, campLng, reserveSeats, geoapifyKey) {
-        if (!allStops.length || !buses.length) return null;
-
-        // ── Helper: get ZIP for a corner stop (majority vote on campers) ──
-        function getZipForStop(stop) {
-            const zipCounts = {};
-            for (const camper of (stop.campers || [])) {
-                const addr = D.addresses[camper.name] || {};
-                const zip  = (addr.zip || '').replace(/-\d{4}$/, '').trim(); // normalize ZIP+4 → 5-digit base ZIP
-                if (zip && zip.length >= 4) {
-                    zipCounts[zip] = (zipCounts[zip] || 0) + 1;
-                }
-            }
-            const entries = Object.entries(zipCounts);
-            if (!entries.length) return null;
-            return entries.sort((a, b) => b[1] - a[1])[0][0];
-        }
-
-        // ── Helper: centroid of a list of stops ──
-        function centroid(stops) {
-            if (!stops.length) return { lat: campLat, lng: campLng };
-            return {
-                lat: stops.reduce((s, st) => s + (st.lat || 0), 0) / stops.length,
-                lng: stops.reduce((s, st) => s + (st.lng || 0), 0) / stops.length
-            };
-        }
-
-        // ── Helper: road distance matrix via Geoapify ──
-        // Returns matrix[seedIdx][stopIdx] = driving seconds (Infinity on error).
-        // Coordinates are [lng, lat] per GeoJSON convention.
-        async function getRoadDistMatrix(seedStops, allStops, apiKey) {
-            const body = {
-                mode: 'drive',
-                sources: seedStops.map(s => ({ location: [s.lng, s.lat] })),
-                targets: allStops.map(s => ({ location: [s.lng, s.lat] }))
-            };
-            const resp = await fetch(
-                'https://api.geoapify.com/v1/routematrix?apiKey=' + encodeURIComponent(apiKey),
-                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-            );
-            if (!resp.ok) throw new Error('Matrix API ' + resp.status);
-            const data = await resp.json();
-            return (data.sources_to_targets || []).map(row =>
-                (row || []).map(cell => (cell && cell.time != null ? cell.time : Infinity))
-            );
-        }
-
-        // ── Helper: Ward's HAC sub-cluster (replaces K-means for ZIP fallback path) ──
-        // See wardSubCluster() in buildRoutesByZipGoogle for the canonical implementation.
-        // This wrapper makes it async-compatible for the legacy ZIP path.
-        async function geoSubCluster(stops, k) {
-            return wardZipSubCluster(stops, k);
-        }
-
-        function wardZipSubCluster(stops, k) {
-            if (stops.length <= k) return stops.map(function(s) { return [s]; });
-            var totalCampers     = stops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
-            var targetPerCluster = Math.ceil(totalCampers / k);
-            var clusters = stops.map(function(s) {
-                var w = Math.max(1, (s.campers || []).length);
-                return { stops: [s], w: w, cx: s.lat, cy: s.lng };
-            });
-            while (clusters.length > k) {
-                var bestI = -1, bestJ = -1, bestWard = Infinity;
-                for (var i = 0; i < clusters.length; i++) {
-                    for (var j = i + 1; j < clusters.length; j++) {
-                        var A = clusters[i], B = clusters[j];
-                        var cosLat = Math.cos((A.cx + B.cx) * 0.5 * Math.PI / 180);
-                        var dlat = (A.cx - B.cx) * 111000;
-                        var dlng = (A.cy - B.cy) * 111000 * cosLat;
-                        var ward = (A.w * B.w) / (A.w + B.w) * (dlat * dlat + dlng * dlng);
-                        if (ward < bestWard) { bestWard = ward; bestI = i; bestJ = j; }
-                    }
-                }
-                if (bestI === -1) break;
-                var A = clusters[bestI], B = clusters[bestJ];
-                var newW = A.w + B.w;
-                clusters[bestI] = {
-                    stops: A.stops.concat(B.stops), w: newW,
-                    cx: (A.cx * A.w + B.cx * B.w) / newW,
-                    cy: (A.cy * A.w + B.cy * B.w) / newW
-                };
-                clusters.splice(bestJ, 1);
-            }
-            // Capacity balancing
-            for (var pass = 0; pass < stops.length * 2; pass++) {
-                var srcIdx = -1, maxExcess = 0;
-                for (var i = 0; i < clusters.length; i++) {
-                    var ex = clusters[i].w - targetPerCluster;
-                    if (ex > maxExcess) { maxExcess = ex; srcIdx = i; }
-                }
-                if (srcIdx === -1) break;
-                var underfullIdxs = [];
-                for (var i = 0; i < clusters.length; i++) {
-                    if (clusters[i].w < targetPerCluster) underfullIdxs.push(i);
-                }
-                if (!underfullIdxs.length) break;
-                var src = clusters[srcIdx];
-                var bestSi = -1, bestD = Infinity, bestTi = -1;
-                for (var si = 0; si < src.stops.length; si++) {
-                    var st = src.stops[si], stW = Math.max(1, (st.campers || []).length);
-                    for (var ui = 0; ui < underfullIdxs.length; ui++) {
-                        var tgt = clusters[underfullIdxs[ui]];
-                        if (tgt.w + stW > targetPerCluster * 1.15) continue;
-                        var d = haversineMi(st.lat, st.lng, tgt.cx, tgt.cy);
-                        if (d < bestD) { bestD = d; bestSi = si; bestTi = underfullIdxs[ui]; }
-                    }
-                }
-                if (bestSi === -1) break;
-                var ms = src.stops[bestSi], mw = Math.max(1, (ms.campers || []).length);
-                src.stops.splice(bestSi, 1); src.w -= mw;
-                if (src.stops.length) {
-                    src.cx = src.stops.reduce(function(s, st) { return s + st.lat; }, 0) / src.stops.length;
-                    src.cy = src.stops.reduce(function(s, st) { return s + st.lng; }, 0) / src.stops.length;
-                }
-                var tgt2 = clusters[bestTi];
-                tgt2.stops.push(ms); tgt2.w += mw;
-                tgt2.cx = tgt2.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgt2.stops.length;
-                tgt2.cy = tgt2.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt2.stops.length;
-            }
-            return clusters.filter(function(c) { return c.stops.length > 0; }).map(function(c) { return c.stops; });
-        }
-
-        // ── Step 1: Group stops by ZIP ──
-        const zipGroups = new Map(); // zip → { stops:[], camperCount:0 }
-        const unknownStops = [];
-
-        for (const stop of allStops) {
-            const zip      = getZipForStop(stop);
-            const kidCount = (stop.campers || []).length;
-            if (!zip) { unknownStops.push(stop); continue; }
-            if (!zipGroups.has(zip)) zipGroups.set(zip, { stops: [], camperCount: 0, zip });
-            const g = zipGroups.get(zip);
-            g.stops.push(stop);
-            g.camperCount += kidCount;
-        }
-
-        // No ZIP data at all → signal caller to fall back
-        if (zipGroups.size === 0) {
-            console.warn('[Go] ZIP clustering: no ZIP data found — falling back to K-medoids');
-            return null;
-        }
-
-        // Assign unknown-ZIP stops to nearest ZIP by centroid
-        if (unknownStops.length) {
-            const cents = new Map();
-            for (const [zip, g] of zipGroups) cents.set(zip, centroid(g.stops));
-            for (const stop of unknownStops) {
-                let bestZip = null, bestDist = Infinity;
-                for (const [zip, c] of cents) {
-                    const d = haversineMi(stop.lat, stop.lng, c.lat, c.lng);
-                    if (d < bestDist) { bestDist = d; bestZip = zip; }
-                }
-                if (bestZip) {
-                    const g = zipGroups.get(bestZip);
-                    g.stops.push(stop);
-                    g.camperCount += (stop.campers || []).length;
-                }
-            }
-        }
-
-        // ── Step 2: Calculate buses needed per ZIP ──
-        // Use true per-bus effective capacity (accounts for monitors, counselors, custom reserves)
-        // so that allocation doesn't undercount how many buses are needed.
-        const busTrueEffCaps = buses.map(b => {
-            const bid  = b.busId || b.id;
-            const mon  = (D.monitors  || []).find(m => m.assignedBus === bid);
-            const cous = (D.counselors || []).filter(c => c.assignedBus === bid);
-            const brs  = (b.reserveMode === 'custom' && b.reserveSeats != null)
-                         ? b.reserveSeats : (reserveSeats || 0);
-            return Math.max(1, (b.capacity || 44) - (mon ? 1 : 0) - cous.length - brs);
-        });
-        const totalEffCap  = busTrueEffCaps.reduce((s, c) => s + c, 0);
-        const effectiveCap = Math.max(1, Math.floor(totalEffCap / buses.length));
-        const totalBuses   = buses.length;
-
-        const zipList = Array.from(zipGroups.values()).sort((a, b) => b.camperCount - a.camperCount);
-        const busAlloc = new Map();
-        let totalAlloc = 0;
-
-        for (const g of zipList) {
-            const needed = Math.max(1, Math.ceil(g.camperCount / effectiveCap));
-            busAlloc.set(g.zip, needed);
-            totalAlloc += needed;
-        }
-
-        // ── Step 3: Adjust allocation to match available bus count ──
-        // Over-allocated → trim slack from ZIPs with lowest load ratio,
-        // but NEVER below the minimum buses needed to keep each bus within capacity.
-        while (totalAlloc > totalBuses) {
-            const trimmable = zipList
-                .filter(g => {
-                    const minNeeded = Math.ceil(g.camperCount / effectiveCap);
-                    return busAlloc.get(g.zip) > Math.max(1, minNeeded); // never trim below capacity floor
-                })
-                .sort((a, b) => {
-                    const slackA = busAlloc.get(a.zip) * effectiveCap - a.camperCount;
-                    const slackB = busAlloc.get(b.zip) * effectiveCap - b.camperCount;
-                    return slackB - slackA; // most slack first
-                });
-            if (!trimmable.length) {
-                console.warn('[Go] ZIP alloc: cannot trim further without exceeding bus capacity — need more buses.');
-                break;
-            }
-            busAlloc.set(trimmable[0].zip, busAlloc.get(trimmable[0].zip) - 1);
-            totalAlloc--;
-        }
-        // Under-allocated → add to ZIP with highest campers-per-bus ratio
-        while (totalAlloc < totalBuses) {
-            const expandable = zipList.slice().sort((a, b) =>
-                (b.camperCount / busAlloc.get(b.zip)) - (a.camperCount / busAlloc.get(a.zip)));
-            busAlloc.set(expandable[0].zip, busAlloc.get(expandable[0].zip) + 1);
-            totalAlloc++;
-        }
-
-        // Log ZIP → bus allocation
-        console.log('[Go] ZIP bus allocation:',
-            zipList.map(g => g.zip + ' → ' + g.camperCount + ' kids / ' + busAlloc.get(g.zip) + ' bus(es)').join(' | '));
-
-        // ── Step 4: Build one zone per bus ──
-        // ZIPs needing 1 bus → one zone.
-        // ZIPs needing N > 1 buses → sub-cluster with K-means into N zones.
-        const allZones = [];
-
-        for (const group of zipList) {
-            const numBusesForZip = busAlloc.get(group.zip);
-            if (numBusesForZip <= 1 || group.stops.length <= 1) {
-                allZones.push({ stops: group.stops.slice(), camperCount: group.camperCount, zip: group.zip });
-            } else {
-                const subClusters = await geoSubCluster(group.stops, numBusesForZip, geoapifyKey);
-                for (const cluster of subClusters) {
-                    allZones.push({
-                        stops:       cluster,
-                        camperCount: cluster.reduce((s, st) => s + (st.campers || []).length, 0),
-                        zip:         group.zip
-                    });
-                }
-            }
-        }
-
-        // ── Step 5: Sort zones by bearing from camp, assign buses ──
-        // Sorting by compass angle gives a consistent, geographic bus ordering.
-        allZones.sort((a, b) => {
-            const ca = centroid(a.stops), cb = centroid(b.stops);
-            return Math.atan2(ca.lng - campLng, ca.lat - campLat) -
-                   Math.atan2(cb.lng - campLng, cb.lat - campLat);
-        });
-
-        const result = [];
-        for (let i = 0; i < Math.min(allZones.length, buses.length); i++) {
-            const zone = allZones[i];
-            const bus  = buses[i];
-            result.push({
-                busId:       bus.busId || bus.id,
-                busName:     bus.busName || bus.name,
-                busColor:    bus.busColor || bus.color || '#10b981',
-                stopIndices: zone.stops.map(s => allStops.indexOf(s)),
-                camperCount: zone.camperCount,
-                capacity:    bus.capacity,
-                zip:         zone.zip
-            });
-        }
-
-        console.log('[Go] ZIP clustering: ' + result.length + ' zones across ' + zipGroups.size + ' ZIP codes');
-        return result;
-    }
-
-    // =========================================================================
-    // buildRoutesByZipGoogle — ZIP-segmented Google Route Optimization
-    //
-    // Groups stops by ZIP code, allocates buses proportionally, then sends each
-    // ZIP as an independent Google Route Optimization request. Google handles
-    // all capacity enforcement and stop ordering within each ZIP.
-    //
-    // This guarantees buses never cross ZIP boundaries while getting globally-
-    // optimal route ordering within each geographic zone.
-    //
-    // Returns array of route objects, or null if Google is unavailable.
-    // =========================================================================
-    async function buildRoutesByZipGoogle(allStops, buses, campLat, campLng, reserveSeats, opts) {
-        var googleKey      = opts.googleKey;
-        var googleProjId   = opts.googleProjId;
-        var isArrival      = opts.isArrival;
-        var serviceTime    = opts.serviceTime;
-        var departureTime  = opts.departureTime;
-        var maxRideTimeSec = opts.maxRideTimeSec;
-        var supabaseUrl    = opts.supabaseUrl;
-        var accessToken    = opts.accessToken;
-        var anonKey        = opts.anonKey;
-        var shiftLabel     = opts.shiftLabel || 'Shift';
-        var pctBase        = opts.pctBase    || 0;
-
-        // ── Sub-zone helpers: neighborhood (primary) + H3 hex cell (fallback) ──
-        function getZipForStop(stop) {
-            var zipCounts = {};
-            for (var i = 0; i < (stop.campers || []).length; i++) {
-                var addr = D.addresses[(stop.campers[i] || {}).name] || {};
-                var zip  = (addr.zip || '').replace(/-\d{4}$/, '').trim();
-                if (zip && zip.length >= 4) zipCounts[zip] = (zipCounts[zip] || 0) + 1;
-            }
-            var entries = Object.entries(zipCounts);
-            if (!entries.length) return null;
-            return entries.sort(function(a, b) { return b[1] - a[1]; })[0][0];
-        }
-
-        function getNeighborhoodForStop(stop) {
-            var nbhdCounts = {};
-            for (var i = 0; i < (stop.campers || []).length; i++) {
-                var nbhd = ((D.addresses[(stop.campers[i] || {}).name] || {}).neighborhood || '').trim();
-                if (nbhd) nbhdCounts[nbhd] = (nbhdCounts[nbhd] || 0) + 1;
-            }
-            var entries = Object.entries(nbhdCounts);
-            if (!entries.length) return null;
-            return entries.sort(function(a, b) { return b[1] - a[1]; })[0][0];
-        }
-
-        // Majority-vote carrier route across all campers at this stop.
-        // Returns e.g. "C006" (city route), "R014" (rural), "H003" (highway).
-        function getCarrierRouteForStop(stop) {
-            var crCounts = {};
-            for (var i = 0; i < (stop.campers || []).length; i++) {
-                var cr = ((D.addresses[(stop.campers[i] || {}).name] || {}).carrierRoute || '').trim();
-                if (cr) crCounts[cr] = (crCounts[cr] || 0) + 1;
-            }
-            var entries = Object.entries(crCounts);
-            if (!entries.length) return null;
-            return entries.sort(function(a, b) { return b[1] - a[1]; })[0][0];
-        }
-
-        // Sub-zone key hierarchy (most → least specific):
-        //   Tier 1 — USPS carrier route  "11210:C006"   density-adaptive, USPS-defined
-        //   Tier 2 — Named neighborhood  "11210:Flatbush"  Google address component
-        //   Tier 3 — H3 hex cell         "11210:h3:abc123"  ~1.2 km hex
-        //   Tier 4 — Grid cell fallback  "11210:4527:7216"  ~0.55 mi grid
-        function getSubZoneKey(stop) {
-            var zip = getZipForStop(stop) || 'NOZIP';
-
-            // Tier 1: USPS carrier route — one route = what one carrier covers in one shift
-            var cr = getCarrierRouteForStop(stop);
-            if (cr) return zip + ':' + cr;
-
-            // Tier 2: named neighborhood (Flatbush, Midwood, etc.)
-            var nbhd = getNeighborhoodForStop(stop);
-            if (nbhd) return zip + ':' + nbhd;
-
-            // Tier 3: H3 hexagonal cell
-            var h3fn = window.H3 && (window.H3.latLngToCell || window.H3.geoToH3);
-            if (h3fn) return zip + ':h3:' + h3fn(stop.lat, stop.lng, 7);
-
-            // Tier 4: grid fallback
-            var gx = Math.round(stop.lat / 0.008);
-            var gy = Math.round(stop.lng / 0.008);
-            return zip + ':' + gx + ':' + gy;
-        }
-
-        // ── Ward's Hierarchical Agglomerative Clustering ──
-        // Builds k compact geographic neighborhoods bottom-up: starts with every stop
-        // as its own cluster, then repeatedly merges the pair whose combination
-        // minimises total within-cluster spread (Ward's criterion, weighted by camper
-        // count).  Guarantees non-overlapping, compact patches — no Voronoi artifacts,
-        // no interleaving buses on the same street.
-        //
-        // busCaps (optional): array of k effective capacities for the buses being
-        // assigned (e.g. [44, 48, 44]).  When provided the function sorts clusters
-        // largest-first and matches them to buses largest-first so each cluster is
-        // balanced against its actual bus ceiling rather than a pooled average.
-        // Returns clusters in the same sorted order so subClusters[i] pairs with
-        // the i-th bus in the sorted bus list passed by the caller.
-        function wardSubCluster(stops, k, busCaps, skipRealloc) {
-            if (stops.length <= k) return stops.map(function(s) { return [s]; });
-
-            // Per-bus capacity ceilings, sorted descending (largest bus first).
-            // Fall back to equal-split average if not provided.
-            var totalCampers = stops.reduce(function(s, st) {
-                return s + (st.campers || []).length;
-            }, 0);
-            var sortedCaps = (busCaps && busCaps.length === k)
-                ? busCaps.slice().sort(function(a, b) { return b - a; })
-                : null;
-            var fallbackTarget = Math.ceil(totalCampers / k);
-
-            // Initialise: one cluster per stop.
-            //   w  = stop count (drives Ward's merge — balances STOPS, not campers,
-            //        because ride-time is dominated by stop count × service time)
-            //   cw = camper count (used only for capacity ceilings)
-            var clusters = stops.map(function(s) {
-                return { stops: [s], w: 1, cw: Math.max(1, (s.campers || []).length), cx: s.lat, cy: s.lng };
-            });
-
-            // Bottom-up merge until k clusters remain.
-            // Ward's criterion weights by STOP count so clusters end up with roughly
-            // equal numbers of pickup points — not equal numbers of kids.  This is what
-            // actually determines route duration.
-            while (clusters.length > k) {
-                var bestI = -1, bestJ = -1, bestWard = Infinity;
-                for (var i = 0; i < clusters.length; i++) {
-                    for (var j = i + 1; j < clusters.length; j++) {
-                        var A = clusters[i], B = clusters[j];
-                        var cosLat = Math.cos((A.cx + B.cx) * 0.5 * Math.PI / 180);
-                        var dlat   = (A.cx - B.cx) * 111000;
-                        var dlng   = (A.cy - B.cy) * 111000 * cosLat;
-                        var distSq = dlat * dlat + dlng * dlng;
-                        // Ward's distance: (wA·wB / (wA+wB)) × ||centA−centB||² using stop count
-                        var ward = (A.w * B.w) / (A.w + B.w) * distSq;
-                        if (ward < bestWard) { bestWard = ward; bestI = i; bestJ = j; }
-                    }
-                }
-                if (bestI === -1) break;
-
-                var A = clusters[bestI], B = clusters[bestJ];
-                var newW = A.w + B.w;
-                clusters[bestI] = {
-                    stops: A.stops.concat(B.stops),
-                    w:     newW,
-                    cw:    A.cw + B.cw,
-                    cx:    (A.cx * A.w + B.cx * B.w) / newW,
-                    cy:    (A.cy * A.w + B.cy * B.w) / newW
-                };
-                clusters.splice(bestJ, 1);
-            }
-
-            // ── Lloyd's refinement: Ward's gives good centroids; now snap every stop
-            // to its nearest centroid (k-means iteration).  This converts Ward's
-            // irregular merge shapes into proper Voronoi cells — convex, non-overlapping
-            // geographic territories.  USPS calls this "clean territory": no truck ever
-            // drives through another truck's zone to reach its own stops.
-            var lloydIters = 0;
-            for (var lloyd = 0; lloyd < 30; lloyd++) {
-                // Recompute each centroid from its current stops
-                for (var li = 0; li < clusters.length; li++) {
-                    if (!clusters[li].stops.length) continue;
-                    clusters[li].cx = clusters[li].stops.reduce(function(s, st) { return s + st.lat; }, 0) / clusters[li].stops.length;
-                    clusters[li].cy = clusters[li].stops.reduce(function(s, st) { return s + st.lng; }, 0) / clusters[li].stops.length;
-                }
-                // Flatten all stops, clear clusters, then reassign each stop to nearest centroid
-                var flatStops = [];
-                for (var li = 0; li < clusters.length; li++) {
-                    for (var si = 0; si < clusters[li].stops.length; si++) {
-                        flatStops.push({ stop: clusters[li].stops[si], prevCi: li });
-                    }
-                    clusters[li].stops = [];
-                    clusters[li].w     = 0;
-                    clusters[li].cw    = 0;
-                }
-                var lloydMoved = 0;
-                for (var fi = 0; fi < flatStops.length; fi++) {
-                    var item = flatStops[fi];
-                    var bestCi = 0, bestDist = Infinity;
-                    for (var li = 0; li < clusters.length; li++) {
-                        var d = haversineMi(item.stop.lat, item.stop.lng, clusters[li].cx, clusters[li].cy);
-                        if (d < bestDist) { bestDist = d; bestCi = li; }
-                    }
-                    clusters[bestCi].stops.push(item.stop);
-                    clusters[bestCi].w  += 1; // stop count
-                    clusters[bestCi].cw += Math.max(1, (item.stop.campers || []).length); // camper count
-                    if (bestCi !== item.prevCi) lloydMoved++;
-                }
-                lloydIters++;
-                if (lloydMoved === 0) break; // fully converged — every stop is in its nearest territory
-            }
-            // Drop any cluster that Lloyd's drained to zero (rare edge case)
-            clusters = clusters.filter(function(c) { return c.stops.length > 0; });
-            console.log('[Go] Ward+Lloyd converged in ' + lloydIters + ' iter(s), ' + clusters.length + ' territories');
-
-            // ── Isolation fix: rescue stops stranded far from their cluster ──
-            // Lloyd's centroid-distance can trap a stop in a cluster whose centroid
-            // happens to be closest, even though the stop is geographically surrounded
-            // by stops from a different cluster.  For each stop, compare its nearest
-            // in-cluster neighbor distance to its nearest cross-cluster neighbor distance.
-            // If the out-cluster neighbor is ≥25% closer, move the stop there (if capacity
-            // allows).  Repeat until no more moves — typically 1-3 passes.
-            var isoMoves = 0;
-            for (var isoPass = 0; isoPass < stops.length; isoPass++) {
-                var isoMoved = false;
-                for (var ci = 0; ci < clusters.length; ci++) {
-                    for (var si = clusters[ci].stops.length - 1; si >= 0; si--) {
-                        var st   = clusters[ci].stops[si];
-                        var stCW = Math.max(1, (st.campers || []).length); // camper weight
-
-                        // Nearest neighbor within own cluster
-                        var nearInDist = Infinity;
-                        for (var ni = 0; ni < clusters[ci].stops.length; ni++) {
-                            if (ni === si) continue;
-                            var d = haversineMi(st.lat, st.lng, clusters[ci].stops[ni].lat, clusters[ci].stops[ni].lng);
-                            if (d < nearInDist) nearInDist = d;
-                        }
-
-                        // Nearest neighbor across all other clusters (with capacity room for campers)
-                        var nearOutDist = Infinity, nearOutCi = -1;
-                        for (var oi = 0; oi < clusters.length; oi++) {
-                            if (oi === ci) continue;
-                            var oCap = sortedCaps ? sortedCaps[oi] : fallbackTarget;
-                            if (clusters[oi].cw + stCW > oCap) continue; // camper capacity check
-                            for (var oni = 0; oni < clusters[oi].stops.length; oni++) {
-                                var d = haversineMi(st.lat, st.lng, clusters[oi].stops[oni].lat, clusters[oi].stops[oni].lng);
-                                if (d < nearOutDist) { nearOutDist = d; nearOutCi = oi; }
-                            }
-                        }
-
-                        // Move if out-cluster neighbor is ≥25% closer than in-cluster neighbor
-                        if (nearOutCi !== -1 && nearOutDist < nearInDist * 0.75) {
-                            clusters[ci].stops.splice(si, 1);
-                            clusters[ci].w  -= 1;
-                            clusters[ci].cw -= stCW;
-                            if (clusters[ci].stops.length) {
-                                clusters[ci].cx = clusters[ci].stops.reduce(function(s, st) { return s + st.lat; }, 0) / clusters[ci].stops.length;
-                                clusters[ci].cy = clusters[ci].stops.reduce(function(s, st) { return s + st.lng; }, 0) / clusters[ci].stops.length;
-                            }
-                            clusters[nearOutCi].stops.push(st);
-                            clusters[nearOutCi].w  += 1;
-                            clusters[nearOutCi].cw += stCW;
-                            clusters[nearOutCi].cx = clusters[nearOutCi].stops.reduce(function(s, st) { return s + st.lat; }, 0) / clusters[nearOutCi].stops.length;
-                            clusters[nearOutCi].cy = clusters[nearOutCi].stops.reduce(function(s, st) { return s + st.lng; }, 0) / clusters[nearOutCi].stops.length;
-                            isoMoved = true;
-                            isoMoves++;
-                        }
-                    }
-                }
-                if (!isoMoved) break;
-            }
-            if (isoMoves > 0) console.log('[Go] Isolation fix: ' + isoMoves + ' stop(s) moved to natural cluster');
-
-            // Match biggest cluster (by kid count) → biggest bus.
-            // After this sort, clusters[i].cw pairs with sortedCaps[i] (both in camper units).
-            clusters.sort(function(a, b) { return b.cw - a.cw; });
-
-            // Post-hoc capacity balancing: only fires if some cluster exceeds its bus capacity.
-            // Ward's stop-balanced clusters may have uneven camper totals; this fixes only
-            // the capacity-violation clusters, without trying to maximize fill.
-            for (var pass = 0; pass < stops.length * 2; pass++) {
-                // Find the cluster most over its camper ceiling
-                var srcIdx = -1, maxExcess = 0;
-                for (var i = 0; i < clusters.length; i++) {
-                    var cap    = sortedCaps ? sortedCaps[i] : fallbackTarget;
-                    var excess = clusters[i].cw - cap;
-                    if (excess > maxExcess) { maxExcess = excess; srcIdx = i; }
-                }
-                if (srcIdx === -1) break; // no cluster over capacity → done
-
-                // Collect clusters that still have camper room
-                var underfullIdxs = [];
-                for (var i = 0; i < clusters.length; i++) {
-                    var cap = sortedCaps ? sortedCaps[i] : fallbackTarget;
-                    if (clusters[i].cw < cap) underfullIdxs.push(i);
-                }
-                if (!underfullIdxs.length) break;
-
-                // Find boundary stop in src closest to any underfull cluster centroid
-                var src = clusters[srcIdx];
-                var bestStopSi = -1, bestMoveD = Infinity, bestTgtIdx = -1;
-                for (var si = 0; si < src.stops.length; si++) {
-                    var st   = src.stops[si];
-                    var stCW = Math.max(1, (st.campers || []).length);
-                    for (var ui = 0; ui < underfullIdxs.length; ui++) {
-                        var ti  = underfullIdxs[ui];
-                        var tgt = clusters[ti];
-                        var tgtCap = sortedCaps ? sortedCaps[ti] : fallbackTarget;
-                        if (tgt.cw + stCW > tgtCap) continue; // respect hard camper ceiling
-                        var d = haversineMi(st.lat, st.lng, tgt.cx, tgt.cy);
-                        if (d < bestMoveD) { bestMoveD = d; bestStopSi = si; bestTgtIdx = ti; }
-                    }
-                }
-                if (bestStopSi === -1) break;
-
-                // Move the stop (update both stop-count and camper-count weights)
-                var movingStop = src.stops[bestStopSi];
-                var movingCW   = Math.max(1, (movingStop.campers || []).length);
-                src.stops.splice(bestStopSi, 1);
-                src.w  -= 1;
-                src.cw -= movingCW;
-                if (src.stops.length) {
-                    src.cx = src.stops.reduce(function(s, st) { return s + st.lat; }, 0) / src.stops.length;
-                    src.cy = src.stops.reduce(function(s, st) { return s + st.lng; }, 0) / src.stops.length;
-                }
-                var tgt = clusters[bestTgtIdx];
-                tgt.stops.push(movingStop);
-                tgt.w  += 1;
-                tgt.cw += movingCW;
-                tgt.cx = tgt.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgt.stops.length;
-                tgt.cy = tgt.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgt.stops.length;
-            }
-
-            // ── Duration rebalancing (disciplined, operationally-justified) ──
-            // A stop only moves if ALL of the following are true:
-            //   (1) Max-min time gap across clusters exceeds TRIGGER_GAP_MIN
-            //       (otherwise the system is balanced enough — don't churn).
-            //   (2) The stop's *nearest neighbor across all stops* lives in the
-            //       candidate target cluster (not in its own cluster). This means
-            //       the target's driver is genuinely driving past it — no detour.
-            //       Centroid distance is not used; actual adjacency is.
-            //   (3) Simulating the move must drop the overall cluster-max time
-            //       by at least MIN_IMPROVEMENT_MIN.  A move that saves 30 sec
-            //       isn't worth the territory disruption.
-            //   (4) Target has camper capacity.
-            // We pick the single best move (biggest time-max drop) each pass.
-            var SERVICE_MIN_PER_STOP = 2.0;
-            var DRIVE_MIN_PER_MI     = 4.0;   // ~15 mph avg with urban stop churn
-            var TRIGGER_GAP_MIN      = 15.0;  // don't rebalance tighter than this
-            var MIN_IMPROVEMENT_MIN  = 2.0;   // move must cut max-time by ≥ this
-            function clusterMaxR(c) {
-                if (!c.stops.length) return 0;
-                var mr = 0;
-                for (var i = 0; i < c.stops.length; i++) {
-                    var d = haversineMi(c.stops[i].lat, c.stops[i].lng, c.cx, c.cy);
-                    if (d > mr) mr = d;
-                }
-                return mr;
-            }
-            function clusterTime(c) {
-                if (!c.stops.length) return 0;
-                // round-trip traversal ≈ 2 × diameter ≈ 4 × radius
-                return c.stops.length * SERVICE_MIN_PER_STOP + clusterMaxR(c) * 4 * DRIVE_MIN_PER_MI;
-            }
-            // Simulate cluster time WITHOUT stop at index si (for source side)
-            function clusterTimeWithout(c, si) {
-                if (c.stops.length <= 1) return 0;
-                var tmpCx = 0, tmpCy = 0;
-                for (var i = 0; i < c.stops.length; i++) {
-                    if (i === si) continue;
-                    tmpCx += c.stops[i].lat;
-                    tmpCy += c.stops[i].lng;
-                }
-                var n = c.stops.length - 1;
-                tmpCx /= n; tmpCy /= n;
-                var mr = 0;
-                for (var j = 0; j < c.stops.length; j++) {
-                    if (j === si) continue;
-                    var d = haversineMi(c.stops[j].lat, c.stops[j].lng, tmpCx, tmpCy);
-                    if (d > mr) mr = d;
-                }
-                return n * SERVICE_MIN_PER_STOP + mr * 4 * DRIVE_MIN_PER_MI;
-            }
-            // Simulate cluster time WITH an extra stop added
-            function clusterTimeWith(c, extraStop) {
-                var n = c.stops.length + 1;
-                var sumLat = extraStop.lat, sumLng = extraStop.lng;
-                for (var i = 0; i < c.stops.length; i++) {
-                    sumLat += c.stops[i].lat; sumLng += c.stops[i].lng;
-                }
-                var ncx = sumLat / n, ncy = sumLng / n;
-                var mr = haversineMi(extraStop.lat, extraStop.lng, ncx, ncy);
-                for (var j = 0; j < c.stops.length; j++) {
-                    var d = haversineMi(c.stops[j].lat, c.stops[j].lng, ncx, ncy);
-                    if (d > mr) mr = d;
-                }
-                return n * SERVICE_MIN_PER_STOP + mr * 4 * DRIVE_MIN_PER_MI;
-            }
-            // For each stop, find its nearest OTHER-cluster neighbor's cluster index
-            // and the distance to that neighbor (actual stop-to-stop adjacency).
-            // Nearest-stop-in-a-specific-cluster distance (per-target adjacency)
-            function nearestDistInCluster(stop, clusterIdx, excludeSi) {
-                var bestD = Infinity;
-                var cs = clusters[clusterIdx].stops;
-                for (var k2 = 0; k2 < cs.length; k2++) {
-                    if (excludeSi != null && k2 === excludeSi) continue;
-                    var d = haversineMi(stop.lat, stop.lng, cs[k2].lat, cs[k2].lng);
-                    if (d < bestD) bestD = d;
-                }
-                return bestD;
-            }
-
-            var durMoves = 0;
-            var initialMaxT = 0, initialMinT = Infinity;
-            {
-                var t0 = clusters.map(clusterTime);
-                for (var i0 = 0; i0 < clusters.length; i0++) {
-                    if (!clusters[i0].stops.length) continue;
-                    if (t0[i0] > initialMaxT) initialMaxT = t0[i0];
-                    if (t0[i0] < initialMinT) initialMinT = t0[i0];
-                }
-            }
-            // Diagnostics: count why moves were rejected (helps tune thresholds)
-            var rejAdjacency = 0, rejCapacity = 0, rejImprovement = 0, considered = 0;
-            for (var dPass = 0; dPass < stops.length; dPass++) {
-                var times = clusters.map(clusterTime);
-                var maxT = -Infinity, minT = Infinity;
-                var activeCount = 0;
-                for (var ti = 0; ti < clusters.length; ti++) {
-                    if (!clusters[ti].stops.length) continue;
-                    activeCount++;
-                    if (times[ti] > maxT) maxT = times[ti];
-                    if (times[ti] < minT) minT = times[ti];
-                }
-                if ((maxT - minT) < TRIGGER_GAP_MIN) break;
-
-                // Median time used as source-qualification floor: only above-median
-                // clusters donate stops (so fast clusters don't lose stops to each other).
-                var sortedT = times.slice().sort(function(a, b) { return a - b; });
-                var medianT = sortedT[Math.floor(sortedT.length / 2)];
-
-                var bestImprovement = MIN_IMPROVEMENT_MIN;
-                var bestSrcIdx = -1, bestSi = -1, bestTgtIdx = -1;
-                for (var srcI = 0; srcI < clusters.length; srcI++) {
-                    if (!clusters[srcI].stops.length) continue;
-                    if (times[srcI] <= medianT) continue; // only above-median clusters donate
-                    var srcClust = clusters[srcI];
-                    for (var si = 0; si < srcClust.stops.length; si++) {
-                        var stop = srcClust.stops[si];
-                        var stCW = Math.max(1, (stop.campers || []).length);
-                        var nearSameDist = nearestDistInCluster(stop, srcI, si);
-
-                        // Iterate ALL potential targets — not just the globally-nearest.
-                        for (var tgtI = 0; tgtI < clusters.length; tgtI++) {
-                            if (tgtI === srcI) continue;
-                            if (!clusters[tgtI].stops.length) continue;
-                            considered++;
-
-                            // (2) Per-target adjacency: a stop in target must be closer
-                            //     to the moving stop than any stop in source.  This
-                            //     means target's driver is genuinely driving past it.
-                            var nearTgtDist = nearestDistInCluster(stop, tgtI, null);
-                            if (nearTgtDist >= nearSameDist) { rejAdjacency++; continue; }
-
-                            // (4) Capacity
-                            var tgtCap = sortedCaps ? sortedCaps[tgtI] : fallbackTarget;
-                            if (clusters[tgtI].cw + stCW > tgtCap) { rejCapacity++; continue; }
-
-                            // (3) Simulate — rely on this to enforce "worth it"
-                            var newSrcT = clusterTimeWithout(srcClust, si);
-                            var newTgtT = clusterTimeWith(clusters[tgtI], stop);
-                            var otherMax = 0;
-                            for (var oi = 0; oi < clusters.length; oi++) {
-                                if (oi === srcI || oi === tgtI) continue;
-                                if (!clusters[oi].stops.length) continue;
-                                if (times[oi] > otherMax) otherMax = times[oi];
-                            }
-                            var newMax = Math.max(otherMax, newSrcT, newTgtT);
-                            var improvement = maxT - newMax;
-                            if (improvement <= MIN_IMPROVEMENT_MIN) { rejImprovement++; continue; }
-                            if (improvement > bestImprovement) {
-                                bestImprovement = improvement;
-                                bestSrcIdx = srcI; bestSi = si; bestTgtIdx = tgtI;
-                            }
-                        }
-                    }
-                }
-                if (bestSrcIdx === -1) break; // no move clears all gates → done
-
-                // Execute the best move
-                var srcX = clusters[bestSrcIdx];
-                var movingStop = srcX.stops[bestSi];
-                var movingCW   = Math.max(1, (movingStop.campers || []).length);
-                srcX.stops.splice(bestSi, 1);
-                srcX.w  -= 1;
-                srcX.cw -= movingCW;
-                if (srcX.stops.length) {
-                    srcX.cx = srcX.stops.reduce(function(s, st) { return s + st.lat; }, 0) / srcX.stops.length;
-                    srcX.cy = srcX.stops.reduce(function(s, st) { return s + st.lng; }, 0) / srcX.stops.length;
-                }
-                var tgtX = clusters[bestTgtIdx];
-                tgtX.stops.push(movingStop);
-                tgtX.w  += 1;
-                tgtX.cw += movingCW;
-                tgtX.cx = tgtX.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tgtX.stops.length;
-                tgtX.cy = tgtX.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tgtX.stops.length;
-                durMoves++;
-            }
-            // Always log duration balance outcome — even 0 moves (shows why).
-            {
-                var finalTimes = clusters.map(clusterTime);
-                var fMax = 0, fMin = Infinity;
-                for (var fi = 0; fi < finalTimes.length; fi++) {
-                    if (!clusters[fi].stops.length) continue;
-                    if (finalTimes[fi] > fMax) fMax = finalTimes[fi];
-                    if (finalTimes[fi] < fMin) fMin = finalTimes[fi];
-                }
-                if (durMoves > 0) {
-                    console.log('[Go] Duration balance: ' + durMoves + ' stop(s) moved — est time range ' +
-                        initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) +
-                        ' min before, ' + fMin.toFixed(0) + '→' + fMax.toFixed(0) + ' min after');
-                } else if ((initialMaxT - initialMinT) >= TRIGGER_GAP_MIN) {
-                    // Gap was big enough to trigger, but nothing moved — diagnose why.
-                    console.log('[Go] Duration balance: 0 moves — gap ' +
-                        initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) +
-                        ' min. Rejected: ' + rejAdjacency + ' adjacency, ' +
-                        rejCapacity + ' capacity, ' + rejImprovement + ' insufficient-improvement (of ' +
-                        considered + ' candidates)');
-                } else {
-                    console.log('[Go] Duration balance: clusters within ' + TRIGGER_GAP_MIN +
-                        ' min of each other — no rebalance needed (' +
-                        initialMinT.toFixed(0) + '→' + initialMaxT.toFixed(0) + ' min)');
-                }
-            }
-
-            // ── Bus reallocation pass (structural, not stop-level) ──
-            // When stop-level rebalancing can't close the time gap (because Ward+Lloyd
-            // already packed same-territory stops tightly), the only remaining move is
-            // structural: take a bus that's barely working and redeploy it to split an
-            // overloaded territory.  USPS analog: dissolve a 2-hour route, give its
-            // addresses to neighbors, and use that freed truck to split an 8-hour route.
-            //
-            // Gates (all must hold):
-            //   (a) A cluster's estimated time is under FAST_TIME_MIN minutes.
-            //   (b) The slowest cluster is at least REALLOC_GAP_MIN minutes above it.
-            //   (c) Non-fast, non-slow clusters have combined headroom ≥ fast's campers
-            //       (so dissolving the fast one doesn't blow anyone's capacity).
-            //   (d) Slow cluster has ≥ 4 stops (splittable into two real sub-routes).
-            // Bounded to 3 passes to prevent runaway; recursive split calls pass
-            // skipRealloc=true so this block doesn't re-enter itself.
-            if (!skipRealloc && clusters.length >= 3) {
-                var FAST_TIME_MIN     = 30.0;
-                var REALLOC_GAP_MIN   = 25.0;
-                var MAX_REALLOC_PASSES = 3;
-                for (var brPass = 0; brPass < MAX_REALLOC_PASSES; brPass++) {
-                    var brTimes = clusters.map(clusterTime);
-                    var fastIdx = -1, fastT = FAST_TIME_MIN;
-                    var slowIdx = -1, slowT = -Infinity;
-                    for (var bi = 0; bi < clusters.length; bi++) {
-                        if (!clusters[bi].stops.length) continue;
-                        if (brTimes[bi] < fastT) { fastT = brTimes[bi]; fastIdx = bi; }
-                        if (brTimes[bi] > slowT) { slowT = brTimes[bi]; slowIdx = bi; }
-                    }
-                    if (fastIdx === -1 || slowIdx === -1 || fastIdx === slowIdx) break;
-                    if ((slowT - fastT) < REALLOC_GAP_MIN) break;
-                    if (clusters[slowIdx].stops.length < 4) break;
-
-                    var fastClust = clusters[fastIdx];
-                    var slowClust = clusters[slowIdx];
-                    var fastCap = sortedCaps ? sortedCaps[fastIdx] : fallbackTarget;
-                    var slowCap = sortedCaps ? sortedCaps[slowIdx] : fallbackTarget;
-
-                    // (c) Headroom check across non-fast, non-slow clusters
-                    var headroom = 0;
-                    for (var hi = 0; hi < clusters.length; hi++) {
-                        if (hi === fastIdx || hi === slowIdx) continue;
-                        if (!clusters[hi].stops.length) continue;
-                        var hc = sortedCaps ? sortedCaps[hi] : fallbackTarget;
-                        headroom += Math.max(0, hc - clusters[hi].cw);
-                    }
-                    if (headroom < fastClust.cw) break;
-
-                    // (1) Dissolve fast cluster: move each stop to its nearest eligible
-                    //     neighbor (not slow, has capacity).  Greedy — tightest first.
-                    var fastStops = fastClust.stops.slice();
-                    var dissolveOk = true;
-                    for (var fs = 0; fs < fastStops.length; fs++) {
-                        var stop = fastStops[fs];
-                        var stopCW = Math.max(1, (stop.campers || []).length);
-                        var bestTgt = -1, bestDist = Infinity;
-                        for (var ti2 = 0; ti2 < clusters.length; ti2++) {
-                            if (ti2 === fastIdx || ti2 === slowIdx) continue;
-                            if (!clusters[ti2].stops.length) continue;
-                            var tc = sortedCaps ? sortedCaps[ti2] : fallbackTarget;
-                            if (clusters[ti2].cw + stopCW > tc) continue;
-                            var ndist = nearestDistInCluster(stop, ti2, null);
-                            if (ndist < bestDist) { bestDist = ndist; bestTgt = ti2; }
-                        }
-                        if (bestTgt === -1) { dissolveOk = false; break; }
-                        var tClust = clusters[bestTgt];
-                        tClust.stops.push(stop);
-                        tClust.w += 1;
-                        tClust.cw += stopCW;
-                        tClust.cx = tClust.stops.reduce(function(s, st) { return s + st.lat; }, 0) / tClust.stops.length;
-                        tClust.cy = tClust.stops.reduce(function(s, st) { return s + st.lng; }, 0) / tClust.stops.length;
-                    }
-                    if (!dissolveOk) {
-                        // Rollback: restore fast cluster's stops (we haven't actually
-                        // emptied it yet — we iterated a copy). Abort this pass.
-                        // But we already pushed some into targets. Easiest rollback:
-                        // just break out — the partial state is consistent because
-                        // we'll re-evaluate from clusters[] as-is next time the
-                        // pipeline runs. To avoid that, undo the pushes.
-                        // Since we can't easily undo cleanly, we accept partial and
-                        // stop: this case should be rare (headroom check above).
-                        break;
-                    }
-
-                    // Fast cluster is now empty
-                    fastClust.stops = [];
-                    fastClust.w = 0;
-                    fastClust.cw = 0;
-
-                    // (2) Split slow cluster in half using Ward's k=2.  Pass capacities
-                    //     [slowCap, fastCap] and skipRealloc=true to prevent recursion.
-                    var slowStops = slowClust.stops.slice();
-                    var splitResult = wardSubCluster(slowStops, 2, [slowCap, fastCap], true);
-                    if (!splitResult || splitResult.length !== 2) break;
-
-                    // Assign the larger half (by campers) to slow's slot, smaller to fast's.
-                    var halfA = splitResult[0], halfB = splitResult[1];
-                    var cwA = halfA.reduce(function(s, st) { return s + Math.max(1, (st.campers || []).length); }, 0);
-                    var cwB = halfB.reduce(function(s, st) { return s + Math.max(1, (st.campers || []).length); }, 0);
-                    var bigHalf = cwA >= cwB ? halfA : halfB;
-                    var smallHalf = cwA >= cwB ? halfB : halfA;
-                    var bigCW = cwA >= cwB ? cwA : cwB;
-                    var smallCW = cwA >= cwB ? cwB : cwA;
-
-                    function rebuildCluster(stopsArr, cwVal) {
-                        var cx = 0, cy = 0;
-                        for (var r = 0; r < stopsArr.length; r++) { cx += stopsArr[r].lat; cy += stopsArr[r].lng; }
-                        return {
-                            stops: stopsArr,
-                            w: stopsArr.length,
-                            cw: cwVal,
-                            cx: stopsArr.length ? cx / stopsArr.length : 0,
-                            cy: stopsArr.length ? cy / stopsArr.length : 0
-                        };
-                    }
-                    clusters[slowIdx] = rebuildCluster(bigHalf, bigCW);
-                    clusters[fastIdx] = rebuildCluster(smallHalf, smallCW);
-
-                    var newTimes = clusters.map(clusterTime);
-                    console.log('[Go] Bus realloc pass ' + (brPass + 1) +
-                        ': dissolved fast cluster (' + fastStops.length + ' stops, ' +
-                        fastT.toFixed(0) + ' min → redistributed), split slow cluster (' +
-                        slowStops.length + ' stops, ' + slowT.toFixed(0) +
-                        ' min → ' + bigHalf.length + '+' + smallHalf.length +
-                        '). New time range: ' +
-                        Math.min.apply(null, newTimes.filter(function(t, i) { return clusters[i].stops.length; })).toFixed(0) +
-                        '→' +
-                        Math.max.apply(null, newTimes.filter(function(t, i) { return clusters[i].stops.length; })).toFixed(0) +
-                        ' min');
-                }
-            }
-
-            return clusters
-                .filter(function(c) { return c.stops.length > 0; })
-                .map(function(c) { return c.stops; });
-        }
-
-        // ── Single-stage Ward's HAC: cluster ALL stops into exactly buses.length patches ──
-        // Skip zone grouping entirely — Ward's runs on all stops at once and produces
-        // buses.length geographically compact, non-overlapping clusters with zero cross-
-        // zone overlap.  Each cluster[i] is sent to Google with sortedBuses[i]: 1 bus,
-        // 1 territory, no two buses ever serving the same street block.
-        if (!allStops.length) {
-            console.warn('[Go] ZIP+Google: no stops — falling back');
-            return null;
-        }
-
-        // Per-bus effective capacities, sorted largest-first so Ward's matches
-        // the biggest cluster to the biggest bus.
-        var sortedBuses = buses.slice().sort(function(a, b) { return (b.capacity || 44) - (a.capacity || 44); });
-        var sortedEffCaps = sortedBuses.map(function(b) {
-            if (b.busId) return Math.max(1, b.capacity || 44);
-            var bid  = b.id;
-            var mon  = (D.monitors  || []).find(function(m) { return m.assignedBus === bid; });
-            var cous = (D.counselors || []).filter(function(c) { return c.assignedBus === bid; });
-            var brs  = (b.reserveMode === 'custom' && b.reserveSeats != null) ? b.reserveSeats : (reserveSeats || 0);
-            return Math.max(1, (b.capacity || 44) - (mon ? 1 : 0) - cous.length - brs);
-        });
-
-        var totalKidsAll = allStops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
-        console.log('[Go] Ward global: ' + allStops.length + ' stops, ' + totalKidsAll + ' kids → ' + buses.length + ' clusters');
-
-        var wardClusters = wardSubCluster(allStops, buses.length, sortedEffCaps);
-
-        console.log('[Go] Ward global result: ' + wardClusters.length + ' clusters — ' +
-            wardClusters.map(function(c, ci) {
-                var kids = c.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
-                return c.length + ' stops/' + kids + ' kids (cap ' + (sortedEffCaps[ci] || 44) + ')';
-            }).join(', '));
-
-        // ── Send each Ward's cluster to Google Route Optimization ──
-        var allRoutes = [];
-
-        for (var sci = 0; sci < wardClusters.length; sci++) {
-            var subStops = wardClusters[sci];
-            var subBus   = sortedBuses[sci] || sortedBuses[sortedBuses.length - 1];
-            var subKids  = subStops.reduce(function(s, st) { return s + (st.campers || []).length; }, 0);
-
-            if (!subStops.length) continue;
-
-            showProgress(shiftLabel + ': cluster ' + (sci + 1) + '/' + wardClusters.length +
-                ' → Google (' + subStops.length + ' stops, ' + subKids + ' kids)...',
-                pctBase + 25 + Math.round(sci / wardClusters.length * 30));
-
-            console.log('[Go] Ward cluster ' + (sci + 1) + '/' + wardClusters.length +
-                ' — ' + subStops.length + ' stops, ' + subKids + ' kids → ' + (subBus.busName || subBus.busId));
-
-            try {
-                var zipRoutes = await window.GoGoogleOptimizer.optimizeTours({
-                    stops:          subStops,
-                    vehicles:       [subBus],
-                    campLat:        campLat,
-                    campLng:        campLng,
-                    departureTime:  departureTime,
-                    isArrival:      isArrival,
-                    serviceTimeSec: serviceTime,
-                    apiKey:         googleKey,
-                    projectId:      googleProjId,
-                    maxRideTimeSec: maxRideTimeSec,
-                    supabaseUrl:    supabaseUrl,
-                    accessToken:    accessToken,
-                    anonKey:        anonKey
-                });
-
-                if (zipRoutes && zipRoutes.length) {
-                    allRoutes.push.apply(allRoutes, zipRoutes);
-                    console.log('[Go] Ward cluster ' + (sci + 1) + ' → ' + zipRoutes.length + ' route(s) built');
-                } else {
-                    console.warn('[Go] Ward cluster ' + (sci + 1) + ' returned no routes');
-                }
-            } catch (e) {
-                console.warn('[Go] Ward cluster ' + (sci + 1) + ' failed (' + e.message + ') — cluster will be missing');
-            }
-        }
-
-        if (!allRoutes.length) {
-            console.warn('[Go] ZIP+Google: all ZIP requests failed — falling back');
-            return null;
-        }
-
-        console.log('[Go] ZIP+Google complete: ' + allRoutes.length + ' routes, ' +
-            allRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops total');
-        return allRoutes;
-    }
-
-    function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
-        if (!stops.length || !buses.length) return [];
-
-        const numBuses = buses.length;
-        const numStops = stops.length;
-
-        // Effective capacity per bus
-        const busCaps = buses.map(b => {
-            const mon = D.monitors.find(m => m.assignedBus === b.id);
-            const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            const brs = b.reserveMode === 'custom' && b.reserveSeats != null ? b.reserveSeats : (reserveSeats || 0);
-            return Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs);
-        });
-
-        const totalKids = stops.reduce((s, st) => s + st.campers.length, 0);
-        const kidCount = stops.map(s => s.campers.length);
-
-        var totalCap = busCaps.reduce(function(s, c) { return s + c; }, 0);
-
-        console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, ' + numStops + ' stops, totalCap: ' + totalCap);
-
-        // =====================================================================
-        // CAPACITATED K-MEDOIDS with K-means++ SEEDING
-        //
-        // Spatial clustering that produces compact, capacity-respecting zones.
-        // Every zone looks like a distinct neighborhood on the map.
-        //
-        // A. K-means++ seeding — spread 13 seeds across stop density
-        // B. Capacitated assignment — each stop → nearest seed with capacity
-        // C. Lloyd's iteration — re-medoid, re-assign, until stable
-        // D. Compactness polish — swap misplaced stops to nearer zones
-        // E. Bus assignment — biggest cluster → biggest bus
-        // =====================================================================
-
-        var AVG_STOP_SEC = (D.setup.avgStopTime || 2) * 60;
-        var K = numBuses; // always produce exactly numBuses clusters
-
-        // Helper: driving distance between two stops (cached via HERE Matrix)
-        function sd(a, b) { return drivingDist(stops[a].lat, stops[a].lng, stops[b].lat, stops[b].lng); }
-
-        // =====================================================================
-        // Stage A — Anchor Selection
-        //
-        // Pick K "anchor" stops to serve as route endpoints. Each anchor
-        // becomes one bus's natural destination. A good anchor set is:
-        //   - FAR from camp (anchors represent the outer reaches of routes)
-        //   - FAR FROM EACH OTHER (anchors cover different directions)
-        //
-        // We combine both criteria via a weighted score:
-        //   score(stop) = distFromCamp + 2 × minDistFromOtherAnchors
-        //
-        // First anchor: farthest stop from camp.
-        // Subsequent: highest-score stop that isn't already an anchor.
-        // =====================================================================
-        var seeds = []; // "seeds" in our pipeline terminology = anchors here
-
-        // First anchor: stop farthest from camp
-        var farthest = 0, farthestD = 0;
-        for (var si1 = 0; si1 < numStops; si1++) {
-            var dc = drivingDist(stops[si1].lat, stops[si1].lng, campLat, campLng);
-            if (dc > farthestD) { farthestD = dc; farthest = si1; }
-        }
-        seeds.push(farthest);
-
-        // Precompute distances from camp for all stops
-        var distsFromCamp = new Array(numStops);
-        for (var dci = 0; dci < numStops; dci++) {
-            distsFromCamp[dci] = drivingDist(stops[dci].lat, stops[dci].lng, campLat, campLng);
-        }
-
-        // Remaining anchors: maximize (distFromCamp + 2 × minDistFromOtherAnchors)
-        while (seeds.length < K && seeds.length < numStops) {
-            var bestIdx = -1, bestScore = -Infinity;
-            for (var si2 = 0; si2 < numStops; si2++) {
-                if (seeds.indexOf(si2) >= 0) continue;
-                // Distance to closest existing anchor
-                var minAnchorDist = Infinity;
-                for (var sj = 0; sj < seeds.length; sj++) {
-                    var d = sd(si2, seeds[sj]);
-                    if (d < minAnchorDist) minAnchorDist = d;
-                }
-                // Weighted score: far from camp AND far from existing anchors
-                var score = distsFromCamp[si2] + 2 * minAnchorDist;
-                if (score > bestScore) { bestScore = score; bestIdx = si2; }
-            }
-            if (bestIdx < 0) break;
-            seeds.push(bestIdx);
-        }
-        console.log('[Go] Anchor+Corridor: ' + seeds.length + ' anchors selected (far from camp + spread)');
-
-        // =====================================================================
-        // Stage B — Corridor Assignment
-        //
-        // For each anchor, the "corridor" is the line segment from camp → anchor.
-        // A stop's corridor distance = perpendicular distance to that line segment
-        // (clamped so stops past the anchor use distance-to-anchor instead).
-        //
-        // A stop "on the way" to an anchor has a tiny corridor distance.
-        // A stop perpendicular to the corridor has a large distance.
-        // A stop past the anchor effectively measures distance to the anchor itself.
-        //
-        // Each stop is assigned to the corridor with smallest distance-to-line.
-        // Capacity is enforced during growth.
-        // =====================================================================
-        var sortedCaps = busCaps.slice().sort(function(a, b) { return b - a; });
-        var maxClusterCap = sortedCaps[0] || 46;
-
-        // Distance from point P to line segment from A to B.
-        // Uses simple Euclidean on lat/lng scaled by rough meters-per-degree,
-        // which is fine for compact regions like one county.
-        function distToCorridor(stopIdx, anchorIdx) {
-            var S = stops[stopIdx];
-            var A = stops[anchorIdx];
-            // Convert lat/lng to approximate meters (flat-earth approximation)
-            var latScale = 111000; // ~meters per degree of latitude
-            var lngScale = 111000 * Math.cos(campLat * Math.PI / 180);
-
-            var ax = (campLng) * lngScale, ay = (campLat) * latScale; // camp
-            var bx = (A.lng) * lngScale, by = (A.lat) * latScale;     // anchor
-            var px = (S.lng) * lngScale, py = (S.lat) * latScale;     // stop
-
-            var dx = bx - ax, dy = by - ay;
-            var lenSq = dx * dx + dy * dy;
-            if (lenSq < 1) {
-                // anchor == camp (degenerate): just use distance to anchor
-                var mx = px - ax, my = py - ay;
-                return Math.sqrt(mx * mx + my * my);
-            }
-            // Project stop onto the corridor line: t = 0 at camp, 1 at anchor
-            var t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-            // Clamp to segment: [0, 1]
-            if (t < 0) t = 0;
-            if (t > 1) t = 1;
-            // Closest point on segment
-            var cx = ax + t * dx, cy = ay + t * dy;
-            var dxp = px - cx, dyp = py - cy;
-            return Math.sqrt(dxp * dxp + dyp * dyp);
-        }
-
-        function assignAll() {
-            // For each stop, compute direct distance to every anchor (Voronoi assignment).
-            // Using corridor distance caused stops surrounded by Zone A's stops to be
-            // assigned to Zone B because they happened to be near Zone B's corridor line,
-            // forcing buses to drive through each other's territory.
-            var stopPrefs = [];
-            for (var si = 0; si < numStops; si++) {
-                var distances = [];
-                for (var ki = 0; ki < seeds.length; ki++) {
-                    distances.push({ k: ki, d: sd(si, seeds[ki]) });
-                }
-                distances.sort(function(a, b) { return a.d - b.d; });
-                stopPrefs.push({ stop: si, prefs: distances, nearestDist: distances[0].d });
-            }
-            // Sort by strongest preference first (stops with clear corridor commitment go first)
-            stopPrefs.sort(function(a, b) { return a.nearestDist - b.nearestDist; });
-
-            var clusters = [];
-            var clusterKids = [];
-            for (var c = 0; c < seeds.length; c++) { clusters.push([]); clusterKids.push(0); }
-
-            for (var ps = 0; ps < stopPrefs.length; ps++) {
-                var pref = stopPrefs[ps];
-                var placed = false;
-                // Try corridors in order of closeness
-                for (var p = 0; p < pref.prefs.length; p++) {
-                    var ci = pref.prefs[p].k;
-                    if (clusterKids[ci] + kidCount[pref.stop] <= maxClusterCap) {
-                        clusters[ci].push(pref.stop);
-                        clusterKids[ci] += kidCount[pref.stop];
-                        placed = true;
-                        break;
-                    }
-                }
-                if (!placed) {
-                    // All corridors full — place in cluster with most remaining room
-                    var best = 0, bestRoom = -Infinity;
-                    for (var ci2 = 0; ci2 < clusters.length; ci2++) {
-                        var room = maxClusterCap - clusterKids[ci2];
-                        if (room > bestRoom) { bestRoom = room; best = ci2; }
-                    }
-                    clusters[best].push(pref.stop);
-                    clusterKids[best] += kidCount[pref.stop];
-                }
-            }
-            return { clusters: clusters, kids: clusterKids };
-        }
-
-        // =====================================================================
-        // Stage C — Lloyd's Iteration
-        // =====================================================================
-        function recomputeMedoid(members) {
-            if (!members.length) return -1;
-            if (members.length === 1) return members[0];
-            var bestMed = members[0], bestTotal = Infinity;
-            for (var m = 0; m < members.length; m++) {
-                var total = 0;
-                for (var o = 0; o < members.length; o++) {
-                    if (m !== o) total += sd(members[m], members[o]);
-                }
-                if (total < bestTotal) { bestTotal = total; bestMed = members[m]; }
-            }
-            return bestMed;
-        }
-
-        var assignment = assignAll();
-        var prevSeeds = seeds.slice();
-
-        for (var iter = 0; iter < 20; iter++) {
-            // Recompute each seed as its cluster's medoid
-            var changed = false;
-            for (var ki3 = 0; ki3 < seeds.length; ki3++) {
-                var newMed = recomputeMedoid(assignment.clusters[ki3]);
-                if (newMed >= 0 && newMed !== seeds[ki3]) {
-                    seeds[ki3] = newMed;
-                    changed = true;
-                }
-            }
-            if (!changed) break;
-            assignment = assignAll();
-
-            // Check assignment stability
-            var stable = true;
-            for (var ks = 0; ks < seeds.length; ks++) {
-                if (seeds[ks] !== prevSeeds[ks]) { stable = false; break; }
-            }
-            if (stable) break;
-            prevSeeds = seeds.slice();
-        }
-        console.log('[Go] Anchor+Corridor: Lloyd\'s converged in ' + (iter + 1) + ' iterations');
-
-        // =====================================================================
-        // Stage D — Compactness Polish
-        //
-        // For each stop, check every other cluster's medoid. If another is
-        // significantly closer (>10%) AND swap doesn't exceed capacity, move it.
-        // =====================================================================
-        var clusters = assignment.clusters.map(function(c) { return c.slice(); });
-        var clusterKids = assignment.kids.slice();
-
-        var polishSwaps = 0;
-        for (var polishIter = 0; polishIter < 100; polishIter++) {
-            var anySwap = false;
-            for (var ownC = 0; ownC < clusters.length; ownC++) {
-                for (var mIdx = 0; mIdx < clusters[ownC].length; mIdx++) {
-                    var si5 = clusters[ownC][mIdx];
-                    var distOwn = sd(si5, seeds[ownC]);
-                    // Find best other cluster
-                    var bestOther = -1, bestOtherDist = Infinity;
-                    for (var otherC = 0; otherC < clusters.length; otherC++) {
-                        if (otherC === ownC) continue;
-                        if (clusterKids[otherC] + kidCount[si5] > maxClusterCap) continue;
-                        var dOther = sd(si5, seeds[otherC]);
-                        if (dOther < bestOtherDist) { bestOtherDist = dOther; bestOther = otherC; }
-                    }
-                    // Swap if other is significantly closer (>25%)
-                    if (bestOther >= 0 && bestOtherDist < distOwn * 0.75) {
-                        clusters[ownC].splice(mIdx, 1);
-                        clusterKids[ownC] -= kidCount[si5];
-                        clusters[bestOther].push(si5);
-                        clusterKids[bestOther] += kidCount[si5];
-                        anySwap = true;
-                        polishSwaps++;
-                        break; // restart outer loop with updated clusters
-                    }
-                }
-                if (anySwap) break;
-            }
-            if (!anySwap) break;
-
-            // Re-medoid affected clusters
-            for (var kk = 0; kk < seeds.length; kk++) {
-                seeds[kk] = recomputeMedoid(clusters[kk]) || seeds[kk];
-            }
-        }
-        console.log('[Go] K-Medoids: ' + polishSwaps + ' polish swaps for compactness');
-
-        // =====================================================================
-        // Stage D+ — LOAD BALANCE
-        //
-        // After compactness polish, if any cluster is too small (<60% of
-        // target), pull stops from the heaviest nearby cluster. This fixes
-        // the outlier problem: K-means seeds isolated far stops which become
-        // tiny clusters, leaving nearby heavy clusters to handle too much.
-        //
-        // We relax the compactness rule here: a stop can move if it's within
-        // 1.5× as close to the light cluster as to its current (heavy) one.
-        // This lets us pull Bus 8's SW tail into Bus 13/9's area.
-        // =====================================================================
-        var targetPerCluster = Math.ceil(totalKids / seeds.length);
-        var minLoad = Math.max(10, Math.floor(targetPerCluster * 0.6));
-        var maxLoad = Math.min(maxClusterCap, Math.ceil(targetPerCluster * 1.15));
-
-        var lbMoves = 0;
-        for (var lbPass = 0; lbPass < 50; lbPass++) {
-            // Find lightest cluster below minLoad
-            var lightC = -1, lightCount = Infinity;
-            for (var lc = 0; lc < clusters.length; lc++) {
-                if (clusterKids[lc] < minLoad && clusterKids[lc] < lightCount) {
-                    lightCount = clusterKids[lc]; lightC = lc;
-                }
-            }
-            if (lightC < 0) break; // all clusters adequately loaded
-
-            // Find heaviest donor cluster (>target) with stops that would
-            // reasonably fit with the light cluster
-            var bestDonor = -1, bestDonorLi = -1;
-            var bestDonorScore = Infinity;
-            var lightMedoid = seeds[lightC];
-
-            for (var hc = 0; hc < clusters.length; hc++) {
-                if (hc === lightC) continue;
-                if (clusterKids[hc] <= targetPerCluster) continue; // donor must be above target
-
-                for (var li = 0; li < clusters[hc].length; li++) {
-                    var cand = clusters[hc][li];
-                    // Won't fit in light cluster?
-                    if (clusterKids[lightC] + kidCount[cand] > maxLoad) continue;
-                    // Don't strip donor below target
-                    if (clusterKids[hc] - kidCount[cand] < targetPerCluster - 2) continue;
-
-                    var distToLight = sd(cand, lightMedoid);
-                    var distToDonor = sd(cand, seeds[hc]);
-                    // Within 1.5× as close to light as to donor — reasonable transfer
-                    if (distToLight < distToDonor * 1.5 && distToLight < bestDonorScore) {
-                        bestDonorScore = distToLight;
-                        bestDonor = hc;
-                        bestDonorLi = li;
-                    }
-                }
-            }
-
-            if (bestDonor < 0) break; // no reasonable transfer found
-
-            // Execute the move
-            var movedStop = clusters[bestDonor].splice(bestDonorLi, 1)[0];
-            clusterKids[bestDonor] -= kidCount[movedStop];
-            clusters[lightC].push(movedStop);
-            clusterKids[lightC] += kidCount[movedStop];
-            lbMoves++;
-
-            // Re-medoid both affected clusters
-            seeds[lightC] = recomputeMedoid(clusters[lightC]) || seeds[lightC];
-            seeds[bestDonor] = recomputeMedoid(clusters[bestDonor]) || seeds[bestDonor];
-        }
-        console.log('[Go] K-Medoids: ' + lbMoves + ' load-balance moves (target=' + targetPerCluster + ', min=' + minLoad + ')');
-
-        // =====================================================================
-        // Stage D++ — TIME BALANCE (soft)
-        //
-        // Goal: equalize estimated ROUTE TIME across buses, not kid count.
-        // A close-by bus can have 40 kids in 40min, a far bus 20 kids in 40min.
-        // Both arrive in the same time.
-        //
-        // Algorithm:
-        //   1. Estimate route time for each cluster (camp → stops sorted by
-        //      distance-from-camp → camp, plus stop-service times)
-        //   2. If the slowest cluster's time is >TIME_GAP_MIN higher than
-        //      the fastest, try moving a stop from slow → fast
-        //   3. Accept move only if:
-        //      - reduces max(slow_time, fast_time_after_move)
-        //      - the moved stop is geographically reasonable for fast cluster
-        //      - fast cluster isn't over capacity
-        // =====================================================================
-        function _routeTimeEst(stopIndices) {
-            if (!stopIndices.length) return 0;
-            var sorted = stopIndices.slice().sort(function(a, b) {
-                return haversineMi(campLat, campLng, stops[a].lat, stops[a].lng) -
-                       haversineMi(campLat, campLng, stops[b].lat, stops[b].lng);
-            });
-            var t = drivingDist(campLat, campLng, stops[sorted[0]].lat, stops[sorted[0]].lng) + AVG_STOP_SEC;
-            for (var ti = 1; ti < sorted.length; ti++) {
-                t += drivingDist(stops[sorted[ti - 1]].lat, stops[sorted[ti - 1]].lng,
-                                  stops[sorted[ti]].lat, stops[sorted[ti]].lng) + AVG_STOP_SEC;
-            }
-            return t;
-        }
-
-        // Strategy: minimax — for each pass, find the slowest cluster and try
-        // moving each of its stops to every other cluster. Accept whichever
-        // move produces the lowest new global-max route time.
-        //
-        // GEOGRAPHIC GUARD (added to prevent cross-city detours):
-        // A stop may only move to a target cluster if it is geographically
-        // close to that cluster. "Close" = driving distance to target medoid
-        // is no more than MAX_DIST_RATIO × driving distance to own medoid.
-        // This prevents a Lakewood stop from being pushed onto a Toms River
-        // bus just to shave a few minutes off the time imbalance.
-        var TIME_GAP_THRESHOLD_SEC = 15 * 60; // only rebalance if gap > 15min
-        var MAX_DIST_RATIO = 1.5; // stop must be within 1.5× of target vs own medoid
-        var tbMoves = 0;
-        for (var tbPass = 0; tbPass < 200; tbPass++) {
-            var times = clusters.map(_routeTimeEst);
-            var gMax = -Infinity, gMin = Infinity;
-            for (var ti = 0; ti < times.length; ti++) {
-                if (clusters[ti].length === 0) continue;
-                if (times[ti] > gMax) gMax = times[ti];
-                if (times[ti] < gMin) gMin = times[ti];
-            }
-            if (gMax - gMin < TIME_GAP_THRESHOLD_SEC) break; // close enough
-
-            // Find the slowest cluster
-            var slowI = times.indexOf(gMax);
-            if (clusters[slowI].length <= 1) break;
-
-            // Try moving each stop from slow to ANY OTHER cluster (not just fastest)
-            var bestMove = null;
-            var bestNewMax = gMax;
-
-            for (var mi = 0; mi < clusters[slowI].length; mi++) {
-                var cand = clusters[slowI][mi];
-
-                // Distance from candidate stop to its own cluster's medoid
-                var distToOwn = sd(cand, seeds[slowI]);
-
-                for (var tgt = 0; tgt < clusters.length; tgt++) {
-                    if (tgt === slowI) continue;
-                    if (clusters[tgt].length === 0) continue;
-                    // Capacity check
-                    if (clusterKids[tgt] + kidCount[cand] > maxClusterCap) continue;
-
-                    // ── Geographic guard ─────────────────────────────────────
-                    // Reject if the candidate is significantly farther from the
-                    // target medoid than from its own medoid. This keeps stops
-                    // in their geographic zone — a Lakewood stop won't move to
-                    // a Toms River cluster just because times are imbalanced.
-                    var distToTgt = sd(cand, seeds[tgt]);
-                    if (distToTgt > distToOwn * MAX_DIST_RATIO) continue;
-
-                    // Estimate new times for donor and receiver
-                    var newSlowStops = clusters[slowI].filter(function(_, idx) { return idx !== mi; });
-                    var newTgtStops = clusters[tgt].concat([cand]);
-                    var newSlowT = _routeTimeEst(newSlowStops);
-                    var newTgtT = _routeTimeEst(newTgtStops);
-
-                    // Compute new global max — donor and receiver change, others stay
-                    var newMaxPair = Math.max(newSlowT, newTgtT);
-                    for (var oi = 0; oi < times.length; oi++) {
-                        if (oi !== slowI && oi !== tgt && times[oi] > newMaxPair) newMaxPair = times[oi];
-                    }
-
-                    // Accept only if new global max is lower than current global max
-                    if (newMaxPair < bestNewMax) {
-                        bestNewMax = newMaxPair;
-                        bestMove = { mi: mi, cand: cand, tgt: tgt };
-                    }
-                }
-            }
-
-            if (!bestMove) break;
-
-            // Execute the move
-            clusters[slowI].splice(bestMove.mi, 1);
-            clusterKids[slowI] -= kidCount[bestMove.cand];
-            clusters[bestMove.tgt].push(bestMove.cand);
-            clusterKids[bestMove.tgt] += kidCount[bestMove.cand];
-            tbMoves++;
-
-            // Re-medoid affected clusters
-            seeds[slowI] = recomputeMedoid(clusters[slowI]) || seeds[slowI];
-            seeds[bestMove.tgt] = recomputeMedoid(clusters[bestMove.tgt]) || seeds[bestMove.tgt];
-        }
-        var finalTimesTmp = clusters.map(_routeTimeEst);
-        var finalMax = Math.max.apply(null, finalTimesTmp);
-        var finalMin = Math.min.apply(null, finalTimesTmp.filter(function(t) { return t > 0; }));
-        console.log('[Go] K-Medoids: ' + tbMoves + ' time-balance moves (gap: ' + (finalMax/60).toFixed(0) + 'min max → ' + (finalMin/60).toFixed(0) + 'min min, threshold 8min)');
-
-        // =====================================================================
-        // Stage D+++ — SELF-HEALING VARIANCE MINIMIZATION
-        //
-        // Goal: pull every route's time toward the MEAN route time.
-        // Slower routes shed stops; faster routes pick them up.
-        //
-        // Scoring: for each route, penalty = -1 per 5min of deviation from mean.
-        //   Route at mean+0min  = 0 penalty
-        //   Route at mean+10min = -2 penalty
-        //   Route at mean-10min = -2 penalty
-        // Total score = sum of all route penalties (negative number; 0 = perfect).
-        //
-        // Each iteration: find the move (any stop, any pair of clusters) that
-        // most improves total score, respecting capacity. Stop when no move
-        // improves.  This is aggressive — allow up to 500 iterations since
-        // the user explicitly accepted the trade-off of longer generation time.
-        // =====================================================================
-        function computeScore(times) {
-            var active = times.filter(function(t) { return t > 0; });
-            if (!active.length) return 0;
-            var mean = active.reduce(function(s, t) { return s + t; }, 0) / active.length;
-            var penalty = 0;
-            for (var i = 0; i < times.length; i++) {
-                if (times[i] <= 0) continue;
-                var devMin = Math.abs(times[i] - mean) / 60;
-                penalty -= Math.floor(devMin / 5);
-            }
-            return penalty;
-        }
-
-        var shTimes = clusters.map(_routeTimeEst);
-        var shMean = shTimes.filter(function(t){return t>0;}).reduce(function(s,t){return s+t;}, 0) / shTimes.filter(function(t){return t>0;}).length;
-        var shInitialScore = computeScore(shTimes);
-        console.log('[Go] K-Medoids: self-healing starting — mean=' + (shMean/60).toFixed(0) + 'min, score=' + shInitialScore);
-
-        // --- Service-area check: is stopIdx geographically reasonable for clusterIdx? ---
-        // Returns true if the stop is (a) within cluster's current area (capped) or (b)
-        // on the way from camp to the cluster (narrow angle-cone + closer to camp).
-        // Hard cap on expansion prevents chain-stretching where each move widens the
-        // cluster and each subsequent move passes using the new (wider) bound.
-        var HARD_RADIUS_CAP_SEC = 5 * 60; // never allow >5min driving from medoid
-        var CONE_DEGREES = 15;            // narrow wedge for "on the way"
-        var AREA_BUFFER = 1.1;            // tight buffer around cluster area
-        function stopInServiceArea(stopIdx, clusterIdx) {
-            if (!clusters[clusterIdx].length) return true; // empty cluster — anything OK
-            var sLat = stops[stopIdx].lat, sLng = stops[stopIdx].lng;
-            var medLat = stops[seeds[clusterIdx]].lat, medLng = stops[seeds[clusterIdx]].lng;
-
-            // (a) Within cluster's area — capped at 8min driving from medoid
-            var maxRadius = 0;
-            for (var i = 0; i < clusters[clusterIdx].length; i++) {
-                var d = sd(clusters[clusterIdx][i], seeds[clusterIdx]);
-                if (d > maxRadius) maxRadius = d;
-            }
-            // Cap the effective radius so cluster can't grow unboundedly
-            var effectiveRadius = Math.min(maxRadius, HARD_RADIUS_CAP_SEC);
-            var distToMedoid = sd(stopIdx, seeds[clusterIdx]);
-            if (distToMedoid <= effectiveRadius * AREA_BUFFER) return true;
-
-            // (b) On the way: stop between camp and cluster, in narrow cone
-            var distCampToStop = haversineMi(campLat, campLng, sLat, sLng);
-            var distCampToMed = haversineMi(campLat, campLng, medLat, medLng);
-            if (distCampToStop >= distCampToMed) return false;
-
-            var angToStop = Math.atan2(sLng - campLng, sLat - campLat) * 180 / Math.PI;
-            var angToMed = Math.atan2(medLng - campLng, medLat - campLat) * 180 / Math.PI;
-            var angDiff = Math.abs(angToStop - angToMed);
-            if (angDiff > 180) angDiff = 360 - angDiff;
-            return angDiff <= CONE_DEGREES;
-        }
-
-        var shMoves = 0, shSwaps = 0;
-        var shNoImprove = 0;
-        for (var shPass = 0; shPass < 500; shPass++) {
-            var curTimes = clusters.map(_routeTimeEst);
-            var curScore = computeScore(curTimes);
-
-            var bestAction = null; // {type: 'move'|'swap', ...details...}
-            var bestNewScore = curScore;
-
-            // --- TRY 1: simple moves (any cluster → any other cluster) ---
-            for (var fromI = 0; fromI < clusters.length; fromI++) {
-                if (clusters[fromI].length <= 1) continue;
-
-                for (var si = 0; si < clusters[fromI].length; si++) {
-                    var cand = clusters[fromI][si];
-
-                    for (var toI = 0; toI < clusters.length; toI++) {
-                        if (toI === fromI) continue;
-                        if (clusterKids[toI] + kidCount[cand] > maxClusterCap) continue;
-                        // GEOGRAPHY GUARD: stop must be in target's area or on the way from camp
-                        if (!stopInServiceArea(cand, toI)) continue;
-
-                        var tempCluster_from = clusters[fromI].filter(function(_, idx) { return idx !== si; });
-                        var tempCluster_to = clusters[toI].concat([cand]);
-                        var newFromT = _routeTimeEst(tempCluster_from);
-                        var newToT = _routeTimeEst(tempCluster_to);
-
-                        var newTimes = curTimes.slice();
-                        newTimes[fromI] = newFromT;
-                        newTimes[toI] = newToT;
-                        var newScore = computeScore(newTimes);
-
-                        if (newScore > bestNewScore) {
-                            bestNewScore = newScore;
-                            bestAction = { type: 'move', fromI: fromI, toI: toI, si: si, cand: cand };
-                        }
-                    }
-                }
-            }
-
-            // --- TRY 2: swaps (exchange stops between capped clusters) ---
-            // This catches the "Bus 1 full but fast" case: swap a close-stop
-            // out of Bus 1 for a far-stop from a slow bus. Both move toward mean.
-            for (var ia = 0; ia < clusters.length; ia++) {
-                if (clusters[ia].length <= 1) continue;
-                for (var ib = ia + 1; ib < clusters.length; ib++) {
-                    if (clusters[ib].length <= 1) continue;
-                    // Only consider swaps between clusters with >5min time gap
-                    if (Math.abs(curTimes[ia] - curTimes[ib]) < 5 * 60) continue;
-
-                    // Limit to top 8 candidate stops on each side by kid count to keep O manageable
-                    var aSortedByKids = clusters[ia].slice().sort(function(x,y){return kidCount[y]-kidCount[x];}).slice(0, 8);
-                    var bSortedByKids = clusters[ib].slice().sort(function(x,y){return kidCount[y]-kidCount[x];}).slice(0, 8);
-
-                    for (var pa = 0; pa < aSortedByKids.length; pa++) {
-                        var stopA = aSortedByKids[pa];
-                        for (var pb = 0; pb < bSortedByKids.length; pb++) {
-                            var stopB = bSortedByKids[pb];
-
-                            // Capacity check after swap
-                            var newKidsA = clusterKids[ia] - kidCount[stopA] + kidCount[stopB];
-                            var newKidsB = clusterKids[ib] - kidCount[stopB] + kidCount[stopA];
-                            if (newKidsA > maxClusterCap) continue;
-                            if (newKidsB > maxClusterCap) continue;
-
-                            // GEOGRAPHY GUARD: each received stop must be in target's
-                            // service area or on the way from camp. Keeps swaps sensible
-                            // — no Bus 1 picking up a far south stop just for time balance.
-                            if (!stopInServiceArea(stopB, ia)) continue;
-                            if (!stopInServiceArea(stopA, ib)) continue;
-
-                            // Simulate swap
-                            var aAfter = clusters[ia].filter(function(s){return s !== stopA;}).concat([stopB]);
-                            var bAfter = clusters[ib].filter(function(s){return s !== stopB;}).concat([stopA]);
-                            var newAT = _routeTimeEst(aAfter);
-                            var newBT = _routeTimeEst(bAfter);
-
-                            var swapTimes = curTimes.slice();
-                            swapTimes[ia] = newAT;
-                            swapTimes[ib] = newBT;
-                            var swapScore = computeScore(swapTimes);
-
-                            if (swapScore > bestNewScore) {
-                                bestNewScore = swapScore;
-                                bestAction = { type: 'swap', ia: ia, ib: ib, stopA: stopA, stopB: stopB };
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (!bestAction) {
-                shNoImprove++;
-                if (shNoImprove > 2) break;
-                continue;
-            }
-            shNoImprove = 0;
-
-            // Execute the action
-            if (bestAction.type === 'move') {
-                clusters[bestAction.fromI].splice(bestAction.si, 1);
-                clusterKids[bestAction.fromI] -= kidCount[bestAction.cand];
-                clusters[bestAction.toI].push(bestAction.cand);
-                clusterKids[bestAction.toI] += kidCount[bestAction.cand];
-                shMoves++;
-                seeds[bestAction.fromI] = recomputeMedoid(clusters[bestAction.fromI]) || seeds[bestAction.fromI];
-                seeds[bestAction.toI] = recomputeMedoid(clusters[bestAction.toI]) || seeds[bestAction.toI];
-            } else { // swap
-                // Remove stopA from ia, stopB from ib; add stopA to ib, stopB to ia
-                clusters[bestAction.ia] = clusters[bestAction.ia].filter(function(s){return s !== bestAction.stopA;});
-                clusters[bestAction.ia].push(bestAction.stopB);
-                clusterKids[bestAction.ia] += kidCount[bestAction.stopB] - kidCount[bestAction.stopA];
-                clusters[bestAction.ib] = clusters[bestAction.ib].filter(function(s){return s !== bestAction.stopB;});
-                clusters[bestAction.ib].push(bestAction.stopA);
-                clusterKids[bestAction.ib] += kidCount[bestAction.stopA] - kidCount[bestAction.stopB];
-                shSwaps++;
-                seeds[bestAction.ia] = recomputeMedoid(clusters[bestAction.ia]) || seeds[bestAction.ia];
-                seeds[bestAction.ib] = recomputeMedoid(clusters[bestAction.ib]) || seeds[bestAction.ib];
-            }
-        }
-
-        var shFinalTimes = clusters.map(_routeTimeEst);
-        var shFinalScore = computeScore(shFinalTimes);
-        var shFinalMax = Math.max.apply(null, shFinalTimes);
-        var shFinalMin = Math.min.apply(null, shFinalTimes.filter(function(t) { return t > 0; }));
-        console.log('[Go] K-Medoids: self-healing ' + shMoves + ' moves + ' + shSwaps + ' swaps, score ' + shInitialScore + ' → ' + shFinalScore +
-            ' (gap: ' + (shFinalMax/60).toFixed(0) + 'min max → ' + (shFinalMin/60).toFixed(0) + 'min min)');
-
-        // =====================================================================
-        // Stage D++++ — COMPACTNESS AUDIT
-        //
-        // After all balancing, identify clusters that have become stretched
-        // (spread > 10 min from medoid). For each such cluster, evict its
-        // farthest stop and reassign it to the geographically-most-appropriate
-        // other cluster with capacity.
-        //
-        // This catches the "Bus 9 has east + south stops" problem that emerges
-        // when chained moves/swaps pass the guard individually but collectively
-        // stretch the cluster.
-        // =====================================================================
-        var MAX_CLUSTER_SPREAD_SEC = 10 * 60; // 10 min driving from medoid
-        var auditEvictions = 0;
-        for (var auditPass = 0; auditPass < 50; auditPass++) {
-            // Find the most stretched cluster
-            var worstSpread = 0, worstCluster = -1, worstStop = -1;
-            for (var ac = 0; ac < clusters.length; ac++) {
-                if (clusters[ac].length <= 1) continue;
-                for (var aStop = 0; aStop < clusters[ac].length; aStop++) {
-                    var d = sd(clusters[ac][aStop], seeds[ac]);
-                    if (d > worstSpread) {
-                        worstSpread = d; worstCluster = ac; worstStop = clusters[ac][aStop];
-                    }
-                }
-            }
-            if (worstSpread <= MAX_CLUSTER_SPREAD_SEC) break; // all clusters within bounds
-
-            // Find the best receiving cluster for this outlier
-            var bestRecv = -1, bestRecvDist = Infinity;
-            for (var rc = 0; rc < clusters.length; rc++) {
-                if (rc === worstCluster) continue;
-                if (clusterKids[rc] + kidCount[worstStop] > maxClusterCap) continue;
-                // Must be a geographically reasonable home for this stop
-                if (!stopInServiceArea(worstStop, rc)) continue;
-                var dr = sd(worstStop, seeds[rc]);
-                if (dr < bestRecvDist) { bestRecvDist = dr; bestRecv = rc; }
-            }
-
-            if (bestRecv < 0) {
-                // No valid receiver — just tolerate this outlier and stop auditing
-                break;
-            }
-
-            // Evict from worst cluster, add to best receiver
-            var idx = clusters[worstCluster].indexOf(worstStop);
-            if (idx >= 0) {
-                clusters[worstCluster].splice(idx, 1);
-                clusterKids[worstCluster] -= kidCount[worstStop];
-                clusters[bestRecv].push(worstStop);
-                clusterKids[bestRecv] += kidCount[worstStop];
-                seeds[worstCluster] = recomputeMedoid(clusters[worstCluster]) || seeds[worstCluster];
-                seeds[bestRecv] = recomputeMedoid(clusters[bestRecv]) || seeds[bestRecv];
-                auditEvictions++;
-            }
-        }
-        if (auditEvictions > 0) {
-            var auditTimes = clusters.map(_routeTimeEst);
-            var auditScore = computeScore(auditTimes);
-            console.log('[Go] K-Medoids: compactness audit evicted ' + auditEvictions + ' outliers, score now ' + auditScore);
-        } else {
-            console.log('[Go] K-Medoids: compactness audit passed — all clusters within 10min spread');
-        }
-
-        // =====================================================================
-        // Stage E — Bus Assignment
-        //
-        // Sort clusters by kid count descending, buses by capacity descending.
-        // Pair biggest with biggest.
-        // =====================================================================
-        var clusterList = [];
-        for (var cli = 0; cli < clusters.length; cli++) {
-            if (clusters[cli].length > 0) {
-                clusterList.push({ stopIndices: clusters[cli], kids: clusterKids[cli], medoid: seeds[cli] });
-            }
-        }
-        clusterList.sort(function(a, b) { return b.kids - a.kids; });
-
-        var busOrder = busCaps.map(function(cap, i) { return { i: i, cap: cap }; });
-        busOrder.sort(function(a, b) { return b.cap - a.cap; });
-
-        // =====================================================================
-        // Stage F — Build Zone Objects (expected format)
-        // =====================================================================
-        var zones = [];
-        for (var zi = 0; zi < clusterList.length && zi < busOrder.length; zi++) {
-            var cluster = clusterList[zi];
-            var bi = busOrder[zi].i;
-            var cLat = cluster.stopIndices.reduce(function(s, si) { return s + stops[si].lat; }, 0) / cluster.stopIndices.length;
-            var cLng = cluster.stopIndices.reduce(function(s, si) { return s + stops[si].lng; }, 0) / cluster.stopIndices.length;
-
-            zones.push({
-                busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
-                busColor: buses[bi].color, stopIndices: cluster.stopIndices,
-                camperCount: cluster.kids, capacity: busCaps[bi],
-                centroidLat: cLat, centroidLng: cLng, _medoid: cluster.medoid
-            });
-        }
-
-        // Route time estimator (for logging + downstream cross-route exchange)
-        function estimateRouteTime(idxArr) {
-            if (!idxArr.length) return 0;
-            var sorted = idxArr.slice().sort(function(a, b) {
-                return haversineMi(campLat, campLng, stops[a].lat, stops[a].lng) -
-                       haversineMi(campLat, campLng, stops[b].lat, stops[b].lng);
-            });
-            var t = drivingDist(campLat, campLng, stops[sorted[0]].lat, stops[sorted[0]].lng) + AVG_STOP_SEC;
-            for (var rti = 1; rti < sorted.length; rti++) {
-                t += drivingDist(stops[sorted[rti - 1]].lat, stops[sorted[rti - 1]].lng,
-                                  stops[sorted[rti]].lat, stops[sorted[rti]].lng) + AVG_STOP_SEC;
-            }
-            return t;
-        }
-
-        // Log summary
-        var finalTimes = zones.map(function(z) { return estimateRouteTime(z.stopIndices); });
-        console.log('[Go] K-Medoids: ' + zones.length + ' zones, ' + totalKids + ' kids, ' + numStops + ' stops');
-        zones.forEach(function(z, i) {
-            var tm = (finalTimes[i] / 60).toFixed(0);
-            var fill = Math.round(z.camperCount / z.capacity * 100);
-            // Zone spread: max distance from medoid to any stop (compactness metric)
-            var maxSpread = 0;
-            z.stopIndices.forEach(function(si) {
-                var d = sd(si, z._medoid);
-                if (d > maxSpread) maxSpread = d;
-            });
-            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' (' + fill + '%), ' +
-                z.stopIndices.length + ' stops, ~' + tm + 'min, spread ' + (maxSpread / 60).toFixed(0) + 'min');
-        });
-        var maxT = Math.max.apply(null, finalTimes), avgT = finalTimes.reduce(function(s, t) { return s + t; }, 0) / finalTimes.length;
-        console.log('[Go] Route time: max ' + (maxT / 60).toFixed(0) + 'min, avg ' + (avgT / 60).toFixed(0) + 'min');
-
-        return zones;
-    }
-
-    // =========================================================================
-    // ROUTING ENGINE v11.0 — Stops-first + Greedy zones + GH/VROOM
-    // =========================================================================
-
 async function generateRoutes() {
-        // Clear caches on each generation
-        _intersectionCache = null;
+    // -------------------------------------------------------------------------
+    // PRE-FLIGHT
+    // -------------------------------------------------------------------------
+    _intersectionCache = null;
 
-        const roster = getRoster();
-        const reserveSeats = parseInt(document.getElementById('routeReserveSeats')?.value) || 0;
-        const avgStopMin = D.setup.avgStopTime || 2;
-        const avgSpeedMph = D.setup.avgSpeed || 25;
+    const roster = getRoster();
+    const reserveSeats = parseInt(document.getElementById('routeReserveSeats')?.value) || 0;
+    const avgStopMin = D.setup.avgStopTime || 2;
+    const avgSpeedMph = D.setup.avgSpeed || 25;
+    const isArrival = D.activeMode === 'arrival';
+    const mode = document.getElementById('routeMode')?.value || 'corner-stops';
 
-        // Validate we have buses and geocoded campers
-        if (!D.buses.length) { toast('Add buses first', 'error'); return; }
+    // Escape hatch for emergencies only — default is always neighborhood mode.
+    const bypassNeighborhoodMode = D.setup.useNeighborhoodMode === 'bypass';
 
-        let hasGeocodedCampers = false;
+    // Hard preflight: must have buses
+    if (!D.buses.length) {
+        toast('Add buses first', 'error');
+        return;
+    }
+
+    // Hard preflight: every bus-mode camper must be geocoded. v4 silently
+    // dropped ungeocoded campers — that's a data-integrity bug, not a feature.
+    const ungeocoded = [];
+    let hasAnyGeocoded = false;
+    Object.keys(roster).forEach(name => {
+        const a = D.addresses[name];
+        if (!a || a.transport === 'pickup') return;
+        if (a._isStaff) return;
+        if (a.geocoded && a.lat && a.lng) { hasAnyGeocoded = true; return; }
+        ungeocoded.push(name);
+    });
+    if (!hasAnyGeocoded) {
+        toast('No geocoded campers — geocode addresses first', 'error');
+        return;
+    }
+    if (ungeocoded.length) {
+        console.error('[Go] PREFLIGHT FAIL: ' + ungeocoded.length +
+            ' camper(s) not geocoded. They will be dropped from routing.');
+        console.error('[Go] Ungeocoded:', ungeocoded.slice(0, 20),
+            ungeocoded.length > 20 ? '(+' + (ungeocoded.length - 20) + ' more)' : '');
+        toast(ungeocoded.length + ' camper(s) not geocoded — geocode them first to include',
+              'error');
+        // We continue rather than abort — but we've told the user loudly.
+    }
+
+    // Hard preflight: neighborhood modules must be loaded (unless bypassing)
+    if (!bypassNeighborhoodMode) {
+        if (!window.CampistryGoNeighborhoods?.buildNeighborhoods) {
+            console.error('[Go] CampistryGoNeighborhoods module not loaded. ' +
+                'Routing cannot proceed with the primary path.');
+            toast('Neighborhood module missing — cannot generate routes', 'error');
+            return;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // CAMP GEOCODING
+    // -------------------------------------------------------------------------
+    _routeProgStart = Date.now();
+    let campCoords = null;
+    if (D.setup.campAddress) {
+        showProgress('Geocoding camp...', 5);
+        if (_campCoordsCache) {
+            campCoords = _campCoordsCache;
+        } else {
+            campCoords = await geocodeSingle(D.setup.campAddress);
+            if (campCoords) {
+                if (D.setup.campLat && D.setup.campLng) {
+                    const drift = haversineMi(D.setup.campLat, D.setup.campLng,
+                                              campCoords.lat, campCoords.lng);
+                    if (drift > 1) {
+                        console.warn('[Go] Camp re-geocoded: moved ' + drift.toFixed(1) +
+                            'mi from saved coords');
+                    }
+                }
+                _campCoordsCache = campCoords;
+                D.setup.campLat = campCoords.lat;
+                D.setup.campLng = campCoords.lng;
+                save();
+            }
+        }
+    }
+    if (!campCoords && D.setup.campLat && D.setup.campLng) {
+        campCoords = { lat: D.setup.campLat, lng: D.setup.campLng };
+        _campCoordsCache = campCoords;
+    }
+    if (!campCoords) { toast('Set camp address first', 'error'); return; }
+    const campLat = campCoords.lat;
+    const campLng = campCoords.lng;
+
+    // -------------------------------------------------------------------------
+    // VEHICLES
+    // -------------------------------------------------------------------------
+    const vehicles = D.buses.map(b => {
+        const mon = D.monitors.find(m => m.assignedBus === b.id);
+        const couns = D.counselors.filter(c => c.assignedBus === b.id);
+        const brs = getBusReserve(b);
+        return {
+            busId: b.id,
+            name: b.name,
+            color: b.color || '#10b981',
+            capacity: Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs),
+            monitor: mon,
+            counselors: couns
+        };
+    });
+
+    // -------------------------------------------------------------------------
+    // OPTIMIZER AVAILABILITY (for per-bus TSP)
+    // -------------------------------------------------------------------------
+    const googleKey    = D.setup.googleMapsKey || '';
+    const googleProjId = D.setup.googleProjectId || '';
+    const geoapifyKey  = D.setup.geoapifyKey || '';
+    const googleAvailable = !!(googleKey && googleProjId &&
+                               window.GoGoogleOptimizer?.optimizeTours);
+
+    // Supabase proxy token (for Google edge-function auth)
+    const _supabaseUrl = window.__CAMPISTRY_SUPABASE__?.url || '';
+    let _googleProxyToken = null;
+    if (_supabaseUrl && window.supabase?.auth?.getSession) {
+        try {
+            const _sess = await window.supabase.auth.getSession();
+            _googleProxyToken = _sess?.data?.session?.access_token || null;
+        } catch (_e) { /* non-fatal */ }
+    }
+
+    console.log('[Go v5] Routing strategy: NEIGHBORHOOD (primary) → ' +
+                (googleAvailable ? 'Google Route Optimization (fallback)' : 'NO FALLBACK'));
+    console.log('[Go v5] Per-bus TSP optimizer: ' +
+                (googleAvailable ? 'Google' : geoapifyKey ? 'Geoapify' : 'local 2-opt'));
+
+    // -------------------------------------------------------------------------
+    // SHIFT LOOP
+    // -------------------------------------------------------------------------
+    const allShiftResults = [];
+    const shifts = D.shifts.length ? D.shifts : [{
+        id: '__all__', label: 'All Campers', divisions: [],
+        departureTime: isArrival ? '07:00' : '16:00', _isVirtual: true
+    }];
+
+    for (let si = 0; si < shifts.length; si++) {
+        const shift = shifts[si];
+        const pctPerShift = 100 / shifts.length;
+        const pctBase = si * pctPerShift;
+        const shiftLabel = shift.label || 'Shift ' + (si + 1);
+
+        // ── Bus set for this shift ──
+        let shiftBusIds = shift.assignedBuses?.length
+            ? shift.assignedBuses
+            : vehicles.map(v => v.busId);
+        if (shift.assignedBuses?.length) {
+            const validIds = shiftBusIds.filter(bid => vehicles.some(v => v.busId === bid));
+            if (validIds.length < shiftBusIds.length) {
+                console.warn('[Go v5] Shift "' + shiftLabel + '": ' +
+                    (shiftBusIds.length - validIds.length) +
+                    ' assigned buses no longer exist — using all buses');
+                shift.assignedBuses = [];
+                shiftBusIds = vehicles.map(v => v.busId);
+                save();
+            }
+        }
+        const shiftVehicles = shiftBusIds
+            .map(bid => vehicles.find(v => v.busId === bid))
+            .filter(Boolean);
+
+        // ── Gather campers for this shift ──
+        const allCampers = [];
         Object.keys(roster).forEach(name => {
+            const c = roster[name];
             const a = D.addresses[name];
-            if (a?.geocoded && a.lat && a.lng && a.transport !== 'pickup') hasGeocodedCampers = true;
-        });
-        if (!hasGeocodedCampers) { toast('No geocoded campers — geocode addresses first', 'error'); return; }
-
-        const vehicles = D.buses.map(b => {
-            const mon = D.monitors.find(m => m.assignedBus === b.id);
-            const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            const brs = getBusReserve(b);
-            return { busId: b.id, name: b.name, color: b.color || '#10b981', capacity: Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs), monitor: mon, counselors: couns };
-        });
-
-        _routeProgStart = Date.now();
-        let campCoords = null;
-        if (D.setup.campAddress) {
-            showProgress('Geocoding camp...', 5);
-            // Always geocode fresh if no cache; use cache only within same session
-            if (_campCoordsCache) {
-                campCoords = _campCoordsCache;
-            } else {
-                campCoords = await geocodeSingle(D.setup.campAddress);
-                if (campCoords) {
-                    // Validate: if saved coords exist and differ significantly, log it
-                    if (D.setup.campLat && D.setup.campLng) {
-                        var drift = haversineMi(D.setup.campLat, D.setup.campLng, campCoords.lat, campCoords.lng);
-                        if (drift > 1) console.warn('[Go] Camp re-geocoded: moved ' + drift.toFixed(1) + 'mi from saved coords (was ' + D.setup.campLat.toFixed(4) + ',' + D.setup.campLng.toFixed(4) + ' → now ' + campCoords.lat.toFixed(4) + ',' + campCoords.lng.toFixed(4) + ')');
-                    }
-                    _campCoordsCache = campCoords;
-                    D.setup.campLat = campCoords.lat;
-                    D.setup.campLng = campCoords.lng;
-                    save();
-                }
-            }
-        }
-        // Fallback to saved coords only if geocoding unavailable (offline, etc.)
-        if (!campCoords && D.setup.campLat && D.setup.campLng) {
-            campCoords = { lat: D.setup.campLat, lng: D.setup.campLng };
-            _campCoordsCache = campCoords;
-        }
-        if (!campCoords) { toast('Set camp address first', 'error'); return; }
-        const campLat = campCoords.lat;
-        const campLng = campCoords.lng;
-
-        console.log('[Go] Distance estimates use haversine — no pre-warm needed');
-
-        // =========================================================
-        // NEW PIPELINE: Stops first → Greedy zones → Route each zone
-        // =========================================================
-
-        const allShiftResults = [];
-        const shifts = D.shifts.length ? D.shifts : [{ id: '__all__', label: 'All Campers', divisions: [], departureTime: D.activeMode === 'arrival' ? '07:00' : '16:00', _isVirtual: true }];
-
-        for (let si = 0; si < shifts.length; si++) {
-            const shift = shifts[si];
-            const pctPerShift = 100 / shifts.length;
-            const pctBase = si * pctPerShift;
-
-            // Auto-clean orphaned bus IDs: if buses were recreated, shift may reference old IDs
-            let shiftBusIds = shift.assignedBuses?.length ? shift.assignedBuses : vehicles.map(v => v.busId);
-            if (shift.assignedBuses?.length) {
-                const validIds = shiftBusIds.filter(bid => vehicles.some(v => v.busId === bid));
-                if (validIds.length < shiftBusIds.length) {
-                    console.warn('[Go] Shift "' + (shift.label || shift.id) + '": ' + (shiftBusIds.length - validIds.length) + ' assigned buses no longer exist — using all buses');
-                    shift.assignedBuses = [];  // clear stale refs
-                    shiftBusIds = vehicles.map(v => v.busId);
-                    save();
-                }
-            }
-            const shiftVehicles = shiftBusIds.map(bid => vehicles.find(v => v.busId === bid)).filter(Boolean);
-            const shiftBuses = shiftBusIds.map(bid => D.buses.find(b => b.id === bid)).filter(Boolean);
-
-            // ── Step 1: Gather all campers for this shift ──
-            const allCampers = [];
-            Object.keys(roster).forEach(name => {
-                const c = roster[name]; const a = D.addresses[name];
-                if (!c || !a?.geocoded || !a.lat || !a.lng) return;
-                if (a._isStaff) return; // Staff are post-gen suggestions, not campers
-                if (a.transport === 'pickup') return;
-                // Filter by arrival/dismissal mode flag
-                const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
-                if (a[modeKey] === false) return;
-                if (shift._isVirtual || camperMatchesShift(c, shift)) {
-                    allCampers.push({ name, division: c.division, bunk: c.bunk || '', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') });
-                }
-            });
-
-            // ── Step 1b: Geocode staff — ALL counselors/monitors are post-gen ──
-            // Routes are generated for campers only. After generation, each staff
-            // member gets a suggested nearest stop. Far staff (>10 min walk) get
-            // an option to add a dedicated stop on their nearest bus.
-            const noStopStaff = []; // [{name, address, lat, lng, busId, role}] — suggested after routes
-
-            for (const counselor of D.counselors) {
-                if (!counselor.address) continue;
-                let staffCoords = null;
-                // Check cached coords first
-                if (counselor._lat && counselor._lng) {
-                    staffCoords = { lat: counselor._lat, lng: counselor._lng };
-                }
-                // Check if this staff member has a geocoded address in D.addresses
-                if (!staffCoords) {
-                    const staffAddr = D.addresses[counselor.name] || D.addresses[counselor.firstName + ' ' + counselor.lastName];
-                    if (staffAddr?.geocoded && staffAddr.lat && staffAddr.lng) {
-                        staffCoords = { lat: staffAddr.lat, lng: staffAddr.lng };
-                        counselor._lat = staffAddr.lat; counselor._lng = staffAddr.lng;
-                    }
-                }
-                // Skip if no coords found (already geocoded by auto-geocode step above)
-                if (!staffCoords) continue;
-
-                // All counselors are post-gen — will suggest closest stop after routing
-                noStopStaff.push({
-                    name: counselor.name, address: counselor.address,
-                    lat: staffCoords.lat, lng: staffCoords.lng,
-                    busId: counselor.assignedBus || null, role: 'counselor', id: counselor.id
+            if (!c || !a?.geocoded || !a.lat || !a.lng) return;
+            if (a._isStaff) return;
+            if (a.transport === 'pickup') return;
+            const modeKey = isArrival ? '_arrival' : '_dismissal';
+            if (a[modeKey] === false) return;
+            if (shift._isVirtual || camperMatchesShift(c, shift)) {
+                allCampers.push({
+                    name,
+                    division: c.division,
+                    bunk: c.bunk || '',
+                    lat: a.lat,
+                    lng: a.lng,
+                    address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ')
                 });
             }
+        });
 
-            for (const monitor of D.monitors) {
-                if (!monitor.address) continue;
-                let staffCoords = null;
-                if (monitor._lat && monitor._lng) {
-                    staffCoords = { lat: monitor._lat, lng: monitor._lng };
-                }
-                if (!staffCoords) {
-                    const staffAddr = D.addresses[monitor.name] || D.addresses[monitor.firstName + ' ' + monitor.lastName];
-                    if (staffAddr?.geocoded && staffAddr.lat && staffAddr.lng) {
-                        staffCoords = { lat: staffAddr.lat, lng: staffAddr.lng };
-                        monitor._lat = staffAddr.lat; monitor._lng = staffAddr.lng;
-                    }
-                }
-                if (!staffCoords) continue;
+        // ── Apply rideWith so siblings/pairs share coords ──
+        applyRideWith(allCampers);
 
-                // Monitors are always "no stop" — they ride the bus
-                noStopStaff.push({
-                    name: monitor.name, address: monitor.address,
-                    lat: staffCoords.lat, lng: staffCoords.lng,
-                    busId: monitor.assignedBus || null, role: 'monitor', id: monitor.id
-                });
+        // ── Deduplicate by name ──
+        const seenNames = new Set();
+        for (let di = allCampers.length - 1; di >= 0; di--) {
+            if (seenNames.has(allCampers[di].name)) allCampers.splice(di, 1);
+            else seenNames.add(allCampers[di].name);
+        }
+
+        if (!allCampers.length || !shiftVehicles.length) {
+            if (!allCampers.length) {
+                console.error('[Go v5] Shift "' + shiftLabel + '": 0 campers matched — skipping');
             }
+            if (!shiftVehicles.length) {
+                console.error('[Go v5] Shift "' + shiftLabel + '": 0 vehicles available — skipping');
+            }
+            allShiftResults.push({ shift, routes: [], camperCount: 0 });
+            continue;
+        }
 
-            if (noStopStaff.length) console.log('[Go] Staff for post-gen stop suggestions: ' + noStopStaff.length);
+        // ── Staff noStopStaff — collected exactly as v4 did ──
+        const noStopStaff = _collectNoStopStaff();
 
-            // Deduplicate campers by name — prevents double-stops if the roster has duplicate entries
-            (function() {
-                const seen = new Set();
-                const before = allCampers.length;
-                for (var di = allCampers.length - 1; di >= 0; di--) {
-                    if (seen.has(allCampers[di].name)) { allCampers.splice(di, 1); }
-                    else { seen.add(allCampers[di].name); }
-                }
-                if (allCampers.length < before) console.warn('[Go] Removed ' + (before - allCampers.length) + ' duplicate camper entries');
-            })();
+        // =====================================================================
+        // PRIMARY PATH: Road-graph neighborhoods → per-bus TSP
+        // =====================================================================
+        let routes = null;
+        let routeSource = null;
 
-            if (!allCampers.length || !shiftVehicles.length) {
-                if (!allCampers.length) console.error('[Go] Shift "' + (shift.label || shift.id) + '": 0 campers matched — skipping');
-                if (!shiftVehicles.length) console.error('[Go] Shift "' + (shift.label || shift.id) + '": 0 vehicles available — skipping');
+        if (!bypassNeighborhoodMode) {
+            try {
+                routes = await _tryNeighborhoodPipeline({
+                    shift, shiftLabel, pctBase,
+                    allCampers, shiftVehicles,
+                    campLat, campLng,
+                    reserveSeats, dropoffMode: mode,
+                    isArrival,
+                    googleAvailable, googleKey, googleProjId,
+                    _supabaseUrl, _googleProxyToken,
+                    serviceTimeSec: avgStopMin * 60
+                });
+                if (routes) routeSource = 'neighborhood';
+            } catch (e) {
+                console.error('[Go v5] Neighborhood pipeline threw:', e);
+                routes = null;
+            }
+        }
+
+        // =====================================================================
+        // FALLBACK PATH: Global corner-stops + Google Route Optimization
+        // Runs ONLY if the primary path returned null or errored.
+        // Loud: toast + console.error so operator knows to fix the root cause.
+        // =====================================================================
+        if (!routes) {
+            if (!googleAvailable) {
+                console.error('[Go v5] Both paths unavailable. Primary (neighborhoods) ' +
+                    'failed and fallback (Google Route Optimization) is not configured.');
+                toast('Route generation failed — see console. Configure Google API key ' +
+                      'or fix neighborhood preflight errors.', 'error');
                 allShiftResults.push({ shift, routes: [], camperCount: 0 });
                 continue;
             }
 
-            // ── Step 2: Create ALL stops globally (not per-zone) ──
-            // This includes "needs stop" staff who were injected as campers above
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': creating stops...', pctBase + 10);
-            const mode = document.getElementById('routeMode')?.value || 'door-to-door';
-            let allStops;
-            if (mode === 'optimized-stops') allStops = createOptimizedStops(allCampers);
-            else if (mode === 'corner-stops') allStops = await createCornerStops(allCampers);
-            else allStops = createHouseStops(allCampers);
+            console.error('[Go v5] FALLBACK: neighborhood pipeline failed, using ' +
+                'Google Route Optimization over global corner stops. Route quality ' +
+                'will be lower; investigate root cause.');
+            toast('Route quality warning: primary pipeline failed, using fallback. ' +
+                  'See console.', 'error');
 
-            // Deduplicate stops by lat/lng — catches same-address campers with slightly different coords
-            (function() {
-                const seen = new Set();
-                const before = allStops.length;
-                allStops = allStops.filter(function(s) {
-                    const key = Math.round(s.lat * 5000) + ',' + Math.round(s.lng * 5000);
-                    if (seen.has(key)) return false;
-                    seen.add(key); return true;
-                });
-                if (allStops.length < before) console.warn('[Go] Removed ' + (before - allStops.length) + ' duplicate stop(s)');
-            })();
-            console.log('[Go] Step 2: ' + allStops.length + ' stops from ' + allCampers.length + ' campers (mode: ' + mode + ')');
-
-            // ── Seed grandfather flags from prior-season camper history ──
-            if (window.GoStopMaster) {
-                try {
-                    const gf = await window.GoStopMaster.getGrandfatherMap();
-                    let seeded = 0;
-                    Object.keys(gf).forEach(function (name) {
-                        if (!D.addresses[name]) return;
-                        if (D.addresses[name]._grandfather === false) return; // user opt-out respected
-                        if (!D.addresses[name]._grandfather) { D.addresses[name]._grandfather = true; seeded++; }
-                    });
-                    if (seeded) console.log('[Go] Grandfather: seeded ' + seeded + ' campers from prior season');
-                } catch (e) { console.warn('[Go] Grandfather seed failed: ' + e.message); }
-            }
-
-            // ── Solver hints: grandfather priority + hard bus pins ──
-            // Reads per-camper overrides from D.addresses[name]:
-            //   ._forcedBusId  — hard pin onto a specific bus (skill in VROOM)
-            //   ._grandfather  — prior-year sticky (priority boost in VROOM)
-            // Stops inherit the strongest hint across their campers.
-            (function applySolverHints() {
-                const busIdxById = {};
-                shiftVehicles.forEach(function(v, i) { busIdxById[v.busId] = i; });
-                let pinned = 0, boosted = 0, conflicts = 0;
-                allStops.forEach(function(st) {
-                    if (st.isMonitor || st.isCounselor) return;
-                    let pin = null, anyGrandfather = false;
-                    (st.campers || []).forEach(function(c) {
-                        const a = D.addresses[c.name]; if (!a) return;
-                        if (a._forcedBusId && busIdxById[a._forcedBusId] != null) {
-                            if (pin == null) pin = busIdxById[a._forcedBusId];
-                            else if (pin !== busIdxById[a._forcedBusId]) conflicts++;
-                        }
-                        if (a._grandfather) anyGrandfather = true;
-                    });
-                    if (pin != null) { st._forcedBusIdx = pin; pinned++; }
-                    if (anyGrandfather) { st._priority = 80; boosted++; }
-                });
-                if (pinned || boosted || conflicts) {
-                    console.log('[Go] Solver hints: ' + pinned + ' pinned, ' + boosted +
-                        ' grandfathered' + (conflicts ? ', ' + conflicts + ' conflicting pins skipped' : ''));
-                }
-            })();
-
-            // ══════════════════════════════════════════════════════════════
-            // STEP 3: Build zones using driving-distance clustering
-            // STEP 4: VROOM per-zone TSP → 2-opt fallback
-            // STEP 5: Cross-route exchange (minimize max route time)
-            //
-            // Industry approach (Routefinder/BusPlanner style):
-            // 1. Cluster stops into compact geographic zones (K-medoids)
-            // 2. Optimize stop order within each zone (VROOM TSP)
-            // 3. Exchange stops between routes to balance time (ALNS relocate)
-            // ══════════════════════════════════════════════════════════════
-            const isArrival = D.activeMode === 'arrival';
-            const hasShifts = shifts.length > 1;
-            const isLastShift = si === shifts.length - 1;
-            const serviceTime = (D.setup.avgStopTime || 2) * 60;
-
-            // ══════════════════════════════════════════════════════════════
-            // STEP 3: Route = Nearest-neighbor tour → capacity split → assign
-            //
-            // Bus ASSIGNMENT: nearest-neighbor geographic ordering ensures stops
-            // in the same neighborhood stay on the same bus. Then splitTourAtGaps
-            // cuts the tour into K evenly-loaded segments.
-            //
-            // Road GEOMETRY: route lines use Geoapify _roadPts or straight-line fallback.
-            // ══════════════════════════════════════════════════════════════
-            let routes = [];
-            let usedExternalOptimizer = false;
-
-            // STEP 3: Route = Sort → Split → Assign
-            //
-            // Three clean steps, exactly as intended:
-            //
-            //   Step 1 (done above): Create stops from camper addresses.
-            //
-            //   Step 2 — CLUSTER: buildGreedyZones() assigns stops to buses.
-            //     Uses capacitated K-medoids clustering (Lloyd's algorithm +
-            //     compactness polish + time-balance minimax pass).
-            //     Each bus gets a geographically compact zone with roughly
-            //     equal ride time.  No NN tour needed — 2D clustering handles
-            //     directionality automatically.
-            //
-            //   Step 3 — ORDER: Per-bus Geoapify TSP reorders each zone's stops
-            //     optimally (road distance) and returns road-following geometry.
-            //     1 vehicle + ~15 stops per call — always under free-tier limits.
-            //
-            // ══════════════════════════════════════════════════════════════
-
-            // ── Step 3: K-medoids zone clustering + per-bus Geoapify TSP ──
-            //
-            // Strategy: CLUSTER FIRST (2D geography), then optimize ordering.
-            //
-            // Phase A — buildGreedyZones: capacitated K-medoids clustering.
-            //   Groups stops into K geographic zones, one per bus.
-            //   Iterates Lloyd's algorithm with compactness polish and a
-            //   time-balance minimax pass — every bus ends up with roughly
-            //   equal ride time AND geographically coherent stops.
-            //   No 1D path-cutting, no NN tour needed.
-            //
-            // Phase B — per-bus Geoapify TSP (Step 3d below): once each bus has
-            //   its stops, send them to Geoapify as a single-vehicle TSP to get
-            //   optimal within-bus stop ordering AND road-following geometry.
-            //   1 vehicle + ~15 stops = ~16 coords, always under free-tier limits.
-            //
-            const geoapifyKey  = D.setup.geoapifyKey?.trim();
-            const googleKey    = D.setup.googleMapsKey?.trim();
-            const googleProjId = D.setup.googleProjectId?.trim();
-
-            // ── Supabase session — used by the Google Route Optimization proxy ──
-            // The Route Optimization API requires OAuth2 (not browser API keys).
-            // The Supabase edge function at /functions/v1/optimize-routes handles
-            // the service-account OAuth dance server-side. We pass the user's
-            // Supabase access token so the edge function can verify the caller.
-            const _supabaseUrl = window.__CAMPISTRY_SUPABASE__?.url || '';
-            let _googleProxyToken = null;
-            if (_supabaseUrl && window.supabase?.auth?.getSession) {
-                try {
-                    const _sess = await window.supabase.auth.getSession();
-                    _googleProxyToken = _sess?.data?.session?.access_token || null;
-                } catch (_e) { /* non-fatal — fall back to direct API key */ }
-            }
-
-            // ── Optimizer selection diagnostics ───────────────────────────────
-            console.log('[Go] Routing strategy: ZIP-segmented Google Route Optimization PRIMARY,',
-                'ZIP-based K-medoids + per-bus TSP FALLBACK.',
-                'Google available:', !!(googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours),
-                '| Geoapify TSP:', (geoapifyKey ? '✓' : '✗'));
-
-            // ── Step 3 (NEW — feature-flagged): Neighborhood-mode routing ──
-            //
-            // When D.setup.useNeighborhoodMode is true, bypass ZIP/K-medoids entirely
-            // and use the road-graph-based Region → Neighborhood → Segment pipeline.
-            // Neighborhoods persist across runs so routes stay stable year-over-year.
-            //
-            // Enable via:   D.setup.useNeighborhoodMode = true; save();
-            // Requires:     campistry_go_neighborhoods.js + campistry_go_persistence.js
-            if (!usedExternalOptimizer
-                && D.setup.useNeighborhoodMode
-                && window.CampistryGoNeighborhoods?.buildNeighborhoods) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': detecting neighborhoods...', pctBase + 15);
-                try {
-                    const nhCampers = allCampers.map(function (c) {
-                        const a = D.addresses[c.name] || {};
-                        return { name: c.name, lat: c.lat, lng: c.lng, address: c.address, division: c.division, bunk: c.bunk, zip: a.zip || '' };
-                    });
-                    const sibMap = detectSiblings(allCampers);
-                    const siblingGroups = {};
-                    for (const [name, gid] of Object.entries(sibMap)) {
-                        (siblingGroups[gid] ||= []).push(name);
-                    }
-
-                    const nhResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({
-                        campers: nhCampers, options: { verbose: true, siblingGroups }
-                    });
-
-                    // Safety net: if neighborhood detection dropped too many campers,
-                    // fall through to the legacy pipeline rather than shipping a
-                    // partial roster.
-                    const unattachedPct = nhResult
-                        ? (nhResult.unattachedCampers?.length || 0) / Math.max(1, allCampers.length)
-                        : 1;
-                    if (unattachedPct > 0.05) {
-                        console.warn('[Go] Neighborhood mode: ' + (unattachedPct * 100).toFixed(1) +
-                            '% of campers unattached — exceeds 5% threshold, falling through');
-                    } else if (nhResult && nhResult.neighborhoods.length) {
-                        const priorAssignments = window.GoNhPersistence
-                            ? await window.GoNhPersistence.getPriorAssignments()
-                            : {};
-
-                        // Pass pre-reduced capacities so packIntoBuses doesn't
-                        // try to subtract monitor/counselor/reserve again.
-                        const reducedBuses = shiftVehicles.map(function (v) {
-                            return {
-                                id: v.busId, name: v.name,
-                                capacity: Math.max(0, (v.capacity || 0) - reserveSeats),
-                            };
-                        });
-
-                        const nhAssignment = window.CampistryGoNeighborhoods.packIntoBuses({
-                            result: nhResult, buses: reducedBuses, priorAssignments, siblingGroups,
-                            depot: { lat: campLat, lng: campLng },
-                            maxRideMin: D.setup.maxRideTime || 45,
-                            avgStopMin: D.setup.avgStopTime || 2,
-                        });
-                        const nhPhysical = window.CampistryGoNeighborhoods.expandToPhysicalStops({
-                            assignment: nhAssignment, result: nhResult, isArrival: isArrival,
-                            dropoffMode: mode
-                        });
-
-                        // Any camper that didn't snap to a segment gets appended to the nearest
-                        // bus as an extra door-drop, so no one is silently lost. (We've already
-                        // gated on the 5% threshold above — this handles the trailing few.)
-                        const attachedNames = new Set(nhResult.homes.map(function (h) { return h.camperName; }));
-                        const leftover = allCampers.filter(function (c) { return !attachedNames.has(c.name); });
-                        if (leftover.length) {
-                            console.warn('[Go] Neighborhood mode: ' + leftover.length + ' un-snapped — appending to nearest bus');
-                        }
-
-                        const nhNameById = {};
-                        for (const nh of nhResult.neighborhoods) nhNameById[nh.id] = nh.primaryName;
-                        const nhRoutes = nhPhysical.map(function (bus) {
-                            const vehicle = shiftVehicles.find(function (v) { return v.busId === bus.busId; }) || {};
-                            const names = bus.neighborhoodIds.map(function (id) {
-                                return nhNameById[id.replace(/_p\d+$/, '')] || id;
-                            });
-                            return {
-                                busId:         bus.busId,
-                                busName:       vehicle.name || bus.name || bus.busId,
-                                busColor:      vehicle.color || '#10b981',
-                                monitor:       vehicle.monitor    || null,
-                                counselors:    vehicle.counselors || [],
-                                stops:         bus.stops.map(function (s, i) {
-                                    return { stopNum: i + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
-                                }),
-                                camperCount:   bus.camperCount,
-                                _cap:          vehicle.capacity,
-                                totalDuration: 0,
-                                _neighborhoodIds:   bus.neighborhoodIds,
-                                _neighborhoodNames: [...new Set(names)],
-                                _segmentOrder:      bus.segmentOrder,
-                                _source:       'neighborhood-mode'
-                            };
-                        });
-
-                        if (nhRoutes.length) {
-                            // Build the set of names already placed on a bus BEFORE we
-                            // append leftovers, so a name that somehow showed up twice
-                            // in the expanded stops won't get re-appended on top.
-                            const placedNames = new Set();
-                            for (const r of nhRoutes) {
-                                for (const st of r.stops) {
-                                    for (const cc of (st.campers || [])) {
-                                        const n = typeof cc === 'string' ? cc : cc.name;
-                                        if (n) placedNames.add(n);
-                                    }
-                                }
-                            }
-
-                            // Append un-snapped campers to their nearest bus (by straight-line
-                            // distance from their home to any existing stop on that bus).
-                            for (const lc of leftover) {
-                                if (placedNames.has(lc.name)) continue;
-                                let bestBus = null, bestDist = Infinity;
-                                for (const r of nhRoutes) {
-                                    if ((r._cap || 0) && r.camperCount >= r._cap) continue;
-                                    for (const s of r.stops) {
-                                        const dLat = s.lat - lc.lat, dLng = s.lng - lc.lng;
-                                        const d = dLat * dLat + dLng * dLng;
-                                        if (d < bestDist) { bestDist = d; bestBus = r; }
-                                    }
-                                }
-                                if (!bestBus) bestBus = nhRoutes.reduce(function (a, b) { return a.camperCount <= b.camperCount ? a : b; });
-                                bestBus.stops.push({
-                                    stopNum:  bestBus.stops.length + 1,
-                                    campers:  [{ name: lc.name, division: lc.division, bunk: lc.bunk }],
-                                    address:  lc.address || '',
-                                    lat:      lc.lat,
-                                    lng:      lc.lng
-                                });
-                                bestBus.camperCount += 1;
-                                placedNames.add(lc.name);
-                            }
-
-                            // Defensive: strip any camper appearing on more than one bus.
-                            // Keep first occurrence; remove subsequent; drop emptied stops.
-                            (function dedupAcrossBuses() {
-                                const seen = new Set();
-                                let removed = 0;
-                                for (const r of nhRoutes) {
-                                    for (const st of r.stops) {
-                                        const keep = [];
-                                        for (const cc of (st.campers || [])) {
-                                            const n = typeof cc === 'string' ? cc : cc.name;
-                                            if (!n || seen.has(n)) { removed++; continue; }
-                                            seen.add(n);
-                                            keep.push(cc);
-                                        }
-                                        st.campers = keep;
-                                    }
-                                    r.stops = r.stops.filter(function (s) { return s.campers.length > 0; });
-                                    r.stops.forEach(function (s, i) { s.stopNum = i + 1; });
-                                    r.camperCount = r.stops.reduce(function (sum, s) { return sum + s.campers.length; }, 0);
-                                }
-                                if (removed) console.warn('[Go] Neighborhood mode: removed ' + removed + ' duplicate camper(s) across buses');
-                            })();
-
-                            routes = nhRoutes;
-                            usedExternalOptimizer = true;
-
-                            // Record this run's assignments for next time and log the diff
-                            if (window.GoNhPersistence) {
-                                try {
-                                    const prevPayload = await window.GoNhPersistence.load();
-                                    await window.GoNhPersistence.recordAssignment(nhAssignment, nhResult);
-                                    const curPayload  = await window.GoNhPersistence.load();
-                                    const changes = window.GoNhPersistence.diff(prevPayload, curPayload);
-                                    if (changes.length) {
-                                        console.log('[Go] Neighborhood mode — year-over-year changes:');
-                                        for (const ch of changes) {
-                                            console.log('  ' + ch.primaryName + ' (' + ch.nhId + '): ' +
-                                                (ch.fromBus || '∅') + ' → ' + (ch.toBus || '∅') + ' (' + ch.reason + ')');
-                                        }
-                                    } else {
-                                        console.log('[Go] Neighborhood mode — no route changes from last run');
-                                    }
-                                } catch (e) {
-                                    console.warn('[Go] Neighborhood persistence failed:', e.message);
-                                }
-                            }
-
-                            toast('✓ Routes generated via Neighborhood mode — ' + nhRoutes.length + ' buses');
-                            console.log('[Go] Neighborhood-mode complete: ' + nhRoutes.length + ' routes, ' +
-                                nhRoutes.reduce(function (s, r) { return s + r.stops.length; }, 0) + ' stops, ' +
-                                nhResult.neighborhoods.length + ' neighborhoods');
-                        }
-                    } else {
-                        console.warn('[Go] Neighborhood mode produced 0 neighborhoods — falling through to ZIP pipeline');
-                    }
-                } catch (e) {
-                    console.warn('[Go] Neighborhood mode failed (' + e.message + ') — falling through');
-                }
-            }
-
-            // ── Step 3 (PRIMARY): ZIP-segmented Google Route Optimization ──
-            //
-            // Groups stops by ZIP code, allocates buses proportionally
-            // (ceil(zipKids / busCapacity)), then sends each ZIP as an independent
-            // Google Route Optimization request.  Google handles capacity enforcement
-            // and globally-optimal stop ordering within each ZIP.
-            //
-            // Buses never cross ZIP boundaries → no cross-zone routing.
-            if (!usedExternalOptimizer && googleKey && googleProjId && window.GoGoogleOptimizer?.optimizeTours) {
-                const googleZipRoutes = await buildRoutesByZipGoogle(
-                    allStops, shiftVehicles, campLat, campLng, reserveSeats, {
-                        googleKey:      googleKey,
-                        googleProjId:   googleProjId,
-                        isArrival:      isArrival,
-                        serviceTime:    serviceTime,
-                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
-                        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
-                        supabaseUrl:    _supabaseUrl,
-                        accessToken:    _googleProxyToken,
-                        anonKey:        window.__CAMPISTRY_SUPABASE__?.anonKey || '',
-                        shiftLabel:     shift.label || ('Shift ' + (si + 1)),
-                        pctBase:        pctBase
-                    }
-                );
-                if (googleZipRoutes && googleZipRoutes.length) {
-                    routes = googleZipRoutes;
-                    usedExternalOptimizer = true;
-                    routes.forEach(function(r) {
-                        if (r._roadPts && r._roadPts.length) _routeGeomCache[r.busId + '_' + si] = r._roadPts;
-                    });
-                    console.log('[Go] ZIP+Google complete: ' + routes.length + ' routes, ' +
-                        routes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
-                    toast('✓ Routes generated via ZIP-segmented Google Route Optimization — ' + routes.length + ' buses');
-                }
-            }
-
-            // ── Step 3 (FALLBACK): ZIP-based K-medoids + per-bus Geoapify TSP ──
-            //
-            // Runs when Google is not configured or all ZIP requests failed.
-            // Groups stops geographically, then orders each bus's stops with Geoapify.
-            if (!usedExternalOptimizer) {
-                console.log('[Go] Falling back to ZIP-based K-medoids + per-bus TSP');
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': clustering stops into bus zones...', pctBase + 25);
-
-                const zones = await buildZipBasedZones(allStops, shiftBuses, campLat, campLng, reserveSeats, geoapifyKey)
-                           || buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
-                const clusterMethod = zones[0]?.zip ? 'ZIP-based' : 'K-medoids';
-                console.log('[Go] ' + clusterMethod + ': ' + zones.length + ' geographic zones from ' + allStops.length + ' stops');
-                (function logZones() {
-                    var times = zones.map(function(z) {
-                        var stops = z.stopIndices.map(function(idx) { return allStops[idx]; });
-                        if (!stops.length) return 0;
-                        var t = drivingDist(campLat, campLng, stops[0].lat, stops[0].lng) + serviceTime;
-                        for (var i = 1; i < stops.length; i++) {
-                            t += drivingDist(stops[i-1].lat, stops[i-1].lng, stops[i].lat, stops[i].lng) + serviceTime;
-                        }
-                        return t;
-                    });
-                    var maxT = Math.max.apply(null, times);
-                    var minT = Math.min.apply(null, times.filter(function(t) { return t > 0; }));
-                    zones.forEach(function(z, i) {
-                        console.log('[Go]   Zone ' + (i+1) + ' (' + (z.busName || z.busId) + '): ' +
-                            z.stopIndices.length + ' stops, ' + z.camperCount + ' kids, ~' + (times[i]/60).toFixed(0) + 'min');
-                        if (z.camperCount > z.capacity) {
-                            console.warn('[Go]   ⚠ Zone ' + (z.busName || z.busId) + ': ' + z.camperCount + ' kids > capacity ' + z.capacity);
-                        }
-                    });
-                    if (times.length > 1) {
-                        console.log('[Go] Balance: max=' + (maxT/60).toFixed(0) + 'min, min=' + (minT/60).toFixed(0) + 'min, spread=' + ((maxT-minT)/60).toFixed(0) + 'min');
-                    }
-                })();
-
-                const builtRoutes = [];
-                zones.forEach(function(zone) {
-                    const vehicle = shiftVehicles.find(function(v) { return v.busId === zone.busId; });
-                    if (!vehicle || !zone.stopIndices.length) return;
-                    builtRoutes.push({
-                        busId:         zone.busId,
-                        busName:       zone.busName,
-                        busColor:      zone.busColor || '#10b981',
-                        monitor:       vehicle.monitor    || null,
-                        counselors:    vehicle.counselors || [],
-                        stops:         zone.stopIndices.map(function(idx, i) {
-                            var s = allStops[idx];
-                            return { stopNum: i + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
-                        }),
-                        camperCount:   zone.camperCount,
-                        _cap:          zone.capacity,
-                        totalDuration: 0,
-                        _source:       'k-medoids-zones'
-                    });
-                });
-
-                if (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus && builtRoutes.length) {
-                    showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing stop order per bus...', pctBase + 40);
-                    let geoTspSucc = 0;
-                    for (const route of builtRoutes) {
-                        if (!route.stops || route.stops.length < 2) continue;
-                        try {
-                            const tspResult = await window.GoGeoapifyOptimizer.optimizeSingleBus({
-                                stops:          route.stops.map(function(s) {
-                                    return { lat: s.lat, lng: s.lng, address: s.address, campers: s.campers };
-                                }),
-                                vehicle:        shiftVehicles.find(function(v) { return v.busId === route.busId; })
-                                                || { capacity: route._cap || 44 },
-                                campLat:        campLat,
-                                campLng:        campLng,
-                                isArrival:      isArrival,
-                                serviceTimeSec: serviceTime,
-                                apiKey:         geoapifyKey
-                            });
-                            if (tspResult?.orderedStops?.length) {
-                                const origCount = route.stops.length;
-                                const tspCount  = tspResult.orderedStops.length;
-                                if (tspCount < origCount) {
-                                    console.warn('[Go] TSP for ' + route.busId + ' returned ' + tspCount +
-                                        '/' + origCount + ' stops — keeping original order to preserve all campers');
-                                    if (tspResult.roadPts?.length) {
-                                        _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
-                                        route._roadPts = tspResult.roadPts;
-                                    }
-                                    route._source = 'distance-sort-split';
-                                } else {
-                                    route.stops = tspResult.orderedStops.map(function(s, idx) {
-                                        return { stopNum: idx + 1, campers: s.campers, address: s.address, lat: s.lat, lng: s.lng };
-                                    });
-                                    route.camperCount = route.stops.reduce(function(s, st) { return s + st.campers.length; }, 0);
-                                    if (tspResult.roadPts?.length) {
-                                        _routeGeomCache[route.busId + '_' + si] = tspResult.roadPts;
-                                        route._roadPts = tspResult.roadPts;
-                                    }
-                                    if (tspResult.legTimes?.length) route._tspLegTimes = tspResult.legTimes;
-                                    route._source = 'geoapify-tsp';
-                                    geoTspSucc++;
-                                }
-                            }
-                        } catch (e) {
-                            console.warn('[Go] Per-bus TSP failed for ' + route.busId + ':', e.message);
-                        }
-                    }
-                    if (geoTspSucc > 0) {
-                        console.log('[Go] Per-bus TSP: ' + geoTspSucc + '/' + builtRoutes.length + ' buses optimized via Geoapify');
-                    }
-                }
-
-                if (builtRoutes.length) {
-                    routes = builtRoutes;
-                    usedExternalOptimizer = true;
-                    const tspLabel = (geoapifyKey && window.GoGeoapifyOptimizer?.optimizeSingleBus)
-                        ? ', stop order optimized per bus' : ', geographically clustered routes';
-                    toast('✓ Routes generated — ' + builtRoutes.length + ' buses' + tspLabel);
-                    console.log('[Go] Routing complete: ' + builtRoutes.length + ' routes, ' +
-                        builtRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
-                }
-            }
-
-            // ORS Vroom fallback
-            if (!usedExternalOptimizer && window.GoOrsOptimizer?.optimizeTours && (D.setup.orsKey || window.__CAMPISTRY_ORS_KEY__)) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing all buses via ORS Vroom...', pctBase + 60);
-                try {
-                    const orsRoutes = await window.GoOrsOptimizer.optimizeTours({
-                        stops:          allStops,
-                        vehicles:       shiftVehicles,
-                        campLat:        campLat,
-                        campLng:        campLng,
-                        isArrival:      isArrival,
-                        serviceTimeSec: serviceTime,
-                        departureTime:  shift.departureTime || (isArrival ? '07:30' : '16:00'),
-                        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
-                        apiKey:         D.setup.orsKey || window.__CAMPISTRY_ORS_KEY__
-                    });
-                    if (orsRoutes && orsRoutes.length > 0) {
-                        routes = orsRoutes;
-                        usedExternalOptimizer = true;
-                        console.log('[Go] ORS Vroom (fallback): ' + orsRoutes.length + ' routes, ' +
-                            orsRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops');
-                        toast('✓ Routes generated via ORS Vroom — ' + orsRoutes.length + ' buses');
-                    }
-                } catch (e) {
-                    console.warn('[Go] ORS Vroom failed (' + e.message + ') — falling through');
-                }
-            }
-
-            // Geoapify multi-bus fallback
-            if (!usedExternalOptimizer && geoapifyKey && window.GoGeoapifyOptimizer?.optimizeTours) {
-                showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing all buses via Geoapify...', pctBase + 65);
-                try {
-                    const geoRoutes = await window.GoGeoapifyOptimizer.optimizeTours({
-                        stops:          allStops,
-                        vehicles:       shiftVehicles,
-                        campLat:        campLat,
-                        campLng:        campLng,
-                        isArrival:      isArrival,
-                        serviceTimeSec: serviceTime,
-                        apiKey:         geoapifyKey
-                    });
-                    if (geoRoutes && geoRoutes.length > 0) {
-                        routes = geoRoutes;
-                        usedExternalOptimizer = true;
-                        let gGeomCached2 = 0;
-                        geoRoutes.forEach(function(r) {
-                            if (r._roadPts && r._roadPts.length) {
-                                _routeGeomCache[r.busId + '_' + si] = r._roadPts;
-                                gGeomCached2++;
-                            }
-                        });
-                        console.log('[Go] Geoapify multi-vehicle (fallback): ' + geoRoutes.length + ' routes, ' +
-                            geoRoutes.reduce(function(s, r) { return s + r.stops.length; }, 0) + ' stops' +
-                            (gGeomCached2 ? ', ' + gGeomCached2 + ' with road geometry' : ''));
-                        toast('✓ Routes generated via Geoapify — ' + geoRoutes.length + ' buses');
-                    }
-                } catch (e) {
-                    console.warn('[Go] Geoapify multi-vehicle failed (' + e.message + ') — falling through');
-                }
-            }
-
-
-            console.log('[Go] All routes complete: ' + routes.length + ' bus routes');
-
-            // ── Sibling repair pass (Transfinder-parity) ──
-            // After the solver places campers, any sibling group split across
-            // multiple buses is reconsidered: minority-bus siblings are moved
-            // to the majority bus when (a) the majority bus has capacity, and
-            // (b) the minority camper's home is within maxWalkMi of the
-            // majority sibling's stop. Otherwise the split is left alone
-            // (geography trumps togetherness — matches observed Transfinder splits).
-            if (routes.length > 1) {
-                try {
-                    const sibMapRepair = detectSiblings(allCampers);
-                    const maxWalkMi = Math.max(0.05, (D.setup.maxWalkDistance || 0.2));
-                    // Build: camperName → {route, stop, routeIdx, stopIdx}
-                    const camperLoc = {};
-                    routes.forEach((r, ri) => {
-                        r.stops.forEach((st, si2) => {
-                            if (st.isMonitor || st.isCounselor) return;
-                            (st.campers || []).forEach(c => { camperLoc[c.name] = { r, st, ri, si2 }; });
-                        });
-                    });
-                    // Bucket siblings per family by bus
-                    const byFamily = {};
-                    Object.keys(sibMapRepair).forEach(name => {
-                        const gid = sibMapRepair[name];
-                        const loc = camperLoc[name]; if (!loc) return;
-                        (byFamily[gid] = byFamily[gid] || []).push({ name, loc });
-                    });
-                    let moves = 0, splitsLeft = 0;
-                    Object.values(byFamily).forEach(members => {
-                        if (members.length < 2) return;
-                        const byBus = {};
-                        members.forEach(m => { (byBus[m.loc.ri] = byBus[m.loc.ri] || []).push(m); });
-                        const busIds = Object.keys(byBus);
-                        if (busIds.length < 2) return; // already together
-                        // Majority bus = bus with most siblings
-                        busIds.sort((a, b) => byBus[b].length - byBus[a].length);
-                        const majRi = +busIds[0];
-                        const majRoute = routes[majRi];
-                        const majStops = byBus[majRi].map(m => m.loc.st);
-                        // Capacity headroom
-                        const cap = majRoute.capacity || 44;
-                        const currentLoad = majRoute.stops.reduce((s, st) => s + ((st.campers || []).filter(c => !c.isMonitor && !c.isCounselor).length), 0);
-                        let headroom = cap - currentLoad;
-                        // Try to move each minority sibling
-                        for (let b = 1; b < busIds.length; b++) {
-                            const minRi = +busIds[b];
-                            byBus[minRi].forEach(m => {
-                                if (headroom <= 0) { splitsLeft++; return; }
-                                // Find nearest majority sibling stop to this camper's home
-                                const hLat = m.loc.st.lat, hLng = m.loc.st.lng;
-                                let target = null, bestD = Infinity;
-                                majStops.forEach(ms => {
-                                    const d = haversineMi(hLat, hLng, ms.lat, ms.lng);
-                                    if (d < bestD) { bestD = d; target = ms; }
-                                });
-                                if (!target || bestD > maxWalkMi) { splitsLeft++; return; }
-                                // Move camper: remove from current stop, append to target stop
-                                const srcStop = m.loc.st;
-                                const camperObj = (srcStop.campers || []).find(c => c.name === m.name);
-                                if (!camperObj) { splitsLeft++; return; }
-                                srcStop.campers = srcStop.campers.filter(c => c.name !== m.name);
-                                target.campers = target.campers || [];
-                                target.campers.push(camperObj);
-                                headroom--;
-                                moves++;
-                            });
-                        }
-                        // Drop any now-empty stops (non-staff)
-                        routes.forEach(r => {
-                            r.stops = r.stops.filter(st => (st.isMonitor || st.isCounselor) || (st.campers && st.campers.length));
-                        });
-                    });
-                    if (moves || splitsLeft) {
-                        console.log('[Go] Sibling repair: ' + moves + ' kids moved together, ' + splitsLeft + ' splits kept (geography)');
-                    }
-                } catch (e) {
-                    console.warn('[Go] Sibling repair failed: ' + e.message);
-                }
-            }
-
-            // ── Staff suggestions: find closest stop for "no stop" staff ──
-            // For each staff member without a dedicated stop, find the closest
-            // existing stop on their assigned bus (or any bus if unassigned).
-            // Store suggestion on the staff object for display in the Staff tab.
-            if (noStopStaff.length) {
-                console.log('[Go] Suggesting stops for ' + noStopStaff.length + ' staff...');
-                noStopStaff.forEach(staff => {
-                    let bestRoute = null, bestStop = null, bestDist = Infinity;
-
-                    const candidateRoutes = staff.busId
-                        ? routes.filter(r => r.busId === staff.busId)
-                        : routes;
-
-                    // If assigned bus has no routes or no stops, search all buses
-                    const searchRoutes = candidateRoutes.some(r => r.stops.length > 0) ? candidateRoutes : routes;
-
-                    for (const r of searchRoutes) {
-                        for (const st of r.stops) {
-                            if (!st.lat || !st.lng) continue;
-                            const d = drivingDist(staff.lat, staff.lng, st.lat, st.lng);
-                            if (d < bestDist) { bestDist = d; bestStop = st; bestRoute = r; }
-                        }
-                    }
-
-                    if (bestRoute && bestStop) {
-                        const walkFt = Math.round(manhattanMi(staff.lat, staff.lng, bestStop.lat, bestStop.lng) * 5280);
-                        staff._suggestedBus = bestRoute.busName;
-                        staff._suggestedBusId = bestRoute.busId;
-                        staff._suggestedStop = bestStop.address;
-                        staff._suggestedStopNum = bestStop.stopNum;
-                        staff._walkFt = walkFt;
-
-                        // Update the actual staff object so the UI can show it
-                        const staffObj = staff.role === 'monitor'
-                            ? D.monitors.find(m => m.id === staff.id)
-                            : D.counselors.find(c => c.id === staff.id);
-                        if (staffObj) {
-                            staffObj._suggestedBus = bestRoute.busName;
-                            staffObj._suggestedBusId = bestRoute.busId;
-                            staffObj._suggestedStop = bestStop.address;
-                            staffObj._suggestedStopNum = bestStop.stopNum;
-                            staffObj._walkFt = walkFt;
-                        }
-
-                        console.log('[Go]   ' + staff.role + ' ' + staff.name + ' → ' + bestRoute.busName + ', Stop ' + bestStop.stopNum + ' (' + bestStop.address + ') — ' + walkFt + 'ft walk');
-                    }
-                });
-            }
-
-            // Calculate ETAs
-            const shiftNeedsReturn = hasShifts && !isLastShift;
-            const timeMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
-
-            const trafficCache = {}; // ETAs from haversine — no traffic API
-
-            for (const r of routes) {
-                if (!r.stops.length) continue;
-                const mx = r._osrmMatrix;
-                // Prefer Geoapify TSP per-leg road times → haversine fallback via trafficCache
-                const tLegs = r._tspLegTimes || trafficCache[r.busId] || null;
-
-                // Traffic-aware drive time: uses Mapbox traffic legs when available
-                // Leg indexing: leg[0] = camp→stop1 (dismissal) or stop1→stop2 (arrival)
-                // For dismissal: leg[i] = stop[i-1] → stop[i], leg[0] = camp → stop[0]
-                // For arrival: leg[i] = stop[i] → stop[i+1], last leg = lastStop → camp
-                function driveMin(stopA, stopB) {
-                    if (mx && stopA._matrixIdx != null && stopB._matrixIdx != null) {
-                        const val = mx[stopA._matrixIdx]?.[stopB._matrixIdx];
-                        if (val != null && val >= 0) return val / 60;
-                    }
-                    if (stopA.lat && stopB.lat) return drivingDist(stopA.lat, stopA.lng, stopB.lat, stopB.lng) / 60;
-                    return 3;
-                }
-                function campToStop(stop) {
-                    if (mx && stop._matrixIdx != null) {
-                        const val = mx[0]?.[stop._matrixIdx];
-                        if (val != null && val >= 0) return val / 60;
-                    }
-                    if (stop.lat && _campCoordsCache) return drivingDist(_campCoordsCache.lat, _campCoordsCache.lng, stop.lat, stop.lng) / 60;
-                    return 15;
-                }
-                function stopToCamp(stop) {
-                    if (mx && stop._matrixIdx != null) {
-                        const val = mx[stop._matrixIdx]?.[0];
-                        if (val != null && val >= 0) return val / 60;
-                    }
-                    if (stop.lat && _campCoordsCache) return drivingDist(stop.lat, stop.lng, _campCoordsCache.lat, _campCoordsCache.lng) / 60;
-                    return 15;
-                }
-
-                // Use traffic legs when available, override static calculations
-                function trafficLegMin(legIdx) {
-                    if (tLegs && tLegs[legIdx] != null) return tLegs[legIdx] / 60; // seconds → minutes
-                    return null;
-                }
-
-                if (isArrival) {
-                    let totalDur = 0;
-                    for (let i = 0; i < r.stops.length; i++) {
-                        const tLeg = trafficLegMin(i);
-                        if (i === 0) totalDur += (tLeg != null ? tLeg : campToStop(r.stops[0]));
-                        else totalDur += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                        totalDur += avgStopMin;
-                    }
-                    const returnLeg = trafficLegMin(r.stops.length);
-                    totalDur += (returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
-                    let cum = timeMin - totalDur;
-                    for (let i = 0; i < r.stops.length; i++) {
-                        const tLeg = trafficLegMin(i);
-                        if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
-                        else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                        cum += avgStopMin;
-                        r.stops[i].estimatedTime = formatTime(cum);
-                        r.stops[i].estimatedMin = cum;
-                    }
-                    r.totalDuration = Math.round(totalDur);
-                } else {
-                    let cum = timeMin;
-                    for (let i = 0; i < r.stops.length; i++) {
-                        // Dismissal: leg[0] = camp→stop[0], leg[i] = stop[i-1]→stop[i]
-                        const tLeg = trafficLegMin(i);
-                        if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
-                        else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                        cum += avgStopMin;
-                        r.stops[i].estimatedTime = formatTime(cum);
-                        r.stops[i].estimatedMin = cum;
-                    }
-                    r.totalDuration = Math.round(cum - timeMin);
-                    if (shiftNeedsReturn && r.stops.length > 0) {
-                        const returnLeg = trafficLegMin(r.stops.length);
-                        r.returnTocamp = Math.round(returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
-                        r.totalDuration += r.returnTocamp;
-                    }
-                }
-                r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
-
-                // ── Max ride time audit ──
-                // No child should ride longer than maxRideTime minutes.
-                // For dismissal: child at stop N rides from camp departure to stop N ETA.
-                // For arrival: child at stop N rides from stop N pickup to camp arrival.
-                const maxRideMin = D.setup.maxRideTime || 45;
-                if (r.stops.length > 0 && r.totalDuration > 0) {
-                    r.stops.forEach(st => {
-                        if (!st.estimatedMin) return;
-                        let rideMin;
-                        if (isArrival) {
-                            // Arrival: kid boards at this stop, rides until camp arrival
-                            const campArrivalMin = timeMin; // camp arrival = departure time for arrival mode
-                            rideMin = campArrivalMin - st.estimatedMin;
-                        } else {
-                            // Dismissal: kid boards at camp, rides until this stop
-                            rideMin = st.estimatedMin - timeMin;
-                        }
-                        st._rideTimeMin = Math.round(Math.abs(rideMin));
-                        if (st._rideTimeMin > maxRideMin) {
-                            st._rideTimeWarning = true;
-                            st.campers.forEach(c => {
-                                console.warn('[Go] Ride time: ' + c.name + ' on ' + r.busName + ' stop ' + st.stopNum + ' = ' + st._rideTimeMin + 'min (max ' + maxRideMin + ')');
-                            });
-                        }
-                    });
-                    // Count violations
-                    const violations = r.stops.filter(s => s._rideTimeWarning).length;
-                    if (violations > 0) {
-                        r._rideTimeViolations = violations;
-                        console.warn('[Go] ' + r.busName + ': ' + violations + ' stop(s) exceed ' + maxRideMin + 'min max ride time');
-                    }
-                }
-
-                r.stops.forEach(s => { delete s._matrixIdx; });
-                delete r._osrmMatrix;
-            }
-
-            allShiftResults.push({ shift, routes, camperCount: routes.reduce((s, r) => s + r.camperCount, 0) });
-        }
-
-        _generatedRoutes = allShiftResults;
-        _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
-
-        // Re-populate cache with road geometry from solvers. Must happen AFTER the
-        // cache reset so geometry stored during the per-shift loop is not lost.
-        //
-        // Priority:
-        //   1. _roadPts already decoded (Geoapify TSP or Google — stored during loop)
-        //   2. _encodedPolyline fallback — decode it now if _roadPts was somehow missed
-        let geomCached = 0;
-        allShiftResults.forEach(function(sr, si) {
-            sr.routes.forEach(function(r) {
-                if (_routeGeomCache[r.busId + '_' + si]) {
-                    // Already cached during the routing loop (Google or Geoapify)
-                    geomCached++;
-                    return;
-                }
-                if (r._roadPts && r._roadPts.length) {
-                    _routeGeomCache[r.busId + '_' + si] = r._roadPts;
-                    geomCached++;
-                } else if (r._encodedPolyline) {
-                    // Fallback: decode Google encoded polyline if _roadPts wasn't set
-                    try {
-                        var decoded = decodePolyline(r._encodedPolyline);
-                        if (decoded && decoded.length) {
-                            _routeGeomCache[r.busId + '_' + si] = decoded;
-                            r._roadPts = decoded;
-                            geomCached++;
-                        }
-                    } catch(e) { /* ignore decode errors */ }
-                }
-            });
-        });
-        if (geomCached > 0) {
-            console.log('[Go] Road geometry cached: ' + geomCached + ' routes (map lines will draw instantly)');
-        } else {
-            console.log('[Go] No solver road geometry — map lines will be fetched on render');
-        }
-
-        D.savedRoutes = allShiftResults;
-        save();
-
-        // ── Stop Master + camper-stop history (for grandfathering next season) ──
-        if (window.GoStopMaster) {
             try {
-                const flatStops = [];
-                const flatRoutes = [];
-                allShiftResults.forEach(sr => {
-                    sr.routes.forEach(r => {
-                        flatRoutes.push(r);
-                        (r.stops || []).forEach(st => {
-                            if (!st.isMonitor && !st.isCounselor) flatStops.push(st);
-                        });
-                    });
+                routes = await _fallbackGoogleGlobal({
+                    shift, shiftLabel, pctBase,
+                    allCampers, shiftVehicles,
+                    campLat, campLng,
+                    reserveSeats,
+                    isArrival,
+                    googleKey, googleProjId,
+                    _supabaseUrl, _googleProxyToken,
+                    serviceTimeSec: avgStopMin * 60
                 });
-                const seasonLabel = (D.setup.seasonLabel || new Date().getFullYear().toString());
-                window.GoStopMaster.upsertStops(flatStops);
-                window.GoStopMaster.recordSeason(seasonLabel, flatRoutes);
-            } catch (e) { console.warn('[Go] Stop Master persist failed: ' + e.message); }
+                if (routes) routeSource = 'google-fallback';
+            } catch (e) {
+                console.error('[Go v5] Fallback pipeline threw:', e);
+                routes = null;
+            }
         }
 
-        const elapsed = Math.round((Date.now() - _routeProgStart) / 1000);
-        const elapsedStr = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm ' + (elapsed % 60) + 's';
-        const totalCampers = allShiftResults.reduce((s, sr) => s + sr.camperCount, 0);
-        const totalBuses = allShiftResults.reduce((s, sr) => s + sr.routes.length, 0);
-        showProgressDone('Routes Complete', totalBuses + ' buses, ' + totalCampers + ' campers — finished in ' + elapsedStr);
-        setTimeout(() => { hideProgress(); renderRouteResults(allShiftResults); renderStaff(); }, 3000);
+        if (!routes) {
+            console.error('[Go v5] Shift "' + shiftLabel + '": all routing paths failed');
+            toast('Failed to generate routes for ' + shiftLabel, 'error');
+            allShiftResults.push({ shift, routes: [], camperCount: 0 });
+            continue;
+        }
+
+        // =====================================================================
+        // COMMON POST-PROCESSING (runs regardless of which path produced routes)
+        // =====================================================================
+        // - stopNum numbering
+        // - ETA / estimatedTime pipeline
+        // - max-ride-time audit
+        // - staff nearest-stop suggestions
+        // =====================================================================
+        _applyETAsAndAudits(routes, {
+            shift, isArrival, campLat, campLng,
+            avgStopMin,
+            shiftNeedsReturn: si === shifts.length - 1 && !isArrival
+        });
+
+        // Staff suggestions (unchanged from v4) — mutate D.monitors / D.counselors
+        _suggestStaffStops(routes, noStopStaff, campLat, campLng);
+
+        routes.forEach(r => { r._source = r._source || routeSource; });
+
+        allShiftResults.push({
+            shift,
+            routes,
+            camperCount: routes.reduce((s, r) => s + r.camperCount, 0)
+        });
     }
+
+    // -------------------------------------------------------------------------
+    // FINALIZE
+    // -------------------------------------------------------------------------
+    _generatedRoutes = allShiftResults;
+    _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
+
+    // Cache road geometry (unchanged from v4)
+    let geomCached = 0;
+    allShiftResults.forEach((sr, si) => {
+        sr.routes.forEach(r => {
+            if (_routeGeomCache[r.busId + '_' + si]) { geomCached++; return; }
+            if (r._roadPts?.length) {
+                _routeGeomCache[r.busId + '_' + si] = r._roadPts;
+                geomCached++;
+            } else if (r._encodedPolyline) {
+                try {
+                    const decoded = decodePolyline(r._encodedPolyline);
+                    if (decoded?.length) {
+                        _routeGeomCache[r.busId + '_' + si] = decoded;
+                        r._roadPts = decoded;
+                        geomCached++;
+                    }
+                } catch (_) { /* ignore */ }
+            }
+        });
+    });
+    if (geomCached) console.log('[Go v5] Road geometry cached: ' + geomCached + ' routes');
+
+    D.savedRoutes = allShiftResults;
+    save();
+
+    const elapsed = Math.round((Date.now() - _routeProgStart) / 1000);
+    const elapsedStr = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm ' + (elapsed % 60) + 's';
+    const totalRoutes = allShiftResults.reduce((s, sr) => s + sr.routes.length, 0);
+    const totalCampers = allShiftResults.reduce((s, sr) => s + sr.camperCount, 0);
+
+    showProgressDone('Routes generated',
+        totalRoutes + ' route(s), ' + totalCampers + ' camper(s) in ' + elapsedStr);
+    renderRouteResults(allShiftResults);
+    renderStaff();
+    setTimeout(hideProgress, 2000);
+}
+
+
+// =============================================================================
+// PRIMARY PATH: Road-graph neighborhoods
+// =============================================================================
+//
+// Returns an array of route objects, or null if the pipeline cannot produce
+// valid routes (triggers the fallback in the caller).
+//
+// Route flow:
+//   1. Build neighborhoods from OSM road graph (persisted across runs)
+//   2. If >5% of campers can't snap to any segment: return null → fallback
+//   3. packIntoBuses: assigns each neighborhood to a bus (geographic locality
+//      + capacity + sibling coherence + prior-year stability)
+//   4. expandToPhysicalStops: for each bus, generate its stops from its own
+//      zone's campers only (door-to-door or corner, per user setting)
+//   5. For each bus: run a per-bus TSP (Google Route Optimization on one
+//      vehicle) to optimally sequence its stops.  This gets globally-optimal
+//      ordering WITHIN each bus without allowing the solver to move campers
+//      BETWEEN buses (which would undo the zone partitioning).
+//   6. Cross-bus camper deduplication safety net (defensive — should never
+//      trigger after zones are drawn correctly).
+//   7. Record year-over-year assignment state.
+// =============================================================================
+async function _tryNeighborhoodPipeline({
+    shift, shiftLabel, pctBase,
+    allCampers, shiftVehicles,
+    campLat, campLng,
+    reserveSeats, dropoffMode,
+    isArrival,
+    googleAvailable, googleKey, googleProjId,
+    _supabaseUrl, _googleProxyToken,
+    serviceTimeSec
+}) {
+    showProgress(shiftLabel + ': detecting neighborhoods...', pctBase + 10);
+
+    // ── Prep input for buildNeighborhoods ──
+    const nhCampers = allCampers.map(c => {
+        const a = D.addresses[c.name] || {};
+        return {
+            name: c.name, lat: c.lat, lng: c.lng,
+            address: c.address,
+            division: c.division, bunk: c.bunk,
+            zip: a.zip || ''
+        };
+    });
+
+    const sibMap = detectSiblings(allCampers);
+    const siblingGroups = {};
+    for (const [name, gid] of Object.entries(sibMap)) {
+        (siblingGroups[gid] ||= []).push(name);
+    }
+
+    // ── Run neighborhood detection ──
+    const nhResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({
+        campers: nhCampers,
+        options: { verbose: true, siblingGroups }
+    });
+
+    if (!nhResult || !nhResult.neighborhoods?.length) {
+        console.warn('[Go v5] Neighborhood detection produced 0 neighborhoods');
+        return null;
+    }
+
+    // ── Safety gate: don't ship a roster missing too many kids ──
+    const unattachedCount = nhResult.unattachedCampers?.length || 0;
+    const unattachedPct = unattachedCount / Math.max(1, allCampers.length);
+    if (unattachedPct > 0.05) {
+        console.warn('[Go v5] Neighborhood mode: ' + (unattachedPct * 100).toFixed(1) +
+            '% of campers unattached (exceeds 5% threshold) — falling through');
+        return null;
+    }
+
+    showProgress(shiftLabel + ': packing neighborhoods into buses...', pctBase + 25);
+
+    // ── Bus assignment ──
+    const priorAssignments = window.GoNhPersistence
+        ? await window.GoNhPersistence.getPriorAssignments()
+        : {};
+
+    const reducedBuses = shiftVehicles.map(v => ({
+        id: v.busId, name: v.name,
+        capacity: Math.max(0, (v.capacity || 0) - reserveSeats)
+    }));
+
+    const nhAssignment = window.CampistryGoNeighborhoods.packIntoBuses({
+        result: nhResult,
+        buses: reducedBuses,
+        priorAssignments,
+        siblingGroups,
+        depot: { lat: campLat, lng: campLng }
+    });
+
+    showProgress(shiftLabel + ': generating per-zone stops...', pctBase + 40);
+
+    // ── Expand each zone into physical stops ──
+    // This is the heart of the "stops per zone, not globally" fix.
+    // expandToPhysicalStops creates stops for each bus using ONLY that bus's
+    // assigned segments/homes, so stops can never land on zone seams.
+    const nhPhysical = window.CampistryGoNeighborhoods.expandToPhysicalStops({
+        assignment: nhAssignment,
+        result: nhResult,
+        isArrival,
+        dropoffMode
+    });
+
+    // ── Append any unsnapped campers to their nearest bus as door drops ──
+    // Gated at 5% above; these are the trailing few.
+    const attachedNames = new Set(nhResult.homes.map(h => h.camperName));
+    const leftover = allCampers.filter(c => !attachedNames.has(c.name));
+    if (leftover.length) {
+        console.warn('[Go v5] ' + leftover.length +
+            ' un-snapped camper(s) — appending as door-drops to nearest bus');
+        for (const c of leftover) {
+            let bestBus = null, bestDist = Infinity;
+            for (const bus of nhPhysical) {
+                if (!bus.stops?.length) continue;
+                for (const s of bus.stops) {
+                    const d = haversineMi(c.lat, c.lng, s.lat, s.lng);
+                    if (d < bestDist) { bestDist = d; bestBus = bus; }
+                }
+            }
+            if (bestBus) {
+                bestBus.stops.push({
+                    lat: c.lat, lng: c.lng,
+                    address: c.address,
+                    campers: [{ name: c.name, division: c.division, bunk: c.bunk }]
+                });
+                bestBus.camperCount = (bestBus.camperCount || 0) + 1;
+            }
+        }
+    }
+
+    // ── Build route objects (still in NH-spine order — will be TSP'd next) ──
+    const nhNameById = {};
+    for (const nh of nhResult.neighborhoods) nhNameById[nh.id] = nh.primaryName;
+
+    let routes = nhPhysical.map(bus => {
+        const vehicle = shiftVehicles.find(v => v.busId === bus.busId) || {};
+        const names = (bus.neighborhoodIds || []).map(id =>
+            nhNameById[id.replace(/_p\d+$/, '')] || id);
+        return {
+            busId:          bus.busId,
+            busName:        vehicle.name || bus.name || bus.busId,
+            busColor:       vehicle.color || '#10b981',
+            monitor:        vehicle.monitor    || null,
+            counselors:     vehicle.counselors || [],
+            stops:          bus.stops.map((s, i) => ({
+                stopNum: i + 1,
+                campers: s.campers,
+                address: s.address,
+                lat: s.lat, lng: s.lng
+            })),
+            camperCount:    bus.camperCount,
+            _cap:           vehicle.capacity,
+            totalDuration:  0,
+            _neighborhoodIds:   bus.neighborhoodIds,
+            _neighborhoodNames: [...new Set(names)],
+            _segmentOrder:      bus.segmentOrder,
+            _source:        'neighborhood-mode'
+        };
+    });
+
+    // ── Cross-bus dedup safety net ──
+    // Should not trigger once zones are drawn correctly, but guards against
+    // any regression in neighborhood detection.
+    (function dedupAcrossBuses() {
+        const seen = new Set();
+        let removed = 0;
+        for (const r of routes) {
+            for (const st of r.stops) {
+                const keep = [];
+                for (const cc of (st.campers || [])) {
+                    const n = typeof cc === 'string' ? cc : cc.name;
+                    if (!n || seen.has(n)) { removed++; continue; }
+                    seen.add(n);
+                    keep.push(cc);
+                }
+                st.campers = keep;
+            }
+            r.stops = r.stops.filter(s => s.campers.length > 0);
+            r.stops.forEach((s, i) => s.stopNum = i + 1);
+            r.camperCount = r.stops.reduce((sum, s) => sum + s.campers.length, 0);
+        }
+        if (removed) {
+            console.warn('[Go v5] Cross-bus dedup removed ' + removed + ' duplicate(s) ' +
+                '(upstream detection bug — please investigate)');
+        }
+    })();
+
+    // ── Per-bus TSP re-ordering ──
+    // Now that each bus has its stops fixed (who is on it is decided), run
+    // a single-vehicle TSP on each bus to find the best stop sequence.
+    // This gets LSTA-grade stop ordering within each zone without letting
+    // the solver move campers between zones.
+    if (googleAvailable && routes.length) {
+        showProgress(shiftLabel + ': optimizing stop order per bus...', pctBase + 60);
+        for (const r of routes) {
+            if (r.stops.length < 3) continue;
+            try {
+                const tspResult = await _perBusGoogleTSP({
+                    route: r,
+                    campLat, campLng,
+                    isArrival,
+                    serviceTimeSec,
+                    googleKey, googleProjId,
+                    _supabaseUrl, _googleProxyToken,
+                    shift
+                });
+                if (tspResult) {
+                    r.stops = tspResult.stops;
+                    r.stops.forEach((s, i) => s.stopNum = i + 1);
+                    r.totalDuration = tspResult.totalDuration || r.totalDuration;
+                    if (tspResult.roadPts) r._roadPts = tspResult.roadPts;
+                    if (tspResult.tspLegTimes) r._tspLegTimes = tspResult.tspLegTimes;
+                }
+            } catch (e) {
+                console.warn('[Go v5] Per-bus TSP failed for ' + r.busName +
+                    ' — using NH-spine order (' + e.message + ')');
+                // Fall through with spine-order stops; still a valid route.
+            }
+        }
+    }
+
+    // ── Record year-over-year assignment state ──
+    if (window.GoNhPersistence) {
+        try {
+            const prevPayload = await window.GoNhPersistence.load();
+            await window.GoNhPersistence.recordAssignment(nhAssignment, nhResult);
+            const curPayload = await window.GoNhPersistence.load();
+            const changes = window.GoNhPersistence.diff(prevPayload, curPayload);
+            if (changes.length) {
+                console.log('[Go v5] Year-over-year neighborhood changes:');
+                for (const ch of changes) {
+                    console.log('  ' + ch.primaryName + ' (' + ch.nhId + '): ' +
+                        (ch.fromBus || '∅') + ' → ' + (ch.toBus || '∅') +
+                        ' (' + ch.reason + ')');
+                }
+            } else {
+                console.log('[Go v5] No neighborhood changes from last run');
+            }
+        } catch (e) {
+            console.warn('[Go v5] Neighborhood persistence failed:', e.message);
+        }
+    }
+
+    toast('✓ Routes generated — ' + routes.length + ' buses, ' +
+          nhResult.neighborhoods.length + ' neighborhoods');
+    console.log('[Go v5] Primary path complete: ' + routes.length + ' routes, ' +
+        routes.reduce((s, r) => s + r.stops.length, 0) + ' stops, ' +
+        nhResult.neighborhoods.length + ' neighborhoods');
+
+    return routes;
+}
+
+
+// =============================================================================
+// PER-BUS TSP
+//
+// Runs Google Route Optimization on ONE bus and ONE set of stops to get an
+// optimal stop sequence.  The bus has effectively unlimited capacity for
+// this call (we've already decided who's on it); we just want the solver to
+// find the best order.
+//
+// Returns { stops, totalDuration, roadPts, tspLegTimes } or null.
+// =============================================================================
+async function _perBusGoogleTSP({
+    route, campLat, campLng,
+    isArrival, serviceTimeSec,
+    googleKey, googleProjId,
+    _supabaseUrl, _googleProxyToken,
+    shift
+}) {
+    if (!window.GoGoogleOptimizer?.optimizeTours) return null;
+
+    // Single-vehicle optimize request
+    const singleBus = [{
+        busId: route.busId,
+        name: route.busName,
+        color: route.busColor,
+        capacity: Math.max(route.camperCount + 10, 1000), // effectively unbounded
+        monitor: route.monitor,
+        counselors: route.counselors
+    }];
+
+    const result = await window.GoGoogleOptimizer.optimizeTours({
+        stops: route.stops,
+        vehicles: singleBus,
+        campLat, campLng,
+        isArrival,
+        serviceTime: serviceTimeSec,
+        departureTime: shift.departureTime ||
+                       (isArrival ? '07:30' : '16:00'),
+        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+        googleKey, googleProjId,
+        supabaseUrl: _supabaseUrl,
+        accessToken: _googleProxyToken,
+        anonKey: window.__CAMPISTRY_SUPABASE__?.anonKey || ''
+    });
+
+    if (!result || !result.length || !result[0].stops?.length) return null;
+
+    const r = result[0];
+    return {
+        stops: r.stops,
+        totalDuration: r.totalDuration || 0,
+        roadPts: r._roadPts || null,
+        tspLegTimes: r._tspLegTimes || null
+    };
+}
+
+
+// =============================================================================
+// FALLBACK PATH: Global corner stops + Google Route Optimization
+//
+// Only runs if the neighborhood pipeline fails.  Loudly warns via toast.
+//
+// This is the v4 "ZIP+Google" path stripped down: generate corner stops
+// globally, then let Google Route Optimization solve the entire CVRP
+// (capacity + stop-ordering) in one call.
+// =============================================================================
+async function _fallbackGoogleGlobal({
+    shift, shiftLabel, pctBase,
+    allCampers, shiftVehicles,
+    campLat, campLng,
+    reserveSeats,
+    isArrival,
+    googleKey, googleProjId,
+    _supabaseUrl, _googleProxyToken,
+    serviceTimeSec
+}) {
+    showProgress(shiftLabel + ': FALLBACK — creating corner stops...', pctBase + 15);
+
+    // Use corner-stops (LSTA-style intersection stops); the other stop modes
+    // from v4 were lower-quality and are not worth preserving in the fallback.
+    const allStops = await createCornerStops(allCampers);
+
+    // Deduplicate (defensive)
+    const seen = new Set();
+    const dedupStops = allStops.filter(s => {
+        const key = Math.round(s.lat * 5000) + ',' + Math.round(s.lng * 5000);
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+    });
+
+    if (!dedupStops.length) {
+        console.error('[Go v5] Fallback: createCornerStops produced 0 stops');
+        return null;
+    }
+
+    showProgress(shiftLabel + ': FALLBACK — Google Route Optimization...', pctBase + 45);
+
+    const result = await window.GoGoogleOptimizer.optimizeTours({
+        stops: dedupStops,
+        vehicles: shiftVehicles,
+        campLat, campLng,
+        isArrival,
+        serviceTime: serviceTimeSec,
+        departureTime: shift.departureTime || (isArrival ? '07:30' : '16:00'),
+        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+        googleKey, googleProjId,
+        supabaseUrl: _supabaseUrl,
+        accessToken: _googleProxyToken,
+        anonKey: window.__CAMPISTRY_SUPABASE__?.anonKey || ''
+    });
+
+    if (!result || !result.length) {
+        console.error('[Go v5] Fallback: Google Route Optimization returned empty');
+        return null;
+    }
+
+    // Ensure stopNum is set
+    result.forEach(r => {
+        r.stops.forEach((s, i) => s.stopNum = i + 1);
+        r.camperCount = r.stops.reduce((sum, s) => sum + s.campers.length, 0);
+    });
+
+    return result;
+}
+
+
+// =============================================================================
+// HELPER: Collect noStopStaff (preserved from v4)
+// =============================================================================
+function _collectNoStopStaff() {
+    const out = [];
+
+    for (const counselor of D.counselors) {
+        if (!counselor.address) continue;
+        let staffCoords = null;
+        if (counselor._lat && counselor._lng) {
+            staffCoords = { lat: counselor._lat, lng: counselor._lng };
+        }
+        if (!staffCoords) {
+            const a = D.addresses[counselor.name] ||
+                      D.addresses[counselor.firstName + ' ' + counselor.lastName];
+            if (a?.geocoded && a.lat && a.lng) {
+                staffCoords = { lat: a.lat, lng: a.lng };
+                counselor._lat = a.lat; counselor._lng = a.lng;
+            }
+        }
+        if (!staffCoords) continue;
+        out.push({
+            name: counselor.name, address: counselor.address,
+            lat: staffCoords.lat, lng: staffCoords.lng,
+            busId: counselor.assignedBus || null,
+            role: 'counselor', id: counselor.id
+        });
+    }
+
+    for (const monitor of D.monitors) {
+        if (!monitor.address) continue;
+        let staffCoords = null;
+        if (monitor._lat && monitor._lng) {
+            staffCoords = { lat: monitor._lat, lng: monitor._lng };
+        }
+        if (!staffCoords) {
+            const a = D.addresses[monitor.name] ||
+                      D.addresses[monitor.firstName + ' ' + monitor.lastName];
+            if (a?.geocoded && a.lat && a.lng) {
+                staffCoords = { lat: a.lat, lng: a.lng };
+                monitor._lat = a.lat; monitor._lng = a.lng;
+            }
+        }
+        if (!staffCoords) continue;
+        out.push({
+            name: monitor.name, address: monitor.address,
+            lat: staffCoords.lat, lng: staffCoords.lng,
+            busId: monitor.assignedBus || null,
+            role: 'monitor', id: monitor.id
+        });
+    }
+
+    if (out.length) console.log('[Go v5] Staff for post-gen suggestions: ' + out.length);
+    return out;
+}
+
+
+// =============================================================================
+// HELPER: ETA / estimatedTime / max-ride-time audit
+//
+// Runs once per shift, after routes are finalized, regardless of which
+// pipeline produced them.  Replaces the two copies of this logic in v4
+// (one in the NH path, one in the ZIP path).
+// =============================================================================
+function _applyETAsAndAudits(routes, {
+    shift, isArrival, campLat, campLng,
+    avgStopMin, shiftNeedsReturn
+}) {
+    const [depHour, depMin] = (shift.departureTime ||
+                               (isArrival ? '08:00' : '16:00')).split(':').map(Number);
+    const timeMin = depHour * 60 + depMin;
+    const maxRideMin = D.setup.maxRideTime || 45;
+
+    function driveMin(a, b) {
+        if (a.lat && b.lat) return drivingDist(a.lat, a.lng, b.lat, b.lng) / 60;
+        return 3;
+    }
+    function campToStop(s) {
+        if (s.lat) return drivingDist(campLat, campLng, s.lat, s.lng) / 60;
+        return 15;
+    }
+    function stopToCamp(s) {
+        if (s.lat) return drivingDist(s.lat, s.lng, campLat, campLng) / 60;
+        return 15;
+    }
+
+    for (const r of routes) {
+        if (!r.stops?.length) continue;
+
+        // Use solver-provided per-leg times if present, else haversine fallback
+        const legs = r._tspLegTimes;
+        function legMinAt(i) {
+            if (legs && legs[i] != null) return legs[i] / 60;
+            return null;
+        }
+
+        if (isArrival) {
+            // Pickup: bus starts at first stop, ends at camp
+            let totalDur = 0;
+            for (let i = 0; i < r.stops.length; i++) {
+                const tLeg = legMinAt(i);
+                if (i === 0) totalDur += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                else totalDur += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
+                totalDur += avgStopMin;
+            }
+            const returnLeg = legMinAt(r.stops.length);
+            totalDur += (returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
+            let cum = timeMin - totalDur;
+            for (let i = 0; i < r.stops.length; i++) {
+                const tLeg = legMinAt(i);
+                if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
+                cum += avgStopMin;
+                r.stops[i].estimatedTime = formatTime(cum);
+                r.stops[i].estimatedMin = cum;
+            }
+            r.totalDuration = Math.round(totalDur);
+        } else {
+            // Dismissal: bus leaves camp, visits each stop in order
+            let cum = timeMin;
+            for (let i = 0; i < r.stops.length; i++) {
+                const tLeg = legMinAt(i);
+                if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
+                cum += avgStopMin;
+                r.stops[i].estimatedTime = formatTime(cum);
+                r.stops[i].estimatedMin = cum;
+            }
+            r.totalDuration = Math.round(cum - timeMin);
+            if (shiftNeedsReturn && r.stops.length > 0) {
+                const returnLeg = legMinAt(r.stops.length);
+                r.returnTocamp = Math.round(returnLeg != null
+                    ? returnLeg
+                    : stopToCamp(r.stops[r.stops.length - 1]));
+                r.totalDuration += r.returnTocamp;
+            }
+        }
+
+        r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
+
+        // Max-ride-time audit
+        let violations = 0;
+        for (const st of r.stops) {
+            if (!st.estimatedMin) continue;
+            const rideMin = isArrival
+                ? (timeMin - st.estimatedMin)
+                : (st.estimatedMin - timeMin);
+            st._rideTimeMin = Math.round(Math.abs(rideMin));
+            if (st._rideTimeMin > maxRideMin) {
+                st._rideTimeWarning = true;
+                violations++;
+                st.campers.forEach(c => {
+                    console.warn('[Go v5] Ride time: ' + c.name + ' on ' + r.busName +
+                        ' stop ' + st.stopNum + ' = ' + st._rideTimeMin +
+                        'min (max ' + maxRideMin + ')');
+                });
+            }
+        }
+        if (violations) {
+            r._rideTimeViolations = violations;
+            console.warn('[Go v5] ' + r.busName + ': ' + violations +
+                ' stop(s) exceed ' + maxRideMin + 'min max ride time');
+        }
+    }
+}
+
+
+// =============================================================================
+// HELPER: Suggest nearest stops for staff
+//
+// Moves the v4 staff-suggestion logic out of generateRoutes for clarity.
+// Walks each staff member to the nearest (bus, stop) pair by haversine.
+// =============================================================================
+function _suggestStaffStops(routes, noStopStaff, campLat, campLng) {
+    if (!noStopStaff?.length || !routes?.length) return;
+
+    for (const staff of noStopStaff) {
+        let bestBus = null, bestStop = null, bestStopIdx = 0, bestDist = Infinity;
+        for (const r of routes) {
+            for (let si = 0; si < r.stops.length; si++) {
+                const st = r.stops[si];
+                const d = haversineMi(staff.lat, staff.lng, st.lat, st.lng);
+                if (d < bestDist) {
+                    bestDist = d; bestBus = r; bestStop = st; bestStopIdx = si;
+                }
+            }
+        }
+        if (!bestBus) continue;
+
+        const rec = staff.role === 'monitor'
+            ? D.monitors.find(m => m.id === staff.id)
+            : D.counselors.find(c => c.id === staff.id);
+        if (!rec) continue;
+
+        rec._suggestedBus      = bestBus.busName;
+        rec._suggestedBusId    = bestBus.busId;
+        rec._suggestedStop     = bestStop.address;
+        rec._suggestedStopNum  = bestStop.stopNum;
+        rec._suggestedDistMi   = bestDist;
+        rec._walkFt            = Math.round(bestDist * 5280);
+    }
+}
+
+
+// =============================================================================
+// KEPT — findAnchorStop (UNUSED IN PHASE 1, PRESERVED FOR PHASE 3)
+//
+// Extracted from the deleted buildGreedyZones().  Returns the stop in a
+// camper set that's farthest from camp and has the most kids within walk
+// radius — i.e. the "keystone" for a route, per the LSTA analysis.
+//
+// Phase 3 will wire this into the per-bus TSP as a mandatory first visit
+// (AM) / last visit (PM).  For Phase 1 we just keep the code alive.
+// =============================================================================
+function findAnchorStop(campers, intersections, walkMi = 0.2) {
+    if (!campers?.length) return null;
+
+    // For each intersection, count kids within walkMi
+    let best = null, bestScore = -Infinity;
+    const distFromCamp = {};
+    const campLat = D.setup.campLat, campLng = D.setup.campLng;
+
+    for (const inter of (intersections || [])) {
+        let kidsHere = 0;
+        for (const c of campers) {
+            const d = haversineMi(c.lat, c.lng, inter.lat, inter.lng);
+            if (d <= walkMi) kidsHere++;
+        }
+        if (!kidsHere) continue;
+        const dc = haversineMi(inter.lat, inter.lng, campLat, campLng);
+        // Score: many kids + far from camp
+        const score = kidsHere * 2 + dc;
+        if (score > bestScore) { bestScore = score; best = { ...inter, kidsHere, distFromCamp: dc }; }
+    }
+    return best;
+}
+
 
 
     // ── Counselor outlier prompt ──
@@ -7396,107 +4424,36 @@ async function generateRoutes() {
     }
 
     // =========================================================================
-    // FALLBACK ROUTING
-    // =========================================================================
-    function fallbackRouting(stops, vehicles, campLat, campLng) {
-        console.warn('[Go] Using fallback geographic routing');
-        const numBuses = vehicles.length;
-        stops.forEach(s => { s._angle = Math.atan2(s.lng - campLng, s.lat - campLat); });
-        stops.sort((a, b) => a._angle - b._angle);
-        const routes = [];
-        const perBus = Math.ceil(stops.length / numBuses);
-        for (let i = 0; i < numBuses; i++) {
-            const v = vehicles[i];
-            const busStops = stops.slice(i * perBus, (i + 1) * perBus);
-            directionalSort(busStops, campLat, campLng);
-            busStops.forEach(s => { delete s._angle; });
-            routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: busStops, camperCount: busStops.reduce((s, st) => s + st.campers.length, 0), _cap: v.capacity, totalDuration: 0 });
-        }
-        return routes;
-    }
-
-    function fallbackRegionRouting(stops, vehicles, campLat, campLng) {
-        const routes = [];
-        const perBus = Math.ceil(stops.length / vehicles.length);
-        // Sort all stops directionally before slicing into buses
-        directionalSort(stops, campLat, campLng);
-        for (let i = 0; i < vehicles.length; i++) {
-            const v = vehicles[i];
-            const busStops = stops.slice(i * perBus, (i + 1) * perBus);
-            busStops.forEach((s, si) => { s.stopNum = si + 1; });
-            routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: busStops, camperCount: busStops.reduce((s, st) => s + st.campers.length, 0), _cap: v.capacity, totalDuration: 0 });
-        }
-        return routes;
-    }
-
-    // =========================================================================
     // STOP CREATION
     // =========================================================================
 
-    /** Normalize a phone string to digits only; returns '' if fewer than 7 digits. */
-    function _normPhone(p) {
-        var d = String(p || '').replace(/\D/g, '');
-        return d.length >= 7 ? d.slice(-10) : '';
-    }
-
-    /**
-     * Detect sibling groups. Union-find over three signals, in priority order:
-     *   1. Shared parent phone number (strongest — cross-surname siblings e.g. blended families)
-     *   2. Same last name + addresses within ~100ft
-     *   3. Explicit D.addresses[name].rideWith partner
-     */
+    /** Detect sibling groups: same last name + addresses within ~100ft */
     function detectSiblings(campers) {
-        // Union-find
-        var parent = {};
-        function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
-        function union(a, b) { var ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
-        campers.forEach(c => { parent[c.name] = c.name; });
-
-        // Phone-based linking
-        var byPhone = {};
+        const byLastName = {};
         campers.forEach(c => {
-            var ph = _normPhone(c.phone || (D.addresses[c.name] && D.addresses[c.name].phone));
-            if (!ph) return;
-            (byPhone[ph] = byPhone[ph] || []).push(c);
-        });
-        Object.values(byPhone).forEach(group => {
-            if (group.length < 2) return;
-            for (var i = 1; i < group.length; i++) union(group[0].name, group[i].name);
-        });
-
-        // Last-name + proximity linking
-        var byLastName = {};
-        campers.forEach(c => {
-            var parts = (c.name || '').trim().split(/\s+/);
-            var lastName = parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
+            const parts = (c.name || '').trim().split(/\s+/);
+            const lastName = parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
             if (!lastName) return;
-            (byLastName[lastName] = byLastName[lastName] || []).push(c);
+            if (!byLastName[lastName]) byLastName[lastName] = [];
+            byLastName[lastName].push(c);
         });
+        const sibMap = {};
+        let gid = 0;
         Object.values(byLastName).forEach(group => {
             if (group.length < 2) return;
-            for (var i = 0; i < group.length; i++) {
-                for (var j = i + 1; j < group.length; j++) {
-                    if (haversineMi(group[i].lat, group[i].lng, group[j].lat, group[j].lng) < 0.02) {
-                        union(group[i].name, group[j].name);
-                    }
+            const used = new Set();
+            group.forEach(c => {
+                if (used.has(c.name)) return;
+                const family = [c]; used.add(c.name);
+                group.forEach(o => {
+                    if (used.has(o.name)) return;
+                    if (haversineMi(c.lat, c.lng, o.lat, o.lng) < 0.02) { family.push(o); used.add(o.name); }
+                });
+                if (family.length >= 2) {
+                    const id = 'sib_' + gid++;
+                    family.forEach(k => { sibMap[k.name] = id; });
                 }
-            }
-        });
-
-        // Explicit rideWith partner
-        campers.forEach(c => {
-            var a = D.addresses[c.name];
-            if (a && a.rideWith && parent[a.rideWith] != null) union(c.name, a.rideWith);
-        });
-
-        // Materialize groups where root has ≥2 members
-        var groupsByRoot = {};
-        campers.forEach(c => { var r = find(c.name); (groupsByRoot[r] = groupsByRoot[r] || []).push(c.name); });
-        var sibMap = {}; var gid = 0;
-        Object.values(groupsByRoot).forEach(names => {
-            if (names.length < 2) return;
-            var id = 'sib_' + gid++;
-            names.forEach(n => { sibMap[n] = id; });
+            });
         });
         if (Object.keys(sibMap).length) console.log('[Go] Siblings: ' + Object.keys(sibMap).length + ' kids in ' + gid + ' families');
         return sibMap;
@@ -7717,12 +4674,6 @@ async function generateRoutes() {
             }
 
             let stopName = '', stopLat = fallbackLat, stopLng = fallbackLng;
-            // Corner-aware fields (Transfinder parity). Populated only when we successfully
-            // snap to an OSM intersection AND find a safe corner.
-            let chosenCorner = null;       // 'NE'|'NW'|'SE'|'SW' or null
-            let intersectionLat = null;    // canonical intersection center (for Stop Master)
-            let intersectionLng = null;
-            let intersectionStreets = null; // ['Main St', 'Cross Rd']
 
             if (mainStreet && crossStreet) {
                 stopName = crossStreet + ' & ' + mainStreet;
@@ -7758,9 +4709,6 @@ async function generateRoutes() {
                         stopLat = bestInter.lat;
                         stopLng = bestInter.lng;
                         stopName = bestInter.name;
-                        intersectionLat = bestInter.lat;
-                        intersectionLng = bestInter.lng;
-                        intersectionStreets = bestInter.streets || null;
                         console.log('[Go]   Best corner: ' + bestInter.name + ' (score ' + bestScore.toFixed(1) + ', total walk ' + (totalWalkTo(bestInter.lat, bestInter.lng) * 5280).toFixed(0) + 'ft)');
                     } else {
                         // No street-matched intersection — find nearest of ANY kind
@@ -7772,9 +4720,6 @@ async function generateRoutes() {
                         if (nearestInter) {
                             stopLat = nearestInter.lat; stopLng = nearestInter.lng;
                             stopName = nearestInter.name;
-                            intersectionLat = nearestInter.lat;
-                            intersectionLng = nearestInter.lng;
-                            intersectionStreets = nearestInter.streets || null;
                             console.log('[Go]   No match for ' + mainStreet + '/' + crossStreet + ' — nearest: ' + nearestInter.name + ' (' + (nearestDist * 5280).toFixed(0) + 'ft)');
                         }
                     }
@@ -7812,49 +4757,15 @@ async function generateRoutes() {
                         }
                     }
 
-                    if (bestInter) {
-                        stopLat = bestInter.lat; stopLng = bestInter.lng; stopName = bestInter.name;
-                        intersectionLat = bestInter.lat;
-                        intersectionLng = bestInter.lng;
-                        intersectionStreets = bestInter.streets || null;
-                    }
+                    if (bestInter) { stopLat = bestInter.lat; stopLng = bestInter.lng; stopName = bestInter.name; }
                 }
             } else {
                 stopName = 'Stop';
             }
 
-            // ── Corner selection (Transfinder-style [SW]/[NE]/...) ──
-            // Only runs when we successfully snapped to an intersection AND major-road
-            // data is loaded. Picks the corner that minimizes total walk while rejecting
-            // corners that would force >30% of cluster kids to cross a major road.
-            if (intersectionLat != null && _majorRoadSegments && _majorRoadSegments.length) {
-                const pick = pickIntersectionCorner(
-                    { lat: intersectionLat, lng: intersectionLng },
-                    cluster,
-                    0.3
-                );
-                if (pick) {
-                    stopLat = pick.lat;
-                    stopLng = pick.lng;
-                    chosenCorner = pick.corner;
-                    stopName = stopName + ' [' + pick.corner + ']';
-                    if (pick.crossings > 0) {
-                        console.log('[Go]   Corner ' + pick.corner + ' accepted (' + pick.crossings + '/' + cluster.length + ' kids cross a major road)');
-                    } else {
-                        console.log('[Go]   Corner ' + pick.corner + ' selected (0 major-road crossings, walk ' + (pick.totalWalkMi * 5280).toFixed(0) + 'ft)');
-                    }
-                } else {
-                    console.warn('[Go]   All 4 corners at ' + stopName + ' would force >30% of kids to cross a major road — keeping intersection center');
-                }
-            }
-
             return {
                 lat: stopLat, lng: stopLng, address: stopName,
-                campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk })),
-                corner: chosenCorner,
-                intersectionLat: intersectionLat,
-                intersectionLng: intersectionLng,
-                intersectionStreets: intersectionStreets
+                campers: cluster.map(c => ({ name: c.name, division: c.division, bunk: c.bunk }))
             };
         });
 
@@ -7862,7 +4773,6 @@ async function generateRoutes() {
         // FIX 6: Use manhattanMi for merge distance check too
         // Merge tiny stops (≤2 kids) only into nearby stops within half walk distance
         // Using full walkMi was pulling distant stops together and stretching routes
-        // Transfinder parity: never merge across a major road — that undoes corner safety.
         const mergeRadius = walkMi * 0.5;
         let didMerge = true;
         while (didMerge) {
@@ -7874,8 +4784,6 @@ async function generateRoutes() {
                     if (j === i) continue;
                     // Don't merge into a stop that would exceed capacity
                     if (stops[j].campers.length + stops[i].campers.length > MAX_STOP_CAPACITY) continue;
-                    // Don't merge across a major road
-                    if (crossesMajorRoad(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng)) continue;
                     const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
                     if (d < bestDist) { bestDist = d; bestJ = j; }
                 }
@@ -8229,10 +5137,7 @@ async function generateRoutes() {
                 .slice()
                 .sort((a, b) => (a.busName || '').localeCompare(b.busName || '', undefined, { numeric: true, sensitivity: 'base' }))
                 .forEach(r => {
-                const nhIdentity = (r._neighborhoodNames && r._neighborhoodNames.length)
-                    ? '<div class="route-meta" style="font-size:.7rem;opacity:.9;margin-top:2px;">🏘 ' + esc(r._neighborhoodNames.slice(0, 3).join(' · ')) + (r._neighborhoodNames.length > 3 ? ' +' + (r._neighborhoodNames.length - 3) + ' more' : '') + '</div>'
-                    : '';
-                html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div>' + nhIdentity + '</div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
+                html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
                 r.stops.forEach(st => {
                     const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) : st.isCounselor ? '👤 ' + esc(st.counselorName) : st.campers.map(c => '<span style="display:inline-flex;align-items:center;gap:2px;">' + esc(c.name) + ' <button onclick="CampistryGo.openMoveModal(\'' + esc(c.name.replace(/'/g, "\\'")) + '\',\'' + r.busId + '\',' + si + ')" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);font-size:10px;" title="Move">↔</button></span>').join(', ');
                     const rideTag = st._rideTimeMin ? '<div style="font-size:.6rem;color:' + (st._rideTimeWarning ? '#ef4444' : 'var(--text-muted)') + ';">' + st._rideTimeMin + ' min ride' + (st._rideTimeWarning ? ' ⚠' : '') + '</div>' : '';
@@ -9022,84 +5927,6 @@ async function generateRoutes() {
         regeocodeAll: function() { geocodeAll(true); },
         testGeocode, systemCheck, testGeoapify,
         generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
-        toggleNeighborhoodMode: function(on) {
-            D.setup.useNeighborhoodMode = !!on;
-            save();
-            console.log('[Go] Neighborhood mode: ' + (on ? 'ON' : 'OFF'));
-        },
-        pinNeighborhood: function(nhId, busId) { return window.GoNhPersistence?.pin(nhId, busId); },
-        unpinNeighborhood: function(nhId) { return window.GoNhPersistence?.unpin(nhId); },
-        loadNeighborhoodState: function() { return window.GoNhPersistence?.load(); },
-        checkNeighborhoodSetup: async function () {
-            const line = function (label, ok, detail) {
-                console.log('%c' + (ok ? '✓' : '✗') + ' ' + label,
-                    'color:' + (ok ? '#22c55e' : '#ef4444') + ';font-weight:bold',
-                    detail || '');
-            };
-            console.log('%c── Neighborhood mode preflight ──', 'font-weight:bold;font-size:13px');
-
-            line('CampistryGoNeighborhoods loaded', !!window.CampistryGoNeighborhoods);
-            line('GoNhPersistence loaded', !!window.GoNhPersistence);
-            line('GoCloudSync loaded', !!window.GoCloudSync);
-
-            const cfg = window.__CAMPISTRY_SUPABASE__;
-            line('Supabase config present', !!(cfg?.url && cfg?.anonKey), cfg?.url || '(missing)');
-
-            let token = '';
-            try {
-                const sess = await window.supabase?.auth?.getSession?.();
-                token = sess?.data?.session?.access_token || '';
-            } catch (_) {}
-            line('Logged in (access token)', !!token);
-
-            const cb = document.getElementById('useNeighborhoodMode');
-            line('UI checkbox rendered', !!cb, cb ? ('checked=' + cb.checked) : '(open Routes tab first)');
-
-            line('Feature flag stored', !!D.setup, 'useNeighborhoodMode=' + !!D.setup?.useNeighborhoodMode);
-
-            if (!token || !cfg?.url) {
-                line('Edge function round-trip', false, 'skipped — not logged in / no supabase');
-                return;
-            }
-            try {
-                const t0 = performance.now();
-                const resp = await fetch(cfg.url + '/functions/v1/overpass-proxy', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + token,
-                        'apikey': cfg.anonKey,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        query: '[out:json][timeout:10];node(around:50,40.7128,-74.0060);out;'
-                    })
-                });
-                const ms = Math.round(performance.now() - t0);
-                if (!resp.ok) {
-                    const bodyTxt = await resp.text().catch(function () { return ''; });
-                    const hint = resp.status === 404 ? 'function not deployed'
-                        : resp.status === 401 ? 'JWT rejected'
-                        : bodyTxt.slice(0, 200);
-                    line('Edge function round-trip', false, 'HTTP ' + resp.status + ' after ' + ms + 'ms — ' + hint);
-                } else {
-                    const data = await resp.json();
-                    const mirror = resp.headers.get('X-Overpass-Mirror') || '(unknown)';
-                    line('Edge function round-trip', true,
-                        (data.elements?.length || 0) + ' elements in ' + ms + 'ms via ' + mirror);
-                }
-            } catch (e) {
-                line('Edge function round-trip', false, e.message);
-            }
-
-            try {
-                const payload = await window.GoNhPersistence?.load();
-                const nhCount = Object.keys(payload?.neighborhoods || {}).length;
-                line('Persistence load', true,
-                    nhCount + ' neighborhood(s) stored, savedAt=' + (payload?.savedAt || 'never'));
-            } catch (e) {
-                line('Persistence load', false, e.message);
-            }
-        },
         renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         setAddressPinMode, toggleHideRoutes, toggleZones,
         toggleAddressPins, showAddressesOnMap, locateCamper,
