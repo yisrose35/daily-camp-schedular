@@ -3840,15 +3840,10 @@ async function _tryNeighborhoodPipeline({
 
 
 // =============================================================================
-// SPATIAL SORT PIPELINE — Cluster-First, Route-Second
+// SPATIAL SORT PIPELINE — Pure lat/lng k-means clustering
 //
-// Pure lat/lng k-means clustering into k=numBuses clusters:
-//   1. Build sibling atoms (indivisible units)
-//   2. K-means on lat/lng → k geographic clusters
-//   3. Capacity fix-up: move farthest atoms from overloaded clusters
-//   4. Sanity check: detect driving-time gaps and move outliers
-//   5. Create corner stops per bus
-//   6. Per-bus Google TSP for optimal stop ordering
+// Clusters campers into k=numBuses groups based solely on coordinates.
+// No capacity balancing, no stops, no routes — just clustering for review.
 // =============================================================================
 async function _trySpatialSortPipeline({
     shift, shiftLabel, pctBase,
@@ -3861,8 +3856,6 @@ async function _trySpatialSortPipeline({
     serviceTimeSec,
     shiftIdx
 }) {
-    const SANITY_GAP_SEC = 300;
-
     showProgress(shiftLabel + ': clustering — building atoms...', pctBase + 10);
 
     // ── A. Build sibling atoms ──
@@ -3903,10 +3896,8 @@ async function _trySpatialSortPipeline({
     showProgress(shiftLabel + ': clustering — k-means on lat/lng...', pctBase + 20);
 
     const k = shiftVehicles.length;
-    const busCapacities = shiftVehicles.map(v =>
-        Math.max(0, (v.capacity || 0) - reserveSeats));
 
-    // K-means++ seeding: pick initial centroids spread apart
+    // K-means++ seeding
     const centroids = [];
     const firstIdx = Math.floor(Math.random() * atoms.length);
     centroids.push({ lat: atoms[firstIdx].lat, lng: atoms[firstIdx].lng });
@@ -3924,12 +3915,10 @@ async function _trySpatialSortPipeline({
         centroids.push({ lat: atoms[bestIdx].lat, lng: atoms[bestIdx].lng });
     }
 
-    // Iterate k-means: assign atoms to nearest centroid, recompute centroids
+    // Iterate k-means
     let assignments = new Array(atoms.length).fill(0);
     for (let iter = 0; iter < 30; iter++) {
         let changed = false;
-
-        // Assign each atom to nearest centroid
         for (let i = 0; i < atoms.length; i++) {
             let bestC = 0, bestD = Infinity;
             for (let ci = 0; ci < k; ci++) {
@@ -3939,10 +3928,10 @@ async function _trySpatialSortPipeline({
             }
             if (assignments[i] !== bestC) { assignments[i] = bestC; changed = true; }
         }
-
-        if (!changed) break;
-
-        // Recompute centroids
+        if (!changed) {
+            console.log('[Go v6] K-means converged after ' + (iter + 1) + ' iterations');
+            break;
+        }
         for (let ci = 0; ci < k; ci++) {
             let sLat = 0, sLng = 0, n = 0;
             for (let i = 0; i < atoms.length; i++) {
@@ -3965,252 +3954,54 @@ async function _trySpatialSortPipeline({
         busBuckets[assignments[i]].push(atoms[i]);
     }
 
-    // ── C. Cascading capacity fix-up ──
-    // Overloaded bus pushes to its NEAREST neighbor only. If neighbor
-    // overflows, IT pushes to ITS nearest neighbor. No skipping — each
-    // bus only talks to its geographic neighbor, preserving tight clusters.
-    showProgress(shiftLabel + ': clustering — capacity fix-up...', pctBase + 30);
-
-    function busCentroid(bucket) {
-        if (!bucket.length) return null;
-        let sLat = 0, sLng = 0;
-        for (const a of bucket) { sLat += a.lat; sLng += a.lng; }
-        return { lat: sLat / bucket.length, lng: sLng / bucket.length };
-    }
-
-    function busUsed(bi) {
-        return busBuckets[bi].reduce((s, a) => s + a.size, 0);
-    }
-
-    function nearestBus(bi, exclude) {
-        const cent = busCentroid(busBuckets[bi]);
-        if (!cent) return -1;
-        let best = -1, bestDist = Infinity;
-        for (let ti = 0; ti < busBuckets.length; ti++) {
-            if (ti === bi || exclude.has(ti)) continue;
-            const tc = busCentroid(busBuckets[ti]);
-            if (!tc) continue;
-            const d = haversineMi(cent.lat, cent.lng, tc.lat, tc.lng);
-            if (d < bestDist) { bestDist = d; best = ti; }
-        }
-        return best;
-    }
-
-    let capMoves = 0;
-    const cascadeVisited = new Set();
-
-    function cascadeOverflow(bi) {
-        if (cascadeVisited.has(bi)) return;
-        cascadeVisited.add(bi);
-
-        let lastNeighbor = -1;
-        while (busUsed(bi) > busCapacities[bi] && busBuckets[bi].length > 1) {
-            const neighbor = nearestBus(bi, cascadeVisited);
-            if (neighbor < 0) break;
-
-            const neighborCent = busCentroid(busBuckets[neighbor]);
-            if (!neighborCent) break;
-
-            let closestIdx = -1, closestDist = Infinity;
-            for (let ai = 0; ai < busBuckets[bi].length; ai++) {
-                const a = busBuckets[bi][ai];
-                const d = haversineMi(a.lat, a.lng, neighborCent.lat, neighborCent.lng);
-                if (d < closestDist) { closestDist = d; closestIdx = ai; }
-            }
-            if (closestIdx < 0) break;
-
-            const atom = busBuckets[bi].splice(closestIdx, 1)[0];
-            busBuckets[neighbor].push(atom);
-            capMoves++;
-            lastNeighbor = neighbor;
-        }
-
-        if (lastNeighbor >= 0 && busUsed(lastNeighbor) > busCapacities[lastNeighbor]) {
-            cascadeOverflow(lastNeighbor);
-        }
-    }
-
-    // Process each overloaded bus
-    for (let bi = 0; bi < busBuckets.length; bi++) {
-        if (busUsed(bi) > busCapacities[bi]) {
-            cascadeVisited.clear();
-            cascadeOverflow(bi);
-        }
-    }
-    if (capMoves) console.log('[Go v6] Capacity fix-up: cascaded ' + capMoves + ' atom(s)');
-
-    // Log cluster assignment
+    // ── C. Log cluster results (no modifications) ──
+    console.log('[Go v6] ═══════════════════════════════════════');
+    console.log('[Go v6] PURE K-MEANS CLUSTERS (no capacity balancing)');
+    console.log('[Go v6] ═══════════════════════════════════════');
     for (let i = 0; i < busBuckets.length; i++) {
-        const count = busUsed(i);
+        const count = busBuckets[i].reduce((s, a) => s + a.size, 0);
         const lats = busBuckets[i].map(a => a.lat);
         const lngs = busBuckets[i].map(a => a.lng);
         if (lats.length) {
             const spread = haversineMi(
                 Math.min(...lats), Math.min(...lngs),
                 Math.max(...lats), Math.max(...lngs));
-            const overFlag = count > busCapacities[i] ? ' ⚠ OVER' : '';
-            console.log('[Go v6] Bus ' + (i + 1) + ' (' + shiftVehicles[i].name + '): ' +
-                count + '/' + busCapacities[i] + ' campers, ' +
-                spread.toFixed(2) + 'mi spread' + overFlag);
-        }
-    }
-
-    // ── D. Sanity check: travel-time gap detection ──
-    // Atoms that get moved are marked so they can't ping-pong back
-    showProgress(shiftLabel + ': clustering — sanity check...', pctBase + 40);
-
-    const movedAtoms = new Set();
-    let sanityMoves = 0;
-    for (let bi = 0; bi < busBuckets.length; bi++) {
-        const bucket = busBuckets[bi];
-        if (bucket.length < 2) continue;
-
-        const cent = busCentroid(bucket);
-        if (!cent) continue;
-        bucket.sort((a, b) =>
-            haversineMi(a.lat, a.lng, cent.lat, cent.lng) -
-            haversineMi(b.lat, b.lng, cent.lat, cent.lng));
-
-        for (let ai = bucket.length - 1; ai >= 0; ai--) {
-            const atom = bucket[ai];
-            if (movedAtoms.has(atom)) continue;
-
-            const gap = drivingDist(cent.lat, cent.lng, atom.lat, atom.lng);
-            if (gap <= SANITY_GAP_SEC) continue;
-
-            let bestTarget = -1, bestDist = Infinity;
-            for (let ti = 0; ti < busBuckets.length; ti++) {
-                if (ti === bi) continue;
-                if (busUsed(ti) + atom.size > busCapacities[ti]) continue;
-                const c = busCentroid(busBuckets[ti]);
-                if (!c) continue;
-                const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
-                if (d < bestDist) { bestDist = d; bestTarget = ti; }
-            }
-            if (bestTarget >= 0) {
-                bucket.splice(ai, 1);
-                busBuckets[bestTarget].push(atom);
-                movedAtoms.add(atom);
-                sanityMoves++;
-                console.log('[Go v6] Sanity: moved ' + atom.members[0].name +
-                    ' (+' + (atom.size - 1) + ') from Bus ' + (bi + 1) +
-                    ' to Bus ' + (bestTarget + 1) +
-                    ' (gap: ' + Math.round(gap) + 's)');
-            }
-        }
-    }
-    if (sanityMoves) {
-        console.log('[Go v6] Sanity check moved ' + sanityMoves + ' atom(s)');
-    } else {
-        console.log('[Go v6] Sanity check: no gaps > ' + SANITY_GAP_SEC + 's detected');
-    }
-
-    // ── E. Create stops per bus ──
-    showProgress(shiftLabel + ': spatial sort — creating stops...', pctBase + 50);
-
-    const busRouteData = [];
-    for (let bi = 0; bi < busBuckets.length; bi++) {
-        const vehicle = shiftVehicles[bi];
-        const campers = busBuckets[bi].flatMap(a => a.members);
-        if (!campers.length) {
-            busRouteData.push({ busId: vehicle.busId, vehicle, stops: [], camperCount: 0 });
-            continue;
-        }
-
-        let stops;
-        if (dropoffMode === 'door-to-door') {
-            stops = createHouseStops(campers);
+            console.log('[Go v6] Cluster ' + (i + 1) + ' (' + shiftVehicles[i].name + '): ' +
+                count + ' campers, ' + busBuckets[i].length + ' atoms, ' +
+                spread.toFixed(2) + 'mi spread, centroid: ' +
+                centroids[i].lat.toFixed(5) + ',' + centroids[i].lng.toFixed(5));
         } else {
-            stops = await createCornerStops(campers);
-        }
-
-        busRouteData.push({
-            busId: vehicle.busId,
-            vehicle,
-            stops,
-            camperCount: campers.length
-        });
-    }
-
-    // ── F. Build route objects ──
-    let routes = busRouteData.map(bd => ({
-        busId:        bd.busId,
-        busName:      bd.vehicle.name || bd.busId,
-        busColor:     bd.vehicle.color || '#10b981',
-        monitor:      bd.vehicle.monitor || null,
-        counselors:   bd.vehicle.counselors || [],
-        stops:        bd.stops.map((s, i) => ({
-            stopNum: i + 1,
-            campers: s.campers,
-            address: s.address,
-            lat: s.lat, lng: s.lng
-        })),
-        camperCount:  bd.camperCount,
-        _cap:         bd.vehicle.capacity,
-        totalDuration: 0,
-        _source:      'spatial-sort'
-    }));
-
-    // ── Cross-bus dedup safety net ──
-    (function dedupAcrossBuses() {
-        const seen = new Set();
-        let removed = 0;
-        for (const r of routes) {
-            for (const st of r.stops) {
-                const keep = [];
-                for (const cc of (st.campers || [])) {
-                    const n = typeof cc === 'string' ? cc : cc.name;
-                    if (!n || seen.has(n)) { removed++; continue; }
-                    seen.add(n);
-                    keep.push(cc);
-                }
-                st.campers = keep;
-            }
-            r.stops = r.stops.filter(s => s.campers.length > 0);
-            r.stops.forEach((s, i) => s.stopNum = i + 1);
-            r.camperCount = r.stops.reduce((sum, s) => sum + s.campers.length, 0);
-        }
-        if (removed) {
-            console.warn('[Go v6] Cross-bus dedup removed ' + removed + ' duplicate(s)');
-        }
-    })();
-
-    // ── G. Per-bus TSP re-ordering ──
-    if (googleAvailable && routes.length) {
-        showProgress(shiftLabel + ': optimizing stop order per bus...', pctBase + 65);
-        for (const r of routes) {
-            if (r.stops.length < 3) continue;
-            try {
-                const tspResult = await _perBusGoogleTSP({
-                    route: r,
-                    campLat, campLng,
-                    isArrival,
-                    serviceTimeSec,
-                    googleKey, googleProjId,
-                    _supabaseUrl, _googleProxyToken,
-                    shift,
-                    shiftIdx
-                });
-                if (tspResult) {
-                    r.stops = tspResult.stops;
-                    r.stops.forEach((s, i) => s.stopNum = i + 1);
-                    r.totalDuration = tspResult.totalDuration || r.totalDuration;
-                    if (tspResult.roadPts) r._roadPts = tspResult.roadPts;
-                    if (tspResult.tspLegTimes) r._tspLegTimes = tspResult.tspLegTimes;
-                }
-            } catch (e) {
-                console.warn('[Go v6] Per-bus TSP failed for ' + r.busName +
-                    ' — using spatial order (' + e.message + ')');
-            }
+            console.log('[Go v6] Cluster ' + (i + 1) + ' (' + shiftVehicles[i].name + '): EMPTY');
         }
     }
+    const totalCampers = busBuckets.reduce((s, b) => s + b.reduce((s2, a) => s2 + a.size, 0), 0);
+    console.log('[Go v6] Total: ' + totalCampers + ' campers in ' + k + ' clusters');
+    console.log('[Go v6] ═══════════════════════════════════════');
 
-    const totalStops = routes.reduce((s, r) => s + r.stops.length, 0);
-    const totalCampers = routes.reduce((s, r) => s + r.camperCount, 0);
-    console.log('[Go v6] Spatial sort complete: ' + routes.length + ' routes, ' +
-        totalStops + ' stops, ' + totalCampers + ' campers');
+    // ── D. Build minimal route objects so the UI can display clusters on the map ──
+    const routes = busBuckets.map((bucket, bi) => {
+        const vehicle = shiftVehicles[bi];
+        const campers = bucket.flatMap(a => a.members);
+        return {
+            busId:        vehicle.busId,
+            busName:      vehicle.name || vehicle.busId,
+            busColor:     vehicle.color || '#10b981',
+            monitor:      vehicle.monitor || null,
+            counselors:   vehicle.counselors || [],
+            stops:        campers.map((c, i) => ({
+                stopNum: i + 1,
+                campers: [c],
+                address: c.address || '',
+                lat: c.lat, lng: c.lng
+            })),
+            camperCount:  campers.length,
+            _cap:         vehicle.capacity,
+            totalDuration: 0,
+            _source:      'spatial-sort'
+        };
+    });
 
-    toast('✓ Routes generated — ' + routes.length + ' buses (spatial sort)');
+    toast('✓ Clustering complete — ' + k + ' clusters (pure lat/lng, no capacity balancing)');
     return routes;
 }
 
