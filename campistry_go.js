@@ -65,7 +65,8 @@
             avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45,
             googleMapsKey: '', googleProjectId: '',
             geoapifyKey: '',
-            campLat: null, campLng: null
+            campLat: null, campLng: null,
+            routingPipeline: 'spatial-sort'
         },
         activeMode: 'dismissal',
         buses: [], shifts: [], monitors: [], counselors: [],
@@ -3323,9 +3324,11 @@ async function generateRoutes() {
         } catch (_e) { /* non-fatal */ }
     }
 
-    console.log('[Go v5] Routing strategy: NEIGHBORHOOD (primary) → ' +
-                (googleAvailable ? 'Google Route Optimization (fallback)' : 'NO FALLBACK'));
-    console.log('[Go v5] Per-bus TSP optimizer: ' +
+    const _pipelineMode = D.setup.routingPipeline || 'spatial-sort';
+    console.log('[Go v6] Routing strategy: ' +
+                (_pipelineMode === 'spatial-sort' ? 'SPATIAL SORT (primary)' : 'NEIGHBORHOOD (primary)') +
+                ' → ' + (googleAvailable ? 'Google Route Optimization (fallback)' : 'NO FALLBACK'));
+    console.log('[Go v6] Per-bus TSP optimizer: ' +
                 (googleAvailable ? 'Google' : geoapifyKey ? 'Geoapify' : 'local 2-opt'));
 
     // -------------------------------------------------------------------------
@@ -3413,28 +3416,53 @@ async function generateRoutes() {
         const noStopStaff = _collectNoStopStaff();
 
         // =====================================================================
-        // PRIMARY PATH: Road-graph neighborhoods → per-bus TSP
+        // PRIMARY PATH: Spatial Sort (default) or Neighborhood pipeline
         // =====================================================================
         let routes = null;
         let routeSource = null;
+        const pipelineMode = D.setup.routingPipeline || 'spatial-sort';
 
         if (!bypassNeighborhoodMode) {
-            try {
-                routes = await _tryNeighborhoodPipeline({
-                    shift, shiftLabel, pctBase,
-                    allCampers, shiftVehicles,
-                    campLat, campLng,
-                    reserveSeats, dropoffMode: mode,
-                    isArrival,
-                    googleAvailable, googleKey, googleProjId,
-                    _supabaseUrl, _googleProxyToken,
-                    serviceTimeSec: avgStopMin * 60,
-                    shiftIdx: si
-                });
-                if (routes) routeSource = 'neighborhood';
-            } catch (e) {
-                console.error('[Go v5] Neighborhood pipeline threw:', e);
-                routes = null;
+            // Spatial sort — compact lat/lng bands + snake pattern
+            if (pipelineMode === 'spatial-sort') {
+                try {
+                    routes = await _trySpatialSortPipeline({
+                        shift, shiftLabel, pctBase,
+                        allCampers, shiftVehicles,
+                        campLat, campLng,
+                        reserveSeats, dropoffMode: mode,
+                        isArrival,
+                        googleAvailable, googleKey, googleProjId,
+                        _supabaseUrl, _googleProxyToken,
+                        serviceTimeSec: avgStopMin * 60,
+                        shiftIdx: si
+                    });
+                    if (routes) routeSource = 'spatial-sort';
+                } catch (e) {
+                    console.error('[Go v6] Spatial sort pipeline threw:', e);
+                    routes = null;
+                }
+            }
+
+            // Neighborhood fallback (or explicit neighborhood mode)
+            if (!routes && pipelineMode !== 'bypass') {
+                try {
+                    routes = await _tryNeighborhoodPipeline({
+                        shift, shiftLabel, pctBase,
+                        allCampers, shiftVehicles,
+                        campLat, campLng,
+                        reserveSeats, dropoffMode: mode,
+                        isArrival,
+                        googleAvailable, googleKey, googleProjId,
+                        _supabaseUrl, _googleProxyToken,
+                        serviceTimeSec: avgStopMin * 60,
+                        shiftIdx: si
+                    });
+                    if (routes) routeSource = 'neighborhood';
+                } catch (e) {
+                    console.error('[Go v5] Neighborhood pipeline threw:', e);
+                    routes = null;
+                }
             }
         }
 
@@ -3810,6 +3838,274 @@ async function _tryNeighborhoodPipeline({
     return routes;
 }
 
+
+// =============================================================================
+// SPATIAL SORT PIPELINE — Cluster-First, Route-Second
+//
+// Replaces neighborhood detection + packIntoBuses with a coordinate-based
+// partitioning strategy:
+//   1. Build sibling atoms (indivisible units)
+//   2. Sort atoms spatially: lat bands + snake-pattern lng
+//   3. Bucket sequentially into buses by capacity
+//   4. Sanity check: detect driving-time gaps (water/highway) and move outliers
+//   5. Create stops per bus (corner or door-to-door)
+//   6. Per-bus Google TSP for optimal stop ordering
+// =============================================================================
+async function _trySpatialSortPipeline({
+    shift, shiftLabel, pctBase,
+    allCampers, shiftVehicles,
+    campLat, campLng,
+    reserveSeats, dropoffMode,
+    isArrival,
+    googleAvailable, googleKey, googleProjId,
+    _supabaseUrl, _googleProxyToken,
+    serviceTimeSec,
+    shiftIdx
+}) {
+    const SANITY_GAP_SEC = 300;
+
+    showProgress(shiftLabel + ': spatial sort — building atoms...', pctBase + 10);
+
+    // ── A. Build sibling atoms ──
+    const sibMap = detectSiblings(allCampers);
+    applyRideWith(allCampers);
+
+    const sibGroups = {};
+    for (const [name, gid] of Object.entries(sibMap)) {
+        (sibGroups[gid] ||= []).push(name);
+    }
+    const camperByName = {};
+    allCampers.forEach(c => { camperByName[c.name] = c; });
+
+    const atoms = [];
+    const atomized = new Set();
+
+    for (const members of Object.values(sibGroups)) {
+        const campers = members.map(n => camperByName[n]).filter(Boolean);
+        if (!campers.length) continue;
+        campers.forEach(c => atomized.add(c.name));
+        atoms.push({
+            members: campers,
+            size: campers.length,
+            lat: campers.reduce((s, c) => s + c.lat, 0) / campers.length,
+            lng: campers.reduce((s, c) => s + c.lng, 0) / campers.length
+        });
+    }
+    allCampers.forEach(c => {
+        if (!atomized.has(c.name)) {
+            atoms.push({ members: [c], size: 1, lat: c.lat, lng: c.lng });
+        }
+    });
+
+    console.log('[Go v6] Spatial sort: ' + atoms.length + ' atoms from ' +
+        allCampers.length + ' campers (' + Object.keys(sibGroups).length + ' sibling groups)');
+
+    // ── B. Spatial sort: lat bands + snake-pattern lng ──
+    showProgress(shiftLabel + ': spatial sort — partitioning...', pctBase + 20);
+
+    const numBuses = shiftVehicles.length;
+    const numBands = Math.ceil(Math.sqrt(numBuses));
+    atoms.sort((a, b) => a.lat - b.lat);
+    const bandSize = Math.ceil(atoms.length / numBands);
+
+    const sortedAtoms = [];
+    for (let bi = 0; bi < numBands; bi++) {
+        const start = bi * bandSize;
+        const end = Math.min(start + bandSize, atoms.length);
+        const band = atoms.slice(start, end);
+        band.sort((a, b) => (bi % 2 === 0 ? 1 : -1) * (a.lng - b.lng));
+        sortedAtoms.push(...band);
+    }
+
+    // ── C. Bucket into buses by capacity ──
+    showProgress(shiftLabel + ': spatial sort — bucketing into buses...', pctBase + 30);
+
+    const busCapacities = shiftVehicles.map(v =>
+        Math.max(0, (v.capacity || 0) - reserveSeats));
+    const busBuckets = shiftVehicles.map(() => []);
+    let busIdx = 0;
+    let busUsed = 0;
+
+    for (const atom of sortedAtoms) {
+        while (busIdx < busBuckets.length - 1 && busUsed + atom.size > busCapacities[busIdx]) {
+            busIdx++;
+            busUsed = busBuckets[busIdx].reduce((s, a) => s + a.size, 0);
+        }
+        busBuckets[busIdx].push(atom);
+        busUsed += atom.size;
+    }
+
+    // Log initial assignment
+    for (let i = 0; i < busBuckets.length; i++) {
+        const count = busBuckets[i].reduce((s, a) => s + a.size, 0);
+        const lats = busBuckets[i].map(a => a.lat);
+        const lngs = busBuckets[i].map(a => a.lng);
+        if (lats.length) {
+            const spread = haversineMi(
+                Math.min(...lats), Math.min(...lngs),
+                Math.max(...lats), Math.max(...lngs));
+            console.log('[Go v6] Bus ' + (i + 1) + ' (' + shiftVehicles[i].name + '): ' +
+                count + '/' + busCapacities[i] + ' campers, ' +
+                spread.toFixed(2) + 'mi spread');
+        }
+    }
+
+    // ── D. Sanity check: travel-time gap detection ──
+    showProgress(shiftLabel + ': spatial sort — sanity check...', pctBase + 40);
+
+    function busCentroid(bucket) {
+        if (!bucket.length) return null;
+        let sLat = 0, sLng = 0;
+        for (const a of bucket) { sLat += a.lat; sLng += a.lng; }
+        return { lat: sLat / bucket.length, lng: sLng / bucket.length };
+    }
+
+    let sanityMoves = 0;
+    for (let bi = 0; bi < busBuckets.length; bi++) {
+        const bucket = busBuckets[bi];
+        if (bucket.length < 2) continue;
+
+        for (let ai = bucket.length - 1; ai >= 1; ai--) {
+            const gap = drivingDist(bucket[ai - 1].lat, bucket[ai - 1].lng,
+                                    bucket[ai].lat, bucket[ai].lng);
+            if (gap <= SANITY_GAP_SEC) continue;
+
+            const outlier = bucket[ai];
+            let bestTarget = -1, bestDist = Infinity;
+            for (let ti = 0; ti < busBuckets.length; ti++) {
+                if (ti === bi) continue;
+                const used = busBuckets[ti].reduce((s, a) => s + a.size, 0);
+                if (used + outlier.size > busCapacities[ti]) continue;
+                const c = busCentroid(busBuckets[ti]);
+                if (!c) continue;
+                const d = haversineMi(outlier.lat, outlier.lng, c.lat, c.lng);
+                if (d < bestDist) { bestDist = d; bestTarget = ti; }
+            }
+            if (bestTarget >= 0) {
+                bucket.splice(ai, 1);
+                busBuckets[bestTarget].push(outlier);
+                sanityMoves++;
+                console.log('[Go v6] Sanity: moved ' + outlier.members[0].name +
+                    ' (+' + (outlier.size - 1) + ') from Bus ' + (bi + 1) +
+                    ' to Bus ' + (bestTarget + 1) +
+                    ' (gap: ' + Math.round(gap) + 's)');
+            }
+        }
+    }
+    if (sanityMoves) {
+        console.log('[Go v6] Sanity check moved ' + sanityMoves + ' atom(s)');
+    } else {
+        console.log('[Go v6] Sanity check: no gaps > ' + SANITY_GAP_SEC + 's detected');
+    }
+
+    // ── E. Create stops per bus ──
+    showProgress(shiftLabel + ': spatial sort — creating stops...', pctBase + 50);
+
+    const busRouteData = [];
+    for (let bi = 0; bi < busBuckets.length; bi++) {
+        const vehicle = shiftVehicles[bi];
+        const campers = busBuckets[bi].flatMap(a => a.members);
+        if (!campers.length) {
+            busRouteData.push({ busId: vehicle.busId, vehicle, stops: [], camperCount: 0 });
+            continue;
+        }
+
+        let stops;
+        if (dropoffMode === 'door-to-door') {
+            stops = createHouseStops(campers);
+        } else {
+            stops = await createCornerStops(campers);
+        }
+
+        busRouteData.push({
+            busId: vehicle.busId,
+            vehicle,
+            stops,
+            camperCount: campers.length
+        });
+    }
+
+    // ── F. Build route objects ──
+    let routes = busRouteData.map(bd => ({
+        busId:        bd.busId,
+        busName:      bd.vehicle.name || bd.busId,
+        busColor:     bd.vehicle.color || '#10b981',
+        monitor:      bd.vehicle.monitor || null,
+        counselors:   bd.vehicle.counselors || [],
+        stops:        bd.stops.map((s, i) => ({
+            stopNum: i + 1,
+            campers: s.campers,
+            address: s.address,
+            lat: s.lat, lng: s.lng
+        })),
+        camperCount:  bd.camperCount,
+        _cap:         bd.vehicle.capacity,
+        totalDuration: 0,
+        _source:      'spatial-sort'
+    }));
+
+    // ── Cross-bus dedup safety net ──
+    (function dedupAcrossBuses() {
+        const seen = new Set();
+        let removed = 0;
+        for (const r of routes) {
+            for (const st of r.stops) {
+                const keep = [];
+                for (const cc of (st.campers || [])) {
+                    const n = typeof cc === 'string' ? cc : cc.name;
+                    if (!n || seen.has(n)) { removed++; continue; }
+                    seen.add(n);
+                    keep.push(cc);
+                }
+                st.campers = keep;
+            }
+            r.stops = r.stops.filter(s => s.campers.length > 0);
+            r.stops.forEach((s, i) => s.stopNum = i + 1);
+            r.camperCount = r.stops.reduce((sum, s) => sum + s.campers.length, 0);
+        }
+        if (removed) {
+            console.warn('[Go v6] Cross-bus dedup removed ' + removed + ' duplicate(s)');
+        }
+    })();
+
+    // ── G. Per-bus TSP re-ordering ──
+    if (googleAvailable && routes.length) {
+        showProgress(shiftLabel + ': optimizing stop order per bus...', pctBase + 65);
+        for (const r of routes) {
+            if (r.stops.length < 3) continue;
+            try {
+                const tspResult = await _perBusGoogleTSP({
+                    route: r,
+                    campLat, campLng,
+                    isArrival,
+                    serviceTimeSec,
+                    googleKey, googleProjId,
+                    _supabaseUrl, _googleProxyToken,
+                    shift,
+                    shiftIdx
+                });
+                if (tspResult) {
+                    r.stops = tspResult.stops;
+                    r.stops.forEach((s, i) => s.stopNum = i + 1);
+                    r.totalDuration = tspResult.totalDuration || r.totalDuration;
+                    if (tspResult.roadPts) r._roadPts = tspResult.roadPts;
+                    if (tspResult.tspLegTimes) r._tspLegTimes = tspResult.tspLegTimes;
+                }
+            } catch (e) {
+                console.warn('[Go v6] Per-bus TSP failed for ' + r.busName +
+                    ' — using spatial order (' + e.message + ')');
+            }
+        }
+    }
+
+    const totalStops = routes.reduce((s, r) => s + r.stops.length, 0);
+    const totalCampers = routes.reduce((s, r) => s + r.camperCount, 0);
+    console.log('[Go v6] Spatial sort complete: ' + routes.length + ' routes, ' +
+        totalStops + ' stops, ' + totalCampers + ' campers');
+
+    toast('✓ Routes generated — ' + routes.length + ' buses (spatial sort)');
+    return routes;
+}
 
 
 function computeZoneTimeWindow(stops, campLat, campLng, isArrival,
