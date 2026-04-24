@@ -4121,84 +4121,109 @@ async function _trySpatialSortPipeline({
     // Remove any empty buckets
     busBuckets = busBuckets.filter(b => b.length > 0);
 
-    // ── F. Phase 5: Local rebalance between neighboring clusters ──
-    // Move edge atoms from oversized clusters to undersized neighbors.
-    // Preserves geographic shape — only shifts boundary atoms.
-    showProgress(shiftLabel + ': phase 5 — local rebalance...', pctBase + 55);
+    // ── F. Phase 5: Distance-based inward cascade rebalance ──
+    // Farther clusters from camp get fewer kids (less pickup time available).
+    // Closer clusters get more kids (more pickup time available).
+    // Excess kids flow inward toward camp, cascading layer by layer.
+    showProgress(shiftLabel + ': phase 5 — distance-based rebalance...', pctBase + 55);
 
     const totalForBalance = busBuckets.reduce((s, b) => s + bucketSize(b), 0);
-    const targetPerBus = Math.round(totalForBalance / k);
+    const TIME_BUDGET_SEC = 45 * 60;
+    const SEC_PER_PICKUP = 90;
+
+    const clusterMeta = busBuckets.map((bucket, idx) => {
+        const cent = bucketCentroid(bucket);
+        const distSec = drivingDist(campLat, campLng, cent.lat, cent.lng);
+        const availableSec = Math.max(SEC_PER_PICKUP * 2, TIME_BUDGET_SEC - 2 * distSec);
+        return { idx, cent, distSec, availableSec, size: bucketSize(bucket) };
+    });
+
+    const totalAvailable = clusterMeta.reduce((s, m) => s + m.availableSec, 0);
+    clusterMeta.forEach(m => {
+        m.target = Math.round((m.availableSec / totalAvailable) * totalForBalance);
+    });
+
+    const targetSum = clusterMeta.reduce((s, m) => s + m.target, 0);
+    if (targetSum !== totalForBalance) {
+        clusterMeta.sort((a, b) => b.target - a.target);
+        clusterMeta[0].target += (totalForBalance - targetSum);
+    }
+
+    clusterMeta.sort((a, b) => b.distSec - a.distSec);
 
     console.log('[Go v6] ═══════════════════════════════════════');
-    console.log('[Go v6] PHASE 5: Local rebalance — target ~' + targetPerBus + ' per bus');
+    console.log('[Go v6] PHASE 5: Distance-based inward cascade rebalance');
     console.log('[Go v6] ═══════════════════════════════════════');
+    clusterMeta.forEach(m => {
+        const distMin = (m.distSec / 60).toFixed(1);
+        console.log('[Go v6]   Cluster ' + (m.idx + 1) + ': ' +
+            m.size + ' campers, target ' + m.target +
+            ', dist from camp ' + distMin + 'min');
+    });
 
     let rebalanceMoves = 0;
-    for (let pass = 0; pass < 20; pass++) {
+    for (let pass = 0; pass < 50; pass++) {
         let moved = false;
 
-        // Find the most oversized cluster
-        let bigIdx = -1, bigOver = 0;
-        for (let i = 0; i < busBuckets.length; i++) {
-            const over = bucketSize(busBuckets[i]) - targetPerBus;
-            if (over > bigOver) { bigOver = over; bigIdx = i; }
-        }
-        if (bigIdx < 0 || bigOver <= 2) break;
+        for (let oi = 0; oi < clusterMeta.length; oi++) {
+            const outer = clusterMeta[oi];
+            const excess = bucketSize(busBuckets[outer.idx]) - outer.target;
+            if (excess <= 0) continue;
 
-        // Find its nearest neighbor that's under target
-        const bigCent = bucketCentroid(busBuckets[bigIdx]);
-        let bestNeighbor = -1, bestDist = Infinity;
-        for (let i = 0; i < busBuckets.length; i++) {
-            if (i === bigIdx) continue;
-            if (bucketSize(busBuckets[i]) >= targetPerBus) continue;
-            const c = bucketCentroid(busBuckets[i]);
-            if (!c) continue;
-            const d = haversineMi(bigCent.lat, bigCent.lng, c.lat, c.lng);
-            if (d < bestDist) { bestDist = d; bestNeighbor = i; }
-        }
-        if (bestNeighbor < 0) break;
+            let bestInner = -1, bestDist = Infinity;
+            for (let ii = 0; ii < clusterMeta.length; ii++) {
+                if (ii === oi) continue;
+                const inner = clusterMeta[ii];
+                if (inner.distSec >= outer.distSec) continue;
+                if (bucketSize(busBuckets[inner.idx]) >= inner.target) continue;
+                const d = haversineMi(outer.cent.lat, outer.cent.lng, inner.cent.lat, inner.cent.lng);
+                if (d < bestDist) { bestDist = d; bestInner = ii; }
+            }
+            if (bestInner < 0) continue;
 
-        const neighborCent = bucketCentroid(busBuckets[bestNeighbor]);
-        const neighborRoom = targetPerBus - bucketSize(busBuckets[bestNeighbor]);
+            const inner = clusterMeta[bestInner];
+            const innerCent = bucketCentroid(busBuckets[inner.idx]);
 
-        // Move atoms closest to the neighbor, one at a time
-        while (bucketSize(busBuckets[bigIdx]) > targetPerBus && busBuckets[bigIdx].length > 1) {
-            const room = targetPerBus - bucketSize(busBuckets[bestNeighbor]);
-            if (room <= 0) break;
-
-            // Find atom in big cluster closest to neighbor
             let closestIdx = -1, closestDist = Infinity;
-            for (let ai = 0; ai < busBuckets[bigIdx].length; ai++) {
-                const a = busBuckets[bigIdx][ai];
+            for (let ai = 0; ai < busBuckets[outer.idx].length; ai++) {
+                const a = busBuckets[outer.idx][ai];
+                const room = inner.target - bucketSize(busBuckets[inner.idx]);
                 if (a.size > room) continue;
-                const d = haversineMi(a.lat, a.lng, neighborCent.lat, neighborCent.lng);
+                const d = haversineMi(a.lat, a.lng, innerCent.lat, innerCent.lng);
                 if (d < closestDist) { closestDist = d; closestIdx = ai; }
             }
-            if (closestIdx < 0) break;
+            if (closestIdx < 0) continue;
 
-            const atom = busBuckets[bigIdx].splice(closestIdx, 1)[0];
-            busBuckets[bestNeighbor].push(atom);
+            const atom = busBuckets[outer.idx].splice(closestIdx, 1)[0];
+            busBuckets[inner.idx].push(atom);
             rebalanceMoves++;
             moved = true;
+
+            outer.cent = bucketCentroid(busBuckets[outer.idx]);
+            inner.cent = bucketCentroid(busBuckets[inner.idx]);
         }
 
         if (!moved) break;
     }
 
     if (rebalanceMoves > 0) {
-        console.log('[Go v6] Rebalance: moved ' + rebalanceMoves + ' atoms between neighbors');
+        console.log('[Go v6] Inward cascade: moved ' + rebalanceMoves + ' atoms toward camp');
     } else {
-        console.log('[Go v6] Rebalance: clusters already balanced');
+        console.log('[Go v6] Inward cascade: clusters already at distance-based targets');
     }
 
     // ── G. Log final cluster results ──
     console.log('[Go v6] ═══════════════════════════════════════');
     console.log('[Go v6] FINAL CLUSTERS');
     console.log('[Go v6] ═══════════════════════════════════════');
+    const metaByIdx = {};
+    clusterMeta.forEach(m => { metaByIdx[m.idx] = m; });
     for (let i = 0; i < busBuckets.length; i++) {
         const count = bucketSize(busBuckets[i]);
         const lats = busBuckets[i].map(a => a.lat);
         const lngs = busBuckets[i].map(a => a.lng);
+        const meta = metaByIdx[i];
+        const targetStr = meta ? ' (target ' + meta.target + ', ' + (meta.distSec / 60).toFixed(1) + 'min from camp)' : '';
         if (lats.length) {
             const spread = haversineMi(
                 Math.min(...lats), Math.min(...lngs),
@@ -4206,8 +4231,7 @@ async function _trySpatialSortPipeline({
             const cent = bucketCentroid(busBuckets[i]);
             console.log('[Go v6] Cluster ' + (i + 1) + ': ' +
                 count + ' campers, ' + busBuckets[i].length + ' atoms, ' +
-                spread.toFixed(2) + 'mi spread, centroid: ' +
-                cent.lat.toFixed(5) + ',' + cent.lng.toFixed(5));
+                spread.toFixed(2) + 'mi spread' + targetStr);
         } else {
             console.log('[Go v6] Cluster ' + (i + 1) + ': EMPTY');
         }
