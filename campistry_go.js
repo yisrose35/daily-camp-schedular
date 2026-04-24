@@ -3926,6 +3926,49 @@ async function _trySpatialSortPipeline({
         return { lat: sLat / bucket.length, lng: sLng / bucket.length };
     }
 
+    // Spatial snake sort — direction adapts to spread relative to camp.
+    // Campers spread N/S from camp → primary sort by LNG (vertical E/W slices)
+    // Campers spread E/W from camp → primary sort by LAT (horizontal N/S slices)
+    function spatialSnakeSort(atomList) {
+        if (atomList.length < 2) return [...atomList];
+        const lats = atomList.map(a => a.lat);
+        const lngs = atomList.map(a => a.lng);
+        const latSpread = Math.max(...lats) - Math.min(...lats);
+        const lngSpread = Math.max(...lngs) - Math.min(...lngs);
+        // lngSpread is in degrees — scale to approx miles at this latitude
+        const avgLat = lats.reduce((s, l) => s + l, 0) / lats.length;
+        const lngMiles = lngSpread * Math.cos(avgLat * Math.PI / 180) * 69;
+        const latMiles = latSpread * 69;
+
+        const northSouth = latMiles >= lngMiles;
+        if (northSouth) {
+            // Buses travel N/S → split into vertical columns (sort by lng first)
+            return [...atomList].sort((a, b) => a.lng - b.lng || a.lat - b.lat);
+        } else {
+            // Buses travel E/W → split into horizontal rows (sort by lat first)
+            return [...atomList].sort((a, b) => a.lat - b.lat || a.lng - b.lng);
+        }
+    }
+
+    // Even spatial split: sort atoms with direction-aware snake, cut into n chunks
+    function evenSpatialSplit(atomList, n) {
+        const sorted = spatialSnakeSort(atomList);
+        const total = sorted.reduce((s, a) => s + a.size, 0);
+        const target = Math.ceil(total / n);
+        const buckets = [];
+        let cur = [], curSz = 0;
+        for (const atom of sorted) {
+            if (curSz + atom.size > target && cur.length > 0 && buckets.length < n - 1) {
+                buckets.push(cur);
+                cur = []; curSz = 0;
+            }
+            cur.push(atom);
+            curSz += atom.size;
+        }
+        if (cur.length) buckets.push(cur);
+        return buckets;
+    }
+
     showProgress(shiftLabel + ': clustering — building atoms...', pctBase + 10);
 
     // ── A. Build sibling atoms ──
@@ -4057,34 +4100,7 @@ async function _trySpatialSortPipeline({
             ' (needs ' + neededBuses + ' buses, using ' + busesToUse + ' freed buses)');
 
         const clusterAtoms = busBuckets[largestIdx];
-
-        // Even spatial split: sort atoms by lat then snake by lng, cut into equal chunks
-        const bandCount = Math.ceil(Math.sqrt(splitInto));
-        clusterAtoms.sort((a, b) => a.lat - b.lat);
-        const bandSize = Math.ceil(clusterAtoms.length / bandCount);
-        const sorted = [];
-        for (let b = 0; b < bandCount; b++) {
-            const band = clusterAtoms.slice(b * bandSize, (b + 1) * bandSize);
-            if (b % 2 === 1) band.sort((a, bb) => bb.lng - a.lng);
-            else band.sort((a, bb) => a.lng - bb.lng);
-            sorted.push(...band);
-        }
-
-        // Cut sorted list into equal-sized sub-buckets by camper count
-        const targetPerBus = Math.ceil(largestSize / splitInto);
-        const subBuckets = [];
-        let current = [];
-        let currentSize = 0;
-        for (const atom of sorted) {
-            if (currentSize + atom.size > targetPerBus && current.length > 0 && subBuckets.length < splitInto - 1) {
-                subBuckets.push(current);
-                current = [];
-                currentSize = 0;
-            }
-            current.push(atom);
-            currentSize += atom.size;
-        }
-        if (current.length) subBuckets.push(current);
+        const subBuckets = evenSpatialSplit(clusterAtoms, splitInto);
 
         // Replace the original cluster with the sub-clusters
         busBuckets.splice(largestIdx, 1, ...subBuckets);
@@ -4177,30 +4193,7 @@ async function _trySpatialSortPipeline({
             for (const atom of busBuckets[ri]) pooledAtoms.push(atom);
         }
 
-        // Even spatial split into optimal bus count
-        const bandCount = Math.ceil(Math.sqrt(optimalBuses));
-        pooledAtoms.sort((a, b) => a.lat - b.lat);
-        const bandSz = Math.ceil(pooledAtoms.length / bandCount);
-        const sorted = [];
-        for (let b = 0; b < bandCount; b++) {
-            const band = pooledAtoms.slice(b * bandSz, (b + 1) * bandSz);
-            if (b % 2 === 1) band.sort((a, bb) => bb.lng - a.lng);
-            else band.sort((a, bb) => a.lng - bb.lng);
-            sorted.push(...band);
-        }
-
-        const targetPerBus = Math.ceil(totalCampersInRegion / optimalBuses);
-        const newBuckets = [];
-        let cur = [], curSz = 0;
-        for (const atom of sorted) {
-            if (curSz + atom.size > targetPerBus && cur.length > 0 && newBuckets.length < optimalBuses - 1) {
-                newBuckets.push(cur);
-                cur = []; curSz = 0;
-            }
-            cur.push(atom);
-            curSz += atom.size;
-        }
-        if (cur.length) newBuckets.push(cur);
+        const newBuckets = evenSpatialSplit(pooledAtoms, optimalBuses);
 
         // Replace the region's clusters with the new ones
         // Sort indices descending so splicing doesn't shift later indices
@@ -4237,26 +4230,7 @@ async function _trySpatialSortPipeline({
             console.log('[Go v6]   → Split cluster (' + lgSz + ' campers) into ' + into);
 
             const cAtoms = busBuckets[lgIdx];
-            const bc = Math.ceil(Math.sqrt(into));
-            cAtoms.sort((a, b) => a.lat - b.lat);
-            const bs = Math.ceil(cAtoms.length / bc);
-            const s2 = [];
-            for (let b = 0; b < bc; b++) {
-                const band = cAtoms.slice(b * bs, (b + 1) * bs);
-                if (b % 2 === 1) band.sort((a, bb) => bb.lng - a.lng);
-                else band.sort((a, bb) => a.lng - bb.lng);
-                s2.push(...band);
-            }
-            const tgt = Math.ceil(lgSz / into);
-            const subs = [];
-            let c2 = [], c2s = 0;
-            for (const atom of s2) {
-                if (c2s + atom.size > tgt && c2.length > 0 && subs.length < into - 1) {
-                    subs.push(c2); c2 = []; c2s = 0;
-                }
-                c2.push(atom); c2s += atom.size;
-            }
-            if (c2.length) subs.push(c2);
+            const subs = evenSpatialSplit(cAtoms, into);
 
             busBuckets.splice(lgIdx, 1, ...subs);
             unusedBuses -= use;
@@ -4289,30 +4263,16 @@ async function _trySpatialSortPipeline({
         ' campers / ' + k + ' buses = ~' + targetPerBus + ' per bus');
     console.log('[Go v6] ═══════════════════════════════════════');
 
-    // Spatial snake sort
-    const balanceBands = Math.ceil(Math.sqrt(k));
-    allAtoms.sort((a, b) => a.lat - b.lat);
-    const balanceBandSize = Math.ceil(allAtoms.length / balanceBands);
-    const balanceSorted = [];
-    for (let b = 0; b < balanceBands; b++) {
-        const band = allAtoms.slice(b * balanceBandSize, (b + 1) * balanceBandSize);
-        if (b % 2 === 1) band.sort((a, bb) => bb.lng - a.lng);
-        else band.sort((a, bb) => a.lng - bb.lng);
-        balanceSorted.push(...band);
-    }
+    const lats = allAtoms.map(a => a.lat);
+    const lngs = allAtoms.map(a => a.lng);
+    const latSpread = (Math.max(...lats) - Math.min(...lats)) * 69;
+    const avgLt = lats.reduce((s, l) => s + l, 0) / lats.length;
+    const lngSpread = (Math.max(...lngs) - Math.min(...lngs)) * Math.cos(avgLt * Math.PI / 180) * 69;
+    console.log('[Go v6] Spread: ' + latSpread.toFixed(1) + 'mi N/S, ' +
+        lngSpread.toFixed(1) + 'mi E/W → splitting by ' +
+        (latSpread >= lngSpread ? 'LONGITUDE (vertical slices)' : 'LATITUDE (horizontal slices)'));
 
-    // Cut into k even chunks
-    busBuckets = [];
-    let cur = [], curSz = 0;
-    for (const atom of balanceSorted) {
-        if (curSz + atom.size > targetPerBus && cur.length > 0 && busBuckets.length < k - 1) {
-            busBuckets.push(cur);
-            cur = []; curSz = 0;
-        }
-        cur.push(atom);
-        curSz += atom.size;
-    }
-    if (cur.length) busBuckets.push(cur);
+    busBuckets = evenSpatialSplit(allAtoms, k);
 
     // ── G. Log final cluster results ──
     console.log('[Go v6] ═══════════════════════════════════════');
