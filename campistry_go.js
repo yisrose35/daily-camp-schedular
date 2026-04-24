@@ -4203,8 +4203,16 @@ async function _trySpatialSortPipeline({
                 const a = busBuckets[outer.idx][ai];
                 const room = inner.target - bucketSize(busBuckets[inner.idx]);
                 if (a.size > room) continue;
-                const d = haversineMi(a.lat, a.lng, innerCent.lat, innerCent.lng);
-                if (d < closestDist) { closestDist = d; closestIdx = ai; }
+                const dToInner = haversineMi(a.lat, a.lng, innerCent.lat, innerCent.lng);
+                let closerToOther = false;
+                for (let ci = 0; ci < clusterMeta.length; ci++) {
+                    if (ci === oi || ci === bestInner) continue;
+                    const other = clusterMeta[ci];
+                    const dToOther = haversineMi(a.lat, a.lng, other.cent.lat, other.cent.lng);
+                    if (dToOther < dToInner) { closerToOther = true; break; }
+                }
+                if (closerToOther) continue;
+                if (dToInner < closestDist) { closestDist = dToInner; closestIdx = ai; }
             }
             if (closestIdx < 0) continue;
 
