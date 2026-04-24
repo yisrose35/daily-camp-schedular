@@ -4331,9 +4331,14 @@ async function _trySpatialSortPipeline({
         const med = median(times);
         const cap = med * MAX_TIME_RATIO;
 
+        // Worst cluster = max overage, where overage = max(time-cap, capacity-overflow-as-seconds)
+        // Capacity overflow converted to time via STOP_WEIGHT so one metric covers both.
         let worstMI = -1, worstOver = 0;
         for (let mi = 0; mi < clusterMeta.length; mi++) {
-            const over = times[mi] - cap;
+            const timeOver = times[mi] - cap;
+            const sz = bucketSize(busBuckets[clusterMeta[mi].idx]);
+            const capOver = (sz - SOFT_CAPACITY) * STOP_WEIGHT;
+            const over = Math.max(timeOver, capOver);
             if (over > worstOver) { worstOver = over; worstMI = mi; }
         }
         if (worstMI < 0) break;
@@ -4344,7 +4349,8 @@ async function _trySpatialSortPipeline({
         for (let mi = 0; mi < clusterMeta.length; mi++) {
             if (mi === worstMI) continue;
             const inner = clusterMeta[mi];
-            if (inner.distSec >= outer.distSec) continue;
+            // For time-driven moves: prefer inward (toward camp). For capacity-driven
+            // moves: any direction is fine as long as receiver has room and isn't over cap.
             if (times[mi] >= cap) continue;
             if (bucketSize(busBuckets[inner.idx]) >= SOFT_CAPACITY) continue;
             const d = haversineMi(outer.cent.lat, outer.cent.lng, inner.cent.lat, inner.cent.lng);
