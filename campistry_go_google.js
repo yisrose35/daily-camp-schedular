@@ -427,12 +427,10 @@ window.GoGoogleOptimizer = (function () {
             for (let vi2 = 0; vi2 < allVisits.length; vi2++) {
                 const visit = allVisits[vi2];
                 const wantsPickup = isArrival;
-                if (visit.isPickup === undefined) {
-                    // Shouldn't happen with paired shipments (Google always sets it
-                    // when both pickup and delivery exist) — skip rather than guess.
-                    continue;
-                }
-                if (visit.isPickup !== wantsPickup) continue;
+                // Proto3 JSON omits false booleans, so delivery visits arrive
+                // without isPickup. Treat absent as false (= delivery visit).
+                const isThisPickup = visit.isPickup === true;
+                if (isThisPickup !== wantsPickup) continue;
 
                 const stopIdx = visit.shipmentIndex ?? 0;
                 if (seenShipment.has(stopIdx)) continue;
