@@ -203,7 +203,10 @@ window.GoGoogleOptimizer = (function () {
                 label:       String(idx),
                 penaltyCost: SKIP_PENALTY,
                 loadDemands: { campers: { amount: String(stop.campers.length) } },
-                pickupToDeliveryTimeLimit: String(maxRideSec) + 's',
+                // No pickupToDeliveryTimeLimit — hard per-camper ride cap caused
+                // far stops to be declared infeasible and cheapest-inserted in
+                // random positions, creating zigzag routes. Ride-time violations
+                // are audited post-hoc via _applyETAsAndAudits instead.
                 ...(isArrival
                     ? { pickups: [homeVisit], deliveries: [campVisit] }
                     : { pickups: [campVisit], deliveries: [homeVisit] })
@@ -330,8 +333,7 @@ window.GoGoogleOptimizer = (function () {
 
         console.log('[GoGoogle v5.2] Sending ' + shipments.length +
             ' paired shipments + ' + modelVehicles.length +
-            ' vehicles (hard ride cap: ' + Math.round(maxRideSec / 60) + 'min, ' +
-            'hard route cap: ' + Math.round(routeDurationHardSec / 60) + 'min, ' +
+            ' vehicles (route cap: ' + Math.round(routeDurationHardSec / 60) + 'min, ' +
             'per-vehicle time windows: ' + Object.keys(vtwByBusId).length + ')');
 
         // ── API CALL ───────────────────────────────────────────────────────────
