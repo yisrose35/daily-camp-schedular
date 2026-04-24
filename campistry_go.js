@@ -4234,6 +4234,63 @@ function _applyETAsAndAudits(routes, {
 
 
 // =============================================================================
+// HELPER: Collect staff members who need a stop suggestion
+// =============================================================================
+function _collectNoStopStaff() {
+    const out = [];
+
+    for (const counselor of D.counselors) {
+        if (!counselor.address) continue;
+        let staffCoords = null;
+        if (counselor._lat && counselor._lng) {
+            staffCoords = { lat: counselor._lat, lng: counselor._lng };
+        }
+        if (!staffCoords) {
+            const a = D.addresses[counselor.name] ||
+                      D.addresses[counselor.firstName + ' ' + counselor.lastName];
+            if (a?.geocoded && a.lat && a.lng) {
+                staffCoords = { lat: a.lat, lng: a.lng };
+                counselor._lat = a.lat; counselor._lng = a.lng;
+            }
+        }
+        if (!staffCoords) continue;
+        out.push({
+            name: counselor.name, address: counselor.address,
+            lat: staffCoords.lat, lng: staffCoords.lng,
+            busId: counselor.assignedBus || null,
+            role: 'counselor', id: counselor.id
+        });
+    }
+
+    for (const monitor of D.monitors) {
+        if (!monitor.address) continue;
+        let staffCoords = null;
+        if (monitor._lat && monitor._lng) {
+            staffCoords = { lat: monitor._lat, lng: monitor._lng };
+        }
+        if (!staffCoords) {
+            const a = D.addresses[monitor.name] ||
+                      D.addresses[monitor.firstName + ' ' + monitor.lastName];
+            if (a?.geocoded && a.lat && a.lng) {
+                staffCoords = { lat: a.lat, lng: a.lng };
+                monitor._lat = a.lat; monitor._lng = a.lng;
+            }
+        }
+        if (!staffCoords) continue;
+        out.push({
+            name: monitor.name, address: monitor.address,
+            lat: staffCoords.lat, lng: staffCoords.lng,
+            busId: monitor.assignedBus || null,
+            role: 'monitor', id: monitor.id
+        });
+    }
+
+    if (out.length) console.log('[Go v5] Staff for post-gen suggestions: ' + out.length);
+    return out;
+}
+
+
+// =============================================================================
 // HELPER: Suggest nearest stops for staff
 //
 // Moves the v4 staff-suggestion logic out of generateRoutes for clarity.
