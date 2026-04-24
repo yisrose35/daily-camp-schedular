@@ -3635,6 +3635,81 @@
             var allTemplates = {};
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
+            // Helper: attach pre/post change blocks to a just-placed swim block.
+            // Mirrors Phase 0 logic: try outside (borrow from adjacent period),
+            // fall back to inside (eat from swim's duration) if outside overlaps
+            // an existing wall. Mutates `swimBlk` in place when going inside.
+            function attachSwimChangeBlocks(swimBlk, template) {
+                if (!swimBlk || swimBlk.type !== 'swim') return;
+                var layer = swimBlk.layer;
+                if (!layer) return;
+                var preChange = layer.preChangeMin > 0 ? layer.preChangeMin : 0;
+                var postChange = layer.postChangeMin > 0 ? layer.postChangeMin : 0;
+                if (preChange <= 0 && postChange <= 0) return;
+
+                var swimStart = swimBlk.startMin;
+                var swimEnd = swimBlk.endMin;
+                var rangeHasConflict = function(rStart, rEnd) {
+                    if (rStart < 0 || rEnd <= rStart) return true;
+                    for (var i = 0; i < template.length; i++) {
+                        var b = template[i];
+                        if (!b || b === swimBlk) continue;
+                        var bs = b.startMin, be = b.endMin;
+                        if (bs == null || be == null) continue;
+                        if (bs < rEnd && be > rStart) return true;
+                    }
+                    return false;
+                };
+
+                var preOutside = preChange > 0 && !rangeHasConflict(swimStart - preChange, swimStart);
+                var postOutside = postChange > 0 && !rangeHasConflict(swimEnd, swimEnd + postChange);
+
+                // Inside fallbacks: shrink swim's block so change fits at its edges.
+                // Only shrink if swim stays at least 5 min after the reduction.
+                var newStart = swimStart, newEnd = swimEnd;
+                if (preChange > 0 && !preOutside && (swimEnd - swimStart - preChange) >= 5) {
+                    newStart = swimStart + preChange;
+                }
+                if (postChange > 0 && !postOutside && (newEnd - newStart - postChange) >= 5) {
+                    newEnd = swimEnd - postChange;
+                }
+                swimBlk.startMin = newStart;
+                swimBlk.endMin = newEnd;
+                if (swimBlk._startMin != null) swimBlk._startMin = newStart;
+                if (swimBlk._endMin != null) swimBlk._endMin = newEnd;
+
+                // Pre-change block
+                if (preChange > 0) {
+                    var pStart = preOutside ? swimStart - preChange : swimStart;
+                    var pEnd   = preOutside ? swimStart              : newStart;
+                    if (pEnd > pStart) {
+                        var preBlk = makeBlock({
+                            startMin: pStart, endMin: pEnd,
+                            type: 'pre-change', event: 'Change',
+                            layer: layer, dMin: pEnd - pStart, dMax: pEnd - pStart,
+                            _fixed: true, _source: 'pinned',
+                            _activityLocked: true, _final: true
+                        });
+                        if (preBlk) template.push(preBlk);
+                    }
+                }
+                // Post-change block
+                if (postChange > 0) {
+                    var qStart = postOutside ? swimEnd                : newEnd;
+                    var qEnd   = postOutside ? swimEnd + postChange   : swimEnd;
+                    if (qEnd > qStart) {
+                        var postBlk = makeBlock({
+                            startMin: qStart, endMin: qEnd,
+                            type: 'post-change', event: 'Change',
+                            layer: layer, dMin: qEnd - qStart, dMax: qEnd - qStart,
+                            _fixed: true, _source: 'pinned',
+                            _activityLocked: true, _final: true
+                        });
+                        if (postBlk) template.push(postBlk);
+                    }
+                }
+            }
+
             // ★ Smart rotation: compute daily quotas (resets each iteration)
             var rotationQuotas = null;
             if (window.RotationEvents && typeof window.RotationEvents.getRotationQuotas === 'function') {
@@ -4586,7 +4661,15 @@
                                 _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
                                 _rotationEventColor: need._rotationEventColor || null, _final: true
                             });
-                            if (blk) template.push(blk);
+                            if (blk) {
+                                template.push(blk);
+                                // Swim pre/post change attachment (mirror of Phase 0 behavior):
+                                // when the swim layer configures preChangeMin/postChangeMin, place
+                                // them as separate blocks — outside swim's window if the adjacent
+                                // range is free, otherwise eat from swim's duration. Any bunk-level
+                                // swim (whether full-period or partial) gets the change buffer.
+                                attachSwimChangeBlocks(blk, template);
+                            }
                             // ★ Rotation quota: increment placed counter on successful CSP placement
                             if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
                                 var _rq = rotationQuotas[need._rotationEventId];
@@ -4675,7 +4758,10 @@
                                     var _rq2 = rotationQuotas[need._rotationEventId];
                                     if (_rq2) _rq2.placed++;
                                 }
-                                if (blk) template.push(blk);
+                                if (blk) {
+                                    template.push(blk);
+                                    attachSwimChangeBlocks(blk, template);
+                                }
                                 if (relaxationType) log('[Phase3] CSP-Relax: ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' via ' + relaxationDetail);
                             } else {
                                 log('[Phase3] CSP: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' (even with relaxation)');
