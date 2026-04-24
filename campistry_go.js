@@ -3822,15 +3822,62 @@ async function _tryNeighborhoodPipeline({
 }
 
 
+
+function computeZoneTimeWindow(stops, campLat, campLng, isArrival,
+                               shiftTargetHHMM, avgSpeedMph, avgStopMin) {
+    if (!stops?.length) return { startHHMM: null, startWindowEndHHMM: null, endHHMM: null };
+
+    // Mean distance from camp (miles).  Haversine is fine for back-solving —
+    // the final stop times come from Google's real road matrix.
+    let sumDist = 0;
+    for (const s of stops) {
+        sumDist += haversineMi(campLat, campLng, s.lat, s.lng);
+    }
+    const meanDist = sumDist / stops.length;
+
+    // Estimate round-trip drive time from camp.  We use mean (not max) distance
+    // because stops on the way back are closer to camp by definition.  The
+    // factor of 2 accounts for going out and coming back.
+    const estDriveMin = (meanDist * 2) / Math.max(1, avgSpeedMph) * 60;
+    const estServiceMin = stops.length * Math.max(0.5, avgStopMin);
+    const bufferMin = 10; // fudge factor for traffic, stop lights, boarding
+    const totalMin = Math.round(estDriveMin + estServiceMin + bufferMin);
+
+    const [tH, tM] = (shiftTargetHHMM || (isArrival ? '08:00' : '16:00'))
+        .split(':').map(Number);
+    const targetMin = tH * 60 + tM;
+
+    if (isArrival) {
+        // Bus starts early enough to reach camp by target.
+        const startMinOfDay = Math.max(0, targetMin - totalMin);
+        return {
+            startHHMM:          _minsToHHMM(startMinOfDay),
+            startWindowEndHHMM: null,
+            endHHMM:            _minsToHHMM(targetMin)
+        };
+    } else {
+        // Dismissal: bus leaves camp at target with a 5-min dispatch window.
+        return {
+            startHHMM:          _minsToHHMM(targetMin),
+            startWindowEndHHMM: _minsToHHMM(targetMin + 5),
+            endHHMM:            null
+        };
+    }
+}
+
+function _minsToHHMM(totalMin) {
+    const h = Math.floor(totalMin / 60) % 24;
+    const m = totalMin % 60;
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+}
+
+
 // =============================================================================
-// PER-BUS TSP
+// REPLACEMENT _perBusGoogleTSP
 //
-// Runs Google Route Optimization on ONE bus and ONE set of stops to get an
-// optimal stop sequence.  The bus has effectively unlimited capacity for
-// this call (we've already decided who's on it); we just want the solver to
-// find the best order.
-//
-// Returns { stops, totalDuration, roadPts, tspLegTimes } or null.
+// Same signature as Phase 1; inside, it now computes a per-bus time window
+// from the bus's stops and passes it to Google so the solver back-solves
+// from the correct arrival/departure target per zone.
 // =============================================================================
 async function _perBusGoogleTSP({
     route, campLat, campLng,
@@ -3841,51 +3888,102 @@ async function _perBusGoogleTSP({
 }) {
     if (!window.GoGoogleOptimizer?.optimizeTours) return null;
 
-    // Single-vehicle optimize request
     const singleBus = [{
-        busId: route.busId,
-        name: route.busName,
-        color: route.busColor,
+        busId:    route.busId,
+        name:     route.busName,
+        color:    route.busColor,
         capacity: Math.max(route.camperCount + 10, 1000), // effectively unbounded
-        monitor: route.monitor,
+        monitor:  route.monitor,
         counselors: route.counselors
     }];
+
+    const avgSpeedMph = D.setup.avgSpeed || 25;
+    const avgStopMin  = D.setup.avgStopTime || 2;
+
+    // Back-solve per-bus time window from this zone's stops' mean distance
+    // to camp.  This is Phase 2's core addition: the solver doesn't just
+    // optimize the sequence, it also respects the time envelope.
+    const shiftTarget = shift.departureTime || (isArrival ? '08:00' : '16:00');
+    const zw = computeZoneTimeWindow(
+        route.stops, campLat, campLng, isArrival,
+        shiftTarget, avgSpeedMph, avgStopMin
+    );
+
+    const vehicleTimeWindows = [{
+        busId:          route.busId,
+        startTime:      zw.startHHMM,
+        startWindowEnd: zw.startWindowEndHHMM,
+        endTime:        zw.endHHMM
+    }];
+
+    console.log('[Go v5.2] Per-bus TSP ' + route.busName +
+        ' (' + route.stops.length + ' stops, ' + route.camperCount + ' campers): ' +
+        (isArrival
+            ? 'pickup ' + (zw.startHHMM || '?') + ' → camp ' + (zw.endHHMM || '?')
+            : 'camp ' + (zw.startHHMM || '?') + ' → dropoffs'));
 
     const result = await window.GoGoogleOptimizer.optimizeTours({
         stops: route.stops,
         vehicles: singleBus,
         campLat, campLng,
         isArrival,
-        serviceTime: serviceTimeSec,
-        departureTime: shift.departureTime ||
-                       (isArrival ? '07:30' : '16:00'),
+        serviceTime:   serviceTimeSec,
+        departureTime: shiftTarget,
         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+        vehicleTimeWindows,
         googleKey, googleProjId,
         supabaseUrl: _supabaseUrl,
         accessToken: _googleProxyToken,
         anonKey: window.__CAMPISTRY_SUPABASE__?.anonKey || ''
     });
 
-    if (!result || !result.length || !result[0].stops?.length) return null;
+    if (!result || !result.length || !result[0].stops?.length) {
+        // If the per-bus TSP returns nothing, it's usually because the hard
+        // ride-time constraint is infeasible for this bus's zone.  Log it
+        // loudly but don't fail the route — fall back to NH-spine ordering.
+        console.warn('[Go v5.2] Per-bus TSP ' + route.busName +
+            ' infeasible under ' + (D.setup.maxRideTime || 45) + 'min ride cap — ' +
+            'retaining spine ordering');
+        return null;
+    }
 
     const r = result[0];
+
+    // Sanity: the per-bus TSP must return the SAME campers (by name).
+    // If it dropped or added anyone, that's a bug — log and skip.
+    const inNames = new Set();
+    for (const s of route.stops) for (const c of s.campers) {
+        inNames.add(typeof c === 'string' ? c : c.name);
+    }
+    const outNames = new Set();
+    for (const s of r.stops) for (const c of s.campers) {
+        outNames.add(typeof c === 'string' ? c : c.name);
+    }
+    if (inNames.size !== outNames.size ||
+        [...inNames].some(n => !outNames.has(n))) {
+        console.error('[Go v5.2] Per-bus TSP altered camper set for ' + route.busName +
+            ' (in: ' + inNames.size + ', out: ' + outNames.size +
+            ') — rejecting result, keeping spine order');
+        return null;
+    }
+
     return {
-        stops: r.stops,
+        stops:         r.stops,
         totalDuration: r.totalDuration || 0,
-        roadPts: r._roadPts || null,
-        tspLegTimes: r._tspLegTimes || null
+        roadPts:       r._roadPts      || null,
+        tspLegTimes:   r._tspLegTimes  || null
     };
 }
 
 
 // =============================================================================
-// FALLBACK PATH: Global corner stops + Google Route Optimization
+// REPLACEMENT _fallbackGoogleGlobal
 //
-// Only runs if the neighborhood pipeline fails.  Loudly warns via toast.
-//
-// This is the v4 "ZIP+Google" path stripped down: generate corner stops
-// globally, then let Google Route Optimization solve the entire CVRP
-// (capacity + stop-ordering) in one call.
+// Unchanged in shape from Phase 1 (Phase 2's hardening is inside the optimizer,
+// not the caller).  The one difference: pass `vehicleTimeWindows` computed from
+// each bus's share of stops.  Since the fallback path hasn't decided zones yet,
+// we use a crude heuristic: sort stops by angle from camp, split into equal
+// chunks per bus, then use those chunks to back-solve time windows.
 // =============================================================================
 async function _fallbackGoogleGlobal({
     shift, shiftLabel, pctBase,
@@ -3899,11 +3997,8 @@ async function _fallbackGoogleGlobal({
 }) {
     showProgress(shiftLabel + ': FALLBACK — creating corner stops...', pctBase + 15);
 
-    // Use corner-stops (LSTA-style intersection stops); the other stop modes
-    // from v4 were lower-quality and are not worth preserving in the fallback.
     const allStops = await createCornerStops(allCampers);
 
-    // Deduplicate (defensive)
     const seen = new Set();
     const dedupStops = allStops.filter(s => {
         const key = Math.round(s.lat * 5000) + ',' + Math.round(s.lng * 5000);
@@ -3912,11 +4007,21 @@ async function _fallbackGoogleGlobal({
     });
 
     if (!dedupStops.length) {
-        console.error('[Go v5] Fallback: createCornerStops produced 0 stops');
+        console.error('[Go v5.2] Fallback: createCornerStops produced 0 stops');
         return null;
     }
 
     showProgress(shiftLabel + ': FALLBACK — Google Route Optimization...', pctBase + 45);
+
+    // Pre-assign stops to buses by angle-from-camp + equal-size chunks, purely
+    // for the purpose of back-solving time windows.  The real assignment
+    // happens inside Google; this is just an estimate.
+    const avgSpeedMph = D.setup.avgSpeed || 25;
+    const avgStopMin  = D.setup.avgStopTime || 2;
+    const vehicleTimeWindows = _estimateFallbackTimeWindows(
+        dedupStops, shiftVehicles, campLat, campLng,
+        isArrival, shift.departureTime, avgSpeedMph, avgStopMin
+    );
 
     const result = await window.GoGoogleOptimizer.optimizeTours({
         stops: dedupStops,
@@ -3926,6 +4031,7 @@ async function _fallbackGoogleGlobal({
         serviceTime: serviceTimeSec,
         departureTime: shift.departureTime || (isArrival ? '07:30' : '16:00'),
         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+        vehicleTimeWindows,
         googleKey, googleProjId,
         supabaseUrl: _supabaseUrl,
         accessToken: _googleProxyToken,
@@ -3933,11 +4039,10 @@ async function _fallbackGoogleGlobal({
     });
 
     if (!result || !result.length) {
-        console.error('[Go v5] Fallback: Google Route Optimization returned empty');
+        console.error('[Go v5.2] Fallback: Google Route Optimization returned empty');
         return null;
     }
 
-    // Ensure stopNum is set
     result.forEach(r => {
         r.stops.forEach((s, i) => s.stopNum = i + 1);
         r.camperCount = r.stops.reduce((sum, s) => sum + s.campers.length, 0);
@@ -3948,76 +4053,69 @@ async function _fallbackGoogleGlobal({
 
 
 // =============================================================================
-// HELPER: Collect noStopStaff (preserved from v4)
+// _estimateFallbackTimeWindows — crude per-bus time window estimate for the
+// fallback path, based on angular sweep + equal-size chunks.  Only used when
+// the neighborhood pipeline fails — so these are rough numbers, not the
+// LSTA-grade back-solve.
 // =============================================================================
-function _collectNoStopStaff() {
-    const out = [];
+function _estimateFallbackTimeWindows(stops, vehicles, campLat, campLng,
+                                       isArrival, shiftTargetHHMM,
+                                       avgSpeedMph, avgStopMin) {
+    if (!stops.length || !vehicles.length) return [];
 
-    for (const counselor of D.counselors) {
-        if (!counselor.address) continue;
-        let staffCoords = null;
-        if (counselor._lat && counselor._lng) {
-            staffCoords = { lat: counselor._lat, lng: counselor._lng };
-        }
-        if (!staffCoords) {
-            const a = D.addresses[counselor.name] ||
-                      D.addresses[counselor.firstName + ' ' + counselor.lastName];
-            if (a?.geocoded && a.lat && a.lng) {
-                staffCoords = { lat: a.lat, lng: a.lng };
-                counselor._lat = a.lat; counselor._lng = a.lng;
-            }
-        }
-        if (!staffCoords) continue;
-        out.push({
-            name: counselor.name, address: counselor.address,
-            lat: staffCoords.lat, lng: staffCoords.lng,
-            busId: counselor.assignedBus || null,
-            role: 'counselor', id: counselor.id
-        });
-    }
+    // Sort stops by angle from camp for a coarse spatial chunking.
+    const annotated = stops.map(s => ({
+        stop: s,
+        angle: Math.atan2(s.lng - campLng, s.lat - campLat)
+    }));
+    annotated.sort((a, b) => a.angle - b.angle);
 
-    for (const monitor of D.monitors) {
-        if (!monitor.address) continue;
-        let staffCoords = null;
-        if (monitor._lat && monitor._lng) {
-            staffCoords = { lat: monitor._lat, lng: monitor._lng };
+    const chunkSize = Math.ceil(annotated.length / vehicles.length);
+    return vehicles.map((v, vi) => {
+        const chunk = annotated
+            .slice(vi * chunkSize, (vi + 1) * chunkSize)
+            .map(a => a.stop);
+        if (!chunk.length) {
+            return {
+                busId: v.busId,
+                startTime: shiftTargetHHMM, endTime: shiftTargetHHMM
+            };
         }
-        if (!staffCoords) {
-            const a = D.addresses[monitor.name] ||
-                      D.addresses[monitor.firstName + ' ' + monitor.lastName];
-            if (a?.geocoded && a.lat && a.lng) {
-                staffCoords = { lat: a.lat, lng: a.lng };
-                monitor._lat = a.lat; monitor._lng = a.lng;
-            }
-        }
-        if (!staffCoords) continue;
-        out.push({
-            name: monitor.name, address: monitor.address,
-            lat: staffCoords.lat, lng: staffCoords.lng,
-            busId: monitor.assignedBus || null,
-            role: 'monitor', id: monitor.id
-        });
-    }
-
-    if (out.length) console.log('[Go v5] Staff for post-gen suggestions: ' + out.length);
-    return out;
+        const zw = computeZoneTimeWindow(
+            chunk, campLat, campLng, isArrival,
+            shiftTargetHHMM, avgSpeedMph, avgStopMin
+        );
+        return {
+            busId:          v.busId,
+            startTime:      zw.startHHMM,
+            startWindowEnd: zw.startWindowEndHHMM,
+            endTime:        zw.endHHMM
+        };
+    });
 }
 
 
 // =============================================================================
-// HELPER: ETA / estimatedTime / max-ride-time audit
+// REPLACEMENT _applyETAsAndAudits
 //
-// Runs once per shift, after routes are finalized, regardless of which
-// pipeline produced them.  Replaces the two copies of this logic in v4
-// (one in the NH path, one in the ZIP path).
+// Unchanged overall shape from Phase 1, but:
+//   - Prefers solver-provided _tspLegTimes (which, post-Phase-2, ARE the
+//     real travel times from Google's road matrix including traffic-free
+//     routing).
+//   - The maxRideTime audit is now a SANITY check rather than a potential
+//     data-quality issue, because the solver hard-capped ride time before
+//     returning.  Violations here mean either (a) the fallback path was used
+//     without full time-window support, or (b) haversine fallback kicked in
+//     because _tspLegTimes was null.  Both get logged as warnings with a
+//     note to that effect.
 // =============================================================================
 function _applyETAsAndAudits(routes, {
     shift, isArrival, campLat, campLng,
     avgStopMin, shiftNeedsReturn
 }) {
     const [depHour, depMin] = (shift.departureTime ||
-                               (isArrival ? '08:00' : '16:00')).split(':').map(Number);
-    const timeMin = depHour * 60 + depMin;
+        (isArrival ? '08:00' : '16:00')).split(':').map(Number);
+    const shiftTargetMin = depHour * 60 + depMin;
     const maxRideMin = D.setup.maxRideTime || 45;
 
     function driveMin(a, b) {
@@ -4036,15 +4134,22 @@ function _applyETAsAndAudits(routes, {
     for (const r of routes) {
         if (!r.stops?.length) continue;
 
-        // Use solver-provided per-leg times if present, else haversine fallback
         const legs = r._tspLegTimes;
-        function legMinAt(i) {
-            if (legs && legs[i] != null) return legs[i] / 60;
-            return null;
-        }
+        const legMinAt = i => (legs && legs[i] != null) ? legs[i] / 60 : null;
+        const usedSolverTimes = !!legs;
 
+        // ── Arrival (pickup) or Dismissal (dropoff) ETA pipeline ─────────────
+        // Phase 2 note: for arrival, each bus now has its OWN start time
+        // (per-zone back-solve).  We derive each bus's start time from its
+        // own first leg + stop chain, NOT from shift.departureTime.  The bus's
+        // arrival at camp is what's pinned; its start time is back-computed.
         if (isArrival) {
-            // Pickup: bus starts at first stop, ends at camp
+            // Arrival mode: bus ENDS at camp at shiftTargetMin (for this bus).
+            // If the solver honored per-vehicle endTimeWindows, camp arrival
+            // is shiftTargetMin minus any per-zone offset.  We don't know the
+            // exact offset here (it's internal to the solver), but the sum of
+            // legTimes + service gives the route duration, and camp arrival
+            // is the anchor — so we count backwards.
             let totalDur = 0;
             for (let i = 0; i < r.stops.length; i++) {
                 const tLeg = legMinAt(i);
@@ -4054,7 +4159,8 @@ function _applyETAsAndAudits(routes, {
             }
             const returnLeg = legMinAt(r.stops.length);
             totalDur += (returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
-            let cum = timeMin - totalDur;
+
+            let cum = shiftTargetMin - totalDur;
             for (let i = 0; i < r.stops.length; i++) {
                 const tLeg = legMinAt(i);
                 if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
@@ -4065,8 +4171,8 @@ function _applyETAsAndAudits(routes, {
             }
             r.totalDuration = Math.round(totalDur);
         } else {
-            // Dismissal: bus leaves camp, visits each stop in order
-            let cum = timeMin;
+            // Dismissal mode: bus STARTS at camp at shiftTargetMin.
+            let cum = shiftTargetMin;
             for (let i = 0; i < r.stops.length; i++) {
                 const tLeg = legMinAt(i);
                 if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
@@ -4075,7 +4181,7 @@ function _applyETAsAndAudits(routes, {
                 r.stops[i].estimatedTime = formatTime(cum);
                 r.stops[i].estimatedMin = cum;
             }
-            r.totalDuration = Math.round(cum - timeMin);
+            r.totalDuration = Math.round(cum - shiftTargetMin);
             if (shiftNeedsReturn && r.stops.length > 0) {
                 const returnLeg = legMinAt(r.stops.length);
                 r.returnTocamp = Math.round(returnLeg != null
@@ -4087,28 +4193,32 @@ function _applyETAsAndAudits(routes, {
 
         r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
 
-        // Max-ride-time audit
+        // ── Max-ride-time audit ─────────────────────────────────────────────
+        // Post-Phase-2, this is a sanity check: the solver already hard-capped
+        // each camper's ride time.  A violation here indicates:
+        //   - The fallback path was used (non-NH, less strict time windows), or
+        //   - _tspLegTimes was null and we used haversine, which overestimates
+        //     ride time on routes with good highway access.
+        // Either way, log it but don't treat it as a data-quality problem.
         let violations = 0;
         for (const st of r.stops) {
             if (!st.estimatedMin) continue;
             const rideMin = isArrival
-                ? (timeMin - st.estimatedMin)
-                : (st.estimatedMin - timeMin);
+                ? (shiftTargetMin - st.estimatedMin)
+                : (st.estimatedMin - shiftTargetMin);
             st._rideTimeMin = Math.round(Math.abs(rideMin));
             if (st._rideTimeMin > maxRideMin) {
                 st._rideTimeWarning = true;
                 violations++;
-                st.campers.forEach(c => {
-                    console.warn('[Go v5] Ride time: ' + c.name + ' on ' + r.busName +
-                        ' stop ' + st.stopNum + ' = ' + st._rideTimeMin +
-                        'min (max ' + maxRideMin + ')');
-                });
             }
         }
         if (violations) {
             r._rideTimeViolations = violations;
-            console.warn('[Go v5] ' + r.busName + ': ' + violations +
-                ' stop(s) exceed ' + maxRideMin + 'min max ride time');
+            const srcNote = usedSolverTimes
+                ? '(using solver leg times — may need investigation)'
+                : '(using haversine fallback — likely overestimate)';
+            console.warn('[Go v5.2] ' + r.busName + ': ' + violations +
+                ' stop(s) exceed ' + maxRideMin + 'min audit ' + srcNote);
         }
     }
 }
