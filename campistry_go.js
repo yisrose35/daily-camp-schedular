@@ -3860,9 +3860,11 @@ async function _trySpatialSortPipeline({
     const avgCapacity = shiftVehicles.length
         ? Math.floor(shiftVehicles.reduce((s, v) => s + (v.capacity || 0), 0) / shiftVehicles.length)
         : 48;
-    const MIN_BUS_THRESHOLD = 0;
+    const MIN_BUS_THRESHOLD = Math.ceil(avgCapacity * 0.75);
+    const CASCADE_FLOOR = Math.ceil(avgCapacity * 0.30);
     console.log('[Go v6] Fleet avg capacity: ' + avgCapacity +
-        ', min cluster threshold: none (time-priority mode)');
+        ', dissolve threshold: ' + MIN_BUS_THRESHOLD +
+        ', cascade floor: ' + CASCADE_FLOOR);
 
     // ── Helper: run k-means on a set of atoms with given k ──
     function runKMeans(atomSet, numClusters) {
@@ -4112,16 +4114,6 @@ async function _trySpatialSortPipeline({
                 const d = haversineMi(sCent.lat, sCent.lng, c.lat, c.lng);
                 if (d < nearDist) { nearDist = d; nearIdx = i; }
             }
-            // If no merge target keeps capacity, allow over-capacity merge —
-            // the outer loop will then split the resulting oversized cluster.
-            if (nearIdx < 0) {
-                for (let i = 0; i < busBuckets.length; i++) {
-                    if (i === smallIdx || i === largestIdx) continue;
-                    const c = bucketCentroid(busBuckets[i]);
-                    const d = haversineMi(sCent.lat, sCent.lng, c.lat, c.lng);
-                    if (d < nearDist) { nearDist = d; nearIdx = i; }
-                }
-            }
             if (nearIdx < 0) break;
 
             console.log('[Go v6] Free-up merge: cluster ' + (smallIdx + 1) +
@@ -4245,7 +4237,7 @@ async function _trySpatialSortPipeline({
         let bestAI = -1, bestADist = Infinity;
         for (let ai = 0; ai < busBuckets[outer.idx].length; ai++) {
             const a = busBuckets[outer.idx][ai];
-            if (bucketSize(busBuckets[outer.idx]) - a.size < MIN_BUS_THRESHOLD) continue;
+            if (bucketSize(busBuckets[outer.idx]) - a.size < CASCADE_FLOOR) continue;
             if (bucketSize(busBuckets[inner.idx]) + a.size > avgCapacity) continue;
             const dToInner = haversineMi(a.lat, a.lng, innerCent.lat, innerCent.lng);
             let closerToOther = false;
