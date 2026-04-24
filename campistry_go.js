@@ -4140,13 +4140,24 @@ async function _trySpatialSortPipeline({
 
     let splitRound = 0;
     let splitSafety = 0;
-    while (splitSafety++ < 100) {
+    let lastLargestSize = Infinity;
+    let stagnantRounds = 0;
+    while (splitSafety++ < k * 2) {
         let largestIdx = -1, largestSize = 0;
         for (let i = 0; i < busBuckets.length; i++) {
             const sz = bucketSize(busBuckets[i]);
             if (sz > largestSize) { largestSize = sz; largestIdx = i; }
         }
         if (largestIdx < 0 || largestSize <= SOFT_CAPACITY) break;
+        if (largestSize >= lastLargestSize) {
+            if (++stagnantRounds >= 2) {
+                console.log('[Go v6] Split aborted: no progress (largest stuck at ' + largestSize + ')');
+                break;
+            }
+        } else {
+            stagnantRounds = 0;
+        }
+        lastLargestSize = largestSize;
 
         let neededBuses = Math.ceil(largestSize / avgCapacity);
         let extraBuses = neededBuses - 1;
@@ -4211,10 +4222,20 @@ async function _trySpatialSortPipeline({
 
                 for (const atom of dissolved) {
                     let bestIdx = -1, bestDist = Infinity;
+                    // Prefer nearest cluster that won't exceed SOFT_CAPACITY
                     for (let i = 0; i < busBuckets.length; i++) {
+                        if (bucketSize(busBuckets[i]) + atom.size > SOFT_CAPACITY) continue;
                         const c = bucketCentroid(busBuckets[i]);
                         const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
                         if (d < bestDist) { bestDist = d; bestIdx = i; }
+                    }
+                    // Fallback: no cluster has room → nearest regardless
+                    if (bestIdx < 0) {
+                        for (let i = 0; i < busBuckets.length; i++) {
+                            const c = bucketCentroid(busBuckets[i]);
+                            const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
+                            if (d < bestDist) { bestDist = d; bestIdx = i; }
+                        }
                     }
                     if (bestIdx >= 0) busBuckets[bestIdx].push(atom);
                 }
