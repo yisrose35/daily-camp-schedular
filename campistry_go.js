@@ -3272,37 +3272,18 @@ async function generateRoutes() {
     }
 
     // -------------------------------------------------------------------------
-    // CAMP GEOCODING
+    // CAMP COORDS — must already be geocoded from the Setup tab
     // -------------------------------------------------------------------------
     _routeProgStart = Date.now();
-    let campCoords = null;
-    if (D.setup.campAddress) {
-        showProgress('Geocoding camp...', 5);
-        if (_campCoordsCache) {
-            campCoords = _campCoordsCache;
-        } else {
-            campCoords = await geocodeSingle(D.setup.campAddress);
-            if (campCoords) {
-                if (D.setup.campLat && D.setup.campLng) {
-                    const drift = haversineMi(D.setup.campLat, D.setup.campLng,
-                                              campCoords.lat, campCoords.lng);
-                    if (drift > 1) {
-                        console.warn('[Go] Camp re-geocoded: moved ' + drift.toFixed(1) +
-                            'mi from saved coords');
-                    }
-                }
-                _campCoordsCache = campCoords;
-                D.setup.campLat = campCoords.lat;
-                D.setup.campLng = campCoords.lng;
-                save();
-            }
-        }
+    if (_campCoordsCache) {
+        // already resolved this session
+    } else if (D.setup.campLat && D.setup.campLng) {
+        _campCoordsCache = { lat: D.setup.campLat, lng: D.setup.campLng };
+    } else {
+        toast('Camp coordinates not found — geocode the camp address in Setup first', 'error');
+        return;
     }
-    if (!campCoords && D.setup.campLat && D.setup.campLng) {
-        campCoords = { lat: D.setup.campLat, lng: D.setup.campLng };
-        _campCoordsCache = campCoords;
-    }
-    if (!campCoords) { toast('Set camp address first', 'error'); return; }
+    const campCoords = _campCoordsCache;
     const campLat = campCoords.lat;
     const campLng = campCoords.lng;
 
