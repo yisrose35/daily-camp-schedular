@@ -4026,6 +4026,24 @@ async function _trySpatialSortPipeline({
         return totalSwaps;
     }
 
+    // Time estimate for a bucket: drive to/from camp + per-stop time + intra-cluster spread.
+    // Used by Phase 3 (split trigger + split count) and Phase 5 (cascade).
+    const STOP_WEIGHT = 120;   // seconds per camper (boarding, walking)
+    const INTRA_WEIGHT = 120;  // seconds per spread-mi × sqrt(atoms)
+    function estimateBucketTime(bucket) {
+        if (!bucket.length) return 0;
+        const cent = bucketCentroid(bucket);
+        const driveSec = drivingDist(campLat, campLng, cent.lat, cent.lng);
+        const lats = bucket.map(a => a.lat);
+        const lngs = bucket.map(a => a.lng);
+        const spread = haversineMi(
+            Math.min(...lats), Math.min(...lngs),
+            Math.max(...lats), Math.max(...lngs));
+        const numKids = bucket.reduce((s, a) => s + a.size, 0);
+        const intra = spread * Math.sqrt(bucket.length) * INTRA_WEIGHT;
+        return 2 * driveSec + numKids * STOP_WEIGHT + intra;
+    }
+
     showProgress(shiftLabel + ': clustering — building atoms...', pctBase + 10);
 
     // ── A. Build sibling atoms ──
@@ -4138,28 +4156,49 @@ async function _trySpatialSortPipeline({
     // Repeat until we run out of freed buses.
     showProgress(shiftLabel + ': phase 3 — splitting large clusters...', pctBase + 35);
 
+    // Target time per bus = 1.4 × median of initial bucket times. Far-from-camp clusters
+    // exceed this naturally; splitting them produces more buses with smaller territories.
+    const initBucketTimes = busBuckets.map(b => estimateBucketTime(b));
+    const sortedInit = [...initBucketTimes].sort((a, b) => a - b);
+    const initMedian = sortedInit[Math.floor(sortedInit.length / 2)] || 1;
+    const TARGET_BUS_TIME = initMedian * 1.4;
+    console.log('[Go v6] Time target per bus: ' + (TARGET_BUS_TIME / 60).toFixed(1) +
+        'min (1.4× median ' + (initMedian / 60).toFixed(1) + 'min)');
+
     let splitRound = 0;
     let splitSafety = 0;
-    let lastLargestSize = Infinity;
+    let lastWorstScore = Infinity;
     let stagnantRounds = 0;
     while (splitSafety++ < k * 2) {
-        let largestIdx = -1, largestSize = 0;
+        // Worst cluster = max overrun across capacity AND time. Score combines both:
+        // capOver = (size - SOFT_CAPACITY) when over; timeOver = (time - TARGET) when over.
+        // Convert capacity to seconds via STOP_WEIGHT for unified comparison.
+        let largestIdx = -1, worstScore = 0;
         for (let i = 0; i < busBuckets.length; i++) {
             const sz = bucketSize(busBuckets[i]);
-            if (sz > largestSize) { largestSize = sz; largestIdx = i; }
+            const t = estimateBucketTime(busBuckets[i]);
+            const capOverSec = Math.max(0, (sz - SOFT_CAPACITY) * STOP_WEIGHT);
+            const timeOverSec = Math.max(0, t - TARGET_BUS_TIME);
+            const score = Math.max(capOverSec, timeOverSec);
+            if (score > worstScore) { worstScore = score; largestIdx = i; }
         }
-        if (largestIdx < 0 || largestSize <= SOFT_CAPACITY) break;
-        if (largestSize >= lastLargestSize) {
+        if (largestIdx < 0 || worstScore <= 0) break;
+        const largestSize = bucketSize(busBuckets[largestIdx]);
+        const largestTime = estimateBucketTime(busBuckets[largestIdx]);
+        if (worstScore >= lastWorstScore) {
             if (++stagnantRounds >= 2) {
-                console.log('[Go v6] Split aborted: no progress (largest stuck at ' + largestSize + ')');
+                console.log('[Go v6] Split aborted: no progress (worst score ' + worstScore.toFixed(0) + ')');
                 break;
             }
         } else {
             stagnantRounds = 0;
         }
-        lastLargestSize = largestSize;
+        lastWorstScore = worstScore;
 
-        let neededBuses = Math.ceil(largestSize / avgCapacity);
+        // Need enough buses to bring BOTH capacity and time under target
+        const busesForCap = Math.ceil(largestSize / avgCapacity);
+        const busesForTime = Math.ceil(largestTime / TARGET_BUS_TIME);
+        let neededBuses = Math.max(busesForCap, busesForTime);
         let extraBuses = neededBuses - 1;
         if (extraBuses <= 0) break;
 
@@ -4241,8 +4280,13 @@ async function _trySpatialSortPipeline({
                 }
 
                 unusedBuses++;
-                largestSize = bucketSize(busBuckets[largestIdx]);
-                extraBuses = Math.ceil(largestSize / avgCapacity) - 1;
+                const newSize = bucketSize(busBuckets[largestIdx]);
+                const newTime = estimateBucketTime(busBuckets[largestIdx]);
+                neededBuses = Math.max(
+                    Math.ceil(newSize / avgCapacity),
+                    Math.ceil(newTime / TARGET_BUS_TIME)
+                );
+                extraBuses = neededBuses - 1;
             }
         }
 
@@ -4286,8 +4330,6 @@ async function _trySpatialSortPipeline({
     showProgress(shiftLabel + ': phase 5 — time-bounded cascade...', pctBase + 55);
 
     const MAX_TIME_RATIO = 1.4;
-    const STOP_WEIGHT = 120;
-    const INTRA_WEIGHT = 120;
 
     const clusterMeta = busBuckets.map((bucket, idx) => {
         const cent = bucketCentroid(bucket);
@@ -4295,20 +4337,7 @@ async function _trySpatialSortPipeline({
         return { idx, cent, distSec };
     });
 
-    function estTime(bucketIdx) {
-        const bucket = busBuckets[bucketIdx];
-        if (!bucket.length) return 0;
-        const cent = bucketCentroid(bucket);
-        const driveSec = drivingDist(campLat, campLng, cent.lat, cent.lng);
-        const lats = bucket.map(a => a.lat);
-        const lngs = bucket.map(a => a.lng);
-        const spread = haversineMi(
-            Math.min(...lats), Math.min(...lngs),
-            Math.max(...lats), Math.max(...lngs));
-        const numKids = bucketSize(bucket);
-        const intra = spread * Math.sqrt(bucket.length) * INTRA_WEIGHT;
-        return 2 * driveSec + numKids * STOP_WEIGHT + intra;
-    }
+    const estTime = (bucketIdx) => estimateBucketTime(busBuckets[bucketIdx]);
 
     function median(arr) {
         const sorted = [...arr].sort((a, b) => a - b);
