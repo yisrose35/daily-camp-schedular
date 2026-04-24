@@ -4021,15 +4021,61 @@ async function _trySpatialSortPipeline({
 
     // Remove empty buckets
     busBuckets = busBuckets.filter(b => b.length > 0);
-    const unusedBuses = k - busBuckets.length;
+    let unusedBuses = k - busBuckets.length;
     if (round > 0) {
         console.log('[Go v6] Dissolve complete: ' + round + ' merges, ' +
-            busBuckets.length + ' clusters remain, ' + unusedBuses + ' buses unused');
+            busBuckets.length + ' clusters remain, ' + unusedBuses + ' buses to redistribute');
     } else {
         console.log('[Go v6] No clusters dissolved — all had ' + MIN_BUS_THRESHOLD + '+ campers');
     }
 
-    // ── D. Log final cluster results ──
+    // ── D. Phase 3: Split oversized clusters using freed buses ──
+    // Find largest cluster, compute how many buses it needs (ceil(size/capacity)),
+    // re-cluster its atoms into that many sub-clusters via k-means.
+    // Repeat until we run out of freed buses.
+    showProgress(shiftLabel + ': phase 3 — splitting large clusters...', pctBase + 35);
+
+    let splitRound = 0;
+    while (unusedBuses > 0) {
+        let largestIdx = -1, largestSize = 0;
+        for (let i = 0; i < busBuckets.length; i++) {
+            const sz = bucketSize(busBuckets[i]);
+            if (sz > largestSize) { largestSize = sz; largestIdx = i; }
+        }
+        if (largestIdx < 0 || largestSize <= avgCapacity) break;
+
+        const neededBuses = Math.ceil(largestSize / avgCapacity);
+        const extraBuses = neededBuses - 1;
+        if (extraBuses <= 0) break;
+
+        const busesToUse = Math.min(extraBuses, unusedBuses);
+        const splitInto = busesToUse + 1;
+
+        splitRound++;
+        console.log('[Go v6] Split ' + splitRound + ': cluster ' + (largestIdx + 1) +
+            ' (' + largestSize + ' campers) → ' + splitInto + ' sub-clusters' +
+            ' (needs ' + neededBuses + ' buses, using ' + busesToUse + ' freed buses)');
+
+        const clusterAtoms = busBuckets[largestIdx];
+        const subBuckets = runKMeans(clusterAtoms, splitInto);
+
+        // Replace the original cluster with the sub-clusters
+        busBuckets.splice(largestIdx, 1, ...subBuckets);
+
+        unusedBuses -= busesToUse;
+
+        for (let si = 0; si < subBuckets.length; si++) {
+            console.log('[Go v6]   Sub-cluster ' + (si + 1) + ': ' +
+                bucketSize(subBuckets[si]) + ' campers, ' + subBuckets[si].length + ' atoms');
+        }
+    }
+
+    if (splitRound > 0) {
+        console.log('[Go v6] Split complete: ' + splitRound + ' splits, ' +
+            busBuckets.length + ' total clusters, ' + unusedBuses + ' buses still unused');
+    }
+
+    // ── E. Log final cluster results ──
     console.log('[Go v6] ═══════════════════════════════════════');
     console.log('[Go v6] FINAL CLUSTERS');
     console.log('[Go v6] ═══════════════════════════════════════');
