@@ -9882,37 +9882,57 @@
                 getBunksForGrade(grade, divisions).forEach(bunk => {
                     const oldSlots = pbs[String(bunk)] || [];
                     // Pass A: try to align shiftable hard-fixed blocks (swim, snacks)
-                    // that currently cross a period boundary.
+                    // that currently cross a period boundary. When swim shifts,
+                    // its attached pre-change / post-change blocks must shift
+                    // with it so the (change, swim, change) triple stays attached.
                     oldSlots.forEach(slot => {
                         const t = String(slot.type || '').toLowerCase();
                         if (!SHIFTABLE_HARD.has(t)) return;
                         if (!crossesBoundary(slot)) return;
                         const blockDur = slot.endMin - slot.startMin;
+                        const oldSwimStart = slot.startMin, oldSwimEnd = slot.endMin;
+                        // Find attached pre/post change blocks (swim only)
+                        let preChangeSlot = null, postChangeSlot = null;
+                        if (t === 'swim') {
+                            preChangeSlot = oldSlots.find(o =>
+                                String(o.type || '').toLowerCase() === 'pre-change' &&
+                                o.endMin === oldSwimStart
+                            );
+                            postChangeSlot = oldSlots.find(o =>
+                                String(o.type || '').toLowerCase() === 'post-change' &&
+                                o.startMin === oldSwimEnd
+                            );
+                        }
+                        const preChangeDur = preChangeSlot ? (preChangeSlot.endMin - preChangeSlot.startMin) : 0;
+                        const postChangeDur = postChangeSlot ? (postChangeSlot.endMin - postChangeSlot.startMin) : 0;
+
                         for (const p of sortedPeriods) {
                             const pDur = p.endMin - p.startMin;
                             if (pDur < blockDur) continue;
                             const targetStart = p.startMin;
                             const targetEnd = targetStart + blockDur;
-                            // No conflict with any other "fixed-ish" block in oldSlots
+                            // Include the change-range in conflict check so we don't
+                            // shift swim into a spot where its change tails collide.
+                            const bundleStart = targetStart - preChangeDur;
+                            const bundleEnd = targetEnd + postChangeDur;
                             const conflict = oldSlots.some(other => {
-                                if (other === slot) return false;
+                                if (other === slot || other === preChangeSlot || other === postChangeSlot) return false;
                                 const ot = String(other.type || '').toLowerCase();
                                 const isFixedish = PERIOD_HARD_FIXED.has(ot) ||
                                                    PERIOD_SOFT_FIXED.has(ot) ||
                                                    other._fixed;
                                 if (!isFixedish) return false;
-                                return other.startMin < targetEnd && other.endMin > targetStart;
+                                return other.startMin < bundleEnd && other.endMin > bundleStart;
                             });
                             if (conflict) continue;
-                            // Update both the slot and the matching bunkTimelines block
-                            const oldStart = slot.startMin, oldEnd = slot.endMin;
+                            // Update the swim slot + matching bunkTimelines block
                             slot.startMin = targetStart;
                             slot.endMin = targetEnd;
                             slot.startTime = minutesToTimeLabel(targetStart);
                             slot.endTime = minutesToTimeLabel(targetEnd);
                             if (Array.isArray(bunkTimelines[bunk])) {
                                 const tlBlock = bunkTimelines[bunk].find(b =>
-                                    b.startMin === oldStart && b.endMin === oldEnd &&
+                                    b.startMin === oldSwimStart && b.endMin === oldSwimEnd &&
                                     String(b.type || '').toLowerCase() === t
                                 );
                                 if (tlBlock) {
@@ -9922,10 +9942,52 @@
                                     tlBlock.endTime = minutesToTimeLabel(targetEnd);
                                 }
                             }
+                            // Shift pre-change to sit immediately before new swim
+                            if (preChangeSlot) {
+                                const oldPreStart = preChangeSlot.startMin, oldPreEnd = preChangeSlot.endMin;
+                                preChangeSlot.startMin = targetStart - preChangeDur;
+                                preChangeSlot.endMin = targetStart;
+                                preChangeSlot.startTime = minutesToTimeLabel(preChangeSlot.startMin);
+                                preChangeSlot.endTime = minutesToTimeLabel(preChangeSlot.endMin);
+                                if (Array.isArray(bunkTimelines[bunk])) {
+                                    const preTl = bunkTimelines[bunk].find(b =>
+                                        b.startMin === oldPreStart && b.endMin === oldPreEnd &&
+                                        String(b.type || '').toLowerCase() === 'pre-change'
+                                    );
+                                    if (preTl) {
+                                        preTl.startMin = preChangeSlot.startMin;
+                                        preTl.endMin = preChangeSlot.endMin;
+                                        preTl.startTime = preChangeSlot.startTime;
+                                        preTl.endTime = preChangeSlot.endTime;
+                                    }
+                                }
+                            }
+                            // Shift post-change to sit immediately after new swim
+                            if (postChangeSlot) {
+                                const oldPostStart = postChangeSlot.startMin, oldPostEnd = postChangeSlot.endMin;
+                                postChangeSlot.startMin = targetEnd;
+                                postChangeSlot.endMin = targetEnd + postChangeDur;
+                                postChangeSlot.startTime = minutesToTimeLabel(postChangeSlot.startMin);
+                                postChangeSlot.endTime = minutesToTimeLabel(postChangeSlot.endMin);
+                                if (Array.isArray(bunkTimelines[bunk])) {
+                                    const postTl = bunkTimelines[bunk].find(b =>
+                                        b.startMin === oldPostStart && b.endMin === oldPostEnd &&
+                                        String(b.type || '').toLowerCase() === 'post-change'
+                                    );
+                                    if (postTl) {
+                                        postTl.startMin = postChangeSlot.startMin;
+                                        postTl.endMin = postChangeSlot.endMin;
+                                        postTl.startTime = postChangeSlot.startTime;
+                                        postTl.endTime = postChangeSlot.endTime;
+                                    }
+                                }
+                            }
                             log('[2.75] Shifted ' + t + ' for ' + grade + '/' + bunk +
-                                ' from ' + minutesToTimeLabel(oldStart) + '-' + minutesToTimeLabel(oldEnd) +
+                                ' from ' + minutesToTimeLabel(oldSwimStart) + '-' + minutesToTimeLabel(oldSwimEnd) +
                                 ' to ' + minutesToTimeLabel(targetStart) + '-' + minutesToTimeLabel(targetEnd) +
-                                ' (period: ' + (p.name || 'unnamed') + ')');
+                                ' (period: ' + (p.name || 'unnamed') + ')' +
+                                (preChangeSlot ? ' +pre-change' : '') +
+                                (postChangeSlot ? ' +post-change' : ''));
                             break;
                         }
                     });
