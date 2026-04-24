@@ -4144,25 +4144,35 @@ async function _trySpatialSortPipeline({
             }
 
             if (!merged) {
-                // Fallback: absorb geographically nearest cluster INTO the largest,
-                // then re-compute extras (since largest just grew).
-                const lCent = bucketCentroid(busBuckets[largestIdx]);
-                let absorbIdx = -1, absorbDist = Infinity;
+                // Steal-from-smallest: force-dissolve the globally smallest cluster
+                // (excluding the over-capacity one). Each atom moves to its nearest
+                // remaining cluster by haversine. Frees 1 bus without creating a mega-blob.
+                let stealIdx = -1, stealSize = Infinity;
                 for (let i = 0; i < busBuckets.length; i++) {
                     if (i === largestIdx) continue;
-                    const c = bucketCentroid(busBuckets[i]);
-                    const d = haversineMi(lCent.lat, lCent.lng, c.lat, c.lng);
-                    if (d < absorbDist) { absorbDist = d; absorbIdx = i; }
+                    const sz = bucketSize(busBuckets[i]);
+                    if (sz < stealSize) { stealSize = sz; stealIdx = i; }
                 }
-                if (absorbIdx < 0) break;
+                if (stealIdx < 0) break;
 
-                const absorbSize = bucketSize(busBuckets[absorbIdx]);
-                console.log('[Go v6] Absorb-and-split: cluster ' + (absorbIdx + 1) +
-                    ' (' + absorbSize + ' campers) → cluster ' + (largestIdx + 1) +
-                    ' (' + largestSize + ' → ' + (largestSize + absorbSize) + ' campers)');
-                busBuckets[largestIdx] = busBuckets[largestIdx].concat(busBuckets[absorbIdx]);
-                busBuckets.splice(absorbIdx, 1);
-                if (absorbIdx < largestIdx) largestIdx--;
+                console.log('[Go v6] Steal-from-smallest: dissolving cluster ' + (stealIdx + 1) +
+                    ' (' + stealSize + ' campers) into geographic neighbors');
+
+                // Redistribute each atom to nearest other cluster centroid
+                const dissolved = busBuckets[stealIdx];
+                busBuckets.splice(stealIdx, 1);
+                if (stealIdx < largestIdx) largestIdx--;
+
+                for (const atom of dissolved) {
+                    let bestIdx = -1, bestDist = Infinity;
+                    for (let i = 0; i < busBuckets.length; i++) {
+                        const c = bucketCentroid(busBuckets[i]);
+                        const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
+                        if (d < bestDist) { bestDist = d; bestIdx = i; }
+                    }
+                    if (bestIdx >= 0) busBuckets[bestIdx].push(atom);
+                }
+
                 unusedBuses++;
                 largestSize = bucketSize(busBuckets[largestIdx]);
                 extraBuses = Math.ceil(largestSize / avgCapacity) - 1;
