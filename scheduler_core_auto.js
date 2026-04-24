@@ -643,12 +643,14 @@
         const TYPE_FLOORS = {
             swim: 30, league: 30, specialty_league: 30, special: 20,
             sport: 25, sports: 25, lunch: 20, snack: 15, snacks: 15,
-            dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20
+            dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20,
+            'pre-change': 5, 'post-change': 5, change: 5
         };
         const TYPE_CEILINGS = {
             swim: 60, league: 60, specialty_league: 60, special: 60,
             sport: GAP_MAX_DUR, sports: GAP_MAX_DUR, lunch: 45, snack: 30,
-            snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60
+            snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60,
+            'pre-change': 30, 'post-change': 30, change: 30
         };
 
         function resolveConstraints(layer, type, block) {
@@ -1438,15 +1440,21 @@
 
                 targetBunks.forEach(bunk => {
                     if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
-                        // Pre-change block
+                        // Pre-change block. Intentionally uses layer:null so
+                        // ensureTimelineIntegrity doesn't clamp the block into
+                        // swim's window (which would evict outside placements
+                        // like 11:20-11:30 that live before the swim window).
                         if (_preChange > 0) {
                             bunkTimelines[bunk].push({
                                 startMin: _preStart, endMin: _preEnd,
                                 type: 'pre-change', event: 'Change',
-                                layer, _classification: 'pinned', _committed: true,
+                                layer: null,
+                                dMin: _preEnd - _preStart, dMax: _preEnd - _preStart,
+                                _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
                                 _activityLocked: true, _noBacktrack: isGradeWide,
-                                _changeOutside: _preOutside
+                                _changeOutside: _preOutside,
+                                _source: 'post-gap-forced'
                             });
                         }
                         // Swim block
@@ -1457,15 +1465,18 @@
                             _fixed: true, _gradeWide: isGradeWide && !isCustom,
                             _activityLocked: true, _noBacktrack: isGradeWide
                         });
-                        // Post-change block
+                        // Post-change block (layer:null, same reasoning as pre-change)
                         if (_postChange > 0) {
                             bunkTimelines[bunk].push({
                                 startMin: _postStart, endMin: _postEnd,
                                 type: 'post-change', event: 'Change',
-                                layer, _classification: 'pinned', _committed: true,
+                                layer: null,
+                                dMin: _postEnd - _postStart, dMax: _postEnd - _postStart,
+                                _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
                                 _activityLocked: true, _noBacktrack: isGradeWide,
-                                _changeOutside: _postOutside
+                                _changeOutside: _postOutside,
+                                _source: 'post-gap-forced'
                             });
                         }
                     } else {
@@ -3678,7 +3689,9 @@
                 if (swimBlk._startMin != null) swimBlk._startMin = newStart;
                 if (swimBlk._endMin != null) swimBlk._endMin = newEnd;
 
-                // Pre-change block
+                // Pre-change block. layer:null avoids ensureTimelineIntegrity
+                // clamping the block to swim's window; post-gap-forced source
+                // tells integrity pass to respect the exact dMin we set.
                 if (preChange > 0) {
                     var pStart = preOutside ? swimStart - preChange : swimStart;
                     var pEnd   = preOutside ? swimStart              : newStart;
@@ -3686,14 +3699,13 @@
                         var preBlk = makeBlock({
                             startMin: pStart, endMin: pEnd,
                             type: 'pre-change', event: 'Change',
-                            layer: layer, dMin: pEnd - pStart, dMax: pEnd - pStart,
-                            _fixed: true, _source: 'pinned',
+                            layer: null, dMin: pEnd - pStart, dMax: pEnd - pStart,
+                            _fixed: true, _source: 'post-gap-forced',
                             _activityLocked: true, _final: true
                         });
                         if (preBlk) template.push(preBlk);
                     }
                 }
-                // Post-change block
                 if (postChange > 0) {
                     var qStart = postOutside ? swimEnd                : newEnd;
                     var qEnd   = postOutside ? swimEnd + postChange   : swimEnd;
@@ -3701,8 +3713,8 @@
                         var postBlk = makeBlock({
                             startMin: qStart, endMin: qEnd,
                             type: 'post-change', event: 'Change',
-                            layer: layer, dMin: qEnd - qStart, dMax: qEnd - qStart,
-                            _fixed: true, _source: 'pinned',
+                            layer: null, dMin: qEnd - qStart, dMax: qEnd - qStart,
+                            _fixed: true, _source: 'post-gap-forced',
                             _activityLocked: true, _final: true
                         });
                         if (postBlk) template.push(postBlk);
