@@ -3743,6 +3743,80 @@ async function _tryNeighborhoodPipeline({
         }
     })();
 
+    // ── Geographic spread re-balance ──
+    // packIntoBuses falls back to ignoring the spread cap when no other bus
+    // has capacity, leaving one bus serving neighborhoods miles apart.
+    // Move outlier stops to the bus whose centroid is actually closest.
+    (function rebalanceSpread() {
+        const MAX_SPREAD_MI = 3.5;
+        const MAX_PASSES    = 8;
+
+        function stopCentroid(stops) {
+            if (!stops.length) return null;
+            return {
+                lat: stops.reduce((s, x) => s + x.lat, 0) / stops.length,
+                lng: stops.reduce((s, x) => s + x.lng, 0) / stops.length
+            };
+        }
+        function spreadMi(stops) {
+            let max = 0;
+            for (let i = 0; i < stops.length; i++)
+                for (let j = i + 1; j < stops.length; j++)
+                    max = Math.max(max, haversineMi(stops[i].lat, stops[i].lng,
+                                                    stops[j].lat, stops[j].lng));
+            return max;
+        }
+
+        let totalMoved = 0;
+        for (let pass = 0; pass < MAX_PASSES; pass++) {
+            let moved = 0;
+            for (const route of routes) {
+                if (route.stops.length < 2) continue;
+                if (spreadMi(route.stops) <= MAX_SPREAD_MI) continue;
+
+                const c = stopCentroid(route.stops);
+                // Find the stop farthest from this bus's own centroid
+                let worstDist = 0, worstIdx = -1;
+                for (let i = 0; i < route.stops.length; i++) {
+                    const d = haversineMi(route.stops[i].lat, route.stops[i].lng, c.lat, c.lng);
+                    if (d > worstDist) { worstDist = d; worstIdx = i; }
+                }
+                if (worstIdx < 0) continue;
+                const outlier = route.stops[worstIdx];
+                const outlierCount = outlier.campers.length;
+
+                // Move to the bus whose centroid is closest to the outlier
+                let bestBus = null, bestDist = worstDist; // must be strictly better
+                for (const other of routes) {
+                    if (other === route || !other.stops.length) continue;
+                    const cap = other._cap != null ? other._cap : 9999;
+                    if ((other.camperCount || 0) + outlierCount > cap) continue;
+                    const oc = stopCentroid(other.stops);
+                    const d = haversineMi(outlier.lat, outlier.lng, oc.lat, oc.lng);
+                    if (d < bestDist) { bestDist = d; bestBus = other; }
+                }
+
+                if (bestBus) {
+                    route.stops.splice(worstIdx, 1);
+                    route.camperCount -= outlierCount;
+                    bestBus.stops.push(outlier);
+                    bestBus.camperCount = (bestBus.camperCount || 0) + outlierCount;
+                    moved++;
+                }
+            }
+            totalMoved += moved;
+            if (!moved) break;
+        }
+
+        // Re-number stops and log summary
+        for (const r of routes) r.stops.forEach((s, i) => s.stopNum = i + 1);
+        if (totalMoved) {
+            const worstSpread = Math.max(...routes.map(r => spreadMi(r.stops))).toFixed(1);
+            console.log('[Go v5] Spread re-balance: moved ' + totalMoved +
+                ' stop(s), worst spread now ' + worstSpread + 'mi');
+        }
+    })();
+
     // ── Per-bus TSP re-ordering ──
     // Now that each bus has its stops fixed (who is on it is decided), run
     // a single-vehicle TSP on each bus to find the best stop sequence.
