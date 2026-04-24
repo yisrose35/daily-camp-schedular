@@ -8605,7 +8605,8 @@
                             h = h % 12 || 12;
                             return h + ':' + String(mm).padStart(2, '0') + ap;
                         };
-                        log('[Phase2.4] Event "' + evt.name + '" window ' + _fmt(winStart) + '-' + _fmt(winEnd) + ' dur=' + dur + ' — grades: ' + gradeEntries.map(e => e.grade + '(' + e.bunks.length + 'b/' + e.viable + 'viable)').join(', '));
+                        const _verbose = totalIters < 1;
+                        if (_verbose) log('[Phase2.4] Event "' + evt.name + '" window ' + _fmt(winStart) + '-' + _fmt(winEnd) + ' dur=' + dur + ' — grades: ' + gradeEntries.map(e => e.grade + '(' + e.bunks.length + 'b/' + e.viable + 'viable)').join(', '));
 
                         const placements = []; // { startMin, endMin, grade }
                         gradeEntries.forEach(({ grade, bunks, viable }) => {
@@ -8613,21 +8614,25 @@
                             if (slot) {
                                 placements.push({ startMin: slot.startMin, endMin: slot.endMin, grade });
                                 bunks.forEach(b => placeWall(b, grade, slot));
-                                log('[Phase2.4]   ✓ ' + grade + ' → ' + _fmt(slot.startMin) + '-' + _fmt(slot.endMin));
+                                if (_verbose) log('[Phase2.4]   ✓ ' + grade + ' → ' + _fmt(slot.startMin) + '-' + _fmt(slot.endMin));
                             } else {
                                 _rotUnplaced.push(grade + '/' + evt.name);
-                                // Diagnose why — list per-bunk conflicts at a few candidate times
-                                const diag = [];
-                                for (let t = winStart; t + dur <= winEnd && diag.length < 3; t += 5) {
-                                    const tEnd = t + dur;
-                                    const crossConflict = placements.find(p => t < p.endMin && tEnd > p.startMin);
-                                    if (crossConflict) continue;
-                                    const blockers = bunks.filter(b => !isWindowFreeForBunk(t, tEnd, b));
-                                    if (blockers.length > 0 && blockers.length < bunks.length) {
-                                        diag.push(_fmt(t) + '-' + _fmt(tEnd) + ' blocked by bunks: ' + blockers.slice(0, 3).join(','));
+                                if (_verbose) {
+                                    const diag = [];
+                                    for (let t = winStart; t + dur <= winEnd && diag.length < 5; t += 5) {
+                                        const tEnd = t + dur;
+                                        const crossConflict = placements.find(p => t < p.endMin && tEnd > p.startMin);
+                                        if (crossConflict) {
+                                            diag.push(_fmt(t) + ' cross:' + crossConflict.grade);
+                                            continue;
+                                        }
+                                        const blockers = bunks.filter(b => !isWindowFreeForBunk(t, tEnd, b));
+                                        if (blockers.length > 0) {
+                                            diag.push(_fmt(t) + ' bunks:' + blockers.slice(0, 3).join(','));
+                                        }
                                     }
+                                    log('[Phase2.4]   ✗ ' + grade + ' NO SLOT. Placements so far: ' + (placements.map(p => p.grade + '@' + _fmt(p.startMin)).join(', ') || 'none') + '. First 5 rejected times: ' + (diag.join(' | ') || 'n/a'));
                                 }
-                                log('[Phase2.4]   ✗ ' + grade + ' NO SLOT. Cross-grade placements: ' + (placements.map(p => p.grade + '@' + _fmt(p.startMin)).join(', ') || 'none') + '. Sample conflicts: ' + (diag.join('; ') || 'all candidates cross-conflicted'));
                             }
                         });
                     });
