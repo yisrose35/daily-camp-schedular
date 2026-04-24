@@ -8549,22 +8549,61 @@
                             return true;
                         };
 
-                        // Find a placement for this grade. If the grade has bell-schedule
-                        // periods (window.campPeriods[grade]), use period boundaries as
-                        // candidates — otherwise Step 2.75 will evict any non-aligned
-                        // rotation_event wall as "soft-fixed straddling boundary". Fall
-                        // back to 5-min scan when no periods are defined for the grade.
+                        // Sequence constraint: the rotation event must be adjacent to
+                        // another activity (e.g. water slides right before/after swim
+                        // so campers stay in bathing suits). Hard preference when set.
+                        const seqTarget = (evt.sequence && evt.sequence.targetActivity || '').trim();
+                        const seqPosition = (evt.sequence && evt.sequence.position) || 'either'; // 'before' | 'after' | 'either'
+
+                        const findTargetTimeForGrade = (bunks) => {
+                            const tgt = seqTarget.toLowerCase();
+                            for (const bunk of bunks) {
+                                const tl = bunkTimelines[bunk] || [];
+                                for (const b of tl) {
+                                    if (!b || b.continuation) continue;
+                                    const eventName = (b.event || '').toLowerCase();
+                                    const typeName = (b.type || '').toLowerCase();
+                                    const sport = (b._assignedSport || '').toLowerCase();
+                                    const spec = (b._assignedSpecial || '').toLowerCase();
+                                    if (eventName === tgt || typeName === tgt || sport === tgt || spec === tgt) {
+                                        return { startMin: b.startMin, endMin: b.endMin };
+                                    }
+                                }
+                            }
+                            return null;
+                        };
+
+                        // Find a placement for this grade.
+                        // Priority 1: sequence-constrained adjacency (hard preference).
+                        // Priority 2: bell-schedule period alignment (so Step 2.75 keeps it cleanly).
+                        // Priority 3: 5-min scan fallback when no periods defined.
                         const findGradeSlot = (bunks, grade, placements) => {
                             const tryWindow = (t, tEnd) => {
                                 if (tEnd > winEnd || t < winStart) return false;
                                 if (placements.some(p => t < p.endMin && tEnd > p.startMin)) return false;
                                 return bunks.every(b => isWindowFreeForBunk(t, tEnd, b));
                             };
+
+                            // Sequence-constrained: try adjacent to target activity first
+                            if (seqTarget) {
+                                const tgt = findTargetTimeForGrade(bunks);
+                                if (tgt) {
+                                    const tryAfter = () => tryWindow(tgt.endMin, tgt.endMin + dur)
+                                        ? { startMin: tgt.endMin, endMin: tgt.endMin + dur } : null;
+                                    const tryBefore = () => tryWindow(tgt.startMin - dur, tgt.startMin)
+                                        ? { startMin: tgt.startMin - dur, endMin: tgt.startMin } : null;
+                                    let adj = null;
+                                    if (seqPosition === 'after') adj = tryAfter();
+                                    else if (seqPosition === 'before') adj = tryBefore();
+                                    else adj = tryAfter() || tryBefore();
+                                    if (adj) return adj;
+                                }
+                                // Adjacency failed — fall through to period-aligned placement so
+                                // the bunks still receive the event (best-effort per user intent).
+                            }
+
                             const gradePeriods = (window.campPeriods || {})[grade] || [];
                             if (gradePeriods.length > 0) {
-                                // Align placement to period starts, event keeps its own duration.
-                                // Period must fit entirely within the daily window and be long
-                                // enough to hold the event without spilling across boundary.
                                 const viable = gradePeriods
                                     .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.endMin <= winEnd)
                                     .sort((a, b) => a.startMin - b.startMin);
@@ -8575,7 +8614,6 @@
                                 }
                                 return null;
                             }
-                            // No periods defined: 5-min scan
                             for (let t = winStart; t + dur <= winEnd; t += 5) {
                                 if (tryWindow(t, t + dur)) {
                                     return { startMin: t, endMin: t + dur };
@@ -8611,20 +8649,30 @@
                             _rotWallCount++;
                         };
 
-                        // Sort grades most-constrained-first. Viable count uses period
-                        // boundaries when the grade has them (Step 2.75 would evict any
-                        // non-period-aligned placement anyway), else 5-min scan.
+                        // Sort grades most-constrained-first. Sequence-constrained grades
+                        // are maximally constrained (at most 2 adjacent slots) so process
+                        // them first before any other grade claims an adjacent time.
                         const gradeEntries = Object.entries(bunksByGrade).map(([g, bks]) => {
                             let viable = 0;
-                            const gPeriods = (window.campPeriods || {})[g] || [];
-                            if (gPeriods.length > 0) {
-                                gPeriods.forEach(p => {
-                                    if (p.startMin < winStart || p.startMin + dur > p.endMin || p.endMin > winEnd) return;
-                                    if (bks.every(b => isWindowFreeForBunk(p.startMin, p.startMin + dur, b))) viable++;
-                                });
+                            if (seqTarget) {
+                                const tgt = findTargetTimeForGrade(bks);
+                                if (tgt) {
+                                    if (tgt.endMin + dur <= winEnd &&
+                                        bks.every(b => isWindowFreeForBunk(tgt.endMin, tgt.endMin + dur, b))) viable++;
+                                    if (tgt.startMin - dur >= winStart &&
+                                        bks.every(b => isWindowFreeForBunk(tgt.startMin - dur, tgt.startMin, b))) viable++;
+                                }
                             } else {
-                                for (let t = winStart; t + dur <= winEnd; t += 5) {
-                                    if (bks.every(b => isWindowFreeForBunk(t, t + dur, b))) viable++;
+                                const gPeriods = (window.campPeriods || {})[g] || [];
+                                if (gPeriods.length > 0) {
+                                    gPeriods.forEach(p => {
+                                        if (p.startMin < winStart || p.startMin + dur > p.endMin || p.endMin > winEnd) return;
+                                        if (bks.every(b => isWindowFreeForBunk(p.startMin, p.startMin + dur, b))) viable++;
+                                    });
+                                } else {
+                                    for (let t = winStart; t + dur <= winEnd; t += 5) {
+                                        if (bks.every(b => isWindowFreeForBunk(t, t + dur, b))) viable++;
+                                    }
                                 }
                             }
                             return { grade: g, bunks: bks, viable };
@@ -9521,13 +9569,17 @@
             // auto-generated pre/post-change wrappers around swim.
             const PERIOD_HARD_FIXED = new Set([
                 'swim','snacks','lunch','dismissal','league','specialty_league',
-                'custom','change','pre-change','post-change'
+                'custom','change','pre-change','post-change',
+                // rotation_event is hard-fixed: Phase 2.4 already aligns to period
+                // starts when no sequence constraint, so straddling is intentional
+                // (e.g. water-slides placed adjacent to swim for the back-to-back rule).
+                'rotation_event'
             ]);
             // Soft-fixed types — preserve when they fit inside a period, but
             // evict when they straddle a period boundary (planner placed them
             // without knowing about periods) or leave an unpackable remainder.
             const PERIOD_SOFT_FIXED = new Set([
-                'special','pinned','rotation_event'
+                'special','pinned'
             ]);
             // Period-pool types to skip when collecting layer durations.
             // These are either fixed events (swim/lunch/etc.) or anchored
