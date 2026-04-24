@@ -383,11 +383,19 @@
     }
 
     function setupInjection() {
-        // Re-inject after every table update
-        const _orig = window.updateTable;
+        // Wrap updateTable
+        const _origUpdate = window.updateTable;
         window.updateTable = function (...args) {
-            const r = _orig?.apply(this, args);
+            const r = _origUpdate?.apply(this, args);
             setTimeout(injectButtons, 80);
+            return r;
+        };
+
+        // Also wrap renderStaggeredView — daily_adjustments.js calls this directly
+        const _origRender = window.renderStaggeredView;
+        window.renderStaggeredView = function (...args) {
+            const r = _origRender?.apply(this, args);
+            setTimeout(injectButtons, 150);
             return r;
         };
 
@@ -395,12 +403,12 @@
         const target = document.getElementById('scheduleTable') || document.body;
         const obs = new MutationObserver(() => {
             clearTimeout(obs._t);
-            obs._t = setTimeout(injectButtons, 120);
+            obs._t = setTimeout(injectButtons, 150);
         });
         obs.observe(target, { childList: true, subtree: true });
 
-        // Initial injection
-        setTimeout(injectButtons, 600);
+        // Initial injection — delay enough for the table to render
+        setTimeout(injectButtons, 800);
     }
 
     // ========================================================================
