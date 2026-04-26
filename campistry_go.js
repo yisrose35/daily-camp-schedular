@@ -4414,30 +4414,81 @@ async function _trySpatialSortPipeline({
                     if (d < nearestD) { nearestD = d; nearestRi = ri; }
                 }
 
-                for (let ri = 0; ri < busBuckets.length; ri++) {
-                    if (ri === si) continue;
-                    if (ri !== nearestRi) continue;  // only the geographically nearest
-                    if (bucketSize(busBuckets[ri]) + atom.size > SOFT_CAPACITY) continue;
-
-                    busBuckets[ri].push(atom);
-                    const newReceiverTime = estTime(ri);
-                    const newReceiverSpread = bucketSpread(busBuckets[ri]);
-                    busBuckets[ri].pop();
-
-                    // Per-cluster spread cap: scales with distance from camp
+                const ri = nearestRi;
+                if (ri >= 0 && ri !== si) {
                     const receiverCap = baseCap * Math.max(0.4, allDists[ri] / medianDist);
-                    if (newReceiverSpread > receiverCap && newReceiverSpread > allSpreads[ri]) {
-                        blockedBySpread++;
-                        continue;
+
+                    // === SINGLE MOVE: atom A → bus Y (no swap) ===
+                    if (bucketSize(busBuckets[ri]) + atom.size <= SOFT_CAPACITY) {
+                        busBuckets[ri].push(atom);
+                        const newReceiverTime = estTime(ri);
+                        const newReceiverSpread = bucketSpread(busBuckets[ri]);
+                        busBuckets[ri].pop();
+
+                        if (newReceiverSpread <= receiverCap || newReceiverSpread <= allSpreads[ri]) {
+                            const newSum = currentSum
+                                - allTimes[si] - allTimes[ri]
+                                + newSourceTime + newReceiverTime;
+                            if (newSum < bestNewSum) {
+                                bestNewSum = newSum;
+                                bestMove = { type: 'single', si, ai, ri };
+                            }
+                        } else {
+                            blockedBySpread++;
+                        }
                     }
 
-                    const newSum = currentSum
-                        - allTimes[si] - allTimes[ri]
-                        + newSourceTime + newReceiverTime;
+                    // === PAIR SWAP: atom A in si ↔ atom B in ri ===
+                    // Only attempt if atom B's nearest cluster is si (mutual nearness)
+                    // and the swap keeps both clusters under spread caps.
+                    const sourceCent = bucketCentroid(busBuckets[si]);  // si without atom
+                    for (let bi = 0; bi < busBuckets[ri].length; bi++) {
+                        const atomB = busBuckets[ri][bi];
 
-                    if (newSum < bestNewSum) {
-                        bestNewSum = newSum;
-                        bestMove = { si, ai, ri };
+                        // Capacity check after swap
+                        const newSrcSize = sourceSize - atom.size + atomB.size;
+                        const newRcvSize = bucketSize(busBuckets[ri]) - atomB.size + atom.size;
+                        if (newSrcSize > SOFT_CAPACITY || newRcvSize > SOFT_CAPACITY) continue;
+                        if (newSrcSize < CASCADE_FLOOR || newRcvSize < CASCADE_FLOOR) continue;
+
+                        // Mutual-nearness: atomB's nearest cluster (excluding ri) must be si
+                        let bNearest = -1, bNearestD = Infinity;
+                        for (let cj = 0; cj < busBuckets.length; cj++) {
+                            if (cj === ri) continue;
+                            const c = (cj === si) ? sourceCent : bucketCentroid(busBuckets[cj]);
+                            if (!c) continue;
+                            const d = haversineMi(atomB.lat, atomB.lng, c.lat, c.lng);
+                            if (d < bNearestD) { bNearestD = d; bNearest = cj; }
+                        }
+                        if (bNearest !== si) continue;
+
+                        // Simulate the swap
+                        busBuckets[si].splice(ai, 0, atomB);   // put B into si at A's old slot
+                        busBuckets[ri].splice(bi, 1);          // remove B from ri
+                        busBuckets[ri].push(atom);             // put A into ri
+                        const swappedSrcTime = estTime(si);
+                        const swappedRcvTime = estTime(ri);
+                        const swappedSrcSpread = bucketSpread(busBuckets[si]);
+                        const swappedRcvSpread = bucketSpread(busBuckets[ri]);
+                        // Undo
+                        busBuckets[ri].pop();
+                        busBuckets[ri].splice(bi, 0, atomB);
+                        busBuckets[si].splice(ai, 1);
+
+                        const srcCap = baseCap * Math.max(0.4, allDists[si] / medianDist);
+                        if ((swappedSrcSpread > srcCap && swappedSrcSpread > allSpreads[si]) ||
+                            (swappedRcvSpread > receiverCap && swappedRcvSpread > allSpreads[ri])) {
+                            blockedBySpread++;
+                            continue;
+                        }
+
+                        const swappedSum = currentSum
+                            - allTimes[si] - allTimes[ri]
+                            + swappedSrcTime + swappedRcvTime;
+                        if (swappedSum < bestNewSum) {
+                            bestNewSum = swappedSum;
+                            bestMove = { type: 'swap', si, ai, ri, bi };
+                        }
                     }
                 }
 
@@ -4447,8 +4498,15 @@ async function _trySpatialSortPipeline({
         }
 
         if (!bestMove) break;
-        const movedAtom = busBuckets[bestMove.si].splice(bestMove.ai, 1)[0];
-        busBuckets[bestMove.ri].push(movedAtom);
+        if (bestMove.type === 'swap') {
+            const a = busBuckets[bestMove.si][bestMove.ai];
+            const b = busBuckets[bestMove.ri][bestMove.bi];
+            busBuckets[bestMove.si][bestMove.ai] = b;
+            busBuckets[bestMove.ri][bestMove.bi] = a;
+        } else {
+            const movedAtom = busBuckets[bestMove.si].splice(bestMove.ai, 1)[0];
+            busBuckets[bestMove.ri].push(movedAtom);
+        }
         moves++;
     }
 
