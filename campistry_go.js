@@ -4203,8 +4203,11 @@ async function _trySpatialSortPipeline({
     const sortedInit = [...initBucketTimes].sort((a, b) => a - b);
     const initMedian = sortedInit[Math.floor(sortedInit.length / 2)] || 1;
     const TARGET_BUS_TIME = initMedian * 1.4;
+    const PHASE3_HARD_SPREAD = D.setup.clusterMaxSpreadMi ?? 3.5;
+    const SPREAD_SEC_PER_MI = 3600 / (D.setup.avgSpeed || 25);
     console.log('[Go v6] Time target per bus: ' + (TARGET_BUS_TIME / 60).toFixed(1) +
-        'min (1.4× median ' + (initMedian / 60).toFixed(1) + 'min)');
+        'min (1.4× median ' + (initMedian / 60).toFixed(1) + 'min), spread cap ' +
+        PHASE3_HARD_SPREAD.toFixed(1) + 'mi');
 
     let splitRound = 0;
     let splitSafety = 0;
@@ -4218,9 +4221,11 @@ async function _trySpatialSortPipeline({
         for (let i = 0; i < busBuckets.length; i++) {
             const sz = bucketSize(busBuckets[i]);
             const t = estimateBucketTime(busBuckets[i]);
+            const sp = bucketSpread(busBuckets[i]);
             const capOverSec = Math.max(0, (sz - SOFT_CAPACITY) * STOP_WEIGHT);
             const timeOverSec = Math.max(0, t - TARGET_BUS_TIME);
-            const score = Math.max(capOverSec, timeOverSec);
+            const spreadOverSec = Math.max(0, sp - PHASE3_HARD_SPREAD) * SPREAD_SEC_PER_MI;
+            const score = Math.max(capOverSec, timeOverSec, spreadOverSec);
             if (score > worstScore) { worstScore = score; largestIdx = i; }
         }
         if (largestIdx < 0 || worstScore <= 0) break;
@@ -4236,10 +4241,14 @@ async function _trySpatialSortPipeline({
         }
         lastWorstScore = worstScore;
 
-        // Need enough buses to bring BOTH capacity and time under target
+        // Need enough buses to bring capacity, time, AND spread under their targets
+        const largestSpread = bucketSpread(busBuckets[largestIdx]);
         const busesForCap = Math.ceil(largestSize / avgCapacity);
         const busesForTime = Math.ceil(largestTime / TARGET_BUS_TIME);
-        let neededBuses = Math.max(busesForCap, busesForTime);
+        const busesForSpread = largestSpread > PHASE3_HARD_SPREAD
+            ? Math.max(2, Math.ceil(largestSpread / PHASE3_HARD_SPREAD))
+            : 1;
+        let neededBuses = Math.max(busesForCap, busesForTime, busesForSpread);
         let extraBuses = neededBuses - 1;
         if (extraBuses <= 0) break;
 
@@ -4323,9 +4332,14 @@ async function _trySpatialSortPipeline({
                 unusedBuses++;
                 const newSize = bucketSize(busBuckets[largestIdx]);
                 const newTime = estimateBucketTime(busBuckets[largestIdx]);
+                const newSpread = bucketSpread(busBuckets[largestIdx]);
+                const newBusesForSpread = newSpread > PHASE3_HARD_SPREAD
+                    ? Math.max(2, Math.ceil(newSpread / PHASE3_HARD_SPREAD))
+                    : 1;
                 neededBuses = Math.max(
                     Math.ceil(newSize / avgCapacity),
-                    Math.ceil(newTime / TARGET_BUS_TIME)
+                    Math.ceil(newTime / TARGET_BUS_TIME),
+                    newBusesForSpread
                 );
                 extraBuses = neededBuses - 1;
             }
@@ -4424,18 +4438,22 @@ async function _trySpatialSortPipeline({
         const outlier = busBuckets[worstI][outAi];
         if (bucketSize(busBuckets[worstI]) - outlier.size < CASCADE_FLOOR) break;
 
-        // Pick nearest cluster (other than worstI) with capacity AND under hard cap
+        // Pick nearest cluster with capacity. Under-cap receivers must stay under;
+        // over-cap receivers must not get worse.
         let bestRi = -1, bestD = Infinity;
         for (let ri = 0; ri < busBuckets.length; ri++) {
             if (ri === worstI) continue;
             if (bucketSize(busBuckets[ri]) + outlier.size > SOFT_CAPACITY) continue;
             const rc = bucketCentroid(busBuckets[ri]);
             if (!rc) continue;
-            // Simulate add to check spread
+            const curRcvSpread = spreads[ri];
             busBuckets[ri].push(outlier);
             const newSpread = bucketSpread(busBuckets[ri]);
             busBuckets[ri].pop();
-            if (newSpread > HARD_SPREAD_CAP) continue;
+            const ok = curRcvSpread <= HARD_SPREAD_CAP
+                ? newSpread <= HARD_SPREAD_CAP
+                : newSpread <= curRcvSpread;
+            if (!ok) continue;
             const d = haversineMi(outlier.lat, outlier.lng, rc.lat, rc.lng);
             if (d < bestD) { bestD = d; bestRi = ri; }
         }
@@ -4505,8 +4523,12 @@ async function _trySpatialSortPipeline({
                         const newReceiverSpread = bucketSpread(busBuckets[ri]);
                         busBuckets[ri].pop();
 
-                        if (newReceiverSpread <= HARD_SPREAD_CAP &&
-                            (newReceiverSpread <= receiverCap || newReceiverSpread <= allSpreads[ri])) {
+                        // Hard-cap semantics: under-cap clusters can't grow past it;
+                        // over-cap clusters can only accept moves that don't worsen them.
+                        const rcvOk = allSpreads[ri] <= HARD_SPREAD_CAP
+                            ? newReceiverSpread <= HARD_SPREAD_CAP
+                            : newReceiverSpread <= allSpreads[ri];
+                        if (rcvOk && (newReceiverSpread <= receiverCap || newReceiverSpread <= allSpreads[ri])) {
                             const newSum = currentSum
                                 - allTimes[si] - allTimes[ri]
                                 + newSourceTime + newReceiverTime;
@@ -4557,8 +4579,14 @@ async function _trySpatialSortPipeline({
                         busBuckets[si].splice(ai, 1);
 
                         const srcCap = Math.min(HARD_SPREAD_CAP, baseCap * Math.max(0.4, allDists[si] / medianDist));
-                        // Hard cap is absolute — escape hatch only applies under hard cap
-                        if (swappedSrcSpread > HARD_SPREAD_CAP || swappedRcvSpread > HARD_SPREAD_CAP ||
+                        // Hard cap: under-cap clusters can't grow past it; over-cap can't get worse
+                        const srcOver = (allSpreads[si] <= HARD_SPREAD_CAP)
+                            ? swappedSrcSpread > HARD_SPREAD_CAP
+                            : swappedSrcSpread > allSpreads[si];
+                        const rcvOver = (allSpreads[ri] <= HARD_SPREAD_CAP)
+                            ? swappedRcvSpread > HARD_SPREAD_CAP
+                            : swappedRcvSpread > allSpreads[ri];
+                        if (srcOver || rcvOver ||
                             (swappedSrcSpread > srcCap && swappedSrcSpread > allSpreads[si]) ||
                             (swappedRcvSpread > receiverCap && swappedRcvSpread > allSpreads[ri])) {
                             blockedBySpread++;
