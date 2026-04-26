@@ -4410,12 +4410,26 @@ async function _trySpatialSortPipeline({
         // Anti-ping-pong: refuse to split if sub-clusters would land below CASCADE_FLOOR.
         // Splitting a 16-camper cluster into 8+8 just triggers a free-up merge, which
         // creates a new oversized cluster, which gets split again — infinite loop.
+        //
+        // EXCEPT: when the cluster's spread is severely over the hard cap
+        // (≥1.8× PHASE3_HARD_SPREAD), the wedge is geographically broken and
+        // routing it on one bus produces 100+ minute routes. In that case
+        // the floor is overridden — better to have small sub-clusters than
+        // an unroutable mega-wedge.
         const minSubSize = Math.floor(largestSize / neededBuses);
-        if (minSubSize < CASCADE_FLOOR) {
+        const spreadIsSevere = largestSpread >= PHASE3_HARD_SPREAD * 1.8;
+        if (minSubSize < CASCADE_FLOOR && !spreadIsSevere) {
             console.log('[Go v6] Skip split: cluster ' + (largestIdx + 1) +
                 ' (' + largestSize + ' campers) would produce sub-clusters of ' +
                 minSubSize + ' < floor ' + CASCADE_FLOOR);
             break;
+        }
+        if (spreadIsSevere && minSubSize < CASCADE_FLOOR) {
+            console.warn('[Go v6] Forcing split despite floor: cluster ' +
+                (largestIdx + 1) + ' has ' + largestSpread.toFixed(2) +
+                'mi spread (' + (PHASE3_HARD_SPREAD * 1.8).toFixed(1) +
+                'mi threshold). Sub-clusters of ' + minSubSize + ' < floor ' +
+                CASCADE_FLOOR + ' but a 1-bus mega-wedge is worse.');
         }
 
         // If we don't have enough freed buses, free more by merging smallest clusters
@@ -5240,10 +5254,33 @@ function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteM
         return max;
     }
 
-    const MAX_ITER = 20;
+    const MAX_ITER = 200;
+    const MAX_MOVES_PER_BUS = 6;   // bound the work per donor bus
+    const APPROX_PER_STOP = 5;
+    const movesPerBus = {};
+    const giveUp = new Set();      // bus IDs we've stopped trying to fix this pass
+
     for (let iter = 0; iter < MAX_ITER; iter++) {
-        const overlong = active.find(r => (r.totalDuration || 0) > maxRouteMin);
+        // Pick the WORST over-cap route that we haven't given up on.
+        let overlong = null, worstOver = 0;
+        active.forEach(r => {
+            if (giveUp.has(r.busId)) return;
+            const over = (r.totalDuration || 0) - maxRouteMin;
+            if (over > worstOver) { worstOver = over; overlong = r; }
+        });
         if (!overlong) return;
+
+        movesPerBus[overlong.busId] = (movesPerBus[overlong.busId] || 0) + 1;
+        if (movesPerBus[overlong.busId] > MAX_MOVES_PER_BUS) {
+            // Stop hammering this bus; it likely has structural problems
+            // (e.g. cluster spread too wide for the cap). Surface it.
+            giveUp.add(overlong.busId);
+            console.warn('[Go v5.2] ' + overlong.busName + ' still ' +
+                overlong.totalDuration + 'min after ' + MAX_MOVES_PER_BUS +
+                ' splits — root cause is likely upstream clustering. ' +
+                'Consider raising maxRouteDuration or adding a bus.');
+            continue;
+        }
 
         // Pull the farthest-from-camp stop on this route.
         let farthestIdx = -1, farthestDist = 0;
@@ -5252,25 +5289,29 @@ function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteM
             const d = distToCamp2(st);
             if (d > farthestDist) { farthestDist = d; farthestIdx = idx; }
         });
-        if (farthestIdx < 0) return;
+        if (farthestIdx < 0) {
+            giveUp.add(overlong.busId);
+            continue;
+        }
         const candidate = overlong.stops[farthestIdx];
         const candCount = candidate.campers?.length || 0;
         if (candCount === 0) {
-            // Degenerate stop — just drop it
             overlong.stops.splice(farthestIdx, 1);
             continue;
         }
 
         // Find the best receiver: a route with room, geographically nearest
-        // to the candidate, that's currently under the duration cap.
+        // to the candidate, with enough headroom under the duration cap.
+        // Require the receiver to have at least APPROX_PER_STOP slack so the
+        // move doesn't push it over.
         let receiver = null, bestDist = Infinity;
         active.forEach(r => {
             if (r === overlong) return;
-            if ((r.totalDuration || 0) >= maxRouteMin) return;
+            const slack = maxRouteMin - (r.totalDuration || 0);
+            if (slack < APPROX_PER_STOP) return;
             const cap = capById[r.busId] || 0;
             const cur = camperCount(r);
             if (cap && cur + candCount > cap) return;
-            // Distance from candidate to this route's nearest stop
             let nearest = Infinity;
             r.stops.forEach(st => {
                 if (st.isMonitor || st.isCounselor || !st.lat || !st.lng) return;
@@ -5281,25 +5322,22 @@ function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteM
         });
 
         if (!receiver) {
+            giveUp.add(overlong.busId);
             console.warn('[Go v5.2] ' + overlong.busName + ' is ' +
                 overlong.totalDuration + 'min over ' + maxRouteMin +
                 'min cap, but no receiver bus has room nearby — leaving as-is');
-            return;
+            continue;
         }
 
         overlong.stops.splice(farthestIdx, 1);
         receiver.stops.push(candidate);
-        // Approximate the duration delta: each stop costs avg 4-5 min
-        // (drive + service). Don't bother re-running the solver — the
-        // ETA pass will recompute totalDuration.
-        const APPROX_PER_STOP = 5;
         overlong.totalDuration = Math.max(0, (overlong.totalDuration || 0) - APPROX_PER_STOP);
         receiver.totalDuration = (receiver.totalDuration || 0) + APPROX_PER_STOP;
         overlong.camperCount = camperCount(overlong);
         receiver.camperCount = camperCount(receiver);
-        console.log('[Go v5.2] Split: moved farthest stop "' +
+        console.log('[Go v5.2] Split: moved "' +
             (candidate.address || '?') + '" (' + candCount + ' campers) from ' +
-            overlong.busName + ' to ' + receiver.busName + ' to honor route cap');
+            overlong.busName + ' to ' + receiver.busName);
     }
 }
 

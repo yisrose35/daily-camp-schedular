@@ -257,14 +257,6 @@ window.GoGoogleOptimizer = (function () {
             ? Math.min(routeDurationHardSec, Math.round(maxRouteDurationSec))
             : null;
 
-        // Fair-share load target: total campers / number of buses, plus 10%
-        // headroom. The solver pays a high per-camper penalty above this, so
-        // it spreads load instead of dumping everyone on the geographically
-        // convenient bus. Hard cap stays at the bus's real capacity.
-        const totalCampers = stops.reduce((s, st) => s + (st.campers?.length || 0), 0);
-        const fairShare = Math.max(1,
-            Math.ceil((totalCampers / Math.max(1, vehicles.length)) * 1.10));
-
         const modelVehicles = vehicles.map((v, vi) => {
             const routeDurationLimit = {
                 maxDuration: String(routeDurationHardSec) + 's'
@@ -275,24 +267,16 @@ window.GoGoogleOptimizer = (function () {
                 // solver will reroute aggressively before letting a bus run long.
                 routeDurationLimit.costPerHourAfterSoftMax = String(3600);
             }
-            // Soft load cap = fair share, but never below 50% of the bus's
-            // real capacity (so a single small bus in a fleet can still be
-            // useful for outlier stops) and never above its hard capacity.
-            const hardLoad = Math.max(1, v.capacity);
-            const softLoad = Math.max(
-                Math.ceil(hardLoad * 0.5),
-                Math.min(hardLoad, fairShare)
-            );
+            // NOTE: softMaxLoad is incompatible with paired-shipment models
+            // where the same load type appears at both pickup and delivery
+            // of a single shipment. Google rejects with HTTP 400:
+            //   "type appears in demands that apply to both pickups and deliveries"
+            // The post-routing rebalancer in campistry_go.js handles load
+            // balancing instead. Hard maxLoad here is just the bus's seat count.
             const veh = {
                 label:            v.name || ('Bus ' + (vi + 1)),
                 travelMode:       1, // DRIVING
-                loadLimits:       {
-                    campers: {
-                        maxLoad:                  String(hardLoad),
-                        softMaxLoad:              String(softLoad),
-                        costPerUnitAboveSoftMax:  100  // $100 per camper over fair-share
-                    }
-                },
+                loadLimits:       { campers: { maxLoad: String(Math.max(1, v.capacity)) } },
                 costPerHour:      40,
                 costPerKilometer: 1,
                 routeDurationLimit: routeDurationLimit
