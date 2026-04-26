@@ -4403,8 +4403,20 @@ async function _trySpatialSortPipeline({
                 busBuckets[si].splice(ai, 1);
                 const newSourceTime = estTime(si);
 
+                // Geographic constraint: receiver must be atom's nearest centroid
+                // (other than the source). Prevents atoms leaking to far clusters.
+                let nearestRi = -1, nearestD = Infinity;
                 for (let ri = 0; ri < busBuckets.length; ri++) {
                     if (ri === si) continue;
+                    const c = bucketCentroid(busBuckets[ri]);
+                    if (!c) continue;
+                    const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
+                    if (d < nearestD) { nearestD = d; nearestRi = ri; }
+                }
+
+                for (let ri = 0; ri < busBuckets.length; ri++) {
+                    if (ri === si) continue;
+                    if (ri !== nearestRi) continue;  // only the geographically nearest
                     if (bucketSize(busBuckets[ri]) + atom.size > SOFT_CAPACITY) continue;
 
                     busBuckets[ri].push(atom);
