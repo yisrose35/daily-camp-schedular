@@ -1424,6 +1424,14 @@
                 // ★ v4.0: Pool exclusivity for pinned swim
                 if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
 
+                // Idempotency guard: if any target bunk already has a swim block,
+                // skip placing another. Prevents double-placement (and therefore
+                // double change blocks) when the layer set somehow contains two
+                // pinned swim layers for the same grade.
+                if (t === 'swim' && targetBunks.some(b => (bunkTimelines[b] || []).some(blk => (blk.type || '').toLowerCase() === 'swim'))) {
+                    return;
+                }
+
                 // ── Swim change-time expansion ────────────────────────────
                 // pre-change sits immediately before swim, post-change immediately
                 // after, forming a contiguous (change, swim, change) unit. The unit
@@ -3711,6 +3719,11 @@
             // an existing wall. Mutates `swimBlk` in place when going inside.
             function attachSwimChangeBlocks(swimBlk, template, gradeForPeriods) {
                 if (!swimBlk || swimBlk.type !== 'swim') return;
+                // Hard idempotency: each swim block is processed exactly once.
+                // Even if the function is called multiple times for the same
+                // swim (across placement paths or retries), we never re-emit.
+                if (swimBlk._changeAttached) return;
+                swimBlk._changeAttached = true;
                 var layer = swimBlk.layer;
                 if (!layer) return;
                 var preChange = layer.preChangeMin > 0 ? layer.preChangeMin : 0;
@@ -3719,19 +3732,6 @@
 
                 var swimStart = swimBlk.startMin;
                 var swimEnd = swimBlk.endMin;
-
-                // Idempotency: bail if change blocks already exist adjacent to this swim.
-                // Prevents double-attachment if this function is somehow called twice
-                // for the same swim (e.g. via different placement paths).
-                var preExists = false, postExists = false;
-                for (var ai = 0; ai < template.length; ai++) {
-                    var ab = template[ai];
-                    if (!ab || ab === swimBlk) continue;
-                    var abt = String(ab.type || '').toLowerCase();
-                    if (abt === 'pre-change' && ab.endMin === swimStart) preExists = true;
-                    if (abt === 'post-change' && ab.startMin === swimEnd) postExists = true;
-                }
-                if (preExists && postExists) return;
 
                 var rangeHasConflict = function(rStart, rEnd) {
                     if (rStart < 0 || rEnd <= rStart) return true;
@@ -3777,7 +3777,7 @@
                 // Pre-change block. layer:null avoids ensureTimelineIntegrity
                 // clamping the block to swim's window; post-gap-forced source
                 // tells integrity pass to respect the exact dMin we set.
-                if (preChange > 0 && !preExists && preOutside) {
+                if (preChange > 0 && preOutside) {
                     var preBlk = makeBlock({
                         startMin: preAnchor - preChange, endMin: preAnchor,
                         type: 'pre-change', event: 'Change',
@@ -3787,7 +3787,7 @@
                     });
                     if (preBlk) template.push(preBlk);
                 }
-                if (postChange > 0 && !postExists && postOutside) {
+                if (postChange > 0 && postOutside) {
                     var postBlk = makeBlock({
                         startMin: postAnchor, endMin: postAnchor + postChange,
                         type: 'post-change', event: 'Change',
