@@ -5887,7 +5887,8 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                 try {
                     // Use GET to avoid CORS preflight (POST with custom content-type triggers it)
                     const getUrl = url + '?data=' + encodeURIComponent(query);
-                    console.log('[Go] Overpass ' + label + ': trying ' + url.split('//')[1].split('/')[0] + '...');
+                    const host = url.startsWith('/') ? 'same-origin proxy' : url.split('//')[1].split('/')[0];
+                    console.log('[Go] Overpass ' + label + ': trying ' + host + '...');
                     // Fail fast after 15 seconds — don't let a slow Overpass mirror block routing
                     const controller = new AbortController();
                     const timeoutId = setTimeout(function() { controller.abort(); }, 15000);
