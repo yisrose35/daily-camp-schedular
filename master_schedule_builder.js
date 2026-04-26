@@ -1958,7 +1958,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           <input type="number" id="daw-pop-post-change" value="${layer.postChangeMin != null ? layer.postChangeMin : ''}" min="0" max="60" step="5" style="width:70px;" placeholder="0">
           <span style="font-size:11px;color:#94a3b8;">min</span>
         </div>
-        <div class="ms-daw-pop-hint">Total = pre + swim + post. Make band width cover all.</div>
+        <div class="ms-daw-pop-hint">Size the band to just the swim period. Pre extends backward, post extends to the next period's start (skips gaps).</div>
       </div>
       ` : ''}
       ${layer.type === 'custom' ? `
