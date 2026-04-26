@@ -265,6 +265,15 @@ window.GoOrsOptimizer = (function () {
             return s + Math.max(1, (v.capacity || 44) - reserved);
         }, 0);
 
+        // Feasibility warning: leaf wedge can't seat all its campers. The
+        // bisection upstream is supposed to size wedges so demand fits, but
+        // small atomic neighborhoods can occasionally land here over-loaded.
+        if (vehicles.length <= 1 && totalKids > totalCap) {
+            console.warn(prefix + 'Wedge over capacity — ' + totalKids +
+                ' campers but only ' + totalCap + ' seats across ' +
+                vehicles.length + ' bus(es). Solver will drop the overflow.');
+        }
+
         // Base case: fits in assigned capacity, single bus, or below API threshold
         if (vehicles.length <= 1 || totalKids <= totalCap ||
                 stops.length <= 1 || stops.length + vehicles.length <= SPLIT_THRESHOLD) {
@@ -356,7 +365,7 @@ window.GoOrsOptimizer = (function () {
     // _singleRequest — build and send one ORS optimization request
     // -------------------------------------------------------------------------
     async function _singleRequest(options, key) {
-        const { stops, vehicles, campLat, campLng, isArrival, serviceTimeSec, departureTime, maxRideTimeSec } = options;
+        const { stops, vehicles, campLat, campLng, isArrival, serviceTimeSec, departureTime, maxRideTimeSec, maxRouteDurationSec } = options;
 
         const svcSec   = Math.round(serviceTimeSec || 120);
         const campCoord = [campLng, campLat]; // Vroom: [lng, lat] !
@@ -370,6 +379,13 @@ window.GoOrsOptimizer = (function () {
             bellSec = (parseInt(parts[0], 10) * 3600) + (parseInt(parts[1], 10) * 60);
         }
         var rideSec = Math.max(60, (maxRideTimeSec || 45 * 60) | 0);
+        // Total route duration cap. Vroom's `max_travel_time` field is a hard
+        // limit on driving + service + breaks per vehicle, so use the user
+        // setting directly. Falls back to rideSec * 2 if not provided to keep
+        // legacy callers working.
+        var routeDurSec = (maxRouteDurationSec && maxRouteDurationSec > 0)
+            ? Math.max(60, Math.round(maxRouteDurationSec))
+            : rideSec * 2;
 
         // ── Build jobs array — one per stop, 1-indexed ──
         // amount: [N] is a 1-dimensional capacity vector (seats needed).
@@ -399,9 +415,22 @@ window.GoOrsOptimizer = (function () {
         // effectiveCap: subtract reserved seat for monitor (if present) and each counselor.
         // Dismissal: start = camp (bus leaves camp, no fixed end → Vroom ends at last job)
         // Arrival:   end   = camp (bus has no fixed start → Vroom starts at first job)
+        //
+        // Capacity strategy: VROOM has no soft cap, so we use the smaller of
+        // (real capacity, fair-share + 15% headroom). This pushes the solver
+        // to balance loads instead of dumping everything on one bus. The
+        // post-routing rebalancer can still shuffle stops if needed.
+        const totalCampers = stops.reduce(function (s, st) {
+            return s + (st.campers ? st.campers.length : 0);
+        }, 0);
+        const fairShare = Math.max(1,
+            Math.ceil((totalCampers / Math.max(1, vehicles.length)) * 1.15));
+
         const vroomVehicles = vehicles.map(function (v, idx) {
             const reservedSeats = (v.monitor ? 1 : 0) + ((v.counselors && v.counselors.length) ? v.counselors.length : 0);
-            const effectiveCap  = Math.max(1, (v.capacity || 44) - reservedSeats);
+            const realCap       = Math.max(1, (v.capacity || 44) - reservedSeats);
+            // Don't drop below 50% of real capacity — single buses still need to be useful.
+            const effectiveCap  = Math.max(Math.ceil(realCap * 0.5), Math.min(realCap, fairShare));
 
             const veh = {
                 id:       idx + 1,            // 1-indexed
@@ -410,7 +439,8 @@ window.GoOrsOptimizer = (function () {
                 // posted against heavy vehicles, and applies lower free-flow speeds.
                 profile:  'driving-hgv',
                 capacity: [effectiveCap],     // must match jobs[].amount dimensionality
-                skills:   [1000 + idx]        // identity skill — supports hard "pin to bus" via job.skills
+                skills:   [1000 + idx],       // identity skill — supports hard "pin to bus" via job.skills
+                max_travel_time: routeDurSec  // hard cap on total driving + service per route
             };
 
             if (isArrival) {

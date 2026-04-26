@@ -886,7 +886,9 @@ let _toastTimer = null;
     }
 
     function formatTime(totalMin) {
-        const h = Math.floor(totalMin / 60), m = Math.round(totalMin % 60);
+        let total = Math.round(totalMin);
+        let h = Math.floor(total / 60), m = total % 60;
+        if (m === 60) { m = 0; h += 1; }
         const p = h >= 12 ? 'PM' : 'AM', h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
         return h12 + ':' + String(m).padStart(2, '0') + ' ' + p;
     }
@@ -3605,16 +3607,36 @@ async function generateRoutes() {
         // =====================================================================
         // COMMON POST-PROCESSING (runs regardless of which path produced routes)
         // =====================================================================
+        // - capacity rebalancing (Phase 2 — equalize bus loads)
         // - stopNum numbering
-        // - ETA / estimatedTime pipeline
+        // - ETA / estimatedTime pipeline (first pass, so we know totalDuration)
+        // - duration-based stop redistribution (Phase 3 — honor route cap)
+        // - ETA pipeline second pass after splits
         // - max-ride-time audit
         // - staff nearest-stop suggestions
         // =====================================================================
+        _rebalanceBusLoads(routes, shiftVehicles);
+
         _applyETAsAndAudits(routes, {
             shift, isArrival, campLat, campLng,
             avgStopMin,
             shiftNeedsReturn: si === shifts.length - 1 && !isArrival
         });
+
+        // Hard-split any route that's still over the duration cap. Use
+        // setup.maxRouteDuration as the target — same value the solver got
+        // as a soft cap, but enforced after the fact.
+        const _maxRouteMin = D.setup.maxRouteDuration || 60;
+        const _hadOverlong = routes.some(r => (r.totalDuration || 0) > _maxRouteMin);
+        if (_hadOverlong) {
+            _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, _maxRouteMin);
+            // Recompute ETAs after stops moved
+            _applyETAsAndAudits(routes, {
+                shift, isArrival, campLat, campLng,
+                avgStopMin,
+                shiftNeedsReturn: si === shifts.length - 1 && !isArrival
+            });
+        }
 
         // Staff suggestions (unchanged from v4) — mutate D.monitors / D.counselors
         _suggestStaffStops(routes, noStopStaff, campLat, campLng);
@@ -3633,6 +3655,24 @@ async function generateRoutes() {
     // -------------------------------------------------------------------------
     _generatedRoutes = allShiftResults;
     _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
+
+    // ── Shift-level imbalance audit ────────────────────────────────────────
+    // Surface bus-load imbalance per shift. The professional camp routes
+    // run in a 27-54 camper band; we want max/min ratio under ~1.5×.
+    allShiftResults.forEach((sr, si) => {
+        const active = sr.routes.filter(r => r.camperCount > 0);
+        if (active.length < 2) return;
+        const counts = active.map(r => r.camperCount);
+        const min = Math.min(...counts), max = Math.max(...counts);
+        const ratio = max / Math.max(1, min);
+        if (ratio >= 2 || (max - min) >= 25) {
+            const label = sr.shift?.label || ('Shift ' + (si + 1));
+            console.warn('[Go v5.2] ' + label + ': bus load imbalance — min=' +
+                min + ', max=' + max + ' (ratio ' + ratio.toFixed(2) + 'x). ' +
+                'Lightest: ' + active.find(r => r.camperCount === min).busName +
+                '; heaviest: ' + active.find(r => r.camperCount === max).busName);
+        }
+    });
 
     // Cache road geometry (unchanged from v4)
     let geomCached = 0;
@@ -4998,6 +5038,7 @@ async function _perBusGoogleTSP({
         serviceTime:   serviceTimeSec,
         departureTime: shiftTarget,
         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+        maxRouteDurationSec: (D.setup.maxRouteDuration || 60) * 60,
         vehicleTimeWindows,
         pinnedAnchorIndex: pinnedIdx,  // NEW PHASE 3
         googleKey, googleProjId,
@@ -5094,6 +5135,7 @@ async function _fallbackGoogleGlobal({
         serviceTime: serviceTimeSec,
         departureTime: shift.departureTime || (isArrival ? '07:30' : '16:00'),
         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+        maxRouteDurationSec: (D.setup.maxRouteDuration || 60) * 60,
         vehicleTimeWindows,
         googleKey, googleProjId,
         supabaseUrl: _supabaseUrl,
@@ -5155,6 +5197,215 @@ function _estimateFallbackTimeWindows(stops, vehicles, campLat, campLng,
             endTime:        zw.endHHMM
         };
     });
+}
+
+
+// =============================================================================
+// _splitOverlongRoutes — peel stops off any route exceeding the duration cap
+//
+// The solver receives maxRouteDuration as a soft cap; an overlong route
+// here means the solver couldn't honor it (usually because too many stops
+// landed on one bus). Peel the farthest-from-camp stops onto the
+// geographically-closest sibling route that has room and runs shorter.
+//
+// We don't know the precise duration of a hypothetical bus path, so use
+// stop count as a proxy (every dropped stop saves ~serviceTime + leg time).
+// =============================================================================
+function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteMin) {
+    if (!routes || routes.length < 2 || !maxRouteMin) return;
+    const active = routes.filter(r => r && r.stops && r.stops.length > 0);
+    if (active.length < 2) return;
+
+    const capById = {};
+    (shiftVehicles || []).forEach(v => { capById[v.busId] = v.capacity || 0; });
+
+    function camperCount(r) {
+        return r.stops.reduce((s, st) =>
+            s + (st.isMonitor || st.isCounselor ? 0 : (st.campers?.length || 0)), 0);
+    }
+    function dist2(a, b) {
+        const dx = a.lat - b.lat, dy = a.lng - b.lng;
+        return dx * dx + dy * dy;
+    }
+    function distToCamp2(st) {
+        return dist2(st, { lat: campLat, lng: campLng });
+    }
+    function routeMaxStopDistFromCamp(r) {
+        let max = 0;
+        r.stops.forEach(st => {
+            if (st.isMonitor || st.isCounselor || !st.lat || !st.lng) return;
+            const d = distToCamp2(st);
+            if (d > max) max = d;
+        });
+        return max;
+    }
+
+    const MAX_ITER = 20;
+    for (let iter = 0; iter < MAX_ITER; iter++) {
+        const overlong = active.find(r => (r.totalDuration || 0) > maxRouteMin);
+        if (!overlong) return;
+
+        // Pull the farthest-from-camp stop on this route.
+        let farthestIdx = -1, farthestDist = 0;
+        overlong.stops.forEach((st, idx) => {
+            if (st.isMonitor || st.isCounselor || !st.lat || !st.lng) return;
+            const d = distToCamp2(st);
+            if (d > farthestDist) { farthestDist = d; farthestIdx = idx; }
+        });
+        if (farthestIdx < 0) return;
+        const candidate = overlong.stops[farthestIdx];
+        const candCount = candidate.campers?.length || 0;
+        if (candCount === 0) {
+            // Degenerate stop — just drop it
+            overlong.stops.splice(farthestIdx, 1);
+            continue;
+        }
+
+        // Find the best receiver: a route with room, geographically nearest
+        // to the candidate, that's currently under the duration cap.
+        let receiver = null, bestDist = Infinity;
+        active.forEach(r => {
+            if (r === overlong) return;
+            if ((r.totalDuration || 0) >= maxRouteMin) return;
+            const cap = capById[r.busId] || 0;
+            const cur = camperCount(r);
+            if (cap && cur + candCount > cap) return;
+            // Distance from candidate to this route's nearest stop
+            let nearest = Infinity;
+            r.stops.forEach(st => {
+                if (st.isMonitor || st.isCounselor || !st.lat || !st.lng) return;
+                const d = dist2(candidate, st);
+                if (d < nearest) nearest = d;
+            });
+            if (nearest < bestDist) { bestDist = nearest; receiver = r; }
+        });
+
+        if (!receiver) {
+            console.warn('[Go v5.2] ' + overlong.busName + ' is ' +
+                overlong.totalDuration + 'min over ' + maxRouteMin +
+                'min cap, but no receiver bus has room nearby — leaving as-is');
+            return;
+        }
+
+        overlong.stops.splice(farthestIdx, 1);
+        receiver.stops.push(candidate);
+        // Approximate the duration delta: each stop costs avg 4-5 min
+        // (drive + service). Don't bother re-running the solver — the
+        // ETA pass will recompute totalDuration.
+        const APPROX_PER_STOP = 5;
+        overlong.totalDuration = Math.max(0, (overlong.totalDuration || 0) - APPROX_PER_STOP);
+        receiver.totalDuration = (receiver.totalDuration || 0) + APPROX_PER_STOP;
+        overlong.camperCount = camperCount(overlong);
+        receiver.camperCount = camperCount(receiver);
+        console.log('[Go v5.2] Split: moved farthest stop "' +
+            (candidate.address || '?') + '" (' + candCount + ' campers) from ' +
+            overlong.busName + ' to ' + receiver.busName + ' to honor route cap');
+    }
+}
+
+
+// =============================================================================
+// _rebalanceBusLoads — post-routing capacity equalization
+//
+// VROOM/Google sometimes return solutions where one bus is near capacity
+// while another is half-empty (the geographic bisection step over-allocates
+// stops to the denser wedge). Equalize by peeling a stop off the heaviest
+// bus and re-attaching it to the lightest, but only when:
+//   1. The stop is geographically close to the lightest bus's current path
+//      (closer to the light bus's centroid than to the heavy bus's centroid).
+//   2. The light bus has room (within capacity).
+//   3. The transfer brings them measurably closer in load.
+//
+// Safe by construction: never moves campers individually, never violates
+// capacity, and only moves stops that geographically fit better elsewhere.
+// =============================================================================
+function _rebalanceBusLoads(routes, shiftVehicles) {
+    if (!routes || routes.length < 2) return;
+    const active = routes.filter(r => r && r.stops && r.stops.length > 0);
+    if (active.length < 2) return;
+
+    // Capacity lookup by busId
+    const capById = {};
+    (shiftVehicles || []).forEach(v => { capById[v.busId] = v.capacity || 0; });
+
+    function camperCount(r) {
+        return r.stops.reduce((s, st) =>
+            s + (st.isMonitor || st.isCounselor ? 0 : (st.campers?.length || 0)), 0);
+    }
+    function centroid(r) {
+        const stops = r.stops.filter(s => !s.isMonitor && !s.isCounselor && s.lat && s.lng);
+        if (!stops.length) return null;
+        const lat = stops.reduce((s, st) => s + st.lat, 0) / stops.length;
+        const lng = stops.reduce((s, st) => s + st.lng, 0) / stops.length;
+        return { lat, lng };
+    }
+    function dist2(a, b) {
+        const dx = a.lat - b.lat, dy = a.lng - b.lng;
+        return dx * dx + dy * dy;
+    }
+
+    // Refresh camper counts in case the caller didn't.
+    active.forEach(r => { r.camperCount = camperCount(r); });
+
+    const MAX_PASSES = 6;       // bounded loop — each pass moves at most one stop
+    const TARGET_RATIO = 1.4;   // stop once max/min camper ratio is under this
+    const MIN_GAP = 8;          // and max-min difference is under this many campers
+
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+        active.forEach(r => { r.camperCount = camperCount(r); });
+        const sorted = [...active].sort((a, b) => a.camperCount - b.camperCount);
+        const lightest = sorted[0];
+        const heaviest = sorted[sorted.length - 1];
+        const ratio = heaviest.camperCount / Math.max(1, lightest.camperCount);
+        const gap = heaviest.camperCount - lightest.camperCount;
+        if (ratio < TARGET_RATIO && gap < MIN_GAP) break;
+
+        const lightCap = capById[lightest.busId] || 999;
+        const lightRoom = lightCap - lightest.camperCount;
+        if (lightRoom <= 0) break; // no room to receive
+
+        const lightC = centroid(lightest);
+        const heavyC = centroid(heaviest);
+        if (!lightC || !heavyC) break;
+
+        // Find the best transfer candidate: a non-staff stop on the heavy
+        // bus that (a) fits in the light bus's remaining capacity, (b) is
+        // closer to the light bus's centroid than to the heavy bus's, and
+        // (c) when moved, doesn't flip the imbalance the other way.
+        let bestStopIdx = -1;
+        let bestScore = 0;
+        heaviest.stops.forEach((st, idx) => {
+            if (st.isMonitor || st.isCounselor) return;
+            const stopCount = st.campers?.length || 0;
+            if (stopCount === 0 || stopCount > lightRoom) return;
+            // Don't flip the imbalance
+            const projHeavy = heaviest.camperCount - stopCount;
+            const projLight = lightest.camperCount + stopCount;
+            if (projLight > projHeavy) return;
+
+            const dToLight = dist2({ lat: st.lat, lng: st.lng }, lightC);
+            const dToHeavy = dist2({ lat: st.lat, lng: st.lng }, heavyC);
+            // Score: how much closer to light than to heavy. Higher = better candidate.
+            const score = dToHeavy - dToLight;
+            if (score > bestScore) { bestScore = score; bestStopIdx = idx; }
+        });
+
+        if (bestStopIdx < 0) break; // no geographically-suitable transfer found
+
+        // Perform the transfer. Append to the light bus; the per-bus TSP
+        // pass (already deferred to the optimizer or done in _applyETAs)
+        // will reorder the stops.
+        const moved = heaviest.stops.splice(bestStopIdx, 1)[0];
+        lightest.stops.push(moved);
+        heaviest.camperCount = camperCount(heaviest);
+        lightest.camperCount = camperCount(lightest);
+        console.log('[Go v5.2] Rebalance: moved stop "' + (moved.address || moved.label || '?') +
+            '" (' + (moved.campers?.length || 0) + ' campers) from ' +
+            heaviest.busName + ' (' + (heaviest.camperCount + (moved.campers?.length || 0)) +
+            '→' + heaviest.camperCount + ') to ' +
+            lightest.busName + ' (' + (lightest.camperCount - (moved.campers?.length || 0)) +
+            '→' + lightest.camperCount + ')');
+    }
 }
 
 
@@ -5282,6 +5533,20 @@ function _applyETAsAndAudits(routes, {
                 : '(using haversine fallback — likely overestimate)';
             console.warn('[Go v5.2] ' + r.busName + ': ' + violations +
                 ' stop(s) exceed ' + maxRideMin + 'min audit ' + srcNote);
+        }
+
+        // ── Route-duration audit ────────────────────────────────────────────
+        // The solver received maxRouteDuration as a soft cap. If the result
+        // still exceeds the cap, surface it loudly so we can investigate
+        // (most likely cause: too few buses for the load, or one of the
+        // post-solver TSP / time-window passes blew the budget).
+        const _maxRouteMin = D.setup.maxRouteDuration || 60;
+        if (r.totalDuration > _maxRouteMin) {
+            r._overRouteCap = true;
+            const overBy = r.totalDuration - _maxRouteMin;
+            console.warn('[Go v5.2] ' + r.busName + ': route is ' + r.totalDuration +
+                'min — ' + overBy + 'min over the ' + _maxRouteMin + 'min cap (' +
+                r.camperCount + ' campers, ' + r.stops.length + ' stops)');
         }
     }
 }
@@ -5977,10 +6242,20 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                     }
                 }
             } else if (mainStreet) {
-                // Default: address range (used only if no intersection found)
+                // Default fallback name when no intersection is available:
+                //   1 house → exact street number ("12 Newberry Ct")
+                //   2+ houses → median number, NOT a range ("15 Newberry Ct
+                //              area"). Avoids the wide ranges ("10-29 Newberry Ct")
+                //              that drivers find ambiguous.
                 const nums = cluster.map(c => parseAddress(c.address).num).filter(n => n > 0).sort((a, b) => a - b);
-                if (nums.length >= 2) stopName = nums[0] + '-' + nums[nums.length - 1] + ' ' + mainStreet;
-                else stopName = mainStreet;
+                if (nums.length >= 2) {
+                    const median = nums[Math.floor(nums.length / 2)];
+                    stopName = median + ' ' + mainStreet + ' (' + nums.length + ' houses)';
+                } else if (nums.length === 1) {
+                    stopName = nums[0] + ' ' + mainStreet;
+                } else {
+                    stopName = mainStreet;
+                }
 
                 if (osmIntersections) {
                     // Single-street cluster (e.g. cul-de-sac). Score by arterial bonus + walk.
@@ -6056,17 +6331,19 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             }
         }
 
-        // Street-segment merge: collapse stops sharing a street name within ~950ft.
+        // Street-segment merge: collapse stops sharing a street name within ~1300ft.
         // Historical Neranina groups by block face (e.g. "Lehigh Blvd@Dartmouth Dr"
-        // pulls every kid on that block). Two kids 700ft apart on the same street
+        // pulls every kid on that block). Two kids 1000ft apart on the same street
         // become one stop for them, two for us. This pass closes that gap.
+        // The wider radius (was 0.18mi) reflects camp's actual stops, which
+        // routinely span ~1200ft of frontage when families share a corner.
         function streetsOf(addr) {
             if (!addr) return [];
             return addr.split(' & ')
                 .map(p => p.replace(/^\d[\d\s\-]*/, '').trim().toLowerCase())
                 .filter(Boolean);
         }
-        const SEG_RADIUS_MI = 0.18;
+        const SEG_RADIUS_MI = 0.25;
         let segMerged = true;
         while (segMerged) {
             segMerged = false;
@@ -6091,12 +6368,17 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             }
         }
 
-        // Arterial absorb: lone singletons fold into the nearest stop within ~1500ft.
-        // Historical pattern: 51% of singleton-equivalent kids landed in 2-8 kid stops
-        // by anchoring at a shared arterial corner (e.g. Cox Cro Rd@Vermont Ave pulled
-        // kids from Vermont Ave + Paddock Pl into one stop). Wider radius + major-road
-        // re-anchoring closes that gap.
+        // Arterial absorb: small outlier stops (≤2 campers) fold into the
+        // nearest larger stop (≥3 campers) within ~1500ft.
+        // Historical pattern: 51% of singleton-equivalent kids landed in 2-8
+        // kid stops by anchoring at a shared arterial corner (e.g. Cox Cro
+        // Rd@Vermont Ave pulled kids from Vermont Ave + Paddock Pl into one
+        // stop). The previous version only absorbed singletons; widening to
+        // pairs closes the residual outlier gap (camp routinely consolidates
+        // 2-kid stops into 5-7 kid arterial stops).
         const ARTERIAL_RADIUS_MI = 0.30;
+        const SMALL_STOP_CAMPERS = 2;
+        const ANCHOR_MIN_CAMPERS = 3;
         const majorSegs = _majorRoadSegments || [];
         function nearestMajorIntersection(lat, lng, maxMi) {
             if (!osmIntersections || majorSegs.length === 0) return null;
@@ -6114,11 +6396,14 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         while (arterialMerged) {
             arterialMerged = false;
             for (let i = stops.length - 1; i >= 0; i--) {
-                if (stops[i].campers.length !== 1) continue;
+                const cnt = stops[i].campers.length;
+                if (cnt < 1 || cnt > SMALL_STOP_CAMPERS) continue;
                 let bestJ = -1, bestDist = ARTERIAL_RADIUS_MI;
                 for (let j = 0; j < stops.length; j++) {
                     if (j === i) continue;
-                    if (stops[j].campers.length + 1 > MAX_STOP_CAPACITY) continue;
+                    // Anchors must already be a real stop, not another tiny outlier.
+                    if (stops[j].campers.length < ANCHOR_MIN_CAMPERS) continue;
+                    if (stops[j].campers.length + cnt > MAX_STOP_CAPACITY) continue;
                     const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
                     if (d < bestDist) { bestDist = d; bestJ = j; }
                 }
@@ -7538,7 +7823,7 @@ function _getPinnedAnchorIndex(route, shiftIdx) {
 //   - anchor-mismatch: solver's first (AM) / last (PM) stop differs from the
 //     detected mega-cluster (informational)
 // =============================================================================
-function _analyzeRoute(route, shiftIdx, campLat, campLng, maxRideMin, isArrival) {
+function _analyzeRoute(route, shiftIdx, campLat, campLng, maxRideMin, isArrival, maxRouteMin) {
     const issues = [];
     const details = {};
 
@@ -7551,9 +7836,11 @@ function _analyzeRoute(route, shiftIdx, campLat, campLng, maxRideMin, isArrival)
         issues.push({ type: 'undersized', severity: 'info',
             msg: 'Only ' + route.camperCount + ' campers (may be mergeable)' });
     }
-    if (route.totalDuration > (maxRideMin + 15)) {
+    // Use maxRouteDuration if available; falls back to maxRideMin+15 for legacy callers.
+    const tooLongThreshold = (maxRouteMin && maxRouteMin > 0) ? maxRouteMin : (maxRideMin + 15);
+    if (route.totalDuration > tooLongThreshold) {
         issues.push({ type: 'too-long', severity: 'warn',
-            msg: 'Route takes ' + route.totalDuration + ' min' });
+            msg: 'Route takes ' + route.totalDuration + ' min (cap ' + tooLongThreshold + ' min)' });
     }
 
     // Stop-distribution checks
@@ -7646,6 +7933,7 @@ async function renderDispatcherDashboard(allShifts) {
     const campLat = D.setup.campLat || _campCoordsCache?.lat || 0;
     const campLng = D.setup.campLng || _campCoordsCache?.lng || 0;
     const maxRideMin = D.setup.maxRideTime || 45;
+    const maxRouteMin = D.setup.maxRouteDuration || 60;
     const isArrival = D.activeMode === 'arrival';
 
     // Count buckets across all shifts
@@ -7657,7 +7945,7 @@ async function renderDispatcherDashboard(allShifts) {
         const shiftData = { shiftIdx: si, shift: sr.shift, routes: [] };
 
         activeRoutes.forEach(r => {
-            const analysis = _analyzeRoute(r, si, campLat, campLng, maxRideMin, isArrival);
+            const analysis = _analyzeRoute(r, si, campLat, campLng, maxRideMin, isArrival, maxRouteMin);
 
             const approveKey = window.GoFlagPersistence._busKey(si, r.busId);
             const flagKey = approveKey;

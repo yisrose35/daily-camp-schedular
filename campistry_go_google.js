@@ -122,6 +122,9 @@ window.GoGoogleOptimizer = (function () {
     //   serviceTime    : number   — seconds per stop
     //   departureTime  : "HH:MM"  — default bell / departure time
     //   maxRideTimeSec : number   — HARD limit per camper (Phase 2)
+    //   maxRouteDurationSec?: number — SOFT cap on total route duration; the
+    //     solver pays a penalty per second over this. Hard cap derived from
+    //     maxRideTime as a safety net to keep the model feasible.
     //   vehicleTimeWindows?: [{   — Phase 2 OPTIONAL per-vehicle windows
     //     busId:       string,
     //     startTime?:  "HH:MM",   (dismissal: bus leaves camp at this time)
@@ -143,6 +146,7 @@ window.GoGoogleOptimizer = (function () {
             stops, vehicles, campLat, campLng,
             isArrival, serviceTime, departureTime,
             maxRideTimeSec,
+            maxRouteDurationSec,
             vehicleTimeWindows,
             googleKey, googleProjId,
             supabaseUrl, accessToken, anonKey
@@ -226,28 +230,72 @@ window.GoGoogleOptimizer = (function () {
             if (vtw.busId) vtwByBusId[vtw.busId] = vtw;
         });
 
-        // Route duration hard limit: enough to cover the longest kid's ride
-        // plus service time on a moderate-size bus.
-        // Rationale: if the first kid rides maxRideSec, plus avgStops * serviceTime
-        // happens on the way, the full route is roughly
-        //    maxRideSec + (stops/bus) * serviceTime + camp leg.
-        // Add 15% slack for real-world driving variability.
+        // Route duration limits.
+        // HARD cap: derived from per-camper ride cap so the solver never
+        // becomes infeasible — this is the absolute ceiling.
+        //   maxRideSec + avgStops * serviceTime + 10min camp-leg + 15% slack.
+        // SOFT cap: the user's maxRouteDuration setting if supplied. The
+        // solver pays a per-second penalty over this and tries to honor it,
+        // but can exceed up to the hard cap if no feasible plan fits inside.
         const avgStopsPerBus = Math.ceil(stops.length / Math.max(1, vehicles.length));
         const svcTotal = avgStopsPerBus * serviceTimeSec;
         const routeDurationHardSec = Math.round(
-            (maxRideSec + svcTotal + 10 * 60) * 1.15 // 10min for camp-leg + 15% slack
+            (maxRideSec + svcTotal + 10 * 60) * 1.15
         );
+        // Sanity: warn if dwell time + ride budget alone consume the soft cap.
+        // (e.g. 14 stops × 2min = 28min already, plus 45min ride is 73min — if
+        //  the soft cap is 60min, the route is structurally infeasible and the
+        //  user should either increase maxRouteDuration or raise bus count.)
+        if (maxRouteDurationSec && (svcTotal + 10 * 60) > maxRouteDurationSec) {
+            console.warn('[GoGoogle v5.2] avg stops/bus (' + avgStopsPerBus +
+                ') × dwell (' + Math.round(serviceTimeSec / 60) + 'min) + camp-leg (10min) = ' +
+                Math.round((svcTotal + 10 * 60) / 60) + 'min — already exceeds maxRouteDuration (' +
+                Math.round(maxRouteDurationSec / 60) + 'min). Add buses or raise the cap.');
+        }
+        // Honor caller-supplied soft cap, but never let it exceed the hard cap.
+        const routeDurationSoftSec = (maxRouteDurationSec && maxRouteDurationSec > 0)
+            ? Math.min(routeDurationHardSec, Math.round(maxRouteDurationSec))
+            : null;
+
+        // Fair-share load target: total campers / number of buses, plus 10%
+        // headroom. The solver pays a high per-camper penalty above this, so
+        // it spreads load instead of dumping everyone on the geographically
+        // convenient bus. Hard cap stays at the bus's real capacity.
+        const totalCampers = stops.reduce((s, st) => s + (st.campers?.length || 0), 0);
+        const fairShare = Math.max(1,
+            Math.ceil((totalCampers / Math.max(1, vehicles.length)) * 1.10));
 
         const modelVehicles = vehicles.map((v, vi) => {
+            const routeDurationLimit = {
+                maxDuration: String(routeDurationHardSec) + 's'
+            };
+            if (routeDurationSoftSec) {
+                routeDurationLimit.softMaxDuration = String(routeDurationSoftSec) + 's';
+                // $1/sec ≈ $3600/hr — much higher than costPerHour ($40), so the
+                // solver will reroute aggressively before letting a bus run long.
+                routeDurationLimit.costPerHourAfterSoftMax = String(3600);
+            }
+            // Soft load cap = fair share, but never below 50% of the bus's
+            // real capacity (so a single small bus in a fleet can still be
+            // useful for outlier stops) and never above its hard capacity.
+            const hardLoad = Math.max(1, v.capacity);
+            const softLoad = Math.max(
+                Math.ceil(hardLoad * 0.5),
+                Math.min(hardLoad, fairShare)
+            );
             const veh = {
                 label:            v.name || ('Bus ' + (vi + 1)),
                 travelMode:       1, // DRIVING
-                loadLimits:       { campers: { maxLoad: String(Math.max(1, v.capacity)) } },
+                loadLimits:       {
+                    campers: {
+                        maxLoad:                  String(hardLoad),
+                        softMaxLoad:              String(softLoad),
+                        costPerUnitAboveSoftMax:  100  // $100 per camper over fair-share
+                    }
+                },
                 costPerHour:      40,
                 costPerKilometer: 1,
-                routeDurationLimit: {
-                    maxDuration: String(routeDurationHardSec) + 's'
-                }
+                routeDurationLimit: routeDurationLimit
             };
 
             // Per-vehicle time window (Phase 2)
@@ -333,7 +381,11 @@ window.GoGoogleOptimizer = (function () {
 
         console.log('[GoGoogle v5.2] Sending ' + shipments.length +
             ' paired shipments + ' + modelVehicles.length +
-            ' vehicles (route cap: ' + Math.round(routeDurationHardSec / 60) + 'min, ' +
+            ' vehicles (route cap: ' +
+            (routeDurationSoftSec
+                ? Math.round(routeDurationSoftSec / 60) + 'min soft / '
+                : '') +
+            Math.round(routeDurationHardSec / 60) + 'min hard, ' +
             'per-vehicle time windows: ' + Object.keys(vtwByBusId).length + ')');
 
         // ── API CALL ───────────────────────────────────────────────────────────
