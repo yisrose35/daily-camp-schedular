@@ -5873,7 +5873,10 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             'way["highway"~"^(residential|secondary|tertiary|primary|trunk|unclassified|living_street)$"]["name"](' + bbox + ');' +
             'out body;>;out skel qt;';
 
+        // Same-origin proxy (Vercel api/overpass.js) tried first — sidesteps CORS
+        // and adds the User-Agent header Overpass requires. External mirrors as fallback.
         const endpoints = [
+            '/api/overpass',
             'https://overpass-api.de/api/interpreter',
             'https://overpass.kumi.systems/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
