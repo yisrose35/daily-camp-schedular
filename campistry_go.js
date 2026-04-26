@@ -4343,7 +4343,7 @@ async function _trySpatialSortPipeline({
     }
 
     console.log('[Go v6] ═══════════════════════════════════════');
-    console.log('[Go v6] PHASE 5: Min-max hill climb (lower the longest route)');
+    console.log('[Go v6] PHASE 5: Sum-minimization hill climb (lower every route)');
     console.log('[Go v6] ═══════════════════════════════════════');
     const initTimes = busBuckets.map((_, i) => estTime(i));
     const initMax = Math.max(...initTimes);
@@ -4353,72 +4353,64 @@ async function _trySpatialSortPipeline({
 
     let moves = 0;
     for (let pass = 0; pass < 500; pass++) {
-        // 1. Find current worst (the bottleneck — the bus we want to shrink)
-        let worstIdx = -1, worstTime = 0;
-        const allTimes = [];
-        for (let i = 0; i < busBuckets.length; i++) {
-            const t = estTime(i);
-            allTimes.push(t);
-            if (t > worstTime) { worstTime = t; worstIdx = i; }
-        }
-        if (worstIdx < 0) break;
+        // Snapshot all current times for fast sum-delta calculations
+        const allTimes = busBuckets.map((_, i) => estTime(i));
+        const currentSum = allTimes.reduce((s, t) => s + t, 0);
 
-        // 2. Floor: don't shrink worst below CASCADE_FLOOR campers
-        const worstSize = bucketSize(busBuckets[worstIdx]);
-        if (worstSize <= CASCADE_FLOOR) break;
-
-        // 3. Search every atom × every receiver. Score = new max after the move.
-        //    Best move = one that reduces max the most. Reject if no move helps.
+        // Search every (source, atom, receiver) tuple. Best move = one that
+        // reduces the GLOBAL SUM by the most. Reduces every bus that can be
+        // reduced; the worst falls naturally as it gets atoms peeled off.
         let bestMove = null;
-        let bestNewMax = worstTime;
+        let bestNewSum = currentSum;
 
-        for (let ai = 0; ai < busBuckets[worstIdx].length; ai++) {
-            const atom = busBuckets[worstIdx][ai];
-            if (worstSize - atom.size < CASCADE_FLOOR) continue;
+        for (let si = 0; si < busBuckets.length; si++) {
+            const sourceSize = bucketSize(busBuckets[si]);
+            if (sourceSize <= CASCADE_FLOOR) continue;
 
-            // Simulate removal once: temporarily pop the atom
-            busBuckets[worstIdx].splice(ai, 1);
-            const newWorstTime = estTime(worstIdx);
+            for (let ai = 0; ai < busBuckets[si].length; ai++) {
+                const atom = busBuckets[si][ai];
+                if (sourceSize - atom.size < CASCADE_FLOOR) continue;
 
-            for (let ri = 0; ri < busBuckets.length; ri++) {
-                if (ri === worstIdx) continue;
-                // Try add to receiver
-                busBuckets[ri].push(atom);
-                const newReceiverTime = estTime(ri);
-                busBuckets[ri].pop();
+                // Simulate removal once
+                busBuckets[si].splice(ai, 1);
+                const newSourceTime = estTime(si);
 
-                // Compute new max across ALL clusters with the simulated move
-                let newMax = 0;
-                for (let ci = 0; ci < busBuckets.length; ci++) {
-                    let t;
-                    if (ci === worstIdx) t = newWorstTime;
-                    else if (ci === ri) t = newReceiverTime;
-                    else t = allTimes[ci];
-                    if (t > newMax) newMax = t;
+                for (let ri = 0; ri < busBuckets.length; ri++) {
+                    if (ri === si) continue;
+                    if (bucketSize(busBuckets[ri]) + atom.size > SOFT_CAPACITY) continue;
+
+                    busBuckets[ri].push(atom);
+                    const newReceiverTime = estTime(ri);
+                    busBuckets[ri].pop();
+
+                    const newSum = currentSum
+                        - allTimes[si] - allTimes[ri]
+                        + newSourceTime + newReceiverTime;
+
+                    if (newSum < bestNewSum) {
+                        bestNewSum = newSum;
+                        bestMove = { si, ai, ri };
+                    }
                 }
 
-                if (newMax < bestNewMax) {
-                    bestNewMax = newMax;
-                    bestMove = { ai, ri };
-                }
+                // Restore
+                busBuckets[si].splice(ai, 0, atom);
             }
-
-            // Restore the atom we popped
-            busBuckets[worstIdx].splice(ai, 0, atom);
         }
 
         if (!bestMove) break;
-
-        // 4. Apply the best move
-        const movedAtom = busBuckets[worstIdx].splice(bestMove.ai, 1)[0];
+        const movedAtom = busBuckets[bestMove.si].splice(bestMove.ai, 1)[0];
         busBuckets[bestMove.ri].push(movedAtom);
         moves++;
     }
 
     const finalTimes = busBuckets.map((_, i) => estTime(i));
     const finalMax = Math.max(...finalTimes);
-    console.log('[Go v6] Hill climb: ' + moves + ' atoms moved (max ' +
-        (initMax / 60).toFixed(1) + 'min → ' + (finalMax / 60).toFixed(1) + 'min)');
+    const initSum = initTimes.reduce((s, t) => s + t, 0);
+    const finalSum = finalTimes.reduce((s, t) => s + t, 0);
+    console.log('[Go v6] Hill climb: ' + moves + ' atoms moved (sum ' +
+        (initSum / 60).toFixed(0) + 'min → ' + (finalSum / 60).toFixed(0) +
+        'min, max ' + (initMax / 60).toFixed(1) + 'min → ' + (finalMax / 60).toFixed(1) + 'min)');
     console.log('[Go v6] Final: max ' + (finalMax / 60).toFixed(1) +
         'min, median ' + (median(finalTimes) / 60).toFixed(1) + 'min, min ' +
         (Math.min(...finalTimes) / 60).toFixed(1) + 'min');
