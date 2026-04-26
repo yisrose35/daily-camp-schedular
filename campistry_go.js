@@ -331,6 +331,86 @@ let _toastTimer = null;
         return result;
     }
     let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
+    let _majorRoadsBboxKey = null; // cache key so we don't refetch within a session
+
+    /** Standalone fetch of just the major-roads layer for clustering use.
+     *  Mirrors the major-roads query in fetchIntersections but doesn't
+     *  also fetch the larger intersection set. Sets _majorRoadSegments. */
+    async function _prefetchMajorRoads(campers) {
+        const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
+        const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
+        if (lats.length < 4 || lngs.length < 4) return;
+        const q1Lat = lats[Math.floor(lats.length * 0.25)], q3Lat = lats[Math.floor(lats.length * 0.75)];
+        const q1Lng = lngs[Math.floor(lngs.length * 0.25)], q3Lng = lngs[Math.floor(lngs.length * 0.75)];
+        const iqrLat = q3Lat - q1Lat, iqrLng = q3Lng - q1Lng;
+        const cleanLats = lats.filter(v => v >= q1Lat - 1.5*iqrLat && v <= q3Lat + 1.5*iqrLat);
+        const cleanLngs = lngs.filter(v => v >= q1Lng - 1.5*iqrLng && v <= q3Lng + 1.5*iqrLng);
+        if (cleanLats.length < 2 || cleanLngs.length < 2) return;
+        const buf = 0.012;
+        const minLat = cleanLats[0] - buf, maxLat = cleanLats[cleanLats.length-1] + buf;
+        const minLng = cleanLngs[0] - buf, maxLng = cleanLngs[cleanLngs.length-1] + buf;
+        const bboxKey = [minLat, minLng, maxLat, maxLng].map(v => v.toFixed(3)).join(',');
+        if (_majorRoadsBboxKey === bboxKey && _majorRoadSegments) return;
+        const bbox = minLat + ',' + minLng + ',' + maxLat + ',' + maxLng;
+        const query = '[out:json][timeout:25];' +
+            'way["highway"~"^(primary|secondary|trunk|tertiary)$"]["name"](' + bbox + ');' +
+            'out body;>;out skel qt;';
+        const endpoints = [
+            '/api/overpass',
+            'https://overpass-api.de/api/interpreter',
+            'https://overpass.kumi.systems/api/interpreter'
+        ];
+        for (const url of endpoints) {
+            try {
+                const ctrl = new AbortController();
+                const t = setTimeout(() => ctrl.abort(), 15000);
+                const r = await fetch(url + '?data=' + encodeURIComponent(query), { signal: ctrl.signal });
+                clearTimeout(t);
+                if (!r.ok) continue;
+                const data = await r.json();
+                if (!data?.elements?.length) continue;
+                const nodes = {};
+                data.elements.filter(e => e.type === 'node' && e.lat && e.lon)
+                    .forEach(e => { nodes[e.id] = { lat: e.lat, lng: e.lon }; });
+                const segs = [];
+                data.elements.filter(e => e.type === 'way' && e.nodes?.length >= 2).forEach(way => {
+                    const name = way.tags?.name || '';
+                    for (let i = 0; i < way.nodes.length - 1; i++) {
+                        const a = nodes[way.nodes[i]], b = nodes[way.nodes[i+1]];
+                        if (a && b) segs.push({ lat1: a.lat, lng1: a.lng, lat2: b.lat, lng2: b.lng, name });
+                    }
+                });
+                _majorRoadSegments = segs;
+                _majorRoadsBboxKey = bboxKey;
+                console.log('[Go v6] Prefetched ' + segs.length + ' major road segments for clustering');
+                return;
+            } catch (_) { continue; }
+        }
+        console.warn('[Go v6] Could not prefetch major roads — clustering will use plain spread');
+    }
+
+    /** For each atom, find the closest major-road name within ~0.25mi. Returns Map(atom→name|null). */
+    function _buildArterialFingerprints(atoms) {
+        const fingerprint = new Map();
+        if (!_majorRoadSegments || !_majorRoadSegments.length) {
+            atoms.forEach(a => fingerprint.set(a, null));
+            return fingerprint;
+        }
+        const MAX_MI = 0.25;
+        // Precompute segment midpoints for cheap haversine pre-filter
+        for (const atom of atoms) {
+            let bestName = null, bestD = MAX_MI;
+            for (const seg of _majorRoadSegments) {
+                if (!seg.name) continue;
+                const midLat = (seg.lat1 + seg.lat2) / 2;
+                const midLng = (seg.lng1 + seg.lng2) / 2;
+                const d = haversineMi(atom.lat, atom.lng, midLat, midLng);
+                if (d < bestD) { bestD = d; bestName = seg.name.toLowerCase(); }
+            }
+            fingerprint.set(atom, bestName);
+        }
+        return fingerprint;
+    }
 
     /** Line segment intersection test (2D) */
     function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
@@ -4067,13 +4147,34 @@ async function _trySpatialSortPipeline({
     // Used by Phase 3 (split trigger + split count) and Phase 5 (cascade).
     const STOP_WEIGHT = 120;   // seconds per camper (boarding, walking)
     const INTRA_WEIGHT = 120;  // seconds per spread-mi × sqrt(atoms)
+    // Arterial-aware spread: atoms sharing a primary arterial are conceptually close
+    // because the bus drives the arterial fast. Without this, two clusters strung
+    // along Hillside Blvd 4mi apart read as 4mi spread → fail the cap → get split.
+    // Closes the historical-vs-ours fragmentation gap (PEACH/PURPLE/MAROON cases).
+    let _arterialFingerprint = null;
     function bucketSpread(bucket) {
         if (!bucket.length) return 0;
         const lats = bucket.map(a => a.lat);
         const lngs = bucket.map(a => a.lng);
-        return haversineMi(
+        const raw = haversineMi(
             Math.min(...lats), Math.min(...lngs),
             Math.max(...lats), Math.max(...lngs));
+        if (!_arterialFingerprint) return raw;
+        // Find the dominant arterial in the bucket
+        const counts = new Map();
+        for (const atom of bucket) {
+            const a = _arterialFingerprint.get(atom);
+            if (a) counts.set(a, (counts.get(a) || 0) + 1);
+        }
+        if (!counts.size) return raw;
+        let domName = null, domN = 0;
+        for (const [n, c] of counts) if (c > domN) { domN = c; domName = n; }
+        // Discount: if ≥60% of atoms share the dominant arterial, discount spread by 40%.
+        // Linear scaling between 50% (no discount) and 80%+ share (max 40% discount).
+        const share = domN / bucket.length;
+        if (share < 0.5) return raw;
+        const discount = Math.min(0.4, (share - 0.5) * 1.33); // 0.5→0, 0.8→0.4
+        return raw * (1 - discount);
     }
     function estimateBucketTime(bucket) {
         if (!bucket.length) return 0;
@@ -4086,6 +4187,10 @@ async function _trySpatialSortPipeline({
     }
 
     showProgress(shiftLabel + ': clustering — building atoms...', pctBase + 10);
+
+    // Prefetch major roads so spread metric can discount intra-arterial atoms.
+    // Cached across shifts via _majorRoadsBboxKey.
+    await _prefetchMajorRoads(allCampers);
 
     // ── A. Build sibling atoms ──
     const sibMap = detectSiblings(allCampers);
@@ -4120,6 +4225,13 @@ async function _trySpatialSortPipeline({
 
     console.log('[Go v6] Clustering: ' + atoms.length + ' atoms from ' +
         allCampers.length + ' campers (' + Object.keys(sibGroups).length + ' sibling groups)');
+
+    // Build per-atom arterial fingerprint so bucketSpread can discount intra-arterial atoms.
+    _arterialFingerprint = _buildArterialFingerprints(atoms);
+    if (_majorRoadSegments?.length) {
+        const tagged = [..._arterialFingerprint.values()].filter(Boolean).length;
+        console.log('[Go v6] Arterial fingerprints: ' + tagged + '/' + atoms.length + ' atoms tagged');
+    }
 
     // ── B. Phase 1: Initial k-means with k = numBuses ──
     showProgress(shiftLabel + ': phase 1 — initial k-means...', pctBase + 15);
