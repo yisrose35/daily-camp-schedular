@@ -1,14 +1,13 @@
-/* swim_debug.js — diagnostic console for swim+change placement
+/* swim_debug.js — single-command diagnostic for swim+change placement.
  *
- * After Auto Build runs, open browser console and use:
- *   swimDebug.help()         — list commands
- *   swimDebug.dump()         — pretty-printed table of every bunk's swim/change
- *   swimDebug.report()       — single JSON blob to copy/paste back to assistant
- *   swimDebug.config()       — pre/swim/post settings per grade (from active layers)
- *   swimDebug.periods()      — current bell-schedule period boundaries
- *   swimDebug.bunk('A1')     — deep dive on one bunk
- *   swimDebug.expected({...})— record what user EXPECTED, included in report()
- *   swimDebug.clearExpected()— wipe expectations
+ * After Auto Build runs, open browser console and type:
+ *
+ *     swimDebug()
+ *
+ * That's the only command. It prints config, periods, a table of every
+ * placed swim/change block, and a JSON report between BEGIN/END markers.
+ * The report is also copied to the clipboard. Paste it back to the
+ * assistant.
  */
 (function () {
   'use strict';
@@ -23,12 +22,8 @@
   }
   function hh(m) {
     if (m == null || isNaN(m)) return '—';
-    var h = Math.floor(m / 60), mm = m % 60;
-    return h + ':' + (mm < 10 ? '0' : '') + mm;
-  }
-  function range(b) {
-    if (!b) return '—';
-    return hh(mm(b.start)) + '–' + hh(mm(b.end)) + ' (' + (mm(b.end) - mm(b.start)) + 'm)';
+    var h = Math.floor(m / 60), mn = m % 60;
+    return h + ':' + (mn < 10 ? '0' : '') + mn;
   }
 
   function getDivisions() {
@@ -71,7 +66,7 @@
         start: mm(pp.start || pp.startTime || pp[0]),
         end: mm(pp.end || pp.endTime || pp[1])
       };
-    }).filter(function (p) { return p.start != null && p.end != null; });
+    }).filter(function (x) { return x.start != null && x.end != null; });
   }
 
   function findPeriod(grade, t) {
@@ -168,37 +163,70 @@
     return out;
   }
 
-  var _expected = {};
+  function run() {
+    var tl = getTimelines();
+    if (!tl || !Object.keys(tl).length) {
+      console.warn('swimDebug: no timelines on window. Run an auto build first.');
+      return null;
+    }
 
-  var swimDebug = {
-    help: function () {
-      var lines = [
-        'swimDebug commands:',
-        '  swimDebug.dump()       — table of every swim/change block',
-        '  swimDebug.report()     — JSON blob (copy this and paste to assistant)',
-        '  swimDebug.config()     — layer settings (pre/swim/post) per grade',
-        '  swimDebug.periods()    — period boundaries per grade',
-        '  swimDebug.bunk("A1")   — deep dive on one bunk',
-        '  swimDebug.expected({bunk:"A1", pre:"11:20-11:30", swim:"11:30-12:10", post:"12:15-12:25"})',
-        '  swimDebug.clearExpected()',
-        '',
-        'Workflow:',
-        '  1. Run an auto build.',
-        '  2. swimDebug.dump()  — see what was placed.',
-        '  3. swimDebug.expected({...}) for any bunks you want to flag.',
-        '  4. swimDebug.report()  — copy the printed JSON.',
-        '  5. Paste it back to the assistant.'
-      ];
-      console.log(lines.join('\n'));
-      return lines.join('\n');
-    },
+    var divs = getDivisions();
+    var grades = Object.keys(divs);
 
-    dump: function () {
-      var rows = allRows();
-      if (!rows.length) {
-        console.warn('swimDebug.dump: no swim/change blocks found in window._bunkTimelines. Run an auto build first.');
-        return [];
-      }
+    // 1) config per grade
+    var configByGrade = {};
+    var configRows = [];
+    grades.forEach(function (g) {
+      var L = layerForGrade(g, 'swim');
+      if (!L) return;
+      var entry = {
+        mode: L.mode || L.placement || null,
+        preChangeMin: L.preChangeMin || 0,
+        periodMin: L.periodMin || L.dMax || L.dMin || 40,
+        postChangeMin: L.postChangeMin || 0,
+        dMin: L.dMin || null,
+        dMax: L.dMax || null
+      };
+      configByGrade[g] = entry;
+      configRows.push(Object.assign({ grade: g }, entry));
+    });
+
+    // 2) periods per grade
+    var periodsByGrade = {};
+    grades.forEach(function (g) { periodsByGrade[g] = periodsForGrade(g); });
+
+    // 3) blocks
+    var rows = allRows();
+    var byBunk = {};
+    rows.forEach(function (r) {
+      if (!byBunk[r.bunk]) byBunk[r.bunk] = { grade: r.grade, blocks: [] };
+      byBunk[r.bunk].blocks.push({
+        kind: r.kind,
+        start: r.start,
+        end: r.end,
+        dur: r.dur,
+        period: r.period,
+        crosses: r.crosses,
+        gapBefore: r.gapBefore,
+        gapAfter: r.gapAfter
+      });
+    });
+
+    // 4) print human view
+    console.log('=== swimDebug ===');
+    console.log('Config (pre / swim / post per grade):');
+    console.table(configRows);
+    console.log('Periods per grade:');
+    Object.keys(periodsByGrade).forEach(function (g) {
+      var line = periodsByGrade[g].map(function (p) {
+        return 'P' + p.idx + ' ' + hh(p.start) + '–' + hh(p.end) + ' (' + (p.end - p.start) + 'm)';
+      }).join('  ');
+      console.log('  ' + g + ': ' + line);
+    });
+    console.log('Placed swim/change blocks:');
+    if (!rows.length) {
+      console.warn('  (none — auto build placed no swim or change blocks)');
+    } else {
       console.table(rows.map(function (r) {
         return {
           bunk: r.bunk,
@@ -214,160 +242,38 @@
           cfg: r.configPre + '/' + r.configSwim + '/' + r.configPost
         };
       }));
-      return rows;
-    },
-
-    config: function () {
-      var layers = getActiveLayers();
-      var divs = getDivisions();
-      var grades = Object.keys(divs);
-      var out = [];
-      grades.forEach(function (g) {
-        var L = layerForGrade(g, 'swim');
-        if (!L) return;
-        out.push({
-          grade: g,
-          mode: L.mode || L.placement || '?',
-          preChangeMin: L.preChangeMin || 0,
-          periodMin: L.periodMin || L.dMax || L.dMin || 40,
-          postChangeMin: L.postChangeMin || 0,
-          dMin: L.dMin,
-          dMax: L.dMax
-        });
-      });
-      console.table(out);
-      return out;
-    },
-
-    periods: function () {
-      var divs = getDivisions();
-      var grades = Object.keys(divs);
-      var out = {};
-      grades.forEach(function (g) {
-        out[g] = periodsForGrade(g).map(function (p) {
-          return 'P' + p.idx + ' ' + hh(p.start) + '–' + hh(p.end) + ' (' + (p.end - p.start) + 'm)';
-        });
-      });
-      console.log('Periods per grade:');
-      Object.keys(out).forEach(function (g) {
-        console.log('  ' + g + ':\n    ' + out[g].join('\n    '));
-      });
-      return out;
-    },
-
-    bunk: function (name) {
-      var tl = getTimelines();
-      if (!tl[name]) {
-        console.warn('No timeline for bunk', name, '. Available:', Object.keys(tl));
-        return null;
-      }
-      var blocks = tl[name].slice().sort(function (a, b) { return mm(a.start) - mm(b.start); });
-      console.log('Bunk', name, 'grade=', gradeOf(name));
-      console.log('Periods:', periodsForGrade(gradeOf(name)).map(function (p) {
-        return 'P' + p.idx + ' ' + hh(p.start) + '–' + hh(p.end);
-      }).join('  '));
-      console.table(blocks.map(function (b) {
-        return {
-          type: b.type || b.activity,
-          start: hh(mm(b.start)),
-          end: hh(mm(b.end)),
-          dur: mm(b.end) - mm(b.start),
-          period: findPeriod(gradeOf(name), mm(b.start)),
-          merged: !!b._mergedIntoSwim,
-          attached: !!b._changeAttached
-        };
-      }));
-      return blocks;
-    },
-
-    expected: function (obj) {
-      if (!obj || !obj.bunk) {
-        console.warn('Usage: swimDebug.expected({bunk:"A1", pre:"11:20-11:30", swim:"11:30-12:10", post:"12:15-12:25"})');
-        return;
-      }
-      _expected[obj.bunk] = {
-        pre: obj.pre || null,
-        swim: obj.swim || null,
-        post: obj.post || null,
-        notes: obj.notes || null
-      };
-      console.log('Recorded expectation for', obj.bunk, _expected[obj.bunk]);
-      return _expected[obj.bunk];
-    },
-
-    clearExpected: function () { _expected = {}; console.log('Expectations cleared.'); },
-
-    report: function () {
-      var rows = allRows();
-      var byBunk = {};
-      rows.forEach(function (r) {
-        if (!byBunk[r.bunk]) byBunk[r.bunk] = { grade: r.grade, blocks: [] };
-        byBunk[r.bunk].blocks.push({
-          kind: r.kind,
-          start: r.start,
-          end: r.end,
-          dur: r.dur,
-          period: r.period,
-          crosses: r.crosses,
-          gapBefore: r.gapBefore,
-          gapAfter: r.gapAfter
-        });
-      });
-
-      var divs = getDivisions();
-      var configByGrade = {};
-      Object.keys(divs).forEach(function (g) {
-        var L = layerForGrade(g, 'swim');
-        if (L) {
-          configByGrade[g] = {
-            mode: L.mode || L.placement || null,
-            preChangeMin: L.preChangeMin || 0,
-            periodMin: L.periodMin || L.dMax || L.dMin || 40,
-            postChangeMin: L.postChangeMin || 0,
-            dMin: L.dMin || null,
-            dMax: L.dMax || null
-          };
-        }
-      });
-
-      var periodsByGrade = {};
-      Object.keys(divs).forEach(function (g) {
-        periodsByGrade[g] = periodsForGrade(g);
-      });
-
-      var report = {
-        generatedAt: new Date().toISOString(),
-        configByGrade: configByGrade,
-        periodsByGrade: periodsByGrade,
-        bunks: byBunk,
-        expected: _expected,
-        summary: {
-          totalSwim: rows.filter(function (r) { return r.kind === 'swim'; }).length,
-          swim40min: rows.filter(function (r) { return r.kind === 'swim' && r.dur === 40; }).length,
-          swimOver40: rows.filter(function (r) { return r.kind === 'swim' && r.dur > 40; }).length,
-          swimCrossingPeriods: rows.filter(function (r) { return r.kind === 'swim' && r.crosses; }).length,
-          preChangeBlocks: rows.filter(function (r) { return r.kind === 'pre'; }).length,
-          postChangeBlocks: rows.filter(function (r) { return r.kind === 'post'; }).length
-        }
-      };
-
-      var json = JSON.stringify(report, null, 2);
-      console.log('=== swimDebug.report ===');
-      console.log('Copy everything between the markers below and paste it to the assistant:');
-      console.log('---BEGIN-SWIM-REPORT---');
-      console.log(json);
-      console.log('---END-SWIM-REPORT---');
-      try {
-        if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(json).then(function () {
-            console.log('(report also copied to clipboard)');
-          }, function () {});
-        }
-      } catch (e) {}
-      return report;
     }
-  };
 
-  window.swimDebug = swimDebug;
-  console.log('[swim_debug] loaded — run swimDebug.help() for commands.');
+    // 5) JSON report for copy/paste
+    var report = {
+      generatedAt: new Date().toISOString(),
+      configByGrade: configByGrade,
+      periodsByGrade: periodsByGrade,
+      bunks: byBunk,
+      summary: {
+        totalSwim: rows.filter(function (r) { return r.kind === 'swim'; }).length,
+        swim40min: rows.filter(function (r) { return r.kind === 'swim' && r.dur === 40; }).length,
+        swimOver40: rows.filter(function (r) { return r.kind === 'swim' && r.dur > 40; }).length,
+        swimCrossingPeriods: rows.filter(function (r) { return r.kind === 'swim' && r.crosses; }).length,
+        preChangeBlocks: rows.filter(function (r) { return r.kind === 'pre'; }).length,
+        postChangeBlocks: rows.filter(function (r) { return r.kind === 'post'; }).length
+      }
+    };
+    var json = JSON.stringify(report, null, 2);
+    console.log('---BEGIN-SWIM-REPORT---');
+    console.log(json);
+    console.log('---END-SWIM-REPORT---');
+    console.log('Copy everything between the BEGIN/END markers and paste it to the assistant.');
+    try {
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(json).then(function () {
+          console.log('(report also copied to clipboard)');
+        }, function () {});
+      }
+    } catch (e) {}
+    return report;
+  }
+
+  window.swimDebug = run;
+  console.log('[swim_debug] loaded — type swimDebug() in the console after an auto build.');
 })();
