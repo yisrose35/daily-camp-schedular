@@ -957,7 +957,10 @@ window.CampistryGoNeighborhoods = (function () {
         // Spread cap used by all placement passes. Defined up here so
         // the prior-year pass can respect it too (otherwise last year's
         // wide buses stick permanently).
-        const MAX_BUS_SPREAD_MI = 3.0;
+        // Tightened 3.0 → 2.5mi: camp's reference routes typically span
+        // 2-3mi within a corridor; 3.0 was letting too many fallback
+        // violations through, producing 5-6mi mega-routes.
+        const MAX_BUS_SPREAD_MI = 2.5;
         const EMPTY_BUS_START_COST_MI = 2.5;
         function wouldSpreadExceed(bus, nh, capMi) {
             const c = nhCentroids[nh.id]; if (!c) return false;
@@ -966,6 +969,49 @@ window.CampistryGoNeighborhoods = (function () {
                 if (haversineMi(c.lat, c.lng, ec.lat, ec.lng) > capMi) return true;
             }
             return false;
+        }
+        // Compute the bus's max pair distance (current spread). 0 if <2 NHs.
+        function busSpread(bus) {
+            const ids = bus.neighborhoodIds;
+            let max = 0;
+            for (let i = 0; i < ids.length; i++) {
+                const ci = nhCentroids[ids[i]]; if (!ci) continue;
+                for (let j = i + 1; j < ids.length; j++) {
+                    const cj = nhCentroids[ids[j]]; if (!cj) continue;
+                    const d = haversineMi(ci.lat, ci.lng, cj.lat, cj.lng);
+                    if (d > max) max = d;
+                }
+            }
+            return max;
+        }
+        // Compute what the spread would BECOME if we added this NH.
+        // Used as the fallback metric when no bus passes the soft cap —
+        // pick the bus that grows LEAST, not the one with closest centroid.
+        // Closest-centroid was producing 6mi mega-buses because it didn't
+        // account for existing internal spread.
+        function resultingSpread(bus, nh) {
+            const c = nhCentroids[nh.id]; if (!c) return Infinity;
+            let max = busSpread(bus);
+            for (const existingId of bus.neighborhoodIds) {
+                const ec = nhCentroids[existingId]; if (!ec) continue;
+                const d = haversineMi(c.lat, c.lng, ec.lat, ec.lng);
+                if (d > max) max = d;
+            }
+            return max;
+        }
+        // Distance from this NH to its NEAREST other NH. Isolated NHs
+        // (large min-distance) should be placed first so they grab empty
+        // buses before being squeezed into already-busy buses far away.
+        function nhIsolation(nhId, others) {
+            const c = nhCentroids[nhId]; if (!c) return 0;
+            let minD = Infinity;
+            for (const other of others) {
+                if (other.id === nhId) continue;
+                const oc = nhCentroids[other.id]; if (!oc) continue;
+                const d = haversineMi(c.lat, c.lng, oc.lat, oc.lng);
+                if (d < minD) minD = d;
+            }
+            return minD === Infinity ? 0 : minD;
         }
 
         // --- 2a. Pass 1: prior-year preference (size-DESC for priority) ---
@@ -999,38 +1045,52 @@ window.CampistryGoNeighborhoods = (function () {
             if (w > 0) globalCentroid = { lat: sL / w, lng: sG / w };
         }
 
-        // Sort unassigned by sweep angle from global centroid, ties by size DESC
-        if (globalCentroid) {
-            unassigned.sort((a, b) => {
-                const ca = nhCentroids[a.id], cb = nhCentroids[b.id];
-                if (!ca && !cb) return b.camperCount - a.camperCount;
-                if (!ca) return 1; if (!cb) return -1;
-                const angA = Math.atan2(ca.lat - globalCentroid.lat, ca.lng - globalCentroid.lng);
-                const angB = Math.atan2(cb.lat - globalCentroid.lat, cb.lng - globalCentroid.lng);
-                if (angA !== angB) return angA - angB;
-                return b.camperCount - a.camperCount;
-            });
-        }
+        // Sort by ISOLATION descending: most-isolated NHs (no close partner)
+        // get assigned first so they can grab an empty bus. Otherwise they
+        // get jammed onto a busy bus far away at the end of the loop, which
+        // produced 6mi mega-buses. Tie-break by size DESC so a big lonely
+        // cluster outranks a tiny one.
+        const _allForIsolation = unassigned.slice();
+        unassigned.sort((a, b) => {
+            const ia = nhIsolation(a.id, _allForIsolation);
+            const ib = nhIsolation(b.id, _allForIsolation);
+            if (ia !== ib) return ib - ia;
+            return b.camperCount - a.camperCount;
+        });
 
-        // "Start a new bus" cost: if the closest non-empty bus is farther than
-        // this, open an empty bus instead of ballooning the distant one.
-        // 2.5mi ≈ a typical neighborhood diameter — bigger than that and you're
-        // spanning two distinct pockets, which is what caused the 5-hour rides.
+        // For each unassigned NH, pick the best bus:
+        //   1. PREFERRED: a bus where adding this NH stays under the spread cap.
+        //      Among those, pick the one with smallest current spread (tightest).
+        //   2. FALLBACK: when no bus stays under the cap, pick the bus that
+        //      results in the SMALLEST spread after adding (not closest centroid).
+        //      Closest-centroid was producing 6mi buses because it ignored the
+        //      bus's existing internal spread — adding to a bus 4mi away whose
+        //      stops already span 2mi makes a 6mi bus.
+        //   3. OVERFLOW: if every bus is over capacity, place on least-full.
         for (const nh of unassigned) {
-            const c = nhCentroids[nh.id];
             let target = null, targetScore = Infinity;
-            let fallbackTarget = null, fallbackScore = Infinity;  // ignores spread cap
+            let fallbackTarget = null, fallbackScore = Infinity;
+
             for (const bus of assignments) {
                 if (bus.camperCount + nh.camperCount > bus.capacity) continue;
-                const bc = busCentroid(bus);
-                const score = (bc && c)
-                    ? haversineMi(c.lat, c.lng, bc.lat, bc.lng)
-                    : EMPTY_BUS_START_COST_MI;
-                if (score < fallbackScore) { fallbackScore = score; fallbackTarget = bus; }
-                if (wouldSpreadExceed(bus, nh, MAX_BUS_SPREAD_MI)) continue;
-                if (score < targetScore) { targetScore = score; target = bus; }
+                const newSpread = resultingSpread(bus, nh);
+
+                // Track best fallback (lowest resulting spread regardless of cap)
+                if (newSpread < fallbackScore) {
+                    fallbackScore = newSpread; fallbackTarget = bus;
+                }
+                // Track best primary (must keep spread under cap)
+                if (newSpread > MAX_BUS_SPREAD_MI) continue;
+                // Among compliant buses, prefer the one already containing this
+                // NH's neighborhood — i.e. the smallest existing spread, breaks
+                // ties toward empty buses.
+                const tieBreaker = bus.neighborhoodIds.length === 0
+                    ? EMPTY_BUS_START_COST_MI
+                    : busSpread(bus);
+                if (tieBreaker < targetScore) { targetScore = tieBreaker; target = bus; }
             }
-            if (!target) target = fallbackTarget;  // spread-cap couldn't be honored
+
+            if (!target) target = fallbackTarget;
             if (!target) {
                 target = assignments.reduce((a, b) => a.camperCount <= b.camperCount ? a : b);
                 console.warn('[Go-NH] Overflow: no bus had room for ' + nh.id + ' (' + nh.camperCount +
