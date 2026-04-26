@@ -1360,67 +1360,51 @@
 
 
         // =====================================================================
-        // SHARED: SWIM BUNDLE COMPUTATION
+        // SHARED: SWIM + CHANGE PERIOD ANCHORS
         // =====================================================================
-        // Expand a placed swim window so that pre-change + swim + post-change
-        // become a SINGLE bundled "Swim" activity (one block, not three).
-        // Returns the new {start, end} along with the change sizes that landed
-        // (in case a side conflicted and was dropped).
+        // Given a swim block aligned to a bell-schedule period, return where
+        // pre-change and post-change should live:
+        //   pre  = last preChangeMin minutes of the period BEFORE swim's period
+        //   post = first postChangeMin minutes of the period AFTER swim's period
         //
-        // Period-aware: when bell-schedule periods exist and the natural
-        // adjacent-to-swim change range crosses a period gap, the change hops
-        // to the neighboring period so it always lands inside one.
-        function computeSwimBundleRange(swimStart, swimEnd, layer, gradeForPeriods, conflictBlocks) {
+        // - If the previous/next period is shorter than the configured change
+        //   length, fill the entire neighboring period.
+        // - If swim sits in the first period, drop pre. If swim sits in the
+        //   last period, drop post.
+        // - Returns {pre:null, post:null} when no campPeriods are configured
+        //   for the grade or when swim doesn't align to a period start.
+        function computeSwimChangeAnchors(swimStart, swimEnd, layer, gradeForPeriods) {
             var preChange = (layer && layer.preChangeMin > 0) ? layer.preChangeMin : 0;
             var postChange = (layer && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
-            if (preChange <= 0 && postChange <= 0) {
-                return { start: swimStart, end: swimEnd, preChange: 0, postChange: 0 };
-            }
-            var preAnchor = swimStart;
-            var postAnchor = swimEnd;
+            if (preChange <= 0 && postChange <= 0) return { pre: null, post: null };
             var gp = (gradeForPeriods && window.campPeriods && window.campPeriods[gradeForPeriods])
                 ? window.campPeriods[gradeForPeriods].slice().sort(function(a, b) { return a.startMin - b.startMin; })
                 : [];
-            if (gp.length > 0) {
-                var withinPeriod = function(rs, re) {
-                    for (var pi = 0; pi < gp.length; pi++) {
-                        if (gp[pi].startMin <= rs && gp[pi].endMin >= re) return true;
-                    }
-                    return false;
-                };
-                if (preChange > 0 && !withinPeriod(swimStart - preChange, swimStart)) {
-                    for (var pj = gp.length - 1; pj >= 0; pj--) {
-                        if (gp[pj].endMin <= swimStart) { preAnchor = gp[pj].endMin; break; }
-                    }
-                }
-                if (postChange > 0 && !withinPeriod(swimEnd, swimEnd + postChange)) {
-                    for (var pk = 0; pk < gp.length; pk++) {
-                        if (gp[pk].startMin >= swimEnd) { postAnchor = gp[pk].startMin; break; }
-                    }
-                }
+            if (gp.length === 0) return { pre: null, post: null };
+            var swimPeriodIdx = -1;
+            for (var i = 0; i < gp.length; i++) {
+                if (gp[i].startMin === swimStart && gp[i].endMin >= swimEnd) { swimPeriodIdx = i; break; }
             }
-            var hasConflict = function(rStart, rEnd) {
-                if (!conflictBlocks || rStart < 0 || rEnd <= rStart) return false;
-                for (var i = 0; i < conflictBlocks.length; i++) {
-                    var b = conflictBlocks[i];
-                    if (!b) continue;
-                    var bt = String(b.type || '').toLowerCase();
-                    if (bt === 'swim') continue;
-                    var bs = b.startMin, be = b.endMin;
-                    if (bs == null || be == null) continue;
-                    if (bs < rEnd && be > rStart) return true;
-                }
-                return false;
-            };
-            var effPre = (preChange > 0 && !hasConflict(preAnchor - preChange, preAnchor)) ? preChange : 0;
-            var effPost = (postChange > 0 && !hasConflict(postAnchor, postAnchor + postChange)) ? postChange : 0;
-            return {
-                start: effPre > 0 ? (preAnchor - effPre) : swimStart,
-                end: effPost > 0 ? (postAnchor + effPost) : swimEnd,
-                preChange: effPre,
-                postChange: effPost
-            };
+            if (swimPeriodIdx < 0) return { pre: null, post: null };
+            var pre = null, post = null;
+            if (preChange > 0 && swimPeriodIdx > 0) {
+                var prevP = gp[swimPeriodIdx - 1];
+                var prevDur = prevP.endMin - prevP.startMin;
+                var preDur = Math.min(preChange, prevDur);
+                pre = { startMin: prevP.endMin - preDur, endMin: prevP.endMin };
+            }
+            if (postChange > 0 && swimPeriodIdx < gp.length - 1) {
+                var nextP = gp[swimPeriodIdx + 1];
+                var nextDur = nextP.endMin - nextP.startMin;
+                var postDur = Math.min(postChange, nextDur);
+                post = { startMin: nextP.startMin, endMin: nextP.startMin + postDur };
+            }
+            return { pre: pre, post: post };
         }
+        // Counter for tagging swim+change groups so eviction/cleanup can keep
+        // the trio atomic and detect orphans.
+        var _swimGroupCounter = 0;
+        function nextSwimGroupId() { return 'sg_' + (++_swimGroupCounter); }
 
         // =====================================================================
         // PHASE 0: PLACE PINNED LAYERS
@@ -1500,37 +1484,15 @@
                     return;
                 }
 
-                // ── Swim change-time placement (separate blocks during placement) ──
-                // Pre-change + swim + post-change go in as THREE blocks while the
-                // pipeline runs (so each side can fail independently when conflicts
-                // exist, and ENFORCE/Phase 2.75 keep working on a normal-sized swim).
-                // A final merge pass at the end of Phase 2.7 collapses the trio into
-                // a single 'swim' block for display.
-                const _preChange = (t === 'swim' && layer.preChangeMin > 0) ? layer.preChangeMin : 0;
-                const _postChange = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
-
-                // Period-anchor: change blocks default to adjacent. Only reroute
-                // when natural position lands in a between-period gap.
-                let _preAnchor = blockStart;
-                let _postAnchor = blockEnd;
-                if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
-                    const _gp = (window.campPeriods && window.campPeriods[grade])
-                        ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
-                        : [];
-                    if (_gp.length > 0) {
-                        const _withinPeriod = (rs, re) =>
-                            _gp.some(p => p.startMin <= rs && p.endMin >= re);
-                        if (_preChange > 0 && !_withinPeriod(blockStart - _preChange, blockStart)) {
-                            for (let i = _gp.length - 1; i >= 0; i--) {
-                                if (_gp[i].endMin <= blockStart) { _preAnchor = _gp[i].endMin; break; }
-                            }
-                        }
-                        if (_postChange > 0 && !_withinPeriod(blockEnd, blockEnd + _postChange)) {
-                            const _next = _gp.find(p => p.startMin >= blockEnd);
-                            if (_next) _postAnchor = _next.startMin;
-                        }
-                    }
-                }
+                // ── Swim + change placement (three separate blocks, period-anchored) ──
+                // Pre-change lives in the last preChangeMin minutes of the period
+                // BEFORE swim's period; post-change lives in the first
+                // postChangeMin minutes of the period AFTER. Swim itself stays
+                // exactly periodMin long, never merged into one big block.
+                const _swimAnchors = (t === 'swim')
+                    ? computeSwimChangeAnchors(blockStart, blockEnd, layer, grade)
+                    : { pre: null, post: null };
+                const _swimGroupId = (t === 'swim') ? nextSwimGroupId() : null;
                 const _rangeFreeForAll = (rStart, rEnd) => {
                     if (rStart < 0 || rEnd <= rStart) return false;
                     return targetBunks.every(bunk => {
@@ -1545,21 +1507,25 @@
                         return true;
                     });
                 };
-                const _preOutside = _preChange > 0 && _rangeFreeForAll(_preAnchor - _preChange, _preAnchor);
-                const _postOutside = _postChange > 0 && _rangeFreeForAll(_postAnchor, _postAnchor + _postChange);
+                const _placePre = !!_swimAnchors.pre &&
+                    _rangeFreeForAll(_swimAnchors.pre.startMin, _swimAnchors.pre.endMin);
+                const _placePost = !!_swimAnchors.post &&
+                    _rangeFreeForAll(_swimAnchors.post.startMin, _swimAnchors.post.endMin);
 
                 targetBunks.forEach(bunk => {
-                    if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
-                        if (_preOutside) {
+                    if (t === 'swim') {
+                        if (_placePre) {
                             bunkTimelines[bunk].push({
-                                startMin: _preAnchor - _preChange, endMin: _preAnchor,
+                                startMin: _swimAnchors.pre.startMin, endMin: _swimAnchors.pre.endMin,
                                 type: 'pre-change', event: 'Change',
                                 layer: null,
-                                dMin: _preChange, dMax: _preChange,
+                                dMin: _swimAnchors.pre.endMin - _swimAnchors.pre.startMin,
+                                dMax: _swimAnchors.pre.endMin - _swimAnchors.pre.startMin,
                                 _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
                                 _activityLocked: true, _noBacktrack: isGradeWide,
-                                _source: 'post-gap-forced'
+                                _source: 'swim-pre-change',
+                                _swimGroupId: _swimGroupId
                             });
                         }
                         bunkTimelines[bunk].push({
@@ -1568,18 +1534,21 @@
                             layer, _classification: 'pinned', _committed: true,
                             _fixed: true, _gradeWide: isGradeWide && !isCustom,
                             _activityLocked: true, _noBacktrack: isGradeWide,
-                            _changeAttached: true
+                            _changeAttached: true,
+                            _swimGroupId: _swimGroupId
                         });
-                        if (_postOutside) {
+                        if (_placePost) {
                             bunkTimelines[bunk].push({
-                                startMin: _postAnchor, endMin: _postAnchor + _postChange,
+                                startMin: _swimAnchors.post.startMin, endMin: _swimAnchors.post.endMin,
                                 type: 'post-change', event: 'Change',
                                 layer: null,
-                                dMin: _postChange, dMax: _postChange,
+                                dMin: _swimAnchors.post.endMin - _swimAnchors.post.startMin,
+                                dMax: _swimAnchors.post.endMin - _swimAnchors.post.startMin,
                                 _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
                                 _activityLocked: true, _noBacktrack: isGradeWide,
-                                _source: 'post-gap-forced'
+                                _source: 'swim-post-change',
+                                _swimGroupId: _swimGroupId
                             });
                         }
                     } else {
@@ -3748,45 +3717,20 @@
             var allTemplates = {};
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
-            // (computeSwimBundleRange is defined at module scope; see above.)
-
-            // Helper: attach pre-change/post-change blocks adjacent to a swim block.
-            // Period-aware (hops a between-period gap); idempotent (per-block flag).
-            // Blocks are emitted as separate pre-change / post-change types; a final
-            // merge pass at the end of Phase 2.7 collapses (pre, swim, post) into a
-            // single 'swim' block for display.
+            // Helper: attach pre-change / post-change blocks anchored to the
+            // bell-schedule periods adjacent to swim's period (see
+            // computeSwimChangeAnchors at module scope). Swim itself stays
+            // exactly periodMin long. Idempotent per swim block.
             function attachSwimChangeBlocks(swimBlk, template, gradeForPeriods) {
                 if (!swimBlk || swimBlk.type !== 'swim') return;
                 if (swimBlk._changeAttached) return;
                 swimBlk._changeAttached = true;
                 var layer = swimBlk.layer;
                 if (!layer) return;
-                var preChange = layer.preChangeMin > 0 ? layer.preChangeMin : 0;
-                var postChange = layer.postChangeMin > 0 ? layer.postChangeMin : 0;
-                if (preChange <= 0 && postChange <= 0) return;
-                var swimStart = swimBlk.startMin, swimEnd = swimBlk.endMin;
-                var preAnchor = swimStart, postAnchor = swimEnd;
-                var gp = (gradeForPeriods && window.campPeriods && window.campPeriods[gradeForPeriods])
-                    ? window.campPeriods[gradeForPeriods].slice().sort(function(a, b) { return a.startMin - b.startMin; })
-                    : [];
-                if (gp.length > 0) {
-                    var withinPeriod = function(rs, re) {
-                        for (var pi = 0; pi < gp.length; pi++) {
-                            if (gp[pi].startMin <= rs && gp[pi].endMin >= re) return true;
-                        }
-                        return false;
-                    };
-                    if (preChange > 0 && !withinPeriod(swimStart - preChange, swimStart)) {
-                        for (var pj = gp.length - 1; pj >= 0; pj--) {
-                            if (gp[pj].endMin <= swimStart) { preAnchor = gp[pj].endMin; break; }
-                        }
-                    }
-                    if (postChange > 0 && !withinPeriod(swimEnd, swimEnd + postChange)) {
-                        for (var pk = 0; pk < gp.length; pk++) {
-                            if (gp[pk].startMin >= swimEnd) { postAnchor = gp[pk].startMin; break; }
-                        }
-                    }
-                }
+                var anchors = computeSwimChangeAnchors(swimBlk.startMin, swimBlk.endMin, layer, gradeForPeriods);
+                if (!anchors.pre && !anchors.post) return;
+                var groupId = swimBlk._swimGroupId || nextSwimGroupId();
+                swimBlk._swimGroupId = groupId;
                 var rangeHasConflict = function(rStart, rEnd) {
                     if (rStart < 0 || rEnd <= rStart) return true;
                     for (var i = 0; i < template.length; i++) {
@@ -3798,25 +3742,27 @@
                     }
                     return false;
                 };
-                if (preChange > 0 && !rangeHasConflict(preAnchor - preChange, preAnchor)) {
+                if (anchors.pre && !rangeHasConflict(anchors.pre.startMin, anchors.pre.endMin)) {
+                    var preDur = anchors.pre.endMin - anchors.pre.startMin;
                     var preBlk = makeBlock({
-                        startMin: preAnchor - preChange, endMin: preAnchor,
+                        startMin: anchors.pre.startMin, endMin: anchors.pre.endMin,
                         type: 'pre-change', event: 'Change',
-                        layer: null, dMin: preChange, dMax: preChange,
-                        _fixed: true, _source: 'post-gap-forced',
+                        layer: null, dMin: preDur, dMax: preDur,
+                        _fixed: true, _source: 'swim-pre-change',
                         _activityLocked: true, _final: true
                     });
-                    if (preBlk) template.push(preBlk);
+                    if (preBlk) { preBlk._swimGroupId = groupId; template.push(preBlk); }
                 }
-                if (postChange > 0 && !rangeHasConflict(postAnchor, postAnchor + postChange)) {
+                if (anchors.post && !rangeHasConflict(anchors.post.startMin, anchors.post.endMin)) {
+                    var postDur = anchors.post.endMin - anchors.post.startMin;
                     var postBlk = makeBlock({
-                        startMin: postAnchor, endMin: postAnchor + postChange,
+                        startMin: anchors.post.startMin, endMin: anchors.post.endMin,
                         type: 'post-change', event: 'Change',
-                        layer: null, dMin: postChange, dMax: postChange,
-                        _fixed: true, _source: 'post-gap-forced',
+                        layer: null, dMin: postDur, dMax: postDur,
+                        _fixed: true, _source: 'swim-post-change',
                         _activityLocked: true, _final: true
                     });
-                    if (postBlk) template.push(postBlk);
+                    if (postBlk) { postBlk._swimGroupId = groupId; template.push(postBlk); }
                 }
             }
 
@@ -4349,14 +4295,12 @@
                     function getValidPositions(need, tmpl, gs, ge, fMin, otherNeeds) {
                         var positions = [];
                         var gaps = findGaps(tmpl, gs, ge);
-                        // ★ Swim with change times is a (pre, swim, post) bundle that
-                        //   must be placed atomically. Reserve gap room for all 3.
+                        // Swim is placed as a standalone period-aligned block.
+                        // Pre/post change live in adjacent bell-schedule periods
+                        // (see attachSwimChangeBlocks + computeSwimChangeAnchors)
+                        // and don't need to share swim's gap.
                         var _swimPre = 0, _swimPost = 0;
-                        if ((need.type || '').toLowerCase() === 'swim' && need.layer) {
-                            _swimPre = need.layer.preChangeMin > 0 ? need.layer.preChangeMin : 0;
-                            _swimPost = need.layer.postChangeMin > 0 ? need.layer.postChangeMin : 0;
-                        }
-                        var _bundleExtra = _swimPre + _swimPost;
+                        var _bundleExtra = 0;
                         // Note: staggered swim (the only kind that reaches CSP — fullGrade
                         // is pinned in Phase 0) is intentionally not constrained to a
                         // single bell-schedule period. With pool exclusivity, requiring
@@ -4438,6 +4382,26 @@
                                     var rG = gap.end - (endAligned + dur);
                                     positions.push({ start: endAligned, dur: dur, deadGaps: rG > 0 && rG < fMin ? 1 : 0, lGap: endAligned - gap.start, rGap: rG });
                                 }
+                            }
+                        }
+                        // ── Swim period-snap filter ─────────────────────────
+                        // Swim must start at period.startMin and fit inside
+                        // one period. Any 5-min candidate that doesn't match
+                        // a period start (or whose period is shorter than
+                        // dMin) is dropped before scoring.
+                        if ((need.type || '').toLowerCase() === 'swim') {
+                            var _gpSwim = (window.campPeriods && window.campPeriods[grade])
+                                ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                                : [];
+                            if (_gpSwim.length > 0) {
+                                var _validSwimStarts = {};
+                                for (var _spi = 0; _spi < _gpSwim.length; _spi++) {
+                                    var _pp = _gpSwim[_spi];
+                                    if ((_pp.endMin - _pp.startMin) >= (need.dMin || 0)) {
+                                        _validSwimStarts[_pp.startMin] = true;
+                                    }
+                                }
+                                positions = positions.filter(function(p) { return _validSwimStarts[p.start]; });
                             }
                         }
                         // Deduplicate
@@ -9753,98 +9717,38 @@
 
 
         // =====================================================================
-        // STEP 2.65 — MERGE SWIM + CHANGE INTO ONE ACTIVITY
+        // STEP 2.65 — DROP ORPHAN CHANGE BLOCKS
         // =====================================================================
-        // Pre-change + swim + post-change blocks have lived as three separate
-        // walls through the whole pipeline (so each side can fail independently
-        // and ENFORCE/Phase 2.75 work on a normal-sized swim). Now collapse the
-        // trio into a single 'swim' block whose range covers the whole bundle —
-        // the user's "swim and change are the same activity" model. The pre/post
-        // change durations and the actual swim sub-range are preserved as metadata
-        // on the merged block for the renderer.
-        //
-        // Period-gap tolerant: when a between-period gap (e.g. 2:10–2:15) sits
-        // between swim and its post-change block, we still merge as long as
-        // nothing else lives in that gap — the merged block then covers the gap
-        // too, treating the whole pre+swim+gap+post stretch as ONE activity.
-        log('\n[STEP 2.65] Merging swim+change into one block...');
-        let _swimMergeCount = 0;
+        // Pre-change / post-change blocks carry _swimGroupId matching their
+        // swim block. If the matching swim block is gone (evicted or moved
+        // by a self-heal pass without taking its change tiles along), drop
+        // the orphans so the renderer doesn't show stray "Change" tiles.
+        log('\n[STEP 2.65] Cleaning up orphan change blocks...');
+        let _orphanChangeCount = 0;
         allGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const tl = bunkTimelines[bunk];
                 if (!Array.isArray(tl) || tl.length === 0) return;
-                tl.sort((a, b) => a.startMin - b.startMin);
-                const merged = [];
-                for (let i = 0; i < tl.length; i++) {
-                    const blk = tl[i];
-                    if (!blk) continue;
-                    if ((blk.type || '').toLowerCase() !== 'swim') {
-                        merged.push(blk);
-                        continue;
+                const liveSwimGroups = new Set();
+                tl.forEach(b => {
+                    if (b && (b.type || '').toLowerCase() === 'swim' && b._swimGroupId) {
+                        liveSwimGroups.add(b._swimGroupId);
                     }
-                    // Helper: nothing else (besides swim/change) lives between
-                    // [a, b) — i.e. it's just dead time / a period gap.
-                    const _gapEmpty = (a, b) => {
-                        if (a >= b) return true;
-                        return !tl.some(x => {
-                            if (!x || x === blk) return false;
-                            const xt = String(x.type || '').toLowerCase();
-                            if (xt === 'pre-change' || xt === 'post-change') return false;
-                            return x.startMin < b && x.endMin > a;
-                        });
-                    };
-                    // Pre-change: find the latest pre-change ending at or before
-                    // swim.startMin with nothing other than dead time between.
-                    let preBlk = null;
-                    // Post-change: find the earliest post-change starting at or
-                    // after swim.endMin with nothing other than dead time between.
-                    let postBlk = null;
-                    for (let j = 0; j < tl.length; j++) {
-                        const ob = tl[j];
-                        if (!ob || ob === blk) continue;
-                        const ot = String(ob.type || '').toLowerCase();
-                        if (ot === 'pre-change' && ob.endMin <= blk.startMin) {
-                            if (_gapEmpty(ob.endMin, blk.startMin)) {
-                                if (!preBlk || ob.endMin > preBlk.endMin) preBlk = ob;
-                            }
-                        }
-                        if (ot === 'post-change' && ob.startMin >= blk.endMin) {
-                            if (_gapEmpty(blk.endMin, ob.startMin)) {
-                                if (!postBlk || ob.startMin < postBlk.startMin) postBlk = ob;
-                            }
-                        }
-                    }
-                    if (preBlk || postBlk) {
-                        // Annotate swim with the bundle range & change metadata.
-                        blk._swimActualStart = blk.startMin;
-                        blk._swimActualEnd = blk.endMin;
-                        blk._preChangeMin = preBlk ? (preBlk.endMin - preBlk.startMin) : 0;
-                        blk._postChangeMin = postBlk ? (postBlk.endMin - postBlk.startMin) : 0;
-                        blk.startMin = preBlk ? preBlk.startMin : blk.startMin;
-                        blk.endMin = postBlk ? postBlk.endMin : blk.endMin;
-                        if (preBlk) preBlk._mergedIntoSwim = true;
-                        if (postBlk) postBlk._mergedIntoSwim = true;
-                        _swimMergeCount++;
-                    }
-                    merged.push(blk);
-                }
-                // Drop any leftover pre-change / post-change blocks that
-                // weren't merged into a swim — these are orphans from when
-                // self-heal / Phase 2.75 moved the swim without taking the
-                // change blocks along, leaving them stranded with no swim
-                // nearby. Without this drop, the schedule shows stray "Change"
-                // tiles disconnected from any swim activity.
-                bunkTimelines[bunk] = merged.filter(b => {
-                    if (!b || b._mergedIntoSwim) return false;
+                });
+                bunkTimelines[bunk] = tl.filter(b => {
+                    if (!b) return false;
                     const bt = String(b.type || '').toLowerCase();
-                    if (bt === 'pre-change' || bt === 'post-change') {
-                        return false; // orphan — drop
-                    }
-                    return true;
+                    if (bt !== 'pre-change' && bt !== 'post-change') return true;
+                    if (b._swimGroupId && liveSwimGroups.has(b._swimGroupId)) return true;
+                    _orphanChangeCount++;
+                    return false;
                 });
             });
         });
-        log('[2.65] Merged ' + _swimMergeCount + ' swim+change groups into single blocks');
+        log('[2.65] Dropped ' + _orphanChangeCount + ' orphan change blocks');
+        // Refresh debug exposure with post-cleanup state so swimDebug() reflects
+        // the final placed schedule, not the elite-restore snapshot.
+        try { window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines)); } catch (_e) {}
 
         // =====================================================================
         // STEP 2.7 — FORMALIZE
