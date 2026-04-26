@@ -68,7 +68,7 @@
             campLat: null, campLng: null,
             routingPipeline: 'spatial-sort',
             clusterSoftCapPct: 112, clusterDissolvePct: 55, clusterFloorPct: 30,
-            clusterSpreadRatio: 150
+            clusterSpreadRatio: 150, clusterMaxSpreadMi: 3.5
         },
         activeMode: 'dismissal',
         buses: [], shifts: [], monitors: [], counselors: [],
@@ -4397,8 +4397,54 @@ async function _trySpatialSortPipeline({
     // Close-to-camp clusters get tight caps (kids are dense, no excuse to sprawl);
     // far-from-camp clusters get proportionally larger caps (kids are sparse).
     const spreadRatio = (D.setup.clusterSpreadRatio ?? 150) / 100;
+    const HARD_SPREAD_CAP = D.setup.clusterMaxSpreadMi ?? 3.5;
     console.log('[Go v6] Spread cap: ' + spreadRatio.toFixed(2) +
-        '× median, scaled by distance-from-camp');
+        '× median, scaled by distance-from-camp, hard ceiling ' + HARD_SPREAD_CAP.toFixed(1) + 'mi');
+
+    // Spread relief pre-pass: any cluster over the hard cap gets its outermost
+    // atoms peeled to the nearest under-cap cluster with capacity, regardless of
+    // sum impact. Prevents the rare 6+mi route (Bus 13 = 111min in last run).
+    let reliefMoves = 0;
+    for (let safety = 0; safety < 200; safety++) {
+        const spreads = busBuckets.map(b => bucketSpread(b));
+        let worstI = -1, worstSpread = HARD_SPREAD_CAP;
+        for (let i = 0; i < spreads.length; i++) if (spreads[i] > worstSpread) { worstSpread = spreads[i]; worstI = i; }
+        if (worstI < 0) break;
+
+        const cent = bucketCentroid(busBuckets[worstI]);
+        if (!cent) break;
+        // Find the atom furthest from centroid (the outlier)
+        let outAi = -1, outD = -1;
+        for (let ai = 0; ai < busBuckets[worstI].length; ai++) {
+            const a = busBuckets[worstI][ai];
+            const d = haversineMi(a.lat, a.lng, cent.lat, cent.lng);
+            if (d > outD) { outD = d; outAi = ai; }
+        }
+        if (outAi < 0) break;
+        const outlier = busBuckets[worstI][outAi];
+        if (bucketSize(busBuckets[worstI]) - outlier.size < CASCADE_FLOOR) break;
+
+        // Pick nearest cluster (other than worstI) with capacity AND under hard cap
+        let bestRi = -1, bestD = Infinity;
+        for (let ri = 0; ri < busBuckets.length; ri++) {
+            if (ri === worstI) continue;
+            if (bucketSize(busBuckets[ri]) + outlier.size > SOFT_CAPACITY) continue;
+            const rc = bucketCentroid(busBuckets[ri]);
+            if (!rc) continue;
+            // Simulate add to check spread
+            busBuckets[ri].push(outlier);
+            const newSpread = bucketSpread(busBuckets[ri]);
+            busBuckets[ri].pop();
+            if (newSpread > HARD_SPREAD_CAP) continue;
+            const d = haversineMi(outlier.lat, outlier.lng, rc.lat, rc.lng);
+            if (d < bestD) { bestD = d; bestRi = ri; }
+        }
+        if (bestRi < 0) break;
+        busBuckets[worstI].splice(outAi, 1);
+        busBuckets[bestRi].push(outlier);
+        reliefMoves++;
+    }
+    if (reliefMoves > 0) console.log('[Go v6] Spread relief: ' + reliefMoves + ' outlier atoms peeled to fit hard cap');
 
     let moves = 0;
     let blockedBySpread = 0;
@@ -4450,7 +4496,7 @@ async function _trySpatialSortPipeline({
 
                 const ri = nearestRi;
                 if (ri >= 0 && ri !== si) {
-                    const receiverCap = baseCap * Math.max(0.4, allDists[ri] / medianDist);
+                    const receiverCap = Math.min(HARD_SPREAD_CAP, baseCap * Math.max(0.4, allDists[ri] / medianDist));
 
                     // === SINGLE MOVE: atom A → bus Y (no swap) ===
                     if (bucketSize(busBuckets[ri]) + atom.size <= SOFT_CAPACITY) {
@@ -4459,7 +4505,8 @@ async function _trySpatialSortPipeline({
                         const newReceiverSpread = bucketSpread(busBuckets[ri]);
                         busBuckets[ri].pop();
 
-                        if (newReceiverSpread <= receiverCap || newReceiverSpread <= allSpreads[ri]) {
+                        if (newReceiverSpread <= HARD_SPREAD_CAP &&
+                            (newReceiverSpread <= receiverCap || newReceiverSpread <= allSpreads[ri])) {
                             const newSum = currentSum
                                 - allTimes[si] - allTimes[ri]
                                 + newSourceTime + newReceiverTime;
@@ -4509,8 +4556,10 @@ async function _trySpatialSortPipeline({
                         busBuckets[ri].splice(bi, 0, atomB);
                         busBuckets[si].splice(ai, 1);
 
-                        const srcCap = baseCap * Math.max(0.4, allDists[si] / medianDist);
-                        if ((swappedSrcSpread > srcCap && swappedSrcSpread > allSpreads[si]) ||
+                        const srcCap = Math.min(HARD_SPREAD_CAP, baseCap * Math.max(0.4, allDists[si] / medianDist));
+                        // Hard cap is absolute — escape hatch only applies under hard cap
+                        if (swappedSrcSpread > HARD_SPREAD_CAP || swappedRcvSpread > HARD_SPREAD_CAP ||
+                            (swappedSrcSpread > srcCap && swappedSrcSpread > allSpreads[si]) ||
                             (swappedRcvSpread > receiverCap && swappedRcvSpread > allSpreads[ri])) {
                             blockedBySpread++;
                             continue;
