@@ -1400,23 +1400,27 @@
                 if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
 
                 // ── Swim change-time expansion ────────────────────────────
-                // The change blocks are treated as SEPARATE activities anchored
-                // to PERIOD BOUNDARIES, not just adjacent to swim. When the swim
-                // block matches a bell-schedule period, pre-change extends back
-                // from that period's start (into the prior period's tail) and
-                // post-change starts at the NEXT period's start (so a gap
-                // between periods is preserved). Example: P1 10:50-11:30,
-                // P2 11:30-12:10, P3 12:15-12:55, swim=40m, pre=post=10m →
-                // Change 11:20-11:30, Swim 11:30-12:10, Change 12:15-12:25.
+                // pre-change sits immediately before swim, post-change immediately
+                // after, forming a contiguous (change, swim, change) unit. The unit
+                // can transpire across multiple periods. The only nuance is gaps
+                // between periods: if the natural change position would land in
+                // such a gap, the change skips past the gap to the adjacent
+                // period boundary so it always happens within a period.
                 //
-                // Fallback: if the outside window overlaps an existing wall for
-                // any target bunk, change eats from swim's own block (legacy
-                // behavior) so nothing collides. Also falls back when periods
-                // aren't configured or swim doesn't align with a single period.
+                // Examples:
+                //  • P1 9:00-9:50, P2 9:50-10:40, swim 9:10-9:50, pre=post=10 →
+                //    Change 9:00-9:10, Swim 9:10-9:50, Change 9:50-10:00.
+                //  • P1 10:50-11:30, P2 11:30-12:10, P3 12:15-12:55,
+                //    swim 11:30-12:10, pre=post=10 (gap 12:10-12:15) →
+                //    Change 11:20-11:30, Swim 11:30-12:10, Change 12:15-12:25.
+                //
+                // Fallback: if the chosen position overlaps an existing wall for
+                // any target bunk, change eats from swim's own block (legacy).
                 const _preChange  = (t === 'swim' && layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
                 const _postChange = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
 
-                // Anchor change times to period boundaries when possible.
+                // Default: change blocks adjacent to swim. Override only if the
+                // natural position lies in a gap between periods.
                 let _preAnchor  = blockStart;  // pre-change ends here
                 let _postAnchor = blockEnd;    // post-change starts here
                 if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
@@ -1424,14 +1428,21 @@
                         ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
                         : [];
                     if (_gradePeriods.length > 0) {
-                        const _swimIdx = _gradePeriods.findIndex(p =>
-                            p.startMin <= blockStart && p.endMin >= blockEnd
-                        );
-                        if (_swimIdx >= 0) {
-                            _preAnchor = _gradePeriods[_swimIdx].startMin;
-                            if (_swimIdx + 1 < _gradePeriods.length) {
-                                _postAnchor = _gradePeriods[_swimIdx + 1].startMin;
+                        const _withinPeriod = (rs, re) =>
+                            _gradePeriods.some(p => p.startMin <= rs && p.endMin >= re);
+                        if (_preChange > 0 && !_withinPeriod(blockStart - _preChange, blockStart)) {
+                            // Natural pre window crosses a gap — retreat to prior period's end
+                            for (let i = _gradePeriods.length - 1; i >= 0; i--) {
+                                if (_gradePeriods[i].endMin <= blockStart) {
+                                    _preAnchor = _gradePeriods[i].endMin;
+                                    break;
+                                }
                             }
+                        }
+                        if (_postChange > 0 && !_withinPeriod(blockEnd, blockEnd + _postChange)) {
+                            // Natural post window crosses a gap — advance to next period's start
+                            const _next = _gradePeriods.find(p => p.startMin >= blockEnd);
+                            if (_next) _postAnchor = _next.startMin;
                         }
                     }
                 }
