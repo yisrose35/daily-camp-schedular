@@ -3709,7 +3709,7 @@
             // Mirrors Phase 0 logic: try outside (borrow from adjacent period),
             // fall back to inside (eat from swim's duration) if outside overlaps
             // an existing wall. Mutates `swimBlk` in place when going inside.
-            function attachSwimChangeBlocks(swimBlk, template) {
+            function attachSwimChangeBlocks(swimBlk, template, gradeForPeriods) {
                 if (!swimBlk || swimBlk.type !== 'swim') return;
                 var layer = swimBlk.layer;
                 if (!layer) return;
@@ -3719,6 +3719,20 @@
 
                 var swimStart = swimBlk.startMin;
                 var swimEnd = swimBlk.endMin;
+
+                // Idempotency: bail if change blocks already exist adjacent to this swim.
+                // Prevents double-attachment if this function is somehow called twice
+                // for the same swim (e.g. via different placement paths).
+                var preExists = false, postExists = false;
+                for (var ai = 0; ai < template.length; ai++) {
+                    var ab = template[ai];
+                    if (!ab || ab === swimBlk) continue;
+                    var abt = String(ab.type || '').toLowerCase();
+                    if (abt === 'pre-change' && ab.endMin === swimStart) preExists = true;
+                    if (abt === 'post-change' && ab.startMin === swimEnd) postExists = true;
+                }
+                if (preExists && postExists) return;
+
                 var rangeHasConflict = function(rStart, rEnd) {
                     if (rStart < 0 || rEnd <= rStart) return true;
                     for (var i = 0; i < template.length; i++) {
@@ -3731,45 +3745,57 @@
                     return false;
                 };
 
-                var preOutside = preChange > 0 && !rangeHasConflict(swimStart - preChange, swimStart);
-                var postOutside = postChange > 0 && !rangeHasConflict(swimEnd, swimEnd + postChange);
+                // Period-anchor: changes default to adjacent. Only reroute when the
+                // natural position would land in a between-period gap.
+                var preAnchor = swimStart;
+                var postAnchor = swimEnd;
+                var gp = (gradeForPeriods && window.campPeriods && window.campPeriods[gradeForPeriods])
+                    ? window.campPeriods[gradeForPeriods].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                    : [];
+                if (gp.length > 0) {
+                    var withinPeriod = function(rs, re) {
+                        for (var pi = 0; pi < gp.length; pi++) {
+                            if (gp[pi].startMin <= rs && gp[pi].endMin >= re) return true;
+                        }
+                        return false;
+                    };
+                    if (preChange > 0 && !withinPeriod(swimStart - preChange, swimStart)) {
+                        for (var pj = gp.length - 1; pj >= 0; pj--) {
+                            if (gp[pj].endMin <= swimStart) { preAnchor = gp[pj].endMin; break; }
+                        }
+                    }
+                    if (postChange > 0 && !withinPeriod(swimEnd, swimEnd + postChange)) {
+                        for (var pk = 0; pk < gp.length; pk++) {
+                            if (gp[pk].startMin >= swimEnd) { postAnchor = gp[pk].startMin; break; }
+                        }
+                    }
+                }
 
-                // Swim duration is sacred — never shrink to make room for change.
-                // The (pre, swim, post) bundle is sized in getValidPositions, so this
-                // path should already have free outside room. If not, log + skip the
-                // change block rather than carving the swim window.
-                var newStart = swimStart, newEnd = swimEnd;
+                var preOutside = preChange > 0 && !rangeHasConflict(preAnchor - preChange, preAnchor);
+                var postOutside = postChange > 0 && !rangeHasConflict(postAnchor, postAnchor + postChange);
 
                 // Pre-change block. layer:null avoids ensureTimelineIntegrity
                 // clamping the block to swim's window; post-gap-forced source
                 // tells integrity pass to respect the exact dMin we set.
-                if (preChange > 0) {
-                    var pStart = preOutside ? swimStart - preChange : swimStart;
-                    var pEnd   = preOutside ? swimStart              : newStart;
-                    if (pEnd > pStart) {
-                        var preBlk = makeBlock({
-                            startMin: pStart, endMin: pEnd,
-                            type: 'pre-change', event: 'Change',
-                            layer: null, dMin: pEnd - pStart, dMax: pEnd - pStart,
-                            _fixed: true, _source: 'post-gap-forced',
-                            _activityLocked: true, _final: true
-                        });
-                        if (preBlk) template.push(preBlk);
-                    }
+                if (preChange > 0 && !preExists && preOutside) {
+                    var preBlk = makeBlock({
+                        startMin: preAnchor - preChange, endMin: preAnchor,
+                        type: 'pre-change', event: 'Change',
+                        layer: null, dMin: preChange, dMax: preChange,
+                        _fixed: true, _source: 'post-gap-forced',
+                        _activityLocked: true, _final: true
+                    });
+                    if (preBlk) template.push(preBlk);
                 }
-                if (postChange > 0) {
-                    var qStart = postOutside ? swimEnd                : newEnd;
-                    var qEnd   = postOutside ? swimEnd + postChange   : swimEnd;
-                    if (qEnd > qStart) {
-                        var postBlk = makeBlock({
-                            startMin: qStart, endMin: qEnd,
-                            type: 'post-change', event: 'Change',
-                            layer: null, dMin: qEnd - qStart, dMax: qEnd - qStart,
-                            _fixed: true, _source: 'post-gap-forced',
-                            _activityLocked: true, _final: true
-                        });
-                        if (postBlk) template.push(postBlk);
-                    }
+                if (postChange > 0 && !postExists && postOutside) {
+                    var postBlk = makeBlock({
+                        startMin: postAnchor, endMin: postAnchor + postChange,
+                        type: 'post-change', event: 'Change',
+                        layer: null, dMin: postChange, dMax: postChange,
+                        _fixed: true, _source: 'post-gap-forced',
+                        _activityLocked: true, _final: true
+                    });
+                    if (postBlk) template.push(postBlk);
                 }
             }
 
@@ -4748,7 +4774,7 @@
                                 // them as separate blocks — outside swim's window if the adjacent
                                 // range is free, otherwise eat from swim's duration. Any bunk-level
                                 // swim (whether full-period or partial) gets the change buffer.
-                                attachSwimChangeBlocks(blk, template);
+                                attachSwimChangeBlocks(blk, template, grade);
                             }
                             // ★ Rotation quota: increment placed counter on successful CSP placement
                             if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
@@ -4840,7 +4866,7 @@
                                 }
                                 if (blk) {
                                     template.push(blk);
-                                    attachSwimChangeBlocks(blk, template);
+                                    attachSwimChangeBlocks(blk, template, grade);
                                 }
                                 if (relaxationType) log('[Phase3] CSP-Relax: ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' via ' + relaxationDetail);
                             } else {
