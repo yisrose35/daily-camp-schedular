@@ -12,14 +12,6 @@
 (function () {
   'use strict';
 
-  function mm(t) {
-    if (t == null) return null;
-    if (typeof t === 'number') return t;
-    var s = String(t).trim();
-    var m = s.match(/^(\d{1,2}):(\d{2})$/);
-    if (!m) return null;
-    return (+m[1]) * 60 + (+m[2]);
-  }
   function hh(m) {
     if (m == null || isNaN(m)) return '—';
     var h = Math.floor(m / 60), mn = m % 60;
@@ -27,46 +19,43 @@
   }
 
   function getDivisions() {
-    return window.divisions
+    return window._divisions
+      || window.divisions
       || (window.globalSettings && window.globalSettings.app1 && window.globalSettings.app1.divisions)
       || (window.g && window.g.app1 && window.g.app1.divisions)
       || {};
   }
-  function getActiveLayers() {
+  function getLayersByGrade() {
+    if (window._layersByGrade) return window._layersByGrade;
     var g = window.g || window.globalSettings || {};
-    return (g.app1 && (g.app1.dawLayers || g.app1.layers)) || window.dawLayers || [];
+    var saved = (g.app1 && g.app1.autoLayerTemplates)
+      ? (g.app1.autoLayerTemplates['_current'] || g.app1.autoLayerTemplates['_default'])
+      : null;
+    return saved || {};
   }
-  function getPeriods() {
-    return window.campPeriods || (window.g && window.g.app1 && window.g.app1.campPeriods) || {};
-  }
-  function getTimelines() {
-    return window._bunkTimelines || window._autoBuildTimelines || {};
-  }
+  function getPeriods() { return window.campPeriods || {}; }
+  function getTimelines() { return window._bunkTimelines || window._autoBuildTimelines || {}; }
+
   function gradeOf(bunk) {
     var divs = getDivisions();
     for (var gname in divs) {
       var info = divs[gname];
       var bunks = (info && info.bunks) || (Array.isArray(info) ? info : []);
       if (bunks && bunks.indexOf && bunks.indexOf(bunk) >= 0) return gname;
-      if (bunks && bunks.includes && bunks.includes(bunk)) return gname;
     }
     return null;
   }
 
   function periodsForGrade(grade) {
     var cp = getPeriods();
-    var p = cp[grade] || cp.default || cp;
-    if (!Array.isArray(p)) {
-      if (p && Array.isArray(p.periods)) p = p.periods;
-      else return [];
-    }
-    return p.map(function (pp, i) {
-      return {
-        idx: i + 1,
-        start: mm(pp.start || pp.startTime || pp[0]),
-        end: mm(pp.end || pp.endTime || pp[1])
-      };
-    }).filter(function (x) { return x.start != null && x.end != null; });
+    var arr = cp[grade];
+    if (!Array.isArray(arr)) return [];
+    return arr.slice()
+      .map(function (p, i) {
+        return { idx: i + 1, start: p.startMin, end: p.endMin, name: p.name || ('P' + (i + 1)) };
+      })
+      .filter(function (p) { return typeof p.start === 'number' && typeof p.end === 'number'; })
+      .sort(function (a, b) { return a.start - b.start; });
   }
 
   function findPeriod(grade, t) {
@@ -84,20 +73,16 @@
     for (var i = 0; i < ps.length; i++) {
       if (start >= ps[i].start && end <= ps[i].end) return false;
     }
-    return true;
+    return ps.length > 0;
   }
 
-  function layerForGrade(grade, type) {
-    var layers = getActiveLayers();
-    for (var i = 0; i < layers.length; i++) {
-      var L = layers[i];
+  function swimLayerForGrade(grade) {
+    var lbg = getLayersByGrade();
+    var arr = lbg[grade] || lbg['_all'] || [];
+    for (var i = 0; i < arr.length; i++) {
+      var L = arr[i];
       if (!L) continue;
-      var t = String(L.type || L.activity || L.name || '').toLowerCase();
-      if (t !== type.toLowerCase()) continue;
-      var grades = L.grades || L.appliesTo || L.applicableGrades || [];
-      if (!Array.isArray(grades) || grades.length === 0 || grades.indexOf(grade) >= 0) {
-        return L;
-      }
+      if (String(L.type || L.activity || '').toLowerCase() === 'swim') return L;
     }
     return null;
   }
@@ -113,8 +98,10 @@
 
   function rowsFor(bunk, blocks) {
     var grade = gradeOf(bunk);
-    var swimL = layerForGrade(grade, 'swim') || {};
-    var sorted = (blocks || []).slice().sort(function (a, b) { return mm(a.start) - mm(b.start); });
+    var swimL = swimLayerForGrade(grade) || {};
+    var sorted = (blocks || []).slice().sort(function (a, b) {
+      return (a.startMin || 0) - (b.startMin || 0);
+    });
 
     var rows = [];
     for (var i = 0; i < sorted.length; i++) {
@@ -122,21 +109,23 @@
       var k = classify(b);
       if (!k) continue;
 
-      var s = mm(b.start), e = mm(b.end);
-      var dur = e - s;
+      var s = b.startMin, e = b.endMin;
+      var dur = (typeof s === 'number' && typeof e === 'number') ? (e - s) : null;
       var prev = sorted[i - 1], next = sorted[i + 1];
-      var gapBefore = prev ? (s - mm(prev.end)) : null;
-      var gapAfter = next ? (mm(next.start) - e) : null;
+      var gapBefore = (prev && typeof prev.endMin === 'number' && typeof s === 'number') ? (s - prev.endMin) : null;
+      var gapAfter = (next && typeof next.startMin === 'number' && typeof e === 'number') ? (next.startMin - e) : null;
 
       rows.push({
         bunk: bunk,
         grade: grade,
         kind: k,
+        startMin: s,
+        endMin: e,
         start: hh(s),
         end: hh(e),
         dur: dur,
         period: findPeriod(grade, s),
-        crosses: crossesPeriod(grade, s, e),
+        crosses: (typeof s === 'number' && typeof e === 'number') ? crossesPeriod(grade, s, e) : null,
         gapBefore: gapBefore,
         gapAfter: gapAfter,
         configPre: swimL.preChangeMin || 0,
@@ -146,7 +135,8 @@
           merged: !!b._mergedIntoSwim,
           attached: !!b._changeAttached,
           swimActualStart: b._swimActualStart,
-          swimActualEnd: b._swimActualEnd
+          swimActualEnd: b._swimActualEnd,
+          mode: swimL.mode || swimL.placement || null
         }
       });
     }
@@ -177,7 +167,7 @@
     var configByGrade = {};
     var configRows = [];
     grades.forEach(function (g) {
-      var L = layerForGrade(g, 'swim');
+      var L = swimLayerForGrade(g);
       if (!L) return;
       var entry = {
         mode: L.mode || L.placement || null,
@@ -185,7 +175,9 @@
         periodMin: L.periodMin || L.dMax || L.dMin || 40,
         postChangeMin: L.postChangeMin || 0,
         dMin: L.dMin || null,
-        dMax: L.dMax || null
+        dMax: L.dMax || null,
+        startMin: L.startMin,
+        endMin: L.endMin
       };
       configByGrade[g] = entry;
       configRows.push(Object.assign({ grade: g }, entry));
@@ -204,25 +196,37 @@
         kind: r.kind,
         start: r.start,
         end: r.end,
+        startMin: r.startMin,
+        endMin: r.endMin,
         dur: r.dur,
         period: r.period,
         crosses: r.crosses,
         gapBefore: r.gapBefore,
-        gapAfter: r.gapAfter
+        gapAfter: r.gapAfter,
+        flags: r.flags
       });
     });
 
     // 4) print human view
     console.log('=== swimDebug ===');
+    console.log('Layer source:', window._layersByGrade ? '_layersByGrade (live)' :
+      'fallback (autoLayerTemplates)');
     console.log('Config (pre / swim / post per grade):');
-    console.table(configRows);
+    if (configRows.length) console.table(configRows);
+    else console.warn('  (no swim layer found — swim is probably not configured for any grade)');
+
     console.log('Periods per grade:');
     Object.keys(periodsByGrade).forEach(function (g) {
-      var line = periodsByGrade[g].map(function (p) {
-        return 'P' + p.idx + ' ' + hh(p.start) + '–' + hh(p.end) + ' (' + (p.end - p.start) + 'm)';
-      }).join('  ');
-      console.log('  ' + g + ': ' + line);
+      var pl = periodsByGrade[g];
+      if (!pl.length) {
+        console.log('  ' + g + ': (no periods configured — check Bell Schedule)');
+      } else {
+        console.log('  ' + g + ': ' + pl.map(function (p) {
+          return p.name + ' ' + hh(p.start) + '–' + hh(p.end) + ' (' + (p.end - p.start) + 'm)';
+        }).join('  '));
+      }
     });
+
     console.log('Placed swim/change blocks:');
     if (!rows.length) {
       console.warn('  (none — auto build placed no swim or change blocks)');
@@ -239,25 +243,28 @@
           crosses: r.crosses ? 'YES' : '',
           gapBefore: r.gapBefore == null ? '' : r.gapBefore + 'm',
           gapAfter: r.gapAfter == null ? '' : r.gapAfter + 'm',
-          cfg: r.configPre + '/' + r.configSwim + '/' + r.configPost
+          cfg: r.configPre + '/' + r.configSwim + '/' + r.configPost,
+          mode: r.flags.mode || ''
         };
       }));
     }
 
     // 5) JSON report for copy/paste
+    var summary = {
+      totalSwim: rows.filter(function (r) { return r.kind === 'swim'; }).length,
+      swim40min: rows.filter(function (r) { return r.kind === 'swim' && r.dur === 40; }).length,
+      swimOver40: rows.filter(function (r) { return r.kind === 'swim' && r.dur > 40; }).length,
+      swimUnder40: rows.filter(function (r) { return r.kind === 'swim' && r.dur != null && r.dur < 40; }).length,
+      swimCrossingPeriods: rows.filter(function (r) { return r.kind === 'swim' && r.crosses; }).length,
+      preChangeBlocks: rows.filter(function (r) { return r.kind === 'pre'; }).length,
+      postChangeBlocks: rows.filter(function (r) { return r.kind === 'post'; }).length
+    };
     var report = {
       generatedAt: new Date().toISOString(),
       configByGrade: configByGrade,
       periodsByGrade: periodsByGrade,
       bunks: byBunk,
-      summary: {
-        totalSwim: rows.filter(function (r) { return r.kind === 'swim'; }).length,
-        swim40min: rows.filter(function (r) { return r.kind === 'swim' && r.dur === 40; }).length,
-        swimOver40: rows.filter(function (r) { return r.kind === 'swim' && r.dur > 40; }).length,
-        swimCrossingPeriods: rows.filter(function (r) { return r.kind === 'swim' && r.crosses; }).length,
-        preChangeBlocks: rows.filter(function (r) { return r.kind === 'pre'; }).length,
-        postChangeBlocks: rows.filter(function (r) { return r.kind === 'post'; }).length
-      }
+      summary: summary
     };
     var json = JSON.stringify(report, null, 2);
     console.log('---BEGIN-SWIM-REPORT---');

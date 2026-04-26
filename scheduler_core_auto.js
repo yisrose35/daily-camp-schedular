@@ -588,6 +588,11 @@
             if (!layersByGrade[grade]) layersByGrade[grade] = [];
             layersByGrade[grade].push(layer);
         });
+        // Debug exposure for swim_debug.js
+        try {
+            window._layersByGrade = layersByGrade;
+            window._divisions = divisions;
+        } catch (_e) {}
 
         const FULL_GRADE_TYPES = new Set(['swim', 'lunch', 'snacks', 'snack']);
 
