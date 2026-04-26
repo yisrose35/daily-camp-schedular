@@ -4556,7 +4556,6 @@ async function _trySpatialSortPipeline({
                 });
                 if (tspResult) {
                     r.stops = tspResult.stops;
-                    r.stops.forEach((s, i) => s.stopNum = i + 1);
                     r.totalDuration = tspResult.totalDuration || r.totalDuration;
                     if (tspResult.roadPts) r._roadPts = tspResult.roadPts;
                     if (tspResult.tspLegTimes) r._tspLegTimes = tspResult.tspLegTimes;
@@ -4565,6 +4564,22 @@ async function _trySpatialSortPipeline({
                 console.warn('[Go v6] Per-bus TSP failed for ' + r.busName +
                     ' — keeping unsorted stop order (' + e.message + ')');
             }
+        }
+
+        // Override TSP order: closest-to-camp first.
+        // For dismissal: bus drops the nearest kid first, then fans outward.
+        // For arrival: bus picks up the farthest first, returns toward camp.
+        for (const r of routes) {
+            if (r.stops.length < 2) continue;
+            r.stops.sort((a, b) => {
+                const da = haversineMi(campLat, campLng, a.lat, a.lng);
+                const db = haversineMi(campLat, campLng, b.lat, b.lng);
+                return isArrival ? (db - da) : (da - db);
+            });
+            r.stops.forEach((s, i) => s.stopNum = i + 1);
+            // Drop solver leg times — they no longer match the new order
+            delete r._tspLegTimes;
+            delete r._roadPts;
         }
     }
 
