@@ -5761,6 +5761,21 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             }
         }
 
+        // Build a set of major-road street names from the OSM major-roads layer.
+        // Anchoring stops at arterial corners keeps the bus on through-roads instead
+        // of detouring into cul-de-sacs — historical Neranina's MAROON route packs
+        // 48 kids in 63min by routing along Bennetts Mills Rd and Whitesville Rd
+        // and letting kids walk ~500ft to the arterial.
+        const majorNames = new Set(
+            (_majorRoadSegments || [])
+                .map(s => (s.name || '').toLowerCase().trim())
+                .filter(Boolean)
+        );
+        const ARTERIAL_REACH_MI = 0.30; // ~1584ft — kids walk this far for an arterial
+        function isArterialInter(inter) {
+            return (inter.streets || []).some(s => majorNames.has(s.toLowerCase().trim()));
+        }
+
         // For each cluster, find the best corner
         const stops = bestClusters.map(cluster => {
             const streetCounts = {};
@@ -5800,9 +5815,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                     let bestInter = null, bestScore = -Infinity;
 
                     osmIntersections.forEach(inter => {
-                        // Quick reject: too far from any kid
+                        const arterial = isArterialInter(inter);
+                        // Arterial intersections get a wider reach — kids walk further to a through-road.
+                        const reach = arterial ? Math.max(walkMi * 2, ARTERIAL_REACH_MI) : walkMi * 2;
                         const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                        if (d > walkMi * 2) return;
+                        if (d > reach) return;
 
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
                         const mainMatch = interStreets.some(s => streetMatch(s, mainStreet));
@@ -5812,7 +5829,10 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                         if (mainMatch && crossMatch) score = 10;
                         else if (mainMatch) score = 4;
                         else if (crossMatch) score = 2;
-                        else return; // no street match — skip
+                        else if (!arterial) return; // no street match AND no arterial — skip
+
+                        // Arterial bonus: ~equivalent to forgiving 1250ft of extra walking
+                        if (arterial) score += 25;
 
                         // Subtract total walking distance (lower = better)
                         score -= totalWalkTo(inter.lat, inter.lng) * 20;
@@ -5846,19 +5866,23 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                 else stopName = mainStreet;
 
                 if (osmIntersections) {
-                    // Single street — first try intersections ON this street
-                    let bestInter = null, bestWalk = Infinity;
+                    // Single-street cluster (e.g. cul-de-sac). Score by arterial bonus + walk.
+                    // Prefer an arterial corner within ~1500ft over an on-street cul-de-sac
+                    // corner — keeps the bus on the through-road.
+                    let bestInter = null, bestScore = -Infinity;
                     osmIntersections.forEach(inter => {
+                        const arterial = isArterialInter(inter);
+                        const reach = arterial ? ARTERIAL_REACH_MI : walkMi * 2;
                         const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                        if (d > walkMi * 2) return;
+                        if (d > reach) return;
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
-                        if (!interStreets.some(s => streetMatch(s, mainStreet))) return;
-                        const tw = totalWalkTo(inter.lat, inter.lng);
-                        if (tw < bestWalk) { bestWalk = tw; bestInter = inter; }
+                        const onStreet = interStreets.some(s => streetMatch(s, mainStreet));
+                        let score = onStreet ? 4 : (arterial ? 0 : -Infinity);
+                        if (arterial) score += 25;
+                        score -= totalWalkTo(inter.lat, inter.lng) * 20;
+                        if (score > bestScore) { bestScore = score; bestInter = inter; }
                     });
 
-                    // Fallback: find the NEAREST intersection of ANY kind
-                    // Drivers need cross-street names, not address ranges
                     if (!bestInter) {
                         let nearestDist = Infinity;
                         osmIntersections.forEach(inter => {
@@ -5870,6 +5894,8 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                         if (bestInter) {
                             console.log('[Go]   No intersection on ' + mainStreet + ' — using nearest: ' + bestInter.name + ' (' + (nearestDist * 5280).toFixed(0) + 'ft)');
                         }
+                    } else if (isArterialInter(bestInter)) {
+                        console.log('[Go]   Arterial corner for ' + mainStreet + ': ' + bestInter.name + ' (walk ' + (totalWalkTo(bestInter.lat, bestInter.lng) * 5280).toFixed(0) + 'ft)');
                     }
 
                     if (bestInter) { stopLat = bestInter.lat; stopLng = bestInter.lng; stopName = bestInter.name; }
