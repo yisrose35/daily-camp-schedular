@@ -9823,7 +9823,20 @@
                     }
                     merged.push(blk);
                 }
-                bunkTimelines[bunk] = merged.filter(b => b && !b._mergedIntoSwim);
+                // Drop any leftover pre-change / post-change blocks that
+                // weren't merged into a swim — these are orphans from when
+                // self-heal / Phase 2.75 moved the swim without taking the
+                // change blocks along, leaving them stranded with no swim
+                // nearby. Without this drop, the schedule shows stray "Change"
+                // tiles disconnected from any swim activity.
+                bunkTimelines[bunk] = merged.filter(b => {
+                    if (!b || b._mergedIntoSwim) return false;
+                    const bt = String(b.type || '').toLowerCase();
+                    if (bt === 'pre-change' || bt === 'post-change') {
+                        return false; // orphan — drop
+                    }
+                    return true;
+                });
             });
         });
         log('[2.65] Merged ' + _swimMergeCount + ' swim+change groups into single blocks');
