@@ -4497,30 +4497,79 @@ async function _trySpatialSortPipeline({
     console.log('[Go v6] Total: ' + totalCampers + ' campers in ' + busBuckets.length + ' clusters');
     console.log('[Go v6] ═══════════════════════════════════════');
 
-    // ── E. Build minimal route objects for map display ──
-    const routes = busBuckets.map((bucket, bi) => {
+    // ── G. Per-cluster stop creation based on dropoff mode ──
+    // Each cluster is FROZEN — stop creators only operate on the campers given.
+    // No camper crosses cluster boundaries from here on.
+    showProgress(shiftLabel + ': building stops (' + dropoffMode + ')...', pctBase + 70);
+
+    const routes = [];
+    for (let bi = 0; bi < busBuckets.length; bi++) {
+        const bucket = busBuckets[bi];
         const vehicle = shiftVehicles[bi] || shiftVehicles[0];
         const campers = bucket.flatMap(a => a.members);
-        return {
+
+        let stopsRaw;
+        if (dropoffMode === 'corner-stops') {
+            stopsRaw = await createCornerStops(campers);
+        } else if (dropoffMode === 'optimized-stops') {
+            stopsRaw = createOptimizedStops(campers);
+        } else {
+            stopsRaw = createHouseStops(campers);
+        }
+
+        routes.push({
             busId:        vehicle.busId,
             busName:      vehicle.name || vehicle.busId,
             busColor:     vehicle.color || '#10b981',
             monitor:      vehicle.monitor || null,
             counselors:   vehicle.counselors || [],
-            stops:        campers.map((c, i) => ({
+            stops:        stopsRaw.map((s, i) => ({
                 stopNum: i + 1,
-                campers: [c],
-                address: c.address || '',
-                lat: c.lat, lng: c.lng
+                campers: s.campers,
+                address: s.address || '',
+                lat: s.lat, lng: s.lng
             })),
             camperCount:  campers.length,
             _cap:         vehicle.capacity,
             totalDuration: 0,
             _source:      'spatial-sort'
-        };
-    });
+        });
+    }
+    console.log('[Go v6] Stops created: ' + routes.reduce((s, r) => s + r.stops.length, 0) +
+        ' total (mode: ' + dropoffMode + ')');
 
-    toast('✓ Clustering complete — ' + busBuckets.length + ' clusters (density-aware)');
+    // ── H. Per-bus Google TSP — orders stops within each bus, never crosses buses ──
+    if (googleAvailable && routes.length) {
+        showProgress(shiftLabel + ': optimizing stop order per bus...', pctBase + 80);
+        for (const r of routes) {
+            if (r.stops.length < 3) continue;
+            try {
+                const tspResult = await _perBusGoogleTSP({
+                    route: r,
+                    campLat, campLng,
+                    isArrival,
+                    serviceTimeSec,
+                    googleKey, googleProjId,
+                    _supabaseUrl, _googleProxyToken,
+                    shift,
+                    shiftIdx
+                });
+                if (tspResult) {
+                    r.stops = tspResult.stops;
+                    r.stops.forEach((s, i) => s.stopNum = i + 1);
+                    r.totalDuration = tspResult.totalDuration || r.totalDuration;
+                    if (tspResult.roadPts) r._roadPts = tspResult.roadPts;
+                    if (tspResult.tspLegTimes) r._tspLegTimes = tspResult.tspLegTimes;
+                }
+            } catch (e) {
+                console.warn('[Go v6] Per-bus TSP failed for ' + r.busName +
+                    ' — keeping unsorted stop order (' + e.message + ')');
+            }
+        }
+    }
+
+    toast('✓ Routes complete — ' + routes.length + ' buses, ' +
+        routes.reduce((s, r) => s + r.stops.length, 0) + ' stops (' + dropoffMode + ')');
     return routes;
 }
 
