@@ -10101,43 +10101,11 @@
                         return gaps;
                     };
                     const allGapsPackable = (gaps) => gaps.every(g => isGapPackable(g.start, g.end));
-                    // For each soft-fixed slot in fixedSlots, check whether
-                    // removing it would make its containing period(s) packable.
-                    // Iterate until no more evictions happen (cascades).
-                    let changed = true;
-                    while (changed) {
-                        changed = false;
-                        for (const s of fixedSlots) {
-                            const t = String(s.type || '').toLowerCase();
-                            if (!PERIOD_SOFT_FIXED.has(t) && !s._fixed) continue;
-                            if (PERIOD_HARD_FIXED.has(t)) continue;
-                            // Find period containing this slot
-                            const containing = periods.find(p =>
-                                s.startMin >= p.startMin && s.endMin <= p.endMin
-                            );
-                            if (!containing) continue;
-                            const gapsWith = computeGapsAround(containing, fixedSlots);
-                            if (allGapsPackable(gapsWith)) continue;
-                            const others = fixedSlots.filter(o => o !== s);
-                            const gapsWithout = computeGapsAround(containing, others);
-                            if (!allGapsPackable(gapsWithout)) continue;
-                            // Eviction is beneficial: removing s makes the period packable.
-                            evictedBlocks.push({
-                                grade, bunk: String(bunk),
-                                name: s.event || s._assignedSpecial || '(unknown)',
-                                type: t, startMin: s.startMin, endMin: s.endMin,
-                                reason: 'remainder gap unpackable for overlapping layers'
-                            });
-                            if (Array.isArray(bunkTimelines[bunk])) {
-                                bunkTimelines[bunk] = bunkTimelines[bunk].filter(b =>
-                                    !(b.startMin === s.startMin && b.endMin === s.endMin)
-                                );
-                            }
-                            fixedSlots = others;
-                            changed = true;
-                            break; // restart loop with updated fixedSlots
-                        }
-                    }
+                    // Pass C (unpackable-gap eviction) is intentionally disabled.
+                    // It removed user-placed specials whenever the remaining gap
+                    // didn't match an available sport duration — but the user
+                    // expects those specials to stay. Any leftover gap is filled
+                    // later by the POST-GAP micro-slot pass ("Free"/"Slush").
                     const periodSlots = [];
                     periods.forEach(period => {
                         if (period.startMin >= period.endMin) return;
