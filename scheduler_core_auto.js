@@ -1495,55 +1495,106 @@
                     return;
                 }
 
-                // ── Swim change-time merge ──────────────────────────────────
-                // Swim + pre-change + post-change are emitted as ONE swim block:
-                // the block's startMin/endMin span the full bundle. Period-aware
-                // anchoring keeps the change portion inside a real period (hops
-                // past inter-period gaps when needed). Pre/post sizes are stored
-                // on the block as metadata for the renderer.
-                let _bundleStart = blockStart, _bundleEnd = blockEnd;
-                let _bundlePre = 0, _bundlePost = 0;
-                if (t === 'swim' && (layer.preChangeMin > 0 || layer.postChangeMin > 0)) {
-                    // Build a "conflict view" from the union of all target bunks'
-                    // existing walls so a side that overlaps any of them is dropped.
-                    const _allWalls = [];
-                    targetBunks.forEach(bunk => {
-                        (bunkTimelines[bunk] || []).forEach(b => _allWalls.push(b));
-                    });
-                    const _br = computeSwimBundleRange(blockStart, blockEnd, layer, grade, _allWalls);
-                    _bundleStart = _br.start;
-                    _bundleEnd = _br.end;
-                    _bundlePre = _br.preChange;
-                    _bundlePost = _br.postChange;
+                // ── Swim change-time placement (separate blocks during placement) ──
+                // Pre-change + swim + post-change go in as THREE blocks while the
+                // pipeline runs (so each side can fail independently when conflicts
+                // exist, and ENFORCE/Phase 2.75 keep working on a normal-sized swim).
+                // A final merge pass at the end of Phase 2.7 collapses the trio into
+                // a single 'swim' block for display.
+                const _preChange = (t === 'swim' && layer.preChangeMin > 0) ? layer.preChangeMin : 0;
+                const _postChange = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+
+                // Period-anchor: change blocks default to adjacent. Only reroute
+                // when natural position lands in a between-period gap.
+                let _preAnchor = blockStart;
+                let _postAnchor = blockEnd;
+                if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
+                    const _gp = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
+                        : [];
+                    if (_gp.length > 0) {
+                        const _withinPeriod = (rs, re) =>
+                            _gp.some(p => p.startMin <= rs && p.endMin >= re);
+                        if (_preChange > 0 && !_withinPeriod(blockStart - _preChange, blockStart)) {
+                            for (let i = _gp.length - 1; i >= 0; i--) {
+                                if (_gp[i].endMin <= blockStart) { _preAnchor = _gp[i].endMin; break; }
+                            }
+                        }
+                        if (_postChange > 0 && !_withinPeriod(blockEnd, blockEnd + _postChange)) {
+                            const _next = _gp.find(p => p.startMin >= blockEnd);
+                            if (_next) _postAnchor = _next.startMin;
+                        }
+                    }
                 }
+                const _rangeFreeForAll = (rStart, rEnd) => {
+                    if (rStart < 0 || rEnd <= rStart) return false;
+                    return targetBunks.every(bunk => {
+                        const tl = bunkTimelines[bunk] || [];
+                        for (let i = 0; i < tl.length; i++) {
+                            const b = tl[i];
+                            if (!b) continue;
+                            const bs = b.startMin, be = b.endMin;
+                            if (bs == null || be == null) continue;
+                            if (bs < rEnd && be > rStart) return false;
+                        }
+                        return true;
+                    });
+                };
+                const _preOutside = _preChange > 0 && _rangeFreeForAll(_preAnchor - _preChange, _preAnchor);
+                const _postOutside = _postChange > 0 && _rangeFreeForAll(_postAnchor, _postAnchor + _postChange);
 
                 targetBunks.forEach(bunk => {
-                    bunkTimelines[bunk].push({
-                        startMin: _bundleStart, endMin: _bundleEnd,
-                        type: isCustom ? 'custom' : (layer.type || 'pinned'),
-                        event: eventName, layer,
-                        _classification: 'pinned', _committed: true, _fixed: true,
-                        _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
-                        _noBacktrack: isGradeWide,
-                        _customActivity: isCustom ? layer.customActivity : null,
-                        _customField: isCustom ? layer.customField : null,
-                        _customBunks: isCustom ? layer.customBunks : null,
-                        // Swim+change merge metadata (for renderer + post-edit).
-                        _preChangeMin: t === 'swim' ? _bundlePre : null,
-                        _postChangeMin: t === 'swim' ? _bundlePost : null,
-                        _swimActualStart: t === 'swim' ? blockStart : null,
-                        _swimActualEnd: t === 'swim' ? blockEnd : null,
-                        // Tag bundle-sized swims so ensureTimelineIntegrity honors
-                        // the explicit dMin/dMax instead of the layer's swim-only ones.
-                        _source: (t === 'swim' && (_bundlePre > 0 || _bundlePost > 0)) ? 'post-gap-forced' : undefined,
-                        dMin: (t === 'swim' && (_bundlePre > 0 || _bundlePost > 0)) ? (_bundleEnd - _bundleStart) : undefined,
-                        dMax: (t === 'swim' && (_bundlePre > 0 || _bundlePost > 0)) ? (_bundleEnd - _bundleStart) : undefined
-                    });
+                    if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
+                        if (_preOutside) {
+                            bunkTimelines[bunk].push({
+                                startMin: _preAnchor - _preChange, endMin: _preAnchor,
+                                type: 'pre-change', event: 'Change',
+                                layer: null,
+                                dMin: _preChange, dMax: _preChange,
+                                _classification: 'pinned', _committed: true,
+                                _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                                _activityLocked: true, _noBacktrack: isGradeWide,
+                                _source: 'post-gap-forced'
+                            });
+                        }
+                        bunkTimelines[bunk].push({
+                            startMin: blockStart, endMin: blockEnd,
+                            type: 'swim', event: eventName,
+                            layer, _classification: 'pinned', _committed: true,
+                            _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                            _activityLocked: true, _noBacktrack: isGradeWide,
+                            _changeAttached: true
+                        });
+                        if (_postOutside) {
+                            bunkTimelines[bunk].push({
+                                startMin: _postAnchor, endMin: _postAnchor + _postChange,
+                                type: 'post-change', event: 'Change',
+                                layer: null,
+                                dMin: _postChange, dMax: _postChange,
+                                _classification: 'pinned', _committed: true,
+                                _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                                _activityLocked: true, _noBacktrack: isGradeWide,
+                                _source: 'post-gap-forced'
+                            });
+                        }
+                    } else {
+                        bunkTimelines[bunk].push({
+                            startMin: blockStart, endMin: blockEnd,
+                            type: isCustom ? 'custom' : (layer.type || 'pinned'),
+                            event: eventName, layer,
+                            _classification: 'pinned', _committed: true, _fixed: true,
+                            _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
+                            _noBacktrack: isGradeWide,
+                            _customActivity: isCustom ? layer.customActivity : null,
+                            _customField: isCustom ? layer.customField : null,
+                            _customBunks: isCustom ? layer.customBunks : null
+                        });
+                    }
                     count++;
                 });
 
                 if (t === 'special') registerSpecialUsage(eventName, grade, blockStart, blockEnd);
-                if (t === 'swim') registerPoolUsage(grade, _bundleStart, _bundleEnd);
+                if (t === 'swim') registerPoolUsage(grade, blockStart, blockEnd);
                 if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
             // ★ v11.3: Validate all timelines after pinned layer placement
@@ -3694,6 +3745,76 @@
 
             // (computeSwimBundleRange is defined at module scope; see above.)
 
+            // Helper: attach pre-change/post-change blocks adjacent to a swim block.
+            // Period-aware (hops a between-period gap); idempotent (per-block flag).
+            // Blocks are emitted as separate pre-change / post-change types; a final
+            // merge pass at the end of Phase 2.7 collapses (pre, swim, post) into a
+            // single 'swim' block for display.
+            function attachSwimChangeBlocks(swimBlk, template, gradeForPeriods) {
+                if (!swimBlk || swimBlk.type !== 'swim') return;
+                if (swimBlk._changeAttached) return;
+                swimBlk._changeAttached = true;
+                var layer = swimBlk.layer;
+                if (!layer) return;
+                var preChange = layer.preChangeMin > 0 ? layer.preChangeMin : 0;
+                var postChange = layer.postChangeMin > 0 ? layer.postChangeMin : 0;
+                if (preChange <= 0 && postChange <= 0) return;
+                var swimStart = swimBlk.startMin, swimEnd = swimBlk.endMin;
+                var preAnchor = swimStart, postAnchor = swimEnd;
+                var gp = (gradeForPeriods && window.campPeriods && window.campPeriods[gradeForPeriods])
+                    ? window.campPeriods[gradeForPeriods].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                    : [];
+                if (gp.length > 0) {
+                    var withinPeriod = function(rs, re) {
+                        for (var pi = 0; pi < gp.length; pi++) {
+                            if (gp[pi].startMin <= rs && gp[pi].endMin >= re) return true;
+                        }
+                        return false;
+                    };
+                    if (preChange > 0 && !withinPeriod(swimStart - preChange, swimStart)) {
+                        for (var pj = gp.length - 1; pj >= 0; pj--) {
+                            if (gp[pj].endMin <= swimStart) { preAnchor = gp[pj].endMin; break; }
+                        }
+                    }
+                    if (postChange > 0 && !withinPeriod(swimEnd, swimEnd + postChange)) {
+                        for (var pk = 0; pk < gp.length; pk++) {
+                            if (gp[pk].startMin >= swimEnd) { postAnchor = gp[pk].startMin; break; }
+                        }
+                    }
+                }
+                var rangeHasConflict = function(rStart, rEnd) {
+                    if (rStart < 0 || rEnd <= rStart) return true;
+                    for (var i = 0; i < template.length; i++) {
+                        var b = template[i];
+                        if (!b || b === swimBlk) continue;
+                        var bs = b.startMin, be = b.endMin;
+                        if (bs == null || be == null) continue;
+                        if (bs < rEnd && be > rStart) return true;
+                    }
+                    return false;
+                };
+                if (preChange > 0 && !rangeHasConflict(preAnchor - preChange, preAnchor)) {
+                    var preBlk = makeBlock({
+                        startMin: preAnchor - preChange, endMin: preAnchor,
+                        type: 'pre-change', event: 'Change',
+                        layer: null, dMin: preChange, dMax: preChange,
+                        _fixed: true, _source: 'post-gap-forced',
+                        _activityLocked: true, _final: true
+                    });
+                    if (preBlk) template.push(preBlk);
+                }
+                if (postChange > 0 && !rangeHasConflict(postAnchor, postAnchor + postChange)) {
+                    var postBlk = makeBlock({
+                        startMin: postAnchor, endMin: postAnchor + postChange,
+                        type: 'post-change', event: 'Change',
+                        layer: null, dMin: postChange, dMax: postChange,
+                        _fixed: true, _source: 'post-gap-forced',
+                        _activityLocked: true, _final: true
+                    });
+                    if (postBlk) template.push(postBlk);
+                }
+            }
+
             // ★ Smart rotation: compute daily quotas (resets each iteration)
             var rotationQuotas = null;
             if (window.RotationEvents && typeof window.RotationEvents.getRotationQuotas === 'function') {
@@ -4263,16 +4384,6 @@
                             for (var pos = _scanStart; pos + dur + _swimPost <= gap.end; pos += 5) {
                                 if (pos - _swimPre < ws || pos + dur + _swimPost > we) continue;
 
-                                // For swim, the actual bundle may be larger than the
-                                // natural-adjacent (pre+swim+post) when a side jumps
-                                // a between-period gap. Verify the period-anchored
-                                // bundle still fits inside this gap.
-                                if (need.type === 'swim' && need.layer && _bundleExtra > 0) {
-                                    var _br = computeSwimBundleRange(pos, pos + dur, need.layer, grade, null);
-                                    if (_br.start < gap.start || _br.end > gap.end) continue;
-                                    if (_br.start < ws || _br.end > we) continue;
-                                }
-
                                 // Resource checks
                                 var ok = true;
                                 if (need.type === 'swim') {
@@ -4656,19 +4767,8 @@
                             var need = sol.need;
                             var placeEnd = sol.start + sol.dur;
 
-                            // Swim merges with its change time into a single block:
-                            // expand placement range to include pre/post change.
-                            var blkStart = sol.start, blkEnd = placeEnd;
-                            var swimBundle = null;
-                            if (need.type === 'swim' && need.layer) {
-                                swimBundle = computeSwimBundleRange(sol.start, placeEnd, need.layer, grade, template);
-                                blkStart = swimBundle.start;
-                                blkEnd = swimBundle.end;
-                            }
-
-                            // Register resources (use the merged swim+change range
-                            // so the pool stays "in use" for the whole bundle).
-                            if (need.type === 'swim') { registerCrossGrade(grade, 'swim', blkStart, blkEnd, need.event); registerPoolUsage(grade, blkStart, blkEnd); }
+                            // Register resources
+                            if (need.type === 'swim') { registerCrossGrade(grade, 'swim', sol.start, placeEnd, need.event); registerPoolUsage(grade, sol.start, placeEnd); }
                             if (need.type === 'special' && need._assignedSpecial) {
                                 registerCrossGrade(grade, 'special', sol.start, placeEnd, need.event);
                                 registerSpecialUsage(need._assignedSpecial, grade, sol.start, placeEnd);
@@ -4679,25 +4779,19 @@
                             if (need.type === 'rotation_event' && need._rotationEventId) { registerRotationEventUsage(need._rotationEventId, grade, sol.start, placeEnd); registerCrossGrade(grade, 'rotation_event', sol.start, placeEnd, need.event); }
 
                             var blk = makeBlock({
-                                startMin: blkStart, endMin: blkEnd, type: need.type, event: need.event,
-                                layer: need.layer,
-                                dMin: swimBundle ? (blkEnd - blkStart) : need.dMin,
-                                dMax: swimBundle ? (blkEnd - blkStart) : need.dMax,
-                                _source: swimBundle ? 'post-gap-forced' : (need._source || 'need'),
-                                _activityLocked: need._activityLocked || false,
+                                startMin: sol.start, endMin: placeEnd, type: need.type, event: need.event,
+                                layer: need.layer, dMin: need.dMin, dMax: need.dMax,
+                                _source: need._source || 'need', _activityLocked: need._activityLocked || false,
                                 _assignedSpecial: need._assignedSpecial || null,
                                 _specialLocation: need._specialLocation || null, _specialDuration: need._specialDuration || null,
                                 _customActivity: need._customActivity || null, _customField: need._customField || null,
                                 _customBunks: need._customBunks || null,
                                 _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                _rotationEventColor: need._rotationEventColor || null, _final: true,
-                                _preChangeMin: swimBundle ? swimBundle.preChange : null,
-                                _postChangeMin: swimBundle ? swimBundle.postChange : null,
-                                _swimActualStart: swimBundle ? sol.start : null,
-                                _swimActualEnd: swimBundle ? placeEnd : null
+                                _rotationEventColor: need._rotationEventColor || null, _final: true
                             });
                             if (blk) {
                                 template.push(blk);
+                                if (need.type === 'swim') attachSwimChangeBlocks(blk, template, grade);
                             }
                             // ★ Rotation quota: increment placed counter on successful CSP placement
                             if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
@@ -4762,17 +4856,7 @@
                             if (positions.length > 0) {
                                 var pos = positions[0];
                                 var placeEnd = pos.start + pos.dur;
-
-                                // Swim merges with its change time into a single block.
-                                var blkStart2 = pos.start, blkEnd2 = placeEnd;
-                                var swimBundle2 = null;
-                                if (need.type === 'swim' && need.layer) {
-                                    swimBundle2 = computeSwimBundleRange(pos.start, placeEnd, need.layer, grade, template);
-                                    blkStart2 = swimBundle2.start;
-                                    blkEnd2 = swimBundle2.end;
-                                }
-
-                                if (need.type === 'swim') { registerCrossGrade(grade, 'swim', blkStart2, blkEnd2, need.event); registerPoolUsage(grade, blkStart2, blkEnd2); }
+                                if (need.type === 'swim') { registerCrossGrade(grade, 'swim', pos.start, placeEnd, need.event); registerPoolUsage(grade, pos.start, placeEnd); }
                                 if (need.type === 'special' && need._assignedSpecial) {
                                     registerCrossGrade(grade, 'special', pos.start, placeEnd, need.event);
                                     registerSpecialUsage(need._assignedSpecial, grade, pos.start, placeEnd);
@@ -4782,23 +4866,16 @@
                                 if (need.type === 'custom') { registerCrossGrade(grade, 'custom', pos.start, placeEnd, need._customActivity || need.event); }
                                 if (need.type === 'rotation_event' && need._rotationEventId) { registerRotationEventUsage(need._rotationEventId, grade, pos.start, placeEnd); registerCrossGrade(grade, 'rotation_event', pos.start, placeEnd, need.event); }
                                 var blk = makeBlock({
-                                    startMin: blkStart2, endMin: blkEnd2, type: need.type, event: need.event,
-                                    layer: need.layer,
-                                    dMin: swimBundle2 ? (blkEnd2 - blkStart2) : need.dMin,
-                                    dMax: swimBundle2 ? (blkEnd2 - blkStart2) : need.dMax,
-                                    _source: swimBundle2 ? 'post-gap-forced' : (need._source || 'need'),
-                                    _activityLocked: need._activityLocked || false,
+                                    startMin: pos.start, endMin: placeEnd, type: need.type, event: need.event,
+                                    layer: need.layer, dMin: need.dMin, dMax: need.dMax,
+                                    _source: need._source || 'need', _activityLocked: need._activityLocked || false,
                                     _assignedSpecial: need._assignedSpecial || null,
                                     _specialLocation: need._specialLocation || null, _specialDuration: need._specialDuration || null,
                                     _customActivity: need._customActivity || null, _customField: need._customField || null,
                                     _customBunks: need._customBunks || null,
                                     _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
                                     _rotationEventColor: need._rotationEventColor || null, _final: true,
-                                    _relaxed: !!relaxationType, _relaxationType: relaxationType, _relaxationDetail: relaxationDetail,
-                                    _preChangeMin: swimBundle2 ? swimBundle2.preChange : null,
-                                    _postChangeMin: swimBundle2 ? swimBundle2.postChange : null,
-                                    _swimActualStart: swimBundle2 ? pos.start : null,
-                                    _swimActualEnd: swimBundle2 ? placeEnd : null
+                                    _relaxed: !!relaxationType, _relaxationType: relaxationType, _relaxationDetail: relaxationDetail
                                 });
                                 if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
                                     var _rq2 = rotationQuotas[need._rotationEventId];
@@ -4806,6 +4883,7 @@
                                 }
                                 if (blk) {
                                     template.push(blk);
+                                    if (need.type === 'swim') attachSwimChangeBlocks(blk, template, grade);
                                 }
                                 if (relaxationType) log('[Phase3] CSP-Relax: ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' via ' + relaxationDetail);
                             } else {
@@ -9668,6 +9746,62 @@
         });
         log('[2.6] ' + (validationPassed ? '✅ Passed' : '⚠️ Errors'));
 
+
+        // =====================================================================
+        // STEP 2.65 — MERGE SWIM + CHANGE INTO ONE ACTIVITY
+        // =====================================================================
+        // Pre-change + swim + post-change blocks have lived as three separate
+        // walls through the whole pipeline (so each side can fail independently
+        // and ENFORCE/Phase 2.75 work on a normal-sized swim). Now collapse the
+        // trio into a single 'swim' block whose range covers the whole bundle —
+        // the user's "swim and change are the same activity" model. The pre/post
+        // change durations and the actual swim sub-range are preserved as metadata
+        // on the merged block for the renderer.
+        log('\n[STEP 2.65] Merging swim+change into one block...');
+        let _swimMergeCount = 0;
+        allGrades.forEach(grade => {
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const tl = bunkTimelines[bunk];
+                if (!Array.isArray(tl) || tl.length === 0) return;
+                tl.sort((a, b) => a.startMin - b.startMin);
+                const merged = [];
+                for (let i = 0; i < tl.length; i++) {
+                    const blk = tl[i];
+                    if (!blk) continue;
+                    if ((blk.type || '').toLowerCase() !== 'swim') {
+                        merged.push(blk);
+                        continue;
+                    }
+                    // Look for adjacent pre-change before and post-change after.
+                    let preBlk = null, postBlk = null;
+                    for (let j = 0; j < tl.length; j++) {
+                        const ob = tl[j];
+                        if (!ob || ob === blk) continue;
+                        const ot = String(ob.type || '').toLowerCase();
+                        if (ot === 'pre-change' && ob.endMin === blk.startMin) preBlk = ob;
+                        if (ot === 'post-change' && ob.startMin === blk.endMin) postBlk = ob;
+                    }
+                    const newStart = preBlk ? preBlk.startMin : blk.startMin;
+                    const newEnd = postBlk ? postBlk.endMin : blk.endMin;
+                    if (preBlk || postBlk) {
+                        // Annotate swim with the bundle range & change metadata.
+                        blk._swimActualStart = blk.startMin;
+                        blk._swimActualEnd = blk.endMin;
+                        blk._preChangeMin = preBlk ? (preBlk.endMin - preBlk.startMin) : 0;
+                        blk._postChangeMin = postBlk ? (postBlk.endMin - postBlk.startMin) : 0;
+                        blk.startMin = newStart;
+                        blk.endMin = newEnd;
+                        // Mark pre/post for removal by skipping when we hit them.
+                        if (preBlk) preBlk._mergedIntoSwim = true;
+                        if (postBlk) postBlk._mergedIntoSwim = true;
+                        _swimMergeCount++;
+                    }
+                    merged.push(blk);
+                }
+                bunkTimelines[bunk] = merged.filter(b => b && !b._mergedIntoSwim);
+            });
+        });
+        log('[2.65] Merged ' + _swimMergeCount + ' swim+change groups into single blocks');
 
         // =====================================================================
         // STEP 2.7 — FORMALIZE
