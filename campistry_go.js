@@ -4252,6 +4252,17 @@ async function _trySpatialSortPipeline({
         let extraBuses = neededBuses - 1;
         if (extraBuses <= 0) break;
 
+        // Anti-ping-pong: refuse to split if sub-clusters would land below CASCADE_FLOOR.
+        // Splitting a 16-camper cluster into 8+8 just triggers a free-up merge, which
+        // creates a new oversized cluster, which gets split again — infinite loop.
+        const minSubSize = Math.floor(largestSize / neededBuses);
+        if (minSubSize < CASCADE_FLOOR) {
+            console.log('[Go v6] Skip split: cluster ' + (largestIdx + 1) +
+                ' (' + largestSize + ' campers) would produce sub-clusters of ' +
+                minSubSize + ' < floor ' + CASCADE_FLOOR);
+            break;
+        }
+
         // If we don't have enough freed buses, free more by merging smallest clusters
         // into their nearest neighbor (as long as the merge doesn't exceed capacity).
         // If no valid pair exists, absorb nearest small cluster INTO the largest and
