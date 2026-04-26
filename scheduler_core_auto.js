@@ -1400,18 +1400,41 @@
                 if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
 
                 // ── Swim change-time expansion ────────────────────────────
-                // If the swim layer has preChangeMin / postChangeMin, the change
-                // blocks are treated as SEPARATE activities that must come
-                // immediately before / after swim. They borrow time from the
-                // adjacent period's tail (pre) or head (post), so swim itself
-                // gets to use its full layer window. Example: swim 11:30-12:10
-                // with 10min preChange → Change 11:20-11:30, Swim 11:30-12:10.
+                // The change blocks are treated as SEPARATE activities anchored
+                // to PERIOD BOUNDARIES, not just adjacent to swim. When the swim
+                // block matches a bell-schedule period, pre-change extends back
+                // from that period's start (into the prior period's tail) and
+                // post-change starts at the NEXT period's start (so a gap
+                // between periods is preserved). Example: P1 10:50-11:30,
+                // P2 11:30-12:10, P3 12:15-12:55, swim=40m, pre=post=10m →
+                // Change 11:20-11:30, Swim 11:30-12:10, Change 12:15-12:25.
                 //
                 // Fallback: if the outside window overlaps an existing wall for
                 // any target bunk, change eats from swim's own block (legacy
-                // behavior) so nothing collides.
+                // behavior) so nothing collides. Also falls back when periods
+                // aren't configured or swim doesn't align with a single period.
                 const _preChange  = (t === 'swim' && layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
                 const _postChange = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+
+                // Anchor change times to period boundaries when possible.
+                let _preAnchor  = blockStart;  // pre-change ends here
+                let _postAnchor = blockEnd;    // post-change starts here
+                if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
+                    const _gradePeriods = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
+                        : [];
+                    if (_gradePeriods.length > 0) {
+                        const _swimIdx = _gradePeriods.findIndex(p =>
+                            p.startMin <= blockStart && p.endMin >= blockEnd
+                        );
+                        if (_swimIdx >= 0) {
+                            _preAnchor = _gradePeriods[_swimIdx].startMin;
+                            if (_swimIdx + 1 < _gradePeriods.length) {
+                                _postAnchor = _gradePeriods[_swimIdx + 1].startMin;
+                            }
+                        }
+                    }
+                }
 
                 const _rangeFreeForAll = (rStart, rEnd) => {
                     if (rStart < 0 || rEnd <= rStart) return false;
@@ -1428,15 +1451,15 @@
                     });
                 };
 
-                const _preOutside  = _preChange  > 0 && _rangeFreeForAll(blockStart - _preChange, blockStart);
-                const _postOutside = _postChange > 0 && _rangeFreeForAll(blockEnd, blockEnd + _postChange);
+                const _preOutside  = _preChange  > 0 && _rangeFreeForAll(_preAnchor - _preChange, _preAnchor);
+                const _postOutside = _postChange > 0 && _rangeFreeForAll(_postAnchor, _postAnchor + _postChange);
 
                 const _swimStart = _preOutside  ? blockStart : blockStart + _preChange;
                 const _swimEnd   = _postOutside ? blockEnd   : blockEnd   - _postChange;
-                const _preStart  = _preOutside  ? blockStart - _preChange : blockStart;
-                const _preEnd    = _preOutside  ? blockStart              : _swimStart;
-                const _postStart = _postOutside ? blockEnd                : _swimEnd;
-                const _postEnd   = _postOutside ? blockEnd + _postChange  : blockEnd;
+                const _preStart  = _preOutside  ? _preAnchor - _preChange : blockStart;
+                const _preEnd    = _preOutside  ? _preAnchor              : _swimStart;
+                const _postStart = _postOutside ? _postAnchor             : _swimEnd;
+                const _postEnd   = _postOutside ? _postAnchor + _postChange : blockEnd;
 
                 targetBunks.forEach(bunk => {
                     if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
