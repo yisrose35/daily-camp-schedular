@@ -4358,11 +4358,13 @@ async function _trySpatialSortPipeline({
         'min, median ' + (median(initTimes) / 60).toFixed(1) + 'min, min ' +
         (Math.min(...initTimes) / 60).toFixed(1) + 'min');
 
-    // Dynamic spread cap: receivers can't grow beyond ratio × current median spread.
-    // Scales with the camp's actual geography — tight camps get tight caps, sprawled
-    // camps get wider caps automatically.
+    // Per-cluster spread cap, scaled by distance from camp.
+    // cap(c) = medianSpread × ratio × (c.distFromCamp / medianDistFromCamp)
+    // Close-to-camp clusters get tight caps (kids are dense, no excuse to sprawl);
+    // far-from-camp clusters get proportionally larger caps (kids are sparse).
     const spreadRatio = (D.setup.clusterSpreadRatio ?? 150) / 100;
-    console.log('[Go v6] Spread cap ratio: ' + spreadRatio.toFixed(2) + '× median spread');
+    console.log('[Go v6] Spread cap: ' + spreadRatio.toFixed(2) +
+        '× median, scaled by distance-from-camp');
 
     let moves = 0;
     let blockedBySpread = 0;
@@ -4373,7 +4375,15 @@ async function _trySpatialSortPipeline({
         const allSpreads = busBuckets.map(b => bucketSpread(b));
         const sortedSpreads = [...allSpreads].sort((a, b) => a - b);
         const medianSpread = sortedSpreads[Math.floor(sortedSpreads.length / 2)] || 0;
-        const spreadCap = medianSpread * spreadRatio;
+
+        // Distance-from-camp per cluster (use centroid → camp haversine for speed)
+        const allDists = busBuckets.map(b => {
+            const c = bucketCentroid(b);
+            return c ? haversineMi(campLat, campLng, c.lat, c.lng) : 0;
+        });
+        const sortedDists = [...allDists].sort((a, b) => a - b);
+        const medianDist = sortedDists[Math.floor(sortedDists.length / 2)] || 1;
+        const baseCap = medianSpread * spreadRatio;
 
         // Search every (source, atom, receiver) tuple. Best move = one that
         // reduces the GLOBAL SUM by the most. Reduces every bus that can be
@@ -4402,9 +4412,9 @@ async function _trySpatialSortPipeline({
                     const newReceiverSpread = bucketSpread(busBuckets[ri]);
                     busBuckets[ri].pop();
 
-                    // Spread cap: skip moves that push a receiver above the dynamic cap,
-                    // unless the receiver was already over (don't make it worse).
-                    if (newReceiverSpread > spreadCap && newReceiverSpread > allSpreads[ri]) {
+                    // Per-cluster spread cap: scales with distance from camp
+                    const receiverCap = baseCap * Math.max(0.4, allDists[ri] / medianDist);
+                    if (newReceiverSpread > receiverCap && newReceiverSpread > allSpreads[ri]) {
                         blockedBySpread++;
                         continue;
                     }
