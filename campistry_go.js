@@ -3881,8 +3881,33 @@ async function _trySpatialSortPipeline({
         ', dissolve threshold: ' + MIN_BUS_THRESHOLD + ' (' + Math.round(_dissPct * 100) + '%)' +
         ', cascade floor: ' + CASCADE_FLOOR + ' (' + Math.round(_floorPct * 100) + '%)');
 
-    // ── Helper: run k-means on a set of atoms with given k ──
+    // ── Helper: run k-means N times with random seeds, return tightest result ──
     function runKMeans(atomSet, numClusters) {
+        if (!atomSet.length || numClusters <= 0) return [];
+        const RESTARTS = 7;
+        let bestBuckets = null;
+        let bestScore = Infinity;
+        for (let r = 0; r < RESTARTS; r++) {
+            const buckets = runKMeansOnce(atomSet, numClusters);
+            // Score: sum of (spread-mi × sqrt(atoms)) — penalizes elongated and big clusters
+            let score = 0;
+            for (const b of buckets) {
+                if (b.length < 2) continue;
+                const lats = b.map(a => a.lat);
+                const lngs = b.map(a => a.lng);
+                const spread = haversineMi(
+                    Math.min(...lats), Math.min(...lngs),
+                    Math.max(...lats), Math.max(...lngs));
+                score += spread * Math.sqrt(b.length);
+            }
+            if (score < bestScore) { bestScore = score; bestBuckets = buckets; }
+        }
+        console.log('[Go v6] K-means: best of ' + RESTARTS + ' restarts (score ' +
+            bestScore.toFixed(2) + ')');
+        return bestBuckets;
+    }
+
+    function runKMeansOnce(atomSet, numClusters) {
         if (!atomSet.length || numClusters <= 0) return [];
 
         // K-means++ seeding
@@ -3891,16 +3916,25 @@ async function _trySpatialSortPipeline({
         cents.push({ lat: atomSet[firstIdx].lat, lng: atomSet[firstIdx].lng });
 
         while (cents.length < numClusters) {
-            let bestIdx = -1, bestDist = -1;
+            // True k-means++: weighted-random pick, probability ∝ distance²
+            const weights = new Array(atomSet.length);
+            let total = 0;
             for (let i = 0; i < atomSet.length; i++) {
                 let minDist = Infinity;
                 for (const c of cents) {
                     const d = (atomSet[i].lat - c.lat) ** 2 + (atomSet[i].lng - c.lng) ** 2;
                     if (d < minDist) minDist = d;
                 }
-                if (minDist > bestDist) { bestDist = minDist; bestIdx = i; }
+                weights[i] = minDist;
+                total += minDist;
             }
-            cents.push({ lat: atomSet[bestIdx].lat, lng: atomSet[bestIdx].lng });
+            let target = Math.random() * total;
+            let pickIdx = 0;
+            for (let i = 0; i < atomSet.length; i++) {
+                target -= weights[i];
+                if (target <= 0) { pickIdx = i; break; }
+            }
+            cents.push({ lat: atomSet[pickIdx].lat, lng: atomSet[pickIdx].lng });
         }
 
         // Iterate
