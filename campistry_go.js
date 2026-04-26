@@ -3880,6 +3880,31 @@ async function _tryNeighborhoodPipeline({
         }
     }
 
+    // ── Stop consolidation per bus ──────────────────────────────────────
+    // expandToPhysicalStops gives one stop per segment, which in dense
+    // neighborhoods produces 25-30 stops on a single bus. Camp's reference
+    // routes consolidate aggressively (10-15 stops, 2-3 campers each) by
+    // pulling kids to a shared corner. Run two merge passes per bus:
+    //   1. Same-street within 0.25mi → merge to closer one
+    //   2. Anywhere within 0.10mi → merge regardless of street
+    // Capped at 15 campers/stop (safety + camp's typical max).
+    let consolidationStats = { busesAffected: 0, totalRemoved: 0 };
+    for (const bus of nhPhysical) {
+        if (!bus.stops?.length || bus.stops.length < 2) continue;
+        const before = bus.stops.length;
+        bus.stops = _consolidateBusStops(bus.stops);
+        const removed = before - bus.stops.length;
+        if (removed > 0) {
+            consolidationStats.busesAffected++;
+            consolidationStats.totalRemoved += removed;
+        }
+    }
+    if (consolidationStats.totalRemoved > 0) {
+        console.log('[Go v5] Stop consolidation: ' +
+            consolidationStats.totalRemoved + ' stops merged across ' +
+            consolidationStats.busesAffected + ' bus(es)');
+    }
+
     // ── Build route objects (still in NH-spine order — will be TSP'd next) ──
     const nhNameById = {};
     for (const nh of nhResult.neighborhoods) nhNameById[nh.id] = nh.primaryName;
@@ -5247,6 +5272,89 @@ function _estimateFallbackTimeWindows(stops, vehicles, campLat, campLng,
             endTime:        zw.endHHMM
         };
     });
+}
+
+
+// =============================================================================
+// _consolidateBusStops — merge close-by stops into shared arterial corners
+//
+// expandToPhysicalStops produces one stop per OSM segment. In dense
+// neighborhoods that means 25-30 stops on a single bus, where camp uses
+// 10-15 by pulling multiple kids to a shared arterial corner. This pass
+// closes that gap.
+//
+// Two passes:
+//   1. Same-street merge: if stops A and B share a street name in their
+//      address AND are within 0.25mi (~1320ft), absorb the smaller into
+//      the larger.
+//   2. Close-distance merge: if A and B are within 0.10mi (~530ft)
+//      regardless of street, absorb.
+//
+// Capacity cap: never let a merged stop exceed 15 campers (camp's typical
+// max). Self-contained distance fn (degree → miles approximation, fine at
+// our scale).
+// =============================================================================
+function _consolidateBusStops(stops) {
+    const SEG_RADIUS_MI = 0.25;
+    const ANY_RADIUS_MI = 0.10;
+    const MAX_STOP_CAP = 15;
+
+    function manhDist(la1, lo1, la2, lo2) {
+        return Math.abs(la1 - la2) * 69 + Math.abs(lo1 - lo2) * 54.6;
+    }
+    // Extract street name tokens from "Brewers Bridge Rd corner" or
+    // "Brewers Bridge Rd & Bridge Ct" or "12 Brewers Bridge Rd".
+    function streetsOf(addr) {
+        if (!addr) return [];
+        return String(addr)
+            .split(/\s*[&@,]\s*/)
+            .map(p => p
+                .replace(/^\d[\d\s\-]*/, '')
+                .replace(/\bcorner\b/i, '')
+                .replace(/\([^)]*\)/g, '')
+                .trim()
+                .toLowerCase())
+            .filter(Boolean);
+    }
+    function camperCount(s) {
+        return Array.isArray(s.campers) ? s.campers.length : 0;
+    }
+
+    function runMerge(radiusMi, requireSameStreet) {
+        let merged = true;
+        while (merged) {
+            merged = false;
+            outer: for (let i = stops.length - 1; i >= 0; i--) {
+                const cntI = camperCount(stops[i]);
+                if (cntI === 0) continue;
+                const sA = requireSameStreet ? streetsOf(stops[i].address) : null;
+                if (requireSameStreet && !sA.length) continue;
+                let bestJ = -1, bestDist = radiusMi;
+                for (let j = 0; j < stops.length; j++) {
+                    if (j === i) continue;
+                    const cntJ = camperCount(stops[j]);
+                    if (cntJ + cntI > MAX_STOP_CAP) continue;
+                    if (requireSameStreet) {
+                        const sB = streetsOf(stops[j].address);
+                        if (!sA.some(n => sB.includes(n))) continue;
+                    }
+                    const d = manhDist(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    if (d < bestDist) { bestDist = d; bestJ = j; }
+                }
+                if (bestJ >= 0) {
+                    stops[bestJ].campers = (stops[bestJ].campers || []).concat(stops[i].campers || []);
+                    stops.splice(i, 1);
+                    merged = true;
+                    break outer;
+                }
+            }
+        }
+    }
+
+    runMerge(SEG_RADIUS_MI, true);   // same-street, wider radius
+    runMerge(ANY_RADIUS_MI, false);  // any-street, tight radius
+
+    return stops;
 }
 
 
