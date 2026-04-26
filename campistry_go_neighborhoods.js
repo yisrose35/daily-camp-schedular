@@ -101,6 +101,61 @@ window.CampistryGoNeighborhoods = (function () {
     function classRank(cls) { return HW_CLASS_RANK[cls] || 99; }
 
     // -------------------------------------------------------------------------
+    // Persistent road-graph cache. Overpass mirrors flake (502, CORS, rate
+    // limits) often enough that a single failed run wipes out neighborhood
+    // mode. Cache successful responses by bbox + TTL so the next run can
+    // reuse them even if Overpass is currently down.
+    //
+    // Key: rounded bbox to 0.01° (~0.7mi) — small bbox shifts (a camper
+    // moves a block) reuse the same cache. TTL 30 days, since road graphs
+    // are stable.
+    // -------------------------------------------------------------------------
+    const ROAD_GRAPH_CACHE_KEY = 'campistry_go_roadgraph_v1';
+    const ROAD_GRAPH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+    function _bboxCacheKey(minLat, minLng, maxLat, maxLng) {
+        const r = (n) => Math.round(n * 100) / 100;
+        return r(minLat) + ',' + r(minLng) + ',' + r(maxLat) + ',' + r(maxLng);
+    }
+    function _loadRoadGraphCache(key) {
+        try {
+            const raw = localStorage.getItem(ROAD_GRAPH_CACHE_KEY);
+            if (!raw) return null;
+            const cache = JSON.parse(raw);
+            const entry = cache[key];
+            if (!entry) return null;
+            if (Date.now() - entry.savedAt > ROAD_GRAPH_TTL_MS) return null;
+            return entry.data;
+        } catch (_) { return null; }
+    }
+    function _saveRoadGraphCache(key, data) {
+        try {
+            // Roll the whole cache: drop expired entries on every save so the
+            // file doesn't balloon.
+            let cache = {};
+            try {
+                const raw = localStorage.getItem(ROAD_GRAPH_CACHE_KEY);
+                if (raw) cache = JSON.parse(raw) || {};
+            } catch (_) { cache = {}; }
+            const now = Date.now();
+            for (const k of Object.keys(cache)) {
+                if (now - (cache[k]?.savedAt || 0) > ROAD_GRAPH_TTL_MS) delete cache[k];
+            }
+            cache[key] = { savedAt: now, data: data };
+            localStorage.setItem(ROAD_GRAPH_CACHE_KEY, JSON.stringify(cache));
+            return true;
+        } catch (e) {
+            // Quota exceeded: drop other entries and keep just this one.
+            try {
+                const fallback = {};
+                fallback[key] = { savedAt: Date.now(), data: data };
+                localStorage.setItem(ROAD_GRAPH_CACHE_KEY, JSON.stringify(fallback));
+                return true;
+            } catch (_) { return false; }
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Overpass fetch — road graph for the bbox of all campers.
     // Reuses the same mirror + timeout strategy as campistry_go.js fetchIntersections().
     // -------------------------------------------------------------------------
@@ -128,17 +183,32 @@ window.CampistryGoNeighborhoods = (function () {
             return null;
         }
         const bbox = minLat + ',' + minLng + ',' + maxLat + ',' + maxLng;
+        const cacheKey = _bboxCacheKey(minLat, minLng, maxLat, maxLng);
+
+        // 1. Try persistent cache first. Road graphs barely change month to
+        //    month, so a 30-day-old cached graph is fine. This makes the
+        //    pipeline survive Overpass outages — once cached, neighborhood
+        //    mode keeps working even when the API is down.
+        const cached = _loadRoadGraphCache(cacheKey);
+        if (cached) {
+            console.log('[Go-NH] Road graph: using cached copy (' +
+                (cached.elements?.length || 0) + ' elements, bbox ' + cacheKey + ')');
+            return cached;
+        }
 
         const query = '[out:json][timeout:25];' +
             'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street)$"](' + bbox + ');' +
             'out body;>;out skel qt;';
 
-        // Prefer the Supabase edge proxy (dodges browser CORS + retries mirrors
-        // server-side). Fall through to direct calls for local/dev usage where
-        // Supabase may not be wired in.
+        // 2. Try the Supabase edge proxy (dodges browser CORS + retries mirrors
+        //    server-side). Cache and return on success.
         const data = await fetchOverpassViaProxy(query, options);
-        if (data) return data;
+        if (data) {
+            _saveRoadGraphCache(cacheKey, data);
+            return data;
+        }
 
+        // 3. Fall through to direct mirrors. Cache on first success.
         const endpoints = [
             'https://overpass-api.de/api/interpreter',
             'https://overpass.kumi.systems/api/interpreter',
@@ -153,12 +223,13 @@ window.CampistryGoNeighborhoods = (function () {
                 if (!resp.ok) continue;
                 const direct = await resp.json();
                 if (options.verbose) console.log('[Go-NH] Overpass (direct): ' + (direct.elements?.length || 0) + ' elements from ' + url);
+                _saveRoadGraphCache(cacheKey, direct);
                 return direct;
             } catch (e) {
                 if (options.verbose) console.warn('[Go-NH] Overpass error at ' + url + ':', e.message);
             }
         }
-        console.warn('[Go-NH] All Overpass routes failed (proxy + direct)');
+        console.warn('[Go-NH] All Overpass routes failed (proxy + direct) and no cache available — neighborhood mode unavailable this run');
         return null;
     }
 
