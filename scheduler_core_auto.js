@@ -4304,20 +4304,11 @@
                             _swimPost = need.layer.postChangeMin > 0 ? need.layer.postChangeMin : 0;
                         }
                         var _bundleExtra = _swimPre + _swimPost;
-                        // ★ Bell-schedule periods: when configured, swim should fit
-                        //   inside a single period so it never straddles a gap.
-                        var _swimGradePeriods = ((need.type || '').toLowerCase() === 'swim' &&
-                                                 window.campPeriods && window.campPeriods[grade])
-                            ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
-                            : [];
-                        var _swimFitsInAPeriod = function(s, e) {
-                            if (_swimGradePeriods.length === 0) return true;
-                            for (var pi = 0; pi < _swimGradePeriods.length; pi++) {
-                                var p = _swimGradePeriods[pi];
-                                if (p.startMin <= s && p.endMin >= e) return true;
-                            }
-                            return false;
-                        };
+                        // Note: staggered swim (the only kind that reaches CSP — fullGrade
+                        // is pinned in Phase 0) is intentionally not constrained to a
+                        // single bell-schedule period. With pool exclusivity, requiring
+                        // every staggered placement to fit inside one period over-restricts
+                        // the search space and forces duration relaxation.
                         for (var g = 0; g < gaps.length; g++) {
                             var gap = gaps[g];
                             var ws = Math.max(gap.start, need.windowStart || gs);
@@ -4344,8 +4335,6 @@
                             var _scanStart = gap.start + _swimPre;
                             for (var pos = _scanStart; pos + dur + _swimPost <= gap.end; pos += 5) {
                                 if (pos - _swimPre < ws || pos + dur + _swimPost > we) continue;
-                                // Reject swim positions that straddle a bell-schedule period gap.
-                                if (need.type === 'swim' && !_swimFitsInAPeriod(pos, pos + dur)) continue;
 
                                 // Resource checks
                                 var ok = true;
@@ -4379,8 +4368,7 @@
                             // Also try exact gap-end alignment (may not be on 5-min boundary).
                             // For swim+change bundles, leave post-change room at the gap's tail.
                             var endAligned = gap.end - dur - _swimPost;
-                            if (endAligned >= ws && endAligned - _swimPre >= gap.start && endAligned + dur + _swimPost <= we &&
-                                (need.type !== 'swim' || _swimFitsInAPeriod(endAligned, endAligned + dur))) {
+                            if (endAligned >= ws && endAligned - _swimPre >= gap.start && endAligned + dur + _swimPost <= we) {
                                 var ok2 = true;
                                 if (need.type === 'swim') ok2 = canUsePoolAtTime(grade, endAligned, endAligned + dur);
                                 if (need.type === 'special' && need._assignedSpecial) ok2 = canUseSpecialAtTime(need._assignedSpecial, grade, endAligned, endAligned + dur);
