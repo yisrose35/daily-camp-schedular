@@ -121,6 +121,7 @@
                         <div class="form-group"><label class="form-label">Soft Cap (% of capacity)</label><input type="number" class="form-input" id="clusterSoftCapPct" value="112" min="100" max="150" step="1"><span class="form-hint">Bus only forced to split above this. 100 = strict, 112 = allow ~12% over</span></div>
                         <div class="form-group"><label class="form-label">Dissolve Threshold (%)</label><input type="number" class="form-input" id="clusterDissolvePct" value="55" min="0" max="100" step="1"><span class="form-hint">Clusters under this size get merged into neighbor</span></div>
                         <div class="form-group"><label class="form-label">Cascade Floor (%)</label><input type="number" class="form-input" id="clusterFloorPct" value="30" min="0" max="100" step="1"><span class="form-hint">Time-balancer can shrink clusters down to this</span></div>
+                        <div class="form-group"><label class="form-label">Spread Cap (% of median)</label><input type="number" class="form-input" id="clusterSpreadRatio" value="150" min="100" max="400" step="10"><span class="form-hint">No cluster spreads beyond this × camp's median spread. 150 = +50%</span></div>
                     </div>
                 </div>
                 <div class="setup-card">

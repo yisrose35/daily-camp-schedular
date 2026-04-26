@@ -67,7 +67,8 @@
             geoapifyKey: '',
             campLat: null, campLng: null,
             routingPipeline: 'spatial-sort',
-            clusterSoftCapPct: 112, clusterDissolvePct: 55, clusterFloorPct: 30
+            clusterSoftCapPct: 112, clusterDissolvePct: 55, clusterFloorPct: 30,
+            clusterSpreadRatio: 150
         },
         activeMode: 'dismissal',
         buses: [], shifts: [], monitors: [], counselors: [],
@@ -1258,6 +1259,7 @@ let _toastTimer = null;
         if (document.getElementById('clusterSoftCapPct')) document.getElementById('clusterSoftCapPct').value = s.clusterSoftCapPct ?? 112;
         if (document.getElementById('clusterDissolvePct')) document.getElementById('clusterDissolvePct').value = s.clusterDissolvePct ?? 55;
         if (document.getElementById('clusterFloorPct')) document.getElementById('clusterFloorPct').value = s.clusterFloorPct ?? 30;
+        if (document.getElementById('clusterSpreadRatio')) document.getElementById('clusterSpreadRatio').value = s.clusterSpreadRatio ?? 150;
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
@@ -1286,6 +1288,7 @@ let _toastTimer = null;
         D.setup.clusterSoftCapPct = parseInt(el('clusterSoftCapPct')?.value) || 112;
         D.setup.clusterDissolvePct = parseInt(el('clusterDissolvePct')?.value) || 55;
         D.setup.clusterFloorPct = parseInt(el('clusterFloorPct')?.value) || 30;
+        D.setup.clusterSpreadRatio = parseInt(el('clusterSpreadRatio')?.value) || 150;
         window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
@@ -4030,15 +4033,19 @@ async function _trySpatialSortPipeline({
     // Used by Phase 3 (split trigger + split count) and Phase 5 (cascade).
     const STOP_WEIGHT = 120;   // seconds per camper (boarding, walking)
     const INTRA_WEIGHT = 120;  // seconds per spread-mi × sqrt(atoms)
+    function bucketSpread(bucket) {
+        if (!bucket.length) return 0;
+        const lats = bucket.map(a => a.lat);
+        const lngs = bucket.map(a => a.lng);
+        return haversineMi(
+            Math.min(...lats), Math.min(...lngs),
+            Math.max(...lats), Math.max(...lngs));
+    }
     function estimateBucketTime(bucket) {
         if (!bucket.length) return 0;
         const cent = bucketCentroid(bucket);
         const driveSec = drivingDist(campLat, campLng, cent.lat, cent.lng);
-        const lats = bucket.map(a => a.lat);
-        const lngs = bucket.map(a => a.lng);
-        const spread = haversineMi(
-            Math.min(...lats), Math.min(...lngs),
-            Math.max(...lats), Math.max(...lngs));
+        const spread = bucketSpread(bucket);
         const numKids = bucket.reduce((s, a) => s + a.size, 0);
         const intra = spread * Math.sqrt(bucket.length) * INTRA_WEIGHT;
         return 2 * driveSec + numKids * STOP_WEIGHT + intra;
@@ -4351,11 +4358,22 @@ async function _trySpatialSortPipeline({
         'min, median ' + (median(initTimes) / 60).toFixed(1) + 'min, min ' +
         (Math.min(...initTimes) / 60).toFixed(1) + 'min');
 
+    // Dynamic spread cap: receivers can't grow beyond ratio × current median spread.
+    // Scales with the camp's actual geography — tight camps get tight caps, sprawled
+    // camps get wider caps automatically.
+    const spreadRatio = (D.setup.clusterSpreadRatio ?? 150) / 100;
+    console.log('[Go v6] Spread cap ratio: ' + spreadRatio.toFixed(2) + '× median spread');
+
     let moves = 0;
+    let blockedBySpread = 0;
     for (let pass = 0; pass < 500; pass++) {
         // Snapshot all current times for fast sum-delta calculations
         const allTimes = busBuckets.map((_, i) => estTime(i));
         const currentSum = allTimes.reduce((s, t) => s + t, 0);
+        const allSpreads = busBuckets.map(b => bucketSpread(b));
+        const sortedSpreads = [...allSpreads].sort((a, b) => a - b);
+        const medianSpread = sortedSpreads[Math.floor(sortedSpreads.length / 2)] || 0;
+        const spreadCap = medianSpread * spreadRatio;
 
         // Search every (source, atom, receiver) tuple. Best move = one that
         // reduces the GLOBAL SUM by the most. Reduces every bus that can be
@@ -4381,7 +4399,15 @@ async function _trySpatialSortPipeline({
 
                     busBuckets[ri].push(atom);
                     const newReceiverTime = estTime(ri);
+                    const newReceiverSpread = bucketSpread(busBuckets[ri]);
                     busBuckets[ri].pop();
+
+                    // Spread cap: skip moves that push a receiver above the dynamic cap,
+                    // unless the receiver was already over (don't make it worse).
+                    if (newReceiverSpread > spreadCap && newReceiverSpread > allSpreads[ri]) {
+                        blockedBySpread++;
+                        continue;
+                    }
 
                     const newSum = currentSum
                         - allTimes[si] - allTimes[ri]
@@ -4410,7 +4436,8 @@ async function _trySpatialSortPipeline({
     const finalSum = finalTimes.reduce((s, t) => s + t, 0);
     console.log('[Go v6] Hill climb: ' + moves + ' atoms moved (sum ' +
         (initSum / 60).toFixed(0) + 'min → ' + (finalSum / 60).toFixed(0) +
-        'min, max ' + (initMax / 60).toFixed(1) + 'min → ' + (finalMax / 60).toFixed(1) + 'min)');
+        'min, max ' + (initMax / 60).toFixed(1) + 'min → ' + (finalMax / 60).toFixed(1) + 'min, ' +
+        blockedBySpread + ' moves blocked by spread cap)');
     console.log('[Go v6] Final: max ' + (finalMax / 60).toFixed(1) +
         'min, median ' + (median(finalTimes) / 60).toFixed(1) + 'min, min ' +
         (Math.min(...finalTimes) / 60).toFixed(1) + 'min');
