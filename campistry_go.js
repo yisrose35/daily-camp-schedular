@@ -5883,7 +5883,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                 .map(s => (s.name || '').toLowerCase().trim())
                 .filter(Boolean)
         );
-        const ARTERIAL_REACH_MI = 0.30; // ~1584ft — kids walk this far for an arterial
+        const ARTERIAL_REACH_MI = 0.50; // ~2640ft — bus-time savings outweigh walk distance
         function isArterialInter(inter) {
             return (inter.streets || []).some(s => majorNames.has(s.toLowerCase().trim()));
         }
@@ -5943,8 +5943,10 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                         else if (crossMatch) score = 2;
                         else if (!arterial) return; // no street match AND no arterial — skip
 
-                        // Arterial bonus: ~equivalent to forgiving 1250ft of extra walking
-                        if (arterial) score += 25;
+                        // Arterial bonus: bus-time saved by staying on through-road > kid walk.
+                        // A 5-min driver detour into a cul-de-sac costs more than asking
+                        // a kid to walk an extra 2000ft to the arterial corner.
+                        if (arterial) score += 60;
 
                         // Subtract total walking distance (lower = better)
                         score -= totalWalkTo(inter.lat, inter.lng) * 20;
@@ -5990,7 +5992,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
                         const onStreet = interStreets.some(s => streetMatch(s, mainStreet));
                         let score = onStreet ? 4 : (arterial ? 0 : -Infinity);
-                        if (arterial) score += 25;
+                        if (arterial) score += 60;
                         score -= totalWalkTo(inter.lat, inter.lng) * 20;
                         if (score > bestScore) { bestScore = score; bestInter = inter; }
                     });
