@@ -9757,6 +9757,11 @@
         // the user's "swim and change are the same activity" model. The pre/post
         // change durations and the actual swim sub-range are preserved as metadata
         // on the merged block for the renderer.
+        //
+        // Period-gap tolerant: when a between-period gap (e.g. 2:10–2:15) sits
+        // between swim and its post-change block, we still merge as long as
+        // nothing else lives in that gap — the merged block then covers the gap
+        // too, treating the whole pre+swim+gap+post stretch as ONE activity.
         log('\n[STEP 2.65] Merging swim+change into one block...');
         let _swimMergeCount = 0;
         allGrades.forEach(grade => {
@@ -9772,26 +9777,46 @@
                         merged.push(blk);
                         continue;
                     }
-                    // Look for adjacent pre-change before and post-change after.
-                    let preBlk = null, postBlk = null;
+                    // Helper: nothing else (besides swim/change) lives between
+                    // [a, b) — i.e. it's just dead time / a period gap.
+                    const _gapEmpty = (a, b) => {
+                        if (a >= b) return true;
+                        return !tl.some(x => {
+                            if (!x || x === blk) return false;
+                            const xt = String(x.type || '').toLowerCase();
+                            if (xt === 'pre-change' || xt === 'post-change') return false;
+                            return x.startMin < b && x.endMin > a;
+                        });
+                    };
+                    // Pre-change: find the latest pre-change ending at or before
+                    // swim.startMin with nothing other than dead time between.
+                    let preBlk = null;
+                    // Post-change: find the earliest post-change starting at or
+                    // after swim.endMin with nothing other than dead time between.
+                    let postBlk = null;
                     for (let j = 0; j < tl.length; j++) {
                         const ob = tl[j];
                         if (!ob || ob === blk) continue;
                         const ot = String(ob.type || '').toLowerCase();
-                        if (ot === 'pre-change' && ob.endMin === blk.startMin) preBlk = ob;
-                        if (ot === 'post-change' && ob.startMin === blk.endMin) postBlk = ob;
+                        if (ot === 'pre-change' && ob.endMin <= blk.startMin) {
+                            if (_gapEmpty(ob.endMin, blk.startMin)) {
+                                if (!preBlk || ob.endMin > preBlk.endMin) preBlk = ob;
+                            }
+                        }
+                        if (ot === 'post-change' && ob.startMin >= blk.endMin) {
+                            if (_gapEmpty(blk.endMin, ob.startMin)) {
+                                if (!postBlk || ob.startMin < postBlk.startMin) postBlk = ob;
+                            }
+                        }
                     }
-                    const newStart = preBlk ? preBlk.startMin : blk.startMin;
-                    const newEnd = postBlk ? postBlk.endMin : blk.endMin;
                     if (preBlk || postBlk) {
                         // Annotate swim with the bundle range & change metadata.
                         blk._swimActualStart = blk.startMin;
                         blk._swimActualEnd = blk.endMin;
                         blk._preChangeMin = preBlk ? (preBlk.endMin - preBlk.startMin) : 0;
                         blk._postChangeMin = postBlk ? (postBlk.endMin - postBlk.startMin) : 0;
-                        blk.startMin = newStart;
-                        blk.endMin = newEnd;
-                        // Mark pre/post for removal by skipping when we hit them.
+                        blk.startMin = preBlk ? preBlk.startMin : blk.startMin;
+                        blk.endMin = postBlk ? postBlk.endMin : blk.endMin;
                         if (preBlk) preBlk._mergedIntoSwim = true;
                         if (postBlk) postBlk._mergedIntoSwim = true;
                         _swimMergeCount++;
