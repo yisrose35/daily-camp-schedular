@@ -3709,19 +3709,11 @@
                 var preOutside = preChange > 0 && !rangeHasConflict(swimStart - preChange, swimStart);
                 var postOutside = postChange > 0 && !rangeHasConflict(swimEnd, swimEnd + postChange);
 
-                // Inside fallbacks: shrink swim's block so change fits at its edges.
-                // Only shrink if swim stays at least 5 min after the reduction.
+                // Swim duration is sacred — never shrink to make room for change.
+                // The (pre, swim, post) bundle is sized in getValidPositions, so this
+                // path should already have free outside room. If not, log + skip the
+                // change block rather than carving the swim window.
                 var newStart = swimStart, newEnd = swimEnd;
-                if (preChange > 0 && !preOutside && (swimEnd - swimStart - preChange) >= 5) {
-                    newStart = swimStart + preChange;
-                }
-                if (postChange > 0 && !postOutside && (newEnd - newStart - postChange) >= 5) {
-                    newEnd = swimEnd - postChange;
-                }
-                swimBlk.startMin = newStart;
-                swimBlk.endMin = newEnd;
-                if (swimBlk._startMin != null) swimBlk._startMin = newStart;
-                if (swimBlk._endMin != null) swimBlk._endMin = newEnd;
 
                 // Pre-change block. layer:null avoids ensureTimelineIntegrity
                 // clamping the block to swim's window; post-gap-forced source
@@ -4279,11 +4271,19 @@
                     function getValidPositions(need, tmpl, gs, ge, fMin, otherNeeds) {
                         var positions = [];
                         var gaps = findGaps(tmpl, gs, ge);
+                        // ★ Swim with change times is a (pre, swim, post) bundle that
+                        //   must be placed atomically. Reserve gap room for all 3.
+                        var _swimPre = 0, _swimPost = 0;
+                        if ((need.type || '').toLowerCase() === 'swim' && need.layer) {
+                            _swimPre = need.layer.preChangeMin > 0 ? need.layer.preChangeMin : 0;
+                            _swimPost = need.layer.postChangeMin > 0 ? need.layer.postChangeMin : 0;
+                        }
+                        var _bundleExtra = _swimPre + _swimPost;
                         for (var g = 0; g < gaps.length; g++) {
                             var gap = gaps[g];
                             var ws = Math.max(gap.start, need.windowStart || gs);
                             var we = Math.min(gap.end, need.windowEnd || ge);
-                            if (we - ws < need.dMin) continue;
+                            if (we - ws < need.dMin + _bundleExtra) continue;
                             // ★ v11.4: Negotiate duration instead of greedily taking dMax
                             // ★ v15.2: Snack/swim are fixed-duration — always use dMin, never stretch to dMax
                             var _needType15 = (need.type || '').toLowerCase();
@@ -4299,9 +4299,12 @@
                                 dur = Math.min(need.dMax, we - ws);
                             }
 
-                            // Scan every 5-min position within the valid range
-                            for (var pos = gap.start; pos + dur <= gap.end; pos += 5) {
-                                if (pos < ws || pos + dur > we) continue;
+                            // Scan every 5-min position within the valid range.
+                            // For swim with changes, the scan starts at gap.start + pre
+                            // so that pre fits before swim within the gap.
+                            var _scanStart = gap.start + _swimPre;
+                            for (var pos = _scanStart; pos + dur + _swimPost <= gap.end; pos += 5) {
+                                if (pos - _swimPre < ws || pos + dur + _swimPost > we) continue;
 
                                 // Resource checks
                                 var ok = true;
@@ -4332,9 +4335,10 @@
                                 if (rGap > 0 && rGap < fMin) deadCount++;
                                 positions.push({ start: pos, dur: dur, deadGaps: deadCount, lGap: lGap, rGap: rGap });
                             }
-                            // Also try exact gap-end alignment (may not be on 5-min boundary)
-                            var endAligned = gap.end - dur;
-                            if (endAligned >= ws && endAligned >= gap.start && endAligned + dur <= we) {
+                            // Also try exact gap-end alignment (may not be on 5-min boundary).
+                            // For swim+change bundles, leave post-change room at the gap's tail.
+                            var endAligned = gap.end - dur - _swimPost;
+                            if (endAligned >= ws && endAligned - _swimPre >= gap.start && endAligned + dur + _swimPost <= we) {
                                 var ok2 = true;
                                 if (need.type === 'swim') ok2 = canUsePoolAtTime(grade, endAligned, endAligned + dur);
                                 if (need.type === 'special' && need._assignedSpecial) ok2 = canUseSpecialAtTime(need._assignedSpecial, grade, endAligned, endAligned + dur);
