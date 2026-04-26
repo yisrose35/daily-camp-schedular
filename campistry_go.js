@@ -5796,16 +5796,18 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             };
         });
 
-        // Merge tiny stops (<=2 kids) into nearest within walkMi
-        // FIX 6: Use manhattanMi for merge distance check too
-        // Merge tiny stops (≤2 kids) only into nearby stops within half walk distance
-        // Using full walkMi was pulling distant stops together and stretching routes
-        const mergeRadius = walkMi * 0.5;
+        // Merge small stops into nearest neighbor.
+        // Historical Neranina averages 3.14 kids/stop (corner-clustered onto real
+        // intersections). Without Overpass we get 2.14 kids/stop (33% more stops
+        // than needed). Merge stops with ≤4 kids within full walkMi to collapse
+        // the over-granular fallback stops into fewer, bigger groups.
+        const mergeRadius = walkMi;
+        const MERGE_THRESHOLD = 4;
         let didMerge = true;
         while (didMerge) {
             didMerge = false;
             for (let i = stops.length - 1; i >= 0; i--) {
-                if (stops[i].campers.length > 2) continue;
+                if (stops[i].campers.length > MERGE_THRESHOLD) continue;
                 let bestJ = -1, bestDist = mergeRadius;
                 for (let j = 0; j < stops.length; j++) {
                     if (j === i) continue;
