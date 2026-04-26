@@ -267,17 +267,43 @@
       summary: summary
     };
     var json = JSON.stringify(report, null, 2);
-    console.log('---BEGIN-SWIM-REPORT---');
-    console.log(json);
-    console.log('---END-SWIM-REPORT---');
-    console.log('Copy everything between the BEGIN/END markers and paste it to the assistant.');
+    window._lastSwimReport = report;
+    window._lastSwimReportJson = json;
+
+    console.log('Summary:', summary);
+    console.log('Full JSON length:', json.length, 'chars');
+    console.log('');
+    console.log('To send the report to the assistant, ANY of:');
+    console.log('  1. Paste from clipboard (already copied) — press Ctrl+V into the chat.');
+    console.log('  2. Download the file that was just triggered (swim_report.json).');
+    console.log('  3. Run  copy(window._lastSwimReportJson)  to recopy, then paste.');
+
+    // Clipboard
     try {
       if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(json).then(function () {
-          console.log('(report also copied to clipboard)');
-        }, function () {});
+          console.log('[swim_debug] copied to clipboard ✓');
+        }, function (err) {
+          console.warn('[swim_debug] clipboard write failed; use option 2 or 3.', err);
+        });
       }
     } catch (e) {}
+
+    // File download
+    try {
+      var blob = new Blob([json], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'swim_report.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
+      console.log('[swim_debug] download triggered: swim_report.json');
+    } catch (e) {
+      console.warn('[swim_debug] download failed:', e);
+    }
+
     return report;
   }
 
