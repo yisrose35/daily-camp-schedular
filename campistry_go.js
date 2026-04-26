@@ -4169,12 +4169,15 @@ async function _trySpatialSortPipeline({
         if (!counts.size) return raw;
         let domName = null, domN = 0;
         for (const [n, c] of counts) if (c > domN) { domN = c; domName = n; }
-        // Discount: if ≥60% of atoms share the dominant arterial, discount spread by 40%.
-        // Linear scaling between 50% (no discount) and 80%+ share (max 40% discount).
+        // Discount: if ≥70% of atoms share the dominant arterial, allow up to 25%
+        // discount, but never reduce by more than 1.0mi absolute. A 5mi cluster
+        // along an arterial still reads as 4mi — too wide for the cap. Only
+        // moderately-spread arterial-aligned clusters benefit.
         const share = domN / bucket.length;
-        if (share < 0.5) return raw;
-        const discount = Math.min(0.4, (share - 0.5) * 1.33); // 0.5→0, 0.8→0.4
-        return raw * (1 - discount);
+        if (share < 0.7) return raw;
+        const pctDiscount = Math.min(0.25, (share - 0.7) * 0.83); // 0.7→0, 1.0→0.25
+        const absDiscount = Math.min(raw * pctDiscount, 1.0);
+        return raw - absDiscount;
     }
     function estimateBucketTime(bucket) {
         if (!bucket.length) return 0;
