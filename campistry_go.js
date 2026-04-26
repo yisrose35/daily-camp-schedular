@@ -66,7 +66,15 @@
             googleMapsKey: '', googleProjectId: '',
             geoapifyKey: '',
             campLat: null, campLng: null,
-            routingPipeline: 'spatial-sort',
+            // Neighborhood mode uses the OSM road graph to cluster campers by
+            // shared road segments (which arterials they share, which streets
+            // are connected). Spatial-sort uses lat/lng k-means, which
+            // produces wedges that mix campers across natural neighborhood
+            // boundaries — e.g. lumping Whitesville Rd corridor with interior
+            // Toms River streets, even though those routes don't share any
+            // common driving path. Camp's reference output groups by
+            // neighborhood/arterial, so default to that.
+            routingPipeline: 'neighborhood',
             clusterSoftCapPct: 112, clusterDissolvePct: 55, clusterFloorPct: 30,
             clusterSpreadRatio: 150, clusterMaxSpreadMi: 3.5
         },
@@ -925,6 +933,20 @@ let _toastTimer = null;
             } else if (local) {
                 D = merge(local);
                 console.log('[Go] Loaded from localStorage');
+            }
+
+            // One-time migration: spatial-sort → neighborhood. Spatial-sort was
+            // the default before we recognized it produced wedges that mix
+            // corridors. Existing users have 'spatial-sort' saved from when
+            // it was the default; upgrade them so they get road-graph-aware
+            // clustering. Users who explicitly chose spatial-sort can flip
+            // back via settings; this migration only runs once.
+            if (D.setup && D.setup.routingPipeline === 'spatial-sort' &&
+                !D.setup._pipelineMigrated_v1) {
+                D.setup.routingPipeline = 'neighborhood';
+                D.setup._pipelineMigrated_v1 = true;
+                console.log('[Go] Upgraded routing pipeline: spatial-sort → neighborhood ' +
+                    '(road-graph aware). Set routingPipeline back to spatial-sort to revert.');
             }
 
             // Recover geocoding checkpoint: if the tab was closed mid-geocode,
@@ -3416,7 +3438,7 @@ async function generateRoutes() {
         } catch (_e) { /* non-fatal */ }
     }
 
-    const _pipelineMode = D.setup.routingPipeline || 'spatial-sort';
+    const _pipelineMode = D.setup.routingPipeline || 'neighborhood';
     console.log('[Go v6] Routing strategy: ' +
                 (_pipelineMode === 'spatial-sort' ? 'SPATIAL SORT (primary)' : 'NEIGHBORHOOD (primary)') +
                 ' → ' + (googleAvailable ? 'Google Route Optimization (fallback)' : 'NO FALLBACK'));
@@ -3512,7 +3534,7 @@ async function generateRoutes() {
         // =====================================================================
         let routes = null;
         let routeSource = null;
-        const pipelineMode = D.setup.routingPipeline || 'spatial-sort';
+        const pipelineMode = D.setup.routingPipeline || 'neighborhood';
 
         if (!bypassNeighborhoodMode) {
             // Spatial sort — compact lat/lng bands + snake pattern
