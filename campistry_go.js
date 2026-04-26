@@ -62,7 +62,7 @@
         setup: {
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
-            avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45,
+            avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 90, maxRideTime: 45,
             googleMapsKey: '', googleProjectId: '',
             geoapifyKey: '',
             campLat: null, campLng: null,
@@ -947,6 +947,20 @@ let _toastTimer = null;
                 D.setup._pipelineMigrated_v1 = true;
                 console.log('[Go] Upgraded routing pipeline: spatial-sort → neighborhood ' +
                     '(road-graph aware). Set routingPipeline back to spatial-sort to revert.');
+            }
+            // One-time migration: maxRouteDuration 60 → 90. The 60-min cap was
+            // too tight for hard geographic clusters (camp's MAROON runs 71min
+            // with 24mi distance), causing the solver to drop stops via
+            // cheapest-insert and produce 100+min routes. Bumping to 90 lets
+            // the solver finish naturally; tight clusters still come in well
+            // under 90 (camp's typical is 30-50min).
+            if (D.setup && D.setup.maxRouteDuration === 60 &&
+                !D.setup._maxRouteDurationMigrated_v1) {
+                D.setup.maxRouteDuration = 90;
+                D.setup._maxRouteDurationMigrated_v1 = true;
+                console.log('[Go] Upgraded maxRouteDuration: 60 → 90 min ' +
+                    '(prevents solver from dropping stops on hard clusters). ' +
+                    'Set back to 60 in settings to revert.');
             }
 
             // Recover geocoding checkpoint: if the tab was closed mid-geocode,
@@ -5619,11 +5633,13 @@ function _applyETAsAndAudits(routes, {
         }
         if (violations) {
             r._rideTimeViolations = violations;
-            const srcNote = usedSolverTimes
-                ? '(using solver leg times — may need investigation)'
-                : '(using haversine fallback — likely overestimate)';
-            console.warn('[Go v5.2] ' + r.busName + ': ' + violations +
-                ' stop(s) exceed ' + maxRideMin + 'min audit ' + srcNote);
+            // The solver does NOT enforce per-camper ride caps as a hard
+            // constraint (paired-shipment models choke on it — see
+            // campistry_go_google.js comments). _rideTimeWarning is kept on
+            // the stop so the dashboard can flag long rides for review, but
+            // we don't spam the console: most violations come from the
+            // haversine fallback estimator over-counting drive time, and
+            // the per-route cap is the real budget anyway.
         }
 
         // ── Route-duration audit ────────────────────────────────────────────
