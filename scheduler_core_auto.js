@@ -1386,10 +1386,35 @@
                     const dur = layer.periodMin || fgC.dMin || 30;
                     const win = layer.endMin - layer.startMin;
                     if (win > dur) {
+                        // ★ When bell-schedule periods are configured, snap to the
+                        //   period closest to the window's center that's wide enough
+                        //   for the full bundle (pre + dur + post) and lies inside
+                        //   the layer window. Avoids landing in a period gap.
+                        const _fgPre  = (t === 'swim' && layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
+                        const _fgPost = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                        const _fgPeriods = (window.campPeriods && window.campPeriods[grade])
+                            ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
+                            : [];
                         const center = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
-                        blockStart = Math.max(layer.startMin, Math.min(layer.endMin - dur, center - Math.round(dur / 2 / 5) * 5));
-                        blockStart = Math.round(blockStart / 5) * 5;
-                        blockEnd = blockStart + dur;
+                        let _snapped = false;
+                        if (_fgPeriods.length > 0) {
+                            const _candidates = _fgPeriods
+                                .filter(p => (p.endMin - p.startMin) >= dur &&
+                                              p.startMin >= layer.startMin &&
+                                              p.endMin <= layer.endMin)
+                                .map(p => ({ p, dist: Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - center) }))
+                                .sort((a, b) => a.dist - b.dist);
+                            if (_candidates.length > 0) {
+                                blockStart = _candidates[0].p.startMin;
+                                blockEnd = blockStart + dur;
+                                _snapped = true;
+                            }
+                        }
+                        if (!_snapped) {
+                            blockStart = Math.max(layer.startMin, Math.min(layer.endMin - dur, center - Math.round(dur / 2 / 5) * 5));
+                            blockStart = Math.round(blockStart / 5) * 5;
+                            blockEnd = blockStart + dur;
+                        }
                     }
                 }
 
