@@ -3453,9 +3453,11 @@ async function generateRoutes() {
     }
 
     const _pipelineMode = D.setup.routingPipeline || 'neighborhood';
-    console.log('[Go v6] Routing strategy: ' +
-                (_pipelineMode === 'spatial-sort' ? 'SPATIAL SORT (primary)' : 'NEIGHBORHOOD (primary)') +
-                ' → ' + (googleAvailable ? 'Google Route Optimization (fallback)' : 'NO FALLBACK'));
+    const _primaryName = _pipelineMode === 'spatial-sort' ? 'SPATIAL SORT' : 'NEIGHBORHOOD';
+    const _secondaryName = _pipelineMode === 'spatial-sort' ? 'NEIGHBORHOOD' : 'SPATIAL SORT';
+    console.log('[Go v6] Routing strategy: ' + _primaryName + ' (primary) → ' +
+                _secondaryName + ' (secondary) → ' +
+                (googleAvailable ? 'Google Route Optimization (fallback)' : 'NO FALLBACK'));
     console.log('[Go v6] Per-bus TSP optimizer: ' +
                 (googleAvailable ? 'Google' : geoapifyKey ? 'Geoapify' : 'local 2-opt'));
 
@@ -3551,45 +3553,60 @@ async function generateRoutes() {
         const pipelineMode = D.setup.routingPipeline || 'neighborhood';
 
         if (!bypassNeighborhoodMode) {
-            // Spatial sort — compact lat/lng bands + snake pattern
+            const _pipelineArgs = {
+                shift, shiftLabel, pctBase,
+                allCampers, shiftVehicles,
+                campLat, campLng,
+                reserveSeats, dropoffMode: mode,
+                isArrival,
+                googleAvailable, googleKey, googleProjId,
+                _supabaseUrl, _googleProxyToken,
+                serviceTimeSec: avgStopMin * 60,
+                shiftIdx: si
+            };
+
+            // PRIMARY — matches user's pipelineMode setting
             if (pipelineMode === 'spatial-sort') {
                 try {
-                    routes = await _trySpatialSortPipeline({
-                        shift, shiftLabel, pctBase,
-                        allCampers, shiftVehicles,
-                        campLat, campLng,
-                        reserveSeats, dropoffMode: mode,
-                        isArrival,
-                        googleAvailable, googleKey, googleProjId,
-                        _supabaseUrl, _googleProxyToken,
-                        serviceTimeSec: avgStopMin * 60,
-                        shiftIdx: si
-                    });
+                    routes = await _trySpatialSortPipeline(_pipelineArgs);
                     if (routes) routeSource = 'spatial-sort';
                 } catch (e) {
                     console.error('[Go v6] Spatial sort pipeline threw:', e);
                     routes = null;
                 }
-            }
-
-            // Neighborhood fallback (or explicit neighborhood mode)
-            if (!routes && pipelineMode !== 'bypass') {
+            } else if (pipelineMode === 'neighborhood') {
                 try {
-                    routes = await _tryNeighborhoodPipeline({
-                        shift, shiftLabel, pctBase,
-                        allCampers, shiftVehicles,
-                        campLat, campLng,
-                        reserveSeats, dropoffMode: mode,
-                        isArrival,
-                        googleAvailable, googleKey, googleProjId,
-                        _supabaseUrl, _googleProxyToken,
-                        serviceTimeSec: avgStopMin * 60,
-                        shiftIdx: si
-                    });
+                    routes = await _tryNeighborhoodPipeline(_pipelineArgs);
                     if (routes) routeSource = 'neighborhood';
                 } catch (e) {
                     console.error('[Go v5] Neighborhood pipeline threw:', e);
                     routes = null;
+                }
+            }
+
+            // SECONDARY — try the OTHER pipeline if primary failed.
+            // Both pipelines have arterial-aware clustering; running the alternate
+            // before global VRP fallback preserves road-graph awareness when the
+            // primary fails (e.g. Overpass timeout for one but not the other).
+            if (!routes && pipelineMode !== 'bypass') {
+                if (pipelineMode === 'spatial-sort') {
+                    console.warn('[Go] Primary spatial-sort failed — trying neighborhood as secondary fallback');
+                    try {
+                        routes = await _tryNeighborhoodPipeline(_pipelineArgs);
+                        if (routes) routeSource = 'neighborhood-secondary';
+                    } catch (e) {
+                        console.error('[Go v5] Neighborhood pipeline (secondary) threw:', e);
+                        routes = null;
+                    }
+                } else {
+                    console.warn('[Go] Primary neighborhood failed — trying spatial-sort as secondary fallback');
+                    try {
+                        routes = await _trySpatialSortPipeline(_pipelineArgs);
+                        if (routes) routeSource = 'spatial-sort-secondary';
+                    } catch (e) {
+                        console.error('[Go v6] Spatial sort pipeline (secondary) threw:', e);
+                        routes = null;
+                    }
                 }
             }
         }
@@ -4063,28 +4080,34 @@ async function _trySpatialSortPipeline({
         ', cascade floor: ' + CASCADE_FLOOR + ' (' + Math.round(_floorPct * 100) + '%)');
 
     // ── Helper: run k-means N times with random seeds, return tightest result ──
+    // Score uses arterial-aware bucketSpread when fingerprints are available, so
+    // restarts that align clusters along corridors are preferred over restarts
+    // that produce equally-tight bounding boxes but cross multiple arterials.
     function runKMeans(atomSet, numClusters) {
         if (!atomSet.length || numClusters <= 0) return [];
         const RESTARTS = 7;
         let bestBuckets = null;
         let bestScore = Infinity;
+        const arterialAware = !!_arterialFingerprint;
         for (let r = 0; r < RESTARTS; r++) {
             const buckets = runKMeansOnce(atomSet, numClusters);
-            // Score: sum of (spread-mi × sqrt(atoms)) — penalizes elongated and big clusters
+            // Score: sum of (spread-mi × sqrt(atoms)) — penalizes elongated and big clusters.
+            // Spread is arterial-discounted when fingerprints exist, so restarts
+            // that produce corridor-aligned clusters score better.
             let score = 0;
             for (const b of buckets) {
                 if (b.length < 2) continue;
-                const lats = b.map(a => a.lat);
-                const lngs = b.map(a => a.lng);
-                const spread = haversineMi(
-                    Math.min(...lats), Math.min(...lngs),
-                    Math.max(...lats), Math.max(...lngs));
+                const spread = arterialAware
+                    ? bucketSpread(b)
+                    : haversineMi(
+                        Math.min(...b.map(a => a.lat)), Math.min(...b.map(a => a.lng)),
+                        Math.max(...b.map(a => a.lat)), Math.max(...b.map(a => a.lng)));
                 score += spread * Math.sqrt(b.length);
             }
             if (score < bestScore) { bestScore = score; bestBuckets = buckets; }
         }
         console.log('[Go v6] K-means: best of ' + RESTARTS + ' restarts (score ' +
-            bestScore.toFixed(2) + ')');
+            bestScore.toFixed(2) + (arterialAware ? ', arterial-aware' : '') + ')');
         return bestBuckets;
     }
 
