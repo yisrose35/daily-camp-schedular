@@ -4322,14 +4322,11 @@ async function _trySpatialSortPipeline({
     // Remove any empty buckets
     busBuckets = busBuckets.filter(b => b.length > 0);
 
-    // ── F. Phase 5: Time-bounded inward cascade ──
-    // Estimate each cluster's route time (drive-to-camp + stops + intra-cluster).
-    // While any cluster's time exceeds MAX_TIME_RATIO × median, move boundary
-    // atoms inward to the nearest geographic neighbor that's closer to camp
-    // and below median time. No hardcoded minutes — only relative ratios.
-    showProgress(shiftLabel + ': phase 5 — time-bounded cascade...', pctBase + 55);
-
-    const MAX_TIME_RATIO = 1.4;
+    // ── F. Phase 5: Min-max hill climb on route time ──
+    // Goal: minimize the LONGEST route. Pick the worst cluster, try moving each
+    // of its atoms to every other cluster, apply the move that lowers the max
+    // by the most. Repeat until no move improves the max. Equality is NOT a goal.
+    showProgress(shiftLabel + ': phase 5 — min-max hill climb...', pctBase + 55);
 
     const clusterMeta = busBuckets.map((bucket, idx) => {
         const cent = bucketCentroid(bucket);
@@ -4346,79 +4343,88 @@ async function _trySpatialSortPipeline({
     }
 
     console.log('[Go v6] ═══════════════════════════════════════');
-    console.log('[Go v6] PHASE 5: Time-bounded inward cascade (max ' + MAX_TIME_RATIO + '× median)');
+    console.log('[Go v6] PHASE 5: Min-max hill climb (lower the longest route)');
     console.log('[Go v6] ═══════════════════════════════════════');
-    const initTimes = clusterMeta.map(m => estTime(m.idx));
-    console.log('[Go v6] Initial: median ' + (median(initTimes) / 60).toFixed(1) +
-        'min, max ' + (Math.max(...initTimes) / 60).toFixed(1) + 'min, min ' +
+    const initTimes = busBuckets.map((_, i) => estTime(i));
+    const initMax = Math.max(...initTimes);
+    console.log('[Go v6] Initial: max ' + (initMax / 60).toFixed(1) +
+        'min, median ' + (median(initTimes) / 60).toFixed(1) + 'min, min ' +
         (Math.min(...initTimes) / 60).toFixed(1) + 'min');
 
-    let rebalanceMoves = 0;
-    for (let pass = 0; pass < 200; pass++) {
-        clusterMeta.forEach(m => { m.cent = bucketCentroid(busBuckets[m.idx]); });
-        const times = clusterMeta.map(m => estTime(m.idx));
-        const med = median(times);
-        const cap = med * MAX_TIME_RATIO;
-
-        // Worst cluster = max overage, where overage = max(time-cap, capacity-overflow-as-seconds)
-        // Capacity overflow converted to time via STOP_WEIGHT so one metric covers both.
-        let worstMI = -1, worstOver = 0;
-        for (let mi = 0; mi < clusterMeta.length; mi++) {
-            const timeOver = times[mi] - cap;
-            const sz = bucketSize(busBuckets[clusterMeta[mi].idx]);
-            const capOver = (sz - SOFT_CAPACITY) * STOP_WEIGHT;
-            const over = Math.max(timeOver, capOver);
-            if (over > worstOver) { worstOver = over; worstMI = mi; }
+    let moves = 0;
+    for (let pass = 0; pass < 500; pass++) {
+        // 1. Find current worst (the bottleneck — the bus we want to shrink)
+        let worstIdx = -1, worstTime = 0;
+        const allTimes = [];
+        for (let i = 0; i < busBuckets.length; i++) {
+            const t = estTime(i);
+            allTimes.push(t);
+            if (t > worstTime) { worstTime = t; worstIdx = i; }
         }
-        if (worstMI < 0) break;
+        if (worstIdx < 0) break;
 
-        const outer = clusterMeta[worstMI];
+        // 2. Floor: don't shrink worst below CASCADE_FLOOR campers
+        const worstSize = bucketSize(busBuckets[worstIdx]);
+        if (worstSize <= CASCADE_FLOOR) break;
 
-        let bestInnerMI = -1, bestDist = Infinity;
-        for (let mi = 0; mi < clusterMeta.length; mi++) {
-            if (mi === worstMI) continue;
-            const inner = clusterMeta[mi];
-            // For time-driven moves: prefer inward (toward camp). For capacity-driven
-            // moves: any direction is fine as long as receiver has room and isn't over cap.
-            if (times[mi] >= cap) continue;
-            if (bucketSize(busBuckets[inner.idx]) >= SOFT_CAPACITY) continue;
-            const d = haversineMi(outer.cent.lat, outer.cent.lng, inner.cent.lat, inner.cent.lng);
-            if (d < bestDist) { bestDist = d; bestInnerMI = mi; }
-        }
-        if (bestInnerMI < 0) break;
+        // 3. Search every atom × every receiver. Score = new max after the move.
+        //    Best move = one that reduces max the most. Reject if no move helps.
+        let bestMove = null;
+        let bestNewMax = worstTime;
 
-        const inner = clusterMeta[bestInnerMI];
-        const innerCent = inner.cent;
+        for (let ai = 0; ai < busBuckets[worstIdx].length; ai++) {
+            const atom = busBuckets[worstIdx][ai];
+            if (worstSize - atom.size < CASCADE_FLOOR) continue;
 
-        let bestAI = -1, bestADist = Infinity;
-        for (let ai = 0; ai < busBuckets[outer.idx].length; ai++) {
-            const a = busBuckets[outer.idx][ai];
-            if (bucketSize(busBuckets[outer.idx]) - a.size < CASCADE_FLOOR) continue;
-            if (bucketSize(busBuckets[inner.idx]) + a.size > SOFT_CAPACITY) continue;
-            const dToInner = haversineMi(a.lat, a.lng, innerCent.lat, innerCent.lng);
-            let closerToOther = false;
-            for (let ci = 0; ci < clusterMeta.length; ci++) {
-                if (ci === worstMI || ci === bestInnerMI) continue;
-                const other = clusterMeta[ci];
-                const dToOther = haversineMi(a.lat, a.lng, other.cent.lat, other.cent.lng);
-                if (dToOther < dToInner) { closerToOther = true; break; }
+            // Simulate removal once: temporarily pop the atom
+            busBuckets[worstIdx].splice(ai, 1);
+            const newWorstTime = estTime(worstIdx);
+
+            for (let ri = 0; ri < busBuckets.length; ri++) {
+                if (ri === worstIdx) continue;
+                // Try add to receiver
+                busBuckets[ri].push(atom);
+                const newReceiverTime = estTime(ri);
+                busBuckets[ri].pop();
+
+                // Compute new max across ALL clusters with the simulated move
+                let newMax = 0;
+                for (let ci = 0; ci < busBuckets.length; ci++) {
+                    let t;
+                    if (ci === worstIdx) t = newWorstTime;
+                    else if (ci === ri) t = newReceiverTime;
+                    else t = allTimes[ci];
+                    if (t > newMax) newMax = t;
+                }
+
+                if (newMax < bestNewMax) {
+                    bestNewMax = newMax;
+                    bestMove = { ai, ri };
+                }
             }
-            if (closerToOther) continue;
-            if (dToInner < bestADist) { bestADist = dToInner; bestAI = ai; }
-        }
-        if (bestAI < 0) break;
 
-        const atom = busBuckets[outer.idx].splice(bestAI, 1)[0];
-        busBuckets[inner.idx].push(atom);
-        rebalanceMoves++;
+            // Restore the atom we popped
+            busBuckets[worstIdx].splice(ai, 0, atom);
+        }
+
+        if (!bestMove) break;
+
+        // 4. Apply the best move
+        const movedAtom = busBuckets[worstIdx].splice(bestMove.ai, 1)[0];
+        busBuckets[bestMove.ri].push(movedAtom);
+        moves++;
     }
 
-    const finalTimes = clusterMeta.map(m => estTime(m.idx));
-    console.log('[Go v6] Time cascade: ' + rebalanceMoves + ' atoms moved inward');
-    console.log('[Go v6] Final: median ' + (median(finalTimes) / 60).toFixed(1) +
-        'min, max ' + (Math.max(...finalTimes) / 60).toFixed(1) + 'min, min ' +
+    const finalTimes = busBuckets.map((_, i) => estTime(i));
+    const finalMax = Math.max(...finalTimes);
+    console.log('[Go v6] Hill climb: ' + moves + ' atoms moved (max ' +
+        (initMax / 60).toFixed(1) + 'min → ' + (finalMax / 60).toFixed(1) + 'min)');
+    console.log('[Go v6] Final: max ' + (finalMax / 60).toFixed(1) +
+        'min, median ' + (median(finalTimes) / 60).toFixed(1) + 'min, min ' +
         (Math.min(...finalTimes) / 60).toFixed(1) + 'min');
 
+    // Refresh centroids after moves
+    clusterMeta.forEach(m => { m.cent = bucketCentroid(busBuckets[m.idx]); });
     clusterMeta.forEach(m => { m.estTime = estTime(m.idx); });
     clusterMeta.sort((a, b) => b.distSec - a.distSec);
 
