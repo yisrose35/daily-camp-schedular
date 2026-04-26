@@ -9899,14 +9899,25 @@
                         minutesToTimeLabel(p.startMin) + '-' + minutesToTimeLabel(p.endMin) +
                         ' floor=' + _f + 'min, candidates=[' + _c.join(',') + ']');
                 });
-                // Pre-compute period boundary points for "crosses boundary" test
-                const boundaries = [];
-                periods.forEach(p => { boundaries.push(p.startMin); boundaries.push(p.endMin); });
-                const crossesBoundary = (s) => {
-                    for (const b of boundaries) {
-                        if (s.startMin < b && s.endMin > b) return true;
+                // Pre-compute MERGED (union) period intervals so overlapping or
+                // adjacent periods are treated as a single contiguous region.
+                // An activity "crosses a boundary" only when it spans a real GAP
+                // between merged intervals (or extends outside all periods).
+                const _sortedP = periods.slice().sort((a, b) => a.startMin - b.startMin);
+                const mergedPeriods = [];
+                _sortedP.forEach(p => {
+                    const last = mergedPeriods[mergedPeriods.length - 1];
+                    if (last && last.endMin >= p.startMin) {
+                        last.endMin = Math.max(last.endMin, p.endMin);
+                    } else {
+                        mergedPeriods.push({ startMin: p.startMin, endMin: p.endMin });
                     }
-                    return false;
+                });
+                const crossesBoundary = (s) => {
+                    for (const m of mergedPeriods) {
+                        if (m.startMin <= s.startMin && m.endMin >= s.endMin) return false;
+                    }
+                    return true;
                 };
                 // Hard-fixed types we'll attempt to shift to a period boundary
                 // when they currently cross one. (lunch / dismissal / leagues
