@@ -5860,6 +5860,55 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             }
         }
 
+        // Arterial absorb: lone singletons fold into the nearest stop within ~1500ft.
+        // Historical pattern: 51% of singleton-equivalent kids landed in 2-8 kid stops
+        // by anchoring at a shared arterial corner (e.g. Cox Cro Rd@Vermont Ave pulled
+        // kids from Vermont Ave + Paddock Pl into one stop). Wider radius + major-road
+        // re-anchoring closes that gap.
+        const ARTERIAL_RADIUS_MI = 0.30;
+        const majorSegs = _majorRoadSegments || [];
+        function nearestMajorIntersection(lat, lng, maxMi) {
+            if (!osmIntersections || majorSegs.length === 0) return null;
+            const majorNames = new Set(majorSegs.map(s => (s.name || '').toLowerCase()).filter(Boolean));
+            let best = null, bestD = maxMi;
+            for (const inter of osmIntersections) {
+                const onMajor = (inter.streets || []).some(s => majorNames.has(s.toLowerCase()));
+                if (!onMajor) continue;
+                const d = haversineMi(lat, lng, inter.lat, inter.lng);
+                if (d < bestD) { bestD = d; best = inter; }
+            }
+            return best;
+        }
+        let arterialMerged = true;
+        while (arterialMerged) {
+            arterialMerged = false;
+            for (let i = stops.length - 1; i >= 0; i--) {
+                if (stops[i].campers.length !== 1) continue;
+                let bestJ = -1, bestDist = ARTERIAL_RADIUS_MI;
+                for (let j = 0; j < stops.length; j++) {
+                    if (j === i) continue;
+                    if (stops[j].campers.length + 1 > MAX_STOP_CAPACITY) continue;
+                    const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    if (d < bestDist) { bestDist = d; bestJ = j; }
+                }
+                if (bestJ >= 0) {
+                    stops[bestJ].campers.push(...stops[i].campers);
+                    // Re-anchor to a major-road intersection between the two if possible
+                    const midLat = (stops[bestJ].lat + stops[i].lat) / 2;
+                    const midLng = (stops[bestJ].lng + stops[i].lng) / 2;
+                    const arterial = nearestMajorIntersection(midLat, midLng, ARTERIAL_RADIUS_MI);
+                    if (arterial) {
+                        stops[bestJ].lat = arterial.lat;
+                        stops[bestJ].lng = arterial.lng;
+                        stops[bestJ].address = arterial.name;
+                    }
+                    stops.splice(i, 1);
+                    arterialMerged = true;
+                    break;
+                }
+            }
+        }
+
         const final = stops.filter(s => s.campers.length > 0);
         console.log('[Go] Corner stops: ' + final.length + ' stops from ' + campers.length + ' campers');
         final.forEach(s => console.log('[Go]   ' + s.address + ' (' + s.campers.length + ' kids)'));
