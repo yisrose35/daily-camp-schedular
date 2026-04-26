@@ -5255,10 +5255,31 @@ function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteM
     }
 
     const MAX_ITER = 200;
-    const MAX_MOVES_PER_BUS = 6;   // bound the work per donor bus
-    const APPROX_PER_STOP = 5;
+    const MAX_MOVES_PER_BUS = 4;
+    // Hard gate: a stop transfer is only allowed when the receiver bus has
+    // at least one stop within MAX_TRANSFER_MI of the candidate. Without this
+    // the splitter happily moves a Toms River stop onto a Lakewood bus —
+    // bumping the receiver from 60min to 100+min because the optimizer now
+    // has to detour 15+ miles. 1.5mi keeps moves within neighborhood.
+    const MAX_TRANSFER_MI = 1.5;
+    const MAX_TRANSFER_MI2 = (MAX_TRANSFER_MI * MAX_TRANSFER_MI) / (69 * 69);
+    // Only run the splitter on routes that are MEANINGFULLY over cap.
+    // A route 5 min over (e.g. 65min on a 60min cap) is not worth a transfer
+    // that risks adding 15+ minutes to another bus.
+    const SLACK_BEFORE_SPLITTING = 12; // min — only act on >12min over
     const movesPerBus = {};
-    const giveUp = new Set();      // bus IDs we've stopped trying to fix this pass
+    const giveUp = new Set();
+
+    // Approximate the time cost of inserting a stop at distance D miles
+    // from the receiver's nearest existing stop. Drive there + dwell + drive
+    // back. avgSpeed ~25mph → 2.4 min/mi each way + 2 min dwell.
+    function approxInsertMin(distMi) {
+        return Math.max(3, Math.round(distMi * 4.8 + 2));
+    }
+    function dist2ToMi(d2) {
+        // dist2 is squared lat/lng degrees. Convert: 1 deg lat ≈ 69 mi.
+        return Math.sqrt(d2) * 69;
+    }
 
     for (let iter = 0; iter < MAX_ITER; iter++) {
         // Pick the WORST over-cap route that we haven't given up on.
@@ -5266,14 +5287,13 @@ function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteM
         active.forEach(r => {
             if (giveUp.has(r.busId)) return;
             const over = (r.totalDuration || 0) - maxRouteMin;
+            if (over <= SLACK_BEFORE_SPLITTING) return;
             if (over > worstOver) { worstOver = over; overlong = r; }
         });
         if (!overlong) return;
 
         movesPerBus[overlong.busId] = (movesPerBus[overlong.busId] || 0) + 1;
         if (movesPerBus[overlong.busId] > MAX_MOVES_PER_BUS) {
-            // Stop hammering this bus; it likely has structural problems
-            // (e.g. cluster spread too wide for the cap). Surface it.
             giveUp.add(overlong.busId);
             console.warn('[Go v5.2] ' + overlong.busName + ' still ' +
                 overlong.totalDuration + 'min after ' + MAX_MOVES_PER_BUS +
@@ -5289,10 +5309,7 @@ function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteM
             const d = distToCamp2(st);
             if (d > farthestDist) { farthestDist = d; farthestIdx = idx; }
         });
-        if (farthestIdx < 0) {
-            giveUp.add(overlong.busId);
-            continue;
-        }
+        if (farthestIdx < 0) { giveUp.add(overlong.busId); continue; }
         const candidate = overlong.stops[farthestIdx];
         const candCount = candidate.campers?.length || 0;
         if (candCount === 0) {
@@ -5300,44 +5317,58 @@ function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteM
             continue;
         }
 
-        // Find the best receiver: a route with room, geographically nearest
-        // to the candidate, with enough headroom under the duration cap.
-        // Require the receiver to have at least APPROX_PER_STOP slack so the
-        // move doesn't push it over.
-        let receiver = null, bestDist = Infinity;
+        // Find the best receiver: a route with room AND with at least one
+        // stop within MAX_TRANSFER_MI of the candidate. If no receiver
+        // qualifies, leave the over-cap route alone — moving the stop to
+        // a far-away bus would only make things worse.
+        let receiver = null, bestDist2 = MAX_TRANSFER_MI2;
         active.forEach(r => {
             if (r === overlong) return;
-            const slack = maxRouteMin - (r.totalDuration || 0);
-            if (slack < APPROX_PER_STOP) return;
             const cap = capById[r.busId] || 0;
             const cur = camperCount(r);
             if (cap && cur + candCount > cap) return;
+
             let nearest = Infinity;
             r.stops.forEach(st => {
                 if (st.isMonitor || st.isCounselor || !st.lat || !st.lng) return;
-                const d = dist2(candidate, st);
-                if (d < nearest) nearest = d;
+                const d2 = dist2(candidate, st);
+                if (d2 < nearest) nearest = d2;
             });
-            if (nearest < bestDist) { bestDist = nearest; receiver = r; }
+            if (nearest > MAX_TRANSFER_MI2) return; // hard distance gate
+
+            // Estimate cost of inserting on this receiver. If projected
+            // duration exceeds cap, skip — don't trade one over-cap route
+            // for another.
+            const insertMin = approxInsertMin(dist2ToMi(nearest));
+            if ((r.totalDuration || 0) + insertMin > maxRouteMin) return;
+
+            if (nearest < bestDist2) { bestDist2 = nearest; receiver = r; }
         });
 
         if (!receiver) {
             giveUp.add(overlong.busId);
+            const candDistMi = dist2ToMi(distToCamp2(candidate));
             console.warn('[Go v5.2] ' + overlong.busName + ' is ' +
-                overlong.totalDuration + 'min over ' + maxRouteMin +
-                'min cap, but no receiver bus has room nearby — leaving as-is');
+                Math.round(worstOver) + 'min over cap, but no receiver bus ' +
+                'has room within ' + MAX_TRANSFER_MI + 'mi of "' +
+                (candidate.address || '?') + '" (' + candDistMi.toFixed(1) +
+                'mi from camp) — leaving as-is. Cluster is geographically ' +
+                'broken; needs upstream fix.');
             continue;
         }
 
         overlong.stops.splice(farthestIdx, 1);
         receiver.stops.push(candidate);
-        overlong.totalDuration = Math.max(0, (overlong.totalDuration || 0) - APPROX_PER_STOP);
-        receiver.totalDuration = (receiver.totalDuration || 0) + APPROX_PER_STOP;
+        const insertMin = approxInsertMin(dist2ToMi(bestDist2));
+        overlong.totalDuration = Math.max(0, (overlong.totalDuration || 0) - insertMin);
+        receiver.totalDuration = (receiver.totalDuration || 0) + insertMin;
         overlong.camperCount = camperCount(overlong);
         receiver.camperCount = camperCount(receiver);
         console.log('[Go v5.2] Split: moved "' +
-            (candidate.address || '?') + '" (' + candCount + ' campers) from ' +
-            overlong.busName + ' to ' + receiver.busName);
+            (candidate.address || '?') + '" (' + candCount + ' campers, ' +
+            dist2ToMi(bestDist2).toFixed(2) + 'mi to receiver) from ' +
+            overlong.busName + ' (-' + insertMin + 'min) to ' +
+            receiver.busName + ' (+' + insertMin + 'min)');
     }
 }
 

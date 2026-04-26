@@ -231,17 +231,22 @@ window.GoGoogleOptimizer = (function () {
         });
 
         // Route duration limits.
-        // HARD cap: derived from per-camper ride cap so the solver never
-        // becomes infeasible — this is the absolute ceiling.
-        //   maxRideSec + avgStops * serviceTime + 10min camp-leg + 15% slack.
-        // SOFT cap: the user's maxRouteDuration setting if supplied. The
-        // solver pays a per-second penalty over this and tries to honor it,
-        // but can exceed up to the hard cap if no feasible plan fits inside.
+        // HARD cap: an absolute ceiling so the solver never becomes infeasible.
+        //   When the caller supplies maxRouteDuration, hard = soft × 1.4 (40%
+        //   slack for solver flexibility while still squeezing routes toward
+        //   the soft cap). Without that, fall back to ride-time-based formula.
+        // SOFT cap: the user's maxRouteDuration. The solver pays a steep
+        //   per-second penalty above this.
         const avgStopsPerBus = Math.ceil(stops.length / Math.max(1, vehicles.length));
         const svcTotal = avgStopsPerBus * serviceTimeSec;
-        const routeDurationHardSec = Math.round(
-            (maxRideSec + svcTotal + 10 * 60) * 1.15
-        );
+        let routeDurationHardSec;
+        if (maxRouteDurationSec && maxRouteDurationSec > 0) {
+            routeDurationHardSec = Math.round(maxRouteDurationSec * 1.4);
+        } else {
+            routeDurationHardSec = Math.round(
+                (maxRideSec + svcTotal + 10 * 60) * 1.15
+            );
+        }
         // Sanity: warn if dwell time + ride budget alone consume the soft cap.
         // (e.g. 14 stops × 2min = 28min already, plus 45min ride is 73min — if
         //  the soft cap is 60min, the route is structurally infeasible and the
