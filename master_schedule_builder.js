@@ -1135,8 +1135,10 @@ function loadDAWLayers() {
   // Load the assigned template (or fallback to unsaved draft '_current')
   if (tmpl && autoTemplates[tmpl]) {
       dawLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+      applyTemplatePeriods(tmpl);
   } else if (autoTemplates['_current']) {
       dawLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+      applyTemplatePeriods('_current');
   } else {
       dawLayers = {};
   }
@@ -1158,9 +1160,21 @@ function saveDAWLayers(forceTemplateName = null) {
   const g = window.loadGlobalSettings?.() || {};
   if (!g.app1) g.app1 = {};
   if (!g.app1.autoLayerTemplates) g.app1.autoLayerTemplates = {};
+  if (!g.app1.autoLayerTemplatePeriods) g.app1.autoLayerTemplatePeriods = {};
   g.app1.autoLayerTemplates[templateKey] = JSON.parse(JSON.stringify(dawLayers));
+  g.app1.autoLayerTemplatePeriods[templateKey] = JSON.parse(JSON.stringify(window.campPeriods || {}));
   window.saveGlobalSettings?.('app1', g.app1);
   window.forceSyncToCloud?.();
+}
+
+function applyTemplatePeriods(templateName) {
+  const g = window.loadGlobalSettings?.() || {};
+  const snapshot = g.app1?.autoLayerTemplatePeriods?.[templateName];
+  if (!snapshot) return false;
+  window.campPeriods = JSON.parse(JSON.stringify(snapshot));
+  window.saveGlobalSettings?.('campPeriods', window.campPeriods);
+  window.dispatchEvent(new CustomEvent('campistry-periods-changed'));
+  return true;
 }
 
 function renderDAWPalette() {
@@ -1279,6 +1293,7 @@ function renderDAWToolbar() {
       const ok = await showConfirm(`Load auto template "${name}"?`);
       if (ok) {
         dawLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
+        applyTemplatePeriods(name);
         currentLoadedTemplate = name;
         renderDAW();
       }
@@ -1371,6 +1386,9 @@ function renderDAWToolbar() {
       const g2 = window.loadGlobalSettings?.() || {};
       if (g2.app1?.autoLayerTemplates?.[nameToDelete]) {
         delete g2.app1.autoLayerTemplates[nameToDelete];
+        if (g2.app1.autoLayerTemplatePeriods) {
+          delete g2.app1.autoLayerTemplatePeriods[nameToDelete];
+        }
         window.saveGlobalSettings?.('app1', g2.app1);
         window.forceSyncToCloud?.();
         
@@ -3393,9 +3411,10 @@ window.MasterSchedulerInternal = {
     if (gridEl && typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
       window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
     }
-    // Re-render panel sidebar badges if panel is open
+    // Re-render panel sidebar badges if panel is open — but skip while user is typing inside it
     const panel = document.getElementById('daw-period-panel');
     if (panel && panel.style.display !== 'none' && typeof window.PeriodEditor?.renderEditor === 'function') {
+      if (panel.contains(document.activeElement)) return;
       window.PeriodEditor.renderEditor(panel);
     }
   });

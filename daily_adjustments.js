@@ -5103,6 +5103,7 @@ window.addEventListener('campistry-periods-changed', function() {
   }
   const panel = document.getElementById('da-period-panel');
   if (panel && panel.style.display !== 'none' && typeof window.PeriodEditor?.renderEditor === 'function') {
+    if (panel.contains(document.activeElement)) return;
     window.PeriodEditor.renderEditor(panel);
   }
 });
