@@ -2612,43 +2612,58 @@ function addDropListeners(gridEl) {
         }
         const result = await daShowModal({
           title: name + ' for ' + divName,
-          description: tileData.type === 'swim' ? 'Change time is carved from the total block. e.g. 3–4 with 10min changes → Change 3:00–3:10, Swim 3:10–3:50, Change 3:50–4:00' : undefined,
+          description: tileData.type === 'swim' ? 'Enter the swim period start/end. Pre-change is added BEFORE swim, post-change AFTER (skipping any bell-schedule gap). e.g. swim 11:30–12:10 with 10min changes and a 12:10–12:15 gap → Change 11:20–11:30, Swim 11:30–12:10, Change 12:15–12:25.' : undefined,
           fields: daSwimFields
         });
         if (!result || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
-        
-        const daTotalStart = parseTimeToMinutes(result.startTime);
-        const daTotalEnd = parseTimeToMinutes(result.endTime);
+
+        // ★ Swim is the (pre, swim, post) bundle. The user enters swim's
+        //   own start/end — pre extends backward, post extends forward.
+        //   Post snaps past period gaps to the next period's start.
+        const daSwimStart = parseTimeToMinutes(result.startTime);
+        const daSwimEnd = parseTimeToMinutes(result.endTime);
         const daPreChange = (tileData.type === 'swim') ? (parseInt(result.preChangeMin) || 0) : 0;
         const daPostChange = (tileData.type === 'swim') ? (parseInt(result.postChangeMin) || 0) : 0;
-        
-        if (daPreChange + daPostChange >= (daTotalEnd - daTotalStart)) {
-          await daShowAlert('Change time (' + (daPreChange + daPostChange) + ' min) must be less than the total block (' + (daTotalEnd - daTotalStart) + ' min).');
-          return;
+
+        // Period-anchor logic for post-change (mirrors master_schedule_builder)
+        const daPeriods = (window.campPeriods && window.campPeriods[divName])
+          ? window.campPeriods[divName].slice().sort((a, b) => a.startMin - b.startMin)
+          : [];
+        const daWithinPeriod = (rs, re) =>
+          daPeriods.some(p => p.startMin <= rs && p.endMin >= re);
+        let daPreAnchor = daSwimStart;
+        let daPostAnchor = daSwimEnd;
+        if (daPeriods.length > 0) {
+          if (daPreChange > 0 && !daWithinPeriod(daSwimStart - daPreChange, daSwimStart)) {
+            for (let i = daPeriods.length - 1; i >= 0; i--) {
+              if (daPeriods[i].endMin <= daSwimStart) { daPreAnchor = daPeriods[i].endMin; break; }
+            }
+          }
+          if (daPostChange > 0 && !daWithinPeriod(daSwimEnd, daSwimEnd + daPostChange)) {
+            const next = daPeriods.find(p => p.startMin >= daSwimEnd);
+            if (next) daPostAnchor = next.startMin;
+          }
         }
-        
-        const daSwimStart = daTotalStart + daPreChange;
-        const daSwimEnd = daTotalEnd - daPostChange;
-        
-        // Pre-Change carved from start of block
+
+        // Pre-Change BEFORE swim
         if (daPreChange > 0) {
           dailyOverrideSkeleton.push({
             id: Date.now().toString() + '_prechange',
             type: 'pinned',
             event: 'Change',
             division: divName,
-            startTime: result.startTime,
-            endTime: minutesToTime(daSwimStart),
+            startTime: minutesToTime(daPreAnchor - daPreChange),
+            endTime: minutesToTime(daPreAnchor),
             reservedFields: [],
             location: null,
             _swimChange: 'pre'
           });
         }
-        
-        // Swim tile — narrowed to exclude change time
+
+        // Swim tile — keeps the user-entered window
         newEvent = {
           id: Date.now().toString(), type: 'pinned', event: name, division: divName,
           startTime: minutesToTime(daSwimStart), endTime: minutesToTime(daSwimEnd),
@@ -2658,16 +2673,16 @@ function addDropListeners(gridEl) {
           _postChangeMin: daPostChange || undefined,
           isNightActivity
         };
-        
-        // Post-Change carved from end of block
+
+        // Post-Change AFTER swim (anchored to next period start if there's a gap)
         if (daPostChange > 0) {
           dailyOverrideSkeleton.push({
             id: Date.now().toString() + '_postchange',
             type: 'pinned',
             event: 'Change',
             division: divName,
-            startTime: minutesToTime(daSwimEnd),
-            endTime: result.endTime,
+            startTime: minutesToTime(daPostAnchor),
+            endTime: minutesToTime(daPostAnchor + daPostChange),
             reservedFields: [],
             location: null,
             _swimChange: 'post'
