@@ -5825,6 +5825,41 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             }
         }
 
+        // Street-segment merge: collapse stops sharing a street name within ~950ft.
+        // Historical Neranina groups by block face (e.g. "Lehigh Blvd@Dartmouth Dr"
+        // pulls every kid on that block). Two kids 700ft apart on the same street
+        // become one stop for them, two for us. This pass closes that gap.
+        function streetsOf(addr) {
+            if (!addr) return [];
+            return addr.split(' & ')
+                .map(p => p.replace(/^\d[\d\s\-]*/, '').trim().toLowerCase())
+                .filter(Boolean);
+        }
+        const SEG_RADIUS_MI = 0.18;
+        let segMerged = true;
+        while (segMerged) {
+            segMerged = false;
+            for (let i = stops.length - 1; i >= 0; i--) {
+                const sA = streetsOf(stops[i].address);
+                if (sA.length === 0) continue;
+                let bestJ = -1, bestDist = SEG_RADIUS_MI;
+                for (let j = 0; j < stops.length; j++) {
+                    if (j === i) continue;
+                    if (stops[j].campers.length + stops[i].campers.length > MAX_STOP_CAPACITY) continue;
+                    const sB = streetsOf(stops[j].address);
+                    if (!sA.some(n => sB.includes(n))) continue;
+                    const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    if (d < bestDist) { bestDist = d; bestJ = j; }
+                }
+                if (bestJ >= 0) {
+                    stops[bestJ].campers.push(...stops[i].campers);
+                    stops.splice(i, 1);
+                    segMerged = true;
+                    break;
+                }
+            }
+        }
+
         const final = stops.filter(s => s.campers.length > 0);
         console.log('[Go] Corner stops: ' + final.length + ' stops from ' + campers.length + ' campers');
         final.forEach(s => console.log('[Go]   ' + s.address + ' (' + s.campers.length + ' kids)'));
