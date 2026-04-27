@@ -1501,35 +1501,6 @@
                     : allBunks;
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
 
-                // ── Pre-detect linked rotation event (e.g. water slides → swim) ──
-                // Done BEFORE period snapping so the period candidate filter can
-                // account for the linked event needing an adjacent slot.
-                // Generic: works for ANY activity type, not just swim.
-                let _earlyWsDur = 0;   // duration of linked rotation event
-                let _earlyWsPos = null; // 'before' | 'after' | 'either'
-                let _earlyWsEvt = null; // the rotation event object
-                if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
-                    try {
-                        const _preAllRots = window.RotationEvents.loadRotationEvents() || [];
-                        for (const rEvt of _preAllRots) {
-                            if (!rEvt || !rEvt.sequence) continue;
-                            const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
-                            if (tgt !== t) continue;
-                            if (currentDate && rEvt.dateRange) {
-                                if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
-                            }
-                            const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
-                            if (rGrades && !rGrades.has(grade)) continue;
-                            const rDur = parseInt(rEvt.durationPerBunk) || 0;
-                            if (rDur <= 0) continue;
-                            _earlyWsDur = rDur;
-                            _earlyWsPos = rEvt.sequence.position || 'either';
-                            _earlyWsEvt = rEvt;
-                            break;
-                        }
-                    } catch (_e) { /* no rotation events */ }
-                }
-
                 // ★ fullGrade windowed layers: compute a proper block time within the window.
                 //   When the window is wider than the activity duration (e.g. swim window 9am-2pm,
                 //   duration 45min), pick the center of the window rather than filling the whole span.
@@ -1552,31 +1523,10 @@
                         const center = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
                         let _snapped = false;
                         if (_fgPeriods.length > 0) {
-                            // When a swim-linked WS exists, ensure the chosen period
-                            // has an adjacent period for WS (before → needs prior
-                            // period, after → needs next period).
                             const _candidates = _fgPeriods
-                                .filter(p => {
-                                    if ((p.endMin - p.startMin) < dur) return false;
-                                    if (p.startMin < layer.startMin || p.endMin > layer.endMin) return false;
-                                    // WS adjacency check
-                                    if (_earlyWsDur > 0) {
-                                        const pIdx = _fgPeriods.indexOf(p);
-                                        if (_earlyWsPos === 'before' || _earlyWsPos === 'either') {
-                                            // Needs a period before this one (or room before)
-                                            if (pIdx === 0 && p.startMin - _earlyWsDur < layer.startMin) {
-                                                // No room before first period — if "either", ok (try after); if "before", skip
-                                                if (_earlyWsPos === 'before') return false;
-                                            }
-                                        }
-                                        if (_earlyWsPos === 'after') {
-                                            if (pIdx === _fgPeriods.length - 1 && p.endMin + _earlyWsDur > layer.endMin) {
-                                                return false; // No room after last period
-                                            }
-                                        }
-                                    }
-                                    return true;
-                                })
+                                .filter(p => (p.endMin - p.startMin) >= dur &&
+                                              p.startMin >= layer.startMin &&
+                                              p.endMin <= layer.endMin)
                                 .map(p => ({ p, dist: Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - center) }))
                                 .sort((a, b) => a.dist - b.dist);
                             if (_candidates.length > 0) {
@@ -1635,38 +1585,6 @@
                     return;
                 }
 
-                // ── Linked rotation event (e.g. water slides → swim) ──────
-                // Uses the pre-detected _earlyWsEvt (found before period snapping)
-                // and computes exact start/end times relative to the chosen period.
-                // Generic: fires for any activity type with a linked rotation event.
-                let _swimLinkedRot = null; // { evt, dur, position, wsStart, wsEnd }
-                if (_earlyWsEvt && _earlyWsDur > 0) {
-                    const rPos = _earlyWsPos;
-                    let wsStart, wsEnd;
-                    if (rPos === 'before') {
-                        wsStart = blockStart - _earlyWsDur; wsEnd = blockStart;
-                    } else if (rPos === 'after') {
-                        wsStart = blockEnd; wsEnd = blockEnd + _earlyWsDur;
-                    } else {
-                        // "either" — prefer before; fall back to after if
-                        // before pushes past day start or into a conflict.
-                        const gradeStart = parseTimeToMinutes((divisions[grade] || {}).startTime) || 480;
-                        const gradeEnd = parseTimeToMinutes((divisions[grade] || {}).endTime) || 960;
-                        const _beforeS = blockStart - _earlyWsDur;
-                        const _afterE = blockEnd + _earlyWsDur;
-                        const _beforeOk = _beforeS >= gradeStart && !targetBunks.some(bk =>
-                            (bunkTimelines[bk] || []).some(b => b && b.startMin < blockStart && b.endMin > _beforeS));
-                        if (_beforeOk) {
-                            wsStart = _beforeS; wsEnd = blockStart;
-                        } else if (_afterE <= gradeEnd) {
-                            wsStart = blockEnd; wsEnd = _afterE;
-                        } else {
-                            wsStart = _beforeS; wsEnd = blockStart;
-                        }
-                    }
-                    _swimLinkedRot = { evt: _earlyWsEvt, dur: _earlyWsDur, position: rPos, wsStart, wsEnd };
-                }
-
                 // ── Swim + change placement (three separate blocks, period-anchored) ──
                 // Pre-change lives in the last preChangeMin minutes of the period
                 // BEFORE swim's period; post-change lives in the first
@@ -1678,41 +1596,15 @@
                 const _swimGroupId = (t === 'swim') ? nextSwimGroupId() : null;
 
                 targetBunks.forEach(bunk => {
-                    // ── Place linked rotation event for ANY activity type ──
-                    // Generic: whenever a rotation event targets this activity
-                    // (via sequence.targetActivity), place it as an atomic
-                    // bundle alongside the parent block.
-                    if (_swimLinkedRot) {
-                        const rl = _swimLinkedRot;
-                        const alreadyPlaced = bunkTimelines[bunk].some(b => b && b._rotationEventId === rl.evt.id);
-                        if (!alreadyPlaced) {
-                            bunkTimelines[bunk].push({
-                                startMin: rl.wsStart, endMin: rl.wsEnd,
-                                type: 'rotation_event', event: rl.evt.name,
-                                field: rl.evt.location || null,
-                                layer: null,
-                                _classification: 'pinned', _committed: true, _fixed: true,
-                                _activityLocked: true, _noBacktrack: true,
-                                _source: 'phase0-linked-bundle',
-                                _rotationEventId: rl.evt.id,
-                                _rotationEventLocation: rl.evt.location || null,
-                                _rotationEventColor: rl.evt.color || '#F59E0B',
-                                _sequenceTarget: t,
-                                _swimGroupId: _swimGroupId,
-                                _final: true
-                            });
-                        }
-                    }
-
                     if (t === 'swim') {
                         // Per-bunk anchor — the helper walks back/forward
                         // through periods if the immediate neighbor is occupied.
-                        const _bundleS = _swimLinkedRot ? Math.min(blockStart, _swimLinkedRot.wsStart) : blockStart;
-                        const _bundleE = _swimLinkedRot ? Math.max(blockEnd, _swimLinkedRot.wsEnd) : blockEnd;
+                        // Note: linked rotation events (e.g. water slides) are
+                        // placed by Phase 2.4 per-bunk, then Phase 2.78 detects
+                        // the bundle and wraps change blocks around both.
                         const _bunkAnchors = computeSwimChangeAnchors(
                             blockStart, blockEnd, layer, grade,
-                            bunkTimelines[bunk] || [],
-                            _bundleS, _bundleE
+                            bunkTimelines[bunk] || []
                         );
                         if (_bunkAnchors.pre) {
                             bunkTimelines[bunk].push({
@@ -1769,12 +1661,6 @@
 
                 if (t === 'special') registerSpecialUsage(eventName, grade, blockStart, blockEnd);
                 if (t === 'swim') registerPoolUsage(grade, blockStart, blockEnd);
-                // Register linked rotation event usage so Phase 2.4
-                // quota tracking knows it's already placed. Generic for any type.
-                if (_swimLinkedRot) {
-                    registerRotationEventUsage(_swimLinkedRot.evt.id, grade, _swimLinkedRot.wsStart, _swimLinkedRot.wsEnd);
-                    registerCrossGrade(grade, 'rotation_event', _swimLinkedRot.wsStart, _swimLinkedRot.wsEnd, _swimLinkedRot.evt.name);
-                }
                 if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
             // ★ v11.3: Validate all timelines after pinned layer placement
