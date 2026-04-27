@@ -9399,33 +9399,106 @@
                         const _verbose = totalIters < 1;
                         if (_verbose) log('[Phase2.4] Event "' + evt.name + '" window ' + _fmt(winStart) + '-' + _fmt(winEnd) + ' dur=' + dur + ' — grades: ' + gradeEntries.map(e => e.grade + '(' + e.bunks.length + 'b/' + e.viable + 'viable)').join(', '));
 
-                        const placements = []; // { startMin, endMin, grade }
-                        gradeEntries.forEach(({ grade, bunks, viable }) => {
-                            const slot = findGradeSlot(bunks, grade, placements);
-                            if (slot) {
-                                placements.push({ startMin: slot.startMin, endMin: slot.endMin, grade });
-                                bunks.forEach(b => placeWall(b, grade, slot));
-                                if (_verbose) log('[Phase2.4]   ✓ ' + grade + ' → ' + _fmt(slot.startMin) + '-' + _fmt(slot.endMin));
-                            } else {
-                                _rotUnplaced.push(grade + '/' + evt.name);
-                                if (_verbose) {
-                                    const diag = [];
-                                    for (let t = winStart; t + dur <= winEnd && diag.length < 5; t += 5) {
-                                        const tEnd = t + dur;
-                                        const crossConflict = placements.find(p => t < p.endMin && tEnd > p.startMin);
-                                        if (crossConflict) {
-                                            diag.push(_fmt(t) + ' cross:' + crossConflict.grade);
-                                            continue;
-                                        }
-                                        const blockers = bunks.filter(b => !isWindowFreeForBunk(t, tEnd, b));
-                                        if (blockers.length > 0) {
-                                            diag.push(_fmt(t) + ' bunks:' + blockers.slice(0, 3).join(','));
+                        // ── Mode branch: whole-grade vs individual (staggered) ──
+                        const _evtGradeMode = evt.gradeMode || 'whole_grade';
+                        const _evtConcurrency = Math.max(1, parseInt(evt.concurrency) || 1);
+
+                        if (_evtGradeMode === 'individual') {
+                            // ── STAGGERED: bunks placed _evtConcurrency-at-a-time into sequential slots ──
+                            // Build a slot list for the daily window, each slot holds up to
+                            // _evtConcurrency bunks (across all grades combined).
+                            const _stagSlots = [];
+                            for (let _t = winStart; _t + dur <= winEnd; _t += dur) {
+                                _stagSlots.push({ startMin: _t, endMin: _t + dur, usedCount: 0 });
+                            }
+
+                            // Flatten all bunks across grades; order by grade (already sorted most-constrained-first)
+                            const _allStagBunks = gradeEntries.flatMap(({ grade: g, bunks: bs }) =>
+                                bs.map(b => ({ bunk: b, grade: g }))
+                            );
+
+                            for (const { bunk, grade } of _allStagBunks) {
+                                let _chosenSlot = null;
+
+                                if (seqTarget) {
+                                    // Sequence-constrained: find the target block in this bunk's timeline
+                                    const _tgtKey = seqTarget.toLowerCase();
+                                    const _tl = bunkTimelines[bunk] || [];
+                                    let _tgtS = null, _tgtE = null;
+                                    for (const blk of _tl) {
+                                        if (!blk || blk.continuation) continue;
+                                        const en = (blk.event || '').toLowerCase();
+                                        const tn = (blk.type || '').toLowerCase();
+                                        const sp = (blk._assignedSport || '').toLowerCase();
+                                        if (en === _tgtKey || tn === _tgtKey || sp === _tgtKey) {
+                                            _tgtS = blk.startMin; _tgtE = blk.endMin; break;
                                         }
                                     }
-                                    log('[Phase2.4]   ✗ ' + grade + ' NO SLOT. Placements so far: ' + (placements.map(p => p.grade + '@' + _fmt(p.startMin)).join(', ') || 'none') + '. First 5 rejected times: ' + (diag.join(' | ') || 'n/a'));
+                                    if (_tgtS != null) {
+                                        // Try slots adjacent to target (closest first)
+                                        const _adjSlots = _stagSlots
+                                            .filter(s => s.usedCount < _evtConcurrency)
+                                            .sort((a, b) => {
+                                                const dA = Math.min(Math.abs(a.endMin - _tgtS), Math.abs(a.startMin - _tgtE));
+                                                const dB = Math.min(Math.abs(b.endMin - _tgtS), Math.abs(b.startMin - _tgtE));
+                                                return dA - dB;
+                                            });
+                                        for (const s of _adjSlots) {
+                                            if (isWindowFreeForBunk(s.startMin, s.endMin, bunk)) {
+                                                _chosenSlot = s; break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (!_chosenSlot) {
+                                    // No-sequence (or sequence target not found): first slot with capacity + no conflict
+                                    _chosenSlot = _stagSlots.find(s =>
+                                        s.usedCount < _evtConcurrency &&
+                                        isWindowFreeForBunk(s.startMin, s.endMin, bunk)
+                                    ) || null;
+                                }
+
+                                if (_chosenSlot) {
+                                    placeWall(bunk, grade, _chosenSlot);
+                                    _chosenSlot.usedCount++;
+                                    if (_verbose) log('[Phase2.4-stagger]   ✓ ' + bunk + '/' + grade + ' → ' + _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) + ' (slot used=' + _chosenSlot.usedCount + '/' + _evtConcurrency + ')');
+                                } else {
+                                    _rotUnplaced.push(bunk + '/' + evt.name);
+                                    if (_verbose) log('[Phase2.4-stagger]   ✗ ' + bunk + '/' + grade + ' — no available slot');
                                 }
                             }
-                        });
+
+                        } else {
+                            // ── WHOLE GRADE: every bunk in a grade shares one slot ──
+                            const placements = []; // { startMin, endMin, grade }
+                            gradeEntries.forEach(({ grade, bunks, viable }) => {
+                                const slot = findGradeSlot(bunks, grade, placements);
+                                if (slot) {
+                                    placements.push({ startMin: slot.startMin, endMin: slot.endMin, grade });
+                                    bunks.forEach(b => placeWall(b, grade, slot));
+                                    if (_verbose) log('[Phase2.4]   ✓ ' + grade + ' → ' + _fmt(slot.startMin) + '-' + _fmt(slot.endMin));
+                                } else {
+                                    _rotUnplaced.push(grade + '/' + evt.name);
+                                    if (_verbose) {
+                                        const diag = [];
+                                        for (let t = winStart; t + dur <= winEnd && diag.length < 5; t += 5) {
+                                            const tEnd = t + dur;
+                                            const crossConflict = placements.find(p => t < p.endMin && tEnd > p.startMin);
+                                            if (crossConflict) {
+                                                diag.push(_fmt(t) + ' cross:' + crossConflict.grade);
+                                                continue;
+                                            }
+                                            const blockers = bunks.filter(b => !isWindowFreeForBunk(t, tEnd, b));
+                                            if (blockers.length > 0) {
+                                                diag.push(_fmt(t) + ' bunks:' + blockers.slice(0, 3).join(','));
+                                            }
+                                        }
+                                        log('[Phase2.4]   ✗ ' + grade + ' NO SLOT. Placements so far: ' + (placements.map(p => p.grade + '@' + _fmt(p.startMin)).join(', ') || 'none') + '. First 5 rejected times: ' + (diag.join(' | ') || 'n/a'));
+                                    }
+                                }
+                            });
+                        }
                     });
 
                     if (_rotWallCount > 0) {
@@ -9433,7 +9506,7 @@
                         allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => ensureTimelineIntegrity(bunk)));
                     }
                     if (_rotUnplaced.length > 0) {
-                        log('[Phase2.4] Grades with no compatible whole-grade slot: ' + _rotUnplaced.join(', ') + ' — Phase 3 will attempt');
+                        log('[Phase2.4] Unplaced (' + (_evtGradeMode === 'individual' ? 'staggered' : 'whole-grade') + '): ' + _rotUnplaced.join(', ') + ' — Phase 3 will attempt');
                     }
                 } catch (e) { console.warn('[Phase2.4] rotation pre-placement failed:', e); }
             }
