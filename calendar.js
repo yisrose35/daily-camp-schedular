@@ -246,20 +246,22 @@ all[date].updated_at = new Date().toISOString();
                 await window.clearCloudKeys([
                     'manualUsageOffsets',
                     'historicalCounts',
+                    'historicalCountedDates',
                     'smartTileHistory',
                     'rotationHistory'
                 ]);
             } else {
                 window.saveGlobalSettings?.('manualUsageOffsets', {});
                 window.saveGlobalSettings?.('historicalCounts', {});
+                window.saveGlobalSettings?.('historicalCountedDates', {});
                 window.saveGlobalSettings?.('smartTileHistory', {});
                 window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
-                
+
                 if (typeof window.forceSyncToCloud === 'function') {
                     await window.forceSyncToCloud();
                 }
             }
-            
+
             console.log("✅ All rotation histories cleared.");
             alert("Activity & Smart Tile History reset successfully!");
             window.location.reload();

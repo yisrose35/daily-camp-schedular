@@ -465,6 +465,7 @@ describe('eraseRotationHistory', () => {
         const keys = clearCloudKeysCalls[0] || [];
         assert.ok(keys.includes('manualUsageOffsets'));
         assert.ok(keys.includes('historicalCounts'));
+        assert.ok(keys.includes('historicalCountedDates'), 'historicalCountedDates must be cleared with historicalCounts');
         assert.ok(keys.includes('smartTileHistory'));
         assert.ok(keys.includes('rotationHistory'));
 
