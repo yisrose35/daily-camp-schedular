@@ -1550,25 +1550,38 @@
                         const center = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
                         let _snapped = false;
                         if (_fgPeriods.length > 0) {
-                            // Score candidates: distance to center, with bonus for
-                            // having room for a linked rotation event adjacent.
-                            // This is a soft preference — doesn't filter, just reorders.
+                            // Score candidates: distance to center, with penalty for
+                            // periods where a linked rotation event can't fit adjacent.
+                            // Checks ACTUAL bunkTimeline conflicts (lunch, specials,
+                            // sports already placed), not just window boundaries.
+                            // Swim is processed last so all other blocks are visible.
+                            const _rotAdjacentFree = (rStart, rEnd) => {
+                                if (rStart < layer.startMin || rEnd > layer.endMin) return false;
+                                // Check every target bunk — all must be free
+                                return targetBunks.every(bk => {
+                                    const tl = bunkTimelines[bk] || [];
+                                    return !tl.some(b => b && b.startMin < rEnd && b.endMin > rStart);
+                                });
+                            };
                             const _candidates = _fgPeriods
                                 .filter(p => (p.endMin - p.startMin) >= dur &&
                                               p.startMin >= layer.startMin &&
                                               p.endMin <= layer.endMin)
                                 .map(p => {
                                     const baseDist = Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - center);
-                                    // Penalty if linked rotation event won't fit adjacent
                                     let rotPenalty = 0;
                                     if (_linkedRotDur > 0) {
-                                        const pIdx = _fgPeriods.indexOf(p);
-                                        const canBefore = (p.startMin - _linkedRotDur >= layer.startMin);
-                                        const canAfter = (p.endMin + _linkedRotDur <= layer.endMin);
+                                        // Account for change block durations in the bundle
+                                        const beforeStart = p.startMin - _fgPre - _linkedRotDur;
+                                        const beforeEnd = p.startMin - _fgPre;
+                                        const afterStart = p.startMin + dur + _fgPost;
+                                        const afterEnd = p.startMin + dur + _fgPost + _linkedRotDur;
+                                        const canBefore = _rotAdjacentFree(beforeStart, beforeEnd);
+                                        const canAfter = _rotAdjacentFree(afterStart, afterEnd);
                                         const posOk = _linkedRotPos === 'before' ? canBefore :
                                                       _linkedRotPos === 'after'  ? canAfter :
                                                       (canBefore || canAfter);
-                                        if (!posOk) rotPenalty = 500; // large penalty, but not infinite
+                                        if (!posOk) rotPenalty = 500;
                                     }
                                     return { p, dist: baseDist + rotPenalty };
                                 })
@@ -1602,6 +1615,15 @@
                         ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
                         : [];
                     const _poolCenter = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
+                    const _fgPre2  = (layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
+                    const _fgPost2 = (layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                    const _poolRotFree = (rStart, rEnd) => {
+                        if (rStart < layer.startMin || rEnd > layer.endMin) return false;
+                        return targetBunks.every(bk => {
+                            const tl = bunkTimelines[bk] || [];
+                            return !tl.some(b => b && b.startMin < rEnd && b.endMin > rStart);
+                        });
+                    };
                     const _poolCandidates = _poolPeriods
                         .filter(p => (p.endMin - p.startMin) >= _fgDur &&
                                       p.startMin >= layer.startMin &&
@@ -1610,8 +1632,12 @@
                             const baseDist = Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - _poolCenter);
                             let rotPenalty = 0;
                             if (_linkedRotDur > 0) {
-                                const canBefore = (p.startMin - _linkedRotDur >= layer.startMin);
-                                const canAfter = (p.endMin + _linkedRotDur <= layer.endMin);
+                                const bS = p.startMin - _fgPre2 - _linkedRotDur;
+                                const bE = p.startMin - _fgPre2;
+                                const aS = p.startMin + _fgDur + _fgPost2;
+                                const aE = p.startMin + _fgDur + _fgPost2 + _linkedRotDur;
+                                const canBefore = _poolRotFree(bS, bE);
+                                const canAfter = _poolRotFree(aS, aE);
                                 const posOk = _linkedRotPos === 'before' ? canBefore :
                                               _linkedRotPos === 'after'  ? canAfter :
                                               (canBefore || canAfter);
@@ -1641,6 +1667,58 @@
                     return;
                 }
 
+                // ── Linked rotation event: try to place adjacent for ALL bunks ──
+                // If a rotation event targets this activity, compute WS position
+                // relative to blockStart/blockEnd, check ALL target bunks for
+                // conflicts, and place only if every bunk is free. Falls back to
+                // Phase 2.4 per-bunk placement if adjacency isn't possible.
+                let _linkedRotPlaced = null; // { wsStart, wsEnd, evt } if placed
+                if (_linkedRotDur > 0) {
+                    const _preDur = (t === 'swim' && layer.preChangeMin > 0) ? layer.preChangeMin : 0;
+                    const _postDur = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                    const _tryRotPos = (wsS, wsE) => {
+                        if (wsS < layer.startMin || wsE > layer.endMin) return false;
+                        return targetBunks.every(bk => {
+                            const tl = bunkTimelines[bk] || [];
+                            return !tl.some(b => b && b.startMin < wsE && b.endMin > wsS);
+                        });
+                    };
+                    // Before the full bundle: [WS] [pre-change] [swim]
+                    const _wsBefS = blockStart - _preDur - _linkedRotDur;
+                    const _wsBefE = blockStart - _preDur;
+                    // After the full bundle: [swim] [post-change] [WS]
+                    const _wsAftS = blockEnd + _postDur;
+                    const _wsAftE = blockEnd + _postDur + _linkedRotDur;
+                    let _wsS = null, _wsE = null;
+                    if (_linkedRotPos === 'before') {
+                        if (_tryRotPos(_wsBefS, _wsBefE)) { _wsS = _wsBefS; _wsE = _wsBefE; }
+                    } else if (_linkedRotPos === 'after') {
+                        if (_tryRotPos(_wsAftS, _wsAftE)) { _wsS = _wsAftS; _wsE = _wsAftE; }
+                    } else {
+                        // "either" — try before first, then after
+                        if (_tryRotPos(_wsBefS, _wsBefE)) { _wsS = _wsBefS; _wsE = _wsBefE; }
+                        else if (_tryRotPos(_wsAftS, _wsAftE)) { _wsS = _wsAftS; _wsE = _wsAftE; }
+                    }
+                    if (_wsS != null) {
+                        // Find the rotation event object for registration
+                        try {
+                            const _allRots = window.RotationEvents.loadRotationEvents() || [];
+                            for (const rEvt of _allRots) {
+                                if (!rEvt || !rEvt.sequence) continue;
+                                const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
+                                if (tgt !== t) continue;
+                                if (currentDate && rEvt.dateRange) {
+                                    if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
+                                }
+                                const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
+                                if (rGrades && !rGrades.has(grade)) continue;
+                                _linkedRotPlaced = { wsStart: _wsS, wsEnd: _wsE, evt: rEvt };
+                                break;
+                            }
+                        } catch (_e) {}
+                    }
+                }
+
                 // ── Swim + change placement (three separate blocks, period-anchored) ──
                 // Pre-change lives in the last preChangeMin minutes of the period
                 // BEFORE swim's period; post-change lives in the first
@@ -1652,15 +1730,38 @@
                 const _swimGroupId = (t === 'swim') ? nextSwimGroupId() : null;
 
                 targetBunks.forEach(bunk => {
+                    // Place linked rotation event if Phase 0 found adjacency works
+                    if (_linkedRotPlaced) {
+                        const rl = _linkedRotPlaced;
+                        const alreadyPlaced = bunkTimelines[bunk].some(b => b && b._rotationEventId === rl.evt.id);
+                        if (!alreadyPlaced) {
+                            bunkTimelines[bunk].push({
+                                startMin: rl.wsStart, endMin: rl.wsEnd,
+                                type: 'rotation_event', event: rl.evt.name,
+                                field: rl.evt.location || null,
+                                layer: null,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: true,
+                                _source: 'phase0-linked-bundle',
+                                _rotationEventId: rl.evt.id,
+                                _rotationEventLocation: rl.evt.location || null,
+                                _rotationEventColor: rl.evt.color || '#F59E0B',
+                                _sequenceTarget: t,
+                                _swimGroupId: _swimGroupId,
+                                _final: true
+                            });
+                        }
+                    }
+
                     if (t === 'swim') {
                         // Per-bunk anchor — the helper walks back/forward
                         // through periods if the immediate neighbor is occupied.
-                        // Note: linked rotation events (e.g. water slides) are
-                        // placed by Phase 2.4 per-bunk, then Phase 2.78 detects
-                        // the bundle and wraps change blocks around both.
+                        const _bundleS = _linkedRotPlaced ? Math.min(blockStart, _linkedRotPlaced.wsStart) : blockStart;
+                        const _bundleE = _linkedRotPlaced ? Math.max(blockEnd, _linkedRotPlaced.wsEnd) : blockEnd;
                         const _bunkAnchors = computeSwimChangeAnchors(
                             blockStart, blockEnd, layer, grade,
-                            bunkTimelines[bunk] || []
+                            bunkTimelines[bunk] || [],
+                            _bundleS, _bundleE
                         );
                         if (_bunkAnchors.pre) {
                             bunkTimelines[bunk].push({
@@ -1717,6 +1818,11 @@
 
                 if (t === 'special') registerSpecialUsage(eventName, grade, blockStart, blockEnd);
                 if (t === 'swim') registerPoolUsage(grade, blockStart, blockEnd);
+                // Register linked rotation event placed in Phase 0 so Phase 2.4 skips it
+                if (_linkedRotPlaced) {
+                    registerRotationEventUsage(_linkedRotPlaced.evt.id, grade, _linkedRotPlaced.wsStart, _linkedRotPlaced.wsEnd);
+                    registerCrossGrade(grade, 'rotation_event', _linkedRotPlaced.wsStart, _linkedRotPlaced.wsEnd, _linkedRotPlaced.evt.name);
+                }
                 if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
             // ★ v11.3: Validate all timelines after pinned layer placement
