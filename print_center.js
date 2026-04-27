@@ -170,37 +170,65 @@ function getEntry(bunk, slotIdx) {
 }
 
 /**
- * Read the bell schedule (DAW layers) for a division from the auto layer templates.
- * Returns the array of layer objects for this division, or null if not found.
+ * Read the bell schedule (DAW layers) for a division.
+ * Follows the same priority chain as daily_adjustments.js loadDAAutoLayers:
+ *   1. Date-specific layers in localStorage (campAutoLayers_<date>)
+ *   2. Date-specific layers in cloud (app1.dailyAutoLayers[date])
+ *   3. Template assigned to today's day-of-week (skeletonAssignments → autoLayerTemplates)
+ *   4. '_current' draft template
+ * Returns the layer array for the requested division, or null.
  */
 function getBellScheduleLayers(divName) {
     try {
+        var dateKey = window.currentScheduleDate || '';
+        var layers = null;
+
+        // Priority 1: Date-specific localStorage
+        try {
+            var stored = localStorage.getItem('campAutoLayers_' + dateKey);
+            if (stored) {
+                var parsed = JSON.parse(stored);
+                if (parsed && parsed[divName] && parsed[divName].length > 0) {
+                    return parsed[divName];
+                }
+                if (parsed && parsed[String(divName)] && parsed[String(divName)].length > 0) {
+                    return parsed[String(divName)];
+                }
+            }
+        } catch (e) { /* ignore */ }
+
         var g = window.loadGlobalSettings ? window.loadGlobalSettings() : null;
         if (!g || !g.app1) return null;
-        var autoTemplates = g.app1.autoLayerTemplates || {};
 
-        // Determine which template is active today
-        var assignments = g.app1.skeletonAssignments || {};
-        var dateStr = window.currentScheduleDate || '';
+        // Priority 2: Date-specific cloud
+        var cloudLayers = g.app1.dailyAutoLayers;
+        if (cloudLayers && cloudLayers[dateKey]) {
+            var dayLayers = cloudLayers[dateKey];
+            if (dayLayers[divName] && dayLayers[divName].length > 0) return dayLayers[divName];
+            if (dayLayers[String(divName)] && dayLayers[String(divName)].length > 0) return dayLayers[String(divName)];
+        }
+
+        // Priority 3: Template for today's day-of-week
+        var autoTemplates = g.app1.autoLayerTemplates || {};
+        var assignments = (window.getSkeletonAssignments ? window.getSkeletonAssignments() : null) || g.app1.skeletonAssignments || {};
         var dow = 0;
-        if (dateStr) {
-            var parts = dateStr.split('-').map(Number);
-            if (parts[0] && parts[1] && parts[2]) {
-                dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
-            }
+        if (dateKey) {
+            var parts = dateKey.split('-').map(Number);
+            if (parts[0] && parts[1] && parts[2]) dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
         }
         var dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         var tmplName = assignments[dayNames[dow]] || assignments['Default'];
 
         var tmpl = null;
-        if (tmplName && autoTemplates[tmplName]) {
-            tmpl = autoTemplates[tmplName];
-        } else if (autoTemplates['_current']) {
-            tmpl = autoTemplates['_current'];
+        if (tmplName && autoTemplates[tmplName]) tmpl = autoTemplates[tmplName];
+        else if (autoTemplates['_current']) tmpl = autoTemplates['_current'];
+
+        if (tmpl) {
+            if (tmpl[divName] && tmpl[divName].length > 0) return tmpl[divName];
+            if (tmpl[String(divName)] && tmpl[String(divName)].length > 0) return tmpl[String(divName)];
         }
 
-        if (!tmpl) return null;
-        return tmpl[divName] || tmpl[String(divName)] || null;
+        return null;
     } catch (e) {
         return null;
     }
