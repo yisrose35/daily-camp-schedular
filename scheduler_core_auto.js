@@ -7668,7 +7668,9 @@
                         _preChangeMin: block._preChangeMin != null ? block._preChangeMin : null,
                         _postChangeMin: block._postChangeMin != null ? block._postChangeMin : null,
                         _swimActualStart: block._swimActualStart != null ? block._swimActualStart : null,
-                        _swimActualEnd: block._swimActualEnd != null ? block._swimActualEnd : null
+                        _swimActualEnd: block._swimActualEnd != null ? block._swimActualEnd : null,
+                        _swimGroupId: block._swimGroupId || null,
+                        _changeAttached: block._changeAttached || false
                     });
                 });
                 // ★ v11.3: Validate after template execution
@@ -9743,39 +9745,10 @@
         log('[2.6] ' + (validationPassed ? '✅ Passed' : '⚠️ Errors'));
 
 
-        // =====================================================================
-        // STEP 2.65 — DROP ORPHAN CHANGE BLOCKS
-        // =====================================================================
-        // Pre-change / post-change blocks carry _swimGroupId matching their
-        // swim block. If the matching swim block is gone (evicted or moved
-        // by a self-heal pass without taking its change tiles along), drop
-        // the orphans so the renderer doesn't show stray "Change" tiles.
-        log('\n[STEP 2.65] Cleaning up orphan change blocks...');
-        let _orphanChangeCount = 0;
-        allGrades.forEach(grade => {
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                const tl = bunkTimelines[bunk];
-                if (!Array.isArray(tl) || tl.length === 0) return;
-                const liveSwimGroups = new Set();
-                tl.forEach(b => {
-                    if (b && (b.type || '').toLowerCase() === 'swim' && b._swimGroupId) {
-                        liveSwimGroups.add(b._swimGroupId);
-                    }
-                });
-                bunkTimelines[bunk] = tl.filter(b => {
-                    if (!b) return false;
-                    const bt = String(b.type || '').toLowerCase();
-                    if (bt !== 'pre-change' && bt !== 'post-change') return true;
-                    if (b._swimGroupId && liveSwimGroups.has(b._swimGroupId)) return true;
-                    _orphanChangeCount++;
-                    return false;
-                });
-            });
-        });
-        log('[2.65] Dropped ' + _orphanChangeCount + ' orphan change blocks');
-        // Refresh debug exposure with post-cleanup state so swimDebug() reflects
-        // the final placed schedule, not the elite-restore snapshot.
-        try { window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines)); } catch (_e) {}
+        // STEP 2.65 was here previously. Moved to STEP 2.78 — runs after
+        // Phase 2.75 has shifted swim into bell-schedule periods, so the
+        // pre/post-change blocks can be re-anchored to the FINAL swim
+        // position rather than where Phase 0/3 first placed them.
 
         // =====================================================================
         // STEP 2.7 — FORMALIZE
@@ -10267,6 +10240,115 @@
         } catch (e) {
             warn('[2.75] Period override failed: ' + e.message);
         }
+
+        // =====================================================================
+        // STEP 2.78 — RE-ANCHOR SWIM CHANGE BLOCKS TO PERIODS
+        // =====================================================================
+        // After Phase 2.75 has shifted swim into bell-schedule periods,
+        // recompute pre/post-change anchors against the FINAL swim
+        // position. Phase 2.75 keeps pre/post immediately adjacent to the
+        // shifted swim (e.g. pre 12:05-12:15 when swim moves to P3) — but
+        // the user's spec is "last preChangeMin minutes of the period
+        // BEFORE swim's period" (e.g. 12:00-12:10 from P2). This pass
+        // drops every pre/post and rebuilds them from the swim block's
+        // layer config + computeSwimChangeAnchors.
+        log('\n[STEP 2.78] Re-anchoring swim change blocks...');
+        let _reanchorPlaced = 0, _reanchorDropped = 0;
+        allGrades.forEach(grade => {
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const tl = bunkTimelines[bunk];
+                if (!Array.isArray(tl) || tl.length === 0) return;
+                // Drop ALL pre-change / post-change blocks first.
+                const beforeCount = tl.length;
+                bunkTimelines[bunk] = tl.filter(b => {
+                    if (!b) return false;
+                    const bt = String(b.type || '').toLowerCase();
+                    return bt !== 'pre-change' && bt !== 'post-change';
+                });
+                _reanchorDropped += (beforeCount - bunkTimelines[bunk].length);
+                // For every swim block, recompute anchors and place pre/post.
+                bunkTimelines[bunk].forEach(sw => {
+                    if (!sw || (sw.type || '').toLowerCase() !== 'swim') return;
+                    const layer = sw.layer;
+                    if (!layer) return;
+                    const anchors = computeSwimChangeAnchors(sw.startMin, sw.endMin, layer, grade);
+                    if (!anchors.pre && !anchors.post) return;
+                    const groupId = sw._swimGroupId || nextSwimGroupId();
+                    sw._swimGroupId = groupId;
+                    const rangeFree = (rs, re) => {
+                        if (rs == null || re == null || rs >= re) return false;
+                        return !bunkTimelines[bunk].some(o => {
+                            if (!o || o === sw) return false;
+                            return o.startMin < re && o.endMin > rs;
+                        });
+                    };
+                    if (anchors.pre && rangeFree(anchors.pre.startMin, anchors.pre.endMin)) {
+                        bunkTimelines[bunk].push({
+                            startMin: anchors.pre.startMin, endMin: anchors.pre.endMin,
+                            type: 'pre-change', event: 'Change',
+                            layer: null,
+                            dMin: anchors.pre.endMin - anchors.pre.startMin,
+                            dMax: anchors.pre.endMin - anchors.pre.startMin,
+                            _classification: 'pinned', _committed: true,
+                            _fixed: true, _activityLocked: true,
+                            _source: 'swim-pre-change',
+                            _swimGroupId: groupId
+                        });
+                        _reanchorPlaced++;
+                    }
+                    if (anchors.post && rangeFree(anchors.post.startMin, anchors.post.endMin)) {
+                        bunkTimelines[bunk].push({
+                            startMin: anchors.post.startMin, endMin: anchors.post.endMin,
+                            type: 'post-change', event: 'Change',
+                            layer: null,
+                            dMin: anchors.post.endMin - anchors.post.startMin,
+                            dMax: anchors.post.endMin - anchors.post.startMin,
+                            _classification: 'pinned', _committed: true,
+                            _fixed: true, _activityLocked: true,
+                            _source: 'swim-post-change',
+                            _swimGroupId: groupId
+                        });
+                        _reanchorPlaced++;
+                    }
+                });
+                bunkTimelines[bunk].sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
+            });
+        });
+        log('[2.78] Re-anchored: dropped ' + _reanchorDropped + ' old change blocks, placed ' + _reanchorPlaced + ' period-anchored ones');
+        // Mirror to divisionTimes._perBunkSlots so the renderer sees them too.
+        allGrades.forEach(grade => {
+            const dt = window.divisionTimes?.[grade];
+            if (!dt || !dt._perBunkSlots) return;
+            const pbs = dt._perBunkSlots;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const tl = bunkTimelines[bunk] || [];
+                const slots = pbs[String(bunk)];
+                if (!Array.isArray(slots)) return;
+                // Drop existing pre-change/post-change slots
+                const filtered = slots.filter(s => {
+                    const t = String(s.type || '').toLowerCase();
+                    return t !== 'pre-change' && t !== 'post-change';
+                });
+                // Add new ones from bunkTimelines
+                tl.forEach(b => {
+                    if (!b) return;
+                    const bt = String(b.type || '').toLowerCase();
+                    if (bt !== 'pre-change' && bt !== 'post-change') return;
+                    filtered.push({
+                        startMin: b.startMin, endMin: b.endMin,
+                        startTime: minutesToTimeLabel(b.startMin),
+                        endTime: minutesToTimeLabel(b.endMin),
+                        type: b.type, event: b.event || 'Change',
+                        _swimGroupId: b._swimGroupId || null,
+                        _fixed: true, _activityLocked: true
+                    });
+                });
+                filtered.sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
+                pbs[String(bunk)] = filtered;
+            });
+        });
+        // Refresh debug exposure with final post-2.78 state.
+        try { window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines)); } catch (_e) {}
 
         // Initialize scheduleAssignments
         allGrades.forEach(grade => {
