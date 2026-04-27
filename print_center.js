@@ -856,31 +856,94 @@ function renderAutoDivisionTable(divName, bunks) {
     dayStart = Math.floor(dayStart / inc) * inc;
     dayEnd = Math.ceil(dayEnd / inc) * inc;
 
-    // ─── 2. Detect periods (grade-wide pinned events shared by all bunks) ─────
-    var periodTypes = ['swim', 'lunch', 'snacks', 'snack', 'dismissal', 'pre-change', 'post-change'];
+    // ─── 2. Detect periods (grade-wide events shared by all bunks) ─────
+    // Strategy: read slot-level .type from _perBunkSlots directly, which is the
+    // authoritative source. Any time range where ALL bunks have a slot with the
+    // same type AND same startMin/endMin is a period (swim, lunch, snacks, league,
+    // dismissal, pre/post-change, custom pinned, etc.)
+    var PERIOD_SLOT_TYPES = ['swim', 'lunch', 'snacks', 'snack', 'dismissal', 'pre-change', 'post-change', 'league', 'specialty_league', 'custom', 'pinned', 'elective'];
     var periods = []; // sorted array of { startMin, endMin, event }
 
-    if (bunks.length > 0) {
+    // Method 1: Read from _perBunkSlots (preferred — has .type on every slot)
+    var perBunkSlotsObj = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName]._perBunkSlots
+        ? window.divisionTimes[divName]._perBunkSlots : null;
+
+    if (perBunkSlotsObj && bunks.length > 0) {
+        var firstBunkSlots = perBunkSlotsObj[String(bunks[0])] || [];
+        firstBunkSlots.forEach(function (slot) {
+            var slotType = (slot.type || '').toLowerCase();
+            var slotEvent = (slot.event || '').toLowerCase();
+            // Check if this slot type is a period type
+            var isPeriodSlot = PERIOD_SLOT_TYPES.some(function (pt) { return slotType === pt || slotType.indexOf(pt) >= 0; });
+            // Also check the event name for keywords
+            if (!isPeriodSlot) {
+                isPeriodSlot = PERIOD_SLOT_TYPES.some(function (pt) { return slotEvent.indexOf(pt) >= 0; });
+            }
+            if (!isPeriodSlot) return;
+
+            // Verify ALL other bunks have a slot at the exact same time range
+            var allMatch = bunks.every(function (bk) {
+                var bkSlots = perBunkSlotsObj[String(bk)] || [];
+                return bkSlots.some(function (s) {
+                    return s.startMin === slot.startMin && s.endMin === slot.endMin;
+                });
+            });
+            if (!allMatch) return;
+
+            // Get the display name
+            var eventName = slot.event || slotType;
+            // Also check scheduleAssignments for a better name
+            var firstBunkEntry = getEntry(bunks[0], firstBunkSlots.indexOf(slot));
+            if (firstBunkEntry) {
+                var betterName = firstBunkEntry._activity || firstBunkEntry._gameLabel || firstBunkEntry._leagueName || '';
+                if (betterName) eventName = betterName;
+            }
+            // Capitalize first letter
+            if (eventName && eventName.length > 0) {
+                eventName = eventName.charAt(0).toUpperCase() + eventName.slice(1);
+            }
+
+            periods.push({ startMin: slot.startMin, endMin: slot.endMin, event: eventName });
+        });
+    }
+
+    // Method 2: Fallback — scan bunkActs for shared pinned entries (old approach)
+    if (periods.length === 0 && bunks.length > 0) {
         var firstActs = bunkActs[bunks[0]] || [];
         firstActs.forEach(function (act) {
             if (!act.entry) return;
-            var evLower = (act.entry._activity || act.entry.field || act.entry.type || '').toLowerCase();
-            var isPeriodType = periodTypes.some(function (pt) { return evLower.indexOf(pt) >= 0; });
-            if (!isPeriodType && !act.entry._gradeWide) return;
+            var entryType = getEntryType(act.entry);
+            if (entryType !== 'pinned' && entryType !== 'league') return;
             var allMatch = bunks.every(function (bk) {
                 return (bunkActs[bk] || []).some(function (a) {
                     return a.startMin === act.startMin && a.endMin === act.endMin;
                 });
             });
             if (!allMatch) return;
-            periods.push({
-                startMin: act.startMin, endMin: act.endMin,
-                event: act.entry._activity || formatEntry(act.entry) || evLower
-            });
+            var evName = act.entry._activity || formatEntry(act.entry) || act.entry.type || 'Event';
+            if (evName.length > 0) evName = evName.charAt(0).toUpperCase() + evName.slice(1);
+            periods.push({ startMin: act.startMin, endMin: act.endMin, event: evName });
         });
     }
+
+    // Deduplicate and sort
     periods.sort(function (a, b) { return a.startMin - b.startMin; });
     periods = periods.filter(function (p, i, arr) { return i === 0 || p.startMin !== arr[i - 1].startMin; });
+
+    // Merge adjacent periods of the same type (e.g. pre-change + swim + post-change → "Swim")
+    var mergedPeriods = [];
+    periods.forEach(function (p) {
+        var last = mergedPeriods.length > 0 ? mergedPeriods[mergedPeriods.length - 1] : null;
+        // Merge if adjacent and related (e.g. Change + Swim + Change)
+        if (last && last.endMin === p.startMin && areRelatedPeriods(last.event, p.event)) {
+            last.endMin = p.endMin;
+            // Keep the more descriptive name
+            if (p.event.toLowerCase().indexOf('change') < 0) last.event = p.event;
+        } else {
+            mergedPeriods.push({ startMin: p.startMin, endMin: p.endMin, event: p.event });
+        }
+    });
+    periods = mergedPeriods;
 
     // ─── 3. Build sections: alternating [activity-section, period, activity-section, ...] ─────
     // Each section is either a "period" (single merged column group) or an "activity"
@@ -1049,11 +1112,29 @@ function buildActivitySection(startMin, endMin, inc) {
 // ── Period color helper ──
 function getPeriodColor(eventName) {
     var e = (eventName || '').toLowerCase();
-    if (e.indexOf('swim') >= 0 || e.indexOf('change') >= 0) return '#0891b2';
+    if (e.indexOf('swim') >= 0 || e.indexOf('pool') >= 0) return '#0891b2';
+    if (e.indexOf('change') >= 0) return '#0e7490';
     if (e.indexOf('lunch') >= 0) return '#dc2626';
     if (e.indexOf('snack') >= 0) return '#ca8a04';
     if (e.indexOf('dismissal') >= 0) return '#6b7280';
+    if (e.indexOf('league') >= 0 || e.indexOf('specialty') >= 0) return '#4338ca';
+    if (e.indexOf('elective') >= 0) return '#9333ea';
+    if (e.indexOf('regroup') >= 0 || e.indexOf('assembly') >= 0) return '#475569';
     return '#147D91';
+}
+
+// ── Check if two period events are related (for merging adjacent periods) ──
+function areRelatedPeriods(eventA, eventB) {
+    var a = (eventA || '').toLowerCase();
+    var b = (eventB || '').toLowerCase();
+    // Merge pre-change/post-change with swim
+    var swimRelated = ['swim', 'change', 'pool'];
+    var aIsSwim = swimRelated.some(function (k) { return a.indexOf(k) >= 0; });
+    var bIsSwim = swimRelated.some(function (k) { return b.indexOf(k) >= 0; });
+    if (aIsSwim && bIsSwim) return true;
+    // Same event name
+    if (a === b) return true;
+    return false;
 }
 
 // ── MANUAL MODE: Bunks on top ──
