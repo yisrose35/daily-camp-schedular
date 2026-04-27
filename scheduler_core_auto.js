@@ -1619,29 +1619,36 @@
                                     return !tl.some(b => b && b.startMin < rEnd && b.endMin > rStart);
                                 });
                             };
-                            const _candidates = _fgPeriods
+                            // Build candidate list — tag each with whether WS
+                            // can fit adjacent (hard constraint, not a penalty).
+                            const _allCandidates = _fgPeriods
                                 .filter(p => (p.endMin - p.startMin) >= dur &&
                                               p.startMin >= layer.startMin &&
                                               p.endMin <= layer.endMin)
                                 .map(p => {
                                     const baseDist = Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - center);
-                                    let rotPenalty = 0;
+                                    let adjOk = true; // true = WS can fit adjacent
                                     if (_linkedRotDur > 0) {
-                                        // Account for change block durations in the bundle
                                         const beforeStart = p.startMin - _fgPre - _linkedRotDur;
                                         const beforeEnd = p.startMin - _fgPre;
                                         const afterStart = p.startMin + dur + _fgPost;
                                         const afterEnd = p.startMin + dur + _fgPost + _linkedRotDur;
                                         const canBefore = _rotAdjacentFree(beforeStart, beforeEnd);
                                         const canAfter = _rotAdjacentFree(afterStart, afterEnd);
-                                        const posOk = _linkedRotPos === 'before' ? canBefore :
-                                                      _linkedRotPos === 'after'  ? canAfter :
-                                                      (canBefore || canAfter);
-                                        if (!posOk) rotPenalty = 500;
+                                        adjOk = _linkedRotPos === 'before' ? canBefore :
+                                                _linkedRotPos === 'after'  ? canAfter :
+                                                (canBefore || canAfter);
                                     }
-                                    return { p, dist: baseDist + rotPenalty };
-                                })
-                                .sort((a, b) => a.dist - b.dist);
+                                    return { p, dist: baseDist, adjOk };
+                                });
+                            // HARD FILTER: only pick periods where linked event
+                            // fits adjacent. Fall back to any period ONLY if
+                            // no period supports adjacency at all.
+                            let _candidates = _allCandidates.filter(c => c.adjOk);
+                            if (_candidates.length === 0 && _linkedRotDur > 0) {
+                                _candidates = _allCandidates; // last resort
+                            }
+                            _candidates.sort((a, b) => a.dist - b.dist);
                             if (_candidates.length > 0) {
                                 blockStart = _candidates[0].p.startMin;
                                 blockEnd = blockStart + dur;
@@ -1680,13 +1687,14 @@
                             return !tl.some(b => b && b.startMin < rEnd && b.endMin > rStart);
                         });
                     };
-                    const _poolCandidates = _poolPeriods
+                    // Tag candidates with adjacency feasibility
+                    const _allPoolCandidates = _poolPeriods
                         .filter(p => (p.endMin - p.startMin) >= _fgDur &&
                                       p.startMin >= layer.startMin &&
                                       p.endMin <= layer.endMin)
                         .map(p => {
                             const baseDist = Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - _poolCenter);
-                            let rotPenalty = 0;
+                            let adjOk = true;
                             if (_linkedRotDur > 0) {
                                 const bS = p.startMin - _fgPre2 - _linkedRotDur;
                                 const bE = p.startMin - _fgPre2;
@@ -1694,22 +1702,51 @@
                                 const aE = p.startMin + _fgDur + _fgPost2 + _linkedRotDur;
                                 const canBefore = _poolRotFree(bS, bE);
                                 const canAfter = _poolRotFree(aS, aE);
-                                const posOk = _linkedRotPos === 'before' ? canBefore :
-                                              _linkedRotPos === 'after'  ? canAfter :
-                                              (canBefore || canAfter);
-                                if (!posOk) rotPenalty = 500;
+                                adjOk = _linkedRotPos === 'before' ? canBefore :
+                                        _linkedRotPos === 'after'  ? canAfter :
+                                        (canBefore || canAfter);
                             }
-                            return { p, dist: baseDist + rotPenalty };
-                        })
-                        .sort((a, b) => a.dist - b.dist);
+                            return { p, dist: baseDist, adjOk };
+                        });
+                    // HARD FILTER: only pick pool periods where linked event
+                    // fits adjacent. Fall back ONLY if no adjacent-OK period
+                    // also passes pool exclusivity.
+                    let _poolAdj = _allPoolCandidates.filter(c => c.adjOk).sort((a, b) => a.dist - b.dist);
+                    let _poolNonAdj = _allPoolCandidates.filter(c => !c.adjOk).sort((a, b) => a.dist - b.dist);
                     let _poolFound = false;
-                    for (const cand of _poolCandidates) {
+                    // Pass 1: only adjacent-OK periods
+                    for (const cand of _poolAdj) {
                         const cs = cand.p.startMin, ce = cs + _fgDur;
                         if (canUsePoolAtTime(grade, cs, ce)) {
                             blockStart = cs;
                             blockEnd = ce;
                             _poolFound = true;
                             break;
+                        }
+                    }
+                    // Pass 2: last resort — non-adjacent periods
+                    if (!_poolFound && _linkedRotDur > 0) {
+                        for (const cand of _poolNonAdj) {
+                            const cs = cand.p.startMin, ce = cs + _fgDur;
+                            if (canUsePoolAtTime(grade, cs, ce)) {
+                                blockStart = cs;
+                                blockEnd = ce;
+                                _poolFound = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Pass 3: no linked rot — just pick best pool-available
+                    if (!_poolFound && _linkedRotDur === 0) {
+                        const _poolAll = _allPoolCandidates.sort((a, b) => a.dist - b.dist);
+                        for (const cand of _poolAll) {
+                            const cs = cand.p.startMin, ce = cs + _fgDur;
+                            if (canUsePoolAtTime(grade, cs, ce)) {
+                                blockStart = cs;
+                                blockEnd = ce;
+                                _poolFound = true;
+                                break;
+                            }
                         }
                     }
                     if (!_poolFound) return;
@@ -9149,8 +9186,23 @@
                                     else adj = tryAfter() || tryBefore();
                                     if (adj) return adj;
                                 }
-                                // Adjacency failed — fall through to period-aligned placement so
-                                // the bunks still receive the event (best-effort per user intent).
+                                // Direct adjacency failed — try nearby periods sorted
+                                // by distance from the target activity, so the linked
+                                // event lands as close as physically possible.
+                                const gradePeriods2 = (window.campPeriods || {})[grade] || [];
+                                if (gradePeriods2.length > 0 && tgt) {
+                                    const tgtCenter = (tgt.startMin + tgt.endMin) / 2;
+                                    const nearby = gradePeriods2
+                                        .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.endMin <= winEnd)
+                                        .map(p => ({ p, dist: Math.abs((p.startMin + p.endMin) / 2 - tgtCenter) }))
+                                        .sort((a, b) => a.dist - b.dist);
+                                    for (const n of nearby) {
+                                        if (tryWindow(n.p.startMin, n.p.startMin + dur)) {
+                                            return { startMin: n.p.startMin, endMin: n.p.startMin + dur };
+                                        }
+                                    }
+                                }
+                                // No period near target — fall through to default placement
                             }
 
                             const gradePeriods = (window.campPeriods || {})[grade] || [];
