@@ -57,7 +57,7 @@ var DEFAULT_TEMPLATE = {
     id: 'default', name: 'Default', isDefault: true,
     campName: '', campLogo: '', customSubtitle: '',
     showHeader: true, showDate: true, showDivisionName: true,
-    headerBgColor: '#147D91', headerTextColor: '#FFFFFF',
+    headerBgColor: '#1D9E75', headerTextColor: '#FFFFFF',
     headerFont: 'DM Sans', headerFontSize: 22,
     gridFont: 'DM Sans', gridFontSize: 11,
     gridHeaderBgColor: '#F1F5F9', gridHeaderTextColor: '#1E293B',
@@ -487,18 +487,23 @@ function canEditTemplates() {
 function getStyles() {
     return '<style id="pc-styles">' +
     /* ── Container ── */
-    '.pc3{font-family:"DM Sans",system-ui,sans-serif;font-size:13px;color:#1E293B;display:flex;flex-direction:column;height:100%;min-height:0;background:#f0f2f5;position:relative;}' +
-    '.pc3.pc3-fullscreen{position:fixed;inset:0;z-index:9999;background:#f0f2f5;}' +
+    '.pc3{font-family:"DM Sans",system-ui,sans-serif;font-size:13px;color:#1E293B;display:flex;flex-direction:column;height:100%;min-height:0;background:#f5f5f4;position:relative;}' +
+    '.pc3.pc3-fullscreen{position:fixed;inset:0;z-index:9999;background:#f5f5f4;}' +
 
     /* ── Toolbar ── */
+    '.pc3-topbar{display:flex;align-items:center;gap:10px;padding:0 14px;height:50px;background:#fff;border-bottom:1px solid #e5e5e5;flex-shrink:0;}' +
+    '.pc3-topbar-name{font-size:14px;font-weight:500;color:#1a1a1a;}' +
+    '.pc3-topbar-date{font-size:12px;color:#666;padding:2px 9px;background:#f5f5f4;border-radius:6px;}' +
+    '.pc3-topbar-sep{width:0.5px;height:18px;background:#e5e5e5;flex-shrink:0;}' +
+    '.pc3-topbar-space{flex:1;}' +
     '.pc3-toolbar{display:flex;align-items:center;gap:6px;padding:4px 10px;background:#fff;border-bottom:1px solid #e2e8f0;flex-shrink:0;flex-wrap:wrap;min-height:36px;}' +
     '.pc3-toolbar-group{display:flex;align-items:center;gap:4px;}' +
     '.pc3-toolbar-sep{width:1px;height:20px;background:#e2e8f0;margin:0 4px;}' +
     '.pc3-tb-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;color:#334155;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;transition:all .15s;}' +
     '.pc3-tb-btn:hover{background:#f8fafc;border-color:#cbd5e1;box-shadow:0 1px 2px rgba(0,0,0,.04);}' +
-    '.pc3-tb-btn.active{background:#147D91;color:#fff;border-color:#147D91;}' +
-    '.pc3-tb-btn.primary{background:#147D91;color:#fff;border-color:#0F6E80;}' +
-    '.pc3-tb-btn.primary:hover{background:#0F6E80;}' +
+    '.pc3-tb-btn.active{background:#1D9E75;color:#fff;border-color:#1D9E75;}' +
+    '.pc3-tb-btn.primary{background:#1D9E75;color:#fff;border-color:#0F6E56;}' +
+    '.pc3-tb-btn.primary:hover{background:#0F6E56;}' +
     '.pc3-tb-btn.danger{color:#dc2626;border-color:#fecaca;}' +
     '.pc3-tb-btn.danger:hover{background:#fef2f2;}' +
     '.pc3-tb-btn.live{background:#dc2626;color:#fff;border-color:#dc2626;animation:pc3-pulse 2s infinite;}' +
@@ -508,7 +513,7 @@ function getStyles() {
 
     /* ── Formula Bar ── */
     '.pc3-formula{display:flex;align-items:center;gap:8px;padding:3px 10px;background:#fafbfc;border-bottom:1px solid #e2e8f0;flex-shrink:0;font-size:12px;min-height:26px;}' +
-    '.pc3-formula-cell{font-weight:700;color:#147D91;min-width:80px;font-size:11px;}' +
+    '.pc3-formula-cell{font-weight:700;color:#1D9E75;min-width:80px;font-size:11px;}' +
     '.pc3-formula-val{flex:1;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
     '.pc3-formula-mode{margin-left:auto;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:4px;}' +
     '.pc3-formula-mode.auto{background:#dbeafe;color:#1e40af;}' +
@@ -527,7 +532,7 @@ function getStyles() {
     '.pc3-item{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:12px;transition:background .1s;}' +
     '.pc3-item:hover{background:#f1f5f9;}' +
     '.pc3-item.selected{background:#e0f2fe;color:#0369a1;}' +
-    '.pc3-item input[type="checkbox"]{accent-color:#147D91;margin:0;cursor:pointer;}' +
+    '.pc3-item input[type="checkbox"]{accent-color:#1D9E75;margin:0;cursor:pointer;}' +
     '.pc3-item-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
     '.pc3-item-count{font-size:10px;color:#94a3b8;font-weight:600;}' +
     '.pc3-sidebar-actions{padding:6px 8px;border-top:1px solid #e2e8f0;display:flex;gap:4px;}' +
@@ -546,7 +551,7 @@ function getStyles() {
     '.pc3-tbl thead th{top:0;}' +
     '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#e8ecf0;}' +
     '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#f8fafc;font-weight:600;}' +
-    '.pc3-tbl td:hover{outline:2px solid #147D91;outline-offset:-1px;z-index:1;}' +
+    '.pc3-tbl td:hover{outline:2px solid #1D9E75;outline-offset:-1px;z-index:1;}' +
     '.pc3-tbl tr:nth-child(even) td{background:#fafbfd;}' +
     '.pc3-tbl .cell-free{color:#94a3b8;font-style:italic;}' +
     '.pc3-tbl .cell-pinned{background:#fff8e1;color:#92400e;font-weight:500;}' +
@@ -559,9 +564,9 @@ function getStyles() {
     '.pc3-tbl th.pc3-row-num{background:#dbe2ea!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 4px;border:1px solid #94a3b8;width:36px;min-width:36px;position:sticky;left:0;z-index:3;}' +
     '.pc3-tbl tr:nth-child(even) th.pc3-row-num{background:#dbe2ea!important;}' +
     '.pc3-tbl td.pc3-cell-selected,.pc3-tbl th.pc3-cell-selected:not(.pc3-row-num):not(.pc3-coord-corner):not(.pc3-coord-row th){background:rgba(20,125,145,.18)!important;}' +
-    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #147D91!important;outline-offset:-2px;background:rgba(20,125,145,.28)!important;z-index:2;}' +
-    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
-    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
+    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #1D9E75!important;outline-offset:-2px;background:rgba(20,125,145,.28)!important;z-index:2;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#1D9E75!important;color:#fff!important;}' +
+    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#1D9E75!important;color:#fff!important;}' +
     '.pc3-tbl td,.pc3-tbl th{cursor:cell;}' +
     '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
@@ -589,7 +594,7 @@ function getStyles() {
     '.pc3-live-tbl th.row-head{position:sticky;left:0;z-index:2;background:#1f2937;}' +
     '.pc3-live-tbl td{color:#e5e7eb;background:#111827;}' +
     '.pc3-live-tbl tr:nth-child(even) td{background:#0f172a;}' +
-    '.pc3-live-tbl .cell-current{background:#164e63 !important;box-shadow:inset 0 0 0 2px #06b6d4;}' +
+    '.pc3-live-tbl .cell-current{background:#064e3b !important;box-shadow:inset 0 0 0 2px #10b981;}' +
     '.pc3-live-tbl .cell-past{opacity:.4;}' +
     '.pc3-live-tbl .cell-pinned{background:#422006 !important;color:#fbbf24;}' +
     '.pc3-live-tbl .cell-league{background:#1e1b4b !important;color:#818cf8;}' +
@@ -608,8 +613,8 @@ function getStyles() {
     '.pc3-drawer details{border-bottom:1px solid #f1f5f9;}' +
     '.pc3-drawer summary{padding:7px 4px;cursor:pointer;font-size:11px;font-weight:600;color:#334155;user-select:none;list-style:none;}' +
     '.pc3-drawer summary::before{content:"\\25B8  ";color:#94a3b8;}' +
-    '.pc3-drawer details[open] summary::before{content:"\\25BE  ";color:#147D91;}' +
-    '.pc3-drawer details[open] summary{color:#147D91;}' +
+    '.pc3-drawer details[open] summary::before{content:"\\25BE  ";color:#1D9E75;}' +
+    '.pc3-drawer details[open] summary{color:#1D9E75;}' +
     '.pc3-drawer summary::-webkit-details-marker{display:none;}' +
     '.pc3-drawer .dp-body{padding:4px 4px 8px;}' +
     '.pc3-drawer .dp-row{display:flex;gap:8px;margin-bottom:5px;}' +
@@ -620,7 +625,7 @@ function getStyles() {
     '.pc3-drawer .dp-field input[type="color"]{width:100%;height:26px;padding:2px;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;}' +
     '.pc3-drawer .dp-field input[type="range"]{width:100%;}' +
     '.pc3-drawer .dp-toggle{display:flex;align-items:center;gap:6px;font-size:11px;color:#475569;margin-bottom:4px;cursor:pointer;}' +
-    '.pc3-drawer .dp-toggle input{accent-color:#147D91;}' +
+    '.pc3-drawer .dp-toggle input{accent-color:#1D9E75;}' +
     '.pc3-drawer .dp-color-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;}' +
     '.pc3-drawer .dp-color-pair{display:flex;align-items:center;gap:4px;font-size:10px;color:#64748b;}' +
     '.pc3-drawer .dp-color-pair span{min-width:44px;}' +
@@ -628,7 +633,7 @@ function getStyles() {
 
     /* ── Zoom ── */
     '.pc3-zoom{display:flex;align-items:center;gap:4px;}' +
-    '.pc3-zoom input[type="range"]{width:80px;height:4px;accent-color:#147D91;}' +
+    '.pc3-zoom input[type="range"]{width:80px;height:4px;accent-color:#1D9E75;}' +
     '.pc3-zoom-label{font-size:10px;color:#64748b;min-width:32px;text-align:center;}' +
 
     /* ── Print overrides ── */
@@ -646,6 +651,17 @@ function buildMainUI() {
     '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + '" id="pc3-root">' +
 
     /* ── Toolbar ── */
+    '<div class="pc3-topbar no-print">' +
+        '<span class="pc3-topbar-name">' + (t.campName || 'Camp Schedule') + '</span>' +
+        '<div class="pc3-topbar-sep"></div>' +
+        '<span class="pc3-topbar-date">' + (window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '') + '</span>' +
+        '<div class="pc3-topbar-space"></div>' +
+        '<button class="pc3-tb-btn" id="pc3-live-btn" title="Open Live View in a new window">' + ICO.monitor + ' Live View</button>' +
+        (canEditTemplates() ? '<button class="pc3-tb-btn" onclick="window._pc3ToggleAdvanced()" title="Design settings">' + ICO.gear + '</button>' : '') +
+        '<button class="pc3-tb-btn" onclick="window._pc3ExportExcel()">' + ICO.excel + ' Excel</button>' +
+        '<button class="pc3-tb-btn primary" onclick="window._pc3Print()">' + ICO.print + ' Print</button>' +
+    '</div>' +
+
     '<div class="pc3-toolbar no-print">' +
         '<div class="pc3-toolbar-group">' +
             '<span class="pc3-tb-label">View</span>' +
@@ -655,9 +671,9 @@ function buildMainUI() {
         '</div>' +
         '<div class="pc3-toolbar-sep"></div>' +
         '<div class="pc3-toolbar-group">' +
-            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-transpose" style="accent-color:#147D91;margin-right:4px;"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '>Transpose</label>' +
-            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-combined" style="accent-color:#147D91;margin-right:4px;"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combined</label>' +
-            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-hide-matchups" style="accent-color:#147D91;margin-right:4px;"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide Matchups</label>' +
+            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-transpose" style="accent-color:#1D9E75;margin-right:4px;"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '>Transpose</label>' +
+            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-combined" style="accent-color:#1D9E75;margin-right:4px;"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combined</label>' +
+            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-hide-matchups" style="accent-color:#1D9E75;margin-right:4px;"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide Matchups</label>' +
         '</div>' +
         /* Time increment selector — visible in all modes but most relevant for auto */
         '<div class="pc3-toolbar-sep"></div>' +
@@ -680,13 +696,8 @@ function buildMainUI() {
         '</div>' +
         '<div style="flex:1;"></div>' +
         '<div class="pc3-toolbar-group">' +
-            '<button class="pc3-tb-btn" id="pc3-live-btn" title="Open Live View in a new window (for casting to a screen)">' + ICO.monitor + ' Live View</button>' +
-            '<div class="pc3-toolbar-sep"></div>' +
-            (canEditTemplates() ? '<button class="pc3-tb-btn" onclick="window._pc3ToggleAdvanced()" title="Design settings">' + ICO.gear + '</button>' : '') +
-            '<button class="pc3-tb-btn" onclick="window._pc3ExportExcel()">' + ICO.excel + ' Excel</button>' +
-            '<button class="pc3-tb-btn primary" onclick="window._pc3Print()">' + ICO.print + ' Print</button>' +
-            '<div class="pc3-toolbar-sep"></div>' +
             '<div class="pc3-zoom">' +
+                '<span class="pc3-tb-label" style="margin-right:2px;">Zoom</span>' +
                 '<button class="pc3-tb-btn" onclick="window._pc3Zoom(-10)">' + ICO.zoomOut + '</button>' +
                 '<input type="range" min="50" max="200" value="' + _zoomLevel + '" id="pc3-zoom-range">' +
                 '<button class="pc3-tb-btn" onclick="window._pc3Zoom(10)">' + ICO.zoomIn + '</button>' +
@@ -1432,7 +1443,7 @@ function liveRefresh() {
                 var divs = getDivisions();
                 var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).sort(naturalSort);
                 if (!bunks.length) return;
-                html += '<div style="margin:8px 14px;font-weight:700;font-size:13px;color:#147D91;">' + escHtml(d) + '</div>';
+                html += '<div style="margin:8px 14px;font-weight:700;font-size:13px;color:#1D9E75;">' + escHtml(d) + '</div>';
                 if (isAutoMode()) { html += renderAutoDivisionTable(d, bunks); }
                 else {
                     var blocks = buildDivisionBlocks(d);
@@ -1936,7 +1947,7 @@ function renderLiveContent() {
             html += '<thead><tr><th class="corner" style="min-width:80px;">Bunk</th>';
             lTimeCols.forEach(function (tc) {
                 var isCurCol = nowMin >= tc.startMin && nowMin < tc.endMin;
-                html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="min-width:50px;font-size:9px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#164e63;color:#67e8f9;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
+                html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="min-width:50px;font-size:9px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#064e3b;color:#67e8f9;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
             });
             html += '</tr></thead><tbody>';
 
