@@ -867,7 +867,11 @@
             const delBtn = document.createElement('button');
             delBtn.textContent = 'Delete';
             delBtn.className = 'league-btn-delete';           delBtn.onclick = () => {
-                if (!window.AccessControl?.checkSetupAccess('delete specialty leagues')) return;
+                // Delete is destructive camp-wide — require canEraseData (owner/admin only)
+                if (!window.AccessControl?.canEraseData?.()) {
+                    window.AccessControl?.showPermissionDenied?.('delete specialty leagues');
+                    return;
+                }
                 // ★ v2.2.7 FIX: confirm() renders plain text; escapeHtml produces HTML entities
                 // that show as literal "&amp;" etc. Use raw name since confirm() is XSS-safe.
                 if (confirm(`Delete "${league.name}"?`)) {

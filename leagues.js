@@ -865,8 +865,8 @@
         delBtn.textContent = 'Delete';
         delBtn.className = 'league-btn-delete';
         delBtn.onclick = function () {
-            // ✅ RBAC Check (v2.6: consistent with create — both use canEditSetup)
-            if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) {
+            // Delete is destructive camp-wide — require canEraseData (owner/admin only)
+            if (!window.AccessControl?.canEraseData?.()) {
                 window.AccessControl?.showPermissionDenied?.('delete leagues');
                 return;
             }

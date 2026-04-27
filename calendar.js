@@ -27,6 +27,43 @@
     const SPECIALTY_LEAGUE_HISTORY_KEY = "specialtyLeagueHistory_v1";
     const LEGACY_GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
     const LEGACY_GLOBAL_REGISTRY_KEY = "campistry_global_registry";
+
+    // ==========================================================
+    // AUDIT LOGGING — fire-and-forget, silent on missing table
+    // Run this SQL in Supabase to enable:
+    //   CREATE TABLE IF NOT EXISTS camp_audit_log (
+    //     id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    //     camp_id     text NOT NULL,
+    //     user_id     text NOT NULL,
+    //     user_role   text NOT NULL,
+    //     action      text NOT NULL,
+    //     details     jsonb,
+    //     created_at  timestamptz DEFAULT now()
+    //   );
+    //   ALTER TABLE camp_audit_log ENABLE ROW LEVEL SECURITY;
+    //   CREATE POLICY "Camp members can insert audit logs"
+    //     ON camp_audit_log FOR INSERT
+    //     WITH CHECK (camp_id = (SELECT camps.id FROM camps WHERE auth.uid() = camps.owner
+    //                            OR EXISTS (SELECT 1 FROM camp_users WHERE camp_id = camps.id AND user_id = auth.uid())));
+    // ==========================================================
+    async function logAuditEvent(action, details = {}) {
+        try {
+            const client = window.CampistryDB?.getClient?.() || window.supabase;
+            const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+            const userId = window.CampistryDB?.getUserId?.() || window.AccessControl?.getCurrentUser?.()?.id;
+            const role = window.AccessControl?.getCurrentRole?.() || 'unknown';
+            if (!client || !campId || !userId) return;
+            await client.from('camp_audit_log').insert({
+                camp_id: campId,
+                user_id: userId,
+                user_role: role,
+                action,
+                details
+            });
+        } catch (_) {
+            // Silent — table may not exist yet
+        }
+    }
     
     // ==========================================================
     // Helper — formatted date YYYY-MM-DD
@@ -234,6 +271,7 @@ all[date].updated_at = new Date().toISOString();
             window.AccessControl?.showPermissionDenied?.('erase rotation history');
             return;
         }
+        logAuditEvent('erase_rotation_history');
         try {
             console.log("🔄 Erasing rotation history...");
             
@@ -296,6 +334,7 @@ all[date].updated_at = new Date().toISOString();
         );
         if (!confirmed) return;
         
+        logAuditEvent('start_new_half');
         try {
             console.log("=".repeat(50));
             console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
@@ -757,6 +796,7 @@ all[date].updated_at = new Date().toISOString();
             
             if (!confirm(confirmMsg)) return;
             
+            logAuditEvent('erase_today_partial', { dateKey, divisions: myDivisions });
             console.log('🗑️ Scheduler deleting divisions:', myDivisions);
             
             // ★★★ THE CRITICAL FIX: Remove bunks from ALL records ★★★
@@ -788,6 +828,7 @@ all[date].updated_at = new Date().toISOString();
             
             if (!confirm(confirmMsg)) return;
             
+            logAuditEvent('erase_today', { dateKey });
             console.log('🗑️ Owner/Admin: Full delete');
             
             // Delete from cloud using ScheduleDB
@@ -876,6 +917,7 @@ all[date].updated_at = new Date().toISOString();
         
         if (!confirm(confirmMsg)) return;
         
+        logAuditEvent('erase_all_schedules');
         console.log("🗑️ Erasing all daily data...");
         
         try {

@@ -117,61 +117,52 @@
     // =========================================================================
 
     async function calculateEditableResources() {
+        // Delegate to AccessControl as the single source of truth for division assignments.
+        // PermissionsDB's job here is solely to derive the bunk list from those divisions.
+        if (window.AccessControl?.getEditableDivisions) {
+            _editableDivisions = window.AccessControl.getEditableDivisions();
+            _editableBunks = window.AccessControl.canEditAnything?.()
+                ? getAllBunkIds()
+                : getBunksForDivisions(_editableDivisions);
+            log('Permissions synced from AccessControl:', {
+                divisions: _editableDivisions.length,
+                bunks: _editableBunks.length
+            });
+            return;
+        }
+
+        // Fallback when AccessControl is not yet loaded (early init race)
         const role = window.CampistryDB?.getRole?.() || 'viewer';
-        const isTeamMember = window.CampistryDB?.isTeamMember?.() || false;
+        log('Fallback permission calc for role:', role);
 
-        log('Calculating permissions for role:', role, 'isTeamMember:', isTeamMember);
-
-        // Owners and admins can edit everything
         if (role === 'owner' || role === 'admin') {
             _editableDivisions = getAllDivisionNames();
             _editableBunks = getAllBunkIds();
-            log('Full access - all divisions:', _editableDivisions.length);
             return;
         }
 
-        // Viewers can't edit anything
         if (role === 'viewer') {
             _editableDivisions = [];
             _editableBunks = [];
-            log('Viewer role - no edit permissions');
             return;
         }
 
-        // Schedulers - check subdivision assignments
+        // Scheduler fallback — subdivisions loaded by loadSubdivisions()
         _editableDivisions = [];
-        _editableBunks = [];
-
-        // Method 1: Via subdivisions
         if (_userSubdivisionIds.length > 0) {
             _userSubdivisionIds.forEach(subId => {
                 const subdivision = _subdivisions.find(s => s.id === subId);
-                if (subdivision?.divisions) {
-                    _editableDivisions.push(...subdivision.divisions);
-                }
+                if (subdivision?.divisions) _editableDivisions.push(...subdivision.divisions);
             });
         }
-
-        // Method 2: Via direct division assignments (fallback)
         if (_directDivisionAssignments.length > 0) {
             _editableDivisions.push(..._directDivisionAssignments);
         }
-
-        // Deduplicate
         _editableDivisions = [...new Set(_editableDivisions)];
-
-        // Calculate editable bunks from divisions
         _editableBunks = getBunksForDivisions(_editableDivisions);
 
-        log('Scheduler permissions:', {
-            divisions: _editableDivisions,
-            bunks: _editableBunks.length
-        });
-
-        // Warn if scheduler has no assignments
         if (role === 'scheduler' && _editableDivisions.length === 0) {
             console.warn('🔐 ⚠️ SCHEDULER HAS NO DIVISION ASSIGNMENTS!');
-            console.warn('🔐 The camp owner needs to assign divisions to this scheduler.');
         }
     }
 
@@ -239,15 +230,11 @@
     // =========================================================================
 
     function canEditDivision(divisionName) {
+        if (window.AccessControl?.canEditDivision) return window.AccessControl.canEditDivision(divisionName);
+        // Fallback
         const role = window.CampistryDB?.getRole?.() || 'viewer';
-        
-        // Owners and admins can edit everything
         if (role === 'owner' || role === 'admin') return true;
-        
-        // Viewers can't edit
         if (role === 'viewer') return false;
-        
-        // Schedulers - check specific permissions
         return _editableDivisions.includes(String(divisionName));
     }
 
@@ -265,10 +252,9 @@
     }
 
     function getEditableDivisions() {
+        if (window.AccessControl?.getEditableDivisions) return window.AccessControl.getEditableDivisions();
         const role = window.CampistryDB?.getRole?.() || 'viewer';
-        if (role === 'owner' || role === 'admin') {
-            return getAllDivisionNames();
-        }
+        if (role === 'owner' || role === 'admin') return getAllDivisionNames();
         return [..._editableDivisions];
     }
 
@@ -281,11 +267,13 @@
     }
 
     function isReadOnly() {
+        if (window.AccessControl?.canSave) return !window.AccessControl.canSave();
         const role = window.CampistryDB?.getRole?.() || 'viewer';
         return role === 'viewer';
     }
 
     function hasFullAccess() {
+        if (window.AccessControl?.canEditAnything) return window.AccessControl.canEditAnything();
         const role = window.CampistryDB?.getRole?.() || 'viewer';
         return role === 'owner' || role === 'admin';
     }
@@ -385,7 +373,7 @@
 
     async function refresh() {
         log('Refreshing permissions...');
-        await loadSubdivisions();
+        // Re-sync bunk list from AccessControl's current division assignments
         await calculateEditableResources();
         return {
             divisions: _editableDivisions,
