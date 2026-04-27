@@ -715,6 +715,9 @@
         // =====================================================================
 
         const _resourceBuckets = {};   // { "special:painting": { [minute]: { count, grades: Set } }, ... }
+        // Metadata for rotation events: { [eventId]: { gradeMode, winStart, dur } }
+        // Populated by Phase 2.4; used by canUseRotationSlotAtTime.
+        const _rotEventMeta = {};
 
         function _rtKey(type, name) {
             return (type + ':' + (name || '')).toLowerCase();
@@ -865,8 +868,23 @@
 
         function canUseRotationSlotAtTime(eventId, concurrency, grade, startMin, endMin) {
             if (!eventId || !concurrency) return true;
-            // Force grade alignment: if the grade is already placed at a specific
-            // time for this event, reject any other time range.
+            const _meta = _rotEventMeta[eventId];
+            const _isStaggered = _meta && _meta.gradeMode === 'individual';
+
+            if (_isStaggered) {
+                // Staggered mode: skip grade-locking and enforce slot-boundary alignment.
+                // Different bunks in the same grade go at different times — grade-locking
+                // must not fire. Also reject any placement that isn't on a window boundary
+                // (windowStart + n * durationPerBunk) to prevent 10:55 mid-slot starts.
+                const _winStart = _meta.winStart;
+                const _dur = _meta.dur;
+                if (_dur > 0 && (startMin - _winStart) % _dur !== 0) return false; // off-boundary
+                // Use 'all' share type: concurrency limit applies across all grades
+                return rtCanUse('rotevt', eventId, grade, startMin, endMin,
+                    'all', concurrency, []);
+            }
+
+            // Whole-grade mode (default): force grade alignment
             const existing = getGradeRotationPlacement(eventId, grade);
             if (existing && (existing.startMin !== startMin || existing.endMin !== endMin)) {
                 return false;
@@ -9155,6 +9173,8 @@
                         const winStart = evt.dailyWindow && evt.dailyWindow.startMin;
                         const winEnd = evt.dailyWindow && evt.dailyWindow.endMin;
                         if (winStart == null || winEnd == null || winEnd - winStart < dur) return;
+                        // Populate metadata for canUseRotationSlotAtTime
+                        _rotEventMeta[evt.id] = { gradeMode: evt.gradeMode || 'whole_grade', winStart, dur };
 
                         const excluded = new Set(evt.excludedBunks || []);
                         const completed = new Set();
