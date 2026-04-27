@@ -227,10 +227,10 @@
       var prevP = swimPi > 0 ? ps[swimPi - 1] : null;
       var nextP = swimPi < ps.length - 1 ? ps[swimPi + 1] : null;
       var preExpected = (cfg.preChangeMin > 0 && prevP)
-        ? { startMin: prevP.endMin - Math.min(cfg.preChangeMin, prevP.endMin - prevP.startMin), endMin: prevP.endMin }
+        ? { startMin: prevP.end - Math.min(cfg.preChangeMin, prevP.end - prevP.start), endMin: prevP.end }
         : null;
       var postExpected = (cfg.postChangeMin > 0 && nextP)
-        ? { startMin: nextP.startMin, endMin: nextP.startMin + Math.min(cfg.postChangeMin, nextP.endMin - nextP.startMin) }
+        ? { startMin: nextP.start, endMin: nextP.start + Math.min(cfg.postChangeMin, nextP.end - nextP.start) }
         : null;
       var blocksAt = function (s, e) {
         var tl = (getTimelines()[bunk] || []).slice().sort(function (a, b) { return (a.startMin || 0) - (b.startMin || 0); });
@@ -247,16 +247,31 @@
         });
         return out;
       };
+      var allBlocks = (getTimelines()[bunk] || [])
+        .slice()
+        .sort(function (a, b) { return (a.startMin || 0) - (b.startMin || 0); })
+        .map(function (b) {
+          return {
+            type: b.type,
+            event: b.event,
+            start: hh(b.startMin),
+            end: hh(b.endMin),
+            dur: (b.startMin != null && b.endMin != null) ? b.endMin - b.startMin : null
+          };
+        });
       byBunk[bunk].swimDiagnostic = {
         swimPeriod: 'P' + (swimPi + 1) + ' ' + hh(ps[swimPi].start) + '–' + hh(ps[swimPi].end),
         prevPeriod: prevP ? ('P' + swimPi + ' ' + hh(prevP.start) + '–' + hh(prevP.end)) : '(none)',
         nextPeriod: nextP ? ('P' + (swimPi + 2) + ' ' + hh(nextP.start) + '–' + hh(nextP.end)) : '(none)',
-        preExpected: preExpected ? (hh(preExpected.startMin) + '–' + hh(preExpected.endMin)) : '(none, no prev period)',
+        preExpected: preExpected ? (hh(preExpected.startMin) + '–' + hh(preExpected.endMin)) :
+          (cfg.preChangeMin > 0 ? '(no prev period)' : '(no preChange configured)'),
         preBlocking: preExpected ? blocksAt(preExpected.startMin, preExpected.endMin) : [],
-        postExpected: postExpected ? (hh(postExpected.startMin) + '–' + hh(postExpected.endMin)) : '(none, no next period)',
+        postExpected: postExpected ? (hh(postExpected.startMin) + '–' + hh(postExpected.endMin)) :
+          (cfg.postChangeMin > 0 ? '(no next period)' : '(no postChange configured)'),
         postBlocking: postExpected ? blocksAt(postExpected.startMin, postExpected.endMin) : [],
         prePlaced: byBunk[bunk].blocks.some(function (b) { return b.kind === 'pre'; }),
-        postPlaced: byBunk[bunk].blocks.some(function (b) { return b.kind === 'post'; })
+        postPlaced: byBunk[bunk].blocks.some(function (b) { return b.kind === 'post'; }),
+        allBlocks: allBlocks
       };
     });
 
