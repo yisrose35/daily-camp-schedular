@@ -988,7 +988,7 @@ function renderAutoDivisionTable(divName, bunks) {
     // The bell schedule defines layer windows — each layer has a type, startMin, endMin.
     // Variable layers (sport, special, activity, elective) = the "Periods" where bunks
     // have different activities. Pinned layers (swim, lunch, custom, etc.) are NOT periods.
-    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1 };
+    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1, 'smart': 1, 'split': 1, 'league': 1, 'specialty_league': 1 };
     var activityRanges = []; // [ { startMin, endMin } ]
 
     // Method 1: Read from DAW layer templates (bell schedule) — authoritative
@@ -1022,9 +1022,10 @@ function renderAutoDivisionTable(divName, bunks) {
             var firstSlots = perBunkSlotsObj[String(bunks[0])] || [];
             var curRange = null;
             firstSlots.forEach(function (slot) {
-                var isVariable = VARIABLE_LAYER_TYPES[(slot.type || '').toLowerCase()] === 1;
+                var slotType = (slot.type || '').toLowerCase();
+                var isVariable = slotType !== 'pinned' && slotType !== '';
                 if (isVariable) {
-                    if (curRange && slot.startMin <= curRange.endMin) {
+                    if (curRange && slot.startMin < curRange.endMin) {
                         curRange.endMin = Math.max(curRange.endMin, slot.endMin);
                     } else {
                         if (curRange) activityRanges.push(curRange);
@@ -1038,10 +1039,35 @@ function renderAutoDivisionTable(divName, bunks) {
         }
     }
 
+    // Method 2b: Fallback — infer from divisionTimes[divName] shared slots
+    if (activityRanges.length === 0) {
+        var divSlots = window.divisionTimes && window.divisionTimes[divName] ? window.divisionTimes[divName] : null;
+        if (divSlots && Array.isArray(divSlots) && divSlots.length > 0) {
+            var curRange2 = null;
+            divSlots.forEach(function (slot) {
+                var slotType2 = (slot.type || '').toLowerCase();
+                var isVar2 = slotType2 !== 'pinned' && slotType2 !== '';
+                if (isVar2) {
+                    if (curRange2 && slot.startMin < curRange2.endMin) {
+                        curRange2.endMin = Math.max(curRange2.endMin, slot.endMin);
+                    } else {
+                        if (curRange2) activityRanges.push(curRange2);
+                        curRange2 = { startMin: slot.startMin, endMin: slot.endMin, name: slot.label || slot.event || null };
+                    }
+                } else {
+                    if (curRange2) { activityRanges.push(curRange2); curRange2 = null; }
+                }
+            });
+            if (curRange2) activityRanges.push(curRange2);
+        }
+    }
+
     // If still nothing, treat entire day as one period
     if (activityRanges.length === 0) {
         activityRanges.push({ startMin: dayStart, endMin: dayEnd });
     }
+
+    try { console.log('[PrintCenter] div=' + divName + ' periods=' + activityRanges.length, activityRanges.map(function(r){return r.name||'?';})); } catch(e){}
 
     // ─── 3. Build the full time-column array covering dayStart → dayEnd ─────
     // Every increment gets a column. We also tag each column with which period it belongs to.
@@ -1427,7 +1453,7 @@ function matchesLocation(entry, loc) {
 // ── COMBINED AUTO TABLE: all bunks from all divisions in one grid ──
 function renderCombinedAutoTable(divBunks) {
     var inc = _timeIncrement;
-    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1 };
+    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1, 'smart': 1, 'split': 1, 'league': 1, 'specialty_league': 1 };
 
     // Build unified bunkActs and day range from all bunks
     var bunkActs = {};
@@ -1472,6 +1498,56 @@ function renderCombinedAutoTable(divBunks) {
         });
         activityRanges = merged;
     }
+
+    // Method 2: Fallback — infer from _perBunkSlots slot types (use firstDiv's first bunk)
+    if (activityRanges.length === 0 && firstDiv) {
+        var perBunkSlotsObj2 = window.divisionTimes && window.divisionTimes[firstDiv] && window.divisionTimes[firstDiv]._perBunkSlots
+            ? window.divisionTimes[firstDiv]._perBunkSlots : null;
+        var firstBunk2 = divBunks.length ? divBunks[0].bunk : null;
+        if (perBunkSlotsObj2 && firstBunk2 !== null) {
+            var firstSlots2 = perBunkSlotsObj2[String(firstBunk2)] || [];
+            var curRangeC = null;
+            firstSlots2.forEach(function (slot) {
+                var slotType = (slot.type || '').toLowerCase();
+                var isVariable = slotType !== 'pinned' && slotType !== '';
+                if (isVariable) {
+                    if (curRangeC && slot.startMin < curRangeC.endMin) {
+                        curRangeC.endMin = Math.max(curRangeC.endMin, slot.endMin);
+                    } else {
+                        if (curRangeC) activityRanges.push(curRangeC);
+                        curRangeC = { startMin: slot.startMin, endMin: slot.endMin, name: slot.label || null };
+                    }
+                } else {
+                    if (curRangeC) { activityRanges.push(curRangeC); curRangeC = null; }
+                }
+            });
+            if (curRangeC) activityRanges.push(curRangeC);
+        }
+    }
+
+    // Method 2b: Fallback — infer from divisionTimes[firstDiv] shared slots
+    if (activityRanges.length === 0 && firstDiv) {
+        var divSlotsC = window.divisionTimes && window.divisionTimes[firstDiv] ? window.divisionTimes[firstDiv] : null;
+        if (divSlotsC && Array.isArray(divSlotsC) && divSlotsC.length > 0) {
+            var curRange2C = null;
+            divSlotsC.forEach(function (slot) {
+                var slotType2 = (slot.type || '').toLowerCase();
+                var isVar2 = slotType2 !== 'pinned' && slotType2 !== '';
+                if (isVar2) {
+                    if (curRange2C && slot.startMin < curRange2C.endMin) {
+                        curRange2C.endMin = Math.max(curRange2C.endMin, slot.endMin);
+                    } else {
+                        if (curRange2C) activityRanges.push(curRange2C);
+                        curRange2C = { startMin: slot.startMin, endMin: slot.endMin, name: slot.label || slot.event || null };
+                    }
+                } else {
+                    if (curRange2C) { activityRanges.push(curRange2C); curRange2C = null; }
+                }
+            });
+            if (curRange2C) activityRanges.push(curRange2C);
+        }
+    }
+
     if (!activityRanges.length) activityRanges.push({ startMin: dayStart, endMin: dayEnd, name: null });
 
     // Build time columns
