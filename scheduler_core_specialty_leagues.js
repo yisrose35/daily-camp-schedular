@@ -726,8 +726,31 @@ for (const futureDate of Object.keys(allDailyData)) {
             const todayGameIndex = leagueGameCounters[league.id];
             const gameNumber = baseGameNumber + todayGameIndex + 1;
 
-            // Get today's matchups using the game number
-            const matchups = getLeagueMatchupsForToday(league, history, gameNumber);
+            // ★★★ Get matchups — playoff > regular ★★★
+            let matchups;
+            let _playoffRoundNum = null;
+            const _PM_S = window.PlayoffMode;
+            if (_PM_S && _PM_S.isLeagueInPlayoff(league)) {
+                const liveMatchups = _PM_S.getActiveMatchups(league);
+                if (liveMatchups.length > 0) {
+                    _playoffRoundNum = league.playoff.currentRound;
+                    matchups = liveMatchups.map(function (m) {
+                        return {
+                            teamA: m.teamA,
+                            teamB: m.teamB,
+                            conference: null,
+                            isInterConference: false,
+                            _playoffSport: m.sport || null
+                        };
+                    });
+                    console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + _playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                } else {
+                    console.log('[SpecialtyLeagues] 🏆 PLAYOFF: no active matchups in current round — skipping');
+                    continue;
+                }
+            } else {
+                matchups = getLeagueMatchupsForToday(league, history, gameNumber);
+            }
 
             if (matchups.length === 0) {
                 console.log(`[SpecialtyLeagues] No matchups generated`);
@@ -770,13 +793,28 @@ if (uniqueSlots.length > 0 && _specDivSlots[uniqueSlots[0]]) {
     _specLockEnd = _specDivSlots[uniqueSlots[uniqueSlots.length - 1]]?.endMin || (_specLockStart + 40);
 }
 window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
-    lockedBy: 'specialty_league',
+    lockedBy: _playoffRoundNum ? 'playoff_specialty' : 'specialty_league',
     leagueName: league.name,
     division: divName,
-    activity: `${league.name} (${league.sport})`,
+    activity: _playoffRoundNum
+        ? `${league.name} Playoff R${_playoffRoundNum}`
+        : `${league.name} (${league.sport})`,
     startMin: _specLockStart,
     endMin: _specLockEnd
 });
+
+// ★★★ PLAYOFF: lock reserved activities for non-playoff kids ★★★
+if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
+    const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum})`;
+    league.playoff.reservedActivities.forEach(function (act) {
+        try {
+            window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, divName, reservedReason);
+        } catch (e) {
+            console.warn('[PLAYOFF specialty] failed to reserve "' + act + '" for ' + divName + ':', e);
+        }
+    });
+    console.log('[SpecialtyLeagues] 🎯 PLAYOFF: reserved [' + league.playoff.reservedActivities.join(', ') + '] for ' + divName);
+}
 }
 
             // Also lock in fieldUsageBySlot for compatibility
@@ -804,7 +842,9 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
                 `${a.teamA} vs ${a.teamB} — ${a.field}`
             );
 
-            const gameLabel = `${league.name} Game ${gameNumber}`;
+            const gameLabel = _playoffRoundNum
+                ? `${league.name} Playoff R${_playoffRoundNum}`
+                : `${league.name} Game ${gameNumber}`;
 
             // Fill all blocks
             blocks.forEach(block => {

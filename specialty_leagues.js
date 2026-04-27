@@ -863,6 +863,12 @@
             editConfigBtn.textContent = 'Edit Setup';
             editConfigBtn.className = 'league-btn-neutral';
 
+            // PLAYOFF BTN
+            const playoffBtn = document.createElement('button');
+            const _playoffActive = !!(league.playoff && league.playoff.enabled);
+            playoffBtn.textContent = _playoffActive ? 'Playoff: ON' : 'Playoff Mode';
+            playoffBtn.className = 'league-btn-neutral' + (_playoffActive ? ' active' : '');
+
             // DELETE BTN
             const delBtn = document.createElement('button');
             delBtn.textContent = 'Delete';
@@ -883,7 +889,7 @@
                 }
             };
 
-            btnGroup.append(editConfigBtn, delBtn);
+            btnGroup.append(editConfigBtn, playoffBtn, delBtn);
             header.append(title, btnGroup);
             detailPaneEl.appendChild(header);
 
@@ -906,6 +912,35 @@
                     editConfigBtn.classList.add('active');
                 }
             };
+
+            // --- PLAYOFF CONTAINER ---
+            const playoffContainer = document.createElement('div');
+            playoffContainer.className = 'league-playoff-container';
+            playoffContainer.style.cssText = 'display:none;margin-top:8px;';
+            const _playoffMount = document.createElement('div');
+            playoffContainer.appendChild(_playoffMount);
+            detailPaneEl.appendChild(playoffContainer);
+
+            if (_playoffActive) {
+                playoffContainer.style.display = 'block';
+                playoffBtn.classList.add('active');
+                mountSpecialtyPlayoffUI(_playoffMount, league);
+            }
+
+            playoffBtn.onclick = () => {
+                const isOpen = playoffContainer.style.display !== 'none';
+                if (isOpen) {
+                    playoffContainer.style.display = 'none';
+                    playoffBtn.classList.remove('active');
+                    playoffBtn.textContent = (league.playoff && league.playoff.enabled) ? 'Playoff: ON' : 'Playoff Mode';
+                } else {
+                    playoffContainer.style.display = 'block';
+                    playoffBtn.classList.add('active');
+                    playoffBtn.textContent = 'Close Playoff';
+                    mountSpecialtyPlayoffUI(_playoffMount, league);
+                }
+            };
+
             // --- MAIN CONTENT ---
             const mainContent = document.createElement('div');
             renderGameResultsUI(league, mainContent);
@@ -913,6 +948,26 @@
         } catch (e) {
             console.error("[SPECIALTY_LEAGUES] Error rendering detail pane:", e);
         }
+    }
+
+    function mountSpecialtyPlayoffUI(mountEl, league) {
+        if (!window.PlayoffMode) {
+            mountEl.innerHTML = '<div style="padding:12px;color:#9CA3AF;font-size:0.82rem;">Playoff module unavailable.</div>';
+            return;
+        }
+        window.PlayoffMode.render(league, mountEl, {
+            onSave: function () { saveData(); },
+            getSports: function () { return league.sports || (league.sport ? [league.sport] : []); },
+            getActivities: function () {
+                var settings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+                var fields = settings.fields || (settings.app1 && settings.app1.fields) || [];
+                var acts = new Set();
+                fields.forEach(function (f) { if (f && f.name) acts.add(f.name); });
+                (window.getAllGlobalSports ? window.getAllGlobalSports() : []).forEach(function (s) { acts.add(s); });
+                return Array.from(acts).sort();
+            },
+            readOnly: !!(window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup())
+        });
     }
 
     // =============================================================
