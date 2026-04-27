@@ -172,7 +172,10 @@ function setupMocks(role) {
     global.AccessControl = {
         getCurrentRole() { return role; },
         showPermissionDenied(action) { alertMessages.push('Permission denied: ' + action); },
-        getEditableDivisions() { return ['Junior Boys']; }
+        getEditableDivisions() { return ['Junior Boys']; },
+        canEraseData() { return role === 'owner' || role === 'admin'; },
+        canEraseAllCampData() { return role === 'owner'; },
+        canSave() { return role !== 'viewer'; }
     };
     global.PermissionsDB = {
         hasFullAccess() { return role === 'owner' || role === 'admin'; }

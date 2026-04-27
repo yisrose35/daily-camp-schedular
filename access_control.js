@@ -2172,6 +2172,13 @@
                 }
                 // ★★★ v3.8: Clear session cache on logout ★★★
                 try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
+                // ★★★ v3.13: Clear localStorage role on logout (prevents stale role on next login) ★★★
+                try {
+                    localStorage.removeItem('campistry_role');
+                    localStorage.removeItem('campistry_user_id');
+                    localStorage.removeItem('campistry_auth_user_id');
+                    localStorage.removeItem('campistry_is_team_member');
+                } catch(e) {}
                 _initialized = false;
                 _restoredFromCache = false;     // ★★★ v3.9 ★★★
                 _roleVerifiedFromDB = false;    // ★★★ v3.9 ★★★

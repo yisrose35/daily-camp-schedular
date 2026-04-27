@@ -168,6 +168,10 @@
     };
     
     window.saveCurrentDailyData = function(key, value) {
+        if (!window.AccessControl?.canSave?.()) {
+            console.warn('🔐 saveCurrentDailyData: permission denied (role:', window.AccessControl?.getCurrentRole?.(), ')');
+            return;
+        }
         try {
             const all = window.loadAllDailyData();
             const date = window.currentScheduleDate;
@@ -226,11 +230,7 @@ all[date].updated_at = new Date().toISOString();
     // RESET ALL ACTIVITY / SPECIAL ROTATION
     // ==========================================================
     window.eraseRotationHistory = async function() {
-        // Check permission - Owner and Admin can erase history
-        const role = window.AccessControl?.getCurrentRole?.();
-        const canErase = role === 'owner' || role === 'admin';
-        
-        if (!canErase) {
+        if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('erase rotation history');
             return;
         }
@@ -275,11 +275,7 @@ all[date].updated_at = new Date().toISOString();
     // START NEW HALF
     // ==========================================================
     window.startNewHalf = async function() {
-        // Check permission - Owner and Admin can start new half
-        const role = window.AccessControl?.getCurrentRole?.();
-        const canErase = role === 'owner' || role === 'admin';
-        
-        if (!canErase) {
+        if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('start new half');
             return;
         }
@@ -786,7 +782,7 @@ all[date].updated_at = new Date().toISOString();
         // ═══════════════════════════════════════════════════════════════
         // OWNER/ADMIN: Delete everything
         // ═══════════════════════════════════════════════════════════════
-        else if (role === 'owner' || role === 'admin') {
+        else if (window.AccessControl?.canEraseData?.()) {
             const confirmMsg = `Delete ALL schedule data for ${dateKey}?\n\n` +
                              `This will delete data from ALL schedulers and cannot be undone.`;
             
@@ -868,14 +864,11 @@ all[date].updated_at = new Date().toISOString();
     // 8. ERASE ALL SCHEDULE DAYS - ★ FIXED to sync deletion to cloud ★
     // ==========================================================
     window.eraseAllDailyData = async function() {
-        // Check permission - Owner and Admin can erase all schedules
-        const role = window.AccessControl?.getCurrentRole?.();
-        const canErase = role === 'owner' || role === 'admin';
-        
-        if (!canErase) {
+        if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('erase all daily data');
             return;
         }
+        const role = window.AccessControl?.getCurrentRole?.();
         
         const confirmMsg = 'Delete ALL schedule data for ALL dates?\n\n' +
                           '⚠️ This will permanently delete schedules from all schedulers for all dates.\n\n' +
