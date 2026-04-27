@@ -1367,7 +1367,13 @@
         //
         // Default placement (no conflictBlocks):
         //   pre  = last preChangeMin minutes of the period BEFORE swim's period
-        //   post = first postChangeMin minutes of the period AFTER swim's period
+        //   post = first postChangeMin minutes of the period AFTER the bundle's
+        //         last period.
+        //
+        // "Bundle" = swim block + any adjacent swim-linked rotation_event
+        // (e.g. water slides). Change wraps the ENTIRE bundle:
+        //   water slides BEFORE swim → [pre-change] [waterslides] [swim] [post-change]
+        //   water slides AFTER  swim → [pre-change] [swim] [waterslides] [post-change]
         //
         // With conflictBlocks (e.g. when re-anchoring against a final timeline):
         //   walk back through prior periods until a period's last preChangeMin
@@ -1381,8 +1387,13 @@
         //     length, fill the entire neighboring period.
         //   - If no prior period is free, pre is null. Same for post.
         //   - Returns {pre:null, post:null} when no campPeriods are configured
-        //     for the grade or swim doesn't align to a period start.
-        function computeSwimChangeAnchors(swimStart, swimEnd, layer, gradeForPeriods, conflictBlocks) {
+        //     for the grade or the bundle doesn't align to any period.
+        function computeSwimChangeAnchors(swimStart, swimEnd, layer, gradeForPeriods, conflictBlocks, bundleStart, bundleEnd) {
+            // bundleStart/bundleEnd default to swimStart/swimEnd when no
+            // adjacent water-slides exist.
+            var bStart = (bundleStart != null) ? bundleStart : swimStart;
+            var bEnd   = (bundleEnd   != null) ? bundleEnd   : swimEnd;
+
             var preChange = (layer && layer.preChangeMin > 0) ? layer.preChangeMin : 0;
             var postChange = (layer && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
             if (preChange <= 0 && postChange <= 0) return { pre: null, post: null };
@@ -1390,11 +1401,22 @@
                 ? window.campPeriods[gradeForPeriods].slice().sort(function(a, b) { return a.startMin - b.startMin; })
                 : [];
             if (gp.length === 0) return { pre: null, post: null };
-            var swimPeriodIdx = -1;
+
+            // Find the period that contains or starts at bStart (for pre walk-back)
+            // and the period that contains or ends at bEnd (for post walk-forward).
+            var firstPeriodIdx = -1, lastPeriodIdx = -1;
             for (var i = 0; i < gp.length; i++) {
-                if (gp[i].startMin === swimStart && gp[i].endMin >= swimEnd) { swimPeriodIdx = i; break; }
+                if (firstPeriodIdx < 0 && gp[i].startMin <= bStart && gp[i].endMin > bStart) firstPeriodIdx = i;
+                if (gp[i].startMin < bEnd && gp[i].endMin >= bEnd) lastPeriodIdx = i;
             }
-            if (swimPeriodIdx < 0) return { pre: null, post: null };
+            // Fallback: exact match on swimStart (original behavior)
+            if (firstPeriodIdx < 0) {
+                for (var j = 0; j < gp.length; j++) {
+                    if (gp[j].startMin === swimStart) { firstPeriodIdx = j; break; }
+                }
+            }
+            if (lastPeriodIdx < 0) lastPeriodIdx = firstPeriodIdx;
+            if (firstPeriodIdx < 0) return { pre: null, post: null };
 
             // Build a fast overlap test against existing blocks. Empty/unset
             // conflictBlocks → no constraint (immediate adjacent always wins).
@@ -1404,20 +1426,19 @@
                 for (var ci = 0; ci < conflicts.length; ci++) {
                     var b = conflicts[ci];
                     if (!b) continue;
-                    // Don't treat the swim itself as a conflict for its own change.
-                    if (b.startMin === swimStart && b.endMin === swimEnd &&
-                        String(b.type || '').toLowerCase() === 'swim') continue;
                     var bs = b.startMin, be = b.endMin;
                     if (bs == null || be == null) continue;
+                    // Don't treat blocks inside the bundle as conflicts.
+                    if (bs >= bStart && be <= bEnd) continue;
                     if (bs < re && be > rs) return true;
                 }
                 return false;
             };
 
-            // PRE: walk back from swim's period through prior periods.
+            // PRE: walk back from the bundle's first period.
             var pre = null;
             if (preChange > 0) {
-                for (var pi = swimPeriodIdx - 1; pi >= 0; pi--) {
+                for (var pi = firstPeriodIdx - 1; pi >= 0; pi--) {
                     var prevP = gp[pi];
                     var prevDur = prevP.endMin - prevP.startMin;
                     var preDur = Math.min(preChange, prevDur);
@@ -1429,10 +1450,10 @@
                 }
             }
 
-            // POST: walk forward through later periods.
+            // POST: walk forward from the bundle's last period.
             var post = null;
             if (postChange > 0) {
-                for (var pj = swimPeriodIdx + 1; pj < gp.length; pj++) {
+                for (var pj = lastPeriodIdx + 1; pj < gp.length; pj++) {
                     var nextP = gp[pj];
                     var nextDur = nextP.endMin - nextP.startMin;
                     var postDur = Math.min(postChange, nextDur);
@@ -4213,7 +4234,8 @@
                             _specialDuration: b._specialDuration || null,
                             _rotationEventId: b._rotationEventId || null,
                             _rotationEventLocation: b._rotationEventLocation || null,
-                            _rotationEventColor: b._rotationEventColor || null
+                            _rotationEventColor: b._rotationEventColor || null,
+                            _sequenceTarget: b._sequenceTarget || null
                         }));
                         if (bType === 'special' && b.event) placedSpecialNames.add(b.event);
                     }
@@ -4833,7 +4855,7 @@
                                 _customActivity: need._customActivity || null, _customField: need._customField || null,
                                 _customBunks: need._customBunks || null,
                                 _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                _rotationEventColor: need._rotationEventColor || null, _final: true
+                                _rotationEventColor: need._rotationEventColor || null, _sequenceTarget: need._sequenceTarget || null, _final: true
                             });
                             if (blk) {
                                 template.push(blk);
@@ -4931,7 +4953,7 @@
                                     _customActivity: need._customActivity || null, _customField: need._customField || null,
                                     _customBunks: need._customBunks || null,
                                     _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                    _rotationEventColor: need._rotationEventColor || null, _final: true,
+                                    _rotationEventColor: need._rotationEventColor || null, _sequenceTarget: need._sequenceTarget || null, _final: true,
                                     _relaxed: !!relaxationType, _relaxationType: relaxationType, _relaxationDetail: relaxationDetail
                                 });
                                 if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
@@ -6256,7 +6278,8 @@
                                     _source: 'rotation_event', _activityLocked: true, _final: true,
                                     _rotationEventId: rhNeed._rotationEventId,
                                     _rotationEventLocation: rhNeed._rotationEventLocation,
-                                    _rotationEventColor: rhNeed._rotationEventColor
+                                    _rotationEventColor: rhNeed._rotationEventColor,
+                                    _sequenceTarget: rhNeed._sequenceTarget || null
                                 }) || rhTmpl[rhBestIdx];
                                 // Fill remainder with sport slot
                                 if (rhRemainEnd - rhRemainStart >= rhMeta.fillMinDur) {
@@ -7726,6 +7749,7 @@
                         _rotationEventId: block._rotationEventId || null,
                         _rotationEventLocation: block._rotationEventLocation || null,
                         _rotationEventColor: block._rotationEventColor || null,
+                        _sequenceTarget: block._sequenceTarget || null,
                         _preChangeMin: block._preChangeMin != null ? block._preChangeMin : null,
                         _postChangeMin: block._postChangeMin != null ? block._postChangeMin : null,
                         _swimActualStart: block._swimActualStart != null ? block._swimActualStart : null,
@@ -8842,6 +8866,11 @@
                                 const blk = tl[i];
                                 if (!blk) continue;
                                 if (!(blk._activityLocked || blk._fixed || blk._classification === 'pinned')) continue;
+                                // Skip pre/post-change blocks — Phase 2.78 will
+                                // rebuild them around the final swim+waterslides
+                                // bundle, so they must not block adjacency placement.
+                                const bt = String(blk.type || '').toLowerCase();
+                                if (bt === 'pre-change' || bt === 'post-change') continue;
                                 const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
                                 const bEnd = blk.endMin != null ? blk.endMin : blk._endMin;
                                 if (bStart == null || bEnd == null) continue;
@@ -8938,6 +8967,7 @@
                                 _rotationEventId: evt.id,
                                 _rotationEventLocation: evt.location || null,
                                 _rotationEventColor: evt.color || '#F59E0B',
+                                _sequenceTarget: seqTarget || null,
                                 _final: true
                             };
                             let insertIdx = tl.length;
@@ -10343,12 +10373,31 @@
                 // until it finds one whose change-window is free, so pre lands
                 // BEFORE any pinned activity (lunch / special) sitting between
                 // it and swim — never overlapping.
+                //
+                // ★ Bundle detection: if a rotation_event (e.g. water slides)
+                // with _sequenceTarget === 'swim' is adjacent to the swim
+                // block, expand the bundle so change wraps BOTH activities:
+                //   waterslides BEFORE swim → [pre] [ws] [swim] [post]
+                //   waterslides AFTER  swim → [pre] [swim] [ws] [post]
                 bunkTimelines[bunk].forEach(sw => {
                     if (!sw || (sw.type || '').toLowerCase() !== 'swim') return;
                     const layer = sw.layer;
                     if (!layer) return;
+                    // Detect adjacent swim-linked rotation_events
+                    let bundleStart = sw.startMin, bundleEnd = sw.endMin;
+                    bunkTimelines[bunk].forEach(adj => {
+                        if (!adj || (adj.type || '').toLowerCase() !== 'rotation_event') return;
+                        if (!adj._sequenceTarget) return;
+                        var tgt = adj._sequenceTarget.toLowerCase();
+                        if (tgt !== 'swim') return;
+                        // Adjacent before swim?
+                        if (adj.endMin === sw.startMin) bundleStart = Math.min(bundleStart, adj.startMin);
+                        // Adjacent after swim?
+                        if (adj.startMin === sw.endMin) bundleEnd = Math.max(bundleEnd, adj.endMin);
+                    });
                     const anchors = computeSwimChangeAnchors(
-                        sw.startMin, sw.endMin, layer, grade, bunkTimelines[bunk]
+                        sw.startMin, sw.endMin, layer, grade, bunkTimelines[bunk],
+                        bundleStart, bundleEnd
                     );
                     if (!anchors.pre && !anchors.post) return;
                     const groupId = sw._swimGroupId || nextSwimGroupId();
