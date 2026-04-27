@@ -70,7 +70,7 @@ var DEFAULT_TEMPLATE = {
     timeColBgColor: '#F8FAFC', timeColTextColor: '#475569',
     timeColFont: '', timeColFontSize: 11, timeColBold: true, timeColWidth: 90,
     cellPadding: 6,
-    tableOrientation: 'bunks-top', layoutMode: 'per-division',
+    tableOrientation: 'bunks-top', layoutMode: 'all-bunks',
     orientation: 'landscape', paperSize: 'letter',
     showPageBreaks: true,
     hideLeagueMatchups: false,
@@ -997,7 +997,7 @@ function renderAutoDivisionTable(divName, bunks) {
         bellLayers.forEach(function (layer) {
             var lt = (layer.type || '').toLowerCase();
             if (VARIABLE_LAYER_TYPES[lt]) {
-                activityRanges.push({ startMin: layer.startMin, endMin: layer.endMin });
+                activityRanges.push({ startMin: layer.startMin, endMin: layer.endMin, name: layer.name || layer.label || null });
             }
         });
         // Sort and merge overlapping ranges
@@ -1005,7 +1005,7 @@ function renderAutoDivisionTable(divName, bunks) {
         var mergedRanges = [];
         activityRanges.forEach(function (r) {
             var last = mergedRanges.length > 0 ? mergedRanges[mergedRanges.length - 1] : null;
-            if (last && r.startMin <= last.endMin) {
+            if (last && r.startMin < last.endMin) {
                 last.endMin = Math.max(last.endMin, r.endMin);
             } else {
                 mergedRanges.push({ startMin: r.startMin, endMin: r.endMin });
@@ -1065,12 +1065,8 @@ function renderAutoDivisionTable(divName, bunks) {
     html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto" data-day-start="' + dayStart + '" data-day-end="' + dayEnd + '" style="table-layout:fixed;">';
     html += '<thead>';
 
-    // ── HEADER ROW 0: Excel column letters (A, B, C, ...) ──
-    html += pcCoordRow(totalDataCols);
-
     // ── HEADER ROW 1 (data row 1): Period labels (only over variable-activity columns) ──
     html += '<tr>';
-    html += pcRowNum(0);
     html += '<th class="corner" rowspan="2" data-r="0" data-c="0" data-cell-text="Bunk" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
 
     var ci = 0;
@@ -1084,14 +1080,15 @@ function renderAutoDivisionTable(divName, bunks) {
             var pSpan = ci - pStart;
             var periodNum = pId + 1;
             var range = activityRanges[pId];
-            var periodTxt = 'Period ' + periodNum + ' (' + minutesToTimeLabel(range.startMin) + '\u2013' + minutesToTimeLabel(range.endMin) + ')';
-            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#f1f5f9;color:#475569;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:4px;border-bottom:none;">';
-            html += 'Period ' + periodNum;
-            html += '<div style="font-size:8px;font-weight:400;opacity:.7;margin-top:1px;">' + minutesToTimeLabel(range.startMin) + ' \u2013 ' + minutesToTimeLabel(range.endMin) + '</div>';
+            var periodName = range.name || ('Period ' + periodNum);
+            var periodTxt = periodName + ' (' + minutesToTimeLabel(range.startMin) + '\u2013' + minutesToTimeLabel(range.endMin) + ')';
+            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#147D91;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border-bottom:none;border-right:2px solid #0e6b7e;">';
+            html += escHtml(periodName);
+            html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' \u2013 ' + minutesToTimeLabel(range.endMin) + '</div>';
             html += '</th>';
         } else {
             // Non-period column — just an empty top header cell
-            html += '<th data-r="0" data-c="' + (1 + ci) + '" style="background:#e8ecf0;border-bottom:none;padding:2px;"></th>';
+            html += '<th data-r="0" data-c="' + (1 + ci) + '" style="background:#f1f5f9;border-bottom:none;padding:2px;"></th>';
             ci++;
         }
     }
@@ -1099,7 +1096,6 @@ function renderAutoDivisionTable(divName, bunks) {
 
     // ── HEADER ROW 2 (data row 2): Sub-time increment labels ──
     html += '<tr>';
-    html += pcRowNum(1);
     var colW = Math.max(36, Math.min(80, 700 / numCols));
     timeCols.forEach(function (col, idx) {
         var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f8fafc;';
@@ -1112,7 +1108,6 @@ function renderAutoDivisionTable(divName, bunks) {
     bunks.forEach(function (bunk, bunkIdx) {
         var rowR = 2 + bunkIdx;
         html += '<tr>';
-        html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(bunk) + '" style="min-width:80px;">' + escHtml(bunk) + '</th>';
 
         var acts = bunkActs[bunk] || [];
@@ -1153,10 +1148,13 @@ function renderAutoDivisionTable(divName, bunks) {
                 if (span > 1) html += ' colspan="' + span + '"';
                 html += ' class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + matchAct.slotIdx + '" data-div="' + escHtml(divName) + '"';
                 html += ' title="' + escHtml(displayText + ' (' + durMin + ' min)') + '"';
-                html += ' style="text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:' + (span <= 1 ? '9' : '10') + 'px;">';
-                html += escHtml(displayText);
-                if (span > 1) html += '<span style="opacity:.4;font-size:8px;margin-left:3px;">' + durMin + 'm</span>';
-                html += '</td>';
+                var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
+                var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
+                html += ' style="padding:3px;vertical-align:middle;">';
+                html += '<div style="border-radius:5px;background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
+                html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
+                if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
+                html += '</div></td>';
 
                 colIdx = nextCol;
             } else {
@@ -1425,6 +1423,161 @@ function matchesLocation(entry, loc) {
 // =========================================================================
 // LIVE REFRESH
 // =========================================================================
+
+// ── COMBINED AUTO TABLE: all bunks from all divisions in one grid ──
+function renderCombinedAutoTable(divBunks) {
+    var inc = _timeIncrement;
+    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1 };
+
+    // Build unified bunkActs and day range from all bunks
+    var bunkActs = {};
+    var dayStart = Infinity, dayEnd = -Infinity;
+    var firstDiv = divBunks.length ? divBunks[0].div : null;
+
+    divBunks.forEach(function (item) {
+        var bunk = item.bunk, divName = item.div;
+        var slots = getPerBunkSchedule(bunk, divName);
+        var acts = [];
+        for (var i = 0; i < slots.length; i++) {
+            var entry = getEntry(bunk, i);
+            if (entry && entry.continuation && acts.length > 0) {
+                acts[acts.length - 1].endMin = slots[i].endMin; continue;
+            }
+            acts.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry || null, slotIdx: i, type: entry ? getEntryType(entry) : 'free' });
+            if (slots[i].startMin < dayStart) dayStart = slots[i].startMin;
+            if (slots[i].endMin > dayEnd) dayEnd = slots[i].endMin;
+        }
+        bunkActs[bunk] = acts;
+    });
+
+    if (dayStart === Infinity) dayStart = 480;
+    if (dayEnd === -Infinity) dayEnd = 960;
+    dayStart = Math.floor(dayStart / inc) * inc;
+    dayEnd = Math.ceil(dayEnd / inc) * inc;
+
+    // Build activity ranges from bell schedule (use first div)
+    var activityRanges = [];
+    var bellLayers = firstDiv ? getBellScheduleLayers(firstDiv) : null;
+    if (bellLayers && bellLayers.length) {
+        bellLayers.forEach(function (layer) {
+            var lt = (layer.type || '').toLowerCase();
+            if (VARIABLE_LAYER_TYPES[lt]) activityRanges.push({ startMin: layer.startMin, endMin: layer.endMin, name: layer.name || layer.label || null });
+        });
+        activityRanges.sort(function (a, b) { return a.startMin - b.startMin; });
+        var merged = [];
+        activityRanges.forEach(function (r) {
+            var last = merged.length ? merged[merged.length - 1] : null;
+            if (last && r.startMin < last.endMin) { last.endMin = Math.max(last.endMin, r.endMin); }
+            else merged.push({ startMin: r.startMin, endMin: r.endMin, name: r.name });
+        });
+        activityRanges = merged;
+    }
+    if (!activityRanges.length) activityRanges.push({ startMin: dayStart, endMin: dayEnd, name: null });
+
+    // Build time columns
+    var timeCols = [];
+    for (var t = dayStart; t < dayEnd; t += inc) {
+        var pIdx = -1;
+        for (var ri = 0; ri < activityRanges.length; ri++) {
+            if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
+        }
+        timeCols.push({ startMin: t, endMin: Math.min(t + inc, dayEnd), label: minutesToTimeLabel(t), periodIdx: pIdx });
+    }
+    var numCols = timeCols.length;
+    var colW = Math.max(44, Math.min(90, 800 / numCols));
+
+    var sheetId = pcNextSheetId();
+    var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;">';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto" style="table-layout:fixed;border-collapse:collapse;">';
+    html += '<thead>';
+
+    // Period header row
+    html += '<tr>';
+    html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center;vertical-align:middle;">Bunk</th>';
+    var ci = 0;
+    while (ci < numCols) {
+        var col = timeCols[ci];
+        if (col.periodIdx >= 0) {
+            var pStart = ci, pId = col.periodIdx;
+            while (ci < numCols && timeCols[ci].periodIdx === pId) ci++;
+            var pSpan = ci - pStart;
+            var range = activityRanges[pId];
+            var periodName = range.name || ('Period ' + (pId + 1));
+            html += '<th colspan="' + pSpan + '" style="text-align:center;background:#147D91;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border:1px solid #0e6b7e;border-bottom:none;">';
+            html += escHtml(periodName);
+            html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' – ' + minutesToTimeLabel(range.endMin) + '</div>';
+            html += '</th>';
+        } else {
+            html += '<th style="background:#f1f5f9;border:1px solid #e2e8f0;border-bottom:none;padding:2px;"></th>';
+            ci++;
+        }
+    }
+    html += '</tr>';
+
+    // Sub-segment time label row
+    html += '<tr>';
+    timeCols.forEach(function (col) {
+        var bg = col.periodIdx >= 0 ? '#f0f9ff' : '#f8fafc';
+        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + (inc <= 10 ? 8 : 9) + 'px;text-align:center;padding:2px;color:#64748b;background:' + bg + ';border:1px solid #e2e8f0;font-weight:500;">' + col.label + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    // One row per bunk, with division label injected between divisions
+    var lastDiv = null;
+    divBunks.forEach(function (item, bunkIdx) {
+        var bunk = item.bunk, divName = item.div;
+
+        // Division separator row
+        if (divName !== lastDiv) {
+            lastDiv = divName;
+            html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#f1f5f9;padding:4px 12px;font-size:11px;font-weight:700;color:#147D91;border:1px solid #e2e8f0;border-top:2px solid #147D91;">' + escHtml(divName) + '</th></tr>';
+        }
+
+        html += '<tr>';
+        html += '<th style="position:sticky;left:0;z-index:2;background:#fff;min-width:80px;padding:4px 8px;font-size:12px;font-weight:600;border:1px solid #e2e8f0;white-space:nowrap;color:#1e293b;">' + escHtml(bunk) + '</th>';
+
+        var acts = bunkActs[bunk] || [];
+        var colIdx = 0;
+        while (colIdx < numCols) {
+            var colStart = timeCols[colIdx].startMin;
+            var colEnd2 = timeCols[colIdx].endMin;
+            var matchAct = null;
+            for (var ai = 0; ai < acts.length; ai++) {
+                if (acts[ai].startMin < colEnd2 && acts[ai].endMin > colStart) { matchAct = acts[ai]; break; }
+            }
+            if (matchAct) {
+                var span = 1, nextCol = colIdx + 1;
+                while (nextCol < numCols && timeCols[nextCol].startMin < matchAct.endMin) { span++; nextCol++; }
+                var type = matchAct.type;
+                var actText = '', locText = '';
+                if (matchAct.entry) {
+                    actText = matchAct.entry._activity || matchAct.entry.sport || '';
+                    locText = typeof matchAct.entry.field === 'string' ? matchAct.entry.field : (matchAct.entry.field && matchAct.entry.field.name ? matchAct.entry.field.name : '');
+                    if (!actText && locText) { actText = locText; locText = ''; }
+                    if (actText && locText && actText === locText) locText = '';
+                }
+                var durMin = matchAct.endMin - matchAct.startMin;
+                var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
+                var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
+                var displayText = actText || '—';
+                html += '<td colspan="' + span + '" style="padding:3px;vertical-align:middle;border:1px solid #e2e8f0;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '">';
+                html += '<div style="border-radius:5px;background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
+                html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(displayText) + '</span>';
+                if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
+                html += '</div></td>';
+                colIdx = nextCol;
+            } else {
+                html += '<td style="padding:3px;border:1px solid #e2e8f0;background:#fafafa;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="—"><div style="min-height:38px;"></div></td>';
+                colIdx++;
+            }
+        }
+        html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    return html;
+}
+
 function liveRefresh() {
     var sel = getSelectedItems();
     var pc = el('pc3-preview-content'), pe = el('pc3-preview-empty');
@@ -1436,19 +1589,25 @@ function liveRefresh() {
     var html = '';
 
     if (_activeView === 'division') {
-        if (_currentTemplate.layoutMode === 'all-bunks') {
-            // Combined view: render all selected divisions into one sheet
-            html += '<div class="pc3-sheet"><div class="pc3-sheet-head"><span class="pc3-sheet-title">All Divisions</span></div>';
+        if (_currentTemplate.layoutMode === 'all-bunks' && isAutoMode()) {
+            // Combined: gather ALL bunks across all selected divisions → one unified table
+            var allDivBunks = [];
+            var divs = getDivisions();
             sel.forEach(function (d) {
-                var divs = getDivisions();
+                var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).sort(naturalSort);
+                bunks.forEach(function (b) { allDivBunks.push({ bunk: b, div: d }); });
+            });
+            html += '<div class="pc3-sheet">';
+            if (allDivBunks.length) html += renderCombinedAutoTable(allDivBunks);
+            html += '</div>';
+        } else if (_currentTemplate.layoutMode === 'all-bunks') {
+            // Manual combined
+            html += '<div class="pc3-sheet">';
+            sel.forEach(function (d) {
                 var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).sort(naturalSort);
                 if (!bunks.length) return;
-                html += '<div style="margin:8px 14px;font-weight:700;font-size:13px;color:#147D91;">' + escHtml(d) + '</div>';
-                if (isAutoMode()) { html += renderAutoDivisionTable(d, bunks); }
-                else {
-                    var blocks = buildDivisionBlocks(d);
-                    html += renderManualBunksTop(d, bunks, blocks);
-                }
+                var blocks = buildDivisionBlocks(d);
+                html += renderManualBunksTop(d, bunks, blocks);
             });
             html += '</div>';
         } else {
