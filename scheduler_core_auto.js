@@ -1436,8 +1436,32 @@
             };
 
             // PRE: walk back from the bundle's first period.
+            // ★ PRIORITY 0: when a linked rotation event precedes swim (e.g. Water Slide
+            // before Swim), the natural "change time" is the inter-period gap between the
+            // rotation event's end and swim's start — not a block inside a prior period.
+            // Check for that gap first so Period 1 stays a full 40-min activity.
             var pre = null;
-            if (preChange > 0) {
+            if (preChange > 0 && bStart < swimStart) {
+                // Find the end of the latest block that starts inside the bundle but ends
+                // before swimStart (this is the linked rotation event).
+                var _rotEnd = bStart;
+                for (var _ci = 0; _ci < conflicts.length; _ci++) {
+                    var _cb = conflicts[_ci];
+                    if (!_cb) continue;
+                    var _cbs = _cb.startMin != null ? _cb.startMin : null;
+                    var _cbe = _cb.endMin   != null ? _cb.endMin   : null;
+                    if (_cbs == null || _cbe == null) continue;
+                    if (_cbs >= bStart && _cbe <= swimStart && _cbe > _rotEnd) _rotEnd = _cbe;
+                }
+                if (_rotEnd > bStart && _rotEnd < swimStart) {
+                    // Use the gap [_rotEnd, swimStart) as the pre-change window.
+                    var _gapDur = Math.min(preChange, swimStart - _rotEnd);
+                    if (_gapDur > 0 && !rangeOccupied(_rotEnd, _rotEnd + _gapDur)) {
+                        pre = { startMin: _rotEnd, endMin: _rotEnd + _gapDur };
+                    }
+                }
+            }
+            if (preChange > 0 && !pre) {
                 for (var pi = firstPeriodIdx - 1; pi >= 0; pi--) {
                     var prevP = gp[pi];
                     var prevDur = prevP.endMin - prevP.startMin;
@@ -1793,6 +1817,40 @@
                         else if (_tryRotPos(_wsAftS, _wsAftE)) { _wsS = _wsAftS; _wsE = _wsAftE; }
                     }
                     if (_wsS != null) {
+                        // ★ Snap WaterSlide placement to a period boundary.
+                        // The raw arithmetic (_wsBefS = blockStart - _preDur - rotDur)
+                        // can land a few minutes off a period start when preChangeMin
+                        // doesn't exactly match the inter-period gap. Find the period
+                        // closest to _wsS (on the correct side of swim) and try it.
+                        const _snapGrPeriods = (window.campPeriods || {})[grade] || [];
+                        if (_snapGrPeriods.length > 0) {
+                            const _isBefore = (_wsS === _wsBefS);
+                            const _snapViable = _snapGrPeriods
+                                .filter(p => {
+                                    if (p.endMin - p.startMin < _linkedRotDur) return false;
+                                    // Respect the layer's daily window
+                                    if (p.startMin < (layer.startMin || winStart)) return false;
+                                    if (p.startMin + _linkedRotDur > (layer.endMin || winEnd)) return false;
+                                    // For "before": only use periods that end at or before swim start
+                                    // For "after": only use periods that start at or after swim end
+                                    if (_isBefore) return p.endMin <= blockStart;
+                                    else           return p.startMin >= blockEnd;
+                                })
+                                .sort((a, b) => {
+                                    const dA = _isBefore ? (blockStart - a.endMin) : (a.startMin - blockEnd);
+                                    const dB = _isBefore ? (blockStart - b.endMin) : (b.startMin - blockEnd);
+                                    return dA - dB; // closest to swim first
+                                });
+                            for (const _sp of _snapViable) {
+                                const _snS = _sp.startMin;
+                                const _snE = _sp.startMin + _linkedRotDur;
+                                if (_snE <= _sp.endMin && _tryRotPos(_snS, _snE)) {
+                                    _wsS = _snS;
+                                    _wsE = _snE;
+                                    break;
+                                }
+                            }
+                        }
                         // Find the rotation event object for registration
                         try {
                             const _allRots = window.RotationEvents.loadRotationEvents() || [];
