@@ -207,6 +207,59 @@
       });
     });
 
+    // 3b) For each bunk that has a swim block, also dump WHAT lives in the
+    // pre/post-anchor windows so we can see what's blocking change placement.
+    Object.keys(byBunk).forEach(function (bunk) {
+      var grade = byBunk[bunk].grade;
+      var swimRow = byBunk[bunk].blocks.find(function (b) { return b.kind === 'swim'; });
+      if (!swimRow) return;
+      var cfg = configByGrade[grade];
+      if (!cfg) return;
+      var ps = periodsForGrade(grade);
+      var swimPi = -1;
+      for (var i = 0; i < ps.length; i++) {
+        if (ps[i].start === swimRow.startMin) { swimPi = i; break; }
+      }
+      if (swimPi < 0) {
+        byBunk[bunk].swimAnchorIssue = 'swim is not at any period start (start=' + swimRow.startMin + ')';
+        return;
+      }
+      var prevP = swimPi > 0 ? ps[swimPi - 1] : null;
+      var nextP = swimPi < ps.length - 1 ? ps[swimPi + 1] : null;
+      var preExpected = (cfg.preChangeMin > 0 && prevP)
+        ? { startMin: prevP.endMin - Math.min(cfg.preChangeMin, prevP.endMin - prevP.startMin), endMin: prevP.endMin }
+        : null;
+      var postExpected = (cfg.postChangeMin > 0 && nextP)
+        ? { startMin: nextP.startMin, endMin: nextP.startMin + Math.min(cfg.postChangeMin, nextP.endMin - nextP.startMin) }
+        : null;
+      var blocksAt = function (s, e) {
+        var tl = (getTimelines()[bunk] || []).slice().sort(function (a, b) { return (a.startMin || 0) - (b.startMin || 0); });
+        var out = [];
+        tl.forEach(function (b) {
+          if (b == null || b.startMin == null || b.endMin == null) return;
+          if (b.startMin < e && b.endMin > s) {
+            out.push({
+              type: b.type, event: b.event,
+              start: hh(b.startMin), end: hh(b.endMin),
+              dur: b.endMin - b.startMin
+            });
+          }
+        });
+        return out;
+      };
+      byBunk[bunk].swimDiagnostic = {
+        swimPeriod: 'P' + (swimPi + 1) + ' ' + hh(ps[swimPi].start) + '–' + hh(ps[swimPi].end),
+        prevPeriod: prevP ? ('P' + swimPi + ' ' + hh(prevP.start) + '–' + hh(prevP.end)) : '(none)',
+        nextPeriod: nextP ? ('P' + (swimPi + 2) + ' ' + hh(nextP.start) + '–' + hh(nextP.end)) : '(none)',
+        preExpected: preExpected ? (hh(preExpected.startMin) + '–' + hh(preExpected.endMin)) : '(none, no prev period)',
+        preBlocking: preExpected ? blocksAt(preExpected.startMin, preExpected.endMin) : [],
+        postExpected: postExpected ? (hh(postExpected.startMin) + '–' + hh(postExpected.endMin)) : '(none, no next period)',
+        postBlocking: postExpected ? blocksAt(postExpected.startMin, postExpected.endMin) : [],
+        prePlaced: byBunk[bunk].blocks.some(function (b) { return b.kind === 'pre'; }),
+        postPlaced: byBunk[bunk].blocks.some(function (b) { return b.kind === 'post'; })
+      };
+    });
+
     // 4) print human view
     console.log('=== swimDebug ===');
     console.log('Layer source:', window._layersByGrade ? '_layersByGrade (live)' :

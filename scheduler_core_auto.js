@@ -1489,31 +1489,32 @@
                 // BEFORE swim's period; post-change lives in the first
                 // postChangeMin minutes of the period AFTER. Swim itself stays
                 // exactly periodMin long, never merged into one big block.
+                // Per-bunk: drop pre/post only for the specific bunk that has
+                // a conflict, instead of dropping for all bunks (the all-or-nothing
+                // gate was emptying change blocks across the whole grade).
                 const _swimAnchors = (t === 'swim')
                     ? computeSwimChangeAnchors(blockStart, blockEnd, layer, grade)
                     : { pre: null, post: null };
                 const _swimGroupId = (t === 'swim') ? nextSwimGroupId() : null;
-                const _rangeFreeForAll = (rStart, rEnd) => {
+                const _bunkRangeFree = (bunk, rStart, rEnd) => {
                     if (rStart < 0 || rEnd <= rStart) return false;
-                    return targetBunks.every(bunk => {
-                        const tl = bunkTimelines[bunk] || [];
-                        for (let i = 0; i < tl.length; i++) {
-                            const b = tl[i];
-                            if (!b) continue;
-                            const bs = b.startMin, be = b.endMin;
-                            if (bs == null || be == null) continue;
-                            if (bs < rEnd && be > rStart) return false;
-                        }
-                        return true;
-                    });
+                    const tl = bunkTimelines[bunk] || [];
+                    for (let i = 0; i < tl.length; i++) {
+                        const b = tl[i];
+                        if (!b) continue;
+                        const bs = b.startMin, be = b.endMin;
+                        if (bs == null || be == null) continue;
+                        if (bs < rEnd && be > rStart) return false;
+                    }
+                    return true;
                 };
-                const _placePre = !!_swimAnchors.pre &&
-                    _rangeFreeForAll(_swimAnchors.pre.startMin, _swimAnchors.pre.endMin);
-                const _placePost = !!_swimAnchors.post &&
-                    _rangeFreeForAll(_swimAnchors.post.startMin, _swimAnchors.post.endMin);
 
                 targetBunks.forEach(bunk => {
                     if (t === 'swim') {
+                        const _placePre = !!_swimAnchors.pre &&
+                            _bunkRangeFree(bunk, _swimAnchors.pre.startMin, _swimAnchors.pre.endMin);
+                        const _placePost = !!_swimAnchors.post &&
+                            _bunkRangeFree(bunk, _swimAnchors.post.startMin, _swimAnchors.post.endMin);
                         if (_placePre) {
                             bunkTimelines[bunk].push({
                                 startMin: _swimAnchors.pre.startMin, endMin: _swimAnchors.pre.endMin,
@@ -4736,6 +4737,21 @@
                             var need = sol.need;
                             var placeEnd = sol.start + sol.dur;
 
+                            // Defensive: swim must land on a bell-schedule period start.
+                            // If something slipped past getValidPositions' filter, drop
+                            // this placement so the schedule never shows a swim that
+                            // crosses periods.
+                            if (need.type === 'swim') {
+                                var _gpGuard = window.campPeriods && window.campPeriods[grade];
+                                if (Array.isArray(_gpGuard) && _gpGuard.length > 0) {
+                                    var _onPeriodStart = _gpGuard.some(function(_pg) { return _pg.startMin === sol.start; });
+                                    if (!_onPeriodStart) {
+                                        log('[Phase3] DROPPED non-period-start swim at ' + sol.start + ' for bunk ' + bunk);
+                                        continue;
+                                    }
+                                }
+                            }
+
                             // Register resources
                             if (need.type === 'swim') { registerCrossGrade(grade, 'swim', sol.start, placeEnd, need.event); registerPoolUsage(grade, sol.start, placeEnd); }
                             if (need.type === 'special' && need._assignedSpecial) {
@@ -4825,6 +4841,17 @@
                             if (positions.length > 0) {
                                 var pos = positions[0];
                                 var placeEnd = pos.start + pos.dur;
+                                // Defensive: swim must land on a bell-schedule period start.
+                                if (need.type === 'swim') {
+                                    var _gpGuard2 = window.campPeriods && window.campPeriods[grade];
+                                    if (Array.isArray(_gpGuard2) && _gpGuard2.length > 0) {
+                                        var _onPeriodStart2 = _gpGuard2.some(function(_pg) { return _pg.startMin === pos.start; });
+                                        if (!_onPeriodStart2) {
+                                            log('[Phase3-Relax] DROPPED non-period-start swim at ' + pos.start + ' for bunk ' + bunk);
+                                            continue;
+                                        }
+                                    }
+                                }
                                 if (need.type === 'swim') { registerCrossGrade(grade, 'swim', pos.start, placeEnd, need.event); registerPoolUsage(grade, pos.start, placeEnd); }
                                 if (need.type === 'special' && need._assignedSpecial) {
                                     registerCrossGrade(grade, 'special', pos.start, placeEnd, need.event);
