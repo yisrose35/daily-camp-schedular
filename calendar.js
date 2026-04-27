@@ -321,8 +321,9 @@ all[date].updated_at = new Date().toISOString();
                     'leagueHistory',              // ★ Regular league history (gamesPerDate)
                     'specialtyLeagueHistory',     // ★ Specialty league history
                     'daily_schedules',            // ★ Clear saved schedules from cloud
-                    'manualUsageOffsets', 
+                    'manualUsageOffsets',
                     'historicalCounts',
+                    'historicalCountedDates',
                     'smartTileHistory',
                     'rotationHistory'
                 ]);
@@ -335,6 +336,7 @@ all[date].updated_at = new Date().toISOString();
                 window.saveGlobalSettings?.('daily_schedules', {});
                 window.saveGlobalSettings?.('manualUsageOffsets', {});
                 window.saveGlobalSettings?.('historicalCounts', {});
+                window.saveGlobalSettings?.('historicalCountedDates', {});
                 window.saveGlobalSettings?.('smartTileHistory', {});
                 window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
                 

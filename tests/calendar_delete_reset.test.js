@@ -518,7 +518,7 @@ describe('startNewHalf', () => {
         assert.equal(fakeStorage.hasOwnProperty('specialtyLeagueHistory_v1'), false);
         assert.equal(fakeStorage.hasOwnProperty('campDailyData_v1'), false);
 
-        // All 8 cloud keys
+        // All 9 cloud keys
         const keys = clearCloudKeysCalls[0] || [];
         assert.ok(keys.includes('leagueRoundState'));
         assert.ok(keys.includes('leagueHistory'));
@@ -526,6 +526,7 @@ describe('startNewHalf', () => {
         assert.ok(keys.includes('daily_schedules'));
         assert.ok(keys.includes('manualUsageOffsets'));
         assert.ok(keys.includes('historicalCounts'));
+        assert.ok(keys.includes('historicalCountedDates'), 'historicalCountedDates must be cleared with historicalCounts');
         assert.ok(keys.includes('smartTileHistory'));
         assert.ok(keys.includes('rotationHistory'));
 
