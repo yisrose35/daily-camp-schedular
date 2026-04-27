@@ -10395,15 +10395,56 @@
                         // Adjacent after swim?
                         if (adj.startMin === sw.endMin) bundleEnd = Math.max(bundleEnd, adj.endMin);
                     });
-                    const anchors = computeSwimChangeAnchors(
+                    const preChangeDur = (layer.preChangeMin > 0) ? layer.preChangeMin : 0;
+                    const postChangeDur = (layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                    let anchors = computeSwimChangeAnchors(
                         sw.startMin, sw.endMin, layer, grade, bunkTimelines[bunk],
                         bundleStart, bundleEnd
                     );
+
+                    // ★ Carve fallback: when a period walk-back/forward can't
+                    // find a free slot (e.g. a sport fills the entire period
+                    // right before water-slides), trim the adjacent sport to
+                    // make room. Only sport/slot types are trimmable — pinned
+                    // activities (swim, lunch, specials, rotation_events, etc.)
+                    // are never carved.
+                    const tl278 = bunkTimelines[bunk];
+                    const TRIMMABLE_TYPES = new Set(['sport', 'slot']);
+                    if (!anchors.pre && preChangeDur > 0) {
+                        // Find the block that ends at bundleStart (immediately before bundle)
+                        const prev = tl278.find(b => b && b.endMin === bundleStart);
+                        const prevType = prev ? String(prev.type || '').toLowerCase() : '';
+                        if (prev && TRIMMABLE_TYPES.has(prevType)) {
+                            const prevDur = prev.endMin - prev.startMin;
+                            if (prevDur > preChangeDur) {
+                                // Trim the sport and place pre-change in freed space
+                                prev.endMin -= preChangeDur;
+                                if (prev.endTime) prev.endTime = minutesToTimeLabel(prev.endMin);
+                                anchors = { pre: { startMin: bundleStart - preChangeDur, endMin: bundleStart }, post: anchors.post };
+                                log('[2.78] Carved ' + preChangeDur + 'm from "' + (prev.event || prev.type) + '" for pre-change before bundle at ' + bunk);
+                            }
+                        }
+                    }
+                    if (!anchors.post && postChangeDur > 0) {
+                        // Find the block that starts at bundleEnd (immediately after bundle)
+                        const nxt = tl278.find(b => b && b.startMin === bundleEnd);
+                        const nxtType = nxt ? String(nxt.type || '').toLowerCase() : '';
+                        if (nxt && TRIMMABLE_TYPES.has(nxtType)) {
+                            const nxtDur = nxt.endMin - nxt.startMin;
+                            if (nxtDur > postChangeDur) {
+                                nxt.startMin += postChangeDur;
+                                if (nxt.startTime) nxt.startTime = minutesToTimeLabel(nxt.startMin);
+                                anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: bundleEnd + postChangeDur } };
+                                log('[2.78] Carved ' + postChangeDur + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
+                            }
+                        }
+                    }
+
                     if (!anchors.pre && !anchors.post) return;
                     const groupId = sw._swimGroupId || nextSwimGroupId();
                     sw._swimGroupId = groupId;
                     if (anchors.pre) {
-                        bunkTimelines[bunk].push({
+                        tl278.push({
                             startMin: anchors.pre.startMin, endMin: anchors.pre.endMin,
                             type: 'pre-change', event: 'Change',
                             layer: null,
@@ -10417,7 +10458,7 @@
                         _reanchorPlaced++;
                     }
                     if (anchors.post) {
-                        bunkTimelines[bunk].push({
+                        tl278.push({
                             startMin: anchors.post.startMin, endMin: anchors.post.endMin,
                             type: 'post-change', event: 'Change',
                             layer: null,
