@@ -169,6 +169,43 @@ function getEntry(bunk, slotIdx) {
     return (aa[bunk] && aa[bunk][slotIdx]) ? aa[bunk][slotIdx] : null;
 }
 
+/**
+ * Read the bell schedule (DAW layers) for a division from the auto layer templates.
+ * Returns the array of layer objects for this division, or null if not found.
+ */
+function getBellScheduleLayers(divName) {
+    try {
+        var g = window.loadGlobalSettings ? window.loadGlobalSettings() : null;
+        if (!g || !g.app1) return null;
+        var autoTemplates = g.app1.autoLayerTemplates || {};
+
+        // Determine which template is active today
+        var assignments = g.app1.skeletonAssignments || {};
+        var dateStr = window.currentScheduleDate || '';
+        var dow = 0;
+        if (dateStr) {
+            var parts = dateStr.split('-').map(Number);
+            if (parts[0] && parts[1] && parts[2]) {
+                dow = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
+            }
+        }
+        var dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        var tmplName = assignments[dayNames[dow]] || assignments['Default'];
+
+        var tmpl = null;
+        if (tmplName && autoTemplates[tmplName]) {
+            tmpl = autoTemplates[tmplName];
+        } else if (autoTemplates['_current']) {
+            tmpl = autoTemplates['_current'];
+        }
+
+        if (!tmpl) return null;
+        return tmpl[divName] || tmpl[String(divName)] || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 function formatEntry(entry) {
     if (!entry) return '';
     if (entry.continuation) return '';
@@ -856,169 +893,116 @@ function renderAutoDivisionTable(divName, bunks) {
     dayStart = Math.floor(dayStart / inc) * inc;
     dayEnd = Math.ceil(dayEnd / inc) * inc;
 
-    // ─── 2. Detect periods (grade-wide events shared by all bunks) ─────
-    // Strategy: read slot-level .type from _perBunkSlots directly, which is the
-    // authoritative source. Any time range where ALL bunks have a slot with the
-    // same type AND same startMin/endMin is a period (swim, lunch, snacks, league,
-    // dismissal, pre/post-change, custom pinned, etc.)
-    var PERIOD_SLOT_TYPES = ['swim', 'lunch', 'snacks', 'snack', 'dismissal', 'pre-change', 'post-change', 'league', 'specialty_league', 'custom', 'pinned', 'elective'];
-    var periods = []; // sorted array of { startMin, endMin, event }
+    // ─── 2. Identify "Periods" from the bell schedule (DAW layer templates) ─────
+    // The bell schedule defines layer windows — each layer has a type, startMin, endMin.
+    // Variable layers (sport, special, activity, elective) = the "Periods" where bunks
+    // have different activities. Pinned layers (swim, lunch, custom, etc.) are NOT periods.
+    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1 };
+    var activityRanges = []; // [ { startMin, endMin } ]
 
-    // Method 1: Read from _perBunkSlots (preferred — has .type on every slot)
-    var perBunkSlotsObj = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName]._perBunkSlots
-        ? window.divisionTimes[divName]._perBunkSlots : null;
-
-    if (perBunkSlotsObj && bunks.length > 0) {
-        var firstBunkSlots = perBunkSlotsObj[String(bunks[0])] || [];
-        firstBunkSlots.forEach(function (slot) {
-            var slotType = (slot.type || '').toLowerCase();
-            var slotEvent = (slot.event || '').toLowerCase();
-            // Check if this slot type is a period type
-            var isPeriodSlot = PERIOD_SLOT_TYPES.some(function (pt) { return slotType === pt || slotType.indexOf(pt) >= 0; });
-            // Also check the event name for keywords
-            if (!isPeriodSlot) {
-                isPeriodSlot = PERIOD_SLOT_TYPES.some(function (pt) { return slotEvent.indexOf(pt) >= 0; });
+    // Method 1: Read from DAW layer templates (bell schedule) — authoritative
+    var bellLayers = getBellScheduleLayers(divName);
+    if (bellLayers && bellLayers.length > 0) {
+        bellLayers.forEach(function (layer) {
+            var lt = (layer.type || '').toLowerCase();
+            if (VARIABLE_LAYER_TYPES[lt]) {
+                activityRanges.push({ startMin: layer.startMin, endMin: layer.endMin });
             }
-            if (!isPeriodSlot) return;
+        });
+        // Sort and merge overlapping ranges
+        activityRanges.sort(function (a, b) { return a.startMin - b.startMin; });
+        var mergedRanges = [];
+        activityRanges.forEach(function (r) {
+            var last = mergedRanges.length > 0 ? mergedRanges[mergedRanges.length - 1] : null;
+            if (last && r.startMin <= last.endMin) {
+                last.endMin = Math.max(last.endMin, r.endMin);
+            } else {
+                mergedRanges.push({ startMin: r.startMin, endMin: r.endMin });
+            }
+        });
+        activityRanges = mergedRanges;
+    }
 
-            // Verify ALL other bunks have a slot at the exact same time range
-            var allMatch = bunks.every(function (bk) {
-                var bkSlots = perBunkSlotsObj[String(bk)] || [];
-                return bkSlots.some(function (s) {
-                    return s.startMin === slot.startMin && s.endMin === slot.endMin;
-                });
+    // Method 2: Fallback — infer from _perBunkSlots slot types
+    if (activityRanges.length === 0) {
+        var perBunkSlotsObj = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName]._perBunkSlots
+            ? window.divisionTimes[divName]._perBunkSlots : null;
+        if (perBunkSlotsObj && bunks.length > 0) {
+            var firstSlots = perBunkSlotsObj[String(bunks[0])] || [];
+            var curRange = null;
+            firstSlots.forEach(function (slot) {
+                var isVariable = VARIABLE_LAYER_TYPES[(slot.type || '').toLowerCase()] === 1;
+                if (isVariable) {
+                    if (curRange && slot.startMin <= curRange.endMin) {
+                        curRange.endMin = Math.max(curRange.endMin, slot.endMin);
+                    } else {
+                        if (curRange) activityRanges.push(curRange);
+                        curRange = { startMin: slot.startMin, endMin: slot.endMin };
+                    }
+                } else {
+                    if (curRange) { activityRanges.push(curRange); curRange = null; }
+                }
             });
-            if (!allMatch) return;
-
-            // Get the display name
-            var eventName = slot.event || slotType;
-            // Also check scheduleAssignments for a better name
-            var firstBunkEntry = getEntry(bunks[0], firstBunkSlots.indexOf(slot));
-            if (firstBunkEntry) {
-                var betterName = firstBunkEntry._activity || firstBunkEntry._gameLabel || firstBunkEntry._leagueName || '';
-                if (betterName) eventName = betterName;
-            }
-            // Capitalize first letter
-            if (eventName && eventName.length > 0) {
-                eventName = eventName.charAt(0).toUpperCase() + eventName.slice(1);
-            }
-
-            periods.push({ startMin: slot.startMin, endMin: slot.endMin, event: eventName });
-        });
-    }
-
-    // Method 2: Fallback — scan bunkActs for shared pinned entries (old approach)
-    if (periods.length === 0 && bunks.length > 0) {
-        var firstActs = bunkActs[bunks[0]] || [];
-        firstActs.forEach(function (act) {
-            if (!act.entry) return;
-            var entryType = getEntryType(act.entry);
-            if (entryType !== 'pinned' && entryType !== 'league') return;
-            var allMatch = bunks.every(function (bk) {
-                return (bunkActs[bk] || []).some(function (a) {
-                    return a.startMin === act.startMin && a.endMin === act.endMin;
-                });
-            });
-            if (!allMatch) return;
-            var evName = act.entry._activity || formatEntry(act.entry) || act.entry.type || 'Event';
-            if (evName.length > 0) evName = evName.charAt(0).toUpperCase() + evName.slice(1);
-            periods.push({ startMin: act.startMin, endMin: act.endMin, event: evName });
-        });
-    }
-
-    // Deduplicate and sort
-    periods.sort(function (a, b) { return a.startMin - b.startMin; });
-    periods = periods.filter(function (p, i, arr) { return i === 0 || p.startMin !== arr[i - 1].startMin; });
-
-    // Merge adjacent periods of the same type (e.g. pre-change + swim + post-change → "Swim")
-    var mergedPeriods = [];
-    periods.forEach(function (p) {
-        var last = mergedPeriods.length > 0 ? mergedPeriods[mergedPeriods.length - 1] : null;
-        // Merge if adjacent and related (e.g. Change + Swim + Change)
-        if (last && last.endMin === p.startMin && areRelatedPeriods(last.event, p.event)) {
-            last.endMin = p.endMin;
-            // Keep the more descriptive name
-            if (p.event.toLowerCase().indexOf('change') < 0) last.event = p.event;
-        } else {
-            mergedPeriods.push({ startMin: p.startMin, endMin: p.endMin, event: p.event });
+            if (curRange) activityRanges.push(curRange);
         }
-    });
-    periods = mergedPeriods;
+    }
 
-    // ─── 3. Build sections: alternating [activity-section, period, activity-section, ...] ─────
-    // Each section is either a "period" (single merged column group) or an "activity"
-    // section (has sub-time increment columns where bunk data goes)
-    var sections = []; // { type:'period'|'activity', startMin, endMin, event?, cols:[] }
-    var cursor = dayStart;
+    // If still nothing, treat entire day as one period
+    if (activityRanges.length === 0) {
+        activityRanges.push({ startMin: dayStart, endMin: dayEnd });
+    }
 
-    periods.forEach(function (p) {
-        // Activity section before this period
-        if (p.startMin > cursor) {
-            sections.push(buildActivitySection(cursor, p.startMin, inc));
+    // ─── 3. Build the full time-column array covering dayStart → dayEnd ─────
+    // Every increment gets a column. We also tag each column with which period it belongs to.
+    var timeCols = []; // [ { startMin, endMin, label, periodIdx (-1 if not in a period) } ]
+    for (var t = dayStart; t < dayEnd; t += inc) {
+        var colEnd = Math.min(t + inc, dayEnd);
+        var pIdx = -1;
+        for (var ri = 0; ri < activityRanges.length; ri++) {
+            // Column is in this period if it overlaps
+            if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
         }
-        // The period itself — gets a single column (no sub-times)
-        sections.push({
-            type: 'period', startMin: p.startMin, endMin: p.endMin, event: p.event,
-            cols: [{ startMin: p.startMin, endMin: p.endMin, label: minutesToTimeLabel(p.startMin) + ' \u2013 ' + minutesToTimeLabel(p.endMin) }]
-        });
-        cursor = p.endMin;
-    });
-    // Activity section after last period
-    if (cursor < dayEnd) {
-        sections.push(buildActivitySection(cursor, dayEnd, inc));
+        timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
     }
-    // Edge case: no periods at all
-    if (sections.length === 0) {
-        sections.push(buildActivitySection(dayStart, dayEnd, inc));
-    }
-
-    // Flatten all columns across sections for easy indexing
-    var allCols = []; // { startMin, endMin, label, sectionIdx, isPeriod }
-    sections.forEach(function (sec, si) {
-        sec.cols.forEach(function (col) {
-            allCols.push({ startMin: col.startMin, endMin: col.endMin, label: col.label, sectionIdx: si, isPeriod: sec.type === 'period' });
-        });
-    });
-    var numCols = allCols.length;
+    var numCols = timeCols.length;
 
     // ─── 4. Render table ─────
     var html = '<div style="overflow:auto;"><table class="pc3-tbl" style="table-layout:fixed;">';
-
-    // ── HEADER ROW 1: Section labels (periods + activity section names) ──
     html += '<thead>';
+
+    // ── HEADER ROW 1: Period labels (only over variable-activity columns) ──
     html += '<tr>';
     html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
-    var sectionNum = 0;
-    sections.forEach(function (sec) {
-        var colCount = sec.cols.length;
-        if (sec.type === 'period') {
-            var pBg = getPeriodColor(sec.event);
-            html += '<th colspan="' + colCount + '" style="text-align:center;background:' + pBg + ';color:#fff;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:5px 4px;border-bottom:none;">';
-            html += escHtml(sec.event);
+
+    var ci = 0;
+    while (ci < numCols) {
+        var col = timeCols[ci];
+        if (col.periodIdx >= 0) {
+            // Count consecutive columns in this period
+            var pStart = ci;
+            var pId = col.periodIdx;
+            while (ci < numCols && timeCols[ci].periodIdx === pId) ci++;
+            var pSpan = ci - pStart;
+            var periodNum = pId + 1;
+            var range = activityRanges[pId];
+            html += '<th colspan="' + pSpan + '" style="text-align:center;background:#f1f5f9;color:#475569;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:4px;border-bottom:none;">';
+            html += 'Period ' + periodNum;
+            html += '<div style="font-size:8px;font-weight:400;opacity:.7;margin-top:1px;">' + minutesToTimeLabel(range.startMin) + ' \u2013 ' + minutesToTimeLabel(range.endMin) + '</div>';
             html += '</th>';
         } else {
-            sectionNum++;
-            // Label the activity section (e.g. "Period 1", "Period 2" or time range)
-            var secLabel = 'Period ' + sectionNum;
-            html += '<th colspan="' + colCount + '" style="text-align:center;background:#f1f5f9;color:#475569;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:4px;border-bottom:none;">';
-            html += escHtml(secLabel);
-            html += '<div style="font-size:8px;font-weight:400;opacity:.7;margin-top:1px;">' + minutesToTimeLabel(sec.startMin) + ' \u2013 ' + minutesToTimeLabel(sec.endMin) + '</div>';
-            html += '</th>';
+            // Non-period column — just an empty top header cell
+            html += '<th style="background:#e8ecf0;border-bottom:none;padding:2px;"></th>';
+            ci++;
         }
-    });
+    }
     html += '</tr>';
 
     // ── HEADER ROW 2: Sub-time increment labels ──
     html += '<tr>';
-    allCols.forEach(function (col) {
-        if (col.isPeriod) {
-            // Period columns get a time range label in the sub-row
-            var pBg2 = getPeriodColor(sections[col.sectionIdx].event);
-            html += '<th style="text-align:center;background:' + pBg2 + ';color:rgba(255,255,255,.8);font-size:8px;font-weight:400;padding:2px;">' + col.label + '</th>';
-        } else {
-            var colW = Math.max(36, Math.min(80, 600 / numCols));
-            html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + (inc <= 10 ? 8 : 9) + 'px;white-space:nowrap;padding:2px;text-align:center;font-weight:500;color:#64748b;">' + col.label + '</th>';
-        }
+    var colW = Math.max(36, Math.min(80, 700 / numCols));
+    timeCols.forEach(function (col) {
+        var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f8fafc;';
+        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + (inc <= 10 ? 8 : 9) + 'px;white-space:nowrap;padding:2px;text-align:center;font-weight:500;color:#64748b;' + bgStyle + '">' + col.label + '</th>';
     });
     html += '</tr>';
     html += '</thead><tbody>';
@@ -1032,35 +1016,20 @@ function renderAutoDivisionTable(divName, bunks) {
         var colIdx = 0;
 
         while (colIdx < numCols) {
-            var col = allCols[colIdx];
+            var colStart = timeCols[colIdx].startMin;
+            var colEnd = timeCols[colIdx].endMin;
 
-            if (col.isPeriod) {
-                // Period column — render as a styled cell with the period event name
-                var pSec = sections[col.sectionIdx];
-                var pBg3 = getPeriodColor(pSec.event);
-                html += '<td style="text-align:center;background:' + pBg3 + ';color:#fff;font-weight:600;font-size:10px;opacity:.85;">';
-                html += escHtml(pSec.event);
-                html += '</td>';
-                colIdx++;
-                continue;
+            // Find which bunk activity covers this time column
+            var matchAct = null;
+            for (var ai = 0; ai < acts.length; ai++) {
+                if (acts[ai].startMin < colEnd && acts[ai].endMin > colStart) { matchAct = acts[ai]; break; }
             }
 
-            // Activity column — find which bunk activity covers this time
-            var colStart = col.startMin;
-            var colEnd = col.endMin;
-            var matchAct = null;
-            acts.forEach(function (a) {
-                // Skip activities that fall entirely within a period
-                var inPeriod = periods.some(function (p) { return a.startMin >= p.startMin && a.endMin <= p.endMin; });
-                if (inPeriod) return;
-                if (a.startMin < colEnd && a.endMin > colStart) matchAct = a;
-            });
-
             if (matchAct) {
-                // Calculate colspan: how many consecutive non-period columns this activity spans
+                // Calculate colspan: how many consecutive columns this activity spans
                 var span = 1;
                 var nextCol = colIdx + 1;
-                while (nextCol < numCols && !allCols[nextCol].isPeriod && allCols[nextCol].startMin < matchAct.endMin) {
+                while (nextCol < numCols && timeCols[nextCol].startMin < matchAct.endMin) {
                     span++;
                     nextCol++;
                 }
@@ -1098,43 +1067,6 @@ function renderAutoDivisionTable(divName, bunks) {
 
     html += '</tbody></table></div>';
     return html;
-}
-
-// ── Build sub-time columns for an activity section ──
-function buildActivitySection(startMin, endMin, inc) {
-    var cols = [];
-    for (var t = startMin; t < endMin; t += inc) {
-        cols.push({ startMin: t, endMin: Math.min(t + inc, endMin), label: minutesToTimeLabel(t) });
-    }
-    return { type: 'activity', startMin: startMin, endMin: endMin, cols: cols };
-}
-
-// ── Period color helper ──
-function getPeriodColor(eventName) {
-    var e = (eventName || '').toLowerCase();
-    if (e.indexOf('swim') >= 0 || e.indexOf('pool') >= 0) return '#0891b2';
-    if (e.indexOf('change') >= 0) return '#0e7490';
-    if (e.indexOf('lunch') >= 0) return '#dc2626';
-    if (e.indexOf('snack') >= 0) return '#ca8a04';
-    if (e.indexOf('dismissal') >= 0) return '#6b7280';
-    if (e.indexOf('league') >= 0 || e.indexOf('specialty') >= 0) return '#4338ca';
-    if (e.indexOf('elective') >= 0) return '#9333ea';
-    if (e.indexOf('regroup') >= 0 || e.indexOf('assembly') >= 0) return '#475569';
-    return '#147D91';
-}
-
-// ── Check if two period events are related (for merging adjacent periods) ──
-function areRelatedPeriods(eventA, eventB) {
-    var a = (eventA || '').toLowerCase();
-    var b = (eventB || '').toLowerCase();
-    // Merge pre-change/post-change with swim
-    var swimRelated = ['swim', 'change', 'pool'];
-    var aIsSwim = swimRelated.some(function (k) { return a.indexOf(k) >= 0; });
-    var bIsSwim = swimRelated.some(function (k) { return b.indexOf(k) >= 0; });
-    if (aIsSwim && bIsSwim) return true;
-    // Same event name
-    if (a === b) return true;
-    return false;
 }
 
 // ── MANUAL MODE: Bunks on top ──
