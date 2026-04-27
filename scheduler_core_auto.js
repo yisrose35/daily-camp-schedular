@@ -879,6 +879,7 @@
                 const _winStart = _meta.winStart;
                 const _dur = _meta.dur;
                 if (_dur > 0 && (startMin - _winStart) % _dur !== 0) return false; // off-boundary
+                if (_dur > 0 && (endMin - startMin) !== _dur) return false; // wrong duration — must equal per-bunk dur
                 // Use 'all' share type: concurrency limit applies across all grades
                 return rtCanUse('rotevt', eventId, grade, startMin, endMin,
                     'all', concurrency, []);
@@ -1480,30 +1481,22 @@
                 }
             }
             if (preChange > 0 && !pre) {
-                for (var pi = firstPeriodIdx - 1; pi >= 0; pi--) {
-                    var prevP = gp[pi];
-                    var prevDur = prevP.endMin - prevP.startMin;
-                    var preDur = Math.min(preChange, prevDur);
-                    var preStart = prevP.endMin - preDur, preEnd = prevP.endMin;
-                    if (!rangeOccupied(preStart, preEnd)) {
-                        pre = { startMin: preStart, endMin: preEnd };
-                        break;
-                    }
+                // Only place Change in the gap immediately before swim — not in a period
+                // further back. Walking back multiple periods puts Change hours before swim.
+                var _preGapEnd = swimStart;
+                var _preGapStart = swimStart - preChange;
+                if (_preGapStart >= 0 && !rangeOccupied(_preGapStart, _preGapEnd)) {
+                    pre = { startMin: _preGapStart, endMin: _preGapEnd };
                 }
             }
 
-            // POST: walk forward from the bundle's last period.
+            // POST: place Change in the gap immediately after swim (not multiple periods ahead).
             var post = null;
             if (postChange > 0) {
-                for (var pj = lastPeriodIdx + 1; pj < gp.length; pj++) {
-                    var nextP = gp[pj];
-                    var nextDur = nextP.endMin - nextP.startMin;
-                    var postDur = Math.min(postChange, nextDur);
-                    var postStart = nextP.startMin, postEnd = nextP.startMin + postDur;
-                    if (!rangeOccupied(postStart, postEnd)) {
-                        post = { startMin: postStart, endMin: postEnd };
-                        break;
-                    }
+                var _postGapStart = swimEnd;
+                var _postGapEnd = swimEnd + postChange;
+                if (!rangeOccupied(_postGapStart, _postGapEnd)) {
+                    post = { startMin: _postGapStart, endMin: _postGapEnd };
                 }
             }
             return { pre: pre, post: post };
@@ -4732,11 +4725,15 @@
                             // ★ v11.4: Negotiate duration instead of greedily taking dMax
                             // ★ v15.2: Snack/swim are fixed-duration — always use dMin, never stretch to dMax
                             var _needType15 = (need.type || '').toLowerCase();
+                            var _rMeta15 = (_needType15 === 'rotation_event' && need._rotationEventId) ? _rotEventMeta[need._rotationEventId] : null;
+                            var _isStaggeredNeed = _rMeta15 && _rMeta15.gradeMode === 'individual';
                             var _isFixedDurNeed = (_needType15 === 'snacks' || _needType15 === 'snack' || _needType15 === 'swim');
                             var gapSize = gap.end - gap.start;
                             var dur;
                             if (_isFixedDurNeed) {
                                 dur = need.dMin; // snack/swim: never stretch beyond their required minimum
+                            } else if (_isStaggeredNeed) {
+                                dur = _rMeta15.dur || need.dMin; // staggered rotation: use per-bunk duration, not grade-wide window
                             } else if (otherNeeds && otherNeeds.length > 0) {
                                 dur = negotiateDuration(need, otherNeeds, gapSize, fMin);
                                 dur = Math.min(dur, we - ws); // can't exceed available window
