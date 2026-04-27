@@ -89,10 +89,16 @@ var _isFullscreen = false;
 var _advancedOpen = false;
 var _previewHtml = '';
 var _cloudSyncTimeout = null;
-var _liveMode = false;
 var _liveInterval = null;
-var _timeIncrement = 15; // minutes: 5, 10, 15, 30, 45, 60
+var _liveCursorInterval = null;
+var _liveWindow = null;
+var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 var CLOUD_SYNC_DEBOUNCE = 2000;
+
+// Excel-style cell selection state
+var _selAnchor = null;   // {sheet, r, c}
+var _selFocus  = null;   // {sheet, r, c}
+var _activeSheet = null; // table element id of currently focused sheet
 
 // =========================================================================
 // UTILITY HELPERS
@@ -131,6 +137,18 @@ function getNowMinutes() {
     var now = new Date();
     return now.getHours() * 60 + now.getMinutes();
 }
+
+// Excel-style coordinate helpers
+function colLetter(c) {
+    var s = ''; var n = c + 1;
+    while (n > 0) {
+        var rem = (n - 1) % 26;
+        s = String.fromCharCode(65 + rem) + s;
+        n = Math.floor((n - 1) / 26);
+    }
+    return s;
+}
+function cellId(r, c) { return colLetter(c) + (r + 1); }
 
 // =========================================================================
 // DATA HELPERS
@@ -522,7 +540,7 @@ function getStyles() {
     '.pc3-sheet{background:#fff;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.08),0 0 0 1px rgba(0,0,0,.04);margin-bottom:16px;overflow:auto;position:relative;}' +
 
     /* ── Spreadsheet Table ── */
-    '.pc3-tbl{border-collapse:collapse;width:100%;table-layout:auto;}' +
+    '.pc3-tbl{border-collapse:collapse;width:100%;table-layout:auto;user-select:none;}' +
     '.pc3-tbl th,.pc3-tbl td{border:1px solid #e2e8f0;padding:5px 8px;text-align:left;white-space:nowrap;position:relative;transition:background .1s;}' +
     '.pc3-tbl th{background:#f1f5f9;font-weight:600;position:sticky;z-index:2;font-size:11px;color:#475569;}' +
     '.pc3-tbl thead th{top:0;}' +
@@ -534,6 +552,18 @@ function getStyles() {
     '.pc3-tbl .cell-pinned{background:#fff8e1;color:#92400e;font-weight:500;}' +
     '.pc3-tbl .cell-league{background:#eff6ff;color:#1e40af;font-weight:500;}' +
     '.pc3-tbl .cell-transition{background:#f5f3ff;color:#6d28d9;font-size:10px;font-style:italic;}' +
+
+    /* ── Excel-style coordinate headers ── */
+    '.pc3-tbl tr.pc3-coord-row th{background:#dbe2ea!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 6px;border:1px solid #94a3b8;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-corner{background:#94a3b8!important;color:transparent;left:0;z-index:5;min-width:36px;width:36px;}' +
+    '.pc3-tbl th.pc3-row-num{background:#dbe2ea!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 4px;border:1px solid #94a3b8;width:36px;min-width:36px;position:sticky;left:0;z-index:3;}' +
+    '.pc3-tbl tr:nth-child(even) th.pc3-row-num{background:#dbe2ea!important;}' +
+    '.pc3-tbl td.pc3-cell-selected,.pc3-tbl th.pc3-cell-selected:not(.pc3-row-num):not(.pc3-coord-corner):not(.pc3-coord-row th){background:rgba(20,125,145,.18)!important;}' +
+    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #147D91!important;outline-offset:-2px;background:rgba(20,125,145,.28)!important;z-index:2;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
+    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
+    '.pc3-tbl td,.pc3-tbl th{cursor:cell;}' +
+    '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
     /* ── Sheet Header ── */
     '.pc3-sheet-head{padding:10px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e2e8f0;}' +
@@ -563,7 +593,12 @@ function getStyles() {
     '.pc3-live-tbl .cell-past{opacity:.4;}' +
     '.pc3-live-tbl .cell-pinned{background:#422006 !important;color:#fbbf24;}' +
     '.pc3-live-tbl .cell-league{background:#1e1b4b !important;color:#818cf8;}' +
-    '.pc3-live-cursor{position:absolute;left:0;right:0;height:3px;background:#fbbf24;z-index:50;pointer-events:none;transition:top .5s linear;box-shadow:0 0 12px rgba(251,191,36,.6);}' +
+    '.pc3-live-cursor-v{position:absolute;top:0;bottom:0;width:3px;background:#fbbf24;z-index:50;pointer-events:none;box-shadow:0 0 14px rgba(251,191,36,.7);transition:left .8s linear;}' +
+    '.pc3-live-cursor-h{position:absolute;left:0;right:0;height:3px;background:#fbbf24;z-index:50;pointer-events:none;box-shadow:0 0 14px rgba(251,191,36,.7);transition:top .8s linear;}' +
+    '.pc3-live-now-tag{position:absolute;background:#fbbf24;color:#111;font-size:11px;font-weight:800;padding:3px 8px;border-radius:4px;font-variant-numeric:tabular-nums;z-index:51;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.4);}' +
+    '.pc3-live-now-tag.tag-v{top:-2px;transform:translateX(-50%);}' +
+    '.pc3-live-now-tag.tag-h{left:8px;transform:translateY(-50%);}' +
+    '.pc3-live-section{position:relative;}' +
 
     /* ── Advanced Drawer ── */
     '.pc3-drawer{position:absolute;top:0;right:0;width:300px;height:100%;background:#fff;border-left:1px solid #e2e8f0;box-shadow:-4px 0 16px rgba(0,0,0,.08);z-index:20;transform:translateX(100%);transition:transform .25s;display:flex;flex-direction:column;}' +
@@ -627,14 +662,15 @@ function buildMainUI() {
         /* Time increment selector — visible in all modes but most relevant for auto */
         '<div class="pc3-toolbar-sep"></div>' +
         '<div class="pc3-toolbar-group">' +
-            '<span class="pc3-tb-label">Grid</span>' +
-            '<select id="pc3-time-increment" class="pc3-tb-select" title="Time axis increment">' +
-                '<option value="5"'  + (_timeIncrement === 5  ? ' selected' : '') + '>5 min</option>' +
-                '<option value="10"' + (_timeIncrement === 10 ? ' selected' : '') + '>10 min</option>' +
-                '<option value="15"' + (_timeIncrement === 15 ? ' selected' : '') + '>15 min</option>' +
-                '<option value="30"' + (_timeIncrement === 30 ? ' selected' : '') + '>30 min</option>' +
-                '<option value="45"' + (_timeIncrement === 45 ? ' selected' : '') + '>45 min</option>' +
-                '<option value="60"' + (_timeIncrement === 60 ? ' selected' : '') + '>1 hr</option>' +
+            '<span class="pc3-tb-label">Sub-segment</span>' +
+            '<select id="pc3-time-increment" class="pc3-tb-select" title="Sub-segment increment within each period">' +
+                (function () {
+                    var opts = '';
+                    for (var iv = 5; iv <= 60; iv += 5) {
+                        opts += '<option value="' + iv + '"' + (_timeIncrement === iv ? ' selected' : '') + '>' + iv + ' min</option>';
+                    }
+                    return opts;
+                })() +
             '</select>' +
         '</div>' +
         '<div class="pc3-toolbar-sep"></div>' +
@@ -644,7 +680,7 @@ function buildMainUI() {
         '</div>' +
         '<div style="flex:1;"></div>' +
         '<div class="pc3-toolbar-group">' +
-            '<button class="pc3-tb-btn' + (_liveMode ? ' live' : '') + '" id="pc3-live-btn" title="Live Display Mode">' + ICO.monitor + ' Live</button>' +
+            '<button class="pc3-tb-btn" id="pc3-live-btn" title="Open Live View in a new window (for casting to a screen)">' + ICO.monitor + ' Live View</button>' +
             '<div class="pc3-toolbar-sep"></div>' +
             (canEditTemplates() ? '<button class="pc3-tb-btn" onclick="window._pc3ToggleAdvanced()" title="Design settings">' + ICO.gear + '</button>' : '') +
             '<button class="pc3-tb-btn" onclick="window._pc3ExportExcel()">' + ICO.excel + ' Excel</button>' +
@@ -848,6 +884,22 @@ function getSelectedItems() {
 // ★★★ SPREADSHEET RENDERERS ★★★
 // =========================================================================
 
+// Excel-style coordinate strip helpers
+var _sheetSeq = 0;
+function pcNextSheetId() { _sheetSeq++; return 'pcsh_' + _sheetSeq; }
+function pcCoordRow(numDataCols) {
+    var s = '<tr class="pc3-coord-row">';
+    s += '<th class="pc3-coord-corner" data-select-all="1"></th>';
+    for (var i = 0; i < numDataCols; i++) {
+        s += '<th data-col-select="' + i + '">' + colLetter(i) + '</th>';
+    }
+    s += '</tr>';
+    return s;
+}
+function pcRowNum(r) {
+    return '<th class="pc3-row-num" data-row-select="' + r + '">' + (r + 1) + '</th>';
+}
+
 // ── Division View (manual mode: slot-based) ──
 function renderDivisionSheet(divName) {
     var t = _currentTemplate;
@@ -995,12 +1047,20 @@ function renderAutoDivisionTable(divName, bunks) {
     var numCols = timeCols.length;
 
     // ─── 4. Render table ─────
-    var html = '<div style="overflow:auto;"><table class="pc3-tbl" style="table-layout:fixed;">';
+    // Total visible data columns = 1 (bunk) + numCols (time)
+    var totalDataCols = 1 + numCols;
+    var sheetId = pcNextSheetId();
+    var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto" data-day-start="' + dayStart + '" data-day-end="' + dayEnd + '" style="table-layout:fixed;">';
     html += '<thead>';
 
-    // ── HEADER ROW 1: Period labels (only over variable-activity columns) ──
+    // ── HEADER ROW 0: Excel column letters (A, B, C, ...) ──
+    html += pcCoordRow(totalDataCols);
+
+    // ── HEADER ROW 1 (data row 1): Period labels (only over variable-activity columns) ──
     html += '<tr>';
-    html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
+    html += pcRowNum(0);
+    html += '<th class="corner" rowspan="2" data-r="0" data-c="0" data-cell-text="Bunk" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
 
     var ci = 0;
     while (ci < numCols) {
@@ -1013,32 +1073,36 @@ function renderAutoDivisionTable(divName, bunks) {
             var pSpan = ci - pStart;
             var periodNum = pId + 1;
             var range = activityRanges[pId];
-            html += '<th colspan="' + pSpan + '" style="text-align:center;background:#f1f5f9;color:#475569;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:4px;border-bottom:none;">';
+            var periodTxt = 'Period ' + periodNum + ' (' + minutesToTimeLabel(range.startMin) + '\u2013' + minutesToTimeLabel(range.endMin) + ')';
+            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#f1f5f9;color:#475569;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:4px;border-bottom:none;">';
             html += 'Period ' + periodNum;
             html += '<div style="font-size:8px;font-weight:400;opacity:.7;margin-top:1px;">' + minutesToTimeLabel(range.startMin) + ' \u2013 ' + minutesToTimeLabel(range.endMin) + '</div>';
             html += '</th>';
         } else {
             // Non-period column — just an empty top header cell
-            html += '<th style="background:#e8ecf0;border-bottom:none;padding:2px;"></th>';
+            html += '<th data-r="0" data-c="' + (1 + ci) + '" style="background:#e8ecf0;border-bottom:none;padding:2px;"></th>';
             ci++;
         }
     }
     html += '</tr>';
 
-    // ── HEADER ROW 2: Sub-time increment labels ──
+    // ── HEADER ROW 2 (data row 2): Sub-time increment labels ──
     html += '<tr>';
+    html += pcRowNum(1);
     var colW = Math.max(36, Math.min(80, 700 / numCols));
-    timeCols.forEach(function (col) {
+    timeCols.forEach(function (col, idx) {
         var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f8fafc;';
-        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + (inc <= 10 ? 8 : 9) + 'px;white-space:nowrap;padding:2px;text-align:center;font-weight:500;color:#64748b;' + bgStyle + '">' + col.label + '</th>';
+        html += '<th data-r="1" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(col.label) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + (inc <= 10 ? 8 : 9) + 'px;white-space:nowrap;padding:2px;text-align:center;font-weight:500;color:#64748b;' + bgStyle + '">' + col.label + '</th>';
     });
     html += '</tr>';
     html += '</thead><tbody>';
 
     // ─── 5. Bunk rows ─────
-    bunks.forEach(function (bunk) {
+    bunks.forEach(function (bunk, bunkIdx) {
+        var rowR = 2 + bunkIdx;
         html += '<tr>';
-        html += '<th class="row-head" style="min-width:80px;">' + escHtml(bunk) + '</th>';
+        html += pcRowNum(rowR);
+        html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(bunk) + '" style="min-width:80px;">' + escHtml(bunk) + '</th>';
 
         var acts = bunkActs[bunk] || [];
         var colIdx = 0;
@@ -1076,7 +1140,7 @@ function renderAutoDivisionTable(divName, bunks) {
 
                 html += '<td';
                 if (span > 1) html += ' colspan="' + span + '"';
-                html += ' class="cell-' + type + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + matchAct.slotIdx + '" data-div="' + escHtml(divName) + '"';
+                html += ' class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + matchAct.slotIdx + '" data-div="' + escHtml(divName) + '"';
                 html += ' title="' + escHtml(displayText + ' (' + durMin + ' min)') + '"';
                 html += ' style="text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:' + (span <= 1 ? '9' : '10') + 'px;">';
                 html += escHtml(displayText);
@@ -1085,7 +1149,7 @@ function renderAutoDivisionTable(divName, bunks) {
 
                 colIdx = nextCol;
             } else {
-                html += '<td class="cell-free" style="text-align:center;font-size:9px;">\u2014</td>';
+                html += '<td class="cell-free" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="\u2014" style="text-align:center;font-size:9px;">\u2014</td>';
                 colIdx++;
             }
         }
@@ -1100,28 +1164,41 @@ function renderAutoDivisionTable(divName, bunks) {
 // ── MANUAL MODE: Bunks on top ──
 function renderManualBunksTop(divName, bunks, blocks) {
     var t = _currentTemplate;
-    var html = '<div style="overflow:auto;"><table class="pc3-tbl">';
-    html += '<thead><tr><th class="corner" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
-    bunks.forEach(function (b) { html += '<th>' + escHtml(b) + '</th>'; });
+    var totalDataCols = 1 + bunks.length;
+    var sheetId = pcNextSheetId();
+    var firstStart = blocks.length ? blocks[0].startMin : 0;
+    var lastEnd = blocks.length ? blocks[blocks.length - 1].endMin : 0;
+    var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="manual-bunks-top" data-day-start="' + firstStart + '" data-day-end="' + lastEnd + '">';
+    html += '<thead>';
+    html += pcCoordRow(totalDataCols);
+    html += '<tr>';
+    html += pcRowNum(0);
+    html += '<th class="corner" data-r="0" data-c="0" data-cell-text="Time" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
+    bunks.forEach(function (b, bi) {
+        html += '<th data-r="0" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(b) + '">' + escHtml(b) + '</th>';
+    });
     html += '</tr></thead><tbody>';
 
-    blocks.forEach(function (eb) {
-        html += '<tr>';
-        html += '<th class="row-head">' + eb.label + '</th>';
+    blocks.forEach(function (eb, blkIdx) {
+        var rowR = 1 + blkIdx;
+        html += '<tr data-block-start="' + eb.startMin + '" data-block-end="' + eb.endMin + '">';
+        html += pcRowNum(rowR);
+        html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(eb.label) + '">' + eb.label + '</th>';
         if (eb.isLeague && !_currentTemplate.hideLeagueMatchups) {
             var matchups = buildLeagueMatchups(eb, divName);
             var mHtml = '<strong>' + escHtml(eb.event) + '</strong>';
             if (matchups.length) { mHtml += '<div>'; matchups.forEach(function (mu) { mHtml += '<span class="pc3-matchup">' + escHtml(mu) + '</span>'; }); mHtml += '</div>'; }
-            html += '<td class="cell-league" colspan="' + bunks.length + '" style="text-align:center;">' + mHtml + '</td>';
+            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;">' + mHtml + '</td>';
         } else {
-            bunks.forEach(function (b) {
+            bunks.forEach(function (b, bi) {
                 var si = findFirstSlotForTime(eb.startMin, divName);
                 var entry = si >= 0 ? getEntry(b, si) : null;
                 var type = getEntryType(entry);
                 var text = entry ? formatEntry(entry) : '';
                 if (!text && type === 'free') text = '\u2014';
                 if (eb.isLeague && _currentTemplate.hideLeagueMatchups) { text = eb.event; type = 'league'; }
-                html += '<td class="cell-' + type + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
+                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
             });
         }
         html += '</tr>';
@@ -1134,21 +1211,35 @@ function renderManualBunksTop(divName, bunks, blocks) {
 // ── MANUAL MODE: Time on top ──
 function renderManualTimeTop(divName, bunks, blocks) {
     var t = _currentTemplate;
-    var html = '<div style="overflow:auto;"><table class="pc3-tbl">';
-    html += '<thead><tr><th class="corner">Bunk</th>';
-    blocks.forEach(function (bl) { html += '<th style="font-size:' + Math.max(8, t.gridFontSize - 1) + 'px;">' + bl.label + '</th>'; });
+    var totalDataCols = 1 + blocks.length;
+    var sheetId = pcNextSheetId();
+    var firstStart = blocks.length ? blocks[0].startMin : 0;
+    var lastEnd = blocks.length ? blocks[blocks.length - 1].endMin : 0;
+    var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="manual-time-top" data-day-start="' + firstStart + '" data-day-end="' + lastEnd + '">';
+    html += '<thead>';
+    html += pcCoordRow(totalDataCols);
+    html += '<tr>';
+    html += pcRowNum(0);
+    html += '<th class="corner" data-r="0" data-c="0" data-cell-text="Bunk">Bunk</th>';
+    blocks.forEach(function (bl, bi) {
+        html += '<th data-r="0" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(bl.label) + '" data-block-start="' + bl.startMin + '" data-block-end="' + bl.endMin + '" style="font-size:' + Math.max(8, t.gridFontSize - 1) + 'px;">' + bl.label + '</th>';
+    });
     html += '</tr></thead><tbody>';
 
-    bunks.forEach(function (b) {
-        html += '<tr><th class="row-head">' + escHtml(b) + '</th>';
-        blocks.forEach(function (eb) {
+    bunks.forEach(function (b, bi) {
+        var rowR = 1 + bi;
+        html += '<tr>';
+        html += pcRowNum(rowR);
+        html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(b) + '">' + escHtml(b) + '</th>';
+        blocks.forEach(function (eb, blkIdx) {
             var si = findFirstSlotForTime(eb.startMin, divName);
             var entry = si >= 0 ? getEntry(b, si) : null;
             var type = getEntryType(entry);
             var text = entry ? formatEntry(entry) : '';
             if (!text && type === 'free') text = '\u2014';
             if (eb.isLeague) { text = eb.event; type = 'league'; }
-            html += '<td class="cell-' + type + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
+            html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
         });
         html += '</tr>';
     });
@@ -1175,10 +1266,20 @@ function renderBunkSheet(bunk) {
     if (t.showDate) html += '<span class="pc3-sheet-subtitle">' + formatDisplayDate(window.currentScheduleDate) + '</span>';
     html += '</div>';
 
-    html += '<div style="overflow:auto;"><table class="pc3-tbl">';
-    html += '<thead><tr><th style="min-width:' + t.timeColWidth + 'px;">Time</th><th>Activity</th><th>Location</th></tr></thead><tbody>';
+    var sheetId = pcNextSheetId();
+    html += '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="bunk">';
+    html += '<thead>';
+    html += pcCoordRow(3);
+    html += '<tr>';
+    html += pcRowNum(0);
+    html += '<th data-r="0" data-c="0" data-cell-text="Time" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
+    html += '<th data-r="0" data-c="1" data-cell-text="Activity">Activity</th>';
+    html += '<th data-r="0" data-c="2" data-cell-text="Location">Location</th>';
+    html += '</tr></thead><tbody>';
 
     schedule.forEach(function (slot, idx) {
+        var rowR = 1 + idx;
         var slotIdx = isAutoMode() ? idx : findFirstSlotForTime(slot.startMin, dn);
         var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
         var type = getEntryType(entry);
@@ -1188,9 +1289,12 @@ function renderBunkSheet(bunk) {
             loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
             if (!act && loc) { act = loc; loc = ''; }
         }
-        html += '<tr><th class="row-head">' + slot.label + '</th>';
-        html += '<td class="cell-' + type + '">' + escHtml(act || '\u2014') + '</td>';
-        html += '<td class="cell-' + type + '">' + escHtml(loc) + '</td>';
+        var actDisplay = act || '\u2014';
+        html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
+        html += pcRowNum(rowR);
+        html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
+        html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(actDisplay) + '">' + escHtml(actDisplay) + '</td>';
+        html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(loc) + '">' + escHtml(loc) + '</td>';
         html += '</tr>';
     });
 
@@ -1206,17 +1310,31 @@ function renderLocationSheet(loc) {
     if (t.showDate) html += '<span class="pc3-sheet-subtitle">' + formatDisplayDate(window.currentScheduleDate) + '</span>';
     html += '</div>';
 
-    html += '<div style="overflow:auto;"><table class="pc3-tbl">';
-    html += '<thead><tr><th>Time</th><th>Bunk(s)</th></tr></thead><tbody>';
+    var sheetId = pcNextSheetId();
+    html += '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="location">';
+    html += '<thead>';
+    html += pcCoordRow(2);
+    html += '<tr>';
+    html += pcRowNum(0);
+    html += '<th data-r="0" data-c="0" data-cell-text="Time">Time</th>';
+    html += '<th data-r="0" data-c="1" data-cell-text="Bunk(s)">Bunk(s)</th>';
+    html += '</tr></thead><tbody>';
 
     var found = scanLocationAcrossBunks(loc);
 
     if (found.length) {
-        found.forEach(function (f) {
-            html += '<tr><th class="row-head">' + f.label + '</th><td>' + f.bunks.map(escHtml).join(', ') + '</td></tr>';
+        found.forEach(function (f, idx) {
+            var rowR = 1 + idx;
+            var bunkStr = f.bunks.map(escHtml).join(', ');
+            html += '<tr>';
+            html += pcRowNum(rowR);
+            html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(f.label) + '">' + f.label + '</th>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(f.bunks.join(', ')) + '">' + bunkStr + '</td>';
+            html += '</tr>';
         });
     } else {
-        html += '<tr><td colspan="2" style="text-align:center;color:#94a3b8;padding:20px;">No schedule data for this location</td></tr>';
+        html += '<tr>' + pcRowNum(1) + '<td data-r="1" data-c="0" colspan="2" style="text-align:center;color:#94a3b8;padding:20px;">No schedule data for this location</td></tr>';
     }
 
     html += '</tbody></table></div></div>';
@@ -1335,72 +1453,420 @@ function liveRefresh() {
     pc.style.transform = 'scale(' + (_zoomLevel / 100) + ')';
     pc.style.transformOrigin = 'top left';
 
-    // Attach cell hover for formula bar
-    pc.querySelectorAll('td[data-bunk]').forEach(function (td) {
-        td.addEventListener('mouseenter', function () {
-            var bunk = this.getAttribute('data-bunk');
-            var slot = this.getAttribute('data-slot');
-            var div = this.getAttribute('data-div');
-            var fxCell = el('pc3-fx-cell');
-            var fxVal = el('pc3-fx-val');
-            if (fxCell) fxCell.textContent = bunk + ' [' + slot + ']';
-            if (fxVal) fxVal.textContent = this.textContent || '\u2014';
-        });
+    // Attach Excel-style cell selection (click + click-and-drag)
+    attachSheetSelection(pc);
+
+    // Auto-select the first data cell of the first sheet for keyboard nav
+    var firstSheet = pc.querySelector('table.pc3-tbl');
+    if (firstSheet) {
+        var firstCell = firstSheet.querySelector('td[data-r][data-c],th[data-r][data-c]:not(.pc3-coord-corner):not(.pc3-row-num)');
+        if (firstCell) {
+            var fr = parseInt(firstCell.getAttribute('data-r'));
+            var fc = parseInt(firstCell.getAttribute('data-c'));
+            setSelection(firstSheet.id, fr, fc, fr, fc);
+        }
+    }
+}
+
+// =========================================================================
+// \u2605\u2605\u2605 EXCEL-STYLE CELL SELECTION \u2605\u2605\u2605
+// =========================================================================
+function getSheet(sheetId) {
+    if (!sheetId) return null;
+    return document.getElementById(sheetId);
+}
+
+function setSelection(sheetId, ar, ac, fr, fc) {
+    _selAnchor = { sheet: sheetId, r: ar, c: ac };
+    _selFocus  = { sheet: sheetId, r: fr, c: fc };
+    _activeSheet = sheetId;
+    paintSelection();
+    updateFormulaBar();
+}
+
+function paintSelection() {
+    // Clear all selection classes across the preview
+    var pc = el('pc3-preview-content');
+    if (!pc) return;
+    pc.querySelectorAll('.pc3-cell-selected,.pc3-cell-active,.pc3-coord-active').forEach(function (n) {
+        n.classList.remove('pc3-cell-selected'); n.classList.remove('pc3-cell-active'); n.classList.remove('pc3-coord-active');
     });
+    if (!_selAnchor || !_selFocus) return;
+    var sheet = getSheet(_selAnchor.sheet);
+    if (!sheet) return;
+    var r0 = Math.min(_selAnchor.r, _selFocus.r), r1 = Math.max(_selAnchor.r, _selFocus.r);
+    var c0 = Math.min(_selAnchor.c, _selFocus.c), c1 = Math.max(_selAnchor.c, _selFocus.c);
+
+    // Highlight every cell whose top-left lies in the rectangle
+    sheet.querySelectorAll('[data-r][data-c]').forEach(function (cell) {
+        var rr = parseInt(cell.getAttribute('data-r'));
+        var cc = parseInt(cell.getAttribute('data-c'));
+        if (rr >= r0 && rr <= r1 && cc >= c0 && cc <= c1) {
+            cell.classList.add('pc3-cell-selected');
+        }
+    });
+    // Mark the focus cell (anchor) with active outline
+    var focusCell = sheet.querySelector('[data-r="' + _selFocus.r + '"][data-c="' + _selFocus.c + '"]');
+    if (focusCell) focusCell.classList.add('pc3-cell-active');
+
+    // Highlight matching column letters and row numbers
+    sheet.querySelectorAll('tr.pc3-coord-row th[data-col-select]').forEach(function (th) {
+        var cc = parseInt(th.getAttribute('data-col-select'));
+        if (cc >= c0 && cc <= c1) th.classList.add('pc3-coord-active');
+    });
+    sheet.querySelectorAll('th.pc3-row-num[data-row-select]').forEach(function (th) {
+        var rr = parseInt(th.getAttribute('data-row-select'));
+        if (rr >= r0 && rr <= r1) th.classList.add('pc3-coord-active');
+    });
+}
+
+function updateFormulaBar() {
+    var fxCell = el('pc3-fx-cell');
+    var fxVal  = el('pc3-fx-val');
+    if (!fxCell || !fxVal) return;
+    if (!_selAnchor || !_selFocus) { fxCell.textContent = '\u2014'; fxVal.textContent = ''; return; }
+    var ar = _selAnchor.r, ac = _selAnchor.c;
+    var fr = _selFocus.r,  fc = _selFocus.c;
+    var single = (ar === fr && ac === fc);
+    if (single) {
+        fxCell.textContent = cellId(ar, ac);
+        var sheet = getSheet(_selAnchor.sheet);
+        var cell = sheet ? sheet.querySelector('[data-r="' + ar + '"][data-c="' + ac + '"]') : null;
+        var txt = '';
+        if (cell) txt = cell.getAttribute('data-cell-text') || cell.textContent || '';
+        fxVal.textContent = txt;
+    } else {
+        var r0 = Math.min(ar, fr), r1 = Math.max(ar, fr);
+        var c0 = Math.min(ac, fc), c1 = Math.max(ac, fc);
+        fxCell.textContent = cellId(r0, c0) + ':' + cellId(r1, c1);
+        var rows = (r1 - r0 + 1), cols = (c1 - c0 + 1);
+        fxVal.textContent = rows + 'R \u00d7 ' + cols + 'C selected';
+    }
+}
+
+function attachSheetSelection(pc) {
+    var dragging = false;
+    pc.addEventListener('mousedown', function (e) {
+        var t = e.target.closest('td[data-r],th[data-r]');
+        if (!t) return;
+        // Coord-row column letter / row-number / corner: range-select that row/col
+        if (t.matches('tr.pc3-coord-row th[data-col-select]')) {
+            var cc = parseInt(t.getAttribute('data-col-select'));
+            var sheet = t.closest('table.pc3-tbl');
+            if (sheet) {
+                var maxR = 0;
+                sheet.querySelectorAll('[data-r]').forEach(function (n) { var rr = parseInt(n.getAttribute('data-r')); if (rr > maxR) maxR = rr; });
+                setSelection(sheet.id, 0, cc, maxR, cc);
+            }
+            e.preventDefault();
+            return;
+        }
+        if (t.matches('th.pc3-row-num[data-row-select]')) {
+            var rr2 = parseInt(t.getAttribute('data-row-select'));
+            var sheet2 = t.closest('table.pc3-tbl');
+            if (sheet2) {
+                var maxC = 0;
+                sheet2.querySelectorAll('[data-c]').forEach(function (n) { var cc2 = parseInt(n.getAttribute('data-c')); if (cc2 > maxC) maxC = cc2; });
+                setSelection(sheet2.id, rr2, 0, rr2, maxC);
+            }
+            e.preventDefault();
+            return;
+        }
+        if (t.matches('th.pc3-coord-corner')) {
+            var sheet3 = t.closest('table.pc3-tbl');
+            if (sheet3) {
+                var maxR3 = 0, maxC3 = 0;
+                sheet3.querySelectorAll('[data-r]').forEach(function (n) { var rr3 = parseInt(n.getAttribute('data-r')); if (rr3 > maxR3) maxR3 = rr3; });
+                sheet3.querySelectorAll('[data-c]').forEach(function (n) { var cc3 = parseInt(n.getAttribute('data-c')); if (cc3 > maxC3) maxC3 = cc3; });
+                setSelection(sheet3.id, 0, 0, maxR3, maxC3);
+            }
+            e.preventDefault();
+            return;
+        }
+        // Regular data/header cell click
+        var sheet4 = t.closest('table.pc3-tbl');
+        if (!sheet4) return;
+        var r = parseInt(t.getAttribute('data-r'));
+        var c = parseInt(t.getAttribute('data-c'));
+        if (e.shiftKey && _selAnchor && _selAnchor.sheet === sheet4.id) {
+            setSelection(sheet4.id, _selAnchor.r, _selAnchor.c, r, c);
+        } else {
+            setSelection(sheet4.id, r, c, r, c);
+        }
+        dragging = true;
+        e.preventDefault();
+    });
+    pc.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+        var t = e.target.closest('td[data-r],th[data-r]:not(.pc3-row-num):not(.pc3-coord-corner)');
+        if (!t) return;
+        var sheet = t.closest('table.pc3-tbl');
+        if (!sheet || !_selAnchor || _selAnchor.sheet !== sheet.id) return;
+        var r = parseInt(t.getAttribute('data-r'));
+        var c = parseInt(t.getAttribute('data-c'));
+        if (isNaN(r) || isNaN(c)) return;
+        setSelection(sheet.id, _selAnchor.r, _selAnchor.c, r, c);
+    });
+    pc.addEventListener('mouseup', function () { dragging = false; });
+}
+
+function findCellAtRC(sheet, r, c) {
+    if (!sheet) return null;
+    return sheet.querySelector('[data-r="' + r + '"][data-c="' + c + '"]');
+}
+
+function moveSelection(dr, dc, extend) {
+    if (!_selFocus) return;
+    var sheet = getSheet(_selFocus.sheet);
+    if (!sheet) return;
+    var nr = _selFocus.r + dr;
+    var nc = _selFocus.c + dc;
+    // Skip past missing positions (e.g., spanned/merged cells) until a real cell exists
+    var safety = 200;
+    while (safety-- > 0) {
+        var cell = findCellAtRC(sheet, nr, nc);
+        if (cell) break;
+        if (nr < 0 || nc < 0) return;
+        if (dr) nr += (dr > 0 ? 1 : -1);
+        else if (dc) nc += (dc > 0 ? 1 : -1);
+        else return;
+    }
+    if (extend) {
+        setSelection(sheet.id, _selAnchor.r, _selAnchor.c, nr, nc);
+    } else {
+        setSelection(sheet.id, nr, nc, nr, nc);
+    }
+    var target = findCellAtRC(sheet, nr, nc);
+    if (target && target.scrollIntoView) target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function copySelectionToClipboard() {
+    if (!_selAnchor || !_selFocus) return false;
+    var sheet = getSheet(_selAnchor.sheet);
+    if (!sheet) return false;
+    var r0 = Math.min(_selAnchor.r, _selFocus.r), r1 = Math.max(_selAnchor.r, _selFocus.r);
+    var c0 = Math.min(_selAnchor.c, _selFocus.c), c1 = Math.max(_selAnchor.c, _selFocus.c);
+    var rows = [];
+    for (var r = r0; r <= r1; r++) {
+        var cols = [];
+        for (var c = c0; c <= c1; c++) {
+            var cell = findCellAtRC(sheet, r, c);
+            var txt = '';
+            if (cell) txt = (cell.getAttribute('data-cell-text') || cell.textContent || '').replace(/\t/g, ' ').replace(/\r?\n/g, ' ').trim();
+            cols.push(txt);
+        }
+        rows.push(cols.join('\t'));
+    }
+    var tsv = rows.join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(tsv).then(function () {
+            if (window.showToast) window.showToast('Copied ' + (r1 - r0 + 1) + 'R \u00d7 ' + (c1 - c0 + 1) + 'C', 'success');
+        });
+    } else {
+        // Fallback: hidden textarea
+        var ta = document.createElement('textarea');
+        ta.value = tsv;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+    }
+    return true;
 }
 
 // =========================================================================
 // ★★★ LIVE MODE ★★★
-// Fullscreen dark-mode display with real-time cursor
+// Pop-out window for casting to a TV / display screen, with a moving
+// time cursor. Uses the same flow.html with ?view=live, which strips
+// the app chrome and runs the schedule fullscreen.
 // =========================================================================
-function toggleLiveMode() {
-    _liveMode = !_liveMode;
-    var btn = el('pc3-live-btn');
-    if (btn) { btn.className = 'pc3-tb-btn' + (_liveMode ? ' live' : ''); }
-
-    if (_liveMode) {
-        startLiveMode();
-    } else {
-        stopLiveMode();
+function openLiveWindow() {
+    try {
+        var dateKey = window.currentScheduleDate || '';
+        var url = (location.pathname || '/flow.html') + '?view=live' + (dateKey ? '&date=' + encodeURIComponent(dateKey) : '');
+        var w = window.open(url, 'pc3_live', 'width=1600,height=900,toolbar=no,location=no,menubar=no,status=no');
+        if (!w) {
+            alert('Pop-out blocked by the browser. Please allow popups for this site and try again.');
+            return;
+        }
+        _liveWindow = w;
+        try { w.focus(); } catch (e) {}
+    } catch (e) {
+        console.error('[PrintCenter] openLiveWindow failed', e);
     }
 }
 
-function startLiveMode() {
-    var gridArea = el('pc3-grid-area');
-    if (!gridArea) return;
+// Standalone live runner (called by flow.html when ?view=live is detected
+// in the popped-out window). Takes over the page chrome and renders the
+// schedule fullscreen with a moving time cursor.
+function runLiveStandalone() {
+    document.documentElement.classList.add('pc3-live-standalone');
+    document.body.classList.add('pc3-live-standalone-body');
 
-    // Build live overlay
-    var html = '<div class="pc3-live-overlay" id="pc3-live-overlay">';
-    html += '<div class="pc3-live-header">';
-    html += '<div class="pc3-live-title">' + escHtml(_currentTemplate.campName || 'Camp Schedule') + '</div>';
-    html += '<div class="pc3-live-clock" id="pc3-live-clock"></div>';
-    html += '<button class="pc3-live-close" onclick="window._pc3ToggleLive()">Exit Live Mode</button>';
-    html += '</div>';
-    html += '<div class="pc3-live-body" id="pc3-live-body"></div>';
-    html += '</div>';
+    // Strip the app shell — keep only #print
+    var roots = document.querySelectorAll('body > *');
+    roots.forEach(function (n) {
+        if (n.id === 'print' || n.tagName === 'SCRIPT' || n.tagName === 'STYLE') return;
+        if (n.id === 'printable-area') return;
+        n.style.display = 'none';
+    });
 
-    gridArea.insertAdjacentHTML('beforeend', html);
-    renderLiveContent();
-    _liveInterval = setInterval(renderLiveContent, 30000); // Update every 30 seconds
-    updateLiveClock();
-    setInterval(updateLiveClock, 1000);
+    // Force the print tab visible if the harness uses tab-content visibility
+    var printTab = document.getElementById('print');
+    if (printTab) {
+        printTab.classList.add('active');
+        printTab.style.display = 'block';
+        printTab.style.position = 'fixed';
+        printTab.style.inset = '0';
+        printTab.style.background = '#0b1220';
+        printTab.style.zIndex = '9999';
+    }
+
+    var container = document.getElementById('print-content') || (function () {
+        var d = document.createElement('div'); d.id = 'print-content';
+        if (printTab) printTab.appendChild(d); else document.body.appendChild(d);
+        return d;
+    })();
+
+    // Inject styles (reuses pc3-live-* classes)
+    container.innerHTML = getStyles() +
+        '<div class="pc3-live-overlay" id="pc3-live-overlay" style="position:fixed;inset:0;">' +
+        '<div class="pc3-live-header">' +
+            '<div class="pc3-live-title" id="pc3-live-title">Camp Schedule</div>' +
+            '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
+            '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
+        '</div>' +
+        '<div class="pc3-live-body" id="pc3-live-body"></div>' +
+        '</div>';
+
+    // Set the title once data is loaded (fall back to "Camp Schedule")
+    function refreshTitle() {
+        try {
+            var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var nm = g.campName || (g.app1 ? g.app1.campName : '') || 'Camp Schedule';
+            var titleEl = document.getElementById('pc3-live-title');
+            if (titleEl) titleEl.textContent = nm;
+            document.title = nm + ' — Live';
+        } catch (e) {}
+    }
+
+    function tickClock() {
+        var clockEl = document.getElementById('pc3-live-clock');
+        if (!clockEl) return;
+        var now = new Date();
+        var h = now.getHours() % 12 || 12;
+        var m = String(now.getMinutes()).padStart(2, '0');
+        var s = String(now.getSeconds()).padStart(2, '0');
+        var ap = now.getHours() >= 12 ? 'PM' : 'AM';
+        clockEl.textContent = h + ':' + m + ':' + s + ' ' + ap;
+    }
+
+    function tickAll() {
+        refreshTitle();
+        renderLiveContent();
+        positionAllLiveCursors();
+    }
+
+    // Trigger normal app initialization so divisions + schedule data load.
+    // (initApp1 loads global settings; initDailyAdjustments loads per-date schedule data.)
+    setTimeout(function () {
+        try { window.initApp1 && window.initApp1(); } catch (e) {}
+        try { window.initDailyAdjustments && window.initDailyAdjustments(); } catch (e) {}
+    }, 100);
+
+    // Wait until divisions/scheduling data are populated, then start.
+    function whenReady(cb) {
+        var attempts = 0;
+        var iv = setInterval(function () {
+            attempts++;
+            var hasDivs = window.divisions && Object.keys(window.divisions).length > 0;
+            var hasSched = (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0)
+                || (window.divisionTimes && Object.keys(window.divisionTimes).length > 0);
+            if ((hasDivs && hasSched) || attempts > 80) {
+                clearInterval(iv);
+                cb();
+            }
+        }, 250);
+    }
+
+    whenReady(function () {
+        tickAll();
+        // Re-render content every 30s, reposition cursor every 15s, clock every 1s
+        if (_liveInterval) clearInterval(_liveInterval);
+        if (_liveCursorInterval) clearInterval(_liveCursorInterval);
+        _liveInterval = setInterval(tickAll, 30000);
+        _liveCursorInterval = setInterval(positionAllLiveCursors, 15000);
+        tickClock();
+        setInterval(tickClock, 1000);
+    });
 }
 
-function stopLiveMode() {
-    var overlay = el('pc3-live-overlay');
-    if (overlay) overlay.remove();
-    if (_liveInterval) { clearInterval(_liveInterval); _liveInterval = null; }
+// Compute the [dayStart, dayEnd] of the activity range visible in a live
+// section, and position its cursor element along the time axis.
+function positionLiveCursor(sectionEl) {
+    if (!sectionEl) return;
+    var nowMin = getNowMinutes();
+    var dayStart = parseInt(sectionEl.getAttribute('data-day-start')) || 0;
+    var dayEnd   = parseInt(sectionEl.getAttribute('data-day-end'))   || 0;
+    var mode     = sectionEl.getAttribute('data-cursor-mode') || 'auto';
+    var cursor   = sectionEl.querySelector('.pc3-live-cursor-v,.pc3-live-cursor-h');
+    var tag      = sectionEl.querySelector('.pc3-live-now-tag');
+    if (!cursor || !tag) return;
+
+    if (dayEnd <= dayStart || nowMin < dayStart || nowMin > dayEnd) {
+        cursor.style.display = 'none';
+        tag.style.display = 'none';
+        return;
+    }
+    cursor.style.display = '';
+    tag.style.display = '';
+    var fraction = (nowMin - dayStart) / (dayEnd - dayStart);
+
+    // Find the time-axis bounding rect to convert fraction -> px
+    var table = sectionEl.querySelector('table');
+    if (!table) return;
+    var tableRect = table.getBoundingClientRect();
+    var sectionRect = sectionEl.getBoundingClientRect();
+
+    if (mode === 'auto') {
+        // Vertical cursor: spans table height, X interpolated across time-axis cells
+        var timeCells = table.querySelectorAll('thead th[data-time-start]');
+        if (timeCells.length === 0) return;
+        var firstCell = timeCells[0];
+        var lastCell = timeCells[timeCells.length - 1];
+        var fr = firstCell.getBoundingClientRect();
+        var lr = lastCell.getBoundingClientRect();
+        var leftEdge = fr.left - sectionRect.left;
+        var rightEdge = lr.right - sectionRect.left;
+        var x = leftEdge + (rightEdge - leftEdge) * fraction;
+        cursor.style.left = x + 'px';
+        cursor.style.top = (tableRect.top - sectionRect.top) + 'px';
+        cursor.style.height = tableRect.height + 'px';
+        tag.style.left = x + 'px';
+        tag.style.top = (tableRect.top - sectionRect.top - 2) + 'px';
+        tag.textContent = minutesToTimeLabel(nowMin);
+    } else {
+        // Horizontal cursor: spans table width, Y interpolated across time-block rows
+        var rows = table.querySelectorAll('tbody tr[data-block-start]');
+        if (rows.length === 0) return;
+        var firstRow = rows[0];
+        var lastRow = rows[rows.length - 1];
+        var fr2 = firstRow.getBoundingClientRect();
+        var lr2 = lastRow.getBoundingClientRect();
+        var topEdge = fr2.top - sectionRect.top;
+        var botEdge = lr2.bottom - sectionRect.top;
+        var y = topEdge + (botEdge - topEdge) * fraction;
+        cursor.style.top = y + 'px';
+        cursor.style.left = (tableRect.left - sectionRect.left) + 'px';
+        cursor.style.width = tableRect.width + 'px';
+        tag.style.top = y + 'px';
+        tag.style.left = (tableRect.left - sectionRect.left + 8) + 'px';
+        tag.textContent = minutesToTimeLabel(nowMin);
+    }
 }
 
-function updateLiveClock() {
-    var clockEl = el('pc3-live-clock');
-    if (!clockEl) return;
-    var now = new Date();
-    var h = now.getHours() % 12 || 12;
-    var m = String(now.getMinutes()).padStart(2, '0');
-    var s = String(now.getSeconds()).padStart(2, '0');
-    var ap = now.getHours() >= 12 ? 'PM' : 'AM';
-    clockEl.textContent = h + ':' + m + ':' + s + ' ' + ap;
+function positionAllLiveCursors() {
+    document.querySelectorAll('.pc3-live-section').forEach(function (s) { positionLiveCursor(s); });
 }
 
 function renderLiveContent() {
@@ -1415,8 +1881,28 @@ function renderLiveContent() {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).sort(naturalSort);
         if (!bunks.length) return;
 
-        html += '<div style="margin-bottom:24px;">';
+        // Compute section dayStart/dayEnd for cursor placement
+        var sectionStart = Infinity, sectionEnd = -Infinity, cursorMode = isAutoMode() ? 'auto' : 'manual';
+        if (isAutoMode()) {
+            bunks.forEach(function (bunk) {
+                var slots = getPerBunkSchedule(bunk, divName);
+                slots.forEach(function (s) {
+                    if (s.startMin < sectionStart) sectionStart = s.startMin;
+                    if (s.endMin > sectionEnd) sectionEnd = s.endMin;
+                });
+            });
+        } else {
+            var blocks0 = buildDivisionBlocks(divName);
+            if (blocks0.length) { sectionStart = blocks0[0].startMin; sectionEnd = blocks0[blocks0.length - 1].endMin; }
+        }
+        if (sectionStart === Infinity) sectionStart = 480;
+        if (sectionEnd === -Infinity) sectionEnd = 960;
+
+        html += '<div class="pc3-live-section" data-day-start="' + sectionStart + '" data-day-end="' + sectionEnd + '" data-cursor-mode="' + cursorMode + '" style="margin-bottom:24px;position:relative;">';
         html += '<div style="font-size:18px;font-weight:700;color:#fbbf24;margin-bottom:8px;padding-left:4px;">' + escHtml(divName) + '</div>';
+        // Cursor + time tag (positioned by JS)
+        html += '<div class="pc3-live-cursor-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
+        html += '<div class="pc3-live-now-tag tag-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
 
         if (isAutoMode()) {
             // ★★★ AUTO LIVE: Spreadsheet grid with current-time column highlighted ★★★
@@ -1450,7 +1936,7 @@ function renderLiveContent() {
             html += '<thead><tr><th class="corner" style="min-width:80px;">Bunk</th>';
             lTimeCols.forEach(function (tc) {
                 var isCurCol = nowMin >= tc.startMin && nowMin < tc.endMin;
-                html += '<th style="min-width:50px;font-size:9px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#164e63;color:#67e8f9;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
+                html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="min-width:50px;font-size:9px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#164e63;color:#67e8f9;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
             });
             html += '</tr></thead><tbody>';
 
@@ -1499,7 +1985,7 @@ function renderLiveContent() {
             timeSlots.forEach(function (ts) {
                 var isCurrent = nowMin >= ts.startMin && nowMin < ts.endMin;
                 var isPast = nowMin >= ts.endMin;
-                html += '<tr>';
+                html += '<tr data-block-start="' + ts.startMin + '" data-block-end="' + ts.endMin + '">';
                 html += '<th class="row-head' + (isCurrent ? ' cell-current' : '') + (isPast ? ' cell-past' : '') + '">' + ts.label + '</th>';
                 bunks.forEach(function (bunk) {
                     var slotIdx = findFirstSlotForTime(ts.startMin, divName);
@@ -1936,7 +2422,7 @@ function bindAll() {
 
     // Live mode
     var liveBtn = el('pc3-live-btn');
-    if (liveBtn) liveBtn.addEventListener('click', toggleLiveMode);
+    if (liveBtn) liveBtn.addEventListener('click', openLiveWindow);
 
     // Advanced drawer design change listeners
     var drawerScroll = el('pc3-drawer-scroll');
@@ -1947,12 +2433,60 @@ function bindAll() {
 
     // Keyboard
     document.addEventListener('keydown', function (e) {
+        // Only handle these shortcuts when the print tab is the active tab
+        // and the user isn't typing into a form input.
+        var printTab = document.getElementById('print');
+        var printActive = printTab && printTab.classList.contains('active');
+        var inField = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable);
         if (e.ctrlKey || e.metaKey) {
-            if (e.key === '=' || e.key === '+') { e.preventDefault(); window._pc3Zoom(10); }
-            if (e.key === '-') { e.preventDefault(); window._pc3Zoom(-10); }
-            if (e.key === 'p') { e.preventDefault(); triggerPrint(); }
+            if (e.key === '=' || e.key === '+') { if (!printActive) return; e.preventDefault(); window._pc3Zoom(10); return; }
+            if (e.key === '-') { if (!printActive) return; e.preventDefault(); window._pc3Zoom(-10); return; }
+            if (e.key === 'p') { if (!printActive) return; e.preventDefault(); triggerPrint(); return; }
+            if (e.key === 'c' || e.key === 'C') {
+                if (!printActive || inField) return;
+                if (copySelectionToClipboard()) e.preventDefault();
+                return;
+            }
+            if (e.key === 'a' || e.key === 'A') {
+                if (!printActive || inField || !_selAnchor) return;
+                var sh = getSheet(_selAnchor.sheet);
+                if (!sh) return;
+                var maxR = 0, maxC = 0;
+                sh.querySelectorAll('[data-r]').forEach(function (n) { var rr = parseInt(n.getAttribute('data-r')); if (rr > maxR) maxR = rr; });
+                sh.querySelectorAll('[data-c]').forEach(function (n) { var cc = parseInt(n.getAttribute('data-c')); if (cc > maxC) maxC = cc; });
+                setSelection(sh.id, 0, 0, maxR, maxC);
+                e.preventDefault();
+                return;
+            }
         }
-        if (e.key === 'Escape' && _liveMode) { toggleLiveMode(); }
+        if (e.key === 'Escape') {
+            if (_selAnchor) { _selAnchor = null; _selFocus = null; paintSelection(); updateFormulaBar(); }
+        }
+        // Arrow-key navigation across the active sheet
+        if (printActive && !inField && _selFocus) {
+            var dr = 0, dc = 0;
+            if (e.key === 'ArrowUp') dr = -1;
+            else if (e.key === 'ArrowDown') dr = 1;
+            else if (e.key === 'ArrowLeft') dc = -1;
+            else if (e.key === 'ArrowRight') dc = 1;
+            else if (e.key === 'Home') { dc = -9999; }
+            else if (e.key === 'End') { dc = 9999; }
+            if (dr || dc) {
+                e.preventDefault();
+                if (Math.abs(dc) > 100) {
+                    var sh2 = getSheet(_selFocus.sheet);
+                    if (sh2) {
+                        var maxC2 = 0;
+                        sh2.querySelectorAll('[data-c]').forEach(function (n) { var cc2 = parseInt(n.getAttribute('data-c')); if (cc2 > maxC2) maxC2 = cc2; });
+                        var nc = (dc > 0) ? maxC2 : 0;
+                        if (e.shiftKey) setSelection(sh2.id, _selAnchor.r, _selAnchor.c, _selFocus.r, nc);
+                        else setSelection(sh2.id, _selFocus.r, nc, _selFocus.r, nc);
+                    }
+                } else {
+                    moveSelection(dr, dc, e.shiftKey);
+                }
+            }
+        }
     });
 }
 
@@ -2027,7 +2561,8 @@ window._pc3SelectNone = function () {
 };
 window._pc3Print = triggerPrint;
 window._pc3ExportExcel = exportExcel;
-window._pc3ToggleLive = toggleLiveMode;
+window._pc3OpenLive = openLiveWindow;
+window._pc3RunLiveStandalone = runLiveStandalone;
 window._pc3SaveTemplate = function () {
     if (!canEditTemplates()) return;
     var nm = prompt('Template name:', 'My Template');
