@@ -386,7 +386,18 @@ function shouldHighlightBunk(bunkName) {
             loadedAssignments = true;
         }
         if (!loadedAssignments) window.scheduleAssignments = window.scheduleAssignments || {};
-        
+
+        // Phase 4: restore scheduleSegments (auto-builder segment data).
+        // If absent on an older save, rebuild from assignments so the segment
+        // store is always populated for segment-aware readers.
+        if (dateData.scheduleSegments && Object.keys(dateData.scheduleSegments).length > 0) {
+            window.scheduleSegments = dateData.scheduleSegments;
+        } else if (dailyData.scheduleSegments && Object.keys(dailyData.scheduleSegments).length > 0) {
+            window.scheduleSegments = dailyData.scheduleSegments;
+        } else {
+            try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+        }
+
         // Load league assignments
         if (!window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
             window.leagueAssignments = dateData.leagueAssignments && Object.keys(dateData.leagueAssignments).length > 0 
@@ -3008,74 +3019,10 @@ if (bypassStatus.highlight) {
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { bunk, slots, activity, location, date: currentDate } }));
         saveSchedule(); 
 
-        // ★★★ FIX: Targeted delta adjustment for historical counts ★★★
-        try {
-            const _gs = window.loadGlobalSettings?.() || {};
-            const _hc = _gs.historicalCounts || {};
-            if (!_hc[bunk]) _hc[bunk] = {};
-            let _newAct = (!isClear && activity) ? activity : null;
-
-            // Normalize: if new activity matches old activity ignoring case, use old casing
-            if (_newAct) {
-                for (const oldAct of _oldActivities) {
-                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) {
-                        console.log(`[PostEdit] 📊 Case normalization: "${_newAct}" → "${oldAct}"`);
-                        _newAct = oldAct;
-                        break;
-                    }
-                }
-            }
-
-            // Decrement old activities
-            const _oldUnique = {};
-            _oldActivities.forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
-            for (const [act, count] of Object.entries(_oldUnique)) {
-                const _before = _hc[bunk][act] || 0;
-                _hc[bunk][act] = Math.max(0, _before - count);
-                console.log(`[PostEdit] 📊 ${bunk} "${act}" count: ${_before} → ${_hc[bunk][act]}`);
-            }
-
-            // Increment new activity (only if it's a tracked/valid activity)
-            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
-            if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
-                let _newCount = 0;
-                slots.forEach(idx => {
-                    const entry = window.scheduleAssignments[bunk]?.[idx];
-                    if (entry && !entry.continuation) _newCount++;
-                });
-                const _before = _hc[bunk][_newAct] || 0;
-                _hc[bunk][_newAct] = _before + _newCount;
-                console.log(`[PostEdit] 📊 ${bunk} "${_newAct}" count: ${_before} → ${_hc[bunk][_newAct]}`);
-            }
-
-            if (window.saveGlobalSettings) {
-                window.saveGlobalSettings('historicalCounts', _hc);
-                if (typeof window.forceSyncToCloud === 'function') {
-                    setTimeout(() => window.forceSyncToCloud(), 100);
-                }
-            }
-            console.log('[PostEdit] 📊 Historical counts delta applied for', bunk);
-        } catch (_hcErr) { console.error('[PostEdit] Historical counts delta failed:', _hcErr); }
-
-        // ★★★ Update rotation history timestamps for the edited bunk ★★★
-        try {
-            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            _rotHist.bunks = _rotHist.bunks || {};
-            _rotHist.bunks[bunk] = _rotHist.bunks[bunk] || {};
-            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _now = Date.now();
-            _rotHist.bunks[bunk] = {};
-            _bunkSlots.forEach(entry => {
-                if (entry?._activity && !entry.continuation && !entry._isTransition) {
-                    const _aLower = entry._activity.toLowerCase();
-                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
-                        _rotHist.bunks[bunk][entry._activity] = _now;
-                    }
-                }
-            });
-            window.saveRotationHistory?.(_rotHist);
-            console.log('[PostEdit] 📊 Rotation timestamps rebuilt for', bunk);
-        } catch (_re) { console.error('[PostEdit] Rotation history update failed:', _re); }
+        // Post-edit counts + rotation history (single shared implementation)
+        if (window.SchedulerCoreUtils?.applyPostEditCounts) {
+            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity) ? activity : null, slots);
+        }
 
         updateTable();
         setTimeout(() => updateTable(), 500);
@@ -3259,6 +3206,9 @@ if (bypassStatus.highlight) {
                 </details>
                 <div id="post-edit-conflict" style="display:none;"></div>
                 <div style="display:flex;gap:10px;margin-top:4px;">
+                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill</button>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:8px;">
                     <button id="post-edit-cancel" style="flex:1;padding:11px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Cancel</button>
                     <button id="post-edit-save" style="flex:1;padding:11px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:0.95rem;cursor:pointer;font-weight:600;">Save Changes</button>
                 </div>
@@ -3266,6 +3216,14 @@ if (bypassStatus.highlight) {
 
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
+
+        document.getElementById('post-edit-autofill').onclick = () => {
+            const pick = window.PostEditInteractions?.autoFillActivity?.(bunk, divName, startMin, endMin);
+            if (!pick) { alert('No suitable activity found based on current constraints.'); return; }
+            actInput.value = pick.activity;
+            clearTimeout(_searchTimer);
+            runActivitySearch();
+        };
 
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea  = document.getElementById('post-edit-conflict');
@@ -5116,7 +5074,20 @@ if (softBlocks.length > 0) {
         const plan = proposal.reassignments || [];
 
         const divSlots = window.divisionTimes?.[divName] || [];
-        
+
+        // Capture old activities before any overwrites (needed for historicalCounts delta)
+        const primaryOldActivities = new Map();
+        for (const bunk of (bunks || [])) {
+            const existing = window.scheduleAssignments[bunk] || [];
+            primaryOldActivities.set(bunk, (slots || []).map(s => existing[s]?._activity).filter(Boolean));
+        }
+        const planOldActivities = new Map();
+        for (const move of plan) {
+            if (!planOldActivities.has(move.bunk)) planOldActivities.set(move.bunk, []);
+            const oldAct = (window.scheduleAssignments[move.bunk] || [])[move.slot]?._activity;
+            if (oldAct) planOldActivities.get(move.bunk).push(oldAct);
+        }
+
         for (const bunk of (bunks || [])) {
             if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
             for (let i = 0; i < (slots || []).length; i++) {
@@ -5148,6 +5119,15 @@ if (softBlocks.length > 0) {
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
         if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
+
+        if (window.SchedulerCoreUtils?.applyPostEditCounts) {
+            for (const bunk of (bunks || [])) {
+                window.SchedulerCoreUtils.applyPostEditCounts(bunk, primaryOldActivities.get(bunk) || [], activity, slots);
+            }
+            for (const move of plan) {
+                window.SchedulerCoreUtils.applyPostEditCounts(move.bunk, planOldActivities.get(move.bunk) || [], move.to.activity, [move.slot]);
+            }
+        }
 
         if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
 
@@ -5210,9 +5190,10 @@ if (softBlocks.length > 0) {
             if (!name) { name = prompt('Enter a name for this version:'); if (!name) return { success: false }; }
             const dailyData = loadDailyData(); 
             const dateData = dailyData[dateKey] || {};
-            const payload = { 
-                scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {}, 
-                leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {}, 
+            const payload = {
+                scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {},
+                scheduleSegments: window.scheduleSegments || dateData.scheduleSegments || {},
+                leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {},
                 divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {}
             };
             if (Object.keys(payload.scheduleAssignments).length === 0) { alert('No schedule data to save.'); return { success: false }; }
@@ -5250,10 +5231,16 @@ if (softBlocks.length > 0) {
                 let data = selected.schedule_data; 
                 if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
                 window.scheduleAssignments = data.scheduleAssignments || data;
+                // Phase 4: restore segments from the version, or rebuild from assignments.
+                if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
+                    window.scheduleSegments = data.scheduleSegments;
+                } else {
+                    try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+                }
                 if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
                 if (data.divisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
-                saveSchedule(); 
-                updateTable(); 
+                saveSchedule();
+                updateTable();
                 alert('✅ Version loaded!');
             } catch (err) { alert('Error: ' + err.message); }
         },
@@ -5264,8 +5251,9 @@ if (softBlocks.length > 0) {
             try {
                 const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
                 if (!versions?.length) { alert('No versions to merge.'); return { success: false }; }
-                const mergedAssignments = {}; 
-                const bunksTouched = new Set(); 
+                const mergedAssignments = {};
+                const mergedSegments = {};
+                const bunksTouched = new Set();
                 let latestLeagueData = null;
                 let latestDivisionTimes = null;
                 versions.forEach(ver => {
@@ -5274,15 +5262,26 @@ if (softBlocks.length > 0) {
                     if (!scheduleData) return;
                     const assignments = scheduleData.scheduleAssignments || scheduleData;
                     if (assignments && typeof assignments === 'object') {
-                        Object.entries(assignments).forEach(([bunkId, slots]) => { 
-                            mergedAssignments[bunkId] = slots; 
-                            bunksTouched.add(bunkId); 
+                        Object.entries(assignments).forEach(([bunkId, slots]) => {
+                            mergedAssignments[bunkId] = slots;
+                            bunksTouched.add(bunkId);
+                        });
+                    }
+                    // Phase 4: merge scheduleSegments per-bunk (same ownership pattern)
+                    if (scheduleData.scheduleSegments && typeof scheduleData.scheduleSegments === 'object') {
+                        Object.entries(scheduleData.scheduleSegments).forEach(([bunkId, row]) => {
+                            mergedSegments[bunkId] = row;
                         });
                     }
                     if (scheduleData.leagueAssignments) latestLeagueData = scheduleData.leagueAssignments;
                     if (scheduleData.divisionTimes) latestDivisionTimes = scheduleData.divisionTimes;
                 });
                 window.scheduleAssignments = mergedAssignments;
+                if (Object.keys(mergedSegments).length > 0) {
+                    window.scheduleSegments = mergedSegments;
+                } else {
+                    try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+                }
                 if (latestLeagueData) window.leagueAssignments = latestLeagueData;
                 if (latestDivisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(latestDivisionTimes) || latestDivisionTimes;
                 saveSchedule(); 

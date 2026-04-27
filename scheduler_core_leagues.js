@@ -1107,11 +1107,25 @@ for (const futureDate of Object.keys(allDailyData)) {
                 const todayGameIndex = leagueGameCounters[league.name];
                 const gameNumber = baseGameNumber + todayGameIndex + 1;
                 
-                // ★★★ Get matchups — check for Away Doubleheader mode ★★★
+                // ★★★ Get matchups — playoff > away doubleheader > round-robin ★★★
                 let matchups;
                 let awayInfo = null;
-                
-                if (league.awayDoubleheader?.enabled) {
+                let playoffMatchupSports = null;     // null when not in playoff mode
+                let playoffRoundNum = null;
+                const _PM = window.PlayoffMode;
+
+                if (_PM && _PM.isLeagueInPlayoff(league)) {
+                    const liveMatchups = _PM.getActiveMatchups(league);
+                    if (liveMatchups.length > 0) {
+                        playoffRoundNum = league.playoff.currentRound;
+                        matchups = liveMatchups.map(function (m) { return [m.teamA, m.teamB]; });
+                        playoffMatchupSports = liveMatchups.map(function (m) { return m.sport || null; });
+                        console.log('   🏆 PLAYOFF Round ' + playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                    } else {
+                        console.log('   🏆 PLAYOFF: no active matchups in current round (all decided or all byes) — skipping');
+                        continue;
+                    }
+                } else if (league.awayDoubleheader?.enabled) {
                     awayInfo = getAwayDoubleheaderMatchups(league, gameNumber, history);
                     if (awayInfo) {
                         matchups = awayInfo.matchups;
@@ -1177,14 +1191,42 @@ for (const futureDate of Object.keys(allDailyData)) {
                 }
 
                 // ★★★ PASS SCHEDULING PRIORITY TO ASSIGNMENT FUNCTION ★★★
-                const assignments = assignMatchupsToFieldsAndSports(
-                    matchups,
-                    availablePool,
-                    league.name,
-                    history,
-                    slots,
-                    league.schedulingPriority || 'sport_variety'
-                );
+                // For playoff mode: each matchup has its own fixed sport — bypass
+                // the variety logic and assign per-matchup directly.
+                let assignments;
+                if (playoffMatchupSports) {
+                    assignments = [];
+                    const _poolUsed = new Set();
+                    matchups.forEach(function (mu, i) {
+                        const teamA = Array.isArray(mu) ? mu[0] : mu;
+                        const teamB = Array.isArray(mu) ? mu[1] : null;
+                        const wantedSport = playoffMatchupSports[i];
+                        if (!teamA || !teamB) return;
+                        if (!wantedSport) {
+                            console.log('   ⚠️ PLAYOFF: matchup ' + teamA + ' vs ' + teamB + ' has no sport set — skipping');
+                            return;
+                        }
+                        const candidates = availablePool.filter(function (p) {
+                            return p.sport === wantedSport && !_poolUsed.has(p.field);
+                        });
+                        if (candidates.length === 0) {
+                            console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')');
+                            return;
+                        }
+                        const pick = candidates[0];
+                        _poolUsed.add(pick.field);
+                        assignments.push({ team1: teamA, team2: teamB, field: pick.field, sport: pick.sport });
+                    });
+                } else {
+                    assignments = assignMatchupsToFieldsAndSports(
+                        matchups,
+                        availablePool,
+                        league.name,
+                        history,
+                        slots,
+                        league.schedulingPriority || 'sport_variety'
+                    );
+                }
 
                 if (assignments.length === 0) {
                     console.log(`   ❌ No assignments possible`);
@@ -1217,13 +1259,33 @@ if (slots.length > 0 && _leagueDivSlots[slots[0]]) {
     _lockEndMin = _leagueDivSlots[slots[slots.length - 1]]?.endMin || (_lockStartMin + 40);
 }
 window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
-    lockedBy: 'regular_league',
+    lockedBy: playoffRoundNum ? 'playoff' : 'regular_league',
     leagueName: league.name,
     division: leagueDivisions.join(', '),
-    activity: `${league.name} League Game`,
+    activity: playoffRoundNum
+        ? (`${league.name} Playoff R${playoffRoundNum}`)
+        : (`${league.name} League Game`),
     startMin: _lockStartMin,
     endMin: _lockEndMin
 });
+
+// ★★★ PLAYOFF: lock reserved activities for non-playoff kids ★★★
+// User-configured list of facilities/activities that should be reserved
+// exclusively for this league's divisions during the playoff slot, so the
+// auto-scheduler routes the not-playing bunks into them.
+if (playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
+    const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum})`;
+    leagueDivisions.forEach(function (divName) {
+        league.playoff.reservedActivities.forEach(function (act) {
+            try {
+                window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
+            } catch (e) {
+                console.warn('[PLAYOFF] failed to reserve "' + act + '" for ' + divName + ':', e);
+            }
+        });
+    });
+    console.log('   🎯 PLAYOFF: reserved [' + league.playoff.reservedActivities.join(', ') + '] for [' + leagueDivisions.join(', ') + ']');
+}
 }
 
                 // Also lock in fieldUsageBySlot for compatibility
@@ -1265,9 +1327,12 @@ window._debugLeagueTimeData = timeData;
             ? block.startTime
             : (_Utils?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
         if (Number(_blockKey) !== Number(timeKey)) return;
+        const _gameLbl = playoffRoundNum
+            ? (`Playoff R${playoffRoundNum}`)
+            : (`Game ${gameNumber}`);
         const pick = {
                             field: `League: ${league.name}`,
-                            sport: `Game ${gameNumber}`,
+                            sport: _gameLbl,
                             _activity: `League: ${league.name}`,
                             _leagueName: league.name,
                             _h2h: true,
@@ -1275,7 +1340,8 @@ window._debugLeagueTimeData = timeData;
                             _allMatchups: assignments.map(a =>
                                 `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
                             ),
-                            _gameLabel: `Game ${gameNumber}`
+                            _gameLabel: _gameLbl,
+                            _playoffRound: playoffRoundNum || null
                         };
 
                         fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
@@ -1424,6 +1490,57 @@ window._debugLeagueTimeData = timeData;
         });
         
         return history.gamesPerDate[leagueName];
+    };
+
+    /**
+     * Remove a date's game counts from league history and propagate updated
+     * game numbers to any future dates still in localStorage.
+     * Called by eraseCurrentDailyData after a day is deleted.
+     */
+    Leagues.cleanupDateFromHistory = function(dateKey) {
+        try {
+            const history = loadLeagueHistory();
+            if (!history.gamesPerDate) return;
+
+            let changed = false;
+            for (const leagueName of Object.keys(history.gamesPerDate)) {
+                if (history.gamesPerDate[leagueName][dateKey] !== undefined) {
+                    delete history.gamesPerDate[leagueName][dateKey];
+                    changed = true;
+                }
+            }
+
+            if (!changed) return;
+
+            saveLeagueHistory(history);
+            console.log('[RegularLeagues] 🗑️ Removed gamesPerDate entries for', dateKey);
+
+            // Propagate corrected game numbers to future schedules in localStorage
+            updateFutureSchedules(dateKey, history);
+        } catch (e) {
+            console.error('[RegularLeagues] cleanupDateFromHistory error:', e);
+        }
+    };
+
+    /**
+     * Wipe all gamesPerDate entries across every league.
+     * Called by eraseAllDailyData when every schedule is deleted at once.
+     * No future-schedule propagation needed because all schedules are gone.
+     */
+    Leagues.clearAllGamesPerDate = function() {
+        try {
+            const history = loadLeagueHistory();
+            if (!history.gamesPerDate || Object.keys(history.gamesPerDate).length === 0) return;
+
+            for (const leagueName of Object.keys(history.gamesPerDate)) {
+                history.gamesPerDate[leagueName] = {};
+            }
+
+            saveLeagueHistory(history);
+            console.log('[RegularLeagues] 🗑️ Cleared all gamesPerDate entries (all schedules deleted)');
+        } catch (e) {
+            console.error('[RegularLeagues] clearAllGamesPerDate error:', e);
+        }
     };
 
     window.SchedulerCoreLeagues = Leagues;

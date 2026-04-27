@@ -27,6 +27,43 @@
     const SPECIALTY_LEAGUE_HISTORY_KEY = "specialtyLeagueHistory_v1";
     const LEGACY_GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
     const LEGACY_GLOBAL_REGISTRY_KEY = "campistry_global_registry";
+
+    // ==========================================================
+    // AUDIT LOGGING — fire-and-forget, silent on missing table
+    // Run this SQL in Supabase to enable:
+    //   CREATE TABLE IF NOT EXISTS camp_audit_log (
+    //     id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    //     camp_id     text NOT NULL,
+    //     user_id     text NOT NULL,
+    //     user_role   text NOT NULL,
+    //     action      text NOT NULL,
+    //     details     jsonb,
+    //     created_at  timestamptz DEFAULT now()
+    //   );
+    //   ALTER TABLE camp_audit_log ENABLE ROW LEVEL SECURITY;
+    //   CREATE POLICY "Camp members can insert audit logs"
+    //     ON camp_audit_log FOR INSERT
+    //     WITH CHECK (camp_id = (SELECT camps.id FROM camps WHERE auth.uid() = camps.owner
+    //                            OR EXISTS (SELECT 1 FROM camp_users WHERE camp_id = camps.id AND user_id = auth.uid())));
+    // ==========================================================
+    async function logAuditEvent(action, details = {}) {
+        try {
+            const client = window.CampistryDB?.getClient?.() || window.supabase;
+            const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+            const userId = window.CampistryDB?.getUserId?.() || window.AccessControl?.getCurrentUser?.()?.id;
+            const role = window.AccessControl?.getCurrentRole?.() || 'unknown';
+            if (!client || !campId || !userId) return;
+            await client.from('camp_audit_log').insert({
+                camp_id: campId,
+                user_id: userId,
+                user_role: role,
+                action,
+                details
+            });
+        } catch (_) {
+            // Silent — table may not exist yet
+        }
+    }
     
     // ==========================================================
     // Helper — formatted date YYYY-MM-DD
@@ -168,6 +205,10 @@
     };
     
     window.saveCurrentDailyData = function(key, value) {
+        if (!window.AccessControl?.canSave?.()) {
+            console.warn('🔐 saveCurrentDailyData: permission denied (role:', window.AccessControl?.getCurrentRole?.(), ')');
+            return;
+        }
         try {
             const all = window.loadAllDailyData();
             const date = window.currentScheduleDate;
@@ -226,14 +267,11 @@ all[date].updated_at = new Date().toISOString();
     // RESET ALL ACTIVITY / SPECIAL ROTATION
     // ==========================================================
     window.eraseRotationHistory = async function() {
-        // Check permission - Owner and Admin can erase history
-        const role = window.AccessControl?.getCurrentRole?.();
-        const canErase = role === 'owner' || role === 'admin';
-        
-        if (!canErase) {
+        if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('erase rotation history');
             return;
         }
+        logAuditEvent('erase_rotation_history');
         try {
             console.log("🔄 Erasing rotation history...");
             
@@ -246,20 +284,22 @@ all[date].updated_at = new Date().toISOString();
                 await window.clearCloudKeys([
                     'manualUsageOffsets',
                     'historicalCounts',
+                    'historicalCountedDates',
                     'smartTileHistory',
                     'rotationHistory'
                 ]);
             } else {
                 window.saveGlobalSettings?.('manualUsageOffsets', {});
                 window.saveGlobalSettings?.('historicalCounts', {});
+                window.saveGlobalSettings?.('historicalCountedDates', {});
                 window.saveGlobalSettings?.('smartTileHistory', {});
                 window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
-                
+
                 if (typeof window.forceSyncToCloud === 'function') {
                     await window.forceSyncToCloud();
                 }
             }
-            
+
             console.log("✅ All rotation histories cleared.");
             alert("Activity & Smart Tile History reset successfully!");
             window.location.reload();
@@ -273,11 +313,7 @@ all[date].updated_at = new Date().toISOString();
     // START NEW HALF
     // ==========================================================
     window.startNewHalf = async function() {
-        // Check permission - Owner and Admin can start new half
-        const role = window.AccessControl?.getCurrentRole?.();
-        const canErase = role === 'owner' || role === 'admin';
-        
-        if (!canErase) {
+        if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('start new half');
             return;
         }
@@ -298,6 +334,7 @@ all[date].updated_at = new Date().toISOString();
         );
         if (!confirmed) return;
         
+        logAuditEvent('start_new_half');
         try {
             console.log("=".repeat(50));
             console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
@@ -311,6 +348,23 @@ all[date].updated_at = new Date().toISOString();
             localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
             localStorage.removeItem(DAILY_DATA_KEY);
             
+            // ★★★ CRITICAL: Directly delete all daily_schedules records from Supabase ★★★
+            // clearCloudKeys('daily_schedules') routes through saveGlobalSettings which skips
+            // the Supabase delete when given {} — we must hit the table directly.
+            {
+                const client = window.CampistryDB?.getClient?.() || window.supabase;
+                const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                if (client && campId) {
+                    console.log("🗑️ New half: deleting all daily_schedules from Supabase...");
+                    const { error } = await client
+                        .from('daily_schedules')
+                        .delete()
+                        .eq('camp_id', campId);
+                    if (error) console.error('🗑️ New half: Supabase delete error:', error);
+                    else console.log("🗑️ New half: Supabase daily_schedules cleared");
+                }
+            }
+
             // ★★★ CRITICAL: Clear ALL cloud keys including new league history keys ★★★
             if (typeof window.clearCloudKeys === 'function') {
                 console.log("☁️ Clearing cloud keys for new half...");
@@ -319,8 +373,9 @@ all[date].updated_at = new Date().toISOString();
                     'leagueHistory',              // ★ Regular league history (gamesPerDate)
                     'specialtyLeagueHistory',     // ★ Specialty league history
                     'daily_schedules',            // ★ Clear saved schedules from cloud
-                    'manualUsageOffsets', 
+                    'manualUsageOffsets',
                     'historicalCounts',
+                    'historicalCountedDates',
                     'smartTileHistory',
                     'rotationHistory'
                 ]);
@@ -333,6 +388,7 @@ all[date].updated_at = new Date().toISOString();
                 window.saveGlobalSettings?.('daily_schedules', {});
                 window.saveGlobalSettings?.('manualUsageOffsets', {});
                 window.saveGlobalSettings?.('historicalCounts', {});
+                window.saveGlobalSettings?.('historicalCountedDates', {});
                 window.saveGlobalSettings?.('smartTileHistory', {});
                 window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
                 
@@ -740,6 +796,7 @@ all[date].updated_at = new Date().toISOString();
             
             if (!confirm(confirmMsg)) return;
             
+            logAuditEvent('erase_today_partial', { dateKey, divisions: myDivisions });
             console.log('🗑️ Scheduler deleting divisions:', myDivisions);
             
             // ★★★ THE CRITICAL FIX: Remove bunks from ALL records ★★★
@@ -765,12 +822,13 @@ all[date].updated_at = new Date().toISOString();
         // ═══════════════════════════════════════════════════════════════
         // OWNER/ADMIN: Delete everything
         // ═══════════════════════════════════════════════════════════════
-        else if (role === 'owner' || role === 'admin') {
+        else if (window.AccessControl?.canEraseData?.()) {
             const confirmMsg = `Delete ALL schedule data for ${dateKey}?\n\n` +
                              `This will delete data from ALL schedulers and cannot be undone.`;
             
             if (!confirm(confirmMsg)) return;
             
+            logAuditEvent('erase_today', { dateKey });
             console.log('🗑️ Owner/Admin: Full delete');
             
             // Delete from cloud using ScheduleDB
@@ -816,9 +874,15 @@ all[date].updated_at = new Date().toISOString();
         }
         
         // ═══════════════════════════════════════════════════════════════
+        // CLEAN LEAGUE HISTORY for the deleted date (regular + specialty)
+        // ═══════════════════════════════════════════════════════════════
+        window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
+        window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
+
+        // ═══════════════════════════════════════════════════════════════
         // REFRESH UI
         // ═══════════════════════════════════════════════════════════════
-        
+
         console.log('🗑️ Refreshing UI...');
         
         if (window.updateTable) {
@@ -841,14 +905,11 @@ all[date].updated_at = new Date().toISOString();
     // 8. ERASE ALL SCHEDULE DAYS - ★ FIXED to sync deletion to cloud ★
     // ==========================================================
     window.eraseAllDailyData = async function() {
-        // Check permission - Owner and Admin can erase all schedules
-        const role = window.AccessControl?.getCurrentRole?.();
-        const canErase = role === 'owner' || role === 'admin';
-        
-        if (!canErase) {
+        if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('erase all daily data');
             return;
         }
+        const role = window.AccessControl?.getCurrentRole?.();
         
         const confirmMsg = 'Delete ALL schedule data for ALL dates?\n\n' +
                           '⚠️ This will permanently delete schedules from all schedulers for all dates.\n\n' +
@@ -856,6 +917,7 @@ all[date].updated_at = new Date().toISOString();
         
         if (!confirm(confirmMsg)) return;
         
+        logAuditEvent('erase_all_schedules');
         console.log("🗑️ Erasing all daily data...");
         
         try {
@@ -894,9 +956,24 @@ all[date].updated_at = new Date().toISOString();
             // Clear window globals
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
-            
+
+            // Clear league gamesPerDate — all schedule-derived game counts are now stale
+            window.SchedulerCoreLeagues?.clearAllGamesPerDate?.();
+            window.SchedulerCoreSpecialtyLeagues?.clearAllGamesPerDate?.();
+
+            // Reset leagueRoundState — currentRound/sportRotationIndex are stale with no schedules
+            window.leagueRoundState = {};
+            if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('leagueRoundState', {});
+            }
+
             console.log("✅ All daily data erased");
-            
+
+            // Notify other modules
+            window.dispatchEvent(new CustomEvent('campistry-schedule-deleted', {
+                detail: { dateKey: '*', role }
+            }));
+
             alert('All schedule data has been deleted.');
             window.location.reload();
             

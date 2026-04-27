@@ -179,25 +179,35 @@
         return null;
     }
 
-    function getSpecialDuration(specialName, activityProperties, gs) {
-        const props = activityProperties && activityProperties[specialName];
-        if (props) {
-            const d = props.defaultDuration || props.duration || props.durationMin || props.periodMin;
-            if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
-        }
-        const cfg = getSpecialConfig(specialName, gs);
-        if (cfg) {
-            const d = cfg.defaultDuration || cfg.duration || cfg.durationMin || cfg.periodMin;
-            if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
-        }
-        if (window.getSpecialActivityByName) {
-            const live = window.getSpecialActivityByName(specialName);
-            if (live) {
-                const d = live.defaultDuration || live.duration || live.durationMin;
-                if (d && parseInt(d, 10) > 0) return parseInt(d, 10);
+    // Return all user-configured allowed durations for a special, in ascending
+    // order. Empty array = user has not configured any → caller should fall
+    // back to the layer's dMin/dMax range. Used by the period-packer integration
+    // to enumerate candidate durations per special.
+    function getSpecialDurations(specialName, activityProperties, gs) {
+        const collect = (obj) => {
+            if (!obj) return null;
+            if (Array.isArray(obj.durations)) {
+                const arr = obj.durations.map(d => parseInt(d, 10)).filter(d => !isNaN(d) && d > 0);
+                if (arr.length > 0) return Array.from(new Set(arr)).sort((a, b) => a - b);
             }
+            const d = obj.defaultDuration || obj.duration || obj.durationMin || obj.periodMin;
+            if (d && parseInt(d, 10) > 0) return [parseInt(d, 10)];
+            return null;
+        };
+        const fromProps = activityProperties && collect(activityProperties[specialName]);
+        if (fromProps) return fromProps;
+        const fromCfg = collect(getSpecialConfig(specialName, gs));
+        if (fromCfg) return fromCfg;
+        if (window.getSpecialActivityByName) {
+            const fromLive = collect(window.getSpecialActivityByName(specialName));
+            if (fromLive) return fromLive;
         }
-        return null; // null = use layer dMin/dMax range
+        return [];
+    }
+
+    function getSpecialDuration(specialName, activityProperties, gs) {
+        const all = getSpecialDurations(specialName, activityProperties, gs);
+        return all.length > 0 ? all[0] : null; // null = use layer dMin/dMax range
     }
 
     function getSpecialCapacity(specialName, activityProperties, gs) {
@@ -223,22 +233,39 @@
         return 2;
     }
 
+    // ═══ CROSS-DIVISION helper ══════════════════════════════════════════
+    // A single-entry check: can newGrade join a slot containing existingGrades
+    // under cross_division pair rules?  Every existing grade must be in an
+    // allowed pair with newGrade (pairs are sorted "A|B" keys).
+    function isCrossDivAllowed(newGrade, existingGrades, allowedPairs) {
+        const pairs = allowedPairs || {};
+        if (!existingGrades || existingGrades.length === 0) return true;
+        for (let i = 0; i < existingGrades.length; i++) {
+            const eg = existingGrades[i];
+            const key = [newGrade, eg].sort().join('|');
+            if (pairs[key] !== true) return false;
+        }
+        return true;
+    }
+
     function getSpecialSharingInfo(specialName, activityProperties, gs) {
-        let shareType = 'not_sharable', cap = 1, allowedDivs = [];
+        let shareType = 'not_sharable', cap = 1, allowedDivs = [], allowedPairs = {};
         const props = activityProperties && activityProperties[specialName];
         if (props && props.sharableWith && props.sharableWith.type) {
             shareType = props.sharableWith.type;
             cap = parseInt(props.sharableWith.capacity) || (shareType === 'not_sharable' ? 1 : 2);
             allowedDivs = props.sharableWith.divisions || [];
+            allowedPairs = props.sharableWith.allowedPairs || {};
         } else {
             const cfg = getSpecialConfig(specialName, gs);
             if (cfg && cfg.sharableWith && cfg.sharableWith.type) {
                 shareType = cfg.sharableWith.type;
                 cap = parseInt(cfg.sharableWith.capacity) || (shareType === 'not_sharable' ? 1 : 2);
                 allowedDivs = cfg.sharableWith.divisions || [];
+                allowedPairs = cfg.sharableWith.allowedPairs || {};
             }
         }
-        return { shareType, capacity: cap, allowedDivisions: allowedDivs };
+        return { shareType, capacity: cap, allowedDivisions: allowedDivs, allowedPairs };
     }
 
     function isScarce(specialName, dayName, gs) {
@@ -272,6 +299,22 @@
         if (!allowed || typeof allowed !== 'object') return true;
         if (Array.isArray(allowed)) return allowed.includes(divName);
         return divName in allowed;
+    }
+    // Per-bunk access check. Honors the per-bunk filter inside
+    // limitUsage.divisions[grade]: an empty array (or missing) means
+    // "all bunks in this grade", a non-empty array means only those
+    // listed bunks are allowed.
+    function isSpecialAvailableForBunk(specialName, divName, bunkName, gs) {
+        if (!isSpecialAvailableForDivision(specialName, divName, gs)) return false;
+        const cfg = getSpecialConfig(specialName, gs);
+        if (!cfg) return true;
+        const rules = cfg.limitUsage;
+        if (!rules || !rules.enabled) return true;
+        const allowed = rules.divisions;
+        if (!allowed || typeof allowed !== 'object' || Array.isArray(allowed)) return true;
+        const bunkList = allowed[divName];
+        if (!Array.isArray(bunkList) || bunkList.length === 0) return true; // all bunks
+        return bunkList.map(String).includes(String(bunkName));
     }
 
     function getLocationForSpecial(specialName, activityProperties, gs) {
@@ -478,6 +521,24 @@
             });
             return count;
         }
+        // Lifetime visit count for rotation-cohort enforcement.
+        // Counts every prior day in allDailyData where this bunk had this
+        // special on its schedule.
+        const _cohortCountCache = {};
+        function getLifetimeSpecialCount(bunk, specialName) {
+            const key = bunk + '||' + specialName;
+            if (_cohortCountCache[key] != null) return _cohortCountCache[key];
+            let count = 0;
+            Object.entries(allDailyData).forEach(([dateKey, dayData]) => {
+                if (dateKey >= currentDate) return;
+                const slots = dayData?.scheduleAssignments?.[bunk];
+                if (!Array.isArray(slots)) return;
+                if (slots.some(e => e && !e.continuation &&
+                    (e._activity === specialName || e.field === specialName))) count++;
+            });
+            _cohortCountCache[key] = count;
+            return count;
+        }
 
         log('[STEP 1] Day: ' + dayName + ' | Rainy: ' + (isRainy ? 'YES' : 'NO'));
         const allowedDivisions = options.allowedDivisions || null;
@@ -497,11 +558,15 @@
         // ★ pickFillActivity — choose the longest real special that fits inside a gap.
         // Used everywhere "General Activity Slot" was previously hard-coded.
         // Returns the special's name, or null if nothing fits (caller falls back gracefully).
-        function pickFillActivity(gapDur, grade) {
+        function pickFillActivity(gapDur, grade, bunk) {
             var best = null, bestDur = 0;
             for (var _pfi = 0; _pfi < todaysSpecials.length; _pfi++) {
                 var _s = todaysSpecials[_pfi];
-                if (grade && !isSpecialAvailableForDivision(_s.name, grade, globalSettings)) continue;
+                if (grade) {
+                    if (bunk != null) {
+                        if (!isSpecialAvailableForBunk(_s.name, grade, bunk, globalSettings)) continue;
+                    } else if (!isSpecialAvailableForDivision(_s.name, grade, globalSettings)) continue;
+                }
                 var _dur = getSpecialDuration(_s.name, activityProperties, globalSettings) ||
                            _s.defaultDuration || _s.duration || _s.durationMin || _s.periodMin || 0;
                 if (_dur <= 0 || _dur > gapDur) continue;
@@ -523,6 +588,11 @@
             if (!layersByGrade[grade]) layersByGrade[grade] = [];
             layersByGrade[grade].push(layer);
         });
+        // Debug exposure for swim_debug.js
+        try {
+            window._layersByGrade = layersByGrade;
+            window._divisions = divisions;
+        } catch (_e) {}
 
         const FULL_GRADE_TYPES = new Set(['swim', 'lunch', 'snacks', 'snack']);
 
@@ -578,12 +648,14 @@
         const TYPE_FLOORS = {
             swim: 30, league: 30, specialty_league: 30, special: 20,
             sport: 25, sports: 25, lunch: 20, snack: 15, snacks: 15,
-            dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20
+            dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20,
+            'pre-change': 5, 'post-change': 5, change: 5
         };
         const TYPE_CEILINGS = {
             swim: 60, league: 60, specialty_league: 60, special: 60,
             sport: GAP_MAX_DUR, sports: GAP_MAX_DUR, lunch: 45, snack: 30,
-            snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60
+            snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60,
+            'pre-change': 30, 'post-change': 30, change: 30
         };
 
         function resolveConstraints(layer, type, block) {
@@ -643,6 +715,9 @@
         // =====================================================================
 
         const _resourceBuckets = {};   // { "special:painting": { [minute]: { count, grades: Set } }, ... }
+        // Metadata for rotation events: { [eventId]: { gradeMode, winStart, dur } }
+        // Populated by Phase 2.4; used by canUseRotationSlotAtTime.
+        const _rotEventMeta = {};
 
         function _rtKey(type, name) {
             return (type + ':' + (name || '')).toLowerCase();
@@ -664,7 +739,7 @@
             }
         }
 
-        function rtCanUse(type, name, grade, startMin, endMin, shareType, capacity, allowedDivisions) {
+        function rtCanUse(type, name, grade, startMin, endMin, shareType, capacity, allowedDivisions, allowedPairs) {
             const key = _rtKey(type, name);
             const buckets = _resourceBuckets[key];
             if (!buckets) return true;
@@ -676,16 +751,23 @@
                 // Capacity check — universal
                 if (b.count >= capacity) return false;
 
-                // Cross-division enforcement
-                if (b.grades.size > 0 && !b.grades.has(grade)) {
-                    if (shareType === 'not_sharable') return false;
-                    if (shareType === 'same_division') return false;
-                    if (shareType === 'custom') {
-                        const existing = [...b.grades];
-                        const allOk = existing.every(g => allowedDivisions.includes(g)) && allowedDivisions.includes(grade);
-                        if (!allOk) return false;
+                // Sharing compatibility
+                if (b.grades.size > 0) {
+                    if (shareType === 'cross_division') {
+                        // Pair-wise check for every grade present (including same-grade)
+                        const gradesArr = [...b.grades];
+                        if (!isCrossDivAllowed(grade, gradesArr, allowedPairs)) return false;
+                    } else if (!b.grades.has(grade)) {
+                        // Cross-grade and not in cross_division mode
+                        if (shareType === 'not_sharable') return false;
+                        if (shareType === 'same_division') return false;
+                        if (shareType === 'custom') {
+                            const existing = [...b.grades];
+                            const allOk = existing.every(g => allowedDivisions.includes(g)) && allowedDivisions.includes(grade);
+                            if (!allOk) return false;
+                        }
+                       // shareType === 'all' → no cross-div restriction, only capacity
                     }
-                   // shareType === 'all' → no cross-div restriction, only capacity
                 }
             }
 
@@ -723,7 +805,7 @@
         function canUseSpecialAtTime(specialName, grade, startMin, endMin) {
             const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
             return rtCanUse('special', specialName, grade, startMin, endMin,
-                info.shareType, info.capacity, info.allowedDivisions);
+                info.shareType, info.capacity, info.allowedDivisions, info.allowedPairs);
         }
 
         function registerPoolUsage(grade, startMin, endMin) {
@@ -763,8 +845,51 @@
             rtRegister('rotevt', eventId, grade, startMin, endMin);
         }
 
+        // Returns { startMin, endMin } of the grade's existing placement for
+        // this event, or null if none yet. Used to force "one slot per grade":
+        // once a bunk of grade G is placed at time T for event E, every other
+        // bunk of grade G must use the same T. Prevents each grade from
+        // spreading across multiple slots and starving later grades.
+        function getGradeRotationPlacement(eventId, grade) {
+            const key = _rtKey('rotevt', eventId);
+            const buckets = _resourceBuckets[key];
+            if (!buckets) return null;
+            let minM = null, maxM = null;
+            for (const mStr in buckets) {
+                const b = buckets[mStr];
+                if (!b || !b.grades.has(grade)) continue;
+                const m = parseInt(mStr, 10);
+                if (minM == null || m < minM) minM = m;
+                if (maxM == null || m > maxM) maxM = m;
+            }
+            if (minM == null) return null;
+            return { startMin: minM, endMin: maxM + 5 };
+        }
+
         function canUseRotationSlotAtTime(eventId, concurrency, grade, startMin, endMin) {
             if (!eventId || !concurrency) return true;
+            const _meta = _rotEventMeta[eventId];
+            const _isStaggered = _meta && _meta.gradeMode === 'individual';
+
+            if (_isStaggered) {
+                // Staggered mode: skip grade-locking and enforce slot-boundary alignment.
+                // Different bunks in the same grade go at different times — grade-locking
+                // must not fire. Also reject any placement that isn't on a window boundary
+                // (windowStart + n * durationPerBunk) to prevent 10:55 mid-slot starts.
+                const _winStart = _meta.winStart;
+                const _dur = _meta.dur;
+                if (_dur > 0 && (startMin - _winStart) % _dur !== 0) return false; // off-boundary
+                if (_dur > 0 && (endMin - startMin) !== _dur) return false; // wrong duration — must equal per-bunk dur
+                // Use 'all' share type: concurrency limit applies across all grades
+                return rtCanUse('rotevt', eventId, grade, startMin, endMin,
+                    'all', concurrency, []);
+            }
+
+            // Whole-grade mode (default): force grade alignment
+            const existing = getGradeRotationPlacement(eventId, grade);
+            if (existing && (existing.startMin !== startMin || existing.endMin !== endMin)) {
+                return false;
+            }
             // not_sharable = only same-grade bunks can share the slot
             return rtCanUse('rotevt', eventId, grade, startMin, endMin,
                 'not_sharable', concurrency, []);
@@ -975,7 +1100,8 @@
 
                fieldLedger[field.name] = {
                     name: field.name, capacity, shareType,
-                    allowedDivisions: props.sharableWith?.divisions || [],
+                    allowedDivisions: props.sharableWith?.divisions || field.sharableWith?.divisions || [],
+                    allowedPairs: props.sharableWith?.allowedPairs || field.sharableWith?.allowedPairs || {},
                     isIndoor: field.isIndoor || false,
                     timeRules, unavailableRules,
                     disabledSports: dailyDisabledSports[field.name] || [],
@@ -993,6 +1119,8 @@
                     fieldLedger[location] = {
                         name: location, capacity: cap,
                         shareType: cfg?.sharableWith?.type || 'not_sharable',
+                        allowedDivisions: cfg?.sharableWith?.divisions || [],
+                        allowedPairs: cfg?.sharableWith?.allowedPairs || {},
                         isIndoor: true,
                         timeRules: [{ startMin: 540, endMin: 990, divisions: null }],
                         activities: [special.name], claims: [],
@@ -1043,6 +1171,10 @@
                 } else {
                     if (overlapping.some(c => c.grade !== grade)) return false;
                 }
+            }
+            if (ledger.shareType === 'cross_division') {
+                // Every existing claim grade must be pair-compatible with new grade
+                if (!isCrossDivAllowed(grade, overlapping.map(c => c.grade), ledger.allowedPairs)) return false;
             }
 
             // ★ EXACT TIME MATCH (now OPT-IN): Some camps require that bunks
@@ -1247,12 +1379,204 @@
 
 
         // =====================================================================
+        // SHARED: SWIM + CHANGE PERIOD ANCHORS
+        // =====================================================================
+        // Given a swim block aligned to a bell-schedule period, return where
+        // pre-change and post-change should live.
+        //
+        // Default placement (no conflictBlocks):
+        //   pre  = last preChangeMin minutes of the period BEFORE swim's period
+        //   post = first postChangeMin minutes of the period AFTER the bundle's
+        //         last period.
+        //
+        // "Bundle" = swim block + any adjacent swim-linked rotation_event
+        // (e.g. water slides). Change wraps the ENTIRE bundle:
+        //   water slides BEFORE swim → [pre-change] [waterslides] [swim] [post-change]
+        //   water slides AFTER  swim → [pre-change] [swim] [waterslides] [post-change]
+        //
+        // With conflictBlocks (e.g. when re-anchoring against a final timeline):
+        //   walk back through prior periods until a period's last preChangeMin
+        //   minutes are free of any overlap; same forward for post. This is
+        //   the "if swim follows lunch / a pinned activity, the change goes
+        //   BEFORE that activity" rule — change always lands inside a single
+        //   bell-schedule period, never crossing one.
+        //
+        // Constraints in either mode:
+        //   - If a candidate period is shorter than the configured change
+        //     length, fill the entire neighboring period.
+        //   - If no prior period is free, pre is null. Same for post.
+        //   - Returns {pre:null, post:null} when no campPeriods are configured
+        //     for the grade or the bundle doesn't align to any period.
+        function computeSwimChangeAnchors(swimStart, swimEnd, layer, gradeForPeriods, conflictBlocks, bundleStart, bundleEnd) {
+            // bundleStart/bundleEnd default to swimStart/swimEnd when no
+            // adjacent water-slides exist.
+            var bStart = (bundleStart != null) ? bundleStart : swimStart;
+            var bEnd   = (bundleEnd   != null) ? bundleEnd   : swimEnd;
+
+            var preChange = (layer && layer.preChangeMin > 0) ? layer.preChangeMin : 0;
+            var postChange = (layer && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+            if (preChange <= 0 && postChange <= 0) return { pre: null, post: null };
+            var gp = (gradeForPeriods && window.campPeriods && window.campPeriods[gradeForPeriods])
+                ? window.campPeriods[gradeForPeriods].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                : [];
+            if (gp.length === 0) return { pre: null, post: null };
+
+            // Find the period that contains or starts at bStart (for pre walk-back)
+            // and the period that contains or ends at bEnd (for post walk-forward).
+            var firstPeriodIdx = -1, lastPeriodIdx = -1;
+            for (var i = 0; i < gp.length; i++) {
+                if (firstPeriodIdx < 0 && gp[i].startMin <= bStart && gp[i].endMin > bStart) firstPeriodIdx = i;
+                if (gp[i].startMin < bEnd && gp[i].endMin >= bEnd) lastPeriodIdx = i;
+            }
+            // Fallback: exact match on swimStart (original behavior)
+            if (firstPeriodIdx < 0) {
+                for (var j = 0; j < gp.length; j++) {
+                    if (gp[j].startMin === swimStart) { firstPeriodIdx = j; break; }
+                }
+            }
+            if (lastPeriodIdx < 0) lastPeriodIdx = firstPeriodIdx;
+            if (firstPeriodIdx < 0) return { pre: null, post: null };
+
+            // Build a fast overlap test against existing blocks. Empty/unset
+            // conflictBlocks → no constraint (immediate adjacent always wins).
+            var conflicts = Array.isArray(conflictBlocks) ? conflictBlocks : [];
+            var rangeOccupied = function(rs, re) {
+                if (rs == null || re == null || rs >= re) return true;
+                for (var ci = 0; ci < conflicts.length; ci++) {
+                    var b = conflicts[ci];
+                    if (!b) continue;
+                    var bs = b.startMin, be = b.endMin;
+                    if (bs == null || be == null) continue;
+                    // Don't treat blocks inside the bundle as conflicts.
+                    if (bs >= bStart && be <= bEnd) continue;
+                    if (bs < re && be > rs) return true;
+                }
+                return false;
+            };
+
+            // PRE: walk back from the bundle's first period.
+            // ★ PRIORITY 0: when a linked rotation event precedes swim (e.g. Water Slide
+            // before Swim), the natural "change time" is the inter-period gap between the
+            // rotation event's end and swim's start — not a block inside a prior period.
+            // Check for that gap first so Period 1 stays a full 40-min activity.
+            var pre = null;
+            if (preChange > 0 && bStart < swimStart) {
+                // Find the end of the latest block that starts inside the bundle but ends
+                // before swimStart (this is the linked rotation event).
+                var _rotEnd = bStart;
+                for (var _ci = 0; _ci < conflicts.length; _ci++) {
+                    var _cb = conflicts[_ci];
+                    if (!_cb) continue;
+                    var _cbs = _cb.startMin != null ? _cb.startMin : null;
+                    var _cbe = _cb.endMin   != null ? _cb.endMin   : null;
+                    if (_cbs == null || _cbe == null) continue;
+                    if (_cbs >= bStart && _cbe <= swimStart && _cbe > _rotEnd) _rotEnd = _cbe;
+                }
+                if (_rotEnd > bStart && _rotEnd < swimStart) {
+                    // Use the gap [_rotEnd, swimStart) as the pre-change window.
+                    var _gapDur = Math.min(preChange, swimStart - _rotEnd);
+                    if (_gapDur > 0 && !rangeOccupied(_rotEnd, _rotEnd + _gapDur)) {
+                        pre = { startMin: _rotEnd, endMin: _rotEnd + _gapDur };
+                    }
+                }
+            }
+            if (preChange > 0 && !pre) {
+                // Only place Change in the gap immediately before swim — not in a period
+                // further back. Walking back multiple periods puts Change hours before swim.
+                var _preGapEnd = swimStart;
+                var _preGapStart = swimStart - preChange;
+                if (_preGapStart >= 0 && !rangeOccupied(_preGapStart, _preGapEnd)) {
+                    pre = { startMin: _preGapStart, endMin: _preGapEnd };
+                }
+            }
+
+            // POST: place Change in the gap immediately after swim (not multiple periods ahead).
+            var post = null;
+            if (postChange > 0) {
+                var _postGapStart = swimEnd;
+                var _postGapEnd = swimEnd + postChange;
+                if (!rangeOccupied(_postGapStart, _postGapEnd)) {
+                    post = { startMin: _postGapStart, endMin: _postGapEnd };
+                }
+            }
+            return { pre: pre, post: post };
+        }
+        // Counter for tagging swim+change groups so eviction/cleanup can keep
+        // the trio atomic and detect orphans.
+        var _swimGroupCounter = 0;
+        function nextSwimGroupId() { return 'sg_' + (++_swimGroupCounter); }
+
+        // =====================================================================
         // PHASE 0: PLACE PINNED LAYERS
         // =====================================================================
 
         function executePinnedLayers() {
             let count = 0;
-            pinnedLayers.forEach(layer => {
+            // Sort so swim layers are processed LAST. Ensures lunch, specials,
+            // and other pinned activities are already in bunkTimelines when
+            // computeSwimChangeAnchors runs for swim's pre/post-change blocks.
+            //
+            // Among swim layers: process the MOST CONSTRAINED grades first so
+            // they get first pick of pool periods. A swim layer that needs
+            // change blocks + an adjacent linked rotation event (e.g. WS) is
+            // far more constrained than a plain swim — it needs ~100 min of
+            // contiguous time and adjacent free slots. Processing it last
+            // forces it into whatever period remains, breaking adjacency.
+            //
+            // Priority (lower = processed first among swim):
+            //   2 = swim with change blocks + linked rotation event
+            //   3 = swim with change blocks only
+            //   4 = swim with linked rotation event only
+            //   5 = plain swim
+
+            // Pre-compute which grades have a linked rotation event targeting swim
+            const _gradesWithLinkedRot = new Set();
+            if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                try {
+                    const _sortRots = window.RotationEvents.loadRotationEvents() || [];
+                    for (const rEvt of _sortRots) {
+                        if (!rEvt || !rEvt.sequence) continue;
+                        const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
+                        if (!tgt) continue;
+                        if (currentDate && rEvt.dateRange) {
+                            if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
+                        }
+                        const rDur = parseInt(rEvt.durationPerBunk) || 0;
+                        if (rDur <= 0) continue;
+                        const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? rEvt.grades : [];
+                        if (rGrades.length > 0) {
+                            rGrades.forEach(g => _gradesWithLinkedRot.add(String(g) + '|' + tgt));
+                        } else {
+                            // No grade filter — applies to all grades
+                            allGrades.forEach(g => _gradesWithLinkedRot.add(String(g) + '|' + tgt));
+                        }
+                    }
+                } catch (_e) {}
+            }
+
+            const orderedPinned = pinnedLayers.slice().sort((a, b) => {
+                const aType = (a.type || '').toLowerCase();
+                const bType = (b.type || '').toLowerCase();
+                const aSwim = aType === 'swim' ? 1 : 0;
+                const bSwim = bType === 'swim' ? 1 : 0;
+                if (aSwim !== bSwim) return aSwim - bSwim; // non-swim before swim
+
+                // Both swim — sort by constraint level (most constrained first)
+                if (aSwim && bSwim) {
+                    const aGrade = String(a.grade || a.division || '');
+                    const bGrade = String(b.grade || b.division || '');
+                    const aChange = (a.preChangeMin > 0 || a.postChangeMin > 0) ? 1 : 0;
+                    const bChange = (b.preChangeMin > 0 || b.postChangeMin > 0) ? 1 : 0;
+                    const aRot = _gradesWithLinkedRot.has(aGrade + '|' + aType) ? 1 : 0;
+                    const bRot = _gradesWithLinkedRot.has(bGrade + '|' + bType) ? 1 : 0;
+                    // Higher constraint score = more constrained = should process first
+                    const aScore = aChange * 2 + aRot;
+                    const bScore = bChange * 2 + bRot;
+                    if (aScore !== bScore) return bScore - aScore; // descending
+                }
+                return 0; // preserve original order for ties
+            });
+            orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
                 const allBunks = getBunksForGrade(grade, divisions);
@@ -1268,6 +1592,33 @@
                     : allBunks;
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
 
+                // ── Pre-detect linked rotation event duration for period scoring ──
+                // Doesn't place anything — just checks if a rotation event targets
+                // this activity type so the period selection can PREFER (not require)
+                // a period with adjacent room for the linked event.
+                let _linkedRotDur = 0;
+                let _linkedRotPos = null; // 'before' | 'after' | 'either'
+                if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                    try {
+                        const _preAllRots = window.RotationEvents.loadRotationEvents() || [];
+                        for (const rEvt of _preAllRots) {
+                            if (!rEvt || !rEvt.sequence) continue;
+                            const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
+                            if (tgt !== t) continue;
+                            if (currentDate && rEvt.dateRange) {
+                                if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
+                            }
+                            const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
+                            if (rGrades && !rGrades.has(grade)) continue;
+                            const rDur = parseInt(rEvt.durationPerBunk) || 0;
+                            if (rDur <= 0) continue;
+                            _linkedRotDur = rDur;
+                            _linkedRotPos = rEvt.sequence.position || 'either';
+                            break;
+                        }
+                    } catch (_e) { /* no rotation events */ }
+                }
+
                 // ★ fullGrade windowed layers: compute a proper block time within the window.
                 //   When the window is wider than the activity duration (e.g. swim window 9am-2pm,
                 //   duration 45min), pick the center of the window rather than filling the whole span.
@@ -1278,10 +1629,72 @@
                     const dur = layer.periodMin || fgC.dMin || 30;
                     const win = layer.endMin - layer.startMin;
                     if (win > dur) {
+                        // ★ When bell-schedule periods are configured, snap to the
+                        //   period closest to the window's center that's wide enough
+                        //   for the full bundle (pre + dur + post) and lies inside
+                        //   the layer window. Avoids landing in a period gap.
+                        const _fgPre  = (t === 'swim' && layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
+                        const _fgPost = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                        const _fgPeriods = (window.campPeriods && window.campPeriods[grade])
+                            ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
+                            : [];
                         const center = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
-                        blockStart = Math.max(layer.startMin, Math.min(layer.endMin - dur, center - Math.round(dur / 2 / 5) * 5));
-                        blockStart = Math.round(blockStart / 5) * 5;
-                        blockEnd = blockStart + dur;
+                        let _snapped = false;
+                        if (_fgPeriods.length > 0) {
+                            // Score candidates: distance to center, with penalty for
+                            // periods where a linked rotation event can't fit adjacent.
+                            // Checks ACTUAL bunkTimeline conflicts (lunch, specials,
+                            // sports already placed), not just window boundaries.
+                            // Swim is processed last so all other blocks are visible.
+                            const _rotAdjacentFree = (rStart, rEnd) => {
+                                if (rStart < layer.startMin || rEnd > layer.endMin) return false;
+                                // Check every target bunk — all must be free
+                                return targetBunks.every(bk => {
+                                    const tl = bunkTimelines[bk] || [];
+                                    return !tl.some(b => b && b.startMin < rEnd && b.endMin > rStart);
+                                });
+                            };
+                            // Build candidate list — tag each with whether WS
+                            // can fit adjacent (hard constraint, not a penalty).
+                            const _allCandidates = _fgPeriods
+                                .filter(p => (p.endMin - p.startMin) >= dur &&
+                                              p.startMin >= layer.startMin &&
+                                              p.endMin <= layer.endMin)
+                                .map(p => {
+                                    const baseDist = Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - center);
+                                    let adjOk = true; // true = WS can fit adjacent
+                                    if (_linkedRotDur > 0) {
+                                        const beforeStart = p.startMin - _fgPre - _linkedRotDur;
+                                        const beforeEnd = p.startMin - _fgPre;
+                                        const afterStart = p.startMin + dur + _fgPost;
+                                        const afterEnd = p.startMin + dur + _fgPost + _linkedRotDur;
+                                        const canBefore = _rotAdjacentFree(beforeStart, beforeEnd);
+                                        const canAfter = _rotAdjacentFree(afterStart, afterEnd);
+                                        adjOk = _linkedRotPos === 'before' ? canBefore :
+                                                _linkedRotPos === 'after'  ? canAfter :
+                                                (canBefore || canAfter);
+                                    }
+                                    return { p, dist: baseDist, adjOk };
+                                });
+                            // HARD FILTER: only pick periods where linked event
+                            // fits adjacent. Fall back to any period ONLY if
+                            // no period supports adjacency at all.
+                            let _candidates = _allCandidates.filter(c => c.adjOk);
+                            if (_candidates.length === 0 && _linkedRotDur > 0) {
+                                _candidates = _allCandidates; // last resort
+                            }
+                            _candidates.sort((a, b) => a.dist - b.dist);
+                            if (_candidates.length > 0) {
+                                blockStart = _candidates[0].p.startMin;
+                                blockEnd = blockStart + dur;
+                                _snapped = true;
+                            }
+                        }
+                        if (!_snapped) {
+                            blockStart = Math.max(layer.startMin, Math.min(layer.endMin - dur, center - Math.round(dur / 2 / 5) * 5));
+                            blockStart = Math.round(blockStart / 5) * 5;
+                            blockEnd = blockStart + dur;
+                        }
                     }
                 }
 
@@ -1289,52 +1702,267 @@
                 if (t === 'special' && !canUseSpecialAtTime(eventName, grade, blockStart, blockEnd)) return;
 
                 // ★ v4.0: Pool exclusivity for pinned swim
-                if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
+                // If the preferred period is pool-blocked (another grade swims
+                // there), try other period starts instead of giving up. Without
+                // this, a fullGrade swim that fails pool exclusivity falls
+                // through to the per-bunk CSP solver which scatters bunks
+                // across different periods — breaking the fullGrade constraint.
+                if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) {
+                    const _fgDur = blockEnd - blockStart;
+                    const _poolPeriods = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
+                        : [];
+                    const _poolCenter = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
+                    const _fgPre2  = (layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
+                    const _fgPost2 = (layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                    const _poolRotFree = (rStart, rEnd) => {
+                        if (rStart < layer.startMin || rEnd > layer.endMin) return false;
+                        return targetBunks.every(bk => {
+                            const tl = bunkTimelines[bk] || [];
+                            return !tl.some(b => b && b.startMin < rEnd && b.endMin > rStart);
+                        });
+                    };
+                    // Tag candidates with adjacency feasibility
+                    const _allPoolCandidates = _poolPeriods
+                        .filter(p => (p.endMin - p.startMin) >= _fgDur &&
+                                      p.startMin >= layer.startMin &&
+                                      p.endMin <= layer.endMin)
+                        .map(p => {
+                            const baseDist = Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - _poolCenter);
+                            let adjOk = true;
+                            if (_linkedRotDur > 0) {
+                                const bS = p.startMin - _fgPre2 - _linkedRotDur;
+                                const bE = p.startMin - _fgPre2;
+                                const aS = p.startMin + _fgDur + _fgPost2;
+                                const aE = p.startMin + _fgDur + _fgPost2 + _linkedRotDur;
+                                const canBefore = _poolRotFree(bS, bE);
+                                const canAfter = _poolRotFree(aS, aE);
+                                adjOk = _linkedRotPos === 'before' ? canBefore :
+                                        _linkedRotPos === 'after'  ? canAfter :
+                                        (canBefore || canAfter);
+                            }
+                            return { p, dist: baseDist, adjOk };
+                        });
+                    // HARD FILTER: only pick pool periods where linked event
+                    // fits adjacent. Fall back ONLY if no adjacent-OK period
+                    // also passes pool exclusivity.
+                    let _poolAdj = _allPoolCandidates.filter(c => c.adjOk).sort((a, b) => a.dist - b.dist);
+                    let _poolNonAdj = _allPoolCandidates.filter(c => !c.adjOk).sort((a, b) => a.dist - b.dist);
+                    let _poolFound = false;
+                    // Pass 1: only adjacent-OK periods
+                    for (const cand of _poolAdj) {
+                        const cs = cand.p.startMin, ce = cs + _fgDur;
+                        if (canUsePoolAtTime(grade, cs, ce)) {
+                            blockStart = cs;
+                            blockEnd = ce;
+                            _poolFound = true;
+                            break;
+                        }
+                    }
+                    // Pass 2: last resort — non-adjacent periods
+                    if (!_poolFound && _linkedRotDur > 0) {
+                        for (const cand of _poolNonAdj) {
+                            const cs = cand.p.startMin, ce = cs + _fgDur;
+                            if (canUsePoolAtTime(grade, cs, ce)) {
+                                blockStart = cs;
+                                blockEnd = ce;
+                                _poolFound = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Pass 3: no linked rot — just pick best pool-available
+                    if (!_poolFound && _linkedRotDur === 0) {
+                        const _poolAll = _allPoolCandidates.sort((a, b) => a.dist - b.dist);
+                        for (const cand of _poolAll) {
+                            const cs = cand.p.startMin, ce = cs + _fgDur;
+                            if (canUsePoolAtTime(grade, cs, ce)) {
+                                blockStart = cs;
+                                blockEnd = ce;
+                                _poolFound = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!_poolFound) return;
+                }
 
-                // ── Swim change-time expansion ────────────────────────────
-                // If the swim layer has preChangeMin / postChangeMin, split
-                // the block into three consecutive sub-blocks:
-                //   [Change] → [Swim] → [Change]
-                // The outer window (blockStart…blockEnd) covers all three.
-                // Pool usage is registered for the entire outer window so
-                // no other grade can overlap.
-                const _preChange  = (t === 'swim' && layer.preChangeMin  > 0) ? layer.preChangeMin  : 0;
-                const _postChange = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
-                const _swimStart  = blockStart + _preChange;
-                const _swimEnd    = blockEnd   - _postChange;
+                // Idempotency guard: if any target bunk already has a swim block,
+                // skip placing another. Prevents double-placement (and therefore
+                // double change blocks) when the layer set somehow contains two
+                // pinned swim layers for the same grade.
+                if (t === 'swim' && targetBunks.some(b => (bunkTimelines[b] || []).some(blk => (blk.type || '').toLowerCase() === 'swim'))) {
+                    return;
+                }
+
+                // ── Linked rotation event: try to place adjacent for ALL bunks ──
+                // If a rotation event targets this activity, compute WS position
+                // relative to blockStart/blockEnd, check ALL target bunks for
+                // conflicts, and place only if every bunk is free. Falls back to
+                // Phase 2.4 per-bunk placement if adjacency isn't possible.
+                let _linkedRotPlaced = null; // { wsStart, wsEnd, evt } if placed
+                if (_linkedRotDur > 0) {
+                    const _preDur = (t === 'swim' && layer.preChangeMin > 0) ? layer.preChangeMin : 0;
+                    const _postDur = (t === 'swim' && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                    const _tryRotPos = (wsS, wsE) => {
+                        if (wsS < layer.startMin || wsE > layer.endMin) return false;
+                        return targetBunks.every(bk => {
+                            const tl = bunkTimelines[bk] || [];
+                            return !tl.some(b => b && b.startMin < wsE && b.endMin > wsS);
+                        });
+                    };
+                    // Before the full bundle: [WS] [pre-change] [swim]
+                    const _wsBefS = blockStart - _preDur - _linkedRotDur;
+                    const _wsBefE = blockStart - _preDur;
+                    // After the full bundle: [swim] [post-change] [WS]
+                    const _wsAftS = blockEnd + _postDur;
+                    const _wsAftE = blockEnd + _postDur + _linkedRotDur;
+                    let _wsS = null, _wsE = null;
+                    if (_linkedRotPos === 'before') {
+                        if (_tryRotPos(_wsBefS, _wsBefE)) { _wsS = _wsBefS; _wsE = _wsBefE; }
+                    } else if (_linkedRotPos === 'after') {
+                        if (_tryRotPos(_wsAftS, _wsAftE)) { _wsS = _wsAftS; _wsE = _wsAftE; }
+                    } else {
+                        // "either" — try before first, then after
+                        if (_tryRotPos(_wsBefS, _wsBefE)) { _wsS = _wsBefS; _wsE = _wsBefE; }
+                        else if (_tryRotPos(_wsAftS, _wsAftE)) { _wsS = _wsAftS; _wsE = _wsAftE; }
+                    }
+                    if (_wsS != null) {
+                        // ★ Snap WaterSlide placement to a period boundary.
+                        // The raw arithmetic (_wsBefS = blockStart - _preDur - rotDur)
+                        // can land a few minutes off a period start when preChangeMin
+                        // doesn't exactly match the inter-period gap. Find the period
+                        // closest to _wsS (on the correct side of swim) and try it.
+                        const _snapGrPeriods = (window.campPeriods || {})[grade] || [];
+                        if (_snapGrPeriods.length > 0) {
+                            const _isBefore = (_wsS === _wsBefS);
+                            const _snapViable = _snapGrPeriods
+                                .filter(p => {
+                                    if (p.endMin - p.startMin < _linkedRotDur) return false;
+                                    // Respect the layer's daily window
+                                    if (p.startMin < (layer.startMin || winStart)) return false;
+                                    if (p.startMin + _linkedRotDur > (layer.endMin || winEnd)) return false;
+                                    // For "before": only use periods that end at or before swim start
+                                    // For "after": only use periods that start at or after swim end
+                                    if (_isBefore) return p.endMin <= blockStart;
+                                    else           return p.startMin >= blockEnd;
+                                })
+                                .sort((a, b) => {
+                                    const dA = _isBefore ? (blockStart - a.endMin) : (a.startMin - blockEnd);
+                                    const dB = _isBefore ? (blockStart - b.endMin) : (b.startMin - blockEnd);
+                                    return dA - dB; // closest to swim first
+                                });
+                            for (const _sp of _snapViable) {
+                                const _snS = _sp.startMin;
+                                const _snE = _sp.startMin + _linkedRotDur;
+                                if (_snE <= _sp.endMin && _tryRotPos(_snS, _snE)) {
+                                    _wsS = _snS;
+                                    _wsE = _snE;
+                                    break;
+                                }
+                            }
+                        }
+                        // Find the rotation event object for registration
+                        try {
+                            const _allRots = window.RotationEvents.loadRotationEvents() || [];
+                            for (const rEvt of _allRots) {
+                                if (!rEvt || !rEvt.sequence) continue;
+                                const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
+                                if (tgt !== t) continue;
+                                if (currentDate && rEvt.dateRange) {
+                                    if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
+                                }
+                                const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
+                                if (rGrades && !rGrades.has(grade)) continue;
+                                _linkedRotPlaced = { wsStart: _wsS, wsEnd: _wsE, evt: rEvt };
+                                break;
+                            }
+                        } catch (_e) {}
+                    }
+                }
+
+                // ── Swim + change placement (three separate blocks, period-anchored) ──
+                // Pre-change lives in the last preChangeMin minutes of the period
+                // BEFORE swim's period; post-change lives in the first
+                // postChangeMin minutes of the period AFTER. Swim itself stays
+                // exactly periodMin long, never merged into one big block.
+                // Per-bunk: drop pre/post only for the specific bunk that has
+                // a conflict, instead of dropping for all bunks (the all-or-nothing
+                // gate was emptying change blocks across the whole grade).
+                const _swimGroupId = (t === 'swim') ? nextSwimGroupId() : null;
 
                 targetBunks.forEach(bunk => {
-                    if (t === 'swim' && (_preChange > 0 || _postChange > 0)) {
-                        // Pre-change block
-                        if (_preChange > 0) {
+                    // Place linked rotation event if Phase 0 found adjacency works
+                    if (_linkedRotPlaced) {
+                        const rl = _linkedRotPlaced;
+                        const alreadyPlaced = bunkTimelines[bunk].some(b => b && b._rotationEventId === rl.evt.id);
+                        if (!alreadyPlaced) {
                             bunkTimelines[bunk].push({
-                                startMin: blockStart, endMin: _swimStart,
-                                type: 'pre-change', event: 'Change',
-                                layer, _classification: 'pinned', _committed: true,
-                                _fixed: true, _gradeWide: isGradeWide && !isCustom,
-                                _activityLocked: true, _noBacktrack: isGradeWide
+                                startMin: rl.wsStart, endMin: rl.wsEnd,
+                                type: 'rotation_event', event: rl.evt.name,
+                                field: rl.evt.location || null,
+                                layer: null,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: true,
+                                _source: 'phase0-linked-bundle',
+                                _rotationEventId: rl.evt.id,
+                                _rotationEventLocation: rl.evt.location || null,
+                                _rotationEventColor: rl.evt.color || '#F59E0B',
+                                _sequenceTarget: t,
+                                _swimGroupId: _swimGroupId,
+                                _final: true
                             });
                         }
-                        // Swim block
+                    }
+
+                    if (t === 'swim') {
+                        // Per-bunk anchor — the helper walks back/forward
+                        // through periods if the immediate neighbor is occupied.
+                        const _bundleS = _linkedRotPlaced ? Math.min(blockStart, _linkedRotPlaced.wsStart) : blockStart;
+                        const _bundleE = _linkedRotPlaced ? Math.max(blockEnd, _linkedRotPlaced.wsEnd) : blockEnd;
+                        const _bunkAnchors = computeSwimChangeAnchors(
+                            blockStart, blockEnd, layer, grade,
+                            bunkTimelines[bunk] || [],
+                            _bundleS, _bundleE
+                        );
+                        if (_bunkAnchors.pre) {
+                            bunkTimelines[bunk].push({
+                                startMin: _bunkAnchors.pre.startMin, endMin: _bunkAnchors.pre.endMin,
+                                type: 'pre-change', event: 'Change',
+                                layer: null,
+                                dMin: _bunkAnchors.pre.endMin - _bunkAnchors.pre.startMin,
+                                dMax: _bunkAnchors.pre.endMin - _bunkAnchors.pre.startMin,
+                                _classification: 'pinned', _committed: true,
+                                _fixed: true, _gradeWide: isGradeWide && !isCustom,
+                                _activityLocked: true, _noBacktrack: isGradeWide,
+                                _source: 'swim-pre-change',
+                                _swimGroupId: _swimGroupId
+                            });
+                        }
                         bunkTimelines[bunk].push({
-                            startMin: _swimStart, endMin: _swimEnd,
+                            startMin: blockStart, endMin: blockEnd,
                             type: 'swim', event: eventName,
                             layer, _classification: 'pinned', _committed: true,
                             _fixed: true, _gradeWide: isGradeWide && !isCustom,
-                            _activityLocked: true, _noBacktrack: isGradeWide
+                            _activityLocked: true, _noBacktrack: isGradeWide,
+                            _changeAttached: true,
+                            _swimGroupId: _swimGroupId
                         });
-                        // Post-change block
-                        if (_postChange > 0) {
+                        if (_bunkAnchors.post) {
                             bunkTimelines[bunk].push({
-                                startMin: _swimEnd, endMin: blockEnd,
+                                startMin: _bunkAnchors.post.startMin, endMin: _bunkAnchors.post.endMin,
                                 type: 'post-change', event: 'Change',
-                                layer, _classification: 'pinned', _committed: true,
+                                layer: null,
+                                dMin: _bunkAnchors.post.endMin - _bunkAnchors.post.startMin,
+                                dMax: _bunkAnchors.post.endMin - _bunkAnchors.post.startMin,
+                                _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
-                                _activityLocked: true, _noBacktrack: isGradeWide
+                                _activityLocked: true, _noBacktrack: isGradeWide,
+                                _source: 'swim-post-change',
+                                _swimGroupId: _swimGroupId
                             });
                         }
                     } else {
-                        // No change time — single block as before
                         bunkTimelines[bunk].push({
                             startMin: blockStart, endMin: blockEnd,
                             type: isCustom ? 'custom' : (layer.type || 'pinned'),
@@ -1352,6 +1980,11 @@
 
                 if (t === 'special') registerSpecialUsage(eventName, grade, blockStart, blockEnd);
                 if (t === 'swim') registerPoolUsage(grade, blockStart, blockEnd);
+                // Register linked rotation event placed in Phase 0 so Phase 2.4 skips it
+                if (_linkedRotPlaced) {
+                    registerRotationEventUsage(_linkedRotPlaced.evt.id, grade, _linkedRotPlaced.wsStart, _linkedRotPlaced.wsEnd);
+                    registerCrossGrade(grade, 'rotation_event', _linkedRotPlaced.wsStart, _linkedRotPlaced.wsEnd, _linkedRotPlaced.evt.name);
+                }
                 if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
             // ★ v11.3: Validate all timelines after pinned layer placement
@@ -1748,7 +2381,7 @@
 
             const specialPriorityList = [];
             todaysSpecials.forEach(s => {
-                if (!isSpecialAvailableForDivision(s.name, grade, globalSettings)) return;
+                if (!isSpecialAvailableForBunk(s.name, grade, bunk, globalSettings)) return;
                 let score = 0;
                 if (window.RotationEngine?.calculateRotationScore) {
                     score = window.RotationEngine.calculateRotationScore({ bunkName: bunk, activityName: s.name, divisionName: grade, beforeSlotIndex: 0, allActivities: null, activityProperties });
@@ -1758,6 +2391,56 @@
                 const maxUsage = parseInt(props.maxUsage) || 0;
                 const maxUsagePeriod = props.maxUsagePeriod || 'half';
                 if (maxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= maxUsage) return;
+                // Rotation cohort: every bunk in the cohort must visit this
+                // special the same number of times before any bunk visits it
+                // again. Skip this special for `bunk` if its lifetime count
+                // already exceeds the cohort minimum.
+                const rc = props.rotationCohort || s.rotationCohort;
+                if (rc && rc.enabled && Array.isArray(rc.grades) && rc.grades.length > 0) {
+                    const cohortBunks = [];
+                    rc.grades.forEach(g => {
+                        getBunksForGrade(g, divisions).forEach(b => {
+                            if (isSpecialAvailableForBunk(s.name, g, b, globalSettings)) {
+                                cohortBunks.push(String(b));
+                            }
+                        });
+                    });
+                    if (cohortBunks.length > 0 && cohortBunks.includes(String(bunk))) {
+                        const myCount = getLifetimeSpecialCount(String(bunk), s.name);
+                        let minCount = Infinity;
+                        for (const b of cohortBunks) {
+                            const c = getLifetimeSpecialCount(b, s.name);
+                            if (c < minCount) minCount = c;
+                        }
+                        if (myCount > minCount) {
+                            log('[cohort] skip ' + s.name + ' for ' + bunk +
+                                ' (count=' + myCount + ' > cohort min=' + minCount + ')');
+                            return;
+                        }
+                    }
+                }
+
+                // Multi-part: enforce daysBetween gap between consecutive parts
+                const mpCfg = (activityProperties[s.name] || s).multiPart || s.multiPart;
+                if (mpCfg && mpCfg.enabled && mpCfg.daysBetween > 0) {
+                    const sortedKeys = Object.keys(allDailyData).sort();
+                    let lastDone = null;
+                    for (let _dk = sortedKeys.length - 1; _dk >= 0; _dk--) {
+                        if (sortedKeys[_dk] >= currentDate) continue;
+                        const _slots = allDailyData[sortedKeys[_dk]]?.scheduleAssignments?.[String(bunk)];
+                        if (Array.isArray(_slots) && _slots.some(e => e && !e.continuation && (e._activity === s.name || e.field === s.name))) {
+                            lastDone = sortedKeys[_dk]; break;
+                        }
+                    }
+                    if (lastDone) {
+                        const msPerDay = 86400000;
+                        const daysDiff = Math.floor((new Date(currentDate) - new Date(lastDone)) / msPerDay);
+                        if (daysDiff < mpCfg.daysBetween) {
+                            log('[multiPart] skip ' + s.name + ' for ' + bunk + ' (only ' + daysDiff + 'd since last, need ' + mpCfg.daysBetween + 'd)');
+                            return;
+                        }
+                    }
+                }
 
                 const specificDuration = getSpecialDuration(s.name, activityProperties, globalSettings);
                 const cfg = getSpecialConfig(s.name, globalSettings);
@@ -1765,6 +2448,9 @@
                 const scarce = isScarce(s.name, dayName, globalSettings);
                 const timeWindow = getSpecialTimeWindow(cfg);
                 const prepDuration = cfg?.prepDuration || 0;
+                const prepCfgEntry = cfg?.prepConfig || null;
+                const prepAttached = !prepCfgEntry || prepCfgEntry.timing !== 'flexible';
+                const effectivePrepDur = prepAttached ? prepDuration : 0;
 
                 specialPriorityList.push({
                     name: s.name, type: 'special', rotationScore: score,
@@ -1776,9 +2462,10 @@
                     capacity: getSpecialCapacity(s.name, activityProperties, globalSettings),
                     location, isScarce: scarce,
                     isIndoor: !isSpecialOnField(s.name, activityProperties, globalSettings),
-                    prepDuration,
-                    totalDuration: (specificDuration || specialConstraints.dIdeal) + prepDuration,
-                    timeWindow, _linkedPair: prepDuration > 0,
+                    prepDuration: effectivePrepDur,
+                    totalDuration: (specificDuration || specialConstraints.dIdeal) + effectivePrepDur,
+                    timeWindow, _linkedPair: prepAttached && prepDuration > 0,
+                    _flexPrep: (!prepAttached && prepDuration > 0) ? { duration: prepDuration, location: prepCfgEntry.location || null, sync: prepCfgEntry.sync || 'staggered' } : null,
                     _layer: specialLayer
                 });
             });
@@ -1865,6 +2552,14 @@
             function canAssignSpecialToGrade(specialName, grade, startMin, endMin) {
                 var info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
                 var existing = globalSpecialUsage[specialName] || [];
+                // cross_division: pair-check ALL overlapping entries (incl same-grade)
+                if (info.shareType === 'cross_division') {
+                    var xdOverlap = existing.filter(function(x) {
+                        return x.startMin < endMin && x.endMin > startMin;
+                    });
+                    if (!isCrossDivAllowed(grade, xdOverlap.map(function(c) { return c.grade; }), info.allowedPairs)) return false;
+                    if (xdOverlap.length >= info.capacity) return false;
+                } else {
                 for (var i = 0; i < existing.length; i++) {
                     var e = existing[i];
                     if (e.endMin <= startMin || e.startMin >= endMin) continue;
@@ -1887,6 +2582,7 @@
                         }).length;
                         if (totalCount >= info.capacity) return false;
                     }
+                }
                 }
                 return true;
             }
@@ -2366,9 +3062,13 @@
             function canDraftSpecialForGrade(specialName, grade) {
                 const existing = draftSpecialGrades[specialName];
                 if (!existing || existing.size === 0) return true;
-                if (existing.has(grade)) return true; // same grade = OK
-                // Check sharing rules
                 const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
+                // cross_division: must pair-check even same-grade (no automatic pass)
+                if (info.shareType === 'cross_division') {
+                    const existingGrades = [...existing];
+                    return isCrossDivAllowed(grade, existingGrades, info.allowedPairs);
+                }
+                if (existing.has(grade)) return true; // same grade = OK (other modes)
                 if (info.shareType === 'not_sharable') return false;
                 // ★ FIX: same_division means "only same-grade bunks can share AT THE SAME TIME"
                 // It does NOT mean the special is exclusive to one grade all day.
@@ -2486,6 +3186,12 @@
             function canAssignSpecialToGrade(specialName, grade, startMin, endMin) {
                 const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
                 const existing = globalSpecialUsage[specialName] || [];
+                if (info.shareType === 'cross_division') {
+                    const xdOverlap = existing.filter(x => x.startMin < endMin && x.endMin > startMin);
+                    if (!isCrossDivAllowed(grade, xdOverlap.map(c => c.grade), info.allowedPairs)) return false;
+                    if (xdOverlap.length >= info.capacity) return false;
+                    return true;
+                }
                 for (const e of existing) {
                     if (e.endMin <= startMin || e.startMin >= endMin) continue;
                     if (e.grade === grade) {
@@ -2874,6 +3580,9 @@
                             const notAllowed = overlapping.length > 0 && allowed.length > 0 && !allowed.includes(grade);
                             if (blockedCross || notAllowed) remaining = 0;
                             else remaining = Math.max(0, ledger.capacity - overlapping.length);
+                        } else if (ledger.shareType === 'cross_division') {
+                            if (!isCrossDivAllowed(grade, overlapping.map(c => c.grade), ledger.allowedPairs)) remaining = 0;
+                            else remaining = Math.max(0, ledger.capacity - overlapping.length);
                         } else {
                             remaining = Math.max(0, ledger.capacity - overlapping.length);
                         }
@@ -2942,6 +3651,10 @@
                             const blockedCross = overlap.some(c => c.grade !== grade && (allowed.length === 0 || !allowed.includes(c.grade)));
                             const notAllowed = overlap.length > 0 && allowed.length > 0 && !allowed.includes(grade);
                             remaining = (blockedCross || notAllowed) ? 0 : Math.max(0, ledger.capacity - overlap.length);
+                        } else if (ledger.shareType === 'cross_division') {
+                            remaining = isCrossDivAllowed(grade, overlap.map(c => c.grade), ledger.allowedPairs)
+                                ? Math.max(0, ledger.capacity - overlap.length)
+                                : 0;
                         } else {
                             remaining = Math.max(0, ledger.capacity - overlap.length);
                         }
@@ -3420,6 +4133,49 @@
             var allTemplates = {};
             log('[Phase3] ★ timeSweepFillAll v8.0: starting for ' + allGrades.length + ' grades');
 
+            // Helper: attach pre-change / post-change blocks anchored to the
+            // bell-schedule periods adjacent to swim's period (see
+            // computeSwimChangeAnchors at module scope). Swim itself stays
+            // exactly periodMin long. Idempotent per swim block.
+            function attachSwimChangeBlocks(swimBlk, template, gradeForPeriods) {
+                if (!swimBlk || swimBlk.type !== 'swim') return;
+                if (swimBlk._changeAttached) return;
+                swimBlk._changeAttached = true;
+                var layer = swimBlk.layer;
+                if (!layer) return;
+                // Pass the current template so the helper walks back/forward
+                // past pinned activities (lunch / specials) when the immediate
+                // neighbor period is occupied.
+                var anchors = computeSwimChangeAnchors(
+                    swimBlk.startMin, swimBlk.endMin, layer, gradeForPeriods, template
+                );
+                if (!anchors.pre && !anchors.post) return;
+                var groupId = swimBlk._swimGroupId || nextSwimGroupId();
+                swimBlk._swimGroupId = groupId;
+                if (anchors.pre) {
+                    var preDur = anchors.pre.endMin - anchors.pre.startMin;
+                    var preBlk = makeBlock({
+                        startMin: anchors.pre.startMin, endMin: anchors.pre.endMin,
+                        type: 'pre-change', event: 'Change',
+                        layer: null, dMin: preDur, dMax: preDur,
+                        _fixed: true, _source: 'swim-pre-change',
+                        _activityLocked: true, _final: true
+                    });
+                    if (preBlk) { preBlk._swimGroupId = groupId; template.push(preBlk); }
+                }
+                if (anchors.post) {
+                    var postDur = anchors.post.endMin - anchors.post.startMin;
+                    var postBlk = makeBlock({
+                        startMin: anchors.post.startMin, endMin: anchors.post.endMin,
+                        type: 'post-change', event: 'Change',
+                        layer: null, dMin: postDur, dMax: postDur,
+                        _fixed: true, _source: 'swim-post-change',
+                        _activityLocked: true, _final: true
+                    });
+                    if (postBlk) { postBlk._swimGroupId = groupId; template.push(postBlk); }
+                }
+            }
+
             // ★ Smart rotation: compute daily quotas (resets each iteration)
             var rotationQuotas = null;
             if (window.RotationEvents && typeof window.RotationEvents.getRotationQuotas === 'function') {
@@ -3569,6 +4325,7 @@
                     _assignedSpecial: opts._assignedSpecial || null,
                     _specialLocation: opts._specialLocation || null,
                     _specialDuration: opts._specialDuration || null,
+                    _flexPrep: opts._flexPrep || null,
                     _gradeWide: opts._gradeWide || false, _noBacktrack: opts._noBacktrack || false,
                     _sportFallbacks: opts._sportFallbacks || null,
                     _customActivity: opts._customActivity || null,
@@ -3581,7 +4338,13 @@
                     _travelPost: _travel ? _travel.postMin : 0,
                     _travelZone: _travel ? _travel.zoneName : null,
                     _travelMode: _travel ? _travel.mode : null,
-                    _final: opts._final || false
+                    _final: opts._final || false,
+                    // Swim+change merge metadata (block holds the bundle range;
+                    // these fields let the renderer split it visually if needed).
+                    _preChangeMin: opts._preChangeMin != null ? opts._preChangeMin : null,
+                    _postChangeMin: opts._postChangeMin != null ? opts._postChangeMin : null,
+                    _swimActualStart: opts._swimActualStart != null ? opts._swimActualStart : null,
+                    _swimActualEnd: opts._swimActualEnd != null ? opts._swimActualEnd : null
                 };
             }
 
@@ -3795,7 +4558,11 @@
                             _noBacktrack: b._noBacktrack || false,
                             _assignedSpecial: b._assignedSpecial || null,
                             _specialLocation: b._specialLocation || null,
-                            _specialDuration: b._specialDuration || null
+                            _specialDuration: b._specialDuration || null,
+                            _rotationEventId: b._rotationEventId || null,
+                            _rotationEventLocation: b._rotationEventLocation || null,
+                            _rotationEventColor: b._rotationEventColor || null,
+                            _sequenceTarget: b._sequenceTarget || null
                         }));
                         if (bType === 'special' && b.event) placedSpecialNames.add(b.event);
                     }
@@ -3939,19 +4706,34 @@
                     function getValidPositions(need, tmpl, gs, ge, fMin, otherNeeds) {
                         var positions = [];
                         var gaps = findGaps(tmpl, gs, ge);
+                        // Swim is placed as a standalone period-aligned block.
+                        // Pre/post change live in adjacent bell-schedule periods
+                        // (see attachSwimChangeBlocks + computeSwimChangeAnchors)
+                        // and don't need to share swim's gap.
+                        var _swimPre = 0, _swimPost = 0;
+                        var _bundleExtra = 0;
+                        // Note: staggered swim (the only kind that reaches CSP — fullGrade
+                        // is pinned in Phase 0) is intentionally not constrained to a
+                        // single bell-schedule period. With pool exclusivity, requiring
+                        // every staggered placement to fit inside one period over-restricts
+                        // the search space and forces duration relaxation.
                         for (var g = 0; g < gaps.length; g++) {
                             var gap = gaps[g];
                             var ws = Math.max(gap.start, need.windowStart || gs);
                             var we = Math.min(gap.end, need.windowEnd || ge);
-                            if (we - ws < need.dMin) continue;
+                            if (we - ws < need.dMin + _bundleExtra) continue;
                             // ★ v11.4: Negotiate duration instead of greedily taking dMax
                             // ★ v15.2: Snack/swim are fixed-duration — always use dMin, never stretch to dMax
                             var _needType15 = (need.type || '').toLowerCase();
+                            var _rMeta15 = (_needType15 === 'rotation_event' && need._rotationEventId) ? _rotEventMeta[need._rotationEventId] : null;
+                            var _isStaggeredNeed = _rMeta15 && _rMeta15.gradeMode === 'individual';
                             var _isFixedDurNeed = (_needType15 === 'snacks' || _needType15 === 'snack' || _needType15 === 'swim');
                             var gapSize = gap.end - gap.start;
                             var dur;
                             if (_isFixedDurNeed) {
                                 dur = need.dMin; // snack/swim: never stretch beyond their required minimum
+                            } else if (_isStaggeredNeed) {
+                                dur = _rMeta15.dur || need.dMin; // staggered rotation: use per-bunk duration, not grade-wide window
                             } else if (otherNeeds && otherNeeds.length > 0) {
                                 dur = negotiateDuration(need, otherNeeds, gapSize, fMin);
                                 dur = Math.min(dur, we - ws); // can't exceed available window
@@ -3959,9 +4741,12 @@
                                 dur = Math.min(need.dMax, we - ws);
                             }
 
-                            // Scan every 5-min position within the valid range
-                            for (var pos = gap.start; pos + dur <= gap.end; pos += 5) {
-                                if (pos < ws || pos + dur > we) continue;
+                            // Scan every 5-min position within the valid range.
+                            // For swim with changes, the scan starts at gap.start + pre
+                            // so that pre fits before swim within the gap.
+                            var _scanStart = gap.start + _swimPre;
+                            for (var pos = _scanStart; pos + dur + _swimPost <= gap.end; pos += 5) {
+                                if (pos - _swimPre < ws || pos + dur + _swimPost > we) continue;
 
                                 // Resource checks
                                 var ok = true;
@@ -3992,9 +4777,10 @@
                                 if (rGap > 0 && rGap < fMin) deadCount++;
                                 positions.push({ start: pos, dur: dur, deadGaps: deadCount, lGap: lGap, rGap: rGap });
                             }
-                            // Also try exact gap-end alignment (may not be on 5-min boundary)
-                            var endAligned = gap.end - dur;
-                            if (endAligned >= ws && endAligned >= gap.start && endAligned + dur <= we) {
+                            // Also try exact gap-end alignment (may not be on 5-min boundary).
+                            // For swim+change bundles, leave post-change room at the gap's tail.
+                            var endAligned = gap.end - dur - _swimPost;
+                            if (endAligned >= ws && endAligned - _swimPre >= gap.start && endAligned + dur + _swimPost <= we) {
                                 var ok2 = true;
                                 if (need.type === 'swim') ok2 = canUsePoolAtTime(grade, endAligned, endAligned + dur);
                                 if (need.type === 'special' && need._assignedSpecial) ok2 = canUseSpecialAtTime(need._assignedSpecial, grade, endAligned, endAligned + dur);
@@ -4011,6 +4797,26 @@
                                     var rG = gap.end - (endAligned + dur);
                                     positions.push({ start: endAligned, dur: dur, deadGaps: rG > 0 && rG < fMin ? 1 : 0, lGap: endAligned - gap.start, rGap: rG });
                                 }
+                            }
+                        }
+                        // ── Swim period-snap filter ─────────────────────────
+                        // Swim must start at period.startMin and fit inside
+                        // one period. Any 5-min candidate that doesn't match
+                        // a period start (or whose period is shorter than
+                        // dMin) is dropped before scoring.
+                        if ((need.type || '').toLowerCase() === 'swim') {
+                            var _gpSwim = (window.campPeriods && window.campPeriods[grade])
+                                ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                                : [];
+                            if (_gpSwim.length > 0) {
+                                var _validSwimStarts = {};
+                                for (var _spi = 0; _spi < _gpSwim.length; _spi++) {
+                                    var _pp = _gpSwim[_spi];
+                                    if ((_pp.endMin - _pp.startMin) >= (need.dMin || 0)) {
+                                        _validSwimStarts[_pp.startMin] = true;
+                                    }
+                                }
+                                positions = positions.filter(function(p) { return _validSwimStarts[p.start]; });
                             }
                         }
                         // Deduplicate
@@ -4345,6 +5151,21 @@
                             var need = sol.need;
                             var placeEnd = sol.start + sol.dur;
 
+                            // Defensive: swim must land on a bell-schedule period start.
+                            // If something slipped past getValidPositions' filter, drop
+                            // this placement so the schedule never shows a swim that
+                            // crosses periods.
+                            if (need.type === 'swim') {
+                                var _gpGuard = window.campPeriods && window.campPeriods[grade];
+                                if (Array.isArray(_gpGuard) && _gpGuard.length > 0) {
+                                    var _onPeriodStart = _gpGuard.some(function(_pg) { return _pg.startMin === sol.start; });
+                                    if (!_onPeriodStart) {
+                                        log('[Phase3] DROPPED non-period-start swim at ' + sol.start + ' for bunk ' + bunk);
+                                        continue;
+                                    }
+                                }
+                            }
+
                             // Register resources
                             if (need.type === 'swim') { registerCrossGrade(grade, 'swim', sol.start, placeEnd, need.event); registerPoolUsage(grade, sol.start, placeEnd); }
                             if (need.type === 'special' && need._assignedSpecial) {
@@ -4365,9 +5186,12 @@
                                 _customActivity: need._customActivity || null, _customField: need._customField || null,
                                 _customBunks: need._customBunks || null,
                                 _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                _rotationEventColor: need._rotationEventColor || null, _final: true
+                                _rotationEventColor: need._rotationEventColor || null, _sequenceTarget: need._sequenceTarget || null, _final: true
                             });
-                            if (blk) template.push(blk);
+                            if (blk) {
+                                template.push(blk);
+                                if (need.type === 'swim') attachSwimChangeBlocks(blk, template, grade);
+                            }
                             // ★ Rotation quota: increment placed counter on successful CSP placement
                             if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
                                 var _rq = rotationQuotas[need._rotationEventId];
@@ -4431,6 +5255,17 @@
                             if (positions.length > 0) {
                                 var pos = positions[0];
                                 var placeEnd = pos.start + pos.dur;
+                                // Defensive: swim must land on a bell-schedule period start.
+                                if (need.type === 'swim') {
+                                    var _gpGuard2 = window.campPeriods && window.campPeriods[grade];
+                                    if (Array.isArray(_gpGuard2) && _gpGuard2.length > 0) {
+                                        var _onPeriodStart2 = _gpGuard2.some(function(_pg) { return _pg.startMin === pos.start; });
+                                        if (!_onPeriodStart2) {
+                                            log('[Phase3-Relax] DROPPED non-period-start swim at ' + pos.start + ' for bunk ' + bunk);
+                                            continue;
+                                        }
+                                    }
+                                }
                                 if (need.type === 'swim') { registerCrossGrade(grade, 'swim', pos.start, placeEnd, need.event); registerPoolUsage(grade, pos.start, placeEnd); }
                                 if (need.type === 'special' && need._assignedSpecial) {
                                     registerCrossGrade(grade, 'special', pos.start, placeEnd, need.event);
@@ -4449,14 +5284,17 @@
                                     _customActivity: need._customActivity || null, _customField: need._customField || null,
                                     _customBunks: need._customBunks || null,
                                     _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                    _rotationEventColor: need._rotationEventColor || null, _final: true,
+                                    _rotationEventColor: need._rotationEventColor || null, _sequenceTarget: need._sequenceTarget || null, _final: true,
                                     _relaxed: !!relaxationType, _relaxationType: relaxationType, _relaxationDetail: relaxationDetail
                                 });
                                 if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
                                     var _rq2 = rotationQuotas[need._rotationEventId];
                                     if (_rq2) _rq2.placed++;
                                 }
-                                if (blk) template.push(blk);
+                                if (blk) {
+                                    template.push(blk);
+                                    if (need.type === 'swim') attachSwimChangeBlocks(blk, template, grade);
+                                }
                                 if (relaxationType) log('[Phase3] CSP-Relax: ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' via ' + relaxationDetail);
                             } else {
                                 log('[Phase3] CSP: could not place ' + need.type + '/' + need.event + ' for bunk ' + bunk + ' (even with relaxation)');
@@ -4974,6 +5812,9 @@
                         var crossGrade = claims.some(function(c) { return c.grade !== cGrade; });
                         if (ledger.shareType === 'not_sharable') { if (claims.length === 0) supply += 1; }
                         else if (ledger.shareType === 'same_division') { if (!crossGrade) supply += Math.max(0, ledger.capacity - claims.filter(function(c) { return c.grade === cGrade; }).length); }
+                        else if (ledger.shareType === 'cross_division') {
+                            if (isCrossDivAllowed(cGrade, claims.map(function(c) { return c.grade; }), ledger.allowedPairs)) supply += Math.max(0, ledger.capacity - claims.length);
+                        }
                         else { supply += Math.max(0, ledger.capacity - claims.length); }
                     });
                     contentionMap[ct + ':' + cGrade] = { supply: supply, demand: 0, bunks: [] };
@@ -5726,7 +6567,7 @@
                     var rhMeta = bunkMeta[rhBunk];
                     var rhTmpl = rhMeta.template;
                     // Check if bunk has a rotation event block already
-                    var rhHasRot = rhTmpl.some(function(b) { return b._source === 'rotation_event' && b._rotationEventId; });
+                    var rhHasRot = rhTmpl.some(function(b) { return b && b._rotationEventId; });
                     if (rhHasRot) continue;
                     // Get rotation needs for this bunk
                     try {
@@ -5768,7 +6609,8 @@
                                     _source: 'rotation_event', _activityLocked: true, _final: true,
                                     _rotationEventId: rhNeed._rotationEventId,
                                     _rotationEventLocation: rhNeed._rotationEventLocation,
-                                    _rotationEventColor: rhNeed._rotationEventColor
+                                    _rotationEventColor: rhNeed._rotationEventColor,
+                                    _sequenceTarget: rhNeed._sequenceTarget || null
                                 }) || rhTmpl[rhBestIdx];
                                 // Fill remainder with sport slot
                                 if (rhRemainEnd - rhRemainStart >= rhMeta.fillMinDur) {
@@ -7237,7 +8079,14 @@
                         _source: block._source || null,
                         _rotationEventId: block._rotationEventId || null,
                         _rotationEventLocation: block._rotationEventLocation || null,
-                        _rotationEventColor: block._rotationEventColor || null
+                        _rotationEventColor: block._rotationEventColor || null,
+                        _sequenceTarget: block._sequenceTarget || null,
+                        _preChangeMin: block._preChangeMin != null ? block._preChangeMin : null,
+                        _postChangeMin: block._postChangeMin != null ? block._postChangeMin : null,
+                        _swimActualStart: block._swimActualStart != null ? block._swimActualStart : null,
+                        _swimActualEnd: block._swimActualEnd != null ? block._swimActualEnd : null,
+                        _swimGroupId: block._swimGroupId || null,
+                        _changeAttached: block._changeAttached || false
                     });
                 });
                 // ★ v11.3: Validate after template execution
@@ -7603,7 +8452,7 @@
 
                 // ★ Missing rotation event penalty
                 if (rotationQuotasForScoring) {
-                    const hasRot = sorted.some(b => b._source === 'rotation_event' && b._rotationEventId);
+                    const hasRot = sorted.some(b => b && b._rotationEventId);
                     if (!hasRot) {
                         Object.values(rotationQuotasForScoring).forEach(q => {
                             if (q.remainingBunks && q.remainingBunks.has(String(bunk))) {
@@ -7669,6 +8518,8 @@
                             if (claims.length === 0) supply += 1;
                         } else if (ledger.shareType === 'same_division') {
                             if (!crossGrade) supply += Math.max(0, ledger.capacity - claims.filter(c => c.grade === grade).length);
+                        } else if (ledger.shareType === 'cross_division') {
+                            if (isCrossDivAllowed(grade, claims.map(c => c.grade), ledger.allowedPairs)) supply += Math.max(0, ledger.capacity - claims.length);
                         } else {
                             supply += Math.max(0, ledger.capacity - claims.length);
                         }
@@ -8298,6 +9149,385 @@
                 }
             });
 
+            // ── Phase 2.4: Pre-place rotation events as walls (STRICT whole-grade) ──
+            // Rotation events (Scheduled Activities) are camp-wide — every bunk in
+            // the date range must pass through. Runs BEFORE Phase 2.5 so specials
+            // don't claim the rotation slot. Strict whole-grade: each grade gets
+            // exactly ONE slot, all bunks in that grade go to that slot. No per-bunk
+            // spreading (previously caused grades 1-2 to fill all 6 periods and
+            // starve grade 3 via not_sharable).
+            if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                try {
+                    const _rotEvents = window.RotationEvents.loadRotationEvents() || [];
+                    let _rotWallCount = 0;
+                    const _rotUnplaced = [];
+
+                    _rotEvents.forEach(evt => {
+                        if (!currentDate || !evt || !evt.dateRange) return;
+                        if (currentDate < evt.dateRange.start || currentDate > evt.dateRange.end) return;
+                        const dur = parseInt(evt.durationPerBunk) || 0;
+                        if (dur <= 0) return;
+                        const winStart = evt.dailyWindow && evt.dailyWindow.startMin;
+                        const winEnd = evt.dailyWindow && evt.dailyWindow.endMin;
+                        if (winStart == null || winEnd == null || winEnd - winStart < dur) return;
+                        // Populate metadata for canUseRotationSlotAtTime
+                        _rotEventMeta[evt.id] = { gradeMode: evt.gradeMode || 'whole_grade', winStart, dur };
+
+                        const excluded = new Set(evt.excludedBunks || []);
+                        const completed = new Set();
+                        Object.values(evt.completedBunks || {}).forEach(arr => {
+                            if (Array.isArray(arr)) arr.forEach(b => completed.add(String(b)));
+                        });
+                        const allowedGrades = (Array.isArray(evt.grades) && evt.grades.length > 0)
+                            ? new Set(evt.grades) : null;
+
+                        const bunksByGrade = {};
+                        allGrades.forEach(grade => {
+                            if (allowedSet && !allowedSet.has(String(grade))) return;
+                            if (allowedGrades && !allowedGrades.has(grade)) return;
+                            const gBunks = getBunksForGrade(grade, divisions)
+                                .map(String)
+                                .filter(b => !excluded.has(b) && !completed.has(b));
+                            if (gBunks.length > 0) bunksByGrade[grade] = gBunks;
+                        });
+                        if (Object.keys(bunksByGrade).length === 0) return;
+                        if (winEnd - winStart < dur) return;
+
+                        const isWindowFreeForBunk = (wStart, wEnd, bunk) => {
+                            const tl = bunkTimelines[bunk] || [];
+                            for (let i = 0; i < tl.length; i++) {
+                                const blk = tl[i];
+                                if (!blk) continue;
+                                if (!(blk._activityLocked || blk._fixed || blk._classification === 'pinned')) continue;
+                                // Skip pre/post-change blocks — Phase 2.78 will
+                                // rebuild them around the final swim+waterslides
+                                // bundle, so they must not block adjacency placement.
+                                const bt = String(blk.type || '').toLowerCase();
+                                if (bt === 'pre-change' || bt === 'post-change') continue;
+                                const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
+                                const bEnd = blk.endMin != null ? blk.endMin : blk._endMin;
+                                if (bStart == null || bEnd == null) continue;
+                                if (bStart < wEnd && bEnd > wStart) return false;
+                            }
+                            return true;
+                        };
+
+                        // Sequence constraint: the rotation event must be adjacent to
+                        // another activity (e.g. water slides right before/after swim
+                        // so campers stay in bathing suits). Hard preference when set.
+                        const seqTarget = (evt.sequence && evt.sequence.targetActivity || '').trim();
+                        const seqPosition = (evt.sequence && evt.sequence.position) || 'either'; // 'before' | 'after' | 'either'
+
+                        const findTargetTimeForGrade = (bunks) => {
+                            const tgt = seqTarget.toLowerCase();
+                            for (const bunk of bunks) {
+                                const tl = bunkTimelines[bunk] || [];
+                                for (const b of tl) {
+                                    if (!b || b.continuation) continue;
+                                    const eventName = (b.event || '').toLowerCase();
+                                    const typeName = (b.type || '').toLowerCase();
+                                    const sport = (b._assignedSport || '').toLowerCase();
+                                    const spec = (b._assignedSpecial || '').toLowerCase();
+                                    if (eventName === tgt || typeName === tgt || sport === tgt || spec === tgt) {
+                                        return { startMin: b.startMin, endMin: b.endMin };
+                                    }
+                                }
+                            }
+                            return null;
+                        };
+
+                        // Find a placement for this grade.
+                        // Priority 1: sequence-constrained adjacency (hard preference).
+                        // Priority 2: bell-schedule period alignment (so Step 2.75 keeps it cleanly).
+                        // Priority 3: 5-min scan fallback when no periods defined.
+                        const findGradeSlot = (bunks, grade, placements) => {
+                            const tryWindow = (t, tEnd) => {
+                                if (tEnd > winEnd || t < winStart) return false;
+                                if (placements.some(p => t < p.endMin && tEnd > p.startMin)) return false;
+                                return bunks.every(b => isWindowFreeForBunk(t, tEnd, b));
+                            };
+
+                            // Sequence-constrained: try adjacent to target activity first.
+                            // If a pinned activity (e.g. lunch) blocks direct adjacency,
+                            // scan past it and land on the other side — the constraint is
+                            // satisfied as long as only pinned activities sit between the
+                            // two linked events (e.g. waterslide → lunch(pinned) → swim).
+                            if (seqTarget) {
+                                const tgt = findTargetTimeForGrade(bunks);
+                                if (tgt) {
+                                    // Returns pinned/fixed blocks overlapping [wStart, wEnd]
+                                    // across all bunks in this grade group.
+                                    const getPinnedBlockersAt = (wStart, wEnd) => {
+                                        const blockers = [];
+                                        for (const bunk of bunks) {
+                                            const tl = bunkTimelines[bunk] || [];
+                                            for (const blk of tl) {
+                                                if (!blk) continue;
+                                                if (!(blk._activityLocked || blk._fixed || blk._classification === 'pinned')) continue;
+                                                const bt = String(blk.type || '').toLowerCase();
+                                                if (bt === 'pre-change' || bt === 'post-change') continue;
+                                                const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
+                                                const bEnd   = blk.endMin   != null ? blk.endMin   : blk._endMin;
+                                                if (bStart == null || bEnd == null) continue;
+                                                if (bStart < wEnd && bEnd > wStart) blockers.push({ startMin: bStart, endMin: bEnd });
+                                            }
+                                        }
+                                        return blockers;
+                                    };
+
+                                    // Try AFTER target, skipping over pinned activities
+                                    // (e.g. swim → lunch(pinned) → [waterslide here]).
+                                    const tryAfterSkippingPinned = () => {
+                                        let t = tgt.endMin;
+                                        let maxIter = 10;
+                                        while (t + dur <= winEnd && maxIter-- > 0) {
+                                            if (tryWindow(t, t + dur)) return { startMin: t, endMin: t + dur };
+                                            // Stop if another already-placed event (not pinned) blocks the way
+                                            if (placements.some(p => t < p.endMin && t + dur > p.startMin)) break;
+                                            const blockers = getPinnedBlockersAt(t, t + dur);
+                                            if (blockers.length === 0) break; // non-pinned blocker or window edge
+                                            t = Math.max(...blockers.map(b => b.endMin));
+                                        }
+                                        return null;
+                                    };
+
+                                    // Try BEFORE target, skipping over pinned activities
+                                    // (e.g. [waterslide here] → lunch(pinned) → swim).
+                                    const tryBeforeSkippingPinned = () => {
+                                        let tEnd = tgt.startMin;
+                                        let maxIter = 10;
+                                        while (tEnd - dur >= winStart && maxIter-- > 0) {
+                                            if (tryWindow(tEnd - dur, tEnd)) return { startMin: tEnd - dur, endMin: tEnd };
+                                            if (placements.some(p => (tEnd - dur) < p.endMin && tEnd > p.startMin)) break;
+                                            const blockers = getPinnedBlockersAt(tEnd - dur, tEnd);
+                                            if (blockers.length === 0) break;
+                                            tEnd = Math.min(...blockers.map(b => b.startMin));
+                                        }
+                                        return null;
+                                    };
+
+                                    let adj = null;
+                                    if (seqPosition === 'after') adj = tryAfterSkippingPinned();
+                                    else if (seqPosition === 'before') adj = tryBeforeSkippingPinned();
+                                    else adj = tryAfterSkippingPinned() || tryBeforeSkippingPinned();
+                                    if (adj) return adj;
+                                }
+                                // Pinned-skip adjacency also failed — try nearby periods sorted
+                                // by distance from the target activity, so the linked
+                                // event lands as close as physically possible.
+                                const gradePeriods2 = (window.campPeriods || {})[grade] || [];
+                                if (gradePeriods2.length > 0 && tgt) {
+                                    const tgtCenter = (tgt.startMin + tgt.endMin) / 2;
+                                    const nearby = gradePeriods2
+                                        .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.endMin <= winEnd)
+                                        .map(p => ({ p, dist: Math.abs((p.startMin + p.endMin) / 2 - tgtCenter) }))
+                                        .sort((a, b) => a.dist - b.dist);
+                                    for (const n of nearby) {
+                                        if (tryWindow(n.p.startMin, n.p.startMin + dur)) {
+                                            return { startMin: n.p.startMin, endMin: n.p.startMin + dur };
+                                        }
+                                    }
+                                }
+                                // No period near target — fall through to default placement
+                            }
+
+                            const gradePeriods = (window.campPeriods || {})[grade] || [];
+                            if (gradePeriods.length > 0) {
+                                const viable = gradePeriods
+                                    .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.endMin <= winEnd)
+                                    .sort((a, b) => a.startMin - b.startMin);
+                                for (const p of viable) {
+                                    if (tryWindow(p.startMin, p.startMin + dur)) {
+                                        return { startMin: p.startMin, endMin: p.startMin + dur };
+                                    }
+                                }
+                                return null;
+                            }
+                            for (let t = winStart; t + dur <= winEnd; t += 5) {
+                                if (tryWindow(t, t + dur)) {
+                                    return { startMin: t, endMin: t + dur };
+                                }
+                            }
+                            return null;
+                        };
+
+                        const placeWall = (bunk, grade, slot) => {
+                            const tl = bunkTimelines[bunk];
+                            if (!tl) return;
+                            if (tl.some(b => b && b._rotationEventId === evt.id)) return;
+                            const block = {
+                                startMin: slot.startMin, endMin: slot.endMin,
+                                type: 'rotation_event', event: evt.name,
+                                field: evt.location || null,
+                                layer: null,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: false,
+                                _source: 'phase0',
+                                _rotationEventId: evt.id,
+                                _rotationEventLocation: evt.location || null,
+                                _rotationEventColor: evt.color || '#F59E0B',
+                                _sequenceTarget: seqTarget || null,
+                                _final: true
+                            };
+                            let insertIdx = tl.length;
+                            for (let k = 0; k < tl.length; k++) {
+                                const eStart = tl[k] && (tl[k].startMin != null ? tl[k].startMin : tl[k]._startMin);
+                                if (eStart != null && slot.startMin < eStart) { insertIdx = k; break; }
+                            }
+                            tl.splice(insertIdx, 0, block);
+                            registerRotationEventUsage(evt.id, grade, slot.startMin, slot.endMin);
+                            _rotWallCount++;
+                        };
+
+                        // Sort grades most-constrained-first. Sequence-constrained grades
+                        // are maximally constrained (at most 2 adjacent slots) so process
+                        // them first before any other grade claims an adjacent time.
+                        const gradeEntries = Object.entries(bunksByGrade).map(([g, bks]) => {
+                            let viable = 0;
+                            if (seqTarget) {
+                                const tgt = findTargetTimeForGrade(bks);
+                                if (tgt) {
+                                    if (tgt.endMin + dur <= winEnd &&
+                                        bks.every(b => isWindowFreeForBunk(tgt.endMin, tgt.endMin + dur, b))) viable++;
+                                    if (tgt.startMin - dur >= winStart &&
+                                        bks.every(b => isWindowFreeForBunk(tgt.startMin - dur, tgt.startMin, b))) viable++;
+                                }
+                            } else {
+                                const gPeriods = (window.campPeriods || {})[g] || [];
+                                if (gPeriods.length > 0) {
+                                    gPeriods.forEach(p => {
+                                        if (p.startMin < winStart || p.startMin + dur > p.endMin || p.endMin > winEnd) return;
+                                        if (bks.every(b => isWindowFreeForBunk(p.startMin, p.startMin + dur, b))) viable++;
+                                    });
+                                } else {
+                                    for (let t = winStart; t + dur <= winEnd; t += 5) {
+                                        if (bks.every(b => isWindowFreeForBunk(t, t + dur, b))) viable++;
+                                    }
+                                }
+                            }
+                            return { grade: g, bunks: bks, viable };
+                        }).sort((a, b) => a.viable - b.viable);
+
+                        const _fmt = m => {
+                            let h = Math.floor(m / 60), mm = m % 60, ap = h >= 12 ? 'pm' : 'am';
+                            h = h % 12 || 12;
+                            return h + ':' + String(mm).padStart(2, '0') + ap;
+                        };
+                        const _verbose = totalIters < 1;
+                        if (_verbose) log('[Phase2.4] Event "' + evt.name + '" window ' + _fmt(winStart) + '-' + _fmt(winEnd) + ' dur=' + dur + ' — grades: ' + gradeEntries.map(e => e.grade + '(' + e.bunks.length + 'b/' + e.viable + 'viable)').join(', '));
+
+                        // ── Mode branch: whole-grade vs individual (staggered) ──
+                        const _evtGradeMode = evt.gradeMode || 'whole_grade';
+                        const _evtConcurrency = Math.max(1, parseInt(evt.concurrency) || 1);
+
+                        if (_evtGradeMode === 'individual') {
+                            // ── STAGGERED: bunks placed _evtConcurrency-at-a-time into sequential slots ──
+                            // Build a slot list for the daily window, each slot holds up to
+                            // _evtConcurrency bunks (across all grades combined).
+                            const _stagSlots = [];
+                            for (let _t = winStart; _t + dur <= winEnd; _t += dur) {
+                                _stagSlots.push({ startMin: _t, endMin: _t + dur, usedCount: 0 });
+                            }
+
+                            // Flatten all bunks across grades; order by grade (already sorted most-constrained-first)
+                            const _allStagBunks = gradeEntries.flatMap(({ grade: g, bunks: bs }) =>
+                                bs.map(b => ({ bunk: b, grade: g }))
+                            );
+
+                            for (const { bunk, grade } of _allStagBunks) {
+                                let _chosenSlot = null;
+
+                                if (seqTarget) {
+                                    // Sequence-constrained: find the target block in this bunk's timeline
+                                    const _tgtKey = seqTarget.toLowerCase();
+                                    const _tl = bunkTimelines[bunk] || [];
+                                    let _tgtS = null, _tgtE = null;
+                                    for (const blk of _tl) {
+                                        if (!blk || blk.continuation) continue;
+                                        const en = (blk.event || '').toLowerCase();
+                                        const tn = (blk.type || '').toLowerCase();
+                                        const sp = (blk._assignedSport || '').toLowerCase();
+                                        if (en === _tgtKey || tn === _tgtKey || sp === _tgtKey) {
+                                            _tgtS = blk.startMin; _tgtE = blk.endMin; break;
+                                        }
+                                    }
+                                    if (_tgtS != null) {
+                                        // Try slots adjacent to target (closest first)
+                                        const _adjSlots = _stagSlots
+                                            .filter(s => s.usedCount < _evtConcurrency)
+                                            .sort((a, b) => {
+                                                const dA = Math.min(Math.abs(a.endMin - _tgtS), Math.abs(a.startMin - _tgtE));
+                                                const dB = Math.min(Math.abs(b.endMin - _tgtS), Math.abs(b.startMin - _tgtE));
+                                                return dA - dB;
+                                            });
+                                        for (const s of _adjSlots) {
+                                            if (isWindowFreeForBunk(s.startMin, s.endMin, bunk)) {
+                                                _chosenSlot = s; break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (!_chosenSlot) {
+                                    // No-sequence (or sequence target not found): first slot with capacity + no conflict
+                                    _chosenSlot = _stagSlots.find(s =>
+                                        s.usedCount < _evtConcurrency &&
+                                        isWindowFreeForBunk(s.startMin, s.endMin, bunk)
+                                    ) || null;
+                                }
+
+                                if (_chosenSlot) {
+                                    placeWall(bunk, grade, _chosenSlot);
+                                    _chosenSlot.usedCount++;
+                                    if (_verbose) log('[Phase2.4-stagger]   ✓ ' + bunk + '/' + grade + ' → ' + _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) + ' (slot used=' + _chosenSlot.usedCount + '/' + _evtConcurrency + ')');
+                                } else {
+                                    _rotUnplaced.push(bunk + '/' + evt.name);
+                                    if (_verbose) log('[Phase2.4-stagger]   ✗ ' + bunk + '/' + grade + ' — no available slot');
+                                }
+                            }
+
+                        } else {
+                            // ── WHOLE GRADE: every bunk in a grade shares one slot ──
+                            const placements = []; // { startMin, endMin, grade }
+                            gradeEntries.forEach(({ grade, bunks, viable }) => {
+                                const slot = findGradeSlot(bunks, grade, placements);
+                                if (slot) {
+                                    placements.push({ startMin: slot.startMin, endMin: slot.endMin, grade });
+                                    bunks.forEach(b => placeWall(b, grade, slot));
+                                    if (_verbose) log('[Phase2.4]   ✓ ' + grade + ' → ' + _fmt(slot.startMin) + '-' + _fmt(slot.endMin));
+                                } else {
+                                    _rotUnplaced.push(grade + '/' + evt.name);
+                                    if (_verbose) {
+                                        const diag = [];
+                                        for (let t = winStart; t + dur <= winEnd && diag.length < 5; t += 5) {
+                                            const tEnd = t + dur;
+                                            const crossConflict = placements.find(p => t < p.endMin && tEnd > p.startMin);
+                                            if (crossConflict) {
+                                                diag.push(_fmt(t) + ' cross:' + crossConflict.grade);
+                                                continue;
+                                            }
+                                            const blockers = bunks.filter(b => !isWindowFreeForBunk(t, tEnd, b));
+                                            if (blockers.length > 0) {
+                                                diag.push(_fmt(t) + ' bunks:' + blockers.slice(0, 3).join(','));
+                                            }
+                                        }
+                                        log('[Phase2.4]   ✗ ' + grade + ' NO SLOT. Placements so far: ' + (placements.map(p => p.grade + '@' + _fmt(p.startMin)).join(', ') || 'none') + '. First 5 rejected times: ' + (diag.join(' | ') || 'n/a'));
+                                    }
+                                }
+                            });
+                        }
+                    });
+
+                    if (_rotWallCount > 0) {
+                        log('[Phase2.4] ★ PRE-PLACED ' + _rotWallCount + ' rotation event blocks as walls');
+                        allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => ensureTimelineIntegrity(bunk)));
+                    }
+                    if (_rotUnplaced.length > 0) {
+                        log('[Phase2.4] Unplaced (' + (_evtGradeMode === 'individual' ? 'staggered' : 'whole-grade') + '): ' + _rotUnplaced.join(', ') + ' — Phase 3 will attempt');
+                    }
+                } catch (e) { console.warn('[Phase2.4] rotation pre-placement failed:', e); }
+            }
+
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
             // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
             // By converting these to immovable walls BEFORE the packer runs,
@@ -8787,6 +10017,9 @@
                                             if (overlapping.some(e => e.grade !== grade)) blocked = true;
                                         }
                                         if (!blocked && overlapping.length >= cap) blocked = true;
+                                    } else if (st === 'cross_division') {
+                                        if (!isCrossDivAllowed(grade, overlapping.map(e => e.grade), ledger.allowedPairs)) blocked = true;
+                                        if (!blocked && overlapping.length >= cap) blocked = true;
                                     } else {
                                         if (overlapping.length >= cap) blocked = true;
                                     }
@@ -8943,7 +10176,7 @@
                     getBunksForGrade(grade, divisions).forEach(bunk => {
                         const tl = bunkTimelines[bunk] || [];
                         tl.forEach(b => {
-                            if (b && b._source === 'rotation_event' && b._rotationEventId) {
+                            if (b && b._rotationEventId) {
                                 if (!byEvent[b._rotationEventId]) byEvent[b._rotationEventId] = new Set();
                                 byEvent[b._rotationEventId].add(String(bunk));
                             }
@@ -9075,6 +10308,11 @@
         log('[2.6] ' + (validationPassed ? '✅ Passed' : '⚠️ Errors'));
 
 
+        // STEP 2.65 was here previously. Moved to STEP 2.78 — runs after
+        // Phase 2.75 has shifted swim into bell-schedule periods, so the
+        // pre/post-change blocks can be re-anchored to the FINAL swim
+        // position rather than where Phase 0/3 first placed them.
+
         // =====================================================================
         // STEP 2.7 — FORMALIZE
         // =====================================================================
@@ -9089,7 +10327,7 @@
                         startMin: block.startMin, endMin: block.endMin,
                         event: (block.event && block.event !== 'General Activity Slot')
                             ? block.event
-                            : (pickFillActivity(block.endMin - block.startMin, grade) || 'Free'),
+                            : (pickFillActivity(block.endMin - block.startMin, grade, bunk) || 'Free'),
                         type: block.type || 'slot',
                         _autoGenerated: true, _classification: block._classification,
                         _suggestedActivity: block._assignedSpecial || block._assignedSport || null,
@@ -9097,7 +10335,11 @@
                         _durationStrict: block._activityLocked || false,
                         _fixed: block._fixed || false, _pinned: block._classification === 'pinned',
                         _specialLocation: block._specialLocation || null,
-                        _draftActivity: block._draftActivity || null, _draftField: block._draftField || null
+                        _draftActivity: block._draftActivity || null, _draftField: block._draftField || null,
+                        _preChangeMin: block._preChangeMin != null ? block._preChangeMin : null,
+                        _postChangeMin: block._postChangeMin != null ? block._postChangeMin : null,
+                        _swimActualStart: block._swimActualStart != null ? block._swimActualStart : null,
+                        _swimActualEnd: block._swimActualEnd != null ? block._swimActualEnd : null
                     });
                 });
             });
@@ -9123,6 +10365,665 @@
             window._perBunkSlots = {};
             allGrades.forEach(grade => { const ds = window.divisionTimes[grade]; if (ds && ds._perBunkSlots) window._perBunkSlots[grade] = ds._perBunkSlots; });
         } else { err('[2.7] DivisionTimesSystem not available'); }
+
+        // =====================================================================
+        // STEP 2.75 — APPLY BELL-SCHEDULE PERIODS
+        // When window.campPeriods[grade] is defined, replace auto-generated
+        // schedulable slots with period-shaped slots. Fixed events (special,
+        // swim, lunch, snacks, dismissal, pinned, rotation_event, leagues,
+        // custom) stay where they are; periods fill the gaps between them.
+        // Periods that fully overlap a fixed event are clipped or dropped.
+        // =====================================================================
+        try {
+            const periodMap = window.campPeriods || {};
+            // Truly fixed types — NEVER evict, even if they cross a period boundary.
+            // Includes user-anchored 'custom' blocks (e.g., Change) and the
+            // auto-generated pre/post-change wrappers around swim.
+            const PERIOD_HARD_FIXED = new Set([
+                'swim','snacks','lunch','dismissal','league','specialty_league',
+                'custom','change','pre-change','post-change',
+                // rotation_event is hard-fixed: Phase 2.4 already aligns to period
+                // starts when no sequence constraint, so straddling is intentional
+                // (e.g. water-slides placed adjacent to swim for the back-to-back rule).
+                'rotation_event'
+            ]);
+            // Soft-fixed types — preserve when they fit inside a period, but
+            // evict when they straddle a period boundary (planner placed them
+            // without knowing about periods) or leave an unpackable remainder.
+            const PERIOD_SOFT_FIXED = new Set([
+                'special','pinned'
+            ]);
+            // Period-pool types to skip when collecting layer durations.
+            // These are either fixed events (swim/lunch/etc.) or anchored
+            // single-purpose blocks (custom/change) that shouldn't be a
+            // generic gap-fill option for the packer.
+            const SKIP_LAYER_TYPES = new Set([
+                'swim','lunch','snacks','snack','dismissal','league','specialty_league',
+                'custom','change','pre-change','post-change'
+            ]);
+            const PACKER_STEP = 5; // 5-min granularity (handles 20/25/30/35/40 etc.)
+            const PACKER_DEFAULT_FLOOR = 10;
+            // Floor + candidate pool are *time-range specific*. Each layer
+            // covers a [startMin, endMin) window — only layers overlapping
+            // the gap being packed contribute to its floor / candidates.
+            // This way a 9am-12pm sports layer (min 20) doesn't constrain
+            // a 1pm-4pm electives layer (min 30), and vice versa.
+            const isLayerEligibleForGap = (l, grade, gapStart, gapEnd) => {
+                const lg = l.grade || l.division || '';
+                if (lg !== grade) return false;
+                const t = String(l.type || '').toLowerCase();
+                if (SKIP_LAYER_TYPES.has(t)) return false;
+                if (t === 'special') return false; // specials are pre-placed
+                const ls = (l.startMin != null) ? l.startMin : -Infinity;
+                const le = (l.endMin   != null) ? l.endMin   : Infinity;
+                return ls < gapEnd && le > gapStart;
+            };
+            const layerMinDur = (l) => {
+                const cands = [l.durationMin, l.periodMin, l.duration]
+                    .map(v => parseInt(v, 10))
+                    .filter(v => !isNaN(v) && v > 0);
+                return cands.length ? Math.min.apply(null, cands) : null;
+            };
+            // Cache by (grade + startMin + endMin)
+            const floorCache = {};
+            const candsCache = {};
+            const computeFloorForGap = (grade, gapStart, gapEnd) => {
+                const key = grade + '_' + gapStart + '_' + gapEnd;
+                if (floorCache[key] != null) return floorCache[key];
+                let floor = Infinity;
+                (layers || []).forEach(l => {
+                    if (!isLayerEligibleForGap(l, grade, gapStart, gapEnd)) return;
+                    const m = layerMinDur(l);
+                    if (m != null && m < floor) floor = m;
+                });
+                if (!isFinite(floor)) floor = PACKER_DEFAULT_FLOOR;
+                floorCache[key] = floor;
+                return floor;
+            };
+            const buildCandidatesForGap = (grade, gapStart, gapEnd) => {
+                const key = grade + '_' + gapStart + '_' + gapEnd;
+                if (candsCache[key]) return candsCache[key];
+                const floor = computeFloorForGap(grade, gapStart, gapEnd);
+                const durations = new Set();
+                const addDur = (n) => {
+                    if (typeof n !== 'number' || isNaN(n)) return;
+                    if (n < floor || n % PACKER_STEP !== 0) return;
+                    durations.add(n);
+                };
+                (layers || []).forEach(l => {
+                    if (!isLayerEligibleForGap(l, grade, gapStart, gapEnd)) return;
+                    const lMin = parseInt(l.durationMin || l.periodMin || l.duration || 0, 10);
+                    const lMax = parseInt(l.durationMax || l.periodMin || l.duration || lMin, 10);
+                    if (lMin > 0) {
+                        const lo = lMin, hi = Math.max(lMax, lMin);
+                        for (let d = lo; d <= hi; d += PACKER_STEP) addDur(d);
+                    }
+                    addDur(parseInt(l.periodMin, 10));
+                    addDur(parseInt(l.duration, 10));
+                });
+                const cands = [...durations].sort((a,b)=>a-b).map(d => ({ activity: 'd' + d, durationMin: d }));
+                candsCache[key] = cands;
+                return cands;
+            };
+            // Split a period gap (start..end) into sub-slot durations whose
+            // sum equals (end - start), using PeriodPacker. Returns an array
+            // of segment durations; [dur] means single segment.
+            const segDursCache = {};
+            const computeSegDurs = (grade, gapStart, gapEnd) => {
+                const dur = gapEnd - gapStart;
+                const key = grade + '_' + gapStart + '_' + gapEnd;
+                if (segDursCache[key] !== undefined) return segDursCache[key];
+                const floor = computeFloorForGap(grade, gapStart, gapEnd);
+                // Sub-floor or non-step gaps are dropped: emitting a slot
+                // shorter than the layer's minimum would let the solver place
+                // an undersized activity. Better to leave the time empty.
+                if (dur < floor || dur % PACKER_STEP !== 0) {
+                    segDursCache[key] = [];
+                    return [];
+                }
+                let result = [dur];
+                do {
+                    if (typeof window.PeriodPacker?.pack !== 'function') break;
+                    const cands = buildCandidatesForGap(grade, gapStart, gapEnd);
+                    if (!cands.length) break;
+                    let packing = null;
+                    try {
+                        const results = window.PeriodPacker.pack({
+                            periodLengthMin: dur,
+                            candidates: cands,
+                            maxSegments: 4,
+                            minSegmentMin: floor,
+                            granularityMin: PACKER_STEP,
+                            allowRepeat: true,
+                            // Prefer fewest segments first; tie-break by larger
+                            // average segment (more room for solver picks).
+                            scoreFn: (p) => -p.segments.length * 1000 +
+                                            p.segments.reduce((a,s) => a + s.durationMin, 0) / p.segments.length,
+                            topN: 1
+                        });
+                        packing = results?.[0];
+                    } catch (_e) { break; }
+                    if (!packing || !packing.segments || packing.segments.length === 0) break;
+                    result = packing.segments.map(s => s.durationMin);
+                } while (false);
+                segDursCache[key] = result;
+                return result;
+            };
+            const splitGapIntoSegments = (startMin, endMin, period, bunk, grade) => {
+                const segDurs = computeSegDurs(grade, startMin, endMin);
+                let cursor = startMin;
+                return segDurs.map((segDur, i) => {
+                    const segStart = cursor;
+                    const segEnd = cursor + segDur;
+                    cursor = segEnd;
+                    const slot = {
+                        startMin: segStart, endMin: segEnd,
+                        startTime: minutesToTimeLabel(segStart),
+                        endTime: minutesToTimeLabel(segEnd),
+                        type: 'slot', event: 'General Activity Slot',
+                        _bunk: bunk, _autoGenerated: true,
+                        _periodId: period.id, _periodName: period.name
+                    };
+                    if (segDurs.length > 1) {
+                        slot._segmentIndex = i;
+                        slot._segmentTotal = segDurs.length;
+                    }
+                    return slot;
+                });
+            };
+            let periodOverrideBunks = 0;
+            let multiSegSlots = 0;
+            const evictedBlocks = [];
+            allGrades.forEach(grade => {
+                const periods = periodMap[grade];
+                if (!periods || periods.length === 0) return;
+                const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                if (!pbs) return;
+                // Diagnostic: show what floor + candidate pool each period
+                // is using. Floor + candidates are derived from the layers
+                // whose time windows overlap that period, so different
+                // periods can legitimately have different floors.
+                periods.forEach(p => {
+                    const _f = computeFloorForGap(grade, p.startMin, p.endMin);
+                    const _c = buildCandidatesForGap(grade, p.startMin, p.endMin).map(c => c.durationMin);
+                    log('[2.75] ' + grade + ' "' + (p.name || 'period') + '" ' +
+                        minutesToTimeLabel(p.startMin) + '-' + minutesToTimeLabel(p.endMin) +
+                        ' floor=' + _f + 'min, candidates=[' + _c.join(',') + ']');
+                });
+                // Pre-compute MERGED (union) period intervals so overlapping or
+                // adjacent periods are treated as a single contiguous region.
+                // An activity "crosses a boundary" only when it spans a real GAP
+                // between merged intervals (or extends outside all periods).
+                const _sortedP = periods.slice().sort((a, b) => a.startMin - b.startMin);
+                const mergedPeriods = [];
+                _sortedP.forEach(p => {
+                    const last = mergedPeriods[mergedPeriods.length - 1];
+                    if (last && last.endMin >= p.startMin) {
+                        last.endMin = Math.max(last.endMin, p.endMin);
+                    } else {
+                        mergedPeriods.push({ startMin: p.startMin, endMin: p.endMin });
+                    }
+                });
+                const crossesBoundary = (s) => {
+                    for (const m of mergedPeriods) {
+                        if (m.startMin <= s.startMin && m.endMin >= s.endMin) return false;
+                    }
+                    return true;
+                };
+                // Hard-fixed types we'll attempt to shift to a period boundary
+                // when they currently cross one. (lunch / dismissal / leagues
+                // are typically rigid so we leave them alone.)
+                const SHIFTABLE_HARD = new Set(['swim','snacks']);
+                const sortedPeriods = [...periods].sort((a,b) => a.startMin - b.startMin);
+                getBunksForGrade(grade, divisions).forEach(bunk => {
+                    const oldSlots = pbs[String(bunk)] || [];
+                    // Pass A: try to align shiftable hard-fixed blocks (swim, snacks)
+                    // that currently cross a period boundary. When swim shifts,
+                    // its attached pre-change / post-change blocks must shift
+                    // with it so the (change, swim, change) triple stays attached.
+                    oldSlots.forEach(slot => {
+                        const t = String(slot.type || '').toLowerCase();
+                        if (!SHIFTABLE_HARD.has(t)) return;
+                        if (!crossesBoundary(slot)) return;
+                        const blockDur = slot.endMin - slot.startMin;
+                        const oldSwimStart = slot.startMin, oldSwimEnd = slot.endMin;
+                        // Find attached pre/post change blocks (swim only)
+                        let preChangeSlot = null, postChangeSlot = null;
+                        // Find linked rotation event (generic — any activity type)
+                        let wsSlotBefore = null, wsSlotAfter = null;
+                        if (t === 'swim') {
+                            preChangeSlot = oldSlots.find(o =>
+                                String(o.type || '').toLowerCase() === 'pre-change' &&
+                                o.endMin === oldSwimStart
+                            );
+                            postChangeSlot = oldSlots.find(o =>
+                                String(o.type || '').toLowerCase() === 'post-change' &&
+                                o.startMin === oldSwimEnd
+                            );
+                        }
+                        // Look in bunkTimelines for adjacent rotation_event targeting this type
+                        if (Array.isArray(bunkTimelines[bunk])) {
+                            wsSlotBefore = bunkTimelines[bunk].find(b =>
+                                b && String(b.type || '').toLowerCase() === 'rotation_event' &&
+                                (b._sequenceTarget || '').toLowerCase() === t &&
+                                b.endMin === oldSwimStart
+                            ) || null;
+                            wsSlotAfter = bunkTimelines[bunk].find(b =>
+                                b && String(b.type || '').toLowerCase() === 'rotation_event' &&
+                                (b._sequenceTarget || '').toLowerCase() === t &&
+                                b.startMin === oldSwimEnd
+                            ) || null;
+                        }
+                        const preChangeDur = preChangeSlot ? (preChangeSlot.endMin - preChangeSlot.startMin) : 0;
+                        const postChangeDur = postChangeSlot ? (postChangeSlot.endMin - postChangeSlot.startMin) : 0;
+                        const wsBeforeDur = wsSlotBefore ? (wsSlotBefore.endMin - wsSlotBefore.startMin) : 0;
+                        const wsAfterDur = wsSlotAfter ? (wsSlotAfter.endMin - wsSlotAfter.startMin) : 0;
+
+                        for (const p of sortedPeriods) {
+                            const pDur = p.endMin - p.startMin;
+                            if (pDur < blockDur) continue;
+                            const targetStart = p.startMin;
+                            const targetEnd = targetStart + blockDur;
+                            // Include the full bundle range (change + WS + swim) in
+                            // conflict check so we don't shift into a collision.
+                            // Order: [pre-change] [WS-before] [swim] [WS-after] [post-change]
+                            const coreStart = targetStart - wsBeforeDur;
+                            const coreEnd = targetEnd + wsAfterDur;
+                            const bundleStart = coreStart - preChangeDur;
+                            const bundleEnd = coreEnd + postChangeDur;
+                            // Check BOTH pbs slots AND bunkTimelines for
+                            // conflicts. Sports placed by the CSP solver live
+                            // in bunkTimelines but may not be flagged _fixed,
+                            // so the old "isFixedish-only" gate missed them.
+                            const conflict = oldSlots.some(other => {
+                                if (other === slot || other === preChangeSlot || other === postChangeSlot) return false;
+                                const ot = String(other.type || '').toLowerCase();
+                                // Skip auto-generated empty slots — they'll be
+                                // regenerated around the shifted swim anyway.
+                                if (ot === 'slot' || other._autoGenerated) return false;
+                                return other.startMin < bundleEnd && other.endMin > bundleStart;
+                            }) || (Array.isArray(bunkTimelines[bunk]) && bunkTimelines[bunk].some(other => {
+                                const os = other.startMin, oe = other.endMin;
+                                if (os == null || oe == null) return false;
+                                const ot = String(other.type || '').toLowerCase();
+                                if (ot === 'swim' && os === slot.startMin && oe === slot.endMin) return false;
+                                if (ot === 'pre-change' || ot === 'post-change') return false;
+                                // Skip the WS blocks we're shifting with swim
+                                if (other === wsSlotBefore || other === wsSlotAfter) return false;
+                                if (ot === 'slot') return false;
+                                return os < bundleEnd && oe > bundleStart;
+                            }));
+                            if (conflict) continue;
+                            // Update the swim slot + matching bunkTimelines block
+                            slot.startMin = targetStart;
+                            slot.endMin = targetEnd;
+                            slot.startTime = minutesToTimeLabel(targetStart);
+                            slot.endTime = minutesToTimeLabel(targetEnd);
+                            if (Array.isArray(bunkTimelines[bunk])) {
+                                const tlBlock = bunkTimelines[bunk].find(b =>
+                                    b.startMin === oldSwimStart && b.endMin === oldSwimEnd &&
+                                    String(b.type || '').toLowerCase() === t
+                                );
+                                if (tlBlock) {
+                                    tlBlock.startMin = targetStart;
+                                    tlBlock.endMin = targetEnd;
+                                    tlBlock.startTime = minutesToTimeLabel(targetStart);
+                                    tlBlock.endTime = minutesToTimeLabel(targetEnd);
+                                }
+                            }
+                            // Shift WS-before to sit immediately before new swim
+                            if (wsSlotBefore) {
+                                wsSlotBefore.startMin = targetStart - wsBeforeDur;
+                                wsSlotBefore.endMin = targetStart;
+                                wsSlotBefore.startTime = minutesToTimeLabel(wsSlotBefore.startMin);
+                                wsSlotBefore.endTime = minutesToTimeLabel(wsSlotBefore.endMin);
+                            }
+                            // Shift WS-after to sit immediately after new swim
+                            if (wsSlotAfter) {
+                                wsSlotAfter.startMin = targetEnd;
+                                wsSlotAfter.endMin = targetEnd + wsAfterDur;
+                                wsSlotAfter.startTime = minutesToTimeLabel(wsSlotAfter.startMin);
+                                wsSlotAfter.endTime = minutesToTimeLabel(wsSlotAfter.endMin);
+                            }
+                            // Shift pre-change to sit before the entire wet bundle
+                            if (preChangeSlot) {
+                                const newPreEnd = targetStart - wsBeforeDur;
+                                const oldPreStart = preChangeSlot.startMin, oldPreEnd = preChangeSlot.endMin;
+                                preChangeSlot.startMin = newPreEnd - preChangeDur;
+                                preChangeSlot.endMin = newPreEnd;
+                                preChangeSlot.startTime = minutesToTimeLabel(preChangeSlot.startMin);
+                                preChangeSlot.endTime = minutesToTimeLabel(preChangeSlot.endMin);
+                                if (Array.isArray(bunkTimelines[bunk])) {
+                                    const preTl = bunkTimelines[bunk].find(b =>
+                                        b.startMin === oldPreStart && b.endMin === oldPreEnd &&
+                                        String(b.type || '').toLowerCase() === 'pre-change'
+                                    );
+                                    if (preTl) {
+                                        preTl.startMin = preChangeSlot.startMin;
+                                        preTl.endMin = preChangeSlot.endMin;
+                                        preTl.startTime = preChangeSlot.startTime;
+                                        preTl.endTime = preChangeSlot.endTime;
+                                    }
+                                }
+                            }
+                            // Shift post-change to sit after the entire wet bundle
+                            if (postChangeSlot) {
+                                const newPostStart = targetEnd + wsAfterDur;
+                                const oldPostStart = postChangeSlot.startMin, oldPostEnd = postChangeSlot.endMin;
+                                postChangeSlot.startMin = newPostStart;
+                                postChangeSlot.endMin = newPostStart + postChangeDur;
+                                postChangeSlot.startTime = minutesToTimeLabel(postChangeSlot.startMin);
+                                postChangeSlot.endTime = minutesToTimeLabel(postChangeSlot.endMin);
+                                if (Array.isArray(bunkTimelines[bunk])) {
+                                    const postTl = bunkTimelines[bunk].find(b =>
+                                        b.startMin === oldPostStart && b.endMin === oldPostEnd &&
+                                        String(b.type || '').toLowerCase() === 'post-change'
+                                    );
+                                    if (postTl) {
+                                        postTl.startMin = postChangeSlot.startMin;
+                                        postTl.endMin = postChangeSlot.endMin;
+                                        postTl.startTime = postChangeSlot.startTime;
+                                        postTl.endTime = postChangeSlot.endTime;
+                                    }
+                                }
+                            }
+                            log('[2.75] Shifted ' + t + ' for ' + grade + '/' + bunk +
+                                ' from ' + minutesToTimeLabel(oldSwimStart) + '-' + minutesToTimeLabel(oldSwimEnd) +
+                                ' to ' + minutesToTimeLabel(targetStart) + '-' + minutesToTimeLabel(targetEnd) +
+                                ' (period: ' + (p.name || 'unnamed') + ')' +
+                                (wsSlotBefore ? ' +ws-before' : '') +
+                                (wsSlotAfter ? ' +ws-after' : '') +
+                                (preChangeSlot ? ' +pre-change' : '') +
+                                (postChangeSlot ? ' +post-change' : ''));
+                            break;
+                        }
+                    });
+                    let fixedSlots = oldSlots.filter(s => {
+                        const t = String(s.type || '').toLowerCase();
+                        if (PERIOD_HARD_FIXED.has(t)) return true;
+                        if (PERIOD_SOFT_FIXED.has(t) || s._fixed) {
+                            if (crossesBoundary(s)) {
+                                evictedBlocks.push({
+                                    grade, bunk: String(bunk),
+                                    name: s.event || s._assignedSpecial || '(unknown)',
+                                    type: t, startMin: s.startMin, endMin: s.endMin,
+                                    reason: 'crosses period boundary'
+                                });
+                                if (Array.isArray(bunkTimelines[bunk])) {
+                                    bunkTimelines[bunk] = bunkTimelines[bunk].filter(b =>
+                                        !(b.startMin === s.startMin && b.endMin === s.endMin)
+                                    );
+                                }
+                                return false;
+                            }
+                            return true;
+                        }
+                        return false;
+                    });
+
+                    // Pass C: fillability check. A soft-fixed event is only
+                    // allowed to stay in a period if every remaining gap can
+                    // be cleanly packed by the layers overlapping that gap.
+                    // Floor + candidate pool are now per-gap (time-range
+                    // specific), so a 9am-12pm 20-min layer doesn't help
+                    // pack a 1pm-4pm gap whose only overlapping layer is
+                    // 30-60min electives.
+                    const isGapPackable = (gapStart, gapEnd) => {
+                        const gap = gapEnd - gapStart;
+                        if (gap <= 0) return true;
+                        const f = computeFloorForGap(grade, gapStart, gapEnd);
+                        const c = buildCandidatesForGap(grade, gapStart, gapEnd);
+                        if (gap < f) return false;
+                        if (gap % PACKER_STEP !== 0) return false;
+                        if (!c.length || typeof window.PeriodPacker?.pack !== 'function') return true;
+                        try {
+                            const ps = window.PeriodPacker.pack({
+                                periodLengthMin: gap,
+                                candidates: c,
+                                maxSegments: 4,
+                                minSegmentMin: f,
+                                granularityMin: PACKER_STEP,
+                                allowRepeat: true,
+                                topN: 1
+                            });
+                            return ps.length > 0;
+                        } catch (_e) { return false; }
+                    };
+                    const computeGapsAround = (period, blocks) => {
+                        const inside = blocks
+                            .filter(f => f.startMin < period.endMin && f.endMin > period.startMin)
+                            .sort((a, b) => a.startMin - b.startMin);
+                        const gaps = [];
+                        let cursor = period.startMin;
+                        inside.forEach(f => {
+                            if (f.startMin > cursor) gaps.push({ start: cursor, end: f.startMin });
+                            cursor = Math.max(cursor, f.endMin);
+                        });
+                        if (cursor < period.endMin) gaps.push({ start: cursor, end: period.endMin });
+                        return gaps;
+                    };
+                    const allGapsPackable = (gaps) => gaps.every(g => isGapPackable(g.start, g.end));
+                    // Pass C (unpackable-gap eviction) is intentionally disabled.
+                    // It removed user-placed specials whenever the remaining gap
+                    // didn't match an available sport duration — but the user
+                    // expects those specials to stay. Any leftover gap is filled
+                    // later by the POST-GAP micro-slot pass ("Free"/"Slush").
+                    const periodSlots = [];
+                    periods.forEach(period => {
+                        if (period.startMin >= period.endMin) return;
+                        // Carve the period around overlapping fixed slots
+                        const overlapping = fixedSlots
+                            .filter(f => f.startMin < period.endMin && f.endMin > period.startMin)
+                            .sort((a, b) => a.startMin - b.startMin);
+                        let cursor = period.startMin;
+                        overlapping.forEach(f => {
+                            if (f.startMin > cursor) {
+                                const segs = splitGapIntoSegments(cursor, f.startMin, period, bunk, grade);
+                                if (segs.length > 1) multiSegSlots++;
+                                periodSlots.push(...segs);
+                            }
+                            cursor = Math.max(cursor, f.endMin);
+                        });
+                        if (cursor < period.endMin) {
+                            const segs = splitGapIntoSegments(cursor, period.endMin, period, bunk, grade);
+                            if (segs.length > 1) multiSegSlots++;
+                            periodSlots.push(...segs);
+                        }
+                    });
+                    const merged = fixedSlots
+                        .concat(periodSlots)
+                        .sort((a, b) => a.startMin - b.startMin)
+                        .map((s, i) => Object.assign({}, s, { slotIndex: i }));
+                    pbs[String(bunk)] = merged;
+                    periodOverrideBunks++;
+                });
+            });
+            if (periodOverrideBunks > 0) {
+                log('[2.75] ✅ Bell-schedule periods applied to ' + periodOverrideBunks + ' bunks (' +
+                    multiSegSlots + ' periods split into multi-segment)');
+            }
+            if (evictedBlocks.length > 0) {
+                warn('[2.75] Evicted ' + evictedBlocks.length + ' pre-placed block(s):');
+                evictedBlocks.forEach(e => {
+                    warn('  - ' + e.grade + '/' + e.bunk + ': ' + e.name + ' (' + e.type + ') @ ' +
+                         minutesToTimeLabel(e.startMin) + '-' + minutesToTimeLabel(e.endMin) +
+                         '  [' + (e.reason || 'unknown') + ']');
+                });
+                warnings.push('Bell schedule: ' + evictedBlocks.length + ' pre-placed activity/activities removed (period violation or unpackable remainder).');
+            }
+        } catch (e) {
+            warn('[2.75] Period override failed: ' + e.message);
+        }
+
+        // =====================================================================
+        // STEP 2.78 — RE-ANCHOR SWIM CHANGE BLOCKS TO PERIODS
+        // =====================================================================
+        // After Phase 2.75 has shifted swim into bell-schedule periods,
+        // recompute pre/post-change anchors against the FINAL swim
+        // position. Phase 2.75 keeps pre/post immediately adjacent to the
+        // shifted swim (e.g. pre 12:05-12:15 when swim moves to P3) — but
+        // the user's spec is "last preChangeMin minutes of the period
+        // BEFORE swim's period" (e.g. 12:00-12:10 from P2). This pass
+        // drops every pre/post and rebuilds them from the swim block's
+        // layer config + computeSwimChangeAnchors.
+        log('\n[STEP 2.78] Re-anchoring swim change blocks...');
+        let _reanchorPlaced = 0, _reanchorDropped = 0;
+        allGrades.forEach(grade => {
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const tl = bunkTimelines[bunk];
+                if (!Array.isArray(tl) || tl.length === 0) return;
+                // Drop ALL pre-change / post-change blocks first.
+                const beforeCount = tl.length;
+                bunkTimelines[bunk] = tl.filter(b => {
+                    if (!b) return false;
+                    const bt = String(b.type || '').toLowerCase();
+                    return bt !== 'pre-change' && bt !== 'post-change';
+                });
+                _reanchorDropped += (beforeCount - bunkTimelines[bunk].length);
+                // For every swim block, recompute anchors and place pre/post.
+                // The helper walks back/forward through bell-schedule periods
+                // until it finds one whose change-window is free, so pre lands
+                // BEFORE any pinned activity (lunch / special) sitting between
+                // it and swim — never overlapping.
+                //
+                // ★ Bundle detection: if a rotation_event (e.g. water slides)
+                // with _sequenceTarget === 'swim' is adjacent to the swim
+                // block, expand the bundle so change wraps BOTH activities:
+                //   waterslides BEFORE swim → [pre] [ws] [swim] [post]
+                //   waterslides AFTER  swim → [pre] [swim] [ws] [post]
+                bunkTimelines[bunk].forEach(sw => {
+                    if (!sw || (sw.type || '').toLowerCase() !== 'swim') return;
+                    const layer = sw.layer;
+                    if (!layer) return;
+                    // Detect adjacent linked rotation_events (generic — matches
+                    // any rotation_event whose _sequenceTarget equals this block's type)
+                    const _swType = (sw.type || '').toLowerCase();
+                    let bundleStart = sw.startMin, bundleEnd = sw.endMin;
+                    bunkTimelines[bunk].forEach(adj => {
+                        if (!adj || (adj.type || '').toLowerCase() !== 'rotation_event') return;
+                        if (!adj._sequenceTarget) return;
+                        var tgt = adj._sequenceTarget.toLowerCase();
+                        if (tgt !== _swType) return;
+                        // Adjacent before?
+                        if (adj.endMin === sw.startMin) bundleStart = Math.min(bundleStart, adj.startMin);
+                        // Adjacent after?
+                        if (adj.startMin === sw.endMin) bundleEnd = Math.max(bundleEnd, adj.endMin);
+                    });
+                    const preChangeDur = (layer.preChangeMin > 0) ? layer.preChangeMin : 0;
+                    const postChangeDur = (layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                    let anchors = computeSwimChangeAnchors(
+                        sw.startMin, sw.endMin, layer, grade, bunkTimelines[bunk],
+                        bundleStart, bundleEnd
+                    );
+
+                    // ★ Carve fallback: when a period walk-back/forward can't
+                    // find a free slot (e.g. a sport fills the entire period
+                    // right before water-slides), trim the adjacent sport to
+                    // make room. Only sport/slot types are trimmable — pinned
+                    // activities (swim, lunch, specials, rotation_events, etc.)
+                    // are never carved.
+                    const tl278 = bunkTimelines[bunk];
+                    const TRIMMABLE_TYPES = new Set(['sport', 'slot']);
+                    if (!anchors.pre && preChangeDur > 0) {
+                        // Find the block that ends at bundleStart (immediately before bundle)
+                        const prev = tl278.find(b => b && b.endMin === bundleStart);
+                        const prevType = prev ? String(prev.type || '').toLowerCase() : '';
+                        if (prev && TRIMMABLE_TYPES.has(prevType)) {
+                            const prevDur = prev.endMin - prev.startMin;
+                            if (prevDur > preChangeDur) {
+                                // Trim the sport and place pre-change in freed space
+                                prev.endMin -= preChangeDur;
+                                if (prev.endTime) prev.endTime = minutesToTimeLabel(prev.endMin);
+                                anchors = { pre: { startMin: bundleStart - preChangeDur, endMin: bundleStart }, post: anchors.post };
+                                log('[2.78] Carved ' + preChangeDur + 'm from "' + (prev.event || prev.type) + '" for pre-change before bundle at ' + bunk);
+                            }
+                        }
+                    }
+                    if (!anchors.post && postChangeDur > 0) {
+                        // Find the block that starts at bundleEnd (immediately after bundle)
+                        const nxt = tl278.find(b => b && b.startMin === bundleEnd);
+                        const nxtType = nxt ? String(nxt.type || '').toLowerCase() : '';
+                        if (nxt && TRIMMABLE_TYPES.has(nxtType)) {
+                            const nxtDur = nxt.endMin - nxt.startMin;
+                            if (nxtDur > postChangeDur) {
+                                nxt.startMin += postChangeDur;
+                                if (nxt.startTime) nxt.startTime = minutesToTimeLabel(nxt.startMin);
+                                anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: bundleEnd + postChangeDur } };
+                                log('[2.78] Carved ' + postChangeDur + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
+                            }
+                        }
+                    }
+
+                    if (!anchors.pre && !anchors.post) return;
+                    const groupId = sw._swimGroupId || nextSwimGroupId();
+                    sw._swimGroupId = groupId;
+                    if (anchors.pre) {
+                        tl278.push({
+                            startMin: anchors.pre.startMin, endMin: anchors.pre.endMin,
+                            type: 'pre-change', event: 'Change',
+                            layer: null,
+                            dMin: anchors.pre.endMin - anchors.pre.startMin,
+                            dMax: anchors.pre.endMin - anchors.pre.startMin,
+                            _classification: 'pinned', _committed: true,
+                            _fixed: true, _activityLocked: true,
+                            _source: 'swim-pre-change',
+                            _swimGroupId: groupId
+                        });
+                        _reanchorPlaced++;
+                    }
+                    if (anchors.post) {
+                        tl278.push({
+                            startMin: anchors.post.startMin, endMin: anchors.post.endMin,
+                            type: 'post-change', event: 'Change',
+                            layer: null,
+                            dMin: anchors.post.endMin - anchors.post.startMin,
+                            dMax: anchors.post.endMin - anchors.post.startMin,
+                            _classification: 'pinned', _committed: true,
+                            _fixed: true, _activityLocked: true,
+                            _source: 'swim-post-change',
+                            _swimGroupId: groupId
+                        });
+                        _reanchorPlaced++;
+                    }
+                });
+                bunkTimelines[bunk].sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
+            });
+        });
+        log('[2.78] Re-anchored: dropped ' + _reanchorDropped + ' old change blocks, placed ' + _reanchorPlaced + ' period-anchored ones');
+        // Mirror to divisionTimes._perBunkSlots so the renderer sees them too.
+        allGrades.forEach(grade => {
+            const dt = window.divisionTimes?.[grade];
+            if (!dt || !dt._perBunkSlots) return;
+            const pbs = dt._perBunkSlots;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const tl = bunkTimelines[bunk] || [];
+                const slots = pbs[String(bunk)];
+                if (!Array.isArray(slots)) return;
+                // Drop existing pre-change/post-change slots
+                const filtered = slots.filter(s => {
+                    const t = String(s.type || '').toLowerCase();
+                    return t !== 'pre-change' && t !== 'post-change';
+                });
+                // Add new ones from bunkTimelines
+                tl.forEach(b => {
+                    if (!b) return;
+                    const bt = String(b.type || '').toLowerCase();
+                    if (bt !== 'pre-change' && bt !== 'post-change') return;
+                    filtered.push({
+                        startMin: b.startMin, endMin: b.endMin,
+                        startTime: minutesToTimeLabel(b.startMin),
+                        endTime: minutesToTimeLabel(b.endMin),
+                        type: b.type, event: b.event || 'Change',
+                        _swimGroupId: b._swimGroupId || null,
+                        _fixed: true, _activityLocked: true
+                    });
+                });
+                filtered.sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
+                pbs[String(bunk)] = filtered;
+            });
+        });
+        // Refresh debug exposure with final post-2.78 state.
+        try { window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines)); } catch (_e) {}
 
         // Initialize scheduleAssignments
         allGrades.forEach(grade => {
@@ -9164,6 +11065,90 @@
             });
         });
 
+
+        // Flexible Prep Injection: place prep slots before the activity for bunks
+        // with prepConfig.timing==='flexible'. Staggered=per bunk, Synchronized=whole grade.
+        (function() {
+            var flexPrepMap = {};
+            todaysSpecials.forEach(function(s) {
+                var _c2 = getSpecialConfig(s.name, globalSettings);
+                var _p2 = _c2 && _c2.prepConfig;
+                if (_p2 && _p2.timing === 'flexible' && (_c2.prepDuration || 0) > 0) {
+                    flexPrepMap[s.name] = { duration: _c2.prepDuration, location: _p2.location || null, sync: _p2.sync || 'staggered' };
+                }
+            });
+            if (!Object.keys(flexPrepMap).length) return;
+            var syncedDone = {};
+            allGrades.forEach(function(grade) {
+                var pbs = window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots;
+                if (!pbs) return;
+                var gradeBunks = getBunksForGrade(grade, divisions);
+                // Synchronized: find common slot for all grade bunks
+                Object.keys(flexPrepMap).forEach(function(actName) {
+                    var pi = flexPrepMap[actName];
+                    if (pi.sync !== 'synchronized') return;
+                    var key = grade + '||' + actName;
+                    if (syncedDone[key]) return;
+                    syncedDone[key] = true;
+                    var bunkStarts = {};
+                    gradeBunks.forEach(function(bunk) {
+                        var asgn = window.scheduleAssignments[String(bunk)];
+                        var arr = pbs[String(bunk)] || [];
+                        if (!asgn) return;
+                        for (var si = 0; si < asgn.length; si++) {
+                            if (asgn[si] && asgn[si]._activity === actName) { bunkStarts[bunk] = arr[si] ? arr[si].startMin : Infinity; break; }
+                        }
+                    });
+                    var affected = Object.keys(bunkStarts);
+                    if (!affected.length) return;
+                    var deadline = Math.min.apply(null, affected.map(function(b) { return bunkStarts[b]; }));
+                    var refArr = pbs[String(affected[0])] || [];
+                    var bestSi = -1;
+                    for (var si2 = refArr.length - 1; si2 >= 0; si2--) {
+                        var slot2 = refArr[si2];
+                        if (!slot2 || slot2.endMin > deadline) continue;
+                        if ((slot2.endMin - slot2.startMin) < pi.duration) continue;
+                        if (affected.every(function(b) { return !window.scheduleAssignments[String(b)][si2]; })) { bestSi = si2; break; }
+                    }
+                    if (bestSi < 0) { log('[flexPrep] no common slot for sync ' + actName + ' grade ' + grade); return; }
+                    affected.forEach(function(bunk) {
+                        var sl3 = pbs[String(bunk)] && pbs[String(bunk)][bestSi];
+                        if (!sl3) return;
+                        window.scheduleAssignments[String(bunk)][bestSi] = { field: pi.location || null, sport: null, _activity: actName + ' (Prep)', _isPrep: true, _prepFor: actName, _fixed: true, _bunkOverride: true, _activityLocked: true, _autoSpecial: true, _autoMode: true, continuation: false, _startMin: sl3.startMin, _endMin: sl3.endMin };
+                        if (pi.location && window.AutoFieldLocks) window.AutoFieldLocks.lockField(pi.location, sl3.startMin, sl3.endMin, grade, actName + ' Prep', 'auto_prep');
+                    });
+                    log('[flexPrep] synced ' + actName + ' prep at slot ' + bestSi + ' for ' + affected.length + ' bunks in ' + grade);
+                });
+                // Staggered: per-bunk, closest free slot before the activity
+                gradeBunks.forEach(function(bunk) {
+                    var asgn = window.scheduleAssignments[String(bunk)];
+                    var arr = pbs[String(bunk)] || [];
+                    if (!asgn) return;
+                    Object.keys(flexPrepMap).forEach(function(actName) {
+                        var pi = flexPrepMap[actName];
+                        if (pi.sync !== 'staggered') return;
+                        var actIdx = -1, actStart = Infinity;
+                        for (var si4 = 0; si4 < asgn.length; si4++) {
+                            if (asgn[si4] && asgn[si4]._activity === actName) { actIdx = si4; actStart = arr[si4] ? arr[si4].startMin : Infinity; break; }
+                        }
+                        if (actIdx < 0) return;
+                        var bestSi2 = -1;
+                        for (var si5 = actIdx - 1; si5 >= 0; si5--) {
+                            var sl4 = arr[si5];
+                            if (!sl4 || sl4.endMin > actStart) continue;
+                            if ((sl4.endMin - sl4.startMin) < pi.duration) continue;
+                            if (!asgn[si5]) { bestSi2 = si5; break; }
+                        }
+                        if (bestSi2 < 0) { log('[flexPrep] no slot for staggered ' + actName + ' prep bunk ' + bunk); return; }
+                        var sl5 = arr[bestSi2];
+                        asgn[bestSi2] = { field: pi.location || null, sport: null, _activity: actName + ' (Prep)', _isPrep: true, _prepFor: actName, _fixed: true, _bunkOverride: true, _activityLocked: true, _autoSpecial: true, _autoMode: true, continuation: false, _startMin: sl5.startMin, _endMin: sl5.endMin };
+                        if (pi.location && window.AutoFieldLocks) window.AutoFieldLocks.lockField(pi.location, sl5.startMin, sl5.endMin, grade, actName + ' Prep', 'auto_prep');
+                        log('[flexPrep] staggered ' + actName + ' prep bunk ' + bunk + ' slot ' + bestSi2);
+                    });
+                });
+            });
+        })();
+
         // Write rotation event blocks (camp-wide pass-through activities)
         let rotationEventWriteCount = 0;
         allGrades.forEach(grade => {
@@ -9171,7 +11156,7 @@
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
-                (bunkTimelines[bunk] || []).filter(b => b._source === 'rotation_event').forEach(block => {
+                (bunkTimelines[bunk] || []).filter(b => b && b._rotationEventId).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1) return;
                    window.scheduleAssignments[String(bunk)][idx] = {
@@ -9386,7 +11371,7 @@
                     const _slotDur = block.endMin - block.startMin;
                     const _slotEvent = block.event && block.event !== 'General Activity Slot'
                         ? block.event
-                        : (pickFillActivity(_slotDur, grade) || 'Free');
+                        : (pickFillActivity(_slotDur, grade, bunk) || 'Free');
                     schedulableSlotBlocks.push({
                         divName: grade, bunk: String(bunk),
                         event: _slotEvent, type: 'slot',
@@ -9851,13 +11836,14 @@
                 const sw = f.sharableWith || {};
                 let type = sw.type || 'not_sharable';
                 const divs = Array.isArray(sw.divisions) ? sw.divisions : [];
-                // Normalize orphaned types
+                // Normalize orphaned types (cross_division is preserved)
                 if (type === 'custom' && divs.length === 0) type = 'same_division';
                 if (type === 'all') type = 'same_division';
                 _csweepFieldMap.set(f.name.toLowerCase().trim(), {
                     type,
                     capacity: parseInt(sw.capacity) || (type === 'not_sharable' ? 1 : 2),
-                    divisions: divs
+                    divisions: divs,
+                    allowedPairs: sw.allowedPairs || {}
                 });
             });
 
@@ -9934,6 +11920,9 @@
                         } else {
                             if (overlapping.some(o => o.grade !== u.grade)) violation = true;
                         }
+                    }
+                    if (!violation && shareType === 'cross_division') {
+                        if (!isCrossDivAllowed(u.grade, overlapping.map(o => o.grade), fieldSharing.allowedPairs)) violation = true;
                     }
                     if (violation) {
                         console.log('[4.5-VIOLATION] ' + fieldNorm + ': bunk ' + u.bunk + ' (' + u.grade + ') @ ' + u.startMin + '-' + u.endMin +
@@ -10054,6 +12043,7 @@
                 var _perfFields = _perfGS.app1?.fields || _perfGS.fields || [];
                 var fieldCap = 1;
                 var fieldShareType = 'not_sharable';
+                var fieldAllowedPairs = {};
                 for (var fi = 0; fi < _perfFields.length; fi++) {
                     var pf = _perfFields[fi];
                     if (!pf || !pf.name) continue;
@@ -10061,6 +12051,7 @@
                         var sw = pf.sharableWith || {};
                         fieldShareType = sw.type || 'not_sharable';
                         fieldCap = parseInt(sw.capacity) || (fieldShareType === 'not_sharable' ? 1 : 2);
+                        fieldAllowedPairs = sw.allowedPairs || {};
                         break;
                     }
                 }
@@ -10087,6 +12078,10 @@
                             // Cross-grade check: not_sharable and same_division block cross-grade sharing
                             if (fieldShareType === 'not_sharable') return false;
                             if (fieldShareType === 'same_division' && og !== ownerGrade) return false;
+                            if (fieldShareType === 'cross_division') {
+                                var pk = [ownerGrade, og].sort().join('|');
+                                if ((fieldAllowedPairs || {})[pk] !== true) return false;
+                            }
                             conflictCount++;
                             if (conflictCount + 1 > fieldCap) return false;
                         }
@@ -10755,6 +12750,8 @@
                 console.log('  ' + minutesToTimeLabel(t) + ': ' + doing + '  [' + onFields + '/' + total + ' on fields]');
             }
         };
+
+        try { window.AutoSegmentModel?.rebuildFromAssignments(); } catch (_e) { warn('Segment rebuild failed: ' + _e.message); }
 
         return { success: true, warnings, elapsed, blocksScheduled: solverBlocks.length, specialBlocksLocked: specialWriteCount };
     };

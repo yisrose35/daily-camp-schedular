@@ -341,7 +341,7 @@ function createDefaultSpecialActivity(name) {
         timeRules: [],
         maxUsage: null,
         maxUsagePeriod: 'half',
-        frequencyWeeks: 0,
+        frequencyDays: 0,
         rainyDayExclusive: false,
         rainyDayOnly: false,
         prepDuration: 0,
@@ -932,7 +932,7 @@ function renderSpecialConfig(container, fac) {
         const saBody = document.createElement("div");
         saBody.style.cssText = "padding:12px;";
 
-        saBody.appendChild(section("Grade Access", summarySpecialAccess(saData),
+        saBody.appendChild(section("Access", summarySpecialAccess(saData),
             () => renderSpecialAccess(saData)));
 
         saBody.appendChild(section("Duration", summarySpecialDuration(saData),
@@ -1627,8 +1627,19 @@ function renderComboSettings(fieldItem) {
 // -- Summaries --
 function summarySpecialAccess(s) {
     if (!s.limitUsage?.enabled) return "Open to all grades";
-    const count = Object.keys(s.limitUsage.divisions || {}).length;
-    return count === 0 ? "Restricted (none selected)" : `${count} grade${count !== 1 ? 's' : ''} allowed`;
+    const divs = s.limitUsage.divisions || {};
+    const gradeKeys = Object.keys(divs);
+    if (gradeKeys.length === 0) return "Restricted (none selected)";
+    const parts = [];
+    let totalBunks = 0, hasBunkFilter = false;
+    gradeKeys.forEach(g => {
+        const list = Array.isArray(divs[g]) ? divs[g] : [];
+        if (list.length === 0) parts.push(g);
+        else { parts.push(g + ' (' + list.length + ')'); totalBunks += list.length; hasBunkFilter = true; }
+    });
+    return hasBunkFilter
+        ? parts.join(', ')
+        : `${gradeKeys.length} grade${gradeKeys.length !== 1 ? 's' : ''} allowed`;
 }
 function summarySpecialTime(s) { return s.timeRules?.length ? `${s.timeRules.length} rule(s)` : "Available all day"; }
 function summarySpecialDays(s) {
@@ -1639,32 +1650,65 @@ function summarySpecialWeather(s) {
     if (s.rainyDayExclusive || s.rainyDayOnly) return "Rainy day only";
     return s.isIndoor ? "Indoor (Rain OK)" : "Outdoor";
 }
-function summarySpecialSharing(s) {
-    const rules = s.sharableWith;
-    if (!rules || rules.type === 'not_sharable') return "No sharing (1 bunk)";
-    return `Up to ${parseInt(rules.capacity) || 2} bunks`;
-}
 function summarySpecialSchedulingMode(s) {
     if (s.fullGrade) return "Full Grade — entire grade together";
     const rules = s.sharableWith;
-    if (!rules || rules.type === 'not_sharable') return "Individual bunks — 1 at a time";
-    return `Individual bunks — up to ${parseInt(rules.capacity) || 2} at once`;
+    if (!rules || rules.type === 'not_sharable') return "Individual bunks — no sharing";
+    const pc = Object.keys(rules.allowedPairs || {}).filter(k => rules.allowedPairs[k]).length;
+    const cap = parseInt(rules.capacity) || 2;
+    return 'Individual bunks — sharing on' + (pc > 0 ? ', ' + pc + ' pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
 }
 function summarySpecialUsage(s) {
-    if (!s.maxUsage) return "No limit";
-    return `Max ${s.maxUsage} per ${s.maxUsagePeriod || 'half'}`;
+    var parts = [];
+    var m = parseInt(s.maxUsage) || 0;
+    if (m > 0) {
+        var period = s.maxUsagePeriod || 'half';
+        var plabels = { half: 'per half', week: 'per week', '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks' };
+        parts.push('Max ' + m + ' ' + (plabels[period] || 'per half'));
+        var maxGradeCount = Object.keys(s.maxUsagePerGrade || {}).filter(function(k) { return (s.maxUsagePerGrade[k] || 0) > 0; }).length;
+        if (maxGradeCount > 0) parts.push(maxGradeCount + ' max-grade override' + (maxGradeCount > 1 ? 's' : ''));
+    }
+    var minF = parseInt(s.minFrequency) || 0;
+    if (minF > 0) {
+        parts.push('Min ' + minF + 'x ' + (s.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+        var minGradeCount = Object.keys(s.minFrequencyPerGrade || {}).filter(function(k) { return (s.minFrequencyPerGrade[k] || 0) > 0; }).length;
+        if (minGradeCount > 0) parts.push(minGradeCount + ' min-grade override' + (minGradeCount > 1 ? 's' : ''));
+    }
+    var days = parseInt(s.frequencyDays || s.frequencyWeeks || 0, 10);
+    if (days > 0) parts.push('Min ' + days + 'd between');
+    if (s.rotationCohort && s.rotationCohort.enabled && Array.isArray(s.rotationCohort.grades) && s.rotationCohort.grades.length > 0) {
+        parts.push('Equal visits across ' + s.rotationCohort.grades.join(', '));
+    }
+    return parts.length > 0 ? parts.join(' • ') : 'No limit';
 }
 function summarySpecialDuration(s) {
-    const d = parseInt(s.duration) || 0;
-    if (d <= 0) return "Uses block size";
+    const durations = (Array.isArray(s.durations) ? s.durations : [])
+        .map(d => parseInt(d, 10)).filter(d => d > 0).sort((a, b) => a - b);
+    if (durations.length === 0) {
+        const d = parseInt(s.duration) || 0;
+        if (d <= 0) return "Uses block size";
+        const prep = parseInt(s.prepDuration) || 0;
+        if (prep > 0) return `${d} min (+${prep} prep = ${d + prep} total)`;
+        return `${d} minutes`;
+    }
+    const label = durations.length === 1
+        ? `${durations[0]} minutes`
+        : `${durations.join(' or ')} minutes`;
     const prep = parseInt(s.prepDuration) || 0;
-    if (prep > 0) return `${d} min (+${prep} prep = ${d + prep} total)`;
-    return `${d} minutes`;
+    return prep > 0 ? `${label} (+${prep} prep)` : label;
 }
-function summarySpecialPrep(s) { return s.prepDuration ? `${s.prepDuration} min` : "None"; }
+function summarySpecialPrep(s) {
+    if (!(s.prepDuration > 0)) return "None";
+    var timing = (s.prepConfig && s.prepConfig.timing === 'flexible') ? 'spread out' : 'back to back';
+    var sync = (s.prepConfig && s.prepConfig.sync === 'synchronized') ? ', synced' : '';
+    var loc = (s.prepConfig && s.prepConfig.location) ? ', @' + s.prepConfig.location : '';
+    return s.prepDuration + "min (" + timing + sync + loc + ")";
+}
 function summarySpecialMultiPart(s) {
     if (!s.multiPart?.enabled) return "Single session";
-    return `${s.multiPart.totalParts} parts, ${s.multiPart.daysBetween} days apart`;
+    var _hasN = Array.isArray(s.multiPart.parts) && s.multiPart.parts.some(function(p){return p.name;});
+    var _nStr = _hasN ? " (" + s.multiPart.parts.map(function(p,i){return p.name||('Part '+(i+1));}).join(', ') + ")" : "";
+    return s.multiPart.totalParts + " parts, " + s.multiPart.daysBetween + "d apart" + _nStr;
 }
 
 function saveSpecialData(saData) {
@@ -1704,7 +1748,7 @@ function saveSpecialData(saData) {
     saveFacilitiesMetadata();
 }
 
-// -- Grade Access --
+// -- Access (per-grade with optional per-bunk filter) --
 function renderSpecialAccess(saData) {
     const container = document.createElement("div");
     const updateSummary = () => {
@@ -1714,6 +1758,9 @@ function renderSpecialAccess(saData) {
     const renderContent = () => {
         container.innerHTML = "";
         const rules = saData.limitUsage || { enabled: false, divisions: {}, priorityList: [] };
+        if (!rules.divisions || typeof rules.divisions !== 'object' || Array.isArray(rules.divisions)) {
+            rules.divisions = {};
+        }
 
         const modeWrap = document.createElement("div");
         modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:16px;";
@@ -1723,7 +1770,7 @@ function renderSpecialAccess(saData) {
         btnAll.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${!rules.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${!rules.enabled ? '#e6f4f7' : '#fff'}; font-weight:${!rules.enabled ? '600' : '400'};`;
 
         const btnRes = document.createElement("button");
-        btnRes.textContent = "Specific Grades";
+        btnRes.textContent = "Specific Grades / Bunks";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${rules.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rules.enabled ? '#e6f4f7' : '#fff'}; font-weight:${rules.enabled ? '600' : '400'};`;
 
         btnAll.onclick = () => { rules.enabled = false; saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
@@ -1732,26 +1779,93 @@ function renderSpecialAccess(saData) {
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
-        if (rules.enabled) {
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
-            const chipWrap = document.createElement("div");
-            chipWrap.style.cssText = "display:flex; flex-wrap:wrap; gap:4px;";
-
-            allDivs.forEach(divName => {
-                const isAllowed = !!rules.divisions[divName];
-                const c = document.createElement("span");
-                c.className = "chip " + (isAllowed ? "active" : "inactive");
-                c.textContent = divName;
-                c.onclick = () => {
-                    if (isAllowed) delete rules.divisions[divName];
-                    else rules.divisions[divName] = [];
-                    saData.limitUsage = rules;
-                    saveSpecialData(saData); renderContent(); updateSummary();
-                };
-                chipWrap.appendChild(c);
-            });
-            container.appendChild(chipWrap);
+        if (!rules.enabled) {
+            renderContent._done = true;
+            return;
         }
+
+        const divisions = window.loadGlobalSettings?.()?.divisions || {};
+        const allDivs = Object.keys(divisions);
+
+        const help = document.createElement("div");
+        help.style.cssText = "font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;";
+        help.innerHTML = 'Click a <strong>grade</strong> to allow/disallow it. Once a grade is allowed, click "All bunks" to switch to per-bunk picking and choose specific bunks (e.g., for a teacher-tied class).';
+        container.appendChild(help);
+
+        allDivs.forEach(divName => {
+            const isAllowed = rules.divisions[divName] !== undefined;
+            const bunkList = Array.isArray(rules.divisions[divName]) ? rules.divisions[divName] : [];
+            const allBunksInGrade = (divisions[divName]?.bunks || []).map(String);
+
+            const gradeRow = document.createElement('div');
+            gradeRow.style.cssText = 'border:1px solid #E5E7EB; border-radius:8px; padding:8px 10px; margin-bottom:6px; background:' +
+                (isAllowed ? '#f0f9fb' : '#fff') + ';';
+
+            // Grade header (chip + bunk-mode toggle)
+            const headRow = document.createElement('div');
+            headRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
+
+            const gChip = document.createElement('span');
+            gChip.className = 'chip ' + (isAllowed ? 'active' : 'inactive');
+            gChip.textContent = divName;
+            gChip.style.cursor = 'pointer';
+            gChip.onclick = () => {
+                if (isAllowed) delete rules.divisions[divName];
+                else rules.divisions[divName] = [];
+                saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+            };
+            headRow.appendChild(gChip);
+
+            if (isAllowed && allBunksInGrade.length > 0) {
+                const isAllBunks = bunkList.length === 0;
+                const modeBtn = document.createElement('button');
+                modeBtn.textContent = isAllBunks ? 'All bunks ▾' : `${bunkList.length} of ${allBunksInGrade.length} bunks ▾`;
+                modeBtn.style.cssText = 'background:#fff; color:#0F5F6E; border:1px solid #B2DCE6; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:0.78rem; font-weight:500;';
+                modeBtn.onclick = () => {
+                    if (isAllBunks) {
+                        // Switch to per-bunk: start with all bunks selected
+                        rules.divisions[divName] = allBunksInGrade.slice();
+                    } else {
+                        // Switch back to "all bunks" mode
+                        rules.divisions[divName] = [];
+                    }
+                    saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                };
+                headRow.appendChild(modeBtn);
+            }
+
+            gradeRow.appendChild(headRow);
+
+            // Bunk chips when in per-bunk mode
+            if (isAllowed && bunkList.length > 0 && allBunksInGrade.length > 0) {
+                const bunkWrap = document.createElement('div');
+                bunkWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; padding-top:8px; border-top:1px dashed #CBD5E1;';
+                allBunksInGrade.forEach(bunkName => {
+                    const isOn = bunkList.includes(bunkName);
+                    const bChip = document.createElement('span');
+                    bChip.className = 'chip ' + (isOn ? 'active' : 'inactive');
+                    bChip.textContent = bunkName;
+                    bChip.style.cursor = 'pointer';
+                    bChip.style.fontSize = '0.75rem';
+                    bChip.onclick = () => {
+                        if (isOn) rules.divisions[divName] = bunkList.filter(b => b !== bunkName);
+                        else rules.divisions[divName] = bunkList.concat([bunkName]);
+                        saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                    };
+                    bunkWrap.appendChild(bChip);
+                });
+                gradeRow.appendChild(bunkWrap);
+
+                if (rules.divisions[divName].length === 0) {
+                    const warn = document.createElement('div');
+                    warn.style.cssText = 'font-size:0.72rem; color:#D97706; margin-top:6px;';
+                    warn.textContent = 'No bunks selected — no one in this grade can use this activity.';
+                    gradeRow.appendChild(warn);
+                }
+            }
+
+            container.appendChild(gradeRow);
+        });
     };
     renderContent();
     return container;
@@ -1871,57 +1985,6 @@ function renderSpecialWeather(saData) {
     return container;
 }
 
-// -- Sharing --
-function renderSpecialSharing(saData) {
-    const container = document.createElement("div");
-    const updateSummary = () => {
-        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
-        if (el) el.textContent = summarySpecialSharing(saData);
-    };
-
-    const renderContent = () => {
-        container.innerHTML = "";
-        const rules = saData.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
-        const isSharable = rules.type !== 'not_sharable';
-
-        const toggleRow = document.createElement("div");
-        toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:12px;";
-
-        const tog = document.createElement("label"); tog.className = "switch";
-        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isSharable;
-        cb.onchange = () => {
-            if (cb.checked) { rules.type = 'same_division'; rules.capacity = Math.max(2, rules.capacity || 2); }
-            else { rules.type = 'not_sharable'; rules.capacity = 1; }
-            saData.sharableWith = rules;
-            saveSpecialData(saData); renderContent(); updateSummary();
-        };
-        const sl = document.createElement("span"); sl.className = "slider";
-        tog.appendChild(cb); tog.appendChild(sl);
-
-        toggleRow.appendChild(tog);
-        toggleRow.innerHTML += '<span style="font-weight:500; font-size:0.9rem;">Allow Sharing</span>';
-        container.appendChild(toggleRow);
-
-        if (isSharable) {
-            const capRow = document.createElement("div");
-            capRow.style.cssText = "display:flex; align-items:center; gap:8px; padding-left:12px; border-left:2px solid #7C3AED;";
-            capRow.innerHTML = '<span style="font-size:0.85rem;">Max bunks:</span>';
-            const capIn = document.createElement("input");
-            capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = rules.capacity || 2;
-            capIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
-            capIn.onchange = () => {
-                rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
-                saData.sharableWith = rules;
-                saveSpecialData(saData); updateSummary();
-            };
-            capRow.appendChild(capIn);
-            container.appendChild(capRow);
-        }
-    };
-    renderContent();
-    return container;
-}
-
 // -- Scheduling Mode (Full Grade vs Individual + Sharing) --
 function renderSpecialSchedulingMode(saData) {
     const container = document.createElement("div");
@@ -1930,26 +1993,24 @@ function renderSpecialSchedulingMode(saData) {
         if (el) el.textContent = summarySpecialSchedulingMode(saData);
     };
 
+    function pk(a, b) { return [a, b].sort().join('|'); }
+
     const renderContent = () => {
         container.innerHTML = "";
 
-        // Top-level toggle: Full Grade vs Individual Bunks
+        // ── Step 1: Full Grade vs Individual ─────────────────────
         const modeWrap = document.createElement("div");
         modeWrap.style.cssText = "display:flex; gap:0; margin-bottom:16px; border-radius:10px; overflow:hidden; border:1px solid #E5E7EB;";
 
         const btnFull = document.createElement("button");
         btnFull.innerHTML = '<strong>Full Grade</strong><span style="display:block;font-size:0.75rem;font-weight:400;margin-top:2px;opacity:0.8;">Entire grade together</span>';
         btnFull.style.cssText = 'flex:1; padding:12px 8px; border:none; cursor:pointer; text-align:center; font-size:0.85rem; transition:all 0.15s; line-height:1.3; '
-            + (saData.fullGrade
-                ? 'background:#0F5F6E; color:white;'
-                : 'background:#fff; color:#6B7280;');
+            + (saData.fullGrade ? 'background:#0F5F6E; color:white;' : 'background:#fff; color:#6B7280;');
 
         const btnIndiv = document.createElement("button");
         btnIndiv.innerHTML = '<strong>Individual Bunks</strong><span style="display:block;font-size:0.75rem;font-weight:400;margin-top:2px;opacity:0.8;">Assigned per bunk</span>';
         btnIndiv.style.cssText = 'flex:1; padding:12px 8px; border:none; cursor:pointer; text-align:center; font-size:0.85rem; transition:all 0.15s; line-height:1.3; border-left:1px solid #E5E7EB; '
-            + (!saData.fullGrade
-                ? 'background:#0F5F6E; color:white;'
-                : 'background:#fff; color:#6B7280;');
+            + (!saData.fullGrade ? 'background:#0F5F6E; color:white;' : 'background:#fff; color:#6B7280;');
 
         btnFull.onclick = () => { saData.fullGrade = true; saveSpecialData(saData); renderContent(); updateSummary(); };
         btnIndiv.onclick = () => { saData.fullGrade = false; saveSpecialData(saData); renderContent(); updateSummary(); };
@@ -1971,84 +2032,150 @@ function renderSpecialSchedulingMode(saData) {
             return;
         }
 
-        // Individual bunks — show sharing controls
-        const rules = saData.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
+        // ── Step 2: Allow sharing? ────────────────────────────────
+        const rules = saData.sharableWith || { type: 'not_sharable', capacity: 2 };
+        if (!rules.allowedPairs || typeof rules.allowedPairs !== 'object') rules.allowedPairs = {};
+
+        // Silently migrate same_division → cross_division with self-pairs populated
+        if (rules.type === 'same_division') {
+            rules.type = 'cross_division';
+            const migDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            migDivs.forEach(g => { rules.allowedPairs[pk(g, g)] = true; });
+            saData.sharableWith = rules;
+            saveSpecialData(saData);
+        }
+
+        // Default same-grade sharing on for existing cross_division data with no pairs set
+        if (rules.type === 'cross_division' && Object.keys(rules.allowedPairs).length === 0) {
+            const defDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            defDivs.forEach(g => { rules.allowedPairs[pk(g, g)] = true; });
+            saveSpecialData(saData);
+        }
+
+        saData.sharableWith = rules;
         const isSharable = rules.type !== 'not_sharable';
 
-        const sharingLabel = document.createElement("div");
-        sharingLabel.style.cssText = "font-size:0.85rem; font-weight:500; color:#374151; margin-bottom:10px;";
-        sharingLabel.textContent = "Can multiple bunks do this at the same time?";
-        container.appendChild(sharingLabel);
+        const sharingHdr = document.createElement("div");
+        sharingHdr.style.cssText = "font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:8px;";
+        sharingHdr.textContent = "Allow sharing?";
+        container.appendChild(sharingHdr);
 
-        const toggleRow = document.createElement("div");
-        toggleRow.style.cssText = "display:flex; gap:0; margin-bottom:16px; border-radius:8px; overflow:hidden; border:1px solid #E5E7EB;";
+        const shareToggle = document.createElement("div");
+        shareToggle.style.cssText = "display:flex; gap:0; margin-bottom:14px; border-radius:8px; overflow:hidden; border:1px solid #E5E7EB;";
 
         const btnNo = document.createElement("button");
         btnNo.textContent = "No — 1 bunk only";
-        btnNo.style.cssText = 'flex:1; padding:10px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; '
+        btnNo.style.cssText = 'flex:1; padding:9px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; '
             + (!isSharable ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#6B7280;');
 
         const btnYes = document.createElement("button");
-        btnYes.textContent = "Yes — multiple bunks";
-        btnYes.style.cssText = 'flex:1; padding:10px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; border-left:1px solid #E5E7EB; '
+        btnYes.textContent = "Yes — allow sharing";
+        btnYes.style.cssText = 'flex:1; padding:9px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; border-left:1px solid #E5E7EB; '
             + (isSharable ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#6B7280;');
 
         btnNo.onclick = () => {
-            rules.type = 'not_sharable'; rules.capacity = 1; rules.divisions = [];
+            rules.type = 'not_sharable'; rules.capacity = 1; rules.allowedPairs = {};
             saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
         btnYes.onclick = () => {
-            rules.type = 'same_division'; rules.capacity = Math.max(2, rules.capacity || 2);
+            rules.type = 'cross_division';
+            if (!rules.capacity || rules.capacity < 2) rules.capacity = 2;
+            // Default: every grade can share with itself
+            const defDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            defDivs.forEach(g => { if (rules.allowedPairs[pk(g, g)] === undefined) rules.allowedPairs[pk(g, g)] = true; });
             saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
 
-        toggleRow.appendChild(btnNo);
-        toggleRow.appendChild(btnYes);
-        container.appendChild(toggleRow);
+        shareToggle.appendChild(btnNo);
+        shareToggle.appendChild(btnYes);
+        container.appendChild(shareToggle);
 
-        if (isSharable) {
-            const capBox = document.createElement("div");
-            capBox.style.cssText = "padding:14px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px;";
-
-            const capLabel = document.createElement("div");
-            capLabel.style.cssText = "font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:10px;";
-            capLabel.textContent = "How many bunks can do this at the same time?";
-            capBox.appendChild(capLabel);
-
-            const capRow = document.createElement("div");
-            capRow.style.cssText = "display:flex; align-items:center; gap:12px; margin-bottom:10px;";
-
-            const capIn = document.createElement("input");
-            capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = rules.capacity || 2;
-            capIn.style.cssText = "width:64px; padding:8px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:1rem; font-weight:600;";
-
-            const capNote = document.createElement("div");
-            capNote.style.cssText = "color:#6B7280; font-size:0.8rem; line-height:1.5;";
-            capNote.innerHTML = 'Up to <strong>' + (rules.capacity || 2) + '</strong> bunks from the <strong>same grade</strong> can be scheduled here at the same time. Bunks from different grades cannot share.';
-
-            capIn.onchange = () => {
-                rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
-                capIn.value = rules.capacity;
-                saData.sharableWith = rules;
-                saveSpecialData(saData); updateSummary();
-                capNote.innerHTML = 'Up to <strong>' + rules.capacity + '</strong> bunks from the <strong>same grade</strong> can be scheduled here at the same time. Bunks from different grades cannot share.';
-            };
-
-            const capSuffix = document.createElement("span");
-            capSuffix.style.cssText = "font-size:0.85rem; color:#6B7280;";
-            capSuffix.textContent = "bunks at once";
-
-            capRow.appendChild(capIn);
-            capRow.appendChild(capSuffix);
-            capBox.appendChild(capRow);
-            capBox.appendChild(capNote);
-            container.appendChild(capBox);
-        } else {
-            const noteBox = document.createElement("div");
-            noteBox.style.cssText = "color:#6B7280; font-size:0.8rem; padding:12px; background:#F9FAFB; border-radius:8px; border:1px solid #E5E7EB; line-height:1.5;";
-            noteBox.textContent = "Only 1 bunk can be assigned to this activity at a time. Other bunks will be scheduled for something else.";
-            container.appendChild(noteBox);
+        if (!isSharable) {
+            const nNote = document.createElement('div');
+            nNote.style.cssText = 'color:#6B7280; font-size:0.82rem; padding:10px; background:#F9FAFB; border-radius:8px;';
+            nNote.textContent = 'Only 1 bunk will be assigned to this activity at a time.';
+            container.appendChild(nNote);
+            return;
         }
+
+        // ── Step 3: Capacity ──────────────────────────────────────
+        const capWrap = document.createElement('div');
+        capWrap.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:16px;';
+        const capLbl = document.createElement('span');
+        capLbl.style.cssText = 'font-size:0.84rem; color:#374151;';
+        capLbl.textContent = 'Max bunks at once:';
+        const capIn = document.createElement('input');
+        capIn.type = 'number'; capIn.min = '2'; capIn.max = '20'; capIn.value = rules.capacity || 2;
+        capIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.9rem; font-weight:600;';
+        capIn.onchange = () => {
+            rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
+            capIn.value = rules.capacity;
+            saData.sharableWith = rules; saveSpecialData(saData); updateSummary();
+        };
+        capWrap.appendChild(capLbl);
+        capWrap.appendChild(capIn);
+        container.appendChild(capWrap);
+
+        // ── Step 4: Grade pairing ─────────────────────────────────
+        const allDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+
+        if (allDivs.length < 2) {
+            const noGr = document.createElement('div');
+            noGr.style.cssText = 'font-size:0.82rem; color:#6B7280; padding:10px; background:#F9FAFB; border-radius:8px;';
+            noGr.textContent = 'No grades configured yet.';
+            container.appendChild(noGr);
+            return;
+        }
+
+        const pairHdr = document.createElement('div');
+        pairHdr.style.cssText = 'font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:10px;';
+        pairHdr.textContent = 'Which grades can share with each other?';
+        container.appendChild(pairHdr);
+
+        const gridWrap = document.createElement('div');
+        gridWrap.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
+
+        allDivs.forEach(rowGrade => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
+
+            const lbl = document.createElement('span');
+            lbl.style.cssText = 'font-size:0.82rem; color:#374151; font-weight:600; min-width:64px; flex-shrink:0;';
+            lbl.textContent = rowGrade + ':';
+            row.appendChild(lbl);
+
+            // Other grades first, then (same grade) at end
+            [...allDivs.filter(g => g !== rowGrade), rowGrade].forEach(colGrade => {
+                const isSame = colGrade === rowGrade;
+                const key = pk(rowGrade, colGrade);
+                const isOn = rules.allowedPairs[key] === true;
+
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.textContent = isSame ? '(same grade)' : colGrade;
+                chip.style.cssText = 'padding:4px 10px; border-radius:20px; font-size:0.8rem; cursor:pointer; transition:all 0.12s; border:1px solid '
+                    + (isOn ? '#0F5F6E' : '#D1D5DB') + '; background:'
+                    + (isOn ? '#e6f4f7' : '#fff') + '; color:'
+                    + (isOn ? '#0F5F6E' : '#6B7280') + '; font-weight:' + (isOn ? '600' : '400') + ';';
+                if (isSame) chip.style.cssText += 'font-style:italic;';
+
+                chip.onclick = () => {
+                    if (rules.allowedPairs[key]) delete rules.allowedPairs[key];
+                    else rules.allowedPairs[key] = true;
+                    saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                };
+                row.appendChild(chip);
+            });
+
+            gridWrap.appendChild(row);
+        });
+
+        container.appendChild(gridWrap);
+
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:0.75rem; color:#9CA3AF; margin-top:10px; line-height:1.5;';
+        hint.textContent = 'Sharing is always mutual — if Grade 1 can share with Grade 2, Grade 2 automatically can share with Grade 1.';
+        container.appendChild(hint);
     };
 
     renderContent();
@@ -2057,53 +2184,346 @@ function renderSpecialSchedulingMode(saData) {
 
 // -- Usage & Frequency --
 function renderSpecialUsage(saData) {
-    const container = document.createElement("div");
-    const updateSummary = () => {
-        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+    var container = document.createElement('div');
+
+    if (saData.frequencyDays == null && saData.frequencyWeeks != null) {
+        saData.frequencyDays = parseInt(saData.frequencyWeeks, 10) || 0;
+    }
+    if (!saData.rotationCohort || typeof saData.rotationCohort !== 'object') {
+        saData.rotationCohort = { enabled: false, grades: [] };
+    }
+    if (!saData.maxUsagePerGrade || typeof saData.maxUsagePerGrade !== 'object') saData.maxUsagePerGrade = {};
+    if (!saData.minFrequencyPerGrade || typeof saData.minFrequencyPerGrade !== 'object') saData.minFrequencyPerGrade = {};
+
+    var updateSummary = function() {
+        var el = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
         if (el) el.textContent = summarySpecialUsage(saData);
     };
 
-    container.innerHTML = `
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
-            <span style="font-size:0.85rem;">Max usage per</span>
-            <select id="fac-sa-usage-period" style="border-radius:6px; border:1px solid #D1D5DB; padding:4px;">
-                <option value="half" ${saData.maxUsagePeriod === 'half' ? 'selected' : ''}>Half Summer</option>
-                <option value="week" ${saData.maxUsagePeriod === 'week' ? 'selected' : ''}>Week</option>
-            </select>
-            <span style="font-size:0.85rem;">:</span>
-            <input type="number" id="fac-sa-max-usage" min="0" placeholder="No limit" value="${saData.maxUsage || ''}"
-                style="width:70px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-        </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-size:0.85rem;">Min frequency (weeks between):</span>
-            <input type="number" id="fac-sa-freq" min="0" value="${saData.frequencyWeeks || 0}"
-                style="width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-        </div>`;
+    var renderContent = function() {
+        container.innerHTML = '';
 
-    const bindInputs = () => {
-        const maxInput = container.querySelector('#fac-sa-max-usage');
-        const periodSel = container.querySelector('#fac-sa-usage-period');
-        const freqInput = container.querySelector('#fac-sa-freq');
+        // ── A: MAXIMUM (CEILING) ──────────────────────────────────────────
+        var ceilLabel = document.createElement('div');
+        ceilLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        ceilLabel.textContent = 'Maximum (ceiling)';
+        container.appendChild(ceilLabel);
 
-        if (maxInput) maxInput.onchange = () => {
-            const v = maxInput.value.trim();
-            saData.maxUsage = v ? parseInt(v) || null : null;
+        var ceilEnabled = (parseInt(saData.maxUsage) || 0) > 0;
+
+        var ceilTogRow = document.createElement('div');
+        ceilTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (ceilEnabled ? '12px' : '4px') + ';';
+        var ceilTog = document.createElement('label'); ceilTog.className = 'switch';
+        var ceilCb = document.createElement('input'); ceilCb.type = 'checkbox'; ceilCb.checked = ceilEnabled;
+        var ceilSl = document.createElement('span'); ceilSl.className = 'slider';
+        ceilTog.appendChild(ceilCb); ceilTog.appendChild(ceilSl);
+        var ceilLbl = document.createElement('span');
+        ceilLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        ceilLbl.textContent = 'Limit how many times a bunk can do this';
+        ceilTogRow.appendChild(ceilTog); ceilTogRow.appendChild(ceilLbl);
+        container.appendChild(ceilTogRow);
+        ceilCb.onchange = function() { saData.maxUsage = ceilCb.checked ? 1 : null; saveSpecialData(saData); renderContent(); updateSummary(); };
+
+        if (ceilEnabled) {
+            var ceilDetail = document.createElement('div');
+            ceilDetail.style.cssText = 'padding-left:12px; border-left:2px solid #147D91; margin-bottom:14px;';
+
+            var countRow = document.createElement('div');
+            countRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;';
+            var countLbl = document.createElement('span'); countLbl.style.cssText = 'font-size:0.85rem; color:#374151;'; countLbl.textContent = 'Max:';
+            var countIn = document.createElement('input');
+            countIn.type = 'number'; countIn.min = '1'; countIn.max = '99'; countIn.value = parseInt(saData.maxUsage) || 1;
+            countIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            countIn.onchange = function() { saData.maxUsage = Math.max(1, parseInt(countIn.value) || 1); saveSpecialData(saData); updateSummary(); };
+
+            var periodSel = document.createElement('select');
+            periodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'half', label:'per half' }, { value:'week', label:'per week' },
+             { value:'2weeks', label:'per 2 weeks' }, { value:'3weeks', label:'per 3 weeks' },
+             { value:'4weeks', label:'per 4 weeks' }].forEach(function(p) {
+                var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((saData.maxUsagePeriod || 'half') === p.value) opt.selected = true;
+                periodSel.appendChild(opt);
+            });
+            periodSel.onchange = function() { saData.maxUsagePeriod = periodSel.value; saveSpecialData(saData); updateSummary(); };
+            countRow.appendChild(countLbl); countRow.appendChild(countIn); countRow.appendChild(periodSel);
+            ceilDetail.appendChild(countRow);
+
+            // per-grade max toggle
+            var ceilPgTogRow = document.createElement('div');
+            ceilPgTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:10px 0 6px 0;';
+            var ceilPgTog = document.createElement('label'); ceilPgTog.className = 'switch';
+            var ceilPgCb = document.createElement('input'); ceilPgCb.type = 'checkbox';
+            var hasMaxGradeOverrides = Object.keys(saData.maxUsagePerGrade).length > 0;
+            ceilPgCb.checked = hasMaxGradeOverrides;
+            var ceilPgSl = document.createElement('span'); ceilPgSl.className = 'slider';
+            ceilPgTog.appendChild(ceilPgCb); ceilPgTog.appendChild(ceilPgSl);
+            var ceilPgLbl = document.createElement('span');
+            ceilPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            ceilPgLbl.textContent = 'Different max per grade';
+            ceilPgTogRow.appendChild(ceilPgTog); ceilPgTogRow.appendChild(ceilPgLbl);
+            ceilDetail.appendChild(ceilPgTogRow);
+
+            var ceilGradeGrid = document.createElement('div');
+            ceilGradeGrid.style.display = hasMaxGradeOverrides ? 'flex' : 'none';
+            ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            var allDivs = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            allDivs.forEach(function(div) {
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                var lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                var inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(saData.maxUsage) || 1);
+                var gv = saData.maxUsagePerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = (function(d) { return function() {
+                    var v = parseInt(inp.value);
+                    if (v > 0) saData.maxUsagePerGrade[d] = v;
+                    else delete saData.maxUsagePerGrade[d];
+                    saveSpecialData(saData); updateSummary();
+                }; })(div);
+                var clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = function() { clrBtn.style.color = '#9CA3AF'; };
+                clrBtn.onmouseout = function() { clrBtn.style.color = '#D1D5DB'; };
+                clrBtn.onclick = (function(d, i) { return function() { i.value = ''; delete saData.maxUsagePerGrade[d]; saveSpecialData(saData); updateSummary(); }; })(div, inp);
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                ceilGradeGrid.appendChild(row);
+            });
+            ceilPgCb.onchange = function() {
+                if (!ceilPgCb.checked) { saData.maxUsagePerGrade = {}; saveSpecialData(saData); updateSummary(); }
+                ceilGradeGrid.style.display = ceilPgCb.checked ? 'flex' : 'none';
+                ceilGradeGrid.style.flexDirection = 'column';
+                ceilGradeGrid.style.gap = '5px';
+                ceilGradeGrid.style.marginTop = '6px';
+            };
+            ceilDetail.appendChild(ceilGradeGrid);
+            container.appendChild(ceilDetail);
+        }
+
+        // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
+        var divider = document.createElement('div');
+        divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(divider);
+
+        var floorLabel = document.createElement('div');
+        floorLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        floorLabel.textContent = 'Minimum (floor)';
+        container.appendChild(floorLabel);
+
+        var minF = parseInt(saData.minFrequency) || 0;
+        var minEnabled = minF > 0;
+
+        var minTogRow = document.createElement('div');
+        minTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (minEnabled ? '12px' : '4px') + ';';
+        var minTog = document.createElement('label'); minTog.className = 'switch';
+        var minCb = document.createElement('input'); minCb.type = 'checkbox'; minCb.checked = minEnabled;
+        var minSl = document.createElement('span'); minSl.className = 'slider';
+        minTog.appendChild(minCb); minTog.appendChild(minSl);
+        var minLbl = document.createElement('span');
+        minLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        minLbl.textContent = 'Require a minimum frequency for every bunk';
+        minTogRow.appendChild(minTog); minTogRow.appendChild(minLbl);
+        container.appendChild(minTogRow);
+        minCb.onchange = function() { saData.minFrequency = minCb.checked ? 1 : null; saveSpecialData(saData); renderContent(); updateSummary(); };
+
+        if (minEnabled) {
+            var minDetail = document.createElement('div');
+            minDetail.style.cssText = 'padding-left:12px; border-left:2px solid #0ea5e9; margin-bottom:4px;';
+
+            var minRow = document.createElement('div');
+            minRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;';
+            var minAtLeast = document.createElement('span'); minAtLeast.style.cssText = 'font-size:0.85rem; color:#374151;'; minAtLeast.textContent = 'At least:';
+            var minIn = document.createElement('input');
+            minIn.type = 'number'; minIn.min = '1'; minIn.max = '14'; minIn.value = minF || 1;
+            minIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            var minSuffix = document.createElement('span');
+            minSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            minSuffix.textContent = 'time(s) per';
+            var minPeriodSel = document.createElement('select');
+            minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+                var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((saData.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
+                minPeriodSel.appendChild(opt);
+            });
+            minIn.onchange = function() { saData.minFrequency = Math.max(1, parseInt(minIn.value) || 1); saveSpecialData(saData); updateSummary(); };
+            minPeriodSel.onchange = function() { saData.minFrequencyPeriod = minPeriodSel.value; saveSpecialData(saData); updateSummary(); };
+            minRow.appendChild(minAtLeast); minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
+            minDetail.appendChild(minRow);
+
+            var minNote = document.createElement('div');
+            minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
+                (saData.minFrequency || 1) + 'x</strong> ' +
+                (saData.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+            minDetail.appendChild(minNote);
+
+            // per-grade min toggle
+            var minPgTogRow = document.createElement('div');
+            minPgTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            var minPgTog = document.createElement('label'); minPgTog.className = 'switch';
+            var minPgCb = document.createElement('input'); minPgCb.type = 'checkbox';
+            var hasMinGradeOverrides = Object.keys(saData.minFrequencyPerGrade || {}).length > 0;
+            minPgCb.checked = hasMinGradeOverrides;
+            var minPgSl = document.createElement('span'); minPgSl.className = 'slider';
+            minPgTog.appendChild(minPgCb); minPgTog.appendChild(minPgSl);
+            var minPgLbl = document.createElement('span');
+            minPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            minPgLbl.textContent = 'Different minimum per grade';
+            minPgTogRow.appendChild(minPgTog); minPgTogRow.appendChild(minPgLbl);
+            minDetail.appendChild(minPgTogRow);
+
+            var minGradeGrid = document.createElement('div');
+            minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
+            minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            var allDivs2 = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            if (!saData.minFrequencyPerGrade) saData.minFrequencyPerGrade = {};
+            allDivs2.forEach(function(div) {
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                var lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                var inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(saData.minFrequency) || 1);
+                var gv = saData.minFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = (function(d) { return function() {
+                    var v = parseInt(inp.value);
+                    if (v > 0) saData.minFrequencyPerGrade[d] = v;
+                    else delete saData.minFrequencyPerGrade[d];
+                    saveSpecialData(saData); updateSummary();
+                }; })(div);
+                var clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = function() { clrBtn.style.color = '#9CA3AF'; };
+                clrBtn.onmouseout = function() { clrBtn.style.color = '#D1D5DB'; };
+                clrBtn.onclick = (function(d, i) { return function() { i.value = ''; delete saData.minFrequencyPerGrade[d]; saveSpecialData(saData); updateSummary(); }; })(div, inp);
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                minGradeGrid.appendChild(row);
+            });
+            minPgCb.onchange = function() {
+                if (!minPgCb.checked) { saData.minFrequencyPerGrade = {}; saveSpecialData(saData); updateSummary(); }
+                minGradeGrid.style.display = minPgCb.checked ? 'flex' : 'none';
+                minGradeGrid.style.flexDirection = 'column';
+                minGradeGrid.style.gap = '5px';
+                minGradeGrid.style.marginTop = '6px';
+            };
+            minDetail.appendChild(minGradeGrid);
+            container.appendChild(minDetail);
+        }
+
+        // ── C: Days between visits ────────────────────────────────────────
+        var div2 = document.createElement('div');
+        div2.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(div2);
+
+        var freqLabel = document.createElement('div');
+        freqLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        freqLabel.textContent = 'Cooldown (days between visits)';
+        container.appendChild(freqLabel);
+
+        var freqRow = document.createElement('div');
+        freqRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap;';
+        var freqLblSpan = document.createElement('span'); freqLblSpan.style.cssText = 'font-size:0.85rem; color:#374151;'; freqLblSpan.textContent = 'Min days between visits:';
+        var freqIn = document.createElement('input');
+        freqIn.type = 'number'; freqIn.min = '0'; freqIn.value = parseInt(saData.frequencyDays) || 0;
+        freqIn.style.cssText = 'width:60px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+        var freqHint = document.createElement('span'); freqHint.style.cssText = 'font-size:0.78rem; color:#6B7280;'; freqHint.textContent = '(0 = no cooldown)';
+        freqIn.onchange = function() {
+            saData.frequencyDays = parseInt(freqIn.value) || 0;
+            if (saData.frequencyWeeks != null) delete saData.frequencyWeeks;
             saveSpecialData(saData); updateSummary();
         };
-        if (periodSel) periodSel.onchange = () => {
-            saData.maxUsagePeriod = periodSel.value;
-            saveSpecialData(saData); updateSummary();
+        freqRow.appendChild(freqLblSpan); freqRow.appendChild(freqIn); freqRow.appendChild(freqHint);
+        container.appendChild(freqRow);
+
+        // ── D: Equal visits across grades (cohort round-robin) ─────────
+        var cohortDiv = document.createElement('div');
+        cohortDiv.style.cssText = 'border-top:1px dashed #E5E7EB; padding-top:14px; margin-top:16px;';
+
+        var cohortLabel = document.createElement('div');
+        cohortLabel.style.cssText = 'font-size:0.85rem; font-weight:600; color:#374151; margin-bottom:6px;';
+        cohortLabel.textContent = 'Equal visits across grades';
+        cohortDiv.appendChild(cohortLabel);
+
+        var cohortHelp = document.createElement('div');
+        cohortHelp.style.cssText = 'font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;';
+        cohortHelp.textContent = 'Every bunk in the chosen grades visits this activity the same number of times before any bunk visits again.';
+        cohortDiv.appendChild(cohortHelp);
+
+        var rc = saData.rotationCohort;
+        var modeWrap = document.createElement('div');
+        modeWrap.style.cssText = 'display:flex; gap:8px; margin-bottom:12px;';
+
+        var btnOff = document.createElement('button');
+        btnOff.textContent = 'Off';
+        btnOff.style.cssText = 'flex:1; padding:7px; border-radius:6px; border:1px solid ' + (!rc.enabled ? '#147D91' : '#E5E7EB') + '; cursor:pointer; background:' + (!rc.enabled ? '#e6f4f7' : '#fff') + '; font-weight:' + (!rc.enabled ? '600' : '400') + '; font-size:0.85rem;';
+
+        var btnOn = document.createElement('button');
+        btnOn.textContent = 'Take turns by bunk';
+        btnOn.style.cssText = 'flex:1; padding:7px; border-radius:6px; border:1px solid ' + (rc.enabled ? '#147D91' : '#E5E7EB') + '; cursor:pointer; background:' + (rc.enabled ? '#e6f4f7' : '#fff') + '; font-weight:' + (rc.enabled ? '600' : '400') + '; font-size:0.85rem;';
+
+        btnOff.onclick = function() { rc.enabled = false; saveSpecialData(saData); renderContent(); updateSummary(); };
+        btnOn.onclick = function() {
+            rc.enabled = true;
+            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.limitUsage && saData.limitUsage.enabled) {
+                rc.grades = Object.keys(saData.limitUsage.divisions || {});
+            }
+            saveSpecialData(saData); renderContent(); updateSummary();
         };
-        if (freqInput) freqInput.onchange = () => {
-            saData.frequencyWeeks = parseInt(freqInput.value) || 0;
-            saveSpecialData(saData);
-        };
+
+        modeWrap.appendChild(btnOff); modeWrap.appendChild(btnOn);
+        cohortDiv.appendChild(modeWrap);
+
+        if (rc.enabled) {
+            var allDivs3 = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            if (!Array.isArray(rc.grades)) rc.grades = [];
+
+            var chipLabel = document.createElement('div');
+            chipLabel.style.cssText = 'font-size:0.78rem; color:#374151; margin-bottom:6px;';
+            chipLabel.textContent = 'Grades sharing the rotation:';
+            cohortDiv.appendChild(chipLabel);
+
+            var chipWrap = document.createElement('div');
+            chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:4px;';
+            allDivs3.forEach(function(divName) {
+                var isOn = rc.grades.includes(divName);
+                var c = document.createElement('span');
+                c.className = 'chip ' + (isOn ? 'active' : 'inactive');
+                c.textContent = divName;
+                c.onclick = (function(dn, on) { return function() {
+                    if (on) rc.grades = rc.grades.filter(function(g) { return g !== dn; });
+                    else rc.grades.push(dn);
+                    saveSpecialData(saData); renderContent(); updateSummary();
+                }; })(divName, isOn);
+                chipWrap.appendChild(c);
+            });
+            cohortDiv.appendChild(chipWrap);
+
+            if (rc.grades.length === 0) {
+                var warn = document.createElement('div');
+                warn.style.cssText = 'font-size:0.75rem; color:#D97706; margin-top:8px;';
+                warn.textContent = 'No grades selected — rotation has no effect.';
+                cohortDiv.appendChild(warn);
+            }
+        }
+
+        container.appendChild(cohortDiv);
     };
-    setTimeout(bindInputs, 0);
 
+    renderContent();
     return container;
 }
-
 // -- Prep Duration --
 function renderSpecialDuration(saData) {
     const container = document.createElement("div");
@@ -2112,39 +2532,102 @@ function renderSpecialDuration(saData) {
         if (el) el.textContent = summarySpecialDuration(saData);
     };
 
+    // Normalize storage: durations array is canonical; duration scalar mirrors durations[0].
+    const normalize = () => {
+        let arr = Array.isArray(saData.durations) ? saData.durations.slice() : [];
+        arr = arr.map(d => parseInt(d, 10)).filter(d => !isNaN(d) && d > 0);
+        // Dedupe + sort ascending.
+        arr = Array.from(new Set(arr)).sort((a, b) => a - b);
+        saData.durations = arr;
+        saData.duration = arr.length > 0 ? arr[0] : null;
+    };
+
+    // Lazy-migrate legacy scalar to array on first render.
+    if ((!Array.isArray(saData.durations) || saData.durations.length === 0)
+        && parseInt(saData.duration, 10) > 0) {
+        saData.durations = [parseInt(saData.duration, 10)];
+    }
+    normalize();
+
+    const commit = () => { normalize(); saveSpecialData(saData); updateSummary(); };
+
     const renderContent = () => {
-        const hasDur = (parseInt(saData.duration) || 0) > 0;
-        const cur = parseInt(saData.duration) || 30;
+        const hasDur = Array.isArray(saData.durations) && saData.durations.length > 0;
+        const rowsHtml = hasDur
+            ? saData.durations.map((d, i) => `
+                <div class="fac-sa-dur-row" data-idx="${i}" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                    <input type="number" class="fac-sa-dur-input" data-idx="${i}" min="5" max="180" step="5" value="${d}"
+                        style="width:80px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
+                    <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
+                    <button type="button" class="fac-sa-dur-del" data-idx="${i}"
+                        style="margin-left:auto; background:transparent; border:none; color:#DC2626; cursor:pointer; font-size:0.9rem;"
+                        title="Remove this duration">✕</button>
+                </div>`).join('')
+            : '';
+
         container.innerHTML = `
             <p style="font-size:0.85rem; color:#6B7280; margin:0 0 10px 0;">
-                Set a fixed duration for this activity. The auto-scheduler will use this instead of the layer's default block size.
+                Set one or more allowed durations for this activity. The auto-scheduler will pick whichever fits the period best. Leave off to use the skeleton block size.
             </p>
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:${hasDur ? '10px' : '0'};">
                 <span style="font-size:0.85rem; color:#374151; flex:1;">
-                    ${hasDur ? `<strong>${cur} minutes</strong>` : 'Not set — uses skeleton block size'}
+                    ${hasDur ? `<strong>${saData.durations.join(' or ')} minutes</strong>` : 'Not set — uses skeleton block size'}
                 </span>
                 <label class="switch">
                     <input type="checkbox" id="fac-sa-dur-toggle" ${hasDur ? 'checked' : ''}>
                     <span class="slider"></span>
                 </label>
             </div>
-            <div id="fac-sa-dur-config" style="display:${hasDur ? 'flex' : 'none'}; align-items:center; gap:8px;">
-                <span style="font-size:0.85rem;">Duration:</span>
-                <input type="number" id="fac-sa-dur-input" min="5" max="180" step="5" value="${cur}"
-                    style="width:70px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-                <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
+            <div id="fac-sa-dur-config" style="display:${hasDur ? 'block' : 'none'};">
+                <div id="fac-sa-dur-rows">${rowsHtml}</div>
+                <button type="button" id="fac-sa-dur-add"
+                    style="margin-top:4px; padding:4px 10px; background:#EEF2FF; border:1px solid #C7D2FE; color:#3730A3; border-radius:6px; cursor:pointer; font-size:0.8rem;">
+                    + Add another duration
+                </button>
             </div>`;
 
         const tog = container.querySelector('#fac-sa-dur-toggle');
         if (tog) tog.onchange = () => {
-            saData.duration = tog.checked ? (parseInt(saData.duration) > 0 ? parseInt(saData.duration) : 30) : null;
-            saveSpecialData(saData); updateSummary(); renderContent();
+            if (tog.checked) {
+                if (!Array.isArray(saData.durations) || saData.durations.length === 0) {
+                    saData.durations = [30];
+                }
+            } else {
+                saData.durations = [];
+            }
+            commit(); renderContent();
         };
-        const input = container.querySelector('#fac-sa-dur-input');
-        if (input) input.onchange = () => {
-            const v = Math.max(5, Math.min(180, parseInt(input.value) || 30));
-            saData.duration = v;
-            saveSpecialData(saData); updateSummary();
+
+        container.querySelectorAll('.fac-sa-dur-input').forEach(input => {
+            input.onchange = () => {
+                const idx = parseInt(input.dataset.idx, 10);
+                const v = Math.max(5, Math.min(180, parseInt(input.value, 10) || 0));
+                if (Number.isFinite(v) && v > 0) saData.durations[idx] = v;
+                commit(); renderContent();
+            };
+        });
+
+        container.querySelectorAll('.fac-sa-dur-del').forEach(btn => {
+            btn.onclick = () => {
+                const idx = parseInt(btn.dataset.idx, 10);
+                saData.durations.splice(idx, 1);
+                commit();
+                if (saData.durations.length === 0) {
+                    // Auto-disable toggle if the last row was removed.
+                    renderContent();
+                } else {
+                    renderContent();
+                }
+            };
+        });
+
+        const addBtn = container.querySelector('#fac-sa-dur-add');
+        if (addBtn) addBtn.onclick = () => {
+            const existing = new Set(saData.durations);
+            // Suggest a new value distinct from current ones.
+            const suggestion = [40, 30, 20, 15, 45, 60].find(v => !existing.has(v)) || 30;
+            saData.durations.push(suggestion);
+            commit(); renderContent();
         };
     };
 
@@ -2153,90 +2636,217 @@ function renderSpecialDuration(saData) {
 }
 
 function renderSpecialPrep(saData) {
-    const container = document.createElement("div");
-    const updateSummary = () => {
-        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+    if (!saData.prepConfig) saData.prepConfig = { timing: 'attached', location: '', sync: 'staggered' };
+    var container = document.createElement("div");
+
+    var updateSummary = function() {
+        var el = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
         if (el) el.textContent = summarySpecialPrep(saData);
     };
 
-    container.innerHTML = `
-        <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-size:0.85rem;">Setup time before activity:</span>
-            <input type="number" id="fac-sa-prep" min="0" max="60" value="${saData.prepDuration || 0}"
-                style="width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-            <span style="font-size:0.8rem; color:#6B7280;">minutes</span>
-        </div>`;
+    var renderContent = function() {
+        container.innerHTML = "";
+        var hp = (saData.prepDuration || 0) > 0;
 
-    setTimeout(() => {
-        const input = container.querySelector('#fac-sa-prep');
-        if (input) input.onchange = () => {
-            saData.prepDuration = Math.max(0, Math.min(60, parseInt(input.value) || 0));
-            saveSpecialData(saData); updateSummary();
+        // Toggle
+        var toggleWrap = document.createElement("div");
+        toggleWrap.style.cssText = "display:flex; align-items:center; gap:12px; padding:14px; background:" + (hp ? "#faf5ff" : "#f9fafb") + "; border:1px solid " + (hp ? "#d8b4fe" : "#e5e7eb") + "; border-radius:10px; margin-bottom:" + (hp ? "12px" : "0") + ";";
+        var togInfo = document.createElement("div"); togInfo.style.cssText = "flex:1;";
+        var togTitle = document.createElement("div"); togTitle.style.cssText = "font-weight:600; color:" + (hp ? "#6b21a8" : "#374151") + ";"; togTitle.textContent = hp ? "Has Prep Phase" : "Single Phase";
+        var togSub = document.createElement("div"); togSub.style.cssText = "font-size:0.8rem; color:" + (hp ? "#7c3aed" : "#6b7280") + ";"; togSub.textContent = hp ? (saData.prepDuration + " min prep + main") : "No prep needed";
+        togInfo.appendChild(togTitle); togInfo.appendChild(togSub);
+        var tog = document.createElement("label"); tog.className = "switch";
+        var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = hp;
+        cb.onchange = function() { saData.prepDuration = this.checked ? 30 : 0; saveSpecialData(saData); renderContent(); updateSummary(); };
+        var sl = document.createElement("span"); sl.className = "slider";
+        tog.appendChild(cb); tog.appendChild(sl);
+        toggleWrap.appendChild(togInfo); toggleWrap.appendChild(tog);
+        container.appendChild(toggleWrap);
+
+        if (!hp) return;
+
+        var config = document.createElement("div");
+        config.style.cssText = "display:flex; flex-direction:column; gap:12px;";
+
+        // Duration
+        var durRow = document.createElement("div");
+        durRow.style.cssText = "display:flex; align-items:center; gap:10px; padding:10px; background:#fff; border-radius:8px; border:1px solid #e9d5ff;";
+        var durLbl = document.createElement("label"); durLbl.style.cssText = "font-size:0.85rem;"; durLbl.textContent = "Prep time:";
+        var durIn = document.createElement("input"); durIn.type = "number"; durIn.min = "5"; durIn.max = "120"; durIn.step = "5"; durIn.value = saData.prepDuration || 30;
+        durIn.style.cssText = "width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;";
+        durIn.onchange = function() { var v = parseInt(this.value, 10); if (!isNaN(v) && v >= 5) { saData.prepDuration = v; saveSpecialData(saData); updateSummary(); renderContent(); } };
+        var durNote = document.createElement("span"); durNote.style.cssText = "font-size:0.85rem; color:#64748b;"; durNote.textContent = "minutes";
+        durRow.appendChild(durLbl); durRow.appendChild(durIn); durRow.appendChild(durNote);
+        config.appendChild(durRow);
+
+        // Timing mode card
+        var mkCard = function(title) {
+            var card = document.createElement("div");
+            card.style.cssText = "background:#fff; border-radius:8px; border:1px solid #e9d5ff; overflow:hidden;";
+            var hdr = document.createElement("div"); hdr.style.cssText = "padding:8px 12px; font-size:0.82rem; font-weight:600; color:#6b21a8; background:#faf5ff; border-bottom:1px solid #e9d5ff;"; hdr.textContent = title;
+            card.appendChild(hdr);
+            var body = document.createElement("div"); body.style.cssText = "padding:10px 12px; display:flex; flex-direction:column; gap:8px;";
+            card.appendChild(body);
+            return { card: card, body: body };
         };
-    }, 0);
 
+        var mkRadio = function(name, value, checked, label, desc, onChange) {
+            var row = document.createElement("label");
+            row.style.cssText = "display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:8px; border-radius:6px;" + (checked ? "background:#f5f3ff;" : "");
+            var r = document.createElement("input"); r.type = "radio"; r.name = name; r.value = value; r.checked = checked;
+            r.style.cssText = "margin-top:2px; flex-shrink:0;";
+            r.onchange = onChange;
+            var txt = document.createElement("div");
+            var tT = document.createElement("div"); tT.style.cssText = "font-size:0.85rem; font-weight:500; color:#374151;"; tT.textContent = label;
+            var tD = document.createElement("div"); tD.style.cssText = "font-size:0.75rem; color:#6b7280; line-height:1.4; margin-top:2px;"; tD.textContent = desc;
+            txt.appendChild(tT); txt.appendChild(tD);
+            row.appendChild(r); row.appendChild(txt);
+            return row;
+        };
+
+        var rng = Date.now(); // unique radio group name
+        var tc = mkCard("Timing");
+        tc.body.appendChild(mkRadio("pt-" + rng, "attached", saData.prepConfig.timing !== "flexible", "Back to back", "Prep immediately precedes the activity — combined into one block.", function() { saData.prepConfig.timing = "attached"; saveSpecialData(saData); updateSummary(); renderContent(); }));
+        tc.body.appendChild(mkRadio("pt-" + rng, "flexible", saData.prepConfig.timing === "flexible", "Spread out", "Scheduler places prep anywhere earlier in the same day, before the activity starts.", function() { saData.prepConfig.timing = "flexible"; saveSpecialData(saData); updateSummary(); renderContent(); }));
+        config.appendChild(tc.card);
+
+        // Prep location dropdown
+        var lc = mkCard("Prep Location");
+        var locRow = document.createElement("div"); locRow.style.cssText = "display:flex; align-items:center; gap:8px;";
+        var locLbl = document.createElement("span"); locLbl.style.cssText = "font-size:0.85rem;"; locLbl.textContent = "Location:";
+        var locSel = document.createElement("select"); locSel.style.cssText = "flex:1; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;";
+        var bOpt = document.createElement("option"); bOpt.value = ""; bOpt.textContent = "— same as activity —"; locSel.appendChild(bOpt);
+        var facs = window.getFacilities ? window.getFacilities() : [];
+        facs.forEach(function(f) { var o = document.createElement("option"); o.value = f.name; o.textContent = f.name; if (f.name === saData.prepConfig.location) o.selected = true; locSel.appendChild(o); });
+        locSel.onchange = function() { saData.prepConfig.location = locSel.value; saveSpecialData(saData); updateSummary(); };
+        locRow.appendChild(locLbl); locRow.appendChild(locSel);
+        lc.body.appendChild(locRow);
+        config.appendChild(lc.card);
+
+        // Sync option (only for flexible)
+        if (saData.prepConfig.timing === "flexible") {
+            var sc = mkCard("Who does prep together?");
+            sc.body.appendChild(mkRadio("ps-" + rng, "staggered", saData.prepConfig.sync !== "synchronized", "Staggered", "Each bunk does prep on its own, at any free time before the activity. Works even when the activity itself is full-grade.", function() { saData.prepConfig.sync = "staggered"; saveSpecialData(saData); updateSummary(); }));
+            sc.body.appendChild(mkRadio("ps-" + rng, "synchronized", saData.prepConfig.sync === "synchronized", "Synchronized", "All bunks do prep at exactly the same time slot — like a camp-wide event leading into the activity.", function() { saData.prepConfig.sync = "synchronized"; saveSpecialData(saData); updateSummary(); }));
+            config.appendChild(sc.card);
+        }
+
+        container.appendChild(config);
+    };
+
+    renderContent();
     return container;
 }
 
-// -- Multi-Part --
 function renderSpecialMultiPart(saData) {
-    const container = document.createElement("div");
-    if (!saData.multiPart) saData.multiPart = { enabled: false, totalParts: 2, daysBetween: 3 };
+    if (!saData.multiPart) saData.multiPart = { enabled: false, totalParts: 2, daysBetween: 3, parts: [] };
+    var mp = saData.multiPart;
+    if (!Array.isArray(mp.parts)) mp.parts = [];
 
-    const updateSummary = () => {
-        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+    var container = document.createElement("div");
+
+    var updateSummary = function() {
+        var el = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
         if (el) el.textContent = summarySpecialMultiPart(saData);
     };
 
-    const renderContent = () => {
+    var ensureParts = function() {
+        var tp = mp.totalParts || 2;
+        while (mp.parts.length < tp) mp.parts.push({ name: '', location: '' });
+        if (mp.parts.length > tp) mp.parts.length = tp;
+    };
+
+    var renderContent = function() {
         container.innerHTML = "";
+        ensureParts();
 
-        const toggleRow = document.createElement("div");
+        var toggleRow = document.createElement("div");
         toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:12px;";
-
-        const tog = document.createElement("label"); tog.className = "switch";
-        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = saData.multiPart.enabled;
-        cb.onchange = () => {
-            saData.multiPart.enabled = cb.checked;
-            saveSpecialData(saData); renderContent(); updateSummary();
-        };
-        const sl = document.createElement("span"); sl.className = "slider";
+        var tog = document.createElement("label"); tog.className = "switch";
+        var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = mp.enabled;
+        cb.onchange = function() { mp.enabled = cb.checked; saveSpecialData(saData); renderContent(); updateSummary(); };
+        var sl = document.createElement("span"); sl.className = "slider";
         tog.appendChild(cb); tog.appendChild(sl);
-
-        toggleRow.appendChild(tog);
-        toggleRow.innerHTML += '<span style="font-weight:500; font-size:0.9rem;">Enable Multi-Part</span>';
+        var lbl = document.createElement("span");
+        lbl.style.cssText = "font-weight:500; font-size:0.9rem;";
+        lbl.textContent = "Enable Multi-Part";
+        toggleRow.appendChild(tog); toggleRow.appendChild(lbl);
         container.appendChild(toggleRow);
 
-        if (saData.multiPart.enabled) {
-            const config = document.createElement("div");
-            config.style.cssText = "padding-left:12px; border-left:2px solid #7C3AED;";
-            config.innerHTML = `
-                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                    <span style="font-size:0.85rem;">Total parts:</span>
-                    <input type="number" id="fac-mp-parts" min="2" max="10" value="${saData.multiPart.totalParts}"
-                        style="width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-                </div>
-                <div style="display:flex; align-items:center; gap:8px;">
-                    <span style="font-size:0.85rem;">Days between parts:</span>
-                    <input type="number" id="fac-mp-days" min="1" max="30" value="${saData.multiPart.daysBetween}"
-                        style="width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;">
-                </div>`;
-            container.appendChild(config);
+        if (!mp.enabled) return;
 
-            setTimeout(() => {
-                const partsIn = container.querySelector('#fac-mp-parts');
-                const daysIn = container.querySelector('#fac-mp-days');
-                if (partsIn) partsIn.onchange = () => {
-                    saData.multiPart.totalParts = Math.max(2, Math.min(10, parseInt(partsIn.value) || 2));
-                    saveSpecialData(saData); updateSummary();
-                };
-                if (daysIn) daysIn.onchange = () => {
-                    saData.multiPart.daysBetween = Math.max(1, Math.min(30, parseInt(daysIn.value) || 3));
-                    saveSpecialData(saData); updateSummary();
-                };
-            }, 0);
+        var config = document.createElement("div");
+        config.style.cssText = "padding-left:12px; border-left:2px solid #7C3AED; display:flex; flex-direction:column; gap:10px;";
+
+        var partsRow = document.createElement("div");
+        partsRow.style.cssText = "display:flex; align-items:center; gap:8px;";
+        var partsLbl = document.createElement("span"); partsLbl.style.cssText = "font-size:0.85rem; font-weight:500;"; partsLbl.textContent = "Number of parts:";
+        var partsIn = document.createElement("input"); partsIn.type = "number"; partsIn.min = "2"; partsIn.max = "10"; partsIn.value = mp.totalParts || 2;
+        partsIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
+        partsIn.onchange = function() {
+            mp.totalParts = Math.max(2, Math.min(10, parseInt(partsIn.value) || 2));
+            ensureParts(); saveSpecialData(saData); renderContent(); updateSummary();
+        };
+        partsRow.appendChild(partsLbl); partsRow.appendChild(partsIn);
+        config.appendChild(partsRow);
+
+        var daysRow = document.createElement("div");
+        daysRow.style.cssText = "display:flex; align-items:center; gap:8px;";
+        var daysLbl = document.createElement("span"); daysLbl.style.cssText = "font-size:0.85rem; font-weight:500;"; daysLbl.textContent = "Days between parts:";
+        var daysIn = document.createElement("input"); daysIn.type = "number"; daysIn.min = "1"; daysIn.max = "30"; daysIn.value = mp.daysBetween || 3;
+        daysIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
+        daysIn.onchange = function() { mp.daysBetween = Math.max(1, Math.min(30, parseInt(daysIn.value) || 3)); saveSpecialData(saData); updateSummary(); };
+        var daysNote = document.createElement("span"); daysNote.style.cssText = "font-size:0.8rem; color:#6B7280;"; daysNote.textContent = "days gap required between each part";
+        daysRow.appendChild(daysLbl); daysRow.appendChild(daysIn); daysRow.appendChild(daysNote);
+        config.appendChild(daysRow);
+
+        var partsHeader = document.createElement("div");
+        partsHeader.style.cssText = "font-size:0.85rem; font-weight:600; color:#374151; margin-top:4px;";
+        partsHeader.textContent = "Part Details";
+        var partsNote2 = document.createElement("span");
+        partsNote2.style.cssText = "font-size:0.75rem; font-weight:400; color:#6B7280; margin-left:6px;";
+        partsNote2.textContent = "(optional: custom name & location)";
+        partsHeader.appendChild(partsNote2);
+        config.appendChild(partsHeader);
+
+        for (var _i = 0; _i < (mp.totalParts || 2); _i++) {
+            (function(i) {
+                var part = mp.parts[i] || { name: '', location: '' };
+                var partRow = document.createElement("div");
+                partRow.style.cssText = "display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid #E5E7EB; border-radius:8px; background:#F9FAFB;";
+                var numBadge = document.createElement("span");
+                numBadge.style.cssText = "width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.72rem; flex-shrink:0; color:#fff; background:#147D91;";
+                numBadge.textContent = i + 1;
+                var nameInp = document.createElement("input");
+                nameInp.type = "text"; nameInp.placeholder = "Part " + (i+1) + " name (optional)";
+                nameInp.value = part.name || '';
+                nameInp.style.cssText = "flex:1.5; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem;";
+                nameInp.onchange = function() { mp.parts[i].name = nameInp.value.trim(); saveSpecialData(saData); };
+                var locSel = document.createElement("select");
+                locSel.style.cssText = "flex:1; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; background:#fff;";
+                var _blankOpt = document.createElement("option"); _blankOpt.value = ""; _blankOpt.textContent = "— same location —";
+                locSel.appendChild(_blankOpt);
+                var _facs = (window.getFacilities ? window.getFacilities() : []);
+                _facs.forEach(function(f) {
+                    var opt = document.createElement("option"); opt.value = f.name; opt.textContent = f.name;
+                    if (f.name === (part.location || '')) opt.selected = true;
+                    locSel.appendChild(opt);
+                });
+                locSel.onchange = function() { mp.parts[i].location = locSel.value; saveSpecialData(saData); };
+                partRow.appendChild(numBadge); partRow.appendChild(nameInp); partRow.appendChild(locSel);
+                if (i > 0) {
+                    var prereq = document.createElement("span");
+                    prereq.style.cssText = "font-size:0.7rem; color:#92400e; white-space:nowrap;";
+                    prereq.textContent = "after " + i;
+                    partRow.appendChild(prereq);
+                }
+                config.appendChild(partRow);
+            })(_i);
         }
+
+        container.appendChild(config);
     };
+
     renderContent();
     return container;
 }

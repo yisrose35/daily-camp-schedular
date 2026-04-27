@@ -485,24 +485,32 @@
         if (!records || records.length === 0) return null;
         
         const mergedAssignments = {};
+        const mergedSegments = {};
         const mergedLeagues = {};
         let mergedUnifiedTimes = [];  // ★★★ FIX: Track unifiedTimes ★★★
         let mergedDivisionTimes = {};
         let maxSlots = 0;
         let isRainyDay = false;
-        
+
         records.forEach(record => {
             const data = record.schedule_data || {};
-            
+
             log('Merging from', record.scheduler_name || 'unknown', {
                 bunks: Object.keys(data.scheduleAssignments || {}).length,
                 slots: data.unifiedTimes?.length || 0
             });
-            
+
             // Merge scheduleAssignments (each scheduler owns their bunks)
             if (data.scheduleAssignments) {
                 Object.entries(data.scheduleAssignments).forEach(([bunkId, slots]) => {
                     mergedAssignments[bunkId] = slots;
+                });
+            }
+
+            // Phase 4: merge scheduleSegments per-bunk (same ownership as assignments)
+            if (data.scheduleSegments) {
+                Object.entries(data.scheduleSegments).forEach(([bunkId, row]) => {
+                    mergedSegments[bunkId] = row;
                 });
             }
             
@@ -556,6 +564,7 @@
         
         return {
             scheduleAssignments: mergedAssignments,
+            scheduleSegments: mergedSegments,
             leagueAssignments: mergedLeagues,
             unifiedTimes: deserializedTimes,  // ★★★ FIX: Now included! ★★★
             divisionTimes: window.DivisionTimesSystem?.deserialize(mergedDivisionTimes) || mergedDivisionTimes,
@@ -615,9 +624,15 @@
             const filteredBunkCount = Object.keys(filteredAssignments).length;
             log(`After filtering: ${filteredBunkCount} bunks (was ${originalBunkCount})`);
 
+            // Phase 4: persist scheduleSegments alongside assignments, filtered
+            // by the same bunk-ownership rules so we never leak foreign data.
+            const rawSegments = data.scheduleSegments || window.scheduleSegments || {};
+            const filteredSegments = options.skipFilter ? rawSegments : filterScheduleToMyBunks(rawSegments);
+
             // Prepare payload
             const payload = {
                 scheduleAssignments: filteredAssignments,
+                scheduleSegments: filteredSegments,
                 leagueAssignments: data.leagueAssignments || {},
                 unifiedTimes: serializeUnifiedTimes(data.unifiedTimes || window.unifiedTimes || []),
                 slotCount: data.unifiedTimes?.length || window.unifiedTimes?.length || 0,

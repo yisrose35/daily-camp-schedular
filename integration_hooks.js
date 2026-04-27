@@ -1318,6 +1318,18 @@
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
             console.log('🔗 Generation complete for', dateKey, '-', bunkCount, 'bunks');
 
+            // ★★★ Capture old schedule BEFORE overwriting localStorage ★★★
+            // reIncrementHistoricalCounts needs the pre-generation schedule to subtract old
+            // counts. If we capture it here (while localStorage still has the old data) and
+            // pass it as oldScheduleAssignments, the subtraction step uses correct data even
+            // after localStorage has been overwritten.
+            let oldScheduleSnapshot = null;
+            try {
+                const DAILY_KEY = 'campDailyData_v1';
+                const preSave = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                oldScheduleSnapshot = preSave[dateKey]?.scheduleAssignments || null;
+            } catch (_) {}
+
             // ★★★ v6.9 FIX: Save to localStorage IMMEDIATELY — no delay! ★★★
             // The old 1000ms "wait for data to settle" caused data loss on quick reload.
             // Data is already in window.scheduleAssignments when this event fires.
@@ -1344,13 +1356,41 @@
 
             // Then do verified cloud save (no artificial delay)
             await verifiedScheduleSave(dateKey);
-            
-            // Rebuild counts if available
+
+            // ★★★ Update rotation history for ALL bunks ★★★
+            // Manual edits call peiUpdateRotationHistory per bunk, but auto-gen never did.
+            // This stamps every scheduled activity with the current timestamp so next-day
+            // variety scoring knows what was done today.
+            try {
+                const newSched = window.scheduleAssignments || {};
+                const history = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+                history.bunks = history.bunks || {};
+                const timestamp = Date.now();
+                const SKIP = new Set(['free', 'free play', 'free (timeout)', 'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
+                Object.keys(newSched).forEach(bunk => {
+                    history.bunks[bunk] = history.bunks[bunk] || {};
+                    (newSched[bunk] || []).forEach(entry => {
+                        if (!entry || entry.continuation || entry._isTransition) return;
+                        const actName = entry._activity || '';
+                        if (!actName || SKIP.has(actName.toLowerCase())) return;
+                        history.bunks[bunk][actName] = timestamp;
+                    });
+                });
+                window.saveRotationHistory?.(history);
+                console.log('🔗 ✅ Rotation history updated for', Object.keys(newSched).length, 'bunks');
+            } catch (rhErr) {
+                console.error('🔗 Rotation history update failed:', rhErr);
+            }
+
+            // ★★★ Update historicalCounts using pre-generation snapshot ★★★
+            // Pass oldScheduleSnapshot so reIncrement subtracts the correct old data
+            // rather than reading from localStorage (which now has the new schedule).
             if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
                 window.SchedulerCoreUtils.reIncrementHistoricalCounts(
                     dateKey,
                     window.scheduleAssignments || {},
-                    true
+                    true,
+                    oldScheduleSnapshot
                 );
             } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
                 window.SchedulerCoreUtils.rebuildHistoricalCounts(true);

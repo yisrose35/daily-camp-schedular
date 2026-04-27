@@ -172,17 +172,20 @@ function getAssignmentsForDate(dateKey, opts = {}) {
         // Determine which bunks to schedule today
         let todayQueue;
         if (opts.manualBunks && opts.manualBunks[evt.id]) {
-            // Semi-auto: user picked specific bunks
             const picked = new Set(opts.manualBunks[evt.id]);
             todayQueue = remaining.filter(b => picked.has(b.bunk));
         } else if (opts.autoFill !== false) {
-            // Auto: take as many as can fit
             todayQueue = [...remaining];
         } else {
-            return; // No bunks selected and auto disabled
+            return;
         }
 
-        // Sort by grade for grouping, then by bunk name within grade
+        // Grade filter
+        const allowedGrades = Array.isArray(evt.grades) && evt.grades.length > 0 ? new Set(evt.grades) : null;
+        if (allowedGrades) todayQueue = todayQueue.filter(b => allowedGrades.has(b.grade));
+        if (todayQueue.length === 0) return;
+
+        // Sort by grade, then bunk number
         todayQueue.sort((a, b) => {
             if (a.grade !== b.grade) return a.grade.localeCompare(b.grade);
             const numA = parseInt(a.bunk.match(/\d+/)?.[0] || 0);
@@ -194,56 +197,244 @@ function getAssignmentsForDate(dateKey, opts = {}) {
         const windowEnd = evt.dailyWindow.endMin;
         const duration = evt.durationPerBunk;
         const concurrency = evt.concurrency || 1;
-
-        // Build time slots
-        const totalSlots = Math.floor((windowEnd - windowStart) / duration);
         const assignments = [];
-        let slotIdx = 0;
-        let concurrencySlot = 0;
-
-        // Get existing schedules for conflict checking
         const scheduleAssignments = window.scheduleAssignments || {};
 
-        for (let i = 0; i < todayQueue.length && slotIdx < totalSlots; i++) {
-            const bunkInfo = todayQueue[i];
-            const slotStart = windowStart + slotIdx * duration;
-            const slotEnd = slotStart + duration;
+        const sequenceTarget = evt.sequence?.targetActivity || '';
+        const sequencePosition = evt.sequence?.position || 'either';
+        const gradeMode = evt.gradeMode || 'individual';
 
-            // Check conflict with existing fixed blocks
-            if (hasBunkConflict(bunkInfo.bunk, slotStart, slotEnd, scheduleAssignments, opts.timelines)) {
-                // Try next slots for this bunk
-                let placed = false;
-                for (let s = slotIdx + 1; s < totalSlots; s++) {
-                    const altStart = windowStart + s * duration;
-                    const altEnd = altStart + duration;
-                    if (!hasBunkConflict(bunkInfo.bunk, altStart, altEnd, scheduleAssignments, opts.timelines)) {
-                        assignments.push({
-                            bunk: bunkInfo.bunk,
-                            grade: bunkInfo.grade,
-                            startMin: altStart,
-                            endMin: altEnd
-                        });
-                        placed = true;
-                        break;
+        // Find the target activity's slot for a bunk — checks timelines (in-progress) then persisted assignments
+        function findTargetEntry(bunkName) {
+            const combined = [...(opts.timelines?.[bunkName] || []), ...(scheduleAssignments[bunkName] || [])];
+            return combined.find(e =>
+                e && !e.continuation && !e._isTransition &&
+                (e._activity === sequenceTarget || e.sport === sequenceTarget ||
+                 e.field === sequenceTarget || e.displayName === sequenceTarget)
+            ) || null;
+        }
+
+        // Try to place a single bunk adjacent to its target entry.
+        // If a pinned/fixed activity (e.g. lunch) blocks the immediately adjacent
+        // slot, scan forward/backward past it — the constraint is satisfied as long
+        // as only pinned activities sit between the two linked events.
+        function tryAdjacent(bunkName, tStart, tEnd) {
+            // Returns the furthest end-time of any pinned/fixed block overlapping [wStart, wEnd]
+            const pinnedBlockEnd = (wStart, wEnd) => {
+                const source = opts.timelines?.[bunkName] || scheduleAssignments[bunkName] || [];
+                let latest = wStart;
+                for (const block of source) {
+                    if (!block || block._isTransition) continue;
+                    if (!(block._activityLocked || block._isFixed || block.type === 'pinned')) continue;
+                    const bStart = block.startMin ?? block._startMin;
+                    const bEnd   = block.endMin   ?? block._endMin;
+                    if (bStart == null || bEnd == null) continue;
+                    if (bStart < wEnd && bEnd > wStart) latest = Math.max(latest, bEnd);
+                }
+                return latest;
+            };
+            // Returns the earliest start-time of any pinned/fixed block overlapping [wStart, wEnd]
+            const pinnedBlockStart = (wStart, wEnd) => {
+                const source = opts.timelines?.[bunkName] || scheduleAssignments[bunkName] || [];
+                let earliest = wEnd;
+                for (const block of source) {
+                    if (!block || block._isTransition) continue;
+                    if (!(block._activityLocked || block._isFixed || block.type === 'pinned')) continue;
+                    const bStart = block.startMin ?? block._startMin;
+                    const bEnd   = block.endMin   ?? block._endMin;
+                    if (bStart == null || bEnd == null) continue;
+                    if (bStart < wEnd && bEnd > wStart) earliest = Math.min(earliest, bStart);
+                }
+                return earliest;
+            };
+
+            // Try AFTER target, skipping pinned blocks (e.g. swim → lunch → [here])
+            if (sequencePosition === 'either' || sequencePosition === 'after') {
+                let t = tEnd;
+                let maxIter = 10;
+                while (t + duration <= windowEnd && maxIter-- > 0) {
+                    if (!hasBunkConflict(bunkName, t, t + duration, scheduleAssignments, opts.timelines)) {
+                        return { startMin: t, endMin: t + duration };
+                    }
+                    // hasBunkConflict only fires for pinned/fixed blocks — skip past them
+                    const nextT = pinnedBlockEnd(t, t + duration);
+                    if (nextT <= t) break; // no forward progress possible
+                    t = nextT;
+                }
+            }
+            // Try BEFORE target, skipping pinned blocks (e.g. [here] → lunch → swim)
+            if (sequencePosition === 'either' || sequencePosition === 'before') {
+                let tEnd2 = tStart;
+                let maxIter = 10;
+                while (tEnd2 - duration >= windowStart && maxIter-- > 0) {
+                    if (!hasBunkConflict(bunkName, tEnd2 - duration, tEnd2, scheduleAssignments, opts.timelines)) {
+                        return { startMin: tEnd2 - duration, endMin: tEnd2 };
+                    }
+                    const prevT = pinnedBlockStart(tEnd2 - duration, tEnd2);
+                    if (prevT >= tEnd2) break;
+                    tEnd2 = prevT;
+                }
+            }
+            return null;
+        }
+
+        // Pre-build time slots with per-slot usage tracking.
+        const slots = [];
+        for (let t = windowStart; t + duration <= windowEnd; t += duration) {
+            slots.push({ startMin: t, endMin: t + duration, used: 0 });
+        }
+
+        // On the last day of the event everyone remaining must be scheduled today.
+        // Auto-scale concurrency so the available slots can hold the full queue.
+        const isLastDay = slots.length > 0 && dateKey >= evt.dateRange.end;
+        const unitCount = gradeMode === 'whole_grade'
+            ? Object.keys(todayQueue.reduce((m, b) => { m[b.grade] = 1; return m; }, {})).length
+            : todayQueue.length;
+        const effectiveConcurrency = isLastDay && slots.length > 0
+            ? Math.max(concurrency, Math.ceil(unitCount / slots.length))
+            : concurrency;
+
+        if (gradeMode === 'whole_grade') {
+            // Group by grade; concurrency here = how many grades go at the same time
+            const gradeGroups = {};
+            todayQueue.forEach(b => {
+                if (!gradeGroups[b.grade]) gradeGroups[b.grade] = [];
+                gradeGroups[b.grade].push(b);
+            });
+
+            Object.values(gradeGroups).forEach(group => {
+                if (sequenceTarget) {
+                    // Find shared target time — scan group until one bunk has it
+                    let tStart = null, tEnd = null;
+                    for (const b of group) {
+                        const e = findTargetEntry(b.bunk);
+                        if (!e) continue;
+                        const s = e._startMin ?? e.startMin ?? null;
+                        const t = e._endMin ?? e.endMin ?? null;
+                        if (s != null && t != null) { tStart = s; tEnd = t; break; }
+                    }
+                    if (tStart == null) return;
+
+                    // Try adjacency for the whole grade group, skipping pinned blocks.
+                    // pinnedBlockEndForGroup / pinnedBlockStartForGroup scan all bunks
+                    // in the group and return the safe skip boundary.
+                    const pinnedBlockEndForGroup = (wStart, wEnd) => {
+                        let latest = wStart;
+                        for (const b of group) {
+                            const source = opts.timelines?.[b.bunk] || scheduleAssignments[b.bunk] || [];
+                            for (const block of source) {
+                                if (!block || block._isTransition) continue;
+                                if (!(block._activityLocked || block._isFixed || block.type === 'pinned')) continue;
+                                const bS = block.startMin ?? block._startMin;
+                                const bE = block.endMin   ?? block._endMin;
+                                if (bS == null || bE == null) continue;
+                                if (bS < wEnd && bE > wStart) latest = Math.max(latest, bE);
+                            }
+                        }
+                        return latest;
+                    };
+                    const pinnedBlockStartForGroup = (wStart, wEnd) => {
+                        let earliest = wEnd;
+                        for (const b of group) {
+                            const source = opts.timelines?.[b.bunk] || scheduleAssignments[b.bunk] || [];
+                            for (const block of source) {
+                                if (!block || block._isTransition) continue;
+                                if (!(block._activityLocked || block._isFixed || block.type === 'pinned')) continue;
+                                const bS = block.startMin ?? block._startMin;
+                                const bE = block.endMin   ?? block._endMin;
+                                if (bS == null || bE == null) continue;
+                                if (bS < wEnd && bE > wStart) earliest = Math.min(earliest, bS);
+                            }
+                        }
+                        return earliest;
+                    };
+
+                    let time = null;
+                    // Try AFTER, skipping pinned activities between target and landing slot
+                    if (sequencePosition === 'either' || sequencePosition === 'after') {
+                        let t = tEnd;
+                        let maxIter = 10;
+                        while (t + duration <= windowEnd && maxIter-- > 0) {
+                            if (group.every(b => !hasBunkConflict(b.bunk, t, t + duration, scheduleAssignments, opts.timelines))) {
+                                time = { startMin: t, endMin: t + duration };
+                                break;
+                            }
+                            const nextT = pinnedBlockEndForGroup(t, t + duration);
+                            if (nextT <= t) break;
+                            t = nextT;
+                        }
+                    }
+                    // Try BEFORE, skipping pinned activities
+                    if (!time && (sequencePosition === 'either' || sequencePosition === 'before')) {
+                        let tEnd2 = tStart;
+                        let maxIter = 10;
+                        while (tEnd2 - duration >= windowStart && maxIter-- > 0) {
+                            if (group.every(b => !hasBunkConflict(b.bunk, tEnd2 - duration, tEnd2, scheduleAssignments, opts.timelines))) {
+                                time = { startMin: tEnd2 - duration, endMin: tEnd2 };
+                                break;
+                            }
+                            const prevT = pinnedBlockStartForGroup(tEnd2 - duration, tEnd2);
+                            if (prevT >= tEnd2) break;
+                            tEnd2 = prevT;
+                        }
+                    }
+                    if (!time) return;
+                    group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: time.startMin, endMin: time.endMin }));
+                } else {
+                    // Find first slot with remaining capacity that clears every bunk in grade
+                    const slot = slots.find(s =>
+                        s.used < effectiveConcurrency &&
+                        group.every(b => !hasBunkConflict(b.bunk, s.startMin, s.endMin, scheduleAssignments, opts.timelines))
+                    );
+                    if (slot) {
+                        group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: slot.startMin, endMin: slot.endMin }));
+                        slot.used++;
+                    } else if (isLastDay && slots.length > 0) {
+                        // Must schedule today — fall back to least-loaded slot ignoring conflicts
+                        const fallback = slots.reduce((best, s) => s.used < best.used ? s : best, slots[0]);
+                        group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: fallback.startMin, endMin: fallback.endMin }));
+                        fallback.used++;
                     }
                 }
-                if (!placed) {
-                    // Can't fit today — skip this bunk (overflow to next day)
-                    continue;
+            });
+
+        } else if (sequenceTarget) {
+            // Individual + sequence: each bunk placed adjacent to its own target slot
+            for (const bunkInfo of todayQueue) {
+                const targetEntry = findTargetEntry(bunkInfo.bunk);
+                const tStart = targetEntry ? (targetEntry._startMin ?? targetEntry.startMin ?? null) : null;
+                const tEnd   = targetEntry ? (targetEntry._endMin   ?? targetEntry.endMin   ?? null) : null;
+                const time   = (tStart != null && tEnd != null) ? tryAdjacent(bunkInfo.bunk, tStart, tEnd) : null;
+                if (time) {
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, ...time });
+                } else if (isLastDay && slots.length > 0) {
+                    // Adjacency failed on last day — fall back to any open slot, then least-loaded
+                    const slot = slots.find(s =>
+                        s.used < effectiveConcurrency &&
+                        !hasBunkConflict(bunkInfo.bunk, s.startMin, s.endMin, scheduleAssignments, opts.timelines)
+                    );
+                    const chosen = slot || slots.reduce((best, s) => s.used < best.used ? s : best, slots[0]);
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: chosen.startMin, endMin: chosen.endMin });
+                    chosen.used++;
                 }
-            } else {
-                assignments.push({
-                    bunk: bunkInfo.bunk,
-                    grade: bunkInfo.grade,
-                    startMin: slotStart,
-                    endMin: slotEnd
-                });
             }
 
-            concurrencySlot++;
-            if (concurrencySlot >= concurrency) {
-                concurrencySlot = 0;
-                slotIdx++;
+        } else {
+            // Individual + no sequence: each bunk fills the first slot with room and no conflict
+            for (const bunkInfo of todayQueue) {
+                const slot = slots.find(s =>
+                    s.used < effectiveConcurrency &&
+                    !hasBunkConflict(bunkInfo.bunk, s.startMin, s.endMin, scheduleAssignments, opts.timelines)
+                );
+                if (slot) {
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: slot.startMin, endMin: slot.endMin });
+                    slot.used++;
+                } else if (isLastDay && slots.length > 0) {
+                    // Must schedule today — fall back to least-loaded slot ignoring conflicts
+                    const fallback = slots.reduce((best, s) => s.used < best.used ? s : best, slots[0]);
+                    assignments.push({ bunk: bunkInfo.bunk, grade: bunkInfo.grade, startMin: fallback.startMin, endMin: fallback.endMin });
+                    fallback.used++;
+                }
             }
         }
 
@@ -622,10 +813,23 @@ function removeCompletion(eventId, bunkName) {
 // UI: Create / Edit Event Modal
 // =================================================================
 
+function buildAllActivityNames(g) {
+    const seen = new Set();
+    // General activities — canonical source (Swim, Lunch, Snack, etc.)
+    Object.keys(g.pinnedTileDefaults || {}).forEach(a => { if (a) seen.add(a); });
+    // Sports (from field activity lists)
+    (g.app1?.fields || []).forEach(f => { (f.activities || []).forEach(a => { if (a) seen.add(a); }); });
+    // Special activities
+    (window.getAllSpecialActivities?.() || []).forEach(s => { if (s.name) seen.add(s.name); });
+    return [...seen].sort();
+}
+
 async function showCreateEventModal(containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
     const allBunks = getAllBunks();
+    const allGrades = [...new Set(allBunks.map(b => b.grade))].sort();
+    const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
     if (!showModal) { alert('Modal system not available'); return; }
@@ -640,9 +844,20 @@ async function showCreateEventModal(containerEl) {
             { name: 'endDate', label: 'End Date (MM/DD/YYYY)', type: 'text', placeholder: 'MM/DD/YYYY' },
             { name: 'windowStart', label: 'Daily Window Start', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', placeholder: 'e.g., 1:00pm' },
-            { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', placeholder: 'e.g., 10' },
+            { name: 'duration', label: 'Duration Per Bunk / Grade (minutes)', type: 'text', placeholder: 'e.g., 10' },
             { name: 'concurrency', label: 'Bunks at a Time', type: 'text', placeholder: 'e.g., 2', default: '2' },
-            { name: 'location', label: 'Location (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] }
+            { name: 'gradeMode', label: 'Scheduling Mode', type: 'select', options: [
+                { value: 'individual', label: 'Individual bunks (staggered)' },
+                { value: 'whole_grade', label: 'Whole grade at once (like leagues)' }
+            ]},
+            { name: 'grades', label: 'Grades (leave all unchecked = all grades)', type: 'checkbox-group', options: allGrades.map(g => ({ value: g, label: g })) },
+            { name: 'location', label: 'Location (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] },
+            { name: 'adjacentTo', label: 'Must be adjacent to (optional)', type: 'select', options: [{ value: '', label: '-- None --' }, ...allActivityNames.map(a => ({ value: a, label: a }))] },
+            { name: 'adjacentPosition', label: 'Position', type: 'select', options: [
+                { value: 'either', label: 'Before or after (scheduler decides)' },
+                { value: 'after', label: 'Immediately after' },
+                { value: 'before', label: 'Immediately before' }
+            ]}
         ],
         confirmText: 'Create'
     });
@@ -685,6 +900,9 @@ async function showCreateEventModal(containerEl) {
         durationPerBunk: duration,
         concurrency,
         location: result.location || null,
+        gradeMode: result.gradeMode || 'individual',
+        grades: Array.isArray(result.grades) ? result.grades : [],
+        sequence: { targetActivity: result.adjacentTo || '', position: result.adjacentPosition || 'either' },
         gradeGrouping: true,
         excludedBunks: [],
         completedBunks: {},
@@ -715,6 +933,9 @@ async function showCreateEventModal(containerEl) {
 async function showEditEventModal(evt, containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
+    const allBunksForEdit = getAllBunks();
+    const allGradesForEdit = [...new Set(allBunksForEdit.map(b => b.grade))].sort();
+    const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
     if (!showModal) return;
@@ -728,9 +949,20 @@ async function showEditEventModal(evt, containerEl) {
             { name: 'endDate', label: 'End Date (MM/DD/YYYY)', type: 'text', default: formatDate(evt.dateRange.end) },
             { name: 'windowStart', label: 'Daily Window Start', type: 'text', default: minutesToTime(evt.dailyWindow.startMin) },
             { name: 'windowEnd', label: 'Daily Window End', type: 'text', default: minutesToTime(evt.dailyWindow.endMin) },
-            { name: 'duration', label: 'Duration Per Bunk (minutes)', type: 'text', default: String(evt.durationPerBunk) },
+            { name: 'duration', label: 'Duration Per Bunk / Grade (minutes)', type: 'text', default: String(evt.durationPerBunk) },
             { name: 'concurrency', label: 'Bunks at a Time', type: 'text', default: String(evt.concurrency || 2) },
-            { name: 'location', label: 'Location (optional)', type: 'select', default: evt.location || '', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] }
+            { name: 'gradeMode', label: 'Scheduling Mode', type: 'select', default: evt.gradeMode || 'individual', options: [
+                { value: 'individual', label: 'Individual bunks (staggered)' },
+                { value: 'whole_grade', label: 'Whole grade at once (like leagues)' }
+            ]},
+            { name: 'grades', label: 'Grades (leave all unchecked = all grades)', type: 'checkbox-group', default: Array.isArray(evt.grades) ? evt.grades : [], options: allGradesForEdit.map(g => ({ value: g, label: g })) },
+            { name: 'location', label: 'Location (optional)', type: 'select', default: evt.location || '', options: [{ value: '', label: '-- None --' }, ...allFields.map(f => ({ value: f, label: f }))] },
+            { name: 'adjacentTo', label: 'Must be adjacent to (optional)', type: 'select', default: evt.sequence?.targetActivity || '', options: [{ value: '', label: '-- None --' }, ...allActivityNames.map(a => ({ value: a, label: a }))] },
+            { name: 'adjacentPosition', label: 'Position', type: 'select', default: evt.sequence?.position || 'either', options: [
+                { value: 'either', label: 'Before or after (scheduler decides)' },
+                { value: 'after', label: 'Immediately after' },
+                { value: 'before', label: 'Immediately before' }
+            ]}
         ],
         confirmText: 'Save Changes'
     });
@@ -755,7 +987,10 @@ async function showEditEventModal(evt, containerEl) {
         dailyWindow: { startMin: windowStartMin, endMin: windowEndMin },
         durationPerBunk: parseInt(result.duration) || evt.durationPerBunk,
         concurrency: Math.max(1, parseInt(result.concurrency) || evt.concurrency),
-        location: result.location || null
+        location: result.location || null,
+        gradeMode: result.gradeMode || 'individual',
+        grades: Array.isArray(result.grades) ? result.grades : [],
+        sequence: { targetActivity: result.adjacentTo || '', position: result.adjacentPosition || 'either' }
     });
 
     renderRotationEventsPane(containerEl);
@@ -947,6 +1182,7 @@ function getNeedsForBunk(bunkName, dateKey) {
     if (!events.length) return [];
 
     const bunkStr = String(bunkName);
+    const bunkGrade = getBunkGrade(bunkStr);
     const needs = [];
 
     events.forEach(evt => {
@@ -954,6 +1190,11 @@ function getNeedsForBunk(bunkName, dateKey) {
 
         // Excluded?
         if (Array.isArray(evt.excludedBunks) && evt.excludedBunks.includes(bunkStr)) return;
+
+        // Grade filter — if the event restricts to specific grades, skip other grades
+        if (Array.isArray(evt.grades) && evt.grades.length > 0) {
+            if (!bunkGrade || !evt.grades.includes(bunkGrade)) return;
+        }
 
         // Already completed (any day in the range)?
         const completed = getCompletedBunks(evt);
@@ -964,6 +1205,24 @@ function getNeedsForBunk(bunkName, dateKey) {
         const winStart = evt.dailyWindow?.startMin;
         const winEnd = evt.dailyWindow?.endMin;
         if (winStart == null || winEnd == null || winEnd - winStart < dur) return;
+
+        // On the last day every remaining bunk must be scheduled.
+        // With `not_sharable`, different grades can't share a slot, so same-grade
+        // bunks must stack (up to concurrency). Scale concurrency to gradeRemaining
+        // so all bunks in this grade fit into one shared slot rather than each
+        // claiming its own slot and starving later grades.
+        const baseConcurrency = parseInt(evt.concurrency) || 1;
+        const allDates = getDatesBetween(evt.dateRange.start, evt.dateRange.end);
+        const todayIdx = allDates.indexOf(dateKey);
+        const daysLeft = allDates.length - Math.max(0, todayIdx);
+        const isLastDay = daysLeft <= 1;
+
+        let effectiveConcurrency = baseConcurrency;
+        if (isLastDay && bunkGrade) {
+            const remaining = getRemainingBunks(evt);
+            const gradeRemaining = remaining.filter(b => b.grade === bunkGrade).length;
+            if (gradeRemaining > baseConcurrency) effectiveConcurrency = gradeRemaining;
+        }
 
         needs.push({
             type: 'rotation_event',
@@ -985,7 +1244,7 @@ function getNeedsForBunk(bunkName, dateKey) {
             _activityLocked: true,
             _source: 'rotation_event',
             _rotationEventId: evt.id,
-            _rotationEventConcurrency: parseInt(evt.concurrency) || 1,
+            _rotationEventConcurrency: effectiveConcurrency,
             _rotationEventColor: evt.color || '#F59E0B',
             _rotationEventLocation: evt.location || null
         });

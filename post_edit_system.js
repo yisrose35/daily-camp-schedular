@@ -592,61 +592,10 @@
         
         window.saveSchedule?.();
 
-        // Historical counts delta
-        try {
-            const _gs = window.loadGlobalSettings?.() || {};
-            const _hc = _gs.historicalCounts || {};
-            if (!_hc[bunk]) _hc[bunk] = {};
-            let _newAct = (!isClear && activity) ? activity : null;
-
-            if (_newAct) {
-                for (const oldAct of _oldActivities) {
-                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) { _newAct = oldAct; break; }
-                }
-            }
-
-            const _oldUnique = {};
-            _oldActivities.forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
-            for (const [act, count] of Object.entries(_oldUnique)) {
-                const _before = _hc[bunk][act] || 0;
-                _hc[bunk][act] = Math.max(0, _before - count);
-            }
-
-            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
-            if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
-                let _newCount = 0;
-                slots.forEach(idx => {
-                    const entry = window.scheduleAssignments[bunk]?.[idx];
-                    if (entry && !entry.continuation) _newCount++;
-                });
-                const _before = _hc[bunk][_newAct] || 0;
-                _hc[bunk][_newAct] = _before + _newCount;
-            }
-
-            if (window.saveGlobalSettings) {
-                window.saveGlobalSettings('historicalCounts', _hc);
-                if (typeof window.forceSyncToCloud === 'function') setTimeout(() => window.forceSyncToCloud(), 100);
-            }
-        } catch (_hcErr) { console.error('[PostEdit] Historical counts delta failed:', _hcErr); }
-
-        // Rotation history timestamps
-        try {
-            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            _rotHist.bunks = _rotHist.bunks || {};
-            _rotHist.bunks[bunk] = _rotHist.bunks[bunk] || {};
-            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _now = Date.now();
-            _rotHist.bunks[bunk] = {};
-            _bunkSlots.forEach(entry => {
-                if (entry?._activity && !entry.continuation && !entry._isTransition) {
-                    const _aLower = entry._activity.toLowerCase();
-                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
-                        _rotHist.bunks[bunk][entry._activity] = _now;
-                    }
-                }
-            });
-            window.saveRotationHistory?.(_rotHist);
-        } catch (_re) { console.error('[PostEdit] Rotation history update failed:', _re); }
+        // Post-edit counts + rotation history (single shared implementation)
+        if (window.SchedulerCoreUtils?.applyPostEditCounts) {
+            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity) ? activity : null, slots);
+        }
         
         // Render
         console.log('[PostEdit] 🔄 Calling updateTable() immediately');
@@ -745,6 +694,9 @@
                     </select>
                 </div>
                 <div id="post-edit-conflict" style="display:none;"></div>
+                <div style="display:flex;gap:10px;margin-top:4px;">
+                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill</button>
+                </div>
                 <div style="display:flex;gap:10px;margin-top:8px;">
                     <button id="post-edit-cancel" style="flex:1;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:1rem;cursor:pointer;font-weight:500;">Cancel</button>
                     <button id="post-edit-delete" style="padding:12px 16px;border:none;border-radius:8px;background:#fef2f2;color:#dc2626;font-size:1rem;cursor:pointer;font-weight:600;border:1px solid #fca5a5;">Delete</button>
@@ -754,7 +706,23 @@
         
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
-        
+
+        document.getElementById('post-edit-autofill').onclick = () => {
+            const divName = peiGetDivForBunk(bunk);
+            const pick = peiAutoFill(bunk, divName, startMin, endMin);
+            if (!pick) { alert('No suitable activity found based on current constraints.'); return; }
+            document.getElementById('post-edit-activity').value = pick.activity;
+            const loc = document.getElementById('post-edit-location');
+            if (pick.field) {
+                for (let i = 0; i < loc.options.length; i++) {
+                    if (loc.options[i].value === pick.field) { loc.selectedIndex = i; break; }
+                }
+            } else {
+                loc.selectedIndex = 0;
+            }
+            checkAndShowConflicts();
+        };
+
         // Delete button
         document.getElementById('post-edit-delete').onclick = () => {
             const divName = peiGetDivForBunk(bunk);
@@ -1214,17 +1182,40 @@
         freeEl.style.cssText = `position:absolute;left:3px;right:3px;top:${topPx}px;height:${heightPx}px;border-radius:5px;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 4px,#f3f4f6 4px,#f3f4f6 8px);border:1px dashed #d1d5db;display:flex;align-items:center;justify-content:center;z-index:0;transition:border-color 0.2s;`;
 
         if (canEditBunk(bunk)) {
+            freeEl.style.gap = '6px';
+
             const addBtn = document.createElement('div');
             addBtn.className = 'pei-add-btn';
             addBtn.innerHTML = '+';
             addBtn.title = `Add activity (${gapDur}min)`;
-            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;';
+            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;flex-shrink:0;';
             freeEl.appendChild(addBtn);
-            freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; freeEl.style.borderColor = '#93c5fd'; });
-            freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; freeEl.style.borderColor = '#d1d5db'; });
+
+            const autoBtn = document.createElement('div');
+            autoBtn.className = 'pei-autofill-btn';
+            autoBtn.innerHTML = '⚡';
+            autoBtn.title = `Auto-fill this gap`;
+            autoBtn.style.cssText = 'padding:2px 8px;border-radius:999px;background:rgba(124,58,237,0.1);color:#7c3aed;font-size:0.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s;z-index:4;white-space:nowrap;flex-shrink:0;letter-spacing:0.01em;';
+            freeEl.appendChild(autoBtn);
+
+            freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; autoBtn.style.opacity = '1'; freeEl.style.borderColor = '#93c5fd'; });
+            freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; autoBtn.style.opacity = '0'; freeEl.style.borderColor = '#d1d5db'; });
+            addBtn.addEventListener('mouseenter', () => { addBtn.style.background = 'rgba(37,99,235,0.2)'; });
+            addBtn.addEventListener('mouseleave', () => { addBtn.style.background = 'rgba(37,99,235,0.1)'; });
+            autoBtn.addEventListener('mouseenter', () => { autoBtn.style.background = 'rgba(124,58,237,0.2)'; });
+            autoBtn.addEventListener('mouseleave', () => { autoBtn.style.background = 'rgba(124,58,237,0.1)'; });
+
             addBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 peiShowAddModal(bunk, divName, gapStart, gapEnd);
+            });
+
+            autoBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const pick = peiAutoFill(bunk, divName, gapStart, gapEnd);
+                if (!pick) { peiShowBanner('No suitable activity found for this gap', 'warning'); return; }
+                peiApplyNewBlock(bunk, divName, gapStart, gapEnd, pick.activity, pick.field || null);
+                peiShowBanner(`✓ Auto-filled: ${pick.activity}`, 'success', true);
             });
         }
 

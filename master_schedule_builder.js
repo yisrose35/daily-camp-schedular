@@ -688,6 +688,7 @@ function init(targetElement = null){
       <div class="ms-auto-container" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
         <div id="daw-toolbar" class="ms-toolbar"></div>
         <div id="daw-expand" class="ms-expand"></div>
+        <div id="daw-period-panel" style="display:none; border-bottom:1px solid #e2e8f0; overflow:hidden; max-height:420px; overflow-y:auto;"></div>
         <div class="ms-daw-wrapper">
           <div id="daw-grid" class="ms-daw-grid"></div>
         </div>
@@ -1134,8 +1135,10 @@ function loadDAWLayers() {
   // Load the assigned template (or fallback to unsaved draft '_current')
   if (tmpl && autoTemplates[tmpl]) {
       dawLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+      applyTemplatePeriods(tmpl);
   } else if (autoTemplates['_current']) {
       dawLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+      applyTemplatePeriods('_current');
   } else {
       dawLayers = {};
   }
@@ -1157,9 +1160,21 @@ function saveDAWLayers(forceTemplateName = null) {
   const g = window.loadGlobalSettings?.() || {};
   if (!g.app1) g.app1 = {};
   if (!g.app1.autoLayerTemplates) g.app1.autoLayerTemplates = {};
+  if (!g.app1.autoLayerTemplatePeriods) g.app1.autoLayerTemplatePeriods = {};
   g.app1.autoLayerTemplates[templateKey] = JSON.parse(JSON.stringify(dawLayers));
+  g.app1.autoLayerTemplatePeriods[templateKey] = JSON.parse(JSON.stringify(window.campPeriods || {}));
   window.saveGlobalSettings?.('app1', g.app1);
   window.forceSyncToCloud?.();
+}
+
+function applyTemplatePeriods(templateName) {
+  const g = window.loadGlobalSettings?.() || {};
+  const snapshot = g.app1?.autoLayerTemplatePeriods?.[templateName];
+  if (!snapshot) return false;
+  window.campPeriods = JSON.parse(JSON.stringify(snapshot));
+  window.saveGlobalSettings?.('campPeriods', window.campPeriods);
+  window.dispatchEvent(new CustomEvent('campistry-periods-changed'));
+  return true;
 }
 
 function renderDAWPalette() {
@@ -1255,6 +1270,8 @@ function renderDAWToolbar() {
       <button id="daw-save-btn" class="ms-daw-sb-btn ms-daw-sb-accent">Save As</button>
     </div>
     <div class="ms-daw-sb-right">
+      <button id="daw-periods-btn" class="ms-daw-sb-btn ms-daw-sb-ghost">Bell Schedule</button>
+      <div class="ms-daw-sb-div"></div>
       <button id="daw-copy-btn" class="ms-daw-sb-btn ms-daw-sb-ghost">Copy To…</button>
       <button id="daw-clear-btn" class="ms-daw-sb-btn ms-daw-sb-danger">Clear</button>
       <div class="ms-daw-sb-div"></div>
@@ -1276,6 +1293,7 @@ function renderDAWToolbar() {
       const ok = await showConfirm(`Load auto template "${name}"?`);
       if (ok) {
         dawLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
+        applyTemplatePeriods(name);
         currentLoadedTemplate = name;
         renderDAW();
       }
@@ -1329,6 +1347,20 @@ function renderDAWToolbar() {
   
   document.getElementById('daw-copy-btn').onclick = () => dawCopyLayersDialog();
 
+  document.getElementById('daw-periods-btn').onclick = () => {
+    const panel = document.getElementById('daw-period-panel');
+    if (!panel) return;
+    const isOpen = panel.style.display !== 'none';
+    if (isOpen) {
+      panel.style.display = 'none';
+    } else {
+      panel.style.display = 'block';
+      if (typeof window.PeriodEditor?.renderEditor === 'function') {
+        window.PeriodEditor.renderEditor(panel);
+      }
+    }
+  };
+
   const dawFsBtn = document.getElementById('daw-fullscreen-btn');
   if (dawFsBtn) dawFsBtn.onclick = () => {
     const container = document.querySelector('.ms-container') || document.documentElement;
@@ -1354,6 +1386,9 @@ function renderDAWToolbar() {
       const g2 = window.loadGlobalSettings?.() || {};
       if (g2.app1?.autoLayerTemplates?.[nameToDelete]) {
         delete g2.app1.autoLayerTemplates[nameToDelete];
+        if (g2.app1.autoLayerTemplatePeriods) {
+          delete g2.app1.autoLayerTemplatePeriods[nameToDelete];
+        }
         window.saveGlobalSettings?.('app1', g2.app1);
         window.forceSyncToCloud?.();
         
@@ -1555,7 +1590,12 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   html += '</div>'; // relative container
   
   gridEl.innerHTML = html;
-  
+
+  // Overlay period blocks from bell schedule
+  if (typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+    window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+  }
+
   // Bind events
   bindDAWEvents(gridEl, globalStart, globalEnd, { layerSource, onSave, onRender, isExternal });
 }
@@ -1918,7 +1958,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           <input type="number" id="daw-pop-post-change" value="${layer.postChangeMin != null ? layer.postChangeMin : ''}" min="0" max="60" step="5" style="width:70px;" placeholder="0">
           <span style="font-size:11px;color:#94a3b8;">min</span>
         </div>
-        <div class="ms-daw-pop-hint">Total = pre + swim + post. Make band width cover all.</div>
+        <div class="ms-daw-pop-hint">Size the band to just the swim period. Pre extends backward, post extends to the next period's start (skips gaps).</div>
       </div>
       ` : ''}
       ${layer.type === 'custom' ? `
@@ -3364,6 +3404,21 @@ window.MasterSchedulerInternal = {
   DAW_LAYER_TYPES: DAW_LAYER_TYPES,
   DAW_PIXELS_PER_MINUTE: DAW_PIXELS_PER_MINUTE,
 };
+
+  // Re-overlay period blocks whenever the bell schedule changes
+  window.addEventListener('campistry-periods-changed', function() {
+    const gridEl = document.getElementById('daw-grid');
+    if (gridEl && typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+      window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+    }
+    // Re-render panel sidebar badges if panel is open — but skip while user is typing inside it
+    const panel = document.getElementById('daw-period-panel');
+    if (panel && panel.style.display !== 'none' && typeof window.PeriodEditor?.renderEditor === 'function') {
+      if (panel.contains(document.activeElement)) return;
+      window.PeriodEditor.renderEditor(panel);
+    }
+  });
+
   // Listen for mode changes from Setup & Config
   window.addEventListener('campistry-builder-mode-changed', (e) => {
     const newMode = e.detail?.mode;

@@ -648,10 +648,14 @@
 <script src="facilities.js"></script>
 <script src="zones.js"></script>
 <script src="rules.js"></script>
+<script src="playoff_mode.js"></script>
 <script src="leagues.js"></script>
 <script src="specialty_leagues.js"></script>
 <script src="master_schedule_builder.js"></script>
-    <script src="auto_field_locks.js"></script>         
+    <script src="auto_field_locks.js"></script>
+<script src="period_editor.js"></script>
+<script src="auto_segment_model.js"></script>
+<script src="period_packer.js"></script>
 <script src="auto_solver_engine.js"></script>
     <script src="auto_build_engine.js"></script>
     <script src="auto_feasibility_check.js"></script>
@@ -660,6 +664,7 @@
     <script src="feasibility_oracle.js"></script>
     <script src="scheduler_core_auto.js"></script>
 <script src="auto_schedule_planner.js"></script>
+<script src="swim_debug.js"></script>
     <script src="custom_persistent_tiles.js"></script>
   
 
@@ -697,6 +702,7 @@
 <script src="unified_schedule_system.js"></script>
     <script src="schedule_calendar_views.js"></script>
 <script src="post_edit_system.js"></script>
+<script src="auto_fill_slot.js"></script>
 
 <!-- Pinned preservation (must come after scheduler_core_main.js) -->
 <script src="pinned_activity_preservation.js"></script>
@@ -786,5 +792,35 @@ function showTab(id) {
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
 <script defer src="/_vercel/insights/script.js"></script>
+
+<!-- Live View pop-out detector — when ?view=live is set, take over the page
+     and run the schedule fullscreen with a live time cursor. -->
+<script>
+(function () {
+    try {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('view') !== 'live') return;
+        window.PC_LIVE_MODE = true;
+        // Optional date override — set BEFORE any scheduling-data scripts trigger their loads
+        var dateParam = params.get('date');
+        if (dateParam) window.currentScheduleDate = dateParam;
+
+        function startLive() {
+            if (!window._pc3RunLiveStandalone) {
+                // Print Center JS not ready yet — try again shortly
+                setTimeout(startLive, 200);
+                return;
+            }
+            try { window._pc3RunLiveStandalone(); }
+            catch (e) { console.error('[LiveView] start failed', e); }
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', startLive);
+        } else {
+            startLive();
+        }
+    } catch (e) { console.error('[LiveView] bootstrap failed', e); }
+})();
+</script>
 </body>
 </html>
