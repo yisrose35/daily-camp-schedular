@@ -214,16 +214,66 @@ function getAssignmentsForDate(dateKey, opts = {}) {
             ) || null;
         }
 
-        // Try to place a single bunk adjacent to its target entry
+        // Try to place a single bunk adjacent to its target entry.
+        // If a pinned/fixed activity (e.g. lunch) blocks the immediately adjacent
+        // slot, scan forward/backward past it — the constraint is satisfied as long
+        // as only pinned activities sit between the two linked events.
         function tryAdjacent(bunkName, tStart, tEnd) {
-            if ((sequencePosition === 'either' || sequencePosition === 'after') &&
-                !hasBunkConflict(bunkName, tEnd, tEnd + duration, scheduleAssignments, opts.timelines)) {
-                return { startMin: tEnd, endMin: tEnd + duration };
+            // Returns the furthest end-time of any pinned/fixed block overlapping [wStart, wEnd]
+            const pinnedBlockEnd = (wStart, wEnd) => {
+                const source = opts.timelines?.[bunkName] || scheduleAssignments[bunkName] || [];
+                let latest = wStart;
+                for (const block of source) {
+                    if (!block || block._isTransition) continue;
+                    if (!(block._activityLocked || block._isFixed || block.type === 'pinned')) continue;
+                    const bStart = block.startMin ?? block._startMin;
+                    const bEnd   = block.endMin   ?? block._endMin;
+                    if (bStart == null || bEnd == null) continue;
+                    if (bStart < wEnd && bEnd > wStart) latest = Math.max(latest, bEnd);
+                }
+                return latest;
+            };
+            // Returns the earliest start-time of any pinned/fixed block overlapping [wStart, wEnd]
+            const pinnedBlockStart = (wStart, wEnd) => {
+                const source = opts.timelines?.[bunkName] || scheduleAssignments[bunkName] || [];
+                let earliest = wEnd;
+                for (const block of source) {
+                    if (!block || block._isTransition) continue;
+                    if (!(block._activityLocked || block._isFixed || block.type === 'pinned')) continue;
+                    const bStart = block.startMin ?? block._startMin;
+                    const bEnd   = block.endMin   ?? block._endMin;
+                    if (bStart == null || bEnd == null) continue;
+                    if (bStart < wEnd && bEnd > wStart) earliest = Math.min(earliest, bStart);
+                }
+                return earliest;
+            };
+
+            // Try AFTER target, skipping pinned blocks (e.g. swim → lunch → [here])
+            if (sequencePosition === 'either' || sequencePosition === 'after') {
+                let t = tEnd;
+                let maxIter = 10;
+                while (t + duration <= windowEnd && maxIter-- > 0) {
+                    if (!hasBunkConflict(bunkName, t, t + duration, scheduleAssignments, opts.timelines)) {
+                        return { startMin: t, endMin: t + duration };
+                    }
+                    // hasBunkConflict only fires for pinned/fixed blocks — skip past them
+                    const nextT = pinnedBlockEnd(t, t + duration);
+                    if (nextT <= t) break; // no forward progress possible
+                    t = nextT;
+                }
             }
-            if ((sequencePosition === 'either' || sequencePosition === 'before') &&
-                tStart - duration >= 0 &&
-                !hasBunkConflict(bunkName, tStart - duration, tStart, scheduleAssignments, opts.timelines)) {
-                return { startMin: tStart - duration, endMin: tStart };
+            // Try BEFORE target, skipping pinned blocks (e.g. [here] → lunch → swim)
+            if (sequencePosition === 'either' || sequencePosition === 'before') {
+                let tEnd2 = tStart;
+                let maxIter = 10;
+                while (tEnd2 - duration >= windowStart && maxIter-- > 0) {
+                    if (!hasBunkConflict(bunkName, tEnd2 - duration, tEnd2, scheduleAssignments, opts.timelines)) {
+                        return { startMin: tEnd2 - duration, endMin: tEnd2 };
+                    }
+                    const prevT = pinnedBlockStart(tEnd2 - duration, tEnd2);
+                    if (prevT >= tEnd2) break;
+                    tEnd2 = prevT;
+                }
             }
             return null;
         }
@@ -265,14 +315,68 @@ function getAssignmentsForDate(dateKey, opts = {}) {
                     }
                     if (tStart == null) return;
 
+                    // Try adjacency for the whole grade group, skipping pinned blocks.
+                    // pinnedBlockEndForGroup / pinnedBlockStartForGroup scan all bunks
+                    // in the group and return the safe skip boundary.
+                    const pinnedBlockEndForGroup = (wStart, wEnd) => {
+                        let latest = wStart;
+                        for (const b of group) {
+                            const source = opts.timelines?.[b.bunk] || scheduleAssignments[b.bunk] || [];
+                            for (const block of source) {
+                                if (!block || block._isTransition) continue;
+                                if (!(block._activityLocked || block._isFixed || block.type === 'pinned')) continue;
+                                const bS = block.startMin ?? block._startMin;
+                                const bE = block.endMin   ?? block._endMin;
+                                if (bS == null || bE == null) continue;
+                                if (bS < wEnd && bE > wStart) latest = Math.max(latest, bE);
+                            }
+                        }
+                        return latest;
+                    };
+                    const pinnedBlockStartForGroup = (wStart, wEnd) => {
+                        let earliest = wEnd;
+                        for (const b of group) {
+                            const source = opts.timelines?.[b.bunk] || scheduleAssignments[b.bunk] || [];
+                            for (const block of source) {
+                                if (!block || block._isTransition) continue;
+                                if (!(block._activityLocked || block._isFixed || block.type === 'pinned')) continue;
+                                const bS = block.startMin ?? block._startMin;
+                                const bE = block.endMin   ?? block._endMin;
+                                if (bS == null || bE == null) continue;
+                                if (bS < wEnd && bE > wStart) earliest = Math.min(earliest, bS);
+                            }
+                        }
+                        return earliest;
+                    };
+
                     let time = null;
-                    if ((sequencePosition === 'either' || sequencePosition === 'after') &&
-                        group.every(b => !hasBunkConflict(b.bunk, tEnd, tEnd + duration, scheduleAssignments, opts.timelines))) {
-                        time = { startMin: tEnd, endMin: tEnd + duration };
-                    } else if ((sequencePosition === 'either' || sequencePosition === 'before') &&
-                        tStart - duration >= 0 &&
-                        group.every(b => !hasBunkConflict(b.bunk, tStart - duration, tStart, scheduleAssignments, opts.timelines))) {
-                        time = { startMin: tStart - duration, endMin: tStart };
+                    // Try AFTER, skipping pinned activities between target and landing slot
+                    if (sequencePosition === 'either' || sequencePosition === 'after') {
+                        let t = tEnd;
+                        let maxIter = 10;
+                        while (t + duration <= windowEnd && maxIter-- > 0) {
+                            if (group.every(b => !hasBunkConflict(b.bunk, t, t + duration, scheduleAssignments, opts.timelines))) {
+                                time = { startMin: t, endMin: t + duration };
+                                break;
+                            }
+                            const nextT = pinnedBlockEndForGroup(t, t + duration);
+                            if (nextT <= t) break;
+                            t = nextT;
+                        }
+                    }
+                    // Try BEFORE, skipping pinned activities
+                    if (!time && (sequencePosition === 'either' || sequencePosition === 'before')) {
+                        let tEnd2 = tStart;
+                        let maxIter = 10;
+                        while (tEnd2 - duration >= windowStart && maxIter-- > 0) {
+                            if (group.every(b => !hasBunkConflict(b.bunk, tEnd2 - duration, tEnd2, scheduleAssignments, opts.timelines))) {
+                                time = { startMin: tEnd2 - duration, endMin: tEnd2 };
+                                break;
+                            }
+                            const prevT = pinnedBlockStartForGroup(tEnd2 - duration, tEnd2);
+                            if (prevT >= tEnd2) break;
+                            tEnd2 = prevT;
+                        }
                     }
                     if (!time) return;
                     group.forEach(b => assignments.push({ bunk: b.bunk, grade: b.grade, startMin: time.startMin, endMin: time.endMin }));

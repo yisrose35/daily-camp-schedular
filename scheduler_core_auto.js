@@ -9172,21 +9172,72 @@
                                 return bunks.every(b => isWindowFreeForBunk(t, tEnd, b));
                             };
 
-                            // Sequence-constrained: try adjacent to target activity first
+                            // Sequence-constrained: try adjacent to target activity first.
+                            // If a pinned activity (e.g. lunch) blocks direct adjacency,
+                            // scan past it and land on the other side — the constraint is
+                            // satisfied as long as only pinned activities sit between the
+                            // two linked events (e.g. waterslide → lunch(pinned) → swim).
                             if (seqTarget) {
                                 const tgt = findTargetTimeForGrade(bunks);
                                 if (tgt) {
-                                    const tryAfter = () => tryWindow(tgt.endMin, tgt.endMin + dur)
-                                        ? { startMin: tgt.endMin, endMin: tgt.endMin + dur } : null;
-                                    const tryBefore = () => tryWindow(tgt.startMin - dur, tgt.startMin)
-                                        ? { startMin: tgt.startMin - dur, endMin: tgt.startMin } : null;
+                                    // Returns pinned/fixed blocks overlapping [wStart, wEnd]
+                                    // across all bunks in this grade group.
+                                    const getPinnedBlockersAt = (wStart, wEnd) => {
+                                        const blockers = [];
+                                        for (const bunk of bunks) {
+                                            const tl = bunkTimelines[bunk] || [];
+                                            for (const blk of tl) {
+                                                if (!blk) continue;
+                                                if (!(blk._activityLocked || blk._fixed || blk._classification === 'pinned')) continue;
+                                                const bt = String(blk.type || '').toLowerCase();
+                                                if (bt === 'pre-change' || bt === 'post-change') continue;
+                                                const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
+                                                const bEnd   = blk.endMin   != null ? blk.endMin   : blk._endMin;
+                                                if (bStart == null || bEnd == null) continue;
+                                                if (bStart < wEnd && bEnd > wStart) blockers.push({ startMin: bStart, endMin: bEnd });
+                                            }
+                                        }
+                                        return blockers;
+                                    };
+
+                                    // Try AFTER target, skipping over pinned activities
+                                    // (e.g. swim → lunch(pinned) → [waterslide here]).
+                                    const tryAfterSkippingPinned = () => {
+                                        let t = tgt.endMin;
+                                        let maxIter = 10;
+                                        while (t + dur <= winEnd && maxIter-- > 0) {
+                                            if (tryWindow(t, t + dur)) return { startMin: t, endMin: t + dur };
+                                            // Stop if another already-placed event (not pinned) blocks the way
+                                            if (placements.some(p => t < p.endMin && t + dur > p.startMin)) break;
+                                            const blockers = getPinnedBlockersAt(t, t + dur);
+                                            if (blockers.length === 0) break; // non-pinned blocker or window edge
+                                            t = Math.max(...blockers.map(b => b.endMin));
+                                        }
+                                        return null;
+                                    };
+
+                                    // Try BEFORE target, skipping over pinned activities
+                                    // (e.g. [waterslide here] → lunch(pinned) → swim).
+                                    const tryBeforeSkippingPinned = () => {
+                                        let tEnd = tgt.startMin;
+                                        let maxIter = 10;
+                                        while (tEnd - dur >= winStart && maxIter-- > 0) {
+                                            if (tryWindow(tEnd - dur, tEnd)) return { startMin: tEnd - dur, endMin: tEnd };
+                                            if (placements.some(p => (tEnd - dur) < p.endMin && tEnd > p.startMin)) break;
+                                            const blockers = getPinnedBlockersAt(tEnd - dur, tEnd);
+                                            if (blockers.length === 0) break;
+                                            tEnd = Math.min(...blockers.map(b => b.startMin));
+                                        }
+                                        return null;
+                                    };
+
                                     let adj = null;
-                                    if (seqPosition === 'after') adj = tryAfter();
-                                    else if (seqPosition === 'before') adj = tryBefore();
-                                    else adj = tryAfter() || tryBefore();
+                                    if (seqPosition === 'after') adj = tryAfterSkippingPinned();
+                                    else if (seqPosition === 'before') adj = tryBeforeSkippingPinned();
+                                    else adj = tryAfterSkippingPinned() || tryBeforeSkippingPinned();
                                     if (adj) return adj;
                                 }
-                                // Direct adjacency failed — try nearby periods sorted
+                                // Pinned-skip adjacency also failed — try nearby periods sorted
                                 // by distance from the target activity, so the linked
                                 // event lands as close as physically possible.
                                 const gradePeriods2 = (window.campPeriods || {})[grade] || [];
