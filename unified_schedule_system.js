@@ -3019,74 +3019,10 @@ if (bypassStatus.highlight) {
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { bunk, slots, activity, location, date: currentDate } }));
         saveSchedule(); 
 
-        // ★★★ FIX: Targeted delta adjustment for historical counts ★★★
-        try {
-            const _gs = window.loadGlobalSettings?.() || {};
-            const _hc = _gs.historicalCounts || {};
-            if (!_hc[bunk]) _hc[bunk] = {};
-            let _newAct = (!isClear && activity) ? activity : null;
-
-            // Normalize: if new activity matches old activity ignoring case, use old casing
-            if (_newAct) {
-                for (const oldAct of _oldActivities) {
-                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) {
-                        console.log(`[PostEdit] 📊 Case normalization: "${_newAct}" → "${oldAct}"`);
-                        _newAct = oldAct;
-                        break;
-                    }
-                }
-            }
-
-            // Decrement old activities
-            const _oldUnique = {};
-            _oldActivities.forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
-            for (const [act, count] of Object.entries(_oldUnique)) {
-                const _before = _hc[bunk][act] || 0;
-                _hc[bunk][act] = Math.max(0, _before - count);
-                console.log(`[PostEdit] 📊 ${bunk} "${act}" count: ${_before} → ${_hc[bunk][act]}`);
-            }
-
-            // Increment new activity (only if it's a tracked/valid activity)
-            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
-            if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
-                let _newCount = 0;
-                slots.forEach(idx => {
-                    const entry = window.scheduleAssignments[bunk]?.[idx];
-                    if (entry && !entry.continuation) _newCount++;
-                });
-                const _before = _hc[bunk][_newAct] || 0;
-                _hc[bunk][_newAct] = _before + _newCount;
-                console.log(`[PostEdit] 📊 ${bunk} "${_newAct}" count: ${_before} → ${_hc[bunk][_newAct]}`);
-            }
-
-            if (window.saveGlobalSettings) {
-                window.saveGlobalSettings('historicalCounts', _hc);
-                if (typeof window.forceSyncToCloud === 'function') {
-                    setTimeout(() => window.forceSyncToCloud(), 100);
-                }
-            }
-            console.log('[PostEdit] 📊 Historical counts delta applied for', bunk);
-        } catch (_hcErr) { console.error('[PostEdit] Historical counts delta failed:', _hcErr); }
-
-        // ★★★ Update rotation history timestamps for the edited bunk ★★★
-        try {
-            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            _rotHist.bunks = _rotHist.bunks || {};
-            _rotHist.bunks[bunk] = _rotHist.bunks[bunk] || {};
-            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _now = Date.now();
-            _rotHist.bunks[bunk] = {};
-            _bunkSlots.forEach(entry => {
-                if (entry?._activity && !entry.continuation && !entry._isTransition) {
-                    const _aLower = entry._activity.toLowerCase();
-                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
-                        _rotHist.bunks[bunk][entry._activity] = _now;
-                    }
-                }
-            });
-            window.saveRotationHistory?.(_rotHist);
-            console.log('[PostEdit] 📊 Rotation timestamps rebuilt for', bunk);
-        } catch (_re) { console.error('[PostEdit] Rotation history update failed:', _re); }
+        // Post-edit counts + rotation history (single shared implementation)
+        if (window.SchedulerCoreUtils?.applyPostEditCounts) {
+            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity) ? activity : null, slots);
+        }
 
         updateTable();
         setTimeout(() => updateTable(), 500);
@@ -5138,7 +5074,20 @@ if (softBlocks.length > 0) {
         const plan = proposal.reassignments || [];
 
         const divSlots = window.divisionTimes?.[divName] || [];
-        
+
+        // Capture old activities before any overwrites (needed for historicalCounts delta)
+        const primaryOldActivities = new Map();
+        for (const bunk of (bunks || [])) {
+            const existing = window.scheduleAssignments[bunk] || [];
+            primaryOldActivities.set(bunk, (slots || []).map(s => existing[s]?._activity).filter(Boolean));
+        }
+        const planOldActivities = new Map();
+        for (const move of plan) {
+            if (!planOldActivities.has(move.bunk)) planOldActivities.set(move.bunk, []);
+            const oldAct = (window.scheduleAssignments[move.bunk] || [])[move.slot]?._activity;
+            if (oldAct) planOldActivities.get(move.bunk).push(oldAct);
+        }
+
         for (const bunk of (bunks || [])) {
             if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
             for (let i = 0; i < (slots || []).length; i++) {
@@ -5170,6 +5119,15 @@ if (softBlocks.length > 0) {
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
         if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
+
+        if (window.SchedulerCoreUtils?.applyPostEditCounts) {
+            for (const bunk of (bunks || [])) {
+                window.SchedulerCoreUtils.applyPostEditCounts(bunk, primaryOldActivities.get(bunk) || [], activity, slots);
+            }
+            for (const move of plan) {
+                window.SchedulerCoreUtils.applyPostEditCounts(move.bunk, planOldActivities.get(move.bunk) || [], move.to.activity, [move.slot]);
+            }
+        }
 
         if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
 

@@ -592,61 +592,10 @@
         
         window.saveSchedule?.();
 
-        // Historical counts delta
-        try {
-            const _gs = window.loadGlobalSettings?.() || {};
-            const _hc = _gs.historicalCounts || {};
-            if (!_hc[bunk]) _hc[bunk] = {};
-            let _newAct = (!isClear && activity) ? activity : null;
-
-            if (_newAct) {
-                for (const oldAct of _oldActivities) {
-                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) { _newAct = oldAct; break; }
-                }
-            }
-
-            const _oldUnique = {};
-            _oldActivities.forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
-            for (const [act, count] of Object.entries(_oldUnique)) {
-                const _before = _hc[bunk][act] || 0;
-                _hc[bunk][act] = Math.max(0, _before - count);
-            }
-
-            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
-            if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
-                let _newCount = 0;
-                slots.forEach(idx => {
-                    const entry = window.scheduleAssignments[bunk]?.[idx];
-                    if (entry && !entry.continuation) _newCount++;
-                });
-                const _before = _hc[bunk][_newAct] || 0;
-                _hc[bunk][_newAct] = _before + _newCount;
-            }
-
-            if (window.saveGlobalSettings) {
-                window.saveGlobalSettings('historicalCounts', _hc);
-                if (typeof window.forceSyncToCloud === 'function') setTimeout(() => window.forceSyncToCloud(), 100);
-            }
-        } catch (_hcErr) { console.error('[PostEdit] Historical counts delta failed:', _hcErr); }
-
-        // Rotation history timestamps
-        try {
-            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            _rotHist.bunks = _rotHist.bunks || {};
-            _rotHist.bunks[bunk] = _rotHist.bunks[bunk] || {};
-            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _now = Date.now();
-            _rotHist.bunks[bunk] = {};
-            _bunkSlots.forEach(entry => {
-                if (entry?._activity && !entry.continuation && !entry._isTransition) {
-                    const _aLower = entry._activity.toLowerCase();
-                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
-                        _rotHist.bunks[bunk][entry._activity] = _now;
-                    }
-                }
-            });
-            window.saveRotationHistory?.(_rotHist);
-        } catch (_re) { console.error('[PostEdit] Rotation history update failed:', _re); }
+        // Post-edit counts + rotation history (single shared implementation)
+        if (window.SchedulerCoreUtils?.applyPostEditCounts) {
+            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity) ? activity : null, slots);
+        }
         
         // Render
         console.log('[PostEdit] 🔄 Calling updateTable() immediately');

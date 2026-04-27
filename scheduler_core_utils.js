@@ -2339,6 +2339,81 @@ const validActivities = Utils.getValidActivityNames();
     window.reIncrementHistoricalCounts = Utils.reIncrementHistoricalCounts;
     window.rebuildHistoricalCountsFromCloud = Utils.rebuildHistoricalCountsFromCloud;
 
+    // =================================================================
+    // POST-EDIT COUNTS + ROTATION HISTORY — shared by all edit paths
+    // =================================================================
+    // Single source of truth for the delta update that must run after ANY
+    // manual cell edit (direct edit, conflict-resolved edit, bypass, proposal).
+    //
+    // @param {string}   bunk          — bunk name
+    // @param {string[]} oldActivities — activities that were in the affected slots before the edit
+    // @param {string|null} newActivity — the replacement activity (null = clear)
+    // @param {number[]} slots         — slot indices that were edited
+    Utils.applyPostEditCounts = function(bunk, oldActivities, newActivity, slots) {
+        // ── historicalCounts delta ────────────────────────────────────
+        try {
+            const _gs = window.loadGlobalSettings?.() || {};
+            const _hc = _gs.historicalCounts || {};
+            if (!_hc[bunk]) _hc[bunk] = {};
+
+            let _newAct = newActivity || null;
+            // Normalize case: reuse old casing when the name matches
+            if (_newAct) {
+                for (const oldAct of (oldActivities || [])) {
+                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) {
+                        _newAct = oldAct;
+                        break;
+                    }
+                }
+            }
+
+            // Decrement old activities
+            const _oldUnique = {};
+            (oldActivities || []).forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
+            for (const [act, count] of Object.entries(_oldUnique)) {
+                _hc[bunk][act] = Math.max(0, (_hc[bunk][act] || 0) - count);
+            }
+
+            // Increment new activity
+            const _validActs = Utils.getValidActivityNames?.() || new Set();
+            if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
+                let _newCount = 0;
+                (slots || []).forEach(idx => {
+                    const entry = window.scheduleAssignments?.[bunk]?.[idx];
+                    if (entry && !entry.continuation) _newCount++;
+                });
+                if (_newCount === 0) _newCount = 1; // fallback when slots list unavailable
+                _hc[bunk][_newAct] = (_hc[bunk][_newAct] || 0) + _newCount;
+            }
+
+            if (window.saveGlobalSettings) {
+                window.saveGlobalSettings('historicalCounts', _hc);
+                if (typeof window.forceSyncToCloud === 'function') {
+                    setTimeout(() => window.forceSyncToCloud(), 100);
+                }
+            }
+        } catch (e) { console.error('[PostEditCounts] historicalCounts delta failed:', e); }
+
+        // ── rotationHistory rebuild for this bunk ─────────────────────
+        try {
+            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            _rotHist.bunks = _rotHist.bunks || {};
+            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
+            const _now = Date.now();
+            _rotHist.bunks[bunk] = {};
+            _bunkSlots.forEach(entry => {
+                if (entry?._activity && !entry.continuation && !entry._isTransition) {
+                    const _aLower = entry._activity.toLowerCase();
+                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
+                        _rotHist.bunks[bunk][entry._activity] = _now;
+                    }
+                }
+            });
+            window.saveRotationHistory?.(_rotHist);
+        } catch (e) { console.error('[PostEditCounts] rotationHistory rebuild failed:', e); }
+    };
+    window.applyPostEditCounts = Utils.applyPostEditCounts;
+
 
     // =================================================================
     // ★★★ NEW v7.5: DIAGNOSTIC FUNCTIONS ★★★
