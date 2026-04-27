@@ -1480,10 +1480,66 @@
             // Sort so swim layers are processed LAST. Ensures lunch, specials,
             // and other pinned activities are already in bunkTimelines when
             // computeSwimChangeAnchors runs for swim's pre/post-change blocks.
+            //
+            // Among swim layers: process the MOST CONSTRAINED grades first so
+            // they get first pick of pool periods. A swim layer that needs
+            // change blocks + an adjacent linked rotation event (e.g. WS) is
+            // far more constrained than a plain swim — it needs ~100 min of
+            // contiguous time and adjacent free slots. Processing it last
+            // forces it into whatever period remains, breaking adjacency.
+            //
+            // Priority (lower = processed first among swim):
+            //   2 = swim with change blocks + linked rotation event
+            //   3 = swim with change blocks only
+            //   4 = swim with linked rotation event only
+            //   5 = plain swim
+
+            // Pre-compute which grades have a linked rotation event targeting swim
+            const _gradesWithLinkedRot = new Set();
+            if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                try {
+                    const _sortRots = window.RotationEvents.loadRotationEvents() || [];
+                    for (const rEvt of _sortRots) {
+                        if (!rEvt || !rEvt.sequence) continue;
+                        const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
+                        if (!tgt) continue;
+                        if (currentDate && rEvt.dateRange) {
+                            if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
+                        }
+                        const rDur = parseInt(rEvt.durationPerBunk) || 0;
+                        if (rDur <= 0) continue;
+                        const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? rEvt.grades : [];
+                        if (rGrades.length > 0) {
+                            rGrades.forEach(g => _gradesWithLinkedRot.add(String(g) + '|' + tgt));
+                        } else {
+                            // No grade filter — applies to all grades
+                            allGrades.forEach(g => _gradesWithLinkedRot.add(String(g) + '|' + tgt));
+                        }
+                    }
+                } catch (_e) {}
+            }
+
             const orderedPinned = pinnedLayers.slice().sort((a, b) => {
-                const aSwim = (a.type || '').toLowerCase() === 'swim' ? 1 : 0;
-                const bSwim = (b.type || '').toLowerCase() === 'swim' ? 1 : 0;
-                return aSwim - bSwim;
+                const aType = (a.type || '').toLowerCase();
+                const bType = (b.type || '').toLowerCase();
+                const aSwim = aType === 'swim' ? 1 : 0;
+                const bSwim = bType === 'swim' ? 1 : 0;
+                if (aSwim !== bSwim) return aSwim - bSwim; // non-swim before swim
+
+                // Both swim — sort by constraint level (most constrained first)
+                if (aSwim && bSwim) {
+                    const aGrade = String(a.grade || a.division || '');
+                    const bGrade = String(b.grade || b.division || '');
+                    const aChange = (a.preChangeMin > 0 || a.postChangeMin > 0) ? 1 : 0;
+                    const bChange = (b.preChangeMin > 0 || b.postChangeMin > 0) ? 1 : 0;
+                    const aRot = _gradesWithLinkedRot.has(aGrade + '|' + aType) ? 1 : 0;
+                    const bRot = _gradesWithLinkedRot.has(bGrade + '|' + bType) ? 1 : 0;
+                    // Higher constraint score = more constrained = should process first
+                    const aScore = aChange * 2 + aRot;
+                    const bScore = bChange * 2 + bRot;
+                    if (aScore !== bScore) return bScore - aScore; // descending
+                }
+                return 0; // preserve original order for ties
             });
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
