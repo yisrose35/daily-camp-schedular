@@ -1526,7 +1526,35 @@
                 if (t === 'special' && !canUseSpecialAtTime(eventName, grade, blockStart, blockEnd)) return;
 
                 // ★ v4.0: Pool exclusivity for pinned swim
-                if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) return;
+                // If the preferred period is pool-blocked (another grade swims
+                // there), try other period starts instead of giving up. Without
+                // this, a fullGrade swim that fails pool exclusivity falls
+                // through to the per-bunk CSP solver which scatters bunks
+                // across different periods — breaking the fullGrade constraint.
+                if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) {
+                    const _fgDur = blockEnd - blockStart;
+                    const _poolPeriods = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
+                        : [];
+                    const _poolCenter = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
+                    const _poolCandidates = _poolPeriods
+                        .filter(p => (p.endMin - p.startMin) >= _fgDur &&
+                                      p.startMin >= layer.startMin &&
+                                      p.endMin <= layer.endMin)
+                        .map(p => ({ p, dist: Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - _poolCenter) }))
+                        .sort((a, b) => a.dist - b.dist);
+                    let _poolFound = false;
+                    for (const cand of _poolCandidates) {
+                        const cs = cand.p.startMin, ce = cs + _fgDur;
+                        if (canUsePoolAtTime(grade, cs, ce)) {
+                            blockStart = cs;
+                            blockEnd = ce;
+                            _poolFound = true;
+                            break;
+                        }
+                    }
+                    if (!_poolFound) return;
+                }
 
                 // Idempotency guard: if any target bunk already has a swim block,
                 // skip placing another. Prevents double-placement (and therefore
