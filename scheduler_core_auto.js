@@ -1501,6 +1501,34 @@
                     : allBunks;
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
 
+                // ── Pre-detect swim-linked rotation event (e.g. water slides) ──
+                // Done BEFORE period snapping so the period candidate filter can
+                // account for WS needing an adjacent slot.
+                let _earlyWsDur = 0;   // duration of linked rotation event
+                let _earlyWsPos = null; // 'before' | 'after' | 'either'
+                let _earlyWsEvt = null; // the rotation event object
+                if (t === 'swim' && window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                    try {
+                        const _preAllRots = window.RotationEvents.loadRotationEvents() || [];
+                        for (const rEvt of _preAllRots) {
+                            if (!rEvt || !rEvt.sequence) continue;
+                            const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
+                            if (tgt !== 'swim') continue;
+                            if (currentDate && rEvt.dateRange) {
+                                if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
+                            }
+                            const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
+                            if (rGrades && !rGrades.has(grade)) continue;
+                            const rDur = parseInt(rEvt.durationPerBunk) || 0;
+                            if (rDur <= 0) continue;
+                            _earlyWsDur = rDur;
+                            _earlyWsPos = rEvt.sequence.position || 'either';
+                            _earlyWsEvt = rEvt;
+                            break;
+                        }
+                    } catch (_e) { /* no rotation events */ }
+                }
+
                 // ★ fullGrade windowed layers: compute a proper block time within the window.
                 //   When the window is wider than the activity duration (e.g. swim window 9am-2pm,
                 //   duration 45min), pick the center of the window rather than filling the whole span.
@@ -1523,10 +1551,31 @@
                         const center = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
                         let _snapped = false;
                         if (_fgPeriods.length > 0) {
+                            // When a swim-linked WS exists, ensure the chosen period
+                            // has an adjacent period for WS (before → needs prior
+                            // period, after → needs next period).
                             const _candidates = _fgPeriods
-                                .filter(p => (p.endMin - p.startMin) >= dur &&
-                                              p.startMin >= layer.startMin &&
-                                              p.endMin <= layer.endMin)
+                                .filter(p => {
+                                    if ((p.endMin - p.startMin) < dur) return false;
+                                    if (p.startMin < layer.startMin || p.endMin > layer.endMin) return false;
+                                    // WS adjacency check
+                                    if (_earlyWsDur > 0) {
+                                        const pIdx = _fgPeriods.indexOf(p);
+                                        if (_earlyWsPos === 'before' || _earlyWsPos === 'either') {
+                                            // Needs a period before this one (or room before)
+                                            if (pIdx === 0 && p.startMin - _earlyWsDur < layer.startMin) {
+                                                // No room before first period — if "either", ok (try after); if "before", skip
+                                                if (_earlyWsPos === 'before') return false;
+                                            }
+                                        }
+                                        if (_earlyWsPos === 'after') {
+                                            if (pIdx === _fgPeriods.length - 1 && p.endMin + _earlyWsDur > layer.endMin) {
+                                                return false; // No room after last period
+                                            }
+                                        }
+                                    }
+                                    return true;
+                                })
                                 .map(p => ({ p, dist: Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - center) }))
                                 .sort((a, b) => a.dist - b.dist);
                             if (_candidates.length > 0) {
@@ -1585,6 +1634,37 @@
                     return;
                 }
 
+                // ── Swim-linked rotation event (e.g. water slides) ──────
+                // Uses the pre-detected _earlyWsEvt (found before period snapping)
+                // and computes exact start/end times relative to the chosen swim period.
+                let _swimLinkedRot = null; // { evt, dur, position, wsStart, wsEnd }
+                if (t === 'swim' && _earlyWsEvt && _earlyWsDur > 0) {
+                    const rPos = _earlyWsPos;
+                    let wsStart, wsEnd;
+                    if (rPos === 'before') {
+                        wsStart = blockStart - _earlyWsDur; wsEnd = blockStart;
+                    } else if (rPos === 'after') {
+                        wsStart = blockEnd; wsEnd = blockEnd + _earlyWsDur;
+                    } else {
+                        // "either" — prefer before; fall back to after if
+                        // before pushes past day start or into a conflict.
+                        const gradeStart = parseTimeToMinutes((divisions[grade] || {}).startTime) || 480;
+                        const gradeEnd = parseTimeToMinutes((divisions[grade] || {}).endTime) || 960;
+                        const _beforeS = blockStart - _earlyWsDur;
+                        const _afterE = blockEnd + _earlyWsDur;
+                        const _beforeOk = _beforeS >= gradeStart && !targetBunks.some(bk =>
+                            (bunkTimelines[bk] || []).some(b => b && b.startMin < blockStart && b.endMin > _beforeS));
+                        if (_beforeOk) {
+                            wsStart = _beforeS; wsEnd = blockStart;
+                        } else if (_afterE <= gradeEnd) {
+                            wsStart = blockEnd; wsEnd = _afterE;
+                        } else {
+                            wsStart = _beforeS; wsEnd = blockStart;
+                        }
+                    }
+                    _swimLinkedRot = { evt: _earlyWsEvt, dur: _earlyWsDur, position: rPos, wsStart, wsEnd };
+                }
+
                 // ── Swim + change placement (three separate blocks, period-anchored) ──
                 // Pre-change lives in the last preChangeMin minutes of the period
                 // BEFORE swim's period; post-change lives in the first
@@ -1597,11 +1677,39 @@
 
                 targetBunks.forEach(bunk => {
                     if (t === 'swim') {
+                        // Place the swim-linked rotation event (water slides)
+                        // as part of the same atomic bundle.
+                        if (_swimLinkedRot) {
+                            const rl = _swimLinkedRot;
+                            // Check if already placed for this bunk
+                            const alreadyPlaced = bunkTimelines[bunk].some(b => b && b._rotationEventId === rl.evt.id);
+                            if (!alreadyPlaced) {
+                                bunkTimelines[bunk].push({
+                                    startMin: rl.wsStart, endMin: rl.wsEnd,
+                                    type: 'rotation_event', event: rl.evt.name,
+                                    field: rl.evt.location || null,
+                                    layer: null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _activityLocked: true, _noBacktrack: true,
+                                    _source: 'phase0-swim-bundle',
+                                    _rotationEventId: rl.evt.id,
+                                    _rotationEventLocation: rl.evt.location || null,
+                                    _rotationEventColor: rl.evt.color || '#F59E0B',
+                                    _sequenceTarget: 'swim',
+                                    _swimGroupId: _swimGroupId,
+                                    _final: true
+                                });
+                            }
+                        }
+
                         // Per-bunk anchor — the helper walks back/forward
                         // through periods if the immediate neighbor is occupied.
+                        const _bundleS = _swimLinkedRot ? Math.min(blockStart, _swimLinkedRot.wsStart) : blockStart;
+                        const _bundleE = _swimLinkedRot ? Math.max(blockEnd, _swimLinkedRot.wsEnd) : blockEnd;
                         const _bunkAnchors = computeSwimChangeAnchors(
                             blockStart, blockEnd, layer, grade,
-                            bunkTimelines[bunk] || []
+                            bunkTimelines[bunk] || [],
+                            _bundleS, _bundleE
                         );
                         if (_bunkAnchors.pre) {
                             bunkTimelines[bunk].push({
@@ -1657,7 +1765,15 @@
                 });
 
                 if (t === 'special') registerSpecialUsage(eventName, grade, blockStart, blockEnd);
-                if (t === 'swim') registerPoolUsage(grade, blockStart, blockEnd);
+                if (t === 'swim') {
+                    registerPoolUsage(grade, blockStart, blockEnd);
+                    // Register swim-linked rotation event usage so Phase 2.4
+                    // quota tracking knows it's already placed.
+                    if (_swimLinkedRot) {
+                        registerRotationEventUsage(_swimLinkedRot.evt.id, grade, _swimLinkedRot.wsStart, _swimLinkedRot.wsEnd);
+                        registerCrossGrade(grade, 'rotation_event', _swimLinkedRot.wsStart, _swimLinkedRot.wsEnd, _swimLinkedRot.evt.name);
+                    }
+                }
                 if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
             // ★ v11.3: Validate all timelines after pinned layer placement
@@ -10117,6 +10233,8 @@
                         const oldSwimStart = slot.startMin, oldSwimEnd = slot.endMin;
                         // Find attached pre/post change blocks (swim only)
                         let preChangeSlot = null, postChangeSlot = null;
+                        // Find swim-linked rotation event (e.g. water slides)
+                        let wsSlotBefore = null, wsSlotAfter = null;
                         if (t === 'swim') {
                             preChangeSlot = oldSlots.find(o =>
                                 String(o.type || '').toLowerCase() === 'pre-change' &&
@@ -10126,19 +10244,37 @@
                                 String(o.type || '').toLowerCase() === 'post-change' &&
                                 o.startMin === oldSwimEnd
                             );
+                            // Look in bunkTimelines for adjacent rotation_event with _sequenceTarget=swim
+                            if (Array.isArray(bunkTimelines[bunk])) {
+                                wsSlotBefore = bunkTimelines[bunk].find(b =>
+                                    b && String(b.type || '').toLowerCase() === 'rotation_event' &&
+                                    (b._sequenceTarget || '').toLowerCase() === 'swim' &&
+                                    b.endMin === oldSwimStart
+                                ) || null;
+                                wsSlotAfter = bunkTimelines[bunk].find(b =>
+                                    b && String(b.type || '').toLowerCase() === 'rotation_event' &&
+                                    (b._sequenceTarget || '').toLowerCase() === 'swim' &&
+                                    b.startMin === oldSwimEnd
+                                ) || null;
+                            }
                         }
                         const preChangeDur = preChangeSlot ? (preChangeSlot.endMin - preChangeSlot.startMin) : 0;
                         const postChangeDur = postChangeSlot ? (postChangeSlot.endMin - postChangeSlot.startMin) : 0;
+                        const wsBeforeDur = wsSlotBefore ? (wsSlotBefore.endMin - wsSlotBefore.startMin) : 0;
+                        const wsAfterDur = wsSlotAfter ? (wsSlotAfter.endMin - wsSlotAfter.startMin) : 0;
 
                         for (const p of sortedPeriods) {
                             const pDur = p.endMin - p.startMin;
                             if (pDur < blockDur) continue;
                             const targetStart = p.startMin;
                             const targetEnd = targetStart + blockDur;
-                            // Include the change-range in conflict check so we don't
-                            // shift swim into a spot where its change tails collide.
-                            const bundleStart = targetStart - preChangeDur;
-                            const bundleEnd = targetEnd + postChangeDur;
+                            // Include the full bundle range (change + WS + swim) in
+                            // conflict check so we don't shift into a collision.
+                            // Order: [pre-change] [WS-before] [swim] [WS-after] [post-change]
+                            const coreStart = targetStart - wsBeforeDur;
+                            const coreEnd = targetEnd + wsAfterDur;
+                            const bundleStart = coreStart - preChangeDur;
+                            const bundleEnd = coreEnd + postChangeDur;
                             // Check BOTH pbs slots AND bunkTimelines for
                             // conflicts. Sports placed by the CSP solver live
                             // in bunkTimelines but may not be flagged _fixed,
@@ -10156,6 +10292,8 @@
                                 const ot = String(other.type || '').toLowerCase();
                                 if (ot === 'swim' && os === slot.startMin && oe === slot.endMin) return false;
                                 if (ot === 'pre-change' || ot === 'post-change') return false;
+                                // Skip the WS blocks we're shifting with swim
+                                if (other === wsSlotBefore || other === wsSlotAfter) return false;
                                 if (ot === 'slot') return false;
                                 return os < bundleEnd && oe > bundleStart;
                             }));
@@ -10177,11 +10315,26 @@
                                     tlBlock.endTime = minutesToTimeLabel(targetEnd);
                                 }
                             }
-                            // Shift pre-change to sit immediately before new swim
+                            // Shift WS-before to sit immediately before new swim
+                            if (wsSlotBefore) {
+                                wsSlotBefore.startMin = targetStart - wsBeforeDur;
+                                wsSlotBefore.endMin = targetStart;
+                                wsSlotBefore.startTime = minutesToTimeLabel(wsSlotBefore.startMin);
+                                wsSlotBefore.endTime = minutesToTimeLabel(wsSlotBefore.endMin);
+                            }
+                            // Shift WS-after to sit immediately after new swim
+                            if (wsSlotAfter) {
+                                wsSlotAfter.startMin = targetEnd;
+                                wsSlotAfter.endMin = targetEnd + wsAfterDur;
+                                wsSlotAfter.startTime = minutesToTimeLabel(wsSlotAfter.startMin);
+                                wsSlotAfter.endTime = minutesToTimeLabel(wsSlotAfter.endMin);
+                            }
+                            // Shift pre-change to sit before the entire wet bundle
                             if (preChangeSlot) {
+                                const newPreEnd = targetStart - wsBeforeDur;
                                 const oldPreStart = preChangeSlot.startMin, oldPreEnd = preChangeSlot.endMin;
-                                preChangeSlot.startMin = targetStart - preChangeDur;
-                                preChangeSlot.endMin = targetStart;
+                                preChangeSlot.startMin = newPreEnd - preChangeDur;
+                                preChangeSlot.endMin = newPreEnd;
                                 preChangeSlot.startTime = minutesToTimeLabel(preChangeSlot.startMin);
                                 preChangeSlot.endTime = minutesToTimeLabel(preChangeSlot.endMin);
                                 if (Array.isArray(bunkTimelines[bunk])) {
@@ -10197,11 +10350,12 @@
                                     }
                                 }
                             }
-                            // Shift post-change to sit immediately after new swim
+                            // Shift post-change to sit after the entire wet bundle
                             if (postChangeSlot) {
+                                const newPostStart = targetEnd + wsAfterDur;
                                 const oldPostStart = postChangeSlot.startMin, oldPostEnd = postChangeSlot.endMin;
-                                postChangeSlot.startMin = targetEnd;
-                                postChangeSlot.endMin = targetEnd + postChangeDur;
+                                postChangeSlot.startMin = newPostStart;
+                                postChangeSlot.endMin = newPostStart + postChangeDur;
                                 postChangeSlot.startTime = minutesToTimeLabel(postChangeSlot.startMin);
                                 postChangeSlot.endTime = minutesToTimeLabel(postChangeSlot.endMin);
                                 if (Array.isArray(bunkTimelines[bunk])) {
@@ -10221,6 +10375,8 @@
                                 ' from ' + minutesToTimeLabel(oldSwimStart) + '-' + minutesToTimeLabel(oldSwimEnd) +
                                 ' to ' + minutesToTimeLabel(targetStart) + '-' + minutesToTimeLabel(targetEnd) +
                                 ' (period: ' + (p.name || 'unnamed') + ')' +
+                                (wsSlotBefore ? ' +ws-before' : '') +
+                                (wsSlotAfter ? ' +ws-after' : '') +
                                 (preChangeSlot ? ' +pre-change' : '') +
                                 (postChangeSlot ? ' +post-change' : ''));
                             break;
