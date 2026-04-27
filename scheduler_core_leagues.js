@@ -1456,6 +1456,27 @@ window._debugLeagueTimeData = timeData;
         }
     };
 
+    /**
+     * Wipe all gamesPerDate entries across every league.
+     * Called by eraseAllDailyData when every schedule is deleted at once.
+     * No future-schedule propagation needed because all schedules are gone.
+     */
+    Leagues.clearAllGamesPerDate = function() {
+        try {
+            const history = loadLeagueHistory();
+            if (!history.gamesPerDate || Object.keys(history.gamesPerDate).length === 0) return;
+
+            for (const leagueName of Object.keys(history.gamesPerDate)) {
+                history.gamesPerDate[leagueName] = {};
+            }
+
+            saveLeagueHistory(history);
+            console.log('[RegularLeagues] 🗑️ Cleared all gamesPerDate entries (all schedules deleted)');
+        } catch (e) {
+            console.error('[RegularLeagues] clearAllGamesPerDate error:', e);
+        }
+    };
+
     window.SchedulerCoreLeagues = Leagues;
     console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v7');
 })();

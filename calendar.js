@@ -899,9 +899,23 @@ all[date].updated_at = new Date().toISOString();
             // Clear window globals
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
-            
+
+            // Clear league gamesPerDate — all schedule-derived game counts are now stale
+            window.SchedulerCoreLeagues?.clearAllGamesPerDate?.();
+
+            // Reset leagueRoundState — currentRound/sportRotationIndex are stale with no schedules
+            window.leagueRoundState = {};
+            if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('leagueRoundState', {});
+            }
+
             console.log("✅ All daily data erased");
-            
+
+            // Notify other modules
+            window.dispatchEvent(new CustomEvent('campistry-schedule-deleted', {
+                detail: { dateKey: '*', role }
+            }));
+
             alert('All schedule data has been deleted.');
             window.location.reload();
             

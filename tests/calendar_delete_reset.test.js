@@ -376,6 +376,59 @@ describe('eraseAllDailyData', () => {
         assert.ok(data['2026-07-15'], 'Data NOT deleted');
         assert.equal(supabaseLog.length, 0);
     });
+
+    it('owner: clears gamesPerDate and leagueRoundState, dispatches event', async () => {
+        resetStorage({
+            'campDailyData_v1': JSON.stringify({
+                '2026-07-15': { scheduleAssignments: { 'Bunk 1': ['Art'] }, leagueAssignments: {} }
+            })
+        });
+        supabaseLog = [];
+        global.supabase = makeSupabaseMock();
+        dispatchedEvents = [];
+        saveGlobalSettingsCalls = [];
+
+        let clearAllCalled = false;
+        global.SchedulerCoreLeagues = {
+            clearAllGamesPerDate() { clearAllCalled = true; }
+        };
+        global.leagueRoundState = { 'Hoops': { currentRound: 12 } };
+
+        setupMocks('owner');
+        reloadCalled = false;
+
+        await global.eraseAllDailyData();
+
+        assert.ok(clearAllCalled, 'clearAllGamesPerDate called');
+        assert.deepEqual(global.leagueRoundState, {}, 'leagueRoundState reset to {}');
+
+        const roundSave = saveGlobalSettingsCalls.find(c => c.key === 'leagueRoundState');
+        assert.ok(roundSave, 'leagueRoundState saved to cloud');
+        assert.deepEqual(roundSave.val, {}, 'leagueRoundState cloud value is empty');
+
+        const evt = dispatchedEvents.find(e => e.dateKey === '*');
+        assert.ok(evt, 'campistry-schedule-deleted event dispatched with dateKey="*"');
+    });
+
+    it('owner: preserves rotation history and league matchup history', async () => {
+        resetStorage({
+            'campDailyData_v1': JSON.stringify({ '2026-07-15': { scheduleAssignments: {}, leagueAssignments: {} } }),
+            'campRotationHistory_v1': JSON.stringify({ 'Bunk 1': { 'Art': 3 } }),
+            'campLeagueHistory_v2': JSON.stringify({ teamSports: { 'Hoops|TeamA': ['Baseball'] }, matchupHistory: {}, gamesPerDate: {}, offCampusCounts: {} }),
+            'specialtyLeagueHistory_v1': JSON.stringify({ round: 2 })
+        });
+        supabaseLog = [];
+        global.supabase = makeSupabaseMock();
+        global.SchedulerCoreLeagues = { clearAllGamesPerDate() {} };
+
+        setupMocks('owner');
+
+        await global.eraseAllDailyData();
+
+        assert.ok(fakeStorage.hasOwnProperty('campRotationHistory_v1'), 'Rotation history preserved');
+        assert.ok(fakeStorage.hasOwnProperty('campLeagueHistory_v2'), 'League matchup history preserved');
+        assert.ok(fakeStorage.hasOwnProperty('specialtyLeagueHistory_v1'), 'Specialty league history preserved');
+    });
 });
 
 describe('eraseRotationHistory', () => {
