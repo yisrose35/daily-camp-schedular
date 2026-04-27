@@ -1501,6 +1501,33 @@
                     : allBunks;
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
 
+                // ── Pre-detect linked rotation event duration for period scoring ──
+                // Doesn't place anything — just checks if a rotation event targets
+                // this activity type so the period selection can PREFER (not require)
+                // a period with adjacent room for the linked event.
+                let _linkedRotDur = 0;
+                let _linkedRotPos = null; // 'before' | 'after' | 'either'
+                if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                    try {
+                        const _preAllRots = window.RotationEvents.loadRotationEvents() || [];
+                        for (const rEvt of _preAllRots) {
+                            if (!rEvt || !rEvt.sequence) continue;
+                            const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
+                            if (tgt !== t) continue;
+                            if (currentDate && rEvt.dateRange) {
+                                if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
+                            }
+                            const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
+                            if (rGrades && !rGrades.has(grade)) continue;
+                            const rDur = parseInt(rEvt.durationPerBunk) || 0;
+                            if (rDur <= 0) continue;
+                            _linkedRotDur = rDur;
+                            _linkedRotPos = rEvt.sequence.position || 'either';
+                            break;
+                        }
+                    } catch (_e) { /* no rotation events */ }
+                }
+
                 // ★ fullGrade windowed layers: compute a proper block time within the window.
                 //   When the window is wider than the activity duration (e.g. swim window 9am-2pm,
                 //   duration 45min), pick the center of the window rather than filling the whole span.
@@ -1523,11 +1550,28 @@
                         const center = Math.round((layer.startMin + layer.endMin) / 2 / 5) * 5;
                         let _snapped = false;
                         if (_fgPeriods.length > 0) {
+                            // Score candidates: distance to center, with bonus for
+                            // having room for a linked rotation event adjacent.
+                            // This is a soft preference — doesn't filter, just reorders.
                             const _candidates = _fgPeriods
                                 .filter(p => (p.endMin - p.startMin) >= dur &&
                                               p.startMin >= layer.startMin &&
                                               p.endMin <= layer.endMin)
-                                .map(p => ({ p, dist: Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - center) }))
+                                .map(p => {
+                                    const baseDist = Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - center);
+                                    // Penalty if linked rotation event won't fit adjacent
+                                    let rotPenalty = 0;
+                                    if (_linkedRotDur > 0) {
+                                        const pIdx = _fgPeriods.indexOf(p);
+                                        const canBefore = (p.startMin - _linkedRotDur >= layer.startMin);
+                                        const canAfter = (p.endMin + _linkedRotDur <= layer.endMin);
+                                        const posOk = _linkedRotPos === 'before' ? canBefore :
+                                                      _linkedRotPos === 'after'  ? canAfter :
+                                                      (canBefore || canAfter);
+                                        if (!posOk) rotPenalty = 500; // large penalty, but not infinite
+                                    }
+                                    return { p, dist: baseDist + rotPenalty };
+                                })
                                 .sort((a, b) => a.dist - b.dist);
                             if (_candidates.length > 0) {
                                 blockStart = _candidates[0].p.startMin;
@@ -1562,7 +1606,19 @@
                         .filter(p => (p.endMin - p.startMin) >= _fgDur &&
                                       p.startMin >= layer.startMin &&
                                       p.endMin <= layer.endMin)
-                        .map(p => ({ p, dist: Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - _poolCenter) }))
+                        .map(p => {
+                            const baseDist = Math.abs(p.startMin + (p.endMin - p.startMin) / 2 - _poolCenter);
+                            let rotPenalty = 0;
+                            if (_linkedRotDur > 0) {
+                                const canBefore = (p.startMin - _linkedRotDur >= layer.startMin);
+                                const canAfter = (p.endMin + _linkedRotDur <= layer.endMin);
+                                const posOk = _linkedRotPos === 'before' ? canBefore :
+                                              _linkedRotPos === 'after'  ? canAfter :
+                                              (canBefore || canAfter);
+                                if (!posOk) rotPenalty = 500;
+                            }
+                            return { p, dist: baseDist + rotPenalty };
+                        })
                         .sort((a, b) => a.dist - b.dist);
                     let _poolFound = false;
                     for (const cand of _poolCandidates) {
