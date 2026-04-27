@@ -1363,17 +1363,26 @@
         // SHARED: SWIM + CHANGE PERIOD ANCHORS
         // =====================================================================
         // Given a swim block aligned to a bell-schedule period, return where
-        // pre-change and post-change should live:
+        // pre-change and post-change should live.
+        //
+        // Default placement (no conflictBlocks):
         //   pre  = last preChangeMin minutes of the period BEFORE swim's period
         //   post = first postChangeMin minutes of the period AFTER swim's period
         //
-        // - If the previous/next period is shorter than the configured change
-        //   length, fill the entire neighboring period.
-        // - If swim sits in the first period, drop pre. If swim sits in the
-        //   last period, drop post.
-        // - Returns {pre:null, post:null} when no campPeriods are configured
-        //   for the grade or when swim doesn't align to a period start.
-        function computeSwimChangeAnchors(swimStart, swimEnd, layer, gradeForPeriods) {
+        // With conflictBlocks (e.g. when re-anchoring against a final timeline):
+        //   walk back through prior periods until a period's last preChangeMin
+        //   minutes are free of any overlap; same forward for post. This is
+        //   the "if swim follows lunch / a pinned activity, the change goes
+        //   BEFORE that activity" rule — change always lands inside a single
+        //   bell-schedule period, never crossing one.
+        //
+        // Constraints in either mode:
+        //   - If a candidate period is shorter than the configured change
+        //     length, fill the entire neighboring period.
+        //   - If no prior period is free, pre is null. Same for post.
+        //   - Returns {pre:null, post:null} when no campPeriods are configured
+        //     for the grade or swim doesn't align to a period start.
+        function computeSwimChangeAnchors(swimStart, swimEnd, layer, gradeForPeriods, conflictBlocks) {
             var preChange = (layer && layer.preChangeMin > 0) ? layer.preChangeMin : 0;
             var postChange = (layer && layer.postChangeMin > 0) ? layer.postChangeMin : 0;
             if (preChange <= 0 && postChange <= 0) return { pre: null, post: null };
@@ -1386,18 +1395,53 @@
                 if (gp[i].startMin === swimStart && gp[i].endMin >= swimEnd) { swimPeriodIdx = i; break; }
             }
             if (swimPeriodIdx < 0) return { pre: null, post: null };
-            var pre = null, post = null;
-            if (preChange > 0 && swimPeriodIdx > 0) {
-                var prevP = gp[swimPeriodIdx - 1];
-                var prevDur = prevP.endMin - prevP.startMin;
-                var preDur = Math.min(preChange, prevDur);
-                pre = { startMin: prevP.endMin - preDur, endMin: prevP.endMin };
+
+            // Build a fast overlap test against existing blocks. Empty/unset
+            // conflictBlocks → no constraint (immediate adjacent always wins).
+            var conflicts = Array.isArray(conflictBlocks) ? conflictBlocks : [];
+            var rangeOccupied = function(rs, re) {
+                if (rs == null || re == null || rs >= re) return true;
+                for (var ci = 0; ci < conflicts.length; ci++) {
+                    var b = conflicts[ci];
+                    if (!b) continue;
+                    // Don't treat the swim itself as a conflict for its own change.
+                    if (b.startMin === swimStart && b.endMin === swimEnd &&
+                        String(b.type || '').toLowerCase() === 'swim') continue;
+                    var bs = b.startMin, be = b.endMin;
+                    if (bs == null || be == null) continue;
+                    if (bs < re && be > rs) return true;
+                }
+                return false;
+            };
+
+            // PRE: walk back from swim's period through prior periods.
+            var pre = null;
+            if (preChange > 0) {
+                for (var pi = swimPeriodIdx - 1; pi >= 0; pi--) {
+                    var prevP = gp[pi];
+                    var prevDur = prevP.endMin - prevP.startMin;
+                    var preDur = Math.min(preChange, prevDur);
+                    var preStart = prevP.endMin - preDur, preEnd = prevP.endMin;
+                    if (!rangeOccupied(preStart, preEnd)) {
+                        pre = { startMin: preStart, endMin: preEnd };
+                        break;
+                    }
+                }
             }
-            if (postChange > 0 && swimPeriodIdx < gp.length - 1) {
-                var nextP = gp[swimPeriodIdx + 1];
-                var nextDur = nextP.endMin - nextP.startMin;
-                var postDur = Math.min(postChange, nextDur);
-                post = { startMin: nextP.startMin, endMin: nextP.startMin + postDur };
+
+            // POST: walk forward through later periods.
+            var post = null;
+            if (postChange > 0) {
+                for (var pj = swimPeriodIdx + 1; pj < gp.length; pj++) {
+                    var nextP = gp[pj];
+                    var nextDur = nextP.endMin - nextP.startMin;
+                    var postDur = Math.min(postChange, nextDur);
+                    var postStart = nextP.startMin, postEnd = nextP.startMin + postDur;
+                    if (!rangeOccupied(postStart, postEnd)) {
+                        post = { startMin: postStart, endMin: postEnd };
+                        break;
+                    }
+                }
             }
             return { pre: pre, post: post };
         }
@@ -1492,36 +1536,23 @@
                 // Per-bunk: drop pre/post only for the specific bunk that has
                 // a conflict, instead of dropping for all bunks (the all-or-nothing
                 // gate was emptying change blocks across the whole grade).
-                const _swimAnchors = (t === 'swim')
-                    ? computeSwimChangeAnchors(blockStart, blockEnd, layer, grade)
-                    : { pre: null, post: null };
                 const _swimGroupId = (t === 'swim') ? nextSwimGroupId() : null;
-                const _bunkRangeFree = (bunk, rStart, rEnd) => {
-                    if (rStart < 0 || rEnd <= rStart) return false;
-                    const tl = bunkTimelines[bunk] || [];
-                    for (let i = 0; i < tl.length; i++) {
-                        const b = tl[i];
-                        if (!b) continue;
-                        const bs = b.startMin, be = b.endMin;
-                        if (bs == null || be == null) continue;
-                        if (bs < rEnd && be > rStart) return false;
-                    }
-                    return true;
-                };
 
                 targetBunks.forEach(bunk => {
                     if (t === 'swim') {
-                        const _placePre = !!_swimAnchors.pre &&
-                            _bunkRangeFree(bunk, _swimAnchors.pre.startMin, _swimAnchors.pre.endMin);
-                        const _placePost = !!_swimAnchors.post &&
-                            _bunkRangeFree(bunk, _swimAnchors.post.startMin, _swimAnchors.post.endMin);
-                        if (_placePre) {
+                        // Per-bunk anchor — the helper walks back/forward
+                        // through periods if the immediate neighbor is occupied.
+                        const _bunkAnchors = computeSwimChangeAnchors(
+                            blockStart, blockEnd, layer, grade,
+                            bunkTimelines[bunk] || []
+                        );
+                        if (_bunkAnchors.pre) {
                             bunkTimelines[bunk].push({
-                                startMin: _swimAnchors.pre.startMin, endMin: _swimAnchors.pre.endMin,
+                                startMin: _bunkAnchors.pre.startMin, endMin: _bunkAnchors.pre.endMin,
                                 type: 'pre-change', event: 'Change',
                                 layer: null,
-                                dMin: _swimAnchors.pre.endMin - _swimAnchors.pre.startMin,
-                                dMax: _swimAnchors.pre.endMin - _swimAnchors.pre.startMin,
+                                dMin: _bunkAnchors.pre.endMin - _bunkAnchors.pre.startMin,
+                                dMax: _bunkAnchors.pre.endMin - _bunkAnchors.pre.startMin,
                                 _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
                                 _activityLocked: true, _noBacktrack: isGradeWide,
@@ -1538,13 +1569,13 @@
                             _changeAttached: true,
                             _swimGroupId: _swimGroupId
                         });
-                        if (_placePost) {
+                        if (_bunkAnchors.post) {
                             bunkTimelines[bunk].push({
-                                startMin: _swimAnchors.post.startMin, endMin: _swimAnchors.post.endMin,
+                                startMin: _bunkAnchors.post.startMin, endMin: _bunkAnchors.post.endMin,
                                 type: 'post-change', event: 'Change',
                                 layer: null,
-                                dMin: _swimAnchors.post.endMin - _swimAnchors.post.startMin,
-                                dMax: _swimAnchors.post.endMin - _swimAnchors.post.startMin,
+                                dMin: _bunkAnchors.post.endMin - _bunkAnchors.post.startMin,
+                                dMax: _bunkAnchors.post.endMin - _bunkAnchors.post.startMin,
                                 _classification: 'pinned', _committed: true,
                                 _fixed: true, _gradeWide: isGradeWide && !isCustom,
                                 _activityLocked: true, _noBacktrack: isGradeWide,
@@ -3728,22 +3759,16 @@
                 swimBlk._changeAttached = true;
                 var layer = swimBlk.layer;
                 if (!layer) return;
-                var anchors = computeSwimChangeAnchors(swimBlk.startMin, swimBlk.endMin, layer, gradeForPeriods);
+                // Pass the current template so the helper walks back/forward
+                // past pinned activities (lunch / specials) when the immediate
+                // neighbor period is occupied.
+                var anchors = computeSwimChangeAnchors(
+                    swimBlk.startMin, swimBlk.endMin, layer, gradeForPeriods, template
+                );
                 if (!anchors.pre && !anchors.post) return;
                 var groupId = swimBlk._swimGroupId || nextSwimGroupId();
                 swimBlk._swimGroupId = groupId;
-                var rangeHasConflict = function(rStart, rEnd) {
-                    if (rStart < 0 || rEnd <= rStart) return true;
-                    for (var i = 0; i < template.length; i++) {
-                        var b = template[i];
-                        if (!b || b === swimBlk) continue;
-                        var bs = b.startMin, be = b.endMin;
-                        if (bs == null || be == null) continue;
-                        if (bs < rEnd && be > rStart) return true;
-                    }
-                    return false;
-                };
-                if (anchors.pre && !rangeHasConflict(anchors.pre.startMin, anchors.pre.endMin)) {
+                if (anchors.pre) {
                     var preDur = anchors.pre.endMin - anchors.pre.startMin;
                     var preBlk = makeBlock({
                         startMin: anchors.pre.startMin, endMin: anchors.pre.endMin,
@@ -3754,7 +3779,7 @@
                     });
                     if (preBlk) { preBlk._swimGroupId = groupId; template.push(preBlk); }
                 }
-                if (anchors.post && !rangeHasConflict(anchors.post.startMin, anchors.post.endMin)) {
+                if (anchors.post) {
                     var postDur = anchors.post.endMin - anchors.post.startMin;
                     var postBlk = makeBlock({
                         startMin: anchors.post.startMin, endMin: anchors.post.endMin,
@@ -10267,22 +10292,21 @@
                 });
                 _reanchorDropped += (beforeCount - bunkTimelines[bunk].length);
                 // For every swim block, recompute anchors and place pre/post.
+                // The helper walks back/forward through bell-schedule periods
+                // until it finds one whose change-window is free, so pre lands
+                // BEFORE any pinned activity (lunch / special) sitting between
+                // it and swim — never overlapping.
                 bunkTimelines[bunk].forEach(sw => {
                     if (!sw || (sw.type || '').toLowerCase() !== 'swim') return;
                     const layer = sw.layer;
                     if (!layer) return;
-                    const anchors = computeSwimChangeAnchors(sw.startMin, sw.endMin, layer, grade);
+                    const anchors = computeSwimChangeAnchors(
+                        sw.startMin, sw.endMin, layer, grade, bunkTimelines[bunk]
+                    );
                     if (!anchors.pre && !anchors.post) return;
                     const groupId = sw._swimGroupId || nextSwimGroupId();
                     sw._swimGroupId = groupId;
-                    const rangeFree = (rs, re) => {
-                        if (rs == null || re == null || rs >= re) return false;
-                        return !bunkTimelines[bunk].some(o => {
-                            if (!o || o === sw) return false;
-                            return o.startMin < re && o.endMin > rs;
-                        });
-                    };
-                    if (anchors.pre && rangeFree(anchors.pre.startMin, anchors.pre.endMin)) {
+                    if (anchors.pre) {
                         bunkTimelines[bunk].push({
                             startMin: anchors.pre.startMin, endMin: anchors.pre.endMin,
                             type: 'pre-change', event: 'Change',
@@ -10296,7 +10320,7 @@
                         });
                         _reanchorPlaced++;
                     }
-                    if (anchors.post && rangeFree(anchors.post.startMin, anchors.post.endMin)) {
+                    if (anchors.post) {
                         bunkTimelines[bunk].push({
                             startMin: anchors.post.startMin, endMin: anchors.post.endMin,
                             type: 'post-change', event: 'Change',
