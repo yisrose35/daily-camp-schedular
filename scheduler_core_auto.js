@@ -1501,19 +1501,20 @@
                     : allBunks;
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
 
-                // ── Pre-detect swim-linked rotation event (e.g. water slides) ──
+                // ── Pre-detect linked rotation event (e.g. water slides → swim) ──
                 // Done BEFORE period snapping so the period candidate filter can
-                // account for WS needing an adjacent slot.
+                // account for the linked event needing an adjacent slot.
+                // Generic: works for ANY activity type, not just swim.
                 let _earlyWsDur = 0;   // duration of linked rotation event
                 let _earlyWsPos = null; // 'before' | 'after' | 'either'
                 let _earlyWsEvt = null; // the rotation event object
-                if (t === 'swim' && window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
                     try {
                         const _preAllRots = window.RotationEvents.loadRotationEvents() || [];
                         for (const rEvt of _preAllRots) {
                             if (!rEvt || !rEvt.sequence) continue;
                             const tgt = (rEvt.sequence.targetActivity || '').toLowerCase();
-                            if (tgt !== 'swim') continue;
+                            if (tgt !== t) continue;
                             if (currentDate && rEvt.dateRange) {
                                 if (currentDate < rEvt.dateRange.start || currentDate > rEvt.dateRange.end) continue;
                             }
@@ -1634,11 +1635,12 @@
                     return;
                 }
 
-                // ── Swim-linked rotation event (e.g. water slides) ──────
+                // ── Linked rotation event (e.g. water slides → swim) ──────
                 // Uses the pre-detected _earlyWsEvt (found before period snapping)
-                // and computes exact start/end times relative to the chosen swim period.
+                // and computes exact start/end times relative to the chosen period.
+                // Generic: fires for any activity type with a linked rotation event.
                 let _swimLinkedRot = null; // { evt, dur, position, wsStart, wsEnd }
-                if (t === 'swim' && _earlyWsEvt && _earlyWsDur > 0) {
+                if (_earlyWsEvt && _earlyWsDur > 0) {
                     const rPos = _earlyWsPos;
                     let wsStart, wsEnd;
                     if (rPos === 'before') {
@@ -1676,32 +1678,33 @@
                 const _swimGroupId = (t === 'swim') ? nextSwimGroupId() : null;
 
                 targetBunks.forEach(bunk => {
-                    if (t === 'swim') {
-                        // Place the swim-linked rotation event (water slides)
-                        // as part of the same atomic bundle.
-                        if (_swimLinkedRot) {
-                            const rl = _swimLinkedRot;
-                            // Check if already placed for this bunk
-                            const alreadyPlaced = bunkTimelines[bunk].some(b => b && b._rotationEventId === rl.evt.id);
-                            if (!alreadyPlaced) {
-                                bunkTimelines[bunk].push({
-                                    startMin: rl.wsStart, endMin: rl.wsEnd,
-                                    type: 'rotation_event', event: rl.evt.name,
-                                    field: rl.evt.location || null,
-                                    layer: null,
-                                    _classification: 'pinned', _committed: true, _fixed: true,
-                                    _activityLocked: true, _noBacktrack: true,
-                                    _source: 'phase0-swim-bundle',
-                                    _rotationEventId: rl.evt.id,
-                                    _rotationEventLocation: rl.evt.location || null,
-                                    _rotationEventColor: rl.evt.color || '#F59E0B',
-                                    _sequenceTarget: 'swim',
-                                    _swimGroupId: _swimGroupId,
-                                    _final: true
-                                });
-                            }
+                    // ── Place linked rotation event for ANY activity type ──
+                    // Generic: whenever a rotation event targets this activity
+                    // (via sequence.targetActivity), place it as an atomic
+                    // bundle alongside the parent block.
+                    if (_swimLinkedRot) {
+                        const rl = _swimLinkedRot;
+                        const alreadyPlaced = bunkTimelines[bunk].some(b => b && b._rotationEventId === rl.evt.id);
+                        if (!alreadyPlaced) {
+                            bunkTimelines[bunk].push({
+                                startMin: rl.wsStart, endMin: rl.wsEnd,
+                                type: 'rotation_event', event: rl.evt.name,
+                                field: rl.evt.location || null,
+                                layer: null,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: true,
+                                _source: 'phase0-linked-bundle',
+                                _rotationEventId: rl.evt.id,
+                                _rotationEventLocation: rl.evt.location || null,
+                                _rotationEventColor: rl.evt.color || '#F59E0B',
+                                _sequenceTarget: t,
+                                _swimGroupId: _swimGroupId,
+                                _final: true
+                            });
                         }
+                    }
 
+                    if (t === 'swim') {
                         // Per-bunk anchor — the helper walks back/forward
                         // through periods if the immediate neighbor is occupied.
                         const _bundleS = _swimLinkedRot ? Math.min(blockStart, _swimLinkedRot.wsStart) : blockStart;
@@ -1765,14 +1768,12 @@
                 });
 
                 if (t === 'special') registerSpecialUsage(eventName, grade, blockStart, blockEnd);
-                if (t === 'swim') {
-                    registerPoolUsage(grade, blockStart, blockEnd);
-                    // Register swim-linked rotation event usage so Phase 2.4
-                    // quota tracking knows it's already placed.
-                    if (_swimLinkedRot) {
-                        registerRotationEventUsage(_swimLinkedRot.evt.id, grade, _swimLinkedRot.wsStart, _swimLinkedRot.wsEnd);
-                        registerCrossGrade(grade, 'rotation_event', _swimLinkedRot.wsStart, _swimLinkedRot.wsEnd, _swimLinkedRot.evt.name);
-                    }
+                if (t === 'swim') registerPoolUsage(grade, blockStart, blockEnd);
+                // Register linked rotation event usage so Phase 2.4
+                // quota tracking knows it's already placed. Generic for any type.
+                if (_swimLinkedRot) {
+                    registerRotationEventUsage(_swimLinkedRot.evt.id, grade, _swimLinkedRot.wsStart, _swimLinkedRot.wsEnd);
+                    registerCrossGrade(grade, 'rotation_event', _swimLinkedRot.wsStart, _swimLinkedRot.wsEnd, _swimLinkedRot.evt.name);
                 }
                 if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
             });
@@ -10233,7 +10234,7 @@
                         const oldSwimStart = slot.startMin, oldSwimEnd = slot.endMin;
                         // Find attached pre/post change blocks (swim only)
                         let preChangeSlot = null, postChangeSlot = null;
-                        // Find swim-linked rotation event (e.g. water slides)
+                        // Find linked rotation event (generic — any activity type)
                         let wsSlotBefore = null, wsSlotAfter = null;
                         if (t === 'swim') {
                             preChangeSlot = oldSlots.find(o =>
@@ -10244,19 +10245,19 @@
                                 String(o.type || '').toLowerCase() === 'post-change' &&
                                 o.startMin === oldSwimEnd
                             );
-                            // Look in bunkTimelines for adjacent rotation_event with _sequenceTarget=swim
-                            if (Array.isArray(bunkTimelines[bunk])) {
-                                wsSlotBefore = bunkTimelines[bunk].find(b =>
-                                    b && String(b.type || '').toLowerCase() === 'rotation_event' &&
-                                    (b._sequenceTarget || '').toLowerCase() === 'swim' &&
-                                    b.endMin === oldSwimStart
-                                ) || null;
-                                wsSlotAfter = bunkTimelines[bunk].find(b =>
-                                    b && String(b.type || '').toLowerCase() === 'rotation_event' &&
-                                    (b._sequenceTarget || '').toLowerCase() === 'swim' &&
-                                    b.startMin === oldSwimEnd
-                                ) || null;
-                            }
+                        }
+                        // Look in bunkTimelines for adjacent rotation_event targeting this type
+                        if (Array.isArray(bunkTimelines[bunk])) {
+                            wsSlotBefore = bunkTimelines[bunk].find(b =>
+                                b && String(b.type || '').toLowerCase() === 'rotation_event' &&
+                                (b._sequenceTarget || '').toLowerCase() === t &&
+                                b.endMin === oldSwimStart
+                            ) || null;
+                            wsSlotAfter = bunkTimelines[bunk].find(b =>
+                                b && String(b.type || '').toLowerCase() === 'rotation_event' &&
+                                (b._sequenceTarget || '').toLowerCase() === t &&
+                                b.startMin === oldSwimEnd
+                            ) || null;
                         }
                         const preChangeDur = preChangeSlot ? (preChangeSlot.endMin - preChangeSlot.startMin) : 0;
                         const postChangeDur = postChangeSlot ? (postChangeSlot.endMin - postChangeSlot.startMin) : 0;
@@ -10539,16 +10540,18 @@
                     if (!sw || (sw.type || '').toLowerCase() !== 'swim') return;
                     const layer = sw.layer;
                     if (!layer) return;
-                    // Detect adjacent swim-linked rotation_events
+                    // Detect adjacent linked rotation_events (generic — matches
+                    // any rotation_event whose _sequenceTarget equals this block's type)
+                    const _swType = (sw.type || '').toLowerCase();
                     let bundleStart = sw.startMin, bundleEnd = sw.endMin;
                     bunkTimelines[bunk].forEach(adj => {
                         if (!adj || (adj.type || '').toLowerCase() !== 'rotation_event') return;
                         if (!adj._sequenceTarget) return;
                         var tgt = adj._sequenceTarget.toLowerCase();
-                        if (tgt !== 'swim') return;
-                        // Adjacent before swim?
+                        if (tgt !== _swType) return;
+                        // Adjacent before?
                         if (adj.endMin === sw.startMin) bundleStart = Math.min(bundleStart, adj.startMin);
-                        // Adjacent after swim?
+                        // Adjacent after?
                         if (adj.startMin === sw.endMin) bundleEnd = Math.max(bundleEnd, adj.endMin);
                     });
                     const preChangeDur = (layer.preChangeMin > 0) ? layer.preChangeMin : 0;
