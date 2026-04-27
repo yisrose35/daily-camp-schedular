@@ -2271,7 +2271,7 @@ const validActivities = Utils.getValidActivityNames();
     };
 
 
-    Utils.reIncrementHistoricalCounts = function(dateKey, newScheduleAssignments, saveToCloud = true) {
+    Utils.reIncrementHistoricalCounts = function(dateKey, newScheduleAssignments, saveToCloud = true, oldScheduleAssignments = null) {
         console.log(`📊 [SchedulerCoreUtils] Re-incrementing for ${dateKey}...`);
 
         const globalSettings = window.loadGlobalSettings?.() || {};
@@ -2279,8 +2279,10 @@ const validActivities = Utils.getValidActivityNames();
         const countedDates = globalSettings.historicalCountedDates || {};
 
         if (countedDates[dateKey]) {
-            const allDaily = window.loadAllDailyData?.() || {};
-            const oldSched = allDaily[dateKey]?.scheduleAssignments || {};
+            // Use caller-supplied old schedule when available — avoids reading stale localStorage
+            // when the caller has already overwritten it with the new schedule.
+            const allDaily = oldScheduleAssignments ? null : (window.loadAllDailyData?.() || {});
+            const oldSched = oldScheduleAssignments || allDaily?.[dateKey]?.scheduleAssignments || {};
             let removed = 0;
 const validActivities = Utils.getValidActivityNames();
             Object.keys(oldSched).forEach(bunk => {
