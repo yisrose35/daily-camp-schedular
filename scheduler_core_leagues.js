@@ -1426,6 +1426,36 @@ window._debugLeagueTimeData = timeData;
         return history.gamesPerDate[leagueName];
     };
 
+    /**
+     * Remove a date's game counts from league history and propagate updated
+     * game numbers to any future dates still in localStorage.
+     * Called by eraseCurrentDailyData after a day is deleted.
+     */
+    Leagues.cleanupDateFromHistory = function(dateKey) {
+        try {
+            const history = loadLeagueHistory();
+            if (!history.gamesPerDate) return;
+
+            let changed = false;
+            for (const leagueName of Object.keys(history.gamesPerDate)) {
+                if (history.gamesPerDate[leagueName][dateKey] !== undefined) {
+                    delete history.gamesPerDate[leagueName][dateKey];
+                    changed = true;
+                }
+            }
+
+            if (!changed) return;
+
+            saveLeagueHistory(history);
+            console.log('[RegularLeagues] 🗑️ Removed gamesPerDate entries for', dateKey);
+
+            // Propagate corrected game numbers to future schedules in localStorage
+            updateFutureSchedules(dateKey, history);
+        } catch (e) {
+            console.error('[RegularLeagues] cleanupDateFromHistory error:', e);
+        }
+    };
+
     window.SchedulerCoreLeagues = Leagues;
     console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v7');
 })();

@@ -816,9 +816,14 @@ all[date].updated_at = new Date().toISOString();
         }
         
         // ═══════════════════════════════════════════════════════════════
+        // CLEAN LEAGUE HISTORY for the deleted date
+        // ═══════════════════════════════════════════════════════════════
+        window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
+
+        // ═══════════════════════════════════════════════════════════════
         // REFRESH UI
         // ═══════════════════════════════════════════════════════════════
-        
+
         console.log('🗑️ Refreshing UI...');
         
         if (window.updateTable) {
