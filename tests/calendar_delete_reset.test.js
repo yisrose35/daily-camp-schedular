@@ -504,6 +504,7 @@ describe('startNewHalf', () => {
                 '2026-07-15': { scheduleAssignments: { 'Bunk 1': ['Art'] } }
             })
         });
+        global.supabase = makeSupabaseMock(); // fresh log so delete assertion is clean
         clearCloudKeysCalls = [];
         setupMocks('owner');
         reloadCalled = false;
@@ -517,6 +518,12 @@ describe('startNewHalf', () => {
         assert.equal(fakeStorage.hasOwnProperty('campLeagueHistory_v2'), false);
         assert.equal(fakeStorage.hasOwnProperty('specialtyLeagueHistory_v1'), false);
         assert.equal(fakeStorage.hasOwnProperty('campDailyData_v1'), false);
+
+        // Direct Supabase delete must fire (not just clearCloudKeys which skips the table)
+        const supabaseDelete = supabaseLog.find(
+            e => e.action === 'delete' && e.table === 'daily_schedules' && e.filters.camp_id === 'test-camp-123'
+        );
+        assert.ok(supabaseDelete, 'startNewHalf must directly delete from Supabase daily_schedules table');
 
         // All 9 cloud keys
         const keys = clearCloudKeysCalls[0] || [];

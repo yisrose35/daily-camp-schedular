@@ -313,6 +313,23 @@ all[date].updated_at = new Date().toISOString();
             localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
             localStorage.removeItem(DAILY_DATA_KEY);
             
+            // ★★★ CRITICAL: Directly delete all daily_schedules records from Supabase ★★★
+            // clearCloudKeys('daily_schedules') routes through saveGlobalSettings which skips
+            // the Supabase delete when given {} — we must hit the table directly.
+            {
+                const client = window.CampistryDB?.getClient?.() || window.supabase;
+                const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                if (client && campId) {
+                    console.log("🗑️ New half: deleting all daily_schedules from Supabase...");
+                    const { error } = await client
+                        .from('daily_schedules')
+                        .delete()
+                        .eq('camp_id', campId);
+                    if (error) console.error('🗑️ New half: Supabase delete error:', error);
+                    else console.log("🗑️ New half: Supabase daily_schedules cleared");
+                }
+            }
+
             // ★★★ CRITICAL: Clear ALL cloud keys including new league history keys ★★★
             if (typeof window.clearCloudKeys === 'function') {
                 console.log("☁️ Clearing cloud keys for new half...");
