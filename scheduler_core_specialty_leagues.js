@@ -981,6 +981,55 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
     // EXPOSE GLOBALLY
     // =========================================================================
 
+    /**
+     * Remove a date's game counts from specialty league history and propagate
+     * corrected game numbers to future dates still in localStorage.
+     * Called by eraseCurrentDailyData after a single day is deleted.
+     */
+    SpecialtyLeagues.cleanupDateFromHistory = function(dateKey) {
+        try {
+            const history = loadSpecialtyHistory();
+            if (!history.gamesPerDate) return;
+
+            let changed = false;
+            for (const leagueId of Object.keys(history.gamesPerDate)) {
+                if (history.gamesPerDate[leagueId][dateKey] !== undefined) {
+                    delete history.gamesPerDate[leagueId][dateKey];
+                    changed = true;
+                }
+            }
+
+            if (!changed) return;
+
+            saveSpecialtyHistory(history);
+            console.log('[SpecialtyLeagues] 🗑️ Removed gamesPerDate entries for', dateKey);
+
+            updateFutureSchedules(dateKey, history);
+        } catch (e) {
+            console.error('[SpecialtyLeagues] cleanupDateFromHistory error:', e);
+        }
+    };
+
+    /**
+     * Wipe all gamesPerDate entries across every specialty league.
+     * Called by eraseAllDailyData when every schedule is deleted at once.
+     */
+    SpecialtyLeagues.clearAllGamesPerDate = function() {
+        try {
+            const history = loadSpecialtyHistory();
+            if (!history.gamesPerDate || Object.keys(history.gamesPerDate).length === 0) return;
+
+            for (const leagueId of Object.keys(history.gamesPerDate)) {
+                history.gamesPerDate[leagueId] = {};
+            }
+
+            saveSpecialtyHistory(history);
+            console.log('[SpecialtyLeagues] 🗑️ Cleared all gamesPerDate entries (all schedules deleted)');
+        } catch (e) {
+            console.error('[SpecialtyLeagues] clearAllGamesPerDate error:', e);
+        }
+    };
+
     window.SchedulerCoreSpecialtyLeagues = SpecialtyLeagues;
 
     if (window.SchedulerCoreLeagues) {

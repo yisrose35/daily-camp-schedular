@@ -377,7 +377,7 @@ describe('eraseAllDailyData', () => {
         assert.equal(supabaseLog.length, 0);
     });
 
-    it('owner: clears gamesPerDate and leagueRoundState, dispatches event', async () => {
+    it('owner: clears gamesPerDate for regular + specialty leagues, resets leagueRoundState, dispatches event', async () => {
         resetStorage({
             'campDailyData_v1': JSON.stringify({
                 '2026-07-15': { scheduleAssignments: { 'Bunk 1': ['Art'] }, leagueAssignments: {} }
@@ -388,9 +388,13 @@ describe('eraseAllDailyData', () => {
         dispatchedEvents = [];
         saveGlobalSettingsCalls = [];
 
-        let clearAllCalled = false;
+        let regularClearAllCalled = false;
+        let specialtyClearAllCalled = false;
         global.SchedulerCoreLeagues = {
-            clearAllGamesPerDate() { clearAllCalled = true; }
+            clearAllGamesPerDate() { regularClearAllCalled = true; }
+        };
+        global.SchedulerCoreSpecialtyLeagues = {
+            clearAllGamesPerDate() { specialtyClearAllCalled = true; }
         };
         global.leagueRoundState = { 'Hoops': { currentRound: 12 } };
 
@@ -399,7 +403,8 @@ describe('eraseAllDailyData', () => {
 
         await global.eraseAllDailyData();
 
-        assert.ok(clearAllCalled, 'clearAllGamesPerDate called');
+        assert.ok(regularClearAllCalled, 'regular clearAllGamesPerDate called');
+        assert.ok(specialtyClearAllCalled, 'specialty clearAllGamesPerDate called');
         assert.deepEqual(global.leagueRoundState, {}, 'leagueRoundState reset to {}');
 
         const roundSave = saveGlobalSettingsCalls.find(c => c.key === 'leagueRoundState');
@@ -608,27 +613,20 @@ describe('Scope: New Half vs Reset History', () => {
 
 describe('gamesPerDate cleanup on day delete', () => {
 
-    it('owner: removes gamesPerDate for the deleted date, preserves other dates', async () => {
-        const leagueHistory = {
-            teamSports: {},
-            matchupHistory: {},
-            gamesPerDate: {
-                'Hoops': { '2026-07-15': 3, '2026-07-16': 2 },
-                'Soccer': { '2026-07-15': 4 }
-            },
-            offCampusCounts: {}
-        };
-
+    it('owner: cleanupDateFromHistory called for both regular and specialty leagues', async () => {
         resetStorage({
             'campDailyData_v1': JSON.stringify({
                 '2026-07-15': { scheduleAssignments: { 'Bunk 1': ['Hoops'] }, leagueAssignments: {} }
-            }),
-            'campLeagueHistory_v2': JSON.stringify(leagueHistory)
+            })
         });
 
-        let cleanupCalledWith = null;
+        let regularCleanup = null;
+        let specialtyCleanup = null;
         global.SchedulerCoreLeagues = {
-            cleanupDateFromHistory(dateKey) { cleanupCalledWith = dateKey; }
+            cleanupDateFromHistory(dateKey) { regularCleanup = dateKey; }
+        };
+        global.SchedulerCoreSpecialtyLeagues = {
+            cleanupDateFromHistory(dateKey) { specialtyCleanup = dateKey; }
         };
 
         global.supabase = makeSupabaseMock();
@@ -644,11 +642,11 @@ describe('gamesPerDate cleanup on day delete', () => {
 
         await global.eraseCurrentDailyData();
 
-        assert.equal(cleanupCalledWith, '2026-07-15',
-            'cleanupDateFromHistory called with the deleted dateKey');
+        assert.equal(regularCleanup, '2026-07-15', 'regular cleanupDateFromHistory called');
+        assert.equal(specialtyCleanup, '2026-07-15', 'specialty cleanupDateFromHistory called');
     });
 
-    it('scheduler: cleanupDateFromHistory called after partial delete', async () => {
+    it('scheduler: cleanupDateFromHistory called for both leagues after partial delete', async () => {
         resetStorage({
             'campDailyData_v1': JSON.stringify({
                 '2026-07-15': {
@@ -676,9 +674,13 @@ describe('gamesPerDate cleanup on day delete', () => {
             loadSchedule: async () => ({ success: false })
         };
 
-        let cleanupCalledWith = null;
+        let regularCleanup = null;
+        let specialtyCleanup = null;
         global.SchedulerCoreLeagues = {
-            cleanupDateFromHistory(dateKey) { cleanupCalledWith = dateKey; }
+            cleanupDateFromHistory(dateKey) { regularCleanup = dateKey; }
+        };
+        global.SchedulerCoreSpecialtyLeagues = {
+            cleanupDateFromHistory(dateKey) { specialtyCleanup = dateKey; }
         };
 
         setupMocks('scheduler');
@@ -686,7 +688,7 @@ describe('gamesPerDate cleanup on day delete', () => {
 
         await global.eraseCurrentDailyData();
 
-        assert.equal(cleanupCalledWith, '2026-07-15',
-            'cleanupDateFromHistory called after scheduler partial delete');
+        assert.equal(regularCleanup, '2026-07-15', 'regular cleanupDateFromHistory called');
+        assert.equal(specialtyCleanup, '2026-07-15', 'specialty cleanupDateFromHistory called');
     });
 });

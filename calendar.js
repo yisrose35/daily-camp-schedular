@@ -816,9 +816,10 @@ all[date].updated_at = new Date().toISOString();
         }
         
         // ═══════════════════════════════════════════════════════════════
-        // CLEAN LEAGUE HISTORY for the deleted date
+        // CLEAN LEAGUE HISTORY for the deleted date (regular + specialty)
         // ═══════════════════════════════════════════════════════════════
         window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
+        window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
 
         // ═══════════════════════════════════════════════════════════════
         // REFRESH UI
@@ -902,6 +903,7 @@ all[date].updated_at = new Date().toISOString();
 
             // Clear league gamesPerDate — all schedule-derived game counts are now stale
             window.SchedulerCoreLeagues?.clearAllGamesPerDate?.();
+            window.SchedulerCoreSpecialtyLeagues?.clearAllGamesPerDate?.();
 
             // Reset leagueRoundState — currentRound/sportRotationIndex are stale with no schedules
             window.leagueRoundState = {};
