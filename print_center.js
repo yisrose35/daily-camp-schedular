@@ -91,6 +91,7 @@ var _previewHtml = '';
 var _cloudSyncTimeout = null;
 var _liveMode = false;
 var _liveInterval = null;
+var _timeIncrement = 15; // minutes: 5, 10, 15, 30, 45, 60
 var CLOUD_SYNC_DEBOUNCE = 2000;
 
 // =========================================================================
@@ -530,6 +531,36 @@ function getStyles() {
     '.pc3-zoom input[type="range"]{width:80px;height:4px;accent-color:#147D91;}' +
     '.pc3-zoom-label{font-size:10px;color:#64748b;min-width:32px;text-align:center;}' +
 
+    /* ── Auto Timeline Grid ── */
+    '.pc3-timeline{position:relative;overflow-x:auto;overflow-y:visible;}' +
+    '.pc3-tl-wrap{display:flex;flex-direction:column;min-width:max-content;}' +
+    '.pc3-tl-header{display:flex;align-items:stretch;position:sticky;top:0;z-index:5;background:#f1f5f9;}' +
+    '.pc3-tl-corner{min-width:100px;max-width:100px;padding:4px 8px;font-size:10px;font-weight:700;color:#64748b;border-right:1px solid #e2e8f0;border-bottom:2px solid #cbd5e1;display:flex;align-items:flex-end;flex-shrink:0;}' +
+    '.pc3-tl-time-axis{display:flex;position:relative;flex:1;border-bottom:2px solid #cbd5e1;}' +
+    '.pc3-tl-tick{position:absolute;top:0;bottom:0;border-left:1px solid #e2e8f0;display:flex;align-items:flex-end;padding:0 0 3px 4px;font-size:9px;color:#94a3b8;white-space:nowrap;box-sizing:border-box;}' +
+    '.pc3-tl-tick.hour{border-left-color:#cbd5e1;font-weight:600;color:#64748b;}' +
+    '.pc3-tl-period-bar{position:absolute;top:0;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#fff;z-index:2;border-radius:0;pointer-events:none;}' +
+    '.pc3-tl-row{display:flex;align-items:stretch;border-bottom:1px solid #f1f5f9;min-height:32px;}' +
+    '.pc3-tl-row:nth-child(even){background:#fafbfd;}' +
+    '.pc3-tl-row:hover{background:#f0f9ff;}' +
+    '.pc3-tl-row-label{min-width:100px;max-width:100px;padding:4px 8px;font-size:11px;font-weight:600;color:#334155;border-right:1px solid #e2e8f0;display:flex;align-items:center;flex-shrink:0;position:sticky;left:0;background:inherit;z-index:3;}' +
+    '.pc3-tl-row-track{position:relative;flex:1;display:flex;align-items:stretch;}' +
+    '.pc3-tl-block{position:absolute;top:2px;bottom:2px;border-radius:4px;display:flex;align-items:center;padding:0 6px;font-size:10px;font-weight:500;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;box-sizing:border-box;border:1px solid transparent;cursor:default;transition:filter .1s;}' +
+    '.pc3-tl-block:hover{filter:brightness(0.93);z-index:4;}' +
+    '.pc3-tl-block .tl-act{font-weight:600;margin-right:4px;}' +
+    '.pc3-tl-block .tl-loc{opacity:.7;font-size:9px;}' +
+    '.pc3-tl-block .tl-dur{margin-left:auto;font-size:8px;opacity:.5;padding-left:4px;}' +
+    '.pc3-tl-block.type-pinned{background:#fff8e1;border-color:#f59e0b;color:#92400e;}' +
+    '.pc3-tl-block.type-league{background:#eff6ff;border-color:#60a5fa;color:#1e40af;}' +
+    '.pc3-tl-block.type-free{background:#f9fafb;border-color:#e5e7eb;color:#94a3b8;font-style:italic;}' +
+    '.pc3-tl-block.type-transition{background:#f5f3ff;border-color:#c4b5fd;color:#6d28d9;font-size:9px;font-style:italic;}' +
+    '.pc3-tl-block.type-general{background:#ecfdf5;border-color:#6ee7b7;color:#065f46;}' +
+    '.pc3-tl-period-divider{display:flex;align-items:stretch;min-height:28px;background:linear-gradient(90deg,#f8fafc,#f1f5f9);border-bottom:1px solid #e2e8f0;border-top:1px solid #e2e8f0;}' +
+    '.pc3-tl-period-label{min-width:100px;max-width:100px;padding:4px 8px;font-size:10px;font-weight:700;color:#475569;border-right:1px solid #e2e8f0;display:flex;align-items:center;flex-shrink:0;position:sticky;left:0;background:inherit;z-index:3;text-transform:uppercase;letter-spacing:.5px;}' +
+    '.pc3-tl-period-track{flex:1;position:relative;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#64748b;}' +
+    '.pc3-tl-gridline{position:absolute;top:0;bottom:0;border-left:1px solid #f3f4f6;pointer-events:none;z-index:0;}' +
+    '.pc3-tl-gridline.hour{border-left-color:#e5e7eb;}' +
+
     /* ── Print overrides ── */
     '@media print{.no-print,.pc3-toolbar,.pc3-formula,.pc3-sidebar,.pc3-drawer{display:none!important;}.pc3{background:#fff!important;}.pc3-grid-area{background:#fff!important;padding:0!important;overflow:visible!important;}.pc3-sheet{box-shadow:none!important;border-radius:0!important;}}' +
     '</style>';
@@ -557,6 +588,19 @@ function buildMainUI() {
             '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-transpose" style="accent-color:#147D91;margin-right:4px;"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '>Transpose</label>' +
             '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-combined" style="accent-color:#147D91;margin-right:4px;"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combined</label>' +
             '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-hide-matchups" style="accent-color:#147D91;margin-right:4px;"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide Matchups</label>' +
+        '</div>' +
+        /* Time increment selector — visible in all modes but most relevant for auto */
+        '<div class="pc3-toolbar-sep"></div>' +
+        '<div class="pc3-toolbar-group">' +
+            '<span class="pc3-tb-label">Grid</span>' +
+            '<select id="pc3-time-increment" class="pc3-tb-select" title="Time axis increment">' +
+                '<option value="5"'  + (_timeIncrement === 5  ? ' selected' : '') + '>5 min</option>' +
+                '<option value="10"' + (_timeIncrement === 10 ? ' selected' : '') + '>10 min</option>' +
+                '<option value="15"' + (_timeIncrement === 15 ? ' selected' : '') + '>15 min</option>' +
+                '<option value="30"' + (_timeIncrement === 30 ? ' selected' : '') + '>30 min</option>' +
+                '<option value="45"' + (_timeIncrement === 45 ? ' selected' : '') + '>45 min</option>' +
+                '<option value="60"' + (_timeIncrement === 60 ? ' selected' : '') + '>1 hr</option>' +
+            '</select>' +
         '</div>' +
         '<div class="pc3-toolbar-sep"></div>' +
         '<div class="pc3-toolbar-group">' +
@@ -807,55 +851,174 @@ function renderDivisionSheet(divName) {
     return html;
 }
 
-// ── AUTO MODE: Unified time axis with per-bunk data ──
+// ── AUTO MODE: Timeline / Gantt layout — bunks on Y, time on X ──
 function renderAutoDivisionTable(divName, bunks) {
-    // Collect ALL unique time slots across all bunks
-    var timeSet = {};
+    var PX_PER_MIN = 3; // pixels per minute of schedule
+
+    // ─── Collect all bunk activities with merged continuations ─────
+    var bunkData = {}; // { bunk: [ { startMin, endMin, entry, slotIdx, type } ] }
+    var dayStart = Infinity, dayEnd = -Infinity;
+
     bunks.forEach(function (bunk) {
-        var schedule = getPerBunkSchedule(bunk, divName);
-        schedule.forEach(function (slot) {
-            var key = slot.startMin + '-' + slot.endMin;
-            if (!timeSet[key]) timeSet[key] = { startMin: slot.startMin, endMin: slot.endMin, label: slot.label };
-        });
-    });
-    var timeSlots = Object.values(timeSet).sort(function (a, b) { return a.startMin - b.startMin; });
-
-    var html = '<div style="overflow:auto;"><table class="pc3-tbl">';
-
-    // Header row: corner + bunk names
-    html += '<thead><tr><th class="corner" style="min-width:90px;">Time</th>';
-    bunks.forEach(function (b) { html += '<th>' + escHtml(b) + '</th>'; });
-    html += '</tr></thead><tbody>';
-
-    // Data rows: one per time slot
-    timeSlots.forEach(function (ts) {
-        html += '<tr>';
-        html += '<th class="row-head">' + ts.label + '</th>';
-        bunks.forEach(function (bunk) {
-            var bunkSchedule = getPerBunkSchedule(bunk, divName);
-            // Find the slot in this bunk that overlaps this time slot
-            var found = null, foundIdx = -1;
-            for (var i = 0; i < bunkSchedule.length; i++) {
-                var bs = bunkSchedule[i];
-                if (bs.startMin === ts.startMin || (bs.startMin < ts.endMin && bs.endMin > ts.startMin)) {
-                    foundIdx = i; break;
+        var slots = getPerBunkSchedule(bunk, divName);
+        var activities = [];
+        for (var i = 0; i < slots.length; i++) {
+            var entry = getEntry(bunk, i);
+            if (!entry) {
+                // Free slot
+                activities.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: null, slotIdx: i, type: 'free' });
+            } else if (entry.continuation) {
+                // Extend previous block
+                if (activities.length > 0) {
+                    activities[activities.length - 1].endMin = slots[i].endMin;
                 }
-            }
-            if (foundIdx >= 0) {
-                var entry = getEntry(bunk, foundIdx);
-                var type = getEntryType(entry);
-                var text = entry ? formatEntry(entry) : '';
-                if (!text && type === 'free') text = '\u2014';
-                html += '<td class="cell-' + type + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + foundIdx + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
+                continue;
             } else {
-                html += '<td class="cell-free">\u2014</td>';
+                activities.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry, slotIdx: i, type: getEntryType(entry) });
             }
-        });
-        html += '</tr>';
+            if (slots[i].startMin < dayStart) dayStart = slots[i].startMin;
+            if (slots[i].endMin > dayEnd) dayEnd = slots[i].endMin;
+        }
+        bunkData[bunk] = activities;
     });
 
-    html += '</tbody></table></div>';
+    if (dayStart === Infinity) dayStart = 480;
+    if (dayEnd === -Infinity) dayEnd = 960;
+
+    // ─── Detect periods: pinned grade-wide events (same time for all bunks) ─────
+    // A "period" is a time range where ALL bunks have the same pinned event
+    var periodTypes = ['swim', 'lunch', 'snacks', 'snack', 'dismissal', 'pre-change', 'post-change'];
+    var periods = []; // [ { startMin, endMin, event, isPeriod: true } ]
+    if (bunks.length > 0) {
+        var firstBunk = bunks[0];
+        (bunkData[firstBunk] || []).forEach(function (act) {
+            if (!act.entry) return;
+            var entryType = (act.entry.type || act.entry._activity || '').toLowerCase();
+            var entryEvent = (act.entry._activity || act.entry.field || '').toLowerCase();
+            var isPinnedType = periodTypes.some(function (pt) { return entryType.indexOf(pt) >= 0 || entryEvent.indexOf(pt) >= 0; });
+            if (!isPinnedType && !act.entry._gradeWide) return;
+
+            // Check if ALL bunks have the same event at this exact time
+            var allMatch = bunks.every(function (bk) {
+                return (bunkData[bk] || []).some(function (a) {
+                    return a.startMin === act.startMin && a.endMin === act.endMin;
+                });
+            });
+            if (allMatch) {
+                periods.push({
+                    startMin: act.startMin, endMin: act.endMin,
+                    event: act.entry._activity || formatEntry(act.entry) || entryType,
+                    isPeriod: true
+                });
+            }
+        });
+    }
+    // Sort periods and deduplicate
+    periods.sort(function (a, b) { return a.startMin - b.startMin; });
+    periods = periods.filter(function (p, i, arr) {
+        return i === 0 || p.startMin !== arr[i - 1].startMin;
+    });
+
+    // ─── Build time segments (split by periods) ─────
+    // Segments are the gaps between periods where bunks have individual activities
+    var segments = []; // [ { startMin, endMin, period: null|periodObj } ]
+    var cursor = dayStart;
+    periods.forEach(function (p) {
+        if (p.startMin > cursor) {
+            segments.push({ startMin: cursor, endMin: p.startMin, period: null });
+        }
+        segments.push({ startMin: p.startMin, endMin: p.endMin, period: p });
+        cursor = p.endMin;
+    });
+    if (cursor < dayEnd) {
+        segments.push({ startMin: cursor, endMin: dayEnd, period: null });
+    }
+    // If no periods were found, the whole day is one segment
+    if (segments.length === 0) {
+        segments.push({ startMin: dayStart, endMin: dayEnd, period: null });
+    }
+
+    // ─── Render ─────
+    var inc = _timeIncrement;
+    var totalMin = dayEnd - dayStart;
+    var totalW = totalMin * PX_PER_MIN;
+
+    var html = '<div class="pc3-timeline">';
+    html += '<div class="pc3-tl-wrap" style="width:' + (100 + totalW) + 'px;">';
+
+    // ── Time axis header ──
+    html += '<div class="pc3-tl-header">';
+    html += '<div class="pc3-tl-corner">Bunk</div>';
+    html += '<div class="pc3-tl-time-axis" style="width:' + totalW + 'px;height:28px;position:relative;">';
+    for (var t = dayStart; t < dayEnd; t += inc) {
+        var x = (t - dayStart) * PX_PER_MIN;
+        var isHour = (t % 60 === 0);
+        html += '<div class="pc3-tl-tick' + (isHour ? ' hour' : '') + '" style="left:' + x + 'px;width:' + (inc * PX_PER_MIN) + 'px;">' + minutesToTimeLabel(t) + '</div>';
+    }
+    // Period bars in header
+    periods.forEach(function (p) {
+        var px = (p.startMin - dayStart) * PX_PER_MIN;
+        var pw = (p.endMin - p.startMin) * PX_PER_MIN;
+        var bgColor = getPeriodColor(p.event);
+        html += '<div class="pc3-tl-period-bar" style="left:' + px + 'px;width:' + pw + 'px;background:' + bgColor + ';">' + escHtml(p.event) + '</div>';
+    });
+    html += '</div></div>';
+
+    // ── Bunk rows ──
+    bunks.forEach(function (bunk) {
+        html += '<div class="pc3-tl-row">';
+        html += '<div class="pc3-tl-row-label">' + escHtml(bunk) + '</div>';
+        html += '<div class="pc3-tl-row-track" style="width:' + totalW + 'px;position:relative;">';
+
+        // Background gridlines
+        for (var gl = dayStart; gl < dayEnd; gl += inc) {
+            var glx = (gl - dayStart) * PX_PER_MIN;
+            html += '<div class="pc3-tl-gridline' + (gl % 60 === 0 ? ' hour' : '') + '" style="left:' + glx + 'px;"></div>';
+        }
+
+        // Activity blocks for this bunk
+        var acts = bunkData[bunk] || [];
+        acts.forEach(function (act) {
+            // Skip blocks that are part of a period (they're shown as dividers)
+            var inPeriod = periods.some(function (p) { return act.startMin >= p.startMin && act.endMin <= p.endMin; });
+            if (inPeriod) return;
+
+            var bx = (act.startMin - dayStart) * PX_PER_MIN;
+            var bw = (act.endMin - act.startMin) * PX_PER_MIN;
+            if (bw < 2) return;
+
+            var actText = '', locText = '', durMin = act.endMin - act.startMin;
+            if (act.entry) {
+                actText = act.entry._activity || act.entry.sport || '';
+                locText = typeof act.entry.field === 'string' ? act.entry.field : (act.entry.field && act.entry.field.name ? act.entry.field.name : '');
+                if (actText && locText && (actText === locText || locText.indexOf(actText) >= 0)) locText = '';
+                if (!actText && locText) { actText = locText; locText = ''; }
+            }
+
+            html += '<div class="pc3-tl-block type-' + act.type + '" style="left:' + bx + 'px;width:' + bw + 'px;" data-bunk="' + escHtml(bunk) + '" data-slot="' + act.slotIdx + '" data-div="' + escHtml(divName) + '" title="' + escHtml(actText + (locText ? ' – ' + locText : '') + ' (' + durMin + ' min)') + '">';
+            if (bw > 40) {
+                html += '<span class="tl-act">' + escHtml(actText || '\u2014') + '</span>';
+                if (bw > 90 && locText) html += '<span class="tl-loc">' + escHtml(locText) + '</span>';
+                if (bw > 60) html += '<span class="tl-dur">' + durMin + 'm</span>';
+            }
+            html += '</div>';
+        });
+
+        html += '</div></div>';
+    });
+
+    html += '</div></div>';
     return html;
+}
+
+// ── Period color helper ──
+function getPeriodColor(eventName) {
+    var e = (eventName || '').toLowerCase();
+    if (e.indexOf('swim') >= 0 || e.indexOf('change') >= 0) return 'rgba(6,182,212,.7)';
+    if (e.indexOf('lunch') >= 0) return 'rgba(239,68,68,.65)';
+    if (e.indexOf('snack') >= 0) return 'rgba(234,179,8,.65)';
+    if (e.indexOf('dismissal') >= 0) return 'rgba(107,114,128,.7)';
+    return 'rgba(20,125,145,.6)';
 }
 
 // ── MANUAL MODE: Bunks on top ──
@@ -1176,57 +1339,105 @@ function renderLiveContent() {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).sort(naturalSort);
         if (!bunks.length) return;
 
-        html += '<div style="margin-bottom:20px;">';
+        html += '<div style="margin-bottom:24px;">';
         html += '<div style="font-size:18px;font-weight:700;color:#fbbf24;margin-bottom:8px;padding-left:4px;">' + escHtml(divName) + '</div>';
 
-        var timeSlots = [];
         if (isAutoMode()) {
-            // Collect unified time axis from per-bunk slots
-            var timeSet = {};
+            // ★★★ AUTO LIVE: Timeline view with now-cursor ★★★
+            var PX = 3;
+            var dayStart = Infinity, dayEnd = -Infinity;
+            var bunkData = {};
             bunks.forEach(function (bunk) {
-                getPerBunkSchedule(bunk, divName).forEach(function (s) {
-                    var key = s.startMin + '-' + s.endMin;
-                    if (!timeSet[key]) timeSet[key] = s;
-                });
+                var slots = getPerBunkSchedule(bunk, divName);
+                var acts = [];
+                for (var i = 0; i < slots.length; i++) {
+                    var entry = getEntry(bunk, i);
+                    if (entry && entry.continuation && acts.length > 0) { acts[acts.length - 1].endMin = slots[i].endMin; continue; }
+                    acts.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry, type: entry ? getEntryType(entry) : 'free' });
+                    if (slots[i].startMin < dayStart) dayStart = slots[i].startMin;
+                    if (slots[i].endMin > dayEnd) dayEnd = slots[i].endMin;
+                }
+                bunkData[bunk] = acts;
             });
-            timeSlots = Object.values(timeSet).sort(function (a, b) { return a.startMin - b.startMin; });
+            if (dayStart === Infinity) dayStart = 480;
+            if (dayEnd === -Infinity) dayEnd = 960;
+            var totalW = (dayEnd - dayStart) * PX;
+
+            // Time header
+            html += '<div style="display:flex;overflow-x:auto;">';
+            html += '<div style="min-width:90px;flex-shrink:0;"></div>';
+            html += '<div style="position:relative;width:' + totalW + 'px;height:24px;border-bottom:1px solid #374151;">';
+            for (var t = dayStart; t < dayEnd; t += _timeIncrement) {
+                var tx = (t - dayStart) * PX;
+                html += '<div style="position:absolute;left:' + tx + 'px;bottom:2px;font-size:9px;color:#9ca3af;white-space:nowrap;' + (t % 60 === 0 ? 'font-weight:600;color:#e5e7eb;' : '') + '">' + minutesToTimeLabel(t) + '</div>';
+            }
+            // Now cursor in header
+            if (nowMin >= dayStart && nowMin <= dayEnd) {
+                var nowX = (nowMin - dayStart) * PX;
+                html += '<div style="position:absolute;left:' + nowX + 'px;top:0;bottom:0;width:2px;background:#fbbf24;z-index:10;box-shadow:0 0 8px rgba(251,191,36,.6);"></div>';
+            }
+            html += '</div></div>';
+
+            // Bunk rows
+            bunks.forEach(function (bunk) {
+                html += '<div style="display:flex;align-items:stretch;min-height:30px;border-bottom:1px solid #1f2937;">';
+                html += '<div style="min-width:90px;flex-shrink:0;font-size:11px;font-weight:600;color:#e5e7eb;padding:4px 8px;display:flex;align-items:center;border-right:1px solid #374151;">' + escHtml(bunk) + '</div>';
+                html += '<div style="position:relative;width:' + totalW + 'px;overflow-x:auto;">';
+
+                (bunkData[bunk] || []).forEach(function (act) {
+                    var bx = (act.startMin - dayStart) * PX;
+                    var bw = (act.endMin - act.startMin) * PX;
+                    if (bw < 2) return;
+                    var isCurrent = nowMin >= act.startMin && nowMin < act.endMin;
+                    var isPast = nowMin >= act.endMin;
+                    var actName = act.entry ? (act.entry._activity || act.entry.sport || formatEntry(act.entry)) : '';
+                    var bg = isCurrent ? '#164e63' : (isPast ? '#0f172a' : '#1e293b');
+                    var border = isCurrent ? '#06b6d4' : '#374151';
+                    var color = isCurrent ? '#67e8f9' : (isPast ? '#475569' : '#e5e7eb');
+                    if (act.type === 'league') { bg = isCurrent ? '#1e1b4b' : '#312e81'; border = '#818cf8'; color = '#c7d2fe'; }
+                    if (act.type === 'pinned') { bg = isCurrent ? '#422006' : '#78350f'; border = '#f59e0b'; color = '#fde68a'; }
+                    html += '<div style="position:absolute;left:' + bx + 'px;width:' + bw + 'px;top:2px;bottom:2px;background:' + bg + ';border:1px solid ' + border + ';border-radius:3px;color:' + color + ';font-size:10px;padding:0 4px;display:flex;align-items:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;' + (isPast ? 'opacity:.5;' : '') + '">';
+                    if (bw > 30) html += escHtml(actName || '\u2014');
+                    html += '</div>';
+                });
+
+                // Now cursor in track
+                if (nowMin >= dayStart && nowMin <= dayEnd) {
+                    var cx = (nowMin - dayStart) * PX;
+                    html += '<div style="position:absolute;left:' + cx + 'px;top:0;bottom:0;width:2px;background:#fbbf24;z-index:10;pointer-events:none;"></div>';
+                }
+
+                html += '</div></div>';
+            });
+
         } else {
-            timeSlots = buildDivisionBlocks(divName);
+            // ★★★ MANUAL LIVE: Table view (existing) ★★★
+            var timeSlots = buildDivisionBlocks(divName);
+            html += '<table class="pc3-live-tbl"><thead><tr><th class="corner">Time</th>';
+            bunks.forEach(function (b) { html += '<th>' + escHtml(b) + '</th>'; });
+            html += '</tr></thead><tbody>';
+
+            timeSlots.forEach(function (ts) {
+                var isCurrent = nowMin >= ts.startMin && nowMin < ts.endMin;
+                var isPast = nowMin >= ts.endMin;
+                html += '<tr>';
+                html += '<th class="row-head' + (isCurrent ? ' cell-current' : '') + (isPast ? ' cell-past' : '') + '">' + ts.label + '</th>';
+                bunks.forEach(function (bunk) {
+                    var slotIdx = findFirstSlotForTime(ts.startMin, divName);
+                    var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
+                    var type = getEntryType(entry);
+                    var text = entry ? formatEntry(entry) : '\u2014';
+                    var cls = 'cell-' + type;
+                    if (isCurrent) cls += ' cell-current';
+                    if (isPast) cls += ' cell-past';
+                    html += '<td class="' + cls + '">' + escHtml(text) + '</td>';
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
         }
 
-        html += '<table class="pc3-live-tbl"><thead><tr><th class="corner">Time</th>';
-        bunks.forEach(function (b) { html += '<th>' + escHtml(b) + '</th>'; });
-        html += '</tr></thead><tbody>';
-
-        timeSlots.forEach(function (ts) {
-            var isCurrent = nowMin >= ts.startMin && nowMin < ts.endMin;
-            var isPast = nowMin >= ts.endMin;
-            html += '<tr>';
-            html += '<th class="row-head' + (isCurrent ? ' cell-current' : '') + (isPast ? ' cell-past' : '') + '">' + ts.label + '</th>';
-
-            bunks.forEach(function (bunk) {
-                var slotIdx;
-                if (isAutoMode()) {
-                    var bunkSched = getPerBunkSchedule(bunk, divName);
-                    slotIdx = -1;
-                    for (var i = 0; i < bunkSched.length; i++) {
-                        if (bunkSched[i].startMin === ts.startMin || (bunkSched[i].startMin < ts.endMin && bunkSched[i].endMin > ts.startMin)) { slotIdx = i; break; }
-                    }
-                } else {
-                    slotIdx = findFirstSlotForTime(ts.startMin, divName);
-                }
-                var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
-                var type = getEntryType(entry);
-                var text = entry ? formatEntry(entry) : '\u2014';
-                var cls = 'cell-' + type;
-                if (isCurrent) cls += ' cell-current';
-                if (isPast) cls += ' cell-past';
-                html += '<td class="' + cls + '">' + escHtml(text) + '</td>';
-            });
-            html += '</tr>';
-        });
-
-        html += '</tbody></table></div>';
+        html += '</div>';
     });
 
     body.innerHTML = html;
@@ -1619,6 +1830,14 @@ function bindAll() {
         if (e) e.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
     });
 
+    // Time increment selector
+    var incSel = el('pc3-time-increment');
+    if (incSel) incSel.addEventListener('change', function () {
+        _timeIncrement = parseInt(this.value) || 15;
+        try { localStorage.setItem('campistry_pc3_timeIncrement', String(_timeIncrement)); } catch (e) {}
+        liveRefresh();
+    });
+
     // Template selector
     var tplSel = el('pc3-template-select');
     if (tplSel) tplSel.addEventListener('change', function () {
@@ -1676,6 +1895,9 @@ function initPrintCenter() {
     var container = document.getElementById('print-content');
     if (!container) return;
     console.log('[PrintCenter] v' + VERSION + ' init (' + (isAutoMode() ? 'AUTO' : 'MANUAL') + ' mode)');
+
+    // Restore saved time increment
+    try { var savedInc = localStorage.getItem('campistry_pc3_timeIncrement'); if (savedInc) _timeIncrement = parseInt(savedInc) || 15; } catch (e) {}
 
     loadTemplates();
     var lastId = localStorage.getItem('campistry_last_print_template');
