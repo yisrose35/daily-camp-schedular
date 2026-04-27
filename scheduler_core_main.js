@@ -658,6 +658,19 @@
             _specialClaims[lower].push({ startMin, endMin, divName });
         }
 
+        // ★ Detect bunks pinned via daily override (STEP 2) for a given window.
+        // Returns { activity } if pinned, null otherwise. The override has already
+        // written to window.scheduleAssignments by the time we run.
+        function _getBunkOverrideAt(bunk, startMin, endMin, divName) {
+            const slots = Utils.findSlotsForRange(startMin, endMin, divName);
+            if (!slots || slots.length === 0) return null;
+            const existing = window.scheduleAssignments[bunk]?.[slots[0]];
+            if (existing && existing._bunkOverride) {
+                return { activity: existing._activity || existing.field || null };
+            }
+            return null;
+        }
+
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
             const [startMin, endMin] = wk.split('|').map(Number);
 
@@ -678,15 +691,36 @@
                     }
                 });
             });
+
+            // ★ Subtract specials already consumed by daily-override pinned bunks.
+            // Pre-register their claims so _canClaim respects per-special caps too.
+            fallbackableJobs.forEach(job => {
+                const divName = job.division;
+                const bunkList = divisions[divName]?.bunks || [];
+                bunkList.forEach(bunk => {
+                    const ov = _getBunkOverrideAt(bunk, startMin, endMin, divName);
+                    if (!ov || !ov.activity) return;
+                    const matchKey = [..._uniqueSpecials.keys()].find(
+                        n => n.toLowerCase() === ov.activity.toLowerCase()
+                    );
+                    if (matchKey) {
+                        _uniqueSpecials.set(matchKey, Math.max(0, _uniqueSpecials.get(matchKey) - 1));
+                        _registerClaim(matchKey, startMin, endMin, divName);
+                    }
+                });
+            });
+
             const totalCapacity = [..._uniqueSpecials.values()].reduce((s, c) => s + c, 0);
 
-            // Collect all bunks across fallbackable divisions and rank by fairness
+            // Collect all bunks across fallbackable divisions and rank by fairness.
+            // ★ Skip bunks already pinned via daily override — they don't compete for budget.
             const _bunkRankings = [];
             fallbackableJobs.forEach(job => {
                 const divName = job.division;
                 const bunkList = divisions[divName]?.bunks || [];
                 const divPriority = _globalPriority[divName] || [];
                 bunkList.forEach(bunk => {
+                    if (_getBunkOverrideAt(bunk, startMin, endMin, divName)) return;
                     const bunkHist = historicalCounts[bunk] || {};
                     const totalUsage = _allSpecialNames.reduce((s, n) => s + (bunkHist[n] || 0), 0);
                     const priorityBonus = divPriority.includes(bunk) ? 0 : 100;
@@ -789,6 +823,23 @@
                 });
             });
 
+            // ★ Subtract specials already consumed by daily-override pinned bunks
+            entries.forEach(({ job }) => {
+                const divName = job.division;
+                const bunkList = divisions[divName]?.bunks || [];
+                bunkList.forEach(bunk => {
+                    const ov = _getBunkOverrideAt(bunk, startMin, endMin, divName);
+                    if (!ov || !ov.activity) return;
+                    const matchKey = Object.keys(specialPoolMap).find(
+                        n => n.toLowerCase() === ov.activity.toLowerCase()
+                    );
+                    if (matchKey) {
+                        specialPoolMap[matchKey].capacity = Math.max(0, specialPoolMap[matchKey].capacity - 1);
+                        specialPoolMap[matchKey].remaining = specialPoolMap[matchKey].capacity;
+                    }
+                });
+            });
+
             const totalSpecialSlots = Object.values(specialPoolMap)
                 .reduce((sum, s) => sum + s.capacity, 0);
 
@@ -807,6 +858,8 @@
                 const divPriority = priorityQueue[divName] || [];
 
                bunkList.forEach(bunk => {
+                    // ★ Skip bunks pinned via daily override — they don't compete for budget
+                    if (_getBunkOverrideAt(bunk, startMin, endMin, divName)) return;
                     const bunkHist = historicalCounts[bunk] || {};
                     const totalUsage = _allSpecialNames.reduce((s, n) => s + (bunkHist[n] || 0), 0);
                     const priorityBonus = divPriority.includes(bunk) ? 0 : 100;

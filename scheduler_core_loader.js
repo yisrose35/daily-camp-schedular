@@ -515,7 +515,7 @@
             disabledSpecials: dailyOvNested.disabledSpecials || dailyOverrides.disabledSpecials || [],
             disabledLeagues: dailyOvNested.leagues || dailyOverrides.disabledLeagues || [],
             disabledSpecialtyLeagues: dailyOverrides.disabledSpecialtyLeagues || [],
-            historicalCounts: window.loadHistoricalCounts?.() || {},
+            historicalCounts: window.loadHistoricalCounts?.() || (window.loadGlobalSettings?.() || {}).historicalCounts || {},
             yesterdayHistory: window.loadYesterdayHistory?.() || {},
             rotationHistory: window.loadRotationHistory?.() || {},
             specialActivityNames: effectiveSpecialActivityNames,
