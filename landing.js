@@ -650,8 +650,8 @@ if (authMode === 'signup' && data?.user && !data?.session) {
         updatePasswordForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const newPassword = document.getElementById('newPassword')?.value;
-            const confirmPassword = document.getElementById('confirmNewPassword')?.value;
-            const submitBtn = document.getElementById('updatePasswordSubmit');
+            const confirmPassword = document.getElementById('confirmPassword')?.value;
+            const submitBtn = document.getElementById('updateSubmit');
             const updateError = document.getElementById('updateError');
             const updateSuccess = document.getElementById('updateSuccess');
             
@@ -676,7 +676,14 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                 if (submitBtn) submitBtn.textContent = 'Password Updated';
                 setTimeout(() => { closeResetModal(); window.location.href = 'dashboard.html'; }, 2000);
             } catch (err) {
-                if (updateError) updateError.textContent = err.message || 'Failed to update password.';
+                // Give a clear message for the most common failure (expired token)
+                const msg = err.message || '';
+                const isExpired = msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('invalid');
+                if (updateError) {
+                    updateError.textContent = isExpired
+                        ? 'This reset link has expired. Please go back and request a new one.'
+                        : (msg || 'Failed to update password. Please try again.');
+                }
                 if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Update Password'; }
             }
         });
@@ -698,6 +705,14 @@ if (authMode === 'signup' && data?.user && !data?.session) {
     }
 
     async function checkSession() {
+        // If the URL contains a password recovery token, never auto-redirect to dashboard.
+        // The PASSWORD_RECOVERY auth event will open the reset modal instead.
+        const hash = window.location.hash;
+        if (hash.includes('type=recovery') || hash.includes('access_token')) {
+            console.log('[Landing] checkSession: recovery token in URL — skipping auto-redirect');
+            return;
+        }
+
         // ★ v3.2 FIX: Fast-check localStorage BEFORE waiting for Supabase
         // If user has cached auth + camp, redirect immediately to dashboard
         const cachedUserId = localStorage.getItem('campistry_auth_user_id');
@@ -722,6 +737,13 @@ if (authMode === 'signup' && data?.user && !data?.session) {
         if (!supabase) { setTimeout(setupAuthListener, 500); return; }
         supabase.auth.onAuthStateChange((event, session) => {
            if (event === 'SIGNED_IN' && session?.user) {
+                // Never redirect to dashboard mid-recovery — PASSWORD_RECOVERY fires right after SIGNED_IN
+                // during the reset flow. Let PASSWORD_RECOVERY handle it.
+                const hash = window.location.hash;
+                if (hash.includes('type=recovery') || hash.includes('access_token')) {
+                    console.log('[Landing] SIGNED_IN during recovery flow — skipping redirect');
+                    return;
+                }
                 // ★ v3.2: If user already has a camp, go straight to dashboard
                 const cachedCampId = localStorage.getItem('campistry_camp_id');
                 if (cachedCampId) {
