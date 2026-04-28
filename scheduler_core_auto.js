@@ -672,8 +672,11 @@
             let dMin = rawMin > 0 ? Math.max(ABSOLUTE_FLOOR, rawMin) : typeFloor;
             let dMax = rawMax > 0 ? Math.max(dMin, Math.max(ABSOLUTE_FLOOR, rawMax)) : Math.max(dMin, typeCeiling);
 
-            // Special override: configured duration locks dMin=dMax
-            if (t === 'special') {
+            // Special override: configured duration locks dMin=dMax.
+            // Applies to type==='special' AND to activity/slot layers whose event name
+            // resolves to a known special with a configured duration (e.g. Triple Fun
+            // placed in a generic 'activity' slot must still honour its 40-min config).
+            if (t === 'special' || t === 'activity' || t === 'slot') {
                 let specDur = null;
                 if (layer) {
                     const specName = layer._assignedSpecial || layer._resolvedSpecial || layer.event || layer.name;
