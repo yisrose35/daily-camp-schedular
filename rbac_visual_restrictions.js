@@ -43,8 +43,12 @@
         if (_currentRole === 'owner' || _currentRole === 'admin') return true;
         const acRole = window.AccessControl?.getCurrentRole?.();
         if (acRole === 'owner' || acRole === 'admin') return true;
-        const lsRole = localStorage.getItem('campistry_role');
-        if (lsRole === 'owner' || lsRole === 'admin') return true;
+        // localStorage only used before AccessControl has finished initializing —
+        // prevents briefly flashing restrictions on owners during the init gap.
+        if (!window.AccessControl?.isInitialized) {
+            const lsRole = localStorage.getItem('campistry_role');
+            if (lsRole === 'owner' || lsRole === 'admin') return true;
+        }
         return false;
     }
 
@@ -682,17 +686,26 @@
     function disableInteractiveElements(container) {
         container.querySelectorAll('button, input, select, .editable, [draggable="true"]').forEach(el => {
             if (!el.classList.contains('rbac-always-enabled')) {
+                el.dataset.rbacDisabled = 'true';  // mark so we only re-enable what WE disabled
                 el.disabled = true;
                 el.style.pointerEvents = 'none';
-                if (el.draggable) el.draggable = false;
+                el.setAttribute('draggable', 'false');  // attribute is more reliable than property
             }
         });
     }
 
     function enableInteractiveElements(container) {
-        container.querySelectorAll('button, input, select, .editable').forEach(el => {
+        // Only re-enable elements that rbac_visual_restrictions explicitly disabled.
+        // Touching elements disabled for non-RBAC reasons (loading state, form validation)
+        // would cause phantom-enabled buttons.
+        container.querySelectorAll('[data-rbac-disabled="true"]').forEach(el => {
+            delete el.dataset.rbacDisabled;
             el.disabled = false;
             el.style.pointerEvents = '';
+            // Restore draggable only if element originally declared it
+            if (el.getAttribute('draggable') === 'false' && el.tagName !== 'INPUT') {
+                el.removeAttribute('draggable');
+            }
         });
     }
 

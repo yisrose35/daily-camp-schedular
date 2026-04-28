@@ -94,8 +94,8 @@
     // DEBUG MODE
     // =========================================================================
     
-    const DEBUG = true;
-    
+    const DEBUG = false;
+
     function debugLog(...args) {
         if (DEBUG) {
             console.log("🔐 [RBAC]", ...args);
@@ -408,26 +408,29 @@
         });
     }
 
+    let _divisionObserverInterval = null;
+
     function setupDivisionChangeObserver() {
-        setInterval(() => {
+        // Clear any previous interval (e.g., from a refresh() call) to avoid accumulation
+        if (_divisionObserverInterval) {
+            clearInterval(_divisionObserverInterval);
+            _divisionObserverInterval = null;
+        }
+
+        _divisionObserverInterval = setInterval(() => {
             const currentHash = JSON.stringify(Object.keys(window.divisions || {}).sort());
-            
-            // ★★★ FIX: Recalculate when divisions first become available ★★★
+
             if (_lastDivisionsHash === '[]' && currentHash !== '[]') {
                 debugLog("window.divisions populated, recalculating editable divisions");
                 calculateEditableDivisions();
-                
-                // Dispatch event so UI can update
                 window.dispatchEvent(new CustomEvent('campistry-divisions-updated', {
                     detail: { editableDivisions: _editableDivisions }
                 }));
-            }
-            // Also recalculate if divisions changed
-            else if (currentHash !== _lastDivisionsHash && _lastDivisionsHash !== null) {
+            } else if (currentHash !== _lastDivisionsHash && _lastDivisionsHash !== null) {
                 debugLog("window.divisions changed, recalculating editable divisions");
                 calculateEditableDivisions();
             }
-            
+
             _lastDivisionsHash = currentHash;
         }, 1000);
     }
@@ -498,9 +501,9 @@
                 const { data: campInfo } = await window.supabase
                     .from('camps')
                     .select('name')
-                    .eq('owner', memberData.camp_id)
+                    .eq('id', memberData.camp_id)  // fix: look up by camp id, not by owner field
                     .maybeSingle();
-                
+
                 _campName = campInfo?.name || 'Your Camp';
                 
                 localStorage.setItem('campistry_user_id', _campId);
@@ -547,7 +550,20 @@
                 
                 if (!acceptError) {
                     console.log("🔐 ✅ Invite auto-accepted!");
-                    return await determineUserContext();
+                    // Populate state directly — no recursive call.
+                    // Recursing risks an infinite loop if Supabase replication hasn't
+                    // caught up yet and STEP 1 still can't see the accepted row.
+                    _currentRole = pendingInvite.role || ROLES.VIEWER;
+                    _isTeamMember = true;
+                    _membership = { ...pendingInvite, user_id: _currentUser.id, accepted_at: new Date().toISOString() };
+                    _campId = pendingInvite.camp_id;
+                    _userName = pendingInvite.name || _currentUser.email.split('@')[0];
+                    _userSubdivisionIds = pendingInvite.subdivision_ids || [];
+                    _directDivisionAssignments = pendingInvite.assigned_divisions || [];
+                    window._campistryMembership = _membership;
+                    localStorage.setItem('campistry_user_id', _campId);
+                    localStorage.setItem('campistry_auth_user_id', _currentUser.id);
+                    return;
                 }
             }
         } catch (e) {
@@ -568,12 +584,12 @@
                 console.log("🔐 User is a camp owner");
                 _currentRole = ROLES.OWNER;
                 _isTeamMember = false;
-                _campId = _currentUser.id;
+                _campId = ownedCamp.id;  // fix: use camp UUID, not user UUID
                 _campName = ownedCamp.name || 'Your Camp';
                 _userName = ownedCamp.owner_name || _currentUser.email.split('@')[0];
                 _userSubdivisionIds = [];
                 _directDivisionAssignments = [];
-                
+
                 localStorage.setItem('campistry_user_id', _campId);
                 localStorage.setItem('campistry_auth_user_id', _currentUser.id);
                 return;

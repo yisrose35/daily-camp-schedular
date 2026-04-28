@@ -139,17 +139,22 @@
      * Check if user has FULL access (Owner or Admin)
      */
     function hasFullAccess() {
-        // ★★★ v1.1 FIX: Check multiple sources — don't rely on single init ★★★
+        // Primary: use the role resolved at init time
         if (_userRole === 'owner' || _userRole === 'admin') return true;
-        
-        // Fallback: check AccessControl directly (may be initialized before PermissionsGuard)
+
+        // Fallback 1: check AccessControl directly (may be initialized before PermissionsGuard)
         const acRole = window.AccessControl?.getCurrentRole?.();
         if (acRole === 'owner' || acRole === 'admin') return true;
-        
-        // Last resort: localStorage
-        const lsRole = localStorage.getItem('campistry_role');
-        if (lsRole === 'owner' || lsRole === 'admin') return true;
-        
+
+        // Fallback 2: localStorage — only accepted as a UI hint before AccessControl
+        // has finished initializing (prevents briefly flashing restrictions on owners).
+        // Once AccessControl is initialized we trust it exclusively; localStorage alone
+        // is NOT sufficient because it can be set by anyone via DevTools.
+        if (!window.AccessControl?.isInitialized) {
+            const lsRole = localStorage.getItem('campistry_role');
+            if (lsRole === 'owner' || lsRole === 'admin') return true;
+        }
+
         return false;
     }
 

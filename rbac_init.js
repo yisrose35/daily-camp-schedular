@@ -78,6 +78,20 @@
             
         } catch (error) {
             console.error("🚀 RBAC initialization error:", error);
+            // Always dispatch the ready events even after a partial failure so that
+            // ScheduleSync.initAfterRBAC() and PermissionsGuard don't hang forever
+            // waiting for events that will never come.
+            const fallbackDetail = {
+                role: window.AccessControl?.getCurrentRole() || 'viewer',
+                editableDivisions: window.AccessControl?.getEditableDivisions() || [],
+                isOwner: window.AccessControl?.isOwner?.() || false,
+                isAdmin: window.AccessControl?.isAdmin?.() || false,
+                isScheduler: window.AccessControl?.isScheduler?.() || false,
+                isViewer: true,
+                initError: error.message
+            };
+            window.dispatchEvent(new CustomEvent('rbac-system-ready', { detail: fallbackDetail }));
+            window.dispatchEvent(new CustomEvent('campistry-rbac-ready', { detail: fallbackDetail }));
         }
     }
 
@@ -167,21 +181,15 @@
     }
 
     function applyViewerRestrictions() {
-        console.log("🚀 Applying viewer restrictions...");
-        
-        // Viewers can only view, not edit
-        // Hide all edit buttons
+        // Viewer input/button disabling is handled by rbac_visual_restrictions.js
+        // (applyToActionButtons + applyToSetupPanel + tab-level handlers) which runs
+        // on initial load AND on every MutationObserver tick for dynamic content.
+        // A one-shot querySelector blast here would miss dynamically rendered elements.
+        // Only handle the static structural elements that are guaranteed to exist at boot.
         const editButtons = document.querySelectorAll('[data-action="edit"], [data-action="delete"], [data-action="generate"]');
         editButtons.forEach(btn => {
+            btn.dataset.rbacDisabled = 'true';
             btn.style.display = 'none';
-        });
-        
-        // Disable all inputs
-        const inputs = document.querySelectorAll('input:not([type="search"]), select, textarea');
-        inputs.forEach(input => {
-            if (!input.closest('.search-container') && !input.closest('.filter-container')) {
-                input.disabled = true;
-            }
         });
     }
 
@@ -288,26 +296,35 @@
     // =========================================================================
 
     function setupTabChangeHandler() {
-        // Re-apply restrictions when tab changes
-        const originalShowTab = window.showTab;
-        
-        if (typeof originalShowTab === 'function') {
+        function _patchShowTab() {
+            const originalShowTab = window.showTab;
+            if (typeof originalShowTab !== 'function') return false;
+            // Don't double-patch
+            if (originalShowTab._rbacPatched) return true;
+
             window.showTab = function(tabId) {
                 const result = originalShowTab.apply(this, arguments);
-                
-                // Reapply restrictions after tab content loads
                 setTimeout(() => {
                     if (window.VisualRestrictions?.refresh) {
                         window.VisualRestrictions.refresh();
                     } else if (window.EditRestrictions?.refresh) {
                         window.EditRestrictions.refresh();
                     }
-                    // Re-install guards for newly rendered buttons
                     installDestructiveActionGuards();
                 }, 100);
-                
                 return result;
             };
+            window.showTab._rbacPatched = true;
+            return true;
+        }
+
+        // Try immediately — works if showTab already defined
+        if (!_patchShowTab()) {
+            // showTab not ready yet — poll briefly until it appears
+            let attempts = 0;
+            const poll = setInterval(() => {
+                if (_patchShowTab() || attempts++ > 30) clearInterval(poll);
+            }, 100);
         }
     }
 
@@ -348,12 +365,16 @@
     // =========================================================================
 
     window.RBACInit = {
-        initialize: initializeRBAC,
+        initialize: () => {
+            initializeRBAC();
+            setupTabChangeHandler();
+        },
         applyRestrictions: applyInitialRestrictions,
         installDestructiveActionGuards,
         refresh: () => {
             applyInitialRestrictions();
             installDestructiveActionGuards();
+            setupTabChangeHandler();
             window.VisualRestrictions?.refresh?.();
         }
     };

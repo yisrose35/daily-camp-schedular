@@ -53,7 +53,7 @@
         },
 
         // Debug mode - set to true to see detailed logs
-        DEBUG: true
+        DEBUG: false
     };
 
     // =========================================================================
@@ -267,10 +267,14 @@
                         _isTeamMember = true;
                         _roleVerifiedFromDB = true;  // ★★★ V-002: DB-verified ★★★
                         cacheValues();
-                        
-                        // Store membership for permissions
-                        window._campistryMembership = pendingInvite;
-                        
+
+                        // Store post-accept membership (fill in the fields we just wrote)
+                        window._campistryMembership = {
+                            ...pendingInvite,
+                            user_id: _userId,
+                            accepted_at: new Date().toISOString()
+                        };
+
                         log('✅ Invite auto-accepted, user is now:', _role);
                         return;
                     } else {
