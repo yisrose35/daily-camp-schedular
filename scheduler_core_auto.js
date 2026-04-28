@@ -4433,7 +4433,25 @@
                 return durs;
             }
 
-            function addSportBlocks(targetArray, startMin, endMin, opts, ceiling, fillMin) {
+            function addSportBlocks(targetArray, startMin, endMin, opts, ceiling, fillMin, grade) {
+                // ── Period-boundary split ─────────────────────────────
+                // When a bell schedule is configured, activities must stay within
+                // a single period. Split the gap at period boundaries and fill
+                // each sub-gap independently so no block crosses a period boundary.
+                if (grade != null) {
+                    var _asbSubs = splitGapAtPeriods({ start: startMin, end: endMin }, grade);
+                    // Only recurse if the gap was actually split into multiple pieces
+                    // or trimmed (e.g., a straddling gap was cut at the period boundary).
+                    if (_asbSubs.length > 1 || (_asbSubs.length === 1 && (_asbSubs[0].start !== startMin || _asbSubs[0].end !== endMin))) {
+                        for (var _asbI = 0; _asbI < _asbSubs.length; _asbI++) {
+                            var _asbSub = _asbSubs[_asbI];
+                            if (_asbSub.end - _asbSub.start < 5) continue;
+                            addSportBlocks(targetArray, _asbSub.start, _asbSub.end, opts, ceiling, fillMin, null);
+                        }
+                        return;
+                    }
+                }
+
                 var totalDur = endMin - startMin;
 
                 // ── Budget-first: water-fill exact durations ─────────
@@ -6137,7 +6155,7 @@
                             _assignedSport: rResult ? rResult.name : null,
                             _sportFallbacks: fMeta.priorityList.map(function(s) { return s.name; }),
                             _final: true
-                        }, fMeta.sportCeiling, fMeta.fillMinDur);
+                        }, fMeta.sportCeiling, fMeta.fillMinDur, fMeta.grade);
                     } else {
                         // Too small for a sport — absorb into adjacent non-fixed block
                         tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
@@ -6492,7 +6510,7 @@
                                 _source: 'perfection-fill',
                                 _sportFallbacks: vMeta.priorityList ? vMeta.priorityList.map(function(s) { return s.name; }) : [],
                                 _final: true
-                            }, vMeta.sportCeiling || 60, Math.min(vGapDur, vMeta.fillMinDur));
+                            }, vMeta.sportCeiling || 60, Math.min(vGapDur, vMeta.fillMinDur), vMeta.grade);
                             filled = true;
                         }
                     }
@@ -6638,7 +6656,7 @@
                                 layer: hMeta.sportLayer, field: null,
                                 dMin: Math.min(hPreGap, hMeta.fillMinDur || 20), dMax: hMeta.sportCeiling,
                                 _source: 'self-heal-pregap', _final: true
-                            }, hMeta.sportCeiling, Math.min(hPreGap, hMeta.fillMinDur || 20));
+                            }, hMeta.sportCeiling, Math.min(hPreGap, hMeta.fillMinDur || 20), hMeta.grade);
                         }
 
                         // ★ v10.3: Fill remainder with sport — NEVER extend layer past dMax
@@ -6652,7 +6670,7 @@
                                 _source: 'self-heal',
                                 _sportFallbacks: hMeta.priorityList.map(function(s) { return s.name; }),
                                 _final: true
-                            }, hMeta.sportCeiling, Math.min(hRemainDur, hMeta.fillMinDur));
+                            }, hMeta.sportCeiling, Math.min(hRemainDur, hMeta.fillMinDur), hMeta.grade);
                         }
                         // If remainder < 10min, leave it — small gap is better than layer above dMax
                         healCount++;
@@ -6728,7 +6746,7 @@
                                         _source: 'self-heal',
                                         _sportFallbacks: rhMeta.priorityList.map(function(s) { return s.name; }),
                                         _final: true
-                                    }, rhMeta.sportCeiling, rhMeta.fillMinDur);
+                                    }, rhMeta.sportCeiling, rhMeta.fillMinDur, rhMeta.grade);
                                 } else if (rhRemainEnd - rhRemainStart > 0) {
                                     rhTmpl[rhBestIdx].endMin = rhRemainEnd;
                                 }
@@ -6860,7 +6878,7 @@
                                 layer: gMeta.sportLayer, field: null,
                                 dMin: Math.min(gPreGap, gMeta.fillMinDur || 20), dMax: gMeta.sportCeiling || 60,
                                 _source: 'guarantee-pregap', _final: true
-                            }, gMeta.sportCeiling || 60, Math.min(gPreGap, gMeta.fillMinDur || 20));
+                            }, gMeta.sportCeiling || 60, Math.min(gPreGap, gMeta.fillMinDur || 20), gMeta.grade);
                         }
                         // Fill remainder with sport — NEVER extend the layer past dMax
                         var gRemainDur = gRemainEnd - gRemainStart;
@@ -6872,7 +6890,7 @@
                                 dMin: Math.min(gRemainDur, gMeta.fillMinDur || 20),
                                 dMax: gMeta.sportCeiling || 60,
                                 _source: 'guarantee-remainder', _final: true
-                            }, gMeta.sportCeiling || 60, Math.min(gRemainDur, gMeta.fillMinDur || 20));
+                            }, gMeta.sportCeiling || 60, Math.min(gRemainDur, gMeta.fillMinDur || 20), gMeta.grade);
                         }
 
                         gTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
