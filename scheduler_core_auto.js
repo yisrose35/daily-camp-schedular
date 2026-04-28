@@ -4185,7 +4185,7 @@
                     if (_rqKeys.length > 0) {
                         _rqKeys.forEach(function(eid) {
                             var q = rotationQuotas[eid];
-                            log('[Phase3] Rotation "' + q.eventName + '": ' + q.remainingCount + ' remaining, ' + q.daysLeft + ' days left, target=' + q.dailyTarget + (q.isLastDay ? ' (LAST DAY)' : ''));
+                            log('[Phase3] Rotation "' + q.eventName + '": ' + q.remainingCount + ' remaining, ' + q.daysLeft + ' days left, target=' + q.dailyTarget + (q.isLastDay ? ' (LAST DAY)' : '') + (q._dateRangeStart ? ' [range: ' + q._dateRangeStart + ' → ' + q._dateRangeEnd + ']' : ''));
                         });
                     }
                 } catch (e) { console.warn('[Phase3] rotation quota computation failed:', e); }
@@ -9480,6 +9480,7 @@
                         const _evtMaxBunksToday = _evtQ24
                             ? (_evtQ24.isLastDay ? _evtTotalEligible : Math.min(_evtTotalEligible, _evtQ24.dailyTarget))
                             : _evtTotalEligible;
+                        if (_evtQ24) log('[Phase2.4] Quota for "' + evt.name + '": daysLeft=' + _evtQ24.daysLeft + ' target=' + _evtQ24.dailyTarget + (_evtQ24.isLastDay ? ' (LAST DAY)' : '') + ' range=' + (_evtQ24._dateRangeStart || '?') + '→' + (_evtQ24._dateRangeEnd || '?'));
 
                         if (_evtGradeMode === 'individual') {
                             // ── STAGGERED: bunks placed _evtConcurrency-at-a-time into sequential slots ──
