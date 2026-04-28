@@ -4191,6 +4191,21 @@
                 } catch (e) { console.warn('[Phase3] rotation quota computation failed:', e); }
             }
 
+            // Pre-seed rotationQuotas.placed with Phase 2.4 walls already in bunkTimelines
+            // so Phase 3 doesn't place additional bunks on top of the Phase 2.4 quota.
+            if (rotationQuotas) {
+                Object.keys(rotationQuotas).forEach(function(eid) {
+                    allGrades.forEach(function(grade) {
+                        getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                            var tl = bunkTimelines[bunk] || [];
+                            if (tl.some(function(b) { return b && b._rotationEventId === eid; })) {
+                                rotationQuotas[eid].placed++;
+                            }
+                        });
+                    });
+                });
+            }
+
             // ── Pre-register Phase-0 placed blocks into fieldLedger ──────────────────
             // Capacity-checked sport blocks and pinned field blocks placed by Phase 0/2
             // live in bunkTimelines before Phase 3 starts but may not have been passed
@@ -9161,6 +9176,14 @@
                     const _rotEvents = window.RotationEvents.loadRotationEvents() || [];
                     let _rotWallCount = 0;
                     const _rotUnplaced = [];
+                    // Use the same quota formula as Phase 3 so Phase 2.4 and Phase 3
+                    // don't independently place their own full quotas on the same day.
+                    let _phase24Quotas = {};
+                    try {
+                        if (typeof window.RotationEvents.getRotationQuotas === 'function') {
+                            _phase24Quotas = window.RotationEvents.getRotationQuotas(currentDate) || {};
+                        }
+                    } catch (_e) {}
 
                     _rotEvents.forEach(evt => {
                         if (!currentDate || !evt || !evt.dateRange) return;
@@ -9448,20 +9471,13 @@
                         const _evtGradeMode = evt.gradeMode || 'whole_grade';
                         const _evtConcurrency = Math.max(1, parseInt(evt.concurrency) || 1);
 
-                        // Taper bunks across the date range: try harder on early days so
-                        // there is buffer toward the end. Formula: factor = 2.5/(daysRemaining+1)
-                        // gives the progression 8,5,2,1 for 16 bunks over 4 days.
-                        // A "reserve" floor ensures each future day can get at least 1 bunk.
-                        const _evtDaysRemaining = Math.max(1,
-                            Math.round((new Date(evt.dateRange.end) - new Date(currentDate)) / 86400000) + 1
-                        );
+                        // Use the same daily target as Phase 3's quota system so Phase 2.4
+                        // and Phase 3 don't each place a full quota independently.
                         const _evtTotalEligible = Object.values(bunksByGrade).reduce((s, bs) => s + bs.length, 0);
-                        const _evtTaperFactor = Math.min(1, 2.5 / (_evtDaysRemaining + 1));
-                        const _evtMaxFromReserve = _evtTotalEligible - Math.max(0, _evtDaysRemaining - 1);
-                        const _evtMaxBunksToday = Math.max(1, Math.min(
-                            Math.ceil(_evtTotalEligible * _evtTaperFactor),
-                            _evtMaxFromReserve
-                        ));
+                        const _evtQ24 = _phase24Quotas[evt.id];
+                        const _evtMaxBunksToday = _evtQ24
+                            ? (_evtQ24.isLastDay ? _evtTotalEligible : Math.min(_evtTotalEligible, _evtQ24.dailyTarget))
+                            : _evtTotalEligible;
 
                         if (_evtGradeMode === 'individual') {
                             // ── STAGGERED: bunks placed _evtConcurrency-at-a-time into sequential slots ──
