@@ -1684,16 +1684,39 @@
         const campId = getCampId();
 
         try {
-            // Check for existing member with this email (prevents duplicates)
+            // Check for an existing record for this email in this camp
             const { data: existing } = await window.supabase
                 .from('camp_users')
-                .select('id, email, accepted_at')
+                .select('id, email, accepted_at, created_at')
                 .eq('camp_id', campId)
                 .eq('email', email.toLowerCase().trim())
                 .maybeSingle();
 
             if (existing) {
-                return { error: `${email} has already been invited to this camp.` };
+                if (existing.accepted_at) {
+                    // Fully onboarded — they're already a member, block permanently
+                    return { error: `${email} is already a member of this camp.` };
+                }
+
+                // Pending (never completed signup) — check whether the invite has expired
+                const inviteAgeMs = existing.created_at
+                    ? Date.now() - new Date(existing.created_at).getTime()
+                    : 0;
+                const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+                if (inviteAgeMs <= SEVEN_DAYS_MS) {
+                    // Still within the window — don't flood the invitee's inbox
+                    return { error: `${email} already has a pending invite. Ask them to check their email, or re-invite after 7 days if they haven't responded.` };
+                }
+
+                // Expired pending invite — clean it up so a fresh one can be sent
+                await window.supabase
+                    .from('camp_users')
+                    .delete()
+                    .eq('id', existing.id);
+
+                console.log(`🔐 Deleted expired pending invite for ${email} — creating fresh invite`);
+                // Fall through to insert the new invite below
             }
 
             const { data, error } = await window.supabase
