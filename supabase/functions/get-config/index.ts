@@ -19,7 +19,8 @@
 // RESPONSE:
 //   { googleMapsKey: string, geoapifyKey: string, googleProjectId: string }
 //
-// JWT verification should be ENABLED for this function (users must be logged in).
+// JWT verification MUST be ENABLED in the Supabase dashboard for this function.
+// The auth check below is a defense-in-depth backup.
 //
 // =============================================================================
 
@@ -43,10 +44,20 @@ serve(async (req: Request) => {
     });
   }
 
-  const googleMapsKey  = Deno.env.get("GOOGLE_MAPS_KEY")   || "";
-  const geoapifyKey    = Deno.env.get("GEOAPIFY_KEY")       || "";
-  const googleProjectId = Deno.env.get("GOOGLE_PROJECT_ID") || "";
-  const orsKey         = Deno.env.get("ORS_KEY")            || "";
+  // Require a Bearer token — rejects unauthenticated callers even if
+  // JWT verification is accidentally disabled in the dashboard.
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+    });
+  }
+
+  const googleMapsKey   = Deno.env.get("GOOGLE_MAPS_KEY")    || "";
+  const geoapifyKey     = Deno.env.get("GEOAPIFY_KEY")        || "";
+  const googleProjectId = Deno.env.get("GOOGLE_PROJECT_ID")   || "";
+  const orsKey          = Deno.env.get("ORS_KEY")             || "";
 
   return new Response(
     JSON.stringify({ googleMapsKey, geoapifyKey, googleProjectId, orsKey }),

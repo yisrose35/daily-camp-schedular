@@ -1304,7 +1304,10 @@ function printApplication(id){
         e.documents.forEach(function(d){h+='<div style="padding:2px 0">📄 '+esc(d.name)+'</div>'});
     }
 
-    if(e.signature){h+=sec('Signature');h+='<img src="'+e.signature+'">';}
+    if(e.signature){
+        const safeDataUrl = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(e.signature);
+        if(safeDataUrl){h+=sec('Signature');h+='<img src="'+e.signature+'">';}
+    }
 
     if(e.adminNotes){h+=sec('Admin Notes');h+='<p>'+esc(e.adminNotes)+'</p>';}
 
