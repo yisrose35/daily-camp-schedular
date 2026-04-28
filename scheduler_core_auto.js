@@ -9296,6 +9296,14 @@
                             return false;
                         };
 
+                        // Hard constraint: [t, tEnd] must fit entirely inside one bell-schedule
+                        // period. A placement that spans a period gap would be evicted by step
+                        // 2.75 anyway, so we reject it here before it wastes a slot.
+                        const isWithinSinglePeriod = (grade, t, tEnd) => {
+                            const periods = (window.campPeriods || {})[grade];
+                            if (!periods || !periods.length) return true;
+                            return periods.some(p => p.startMin <= t && p.endMin >= tEnd);
+                        };
 
                         // Sequence constraint: the rotation event must be adjacent to
                         // another activity (e.g. water slides right before/after swim
@@ -9329,6 +9337,7 @@
                             const tryWindow = (t, tEnd) => {
                                 if (tEnd > winEnd || t < winStart) return false;
                                 if (placements.some(p => t < p.endMin && tEnd > p.startMin)) return false;
+                                if (!isWithinSinglePeriod(grade, t, tEnd)) return false;
                                 if (bunks.some(b => wouldCreateSmallGapForBunk(b, t, tEnd) || wouldCreatePeriodBoundaryGap(b, grade, t, tEnd))) return false;
                                 return bunks.every(b => isWindowFreeForBunk(t, tEnd, b));
                             };
@@ -9566,16 +9575,19 @@
                                                 return dA - dB;
                                             });
                                         for (const s of _adjSlots) {
-                                            if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                            if (isWithinSinglePeriod(grade, s.startMin, s.endMin) &&
+                                                isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
                                                 !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
                                                 !wouldCreatePeriodBoundaryGap(bunk, grade, s.startMin, s.endMin)) {
                                                 _chosenSlot = s; break;
                                             }
                                         }
                                         // Relax period boundary gap if no gap-safe adj slot found
+                                        // (isWithinSinglePeriod is always a hard constraint)
                                         if (!_chosenSlot) {
                                             for (const s of _adjSlots) {
-                                                if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                                if (isWithinSinglePeriod(grade, s.startMin, s.endMin) &&
+                                                    isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
                                                     !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
                                                     _chosenSlot = s; break;
                                                 }
@@ -9585,10 +9597,11 @@
                                 }
 
                                 if (!_chosenSlot) {
-                                    // Pass 1: strict — period boundary gap + small gap both enforced
+                                    // Pass 1: strict — must be within a period, no boundary gap, no small gap
                                     _chosenSlot = _stagSlots.find(s =>
                                         (s.ownerGrade === null || s.ownerGrade === grade) &&
                                         s.usedCount < _evtConcurrency &&
+                                        isWithinSinglePeriod(grade, s.startMin, s.endMin) &&
                                         isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
                                         !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
                                         !wouldCreatePeriodBoundaryGap(bunk, grade, s.startMin, s.endMin)
@@ -9596,11 +9609,12 @@
                                 }
 
                                 if (!_chosenSlot) {
-                                    // Pass 2: relax period boundary gap so stagger stays in Phase 2.4
-                                    // and doesn't fall through to Phase 3 (which has no grade exclusivity).
+                                    // Pass 2: relax boundary-gap constraint but keep period containment
+                                    // (isWithinSinglePeriod is never relaxed — crossing a gap is hard-wrong).
                                     _chosenSlot = _stagSlots.find(s =>
                                         (s.ownerGrade === null || s.ownerGrade === grade) &&
                                         s.usedCount < _evtConcurrency &&
+                                        isWithinSinglePeriod(grade, s.startMin, s.endMin) &&
                                         isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
                                         !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)
                                     ) || null;
