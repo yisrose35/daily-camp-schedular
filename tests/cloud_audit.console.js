@@ -117,10 +117,11 @@
         }
 
         // Camp ID
-        const campId = window.CAMP_ID || window.campId
-            || (typeof window.loadGlobalSettings === 'function' && window.loadGlobalSettings()?.campId);
+        const campId = window.CampistryDB?.getCampId?.()
+            || window.CAMP_ID || window.campId
+            || window._campistryMembership?.camp_id;
         if (campId) pass('camp_id', String(campId));
-        else fail('camp_id', 'could not determine — check CAMP_ID or loadGlobalSettings().campId');
+        else fail('camp_id', 'could not determine — CampistryDB.getCampId() returned nothing');
 
         // User ID
         let userId = null;
@@ -182,7 +183,8 @@
 
         // Methods
         for (const method of ['getRole', 'hasFullAccess', 'getEditableBunks',
-            'getEditableDivisions', 'canEditDate', 'isOwner', 'isAdmin']) {
+            'getEditableDivisions', 'canEditDivision', 'canEditBunk',
+            'isOwner', 'isAdmin', 'getUserInfo', 'diagnose']) {
             if (typeof cp[method] === 'function') pass(`CloudPermissions.${method}`, 'function');
             else fail(`CloudPermissions.${method}`, 'missing');
         }
@@ -224,17 +226,14 @@
         if (!db) { fail('ScheduleDB', 'not defined'); sectionEnd(); return; }
         pass('ScheduleDB', 'defined');
 
-        for (const method of ['isInitialized', 'getMyEditableBunks', 'getMyEditableDivisions',
-            'loadSchedule', 'saveSchedule', 'deleteSchedule', 'diagnose']) {
+        for (const method of ['initialize', 'loadSchedule', 'loadAllSchedulersForDate',
+            'saveSchedule', 'deleteSchedule', 'deleteMyScheduleOnly',
+            'mergeSchedules', 'getLocalSchedule', 'setLocalSchedule',
+            'serializeUnifiedTimes', 'deserializeUnifiedTimes',
+            'getMyEditableBunks', 'getMyEditableDivisions', 'diagnose']) {
             if (typeof db[method] === 'function') pass(`ScheduleDB.${method}`, 'function');
             else fail(`ScheduleDB.${method}`, 'missing');
         }
-
-        try {
-            const init = db.isInitialized();
-            if (init) pass('ScheduleDB.isInitialized()', 'true');
-            else warn('ScheduleDB.isInitialized()', 'false — call ScheduleDB.init() first');
-        } catch (e) { fail('ScheduleDB.isInitialized()', e.message); }
 
         try {
             const bunks = db.getMyEditableBunks();
@@ -273,19 +272,22 @@
         } catch (e) { fail('normalizeFieldForSave round-trip', e.message); }
 
         // Merge test (no network)
+        // mergeSchedules(records) takes an array of DB row objects: [{schedule_data:{...}}, ...]
         try {
-            if (typeof db._mergeSchedules === 'function' || typeof db.mergeSchedules === 'function') {
-                const merge = db._mergeSchedules || db.mergeSchedules;
-                const cloud = { bunk1: { p1: 'Swimming' } };
-                const local = { bunk2: { p1: 'Arts' } };
-                const editableBunks = ['bunk2'];
-                const merged = merge(cloud, local, editableBunks);
-                const hasCloud = merged.bunk1?.p1 === 'Swimming';
-                const hasLocal = merged.bunk2?.p1 === 'Arts';
-                if (hasCloud && hasLocal) pass('ScheduleDB merge logic', 'cloud+local correctly merged');
-                else fail('ScheduleDB merge logic', `cloud=${hasCloud}, local=${hasLocal}`);
+            const merge = db.mergeSchedules;
+            if (typeof merge === 'function') {
+                const fakeRecords = [
+                    { schedule_data: { scheduleAssignments: { bunk1: { p1: 'Swimming' } } } },
+                    { schedule_data: { scheduleAssignments: { bunk2: { p1: 'Arts' } } } }
+                ];
+                const result = merge(fakeRecords);
+                const assignments = result?.scheduleAssignments;
+                const hasB1 = assignments?.bunk1?.p1 === 'Swimming';
+                const hasB2 = assignments?.bunk2?.p1 === 'Arts';
+                if (hasB1 && hasB2) pass('ScheduleDB.mergeSchedules()', 'both bunk rows merged correctly');
+                else fail('ScheduleDB.mergeSchedules()', `bunk1=${hasB1}, bunk2=${hasB2} — check merge output`);
             } else {
-                warn('ScheduleDB merge', 'internal merge function not exposed — skipping merge unit test');
+                warn('ScheduleDB merge', 'mergeSchedules not a function — skipping');
             }
         } catch (e) { fail('ScheduleDB merge', e.message); }
 
@@ -302,37 +304,57 @@
         if (!ss) { fail('ScheduleSync', 'not defined'); sectionEnd(); return; }
         pass('ScheduleSync', 'defined');
 
-        for (const method of ['getSyncStatus', 'isInitialized', 'subscribe',
-            'unsubscribe', 'queueScheduleSave', 'processOfflineQueue', 'diagnose']) {
+        // Methods (queueSave is the actual name; isInitialized is a getter not a method)
+        for (const method of ['getSyncStatus', 'subscribe', 'unsubscribe',
+            'onRemoteChange', 'onStatusChange', 'queueSave', 'forceSave', 'forceSync',
+            'processOfflineQueue', 'clearOfflineQueue', 'isOnline', 'scheduleReconnect']) {
             if (typeof ss[method] === 'function') pass(`ScheduleSync.${method}`, 'function');
             else fail(`ScheduleSync.${method}`, 'missing');
         }
 
-        try {
-            const init = ss.isInitialized ? ss.isInitialized() : ss.initialized;
-            if (init) pass('ScheduleSync.isInitialized()', 'true');
-            else warn('ScheduleSync.isInitialized()', 'false — sync not started yet');
-        } catch (e) { fail('ScheduleSync.isInitialized()', e.message); }
+        // isInitialized is a getter (boolean), not a method
+        if ('isInitialized' in ss) {
+            const init = ss.isInitialized;
+            if (init) pass('ScheduleSync.isInitialized', 'true');
+            else warn('ScheduleSync.isInitialized', 'false — sync not started yet');
+        } else {
+            fail('ScheduleSync.isInitialized', 'getter not found on object');
+        }
+
+        // offlineQueueLength is a getter too
+        if ('offlineQueueLength' in ss) {
+            const ql = ss.offlineQueueLength;
+            if (ql > 0) warn('ScheduleSync.offlineQueueLength', `${ql} items pending — will retry on reconnect`);
+            else pass('ScheduleSync.offlineQueueLength', '0 pending items');
+        } else {
+            warn('ScheduleSync.offlineQueueLength', 'getter not found');
+        }
 
         try {
             const status = ss.getSyncStatus();
             if (status && typeof status === 'object') {
                 pass('ScheduleSync.getSyncStatus()', 'returned object');
-                if ('connected' in status) pass('status.connected', String(status.connected));
-                else warn('status.connected', 'field missing');
-                if ('online' in status) pass('status.online', String(status.online));
-                else warn('status.online', 'field missing');
-                if ('offlineQueueSize' in status || 'queueSize' in status) {
-                    const qs = status.offlineQueueSize ?? status.queueSize ?? 0;
-                    if (qs > 0) warn('offline queue', `${qs} items pending — will retry on reconnect`);
-                    else pass('offline queue', '0 pending items');
+                // Actual fields: status, isOnline, lastSync, queueLength, currentDate,
+                //                initialHydrationDone, reconnectAttempts, subscriptionActive, isSubscribed
+                if ('subscriptionActive' in status) pass('status.subscriptionActive', String(status.subscriptionActive));
+                else warn('status.subscriptionActive', 'field missing from getSyncStatus()');
+                if ('isOnline' in status) pass('status.isOnline', String(status.isOnline));
+                else warn('status.isOnline', 'field missing from getSyncStatus()');
+                if ('queueLength' in status) {
+                    if (status.queueLength > 0) warn('status.queueLength', `${status.queueLength} items pending`);
+                    else pass('status.queueLength', '0 pending items');
                 } else {
-                    warn('offline queue size', 'field not in status — check getSyncStatus()');
+                    warn('status.queueLength', 'field missing from getSyncStatus()');
                 }
+                if ('status' in status) pass('status.status', String(status.status));
             } else {
                 fail('ScheduleSync.getSyncStatus()', 'returned ' + typeof status);
             }
         } catch (e) { fail('ScheduleSync.getSyncStatus()', e.message); }
+
+        // diagnoseScheduleSync is a window-level export, not on ScheduleSync object
+        if (typeof window.diagnoseScheduleSync === 'function') pass('window.diagnoseScheduleSync', 'function');
+        else warn('window.diagnoseScheduleSync', 'not exposed');
 
         try {
             const isOnline = navigator.onLine;
@@ -370,10 +392,6 @@
         } else {
             fail('loadGlobalSettings', 'not a function');
         }
-
-        // diagnoseScheduleSync
-        if (typeof window.diagnoseScheduleSync === 'function') pass('diagnoseScheduleSync', 'function');
-        else warn('diagnoseScheduleSync', 'not exposed — minor (used for debugging only)');
 
         // forceSyncToCloud
         if (typeof window.forceSyncToCloud === 'function') pass('forceSyncToCloud', 'function');
