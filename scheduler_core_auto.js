@@ -9448,6 +9448,15 @@
                         const _evtGradeMode = evt.gradeMode || 'whole_grade';
                         const _evtConcurrency = Math.max(1, parseInt(evt.concurrency) || 1);
 
+                        // Spread bunks evenly across the date range so all bunks don't
+                        // pile onto day 1. Remaining eligible bunks ÷ remaining days gives
+                        // the target for today; the rest are deferred to future scheduler runs.
+                        const _evtDaysRemaining = Math.max(1,
+                            Math.round((new Date(evt.dateRange.end) - new Date(currentDate)) / 86400000) + 1
+                        );
+                        const _evtTotalEligible = Object.values(bunksByGrade).reduce((s, bs) => s + bs.length, 0);
+                        const _evtMaxBunksToday = Math.ceil(_evtTotalEligible / _evtDaysRemaining);
+
                         if (_evtGradeMode === 'individual') {
                             // ── STAGGERED: bunks placed _evtConcurrency-at-a-time into sequential slots ──
                             // Build a slot list for the daily window, each slot holds up to
@@ -9457,10 +9466,11 @@
                                 _stagSlots.push({ startMin: _t, endMin: _t + dur, usedCount: 0 });
                             }
 
-                            // Flatten all bunks across grades; order by grade (already sorted most-constrained-first)
+                            // Flatten all bunks across grades; order by grade (already sorted most-constrained-first).
+                            // Slice to daily limit so remaining bunks are deferred to future days.
                             const _allStagBunks = gradeEntries.flatMap(({ grade: g, bunks: bs }) =>
                                 bs.map(b => ({ bunk: b, grade: g }))
-                            );
+                            ).slice(0, _evtMaxBunksToday);
 
                             for (const { bunk, grade } of _allStagBunks) {
                                 let _chosenSlot = null;
@@ -9520,11 +9530,18 @@
                         } else {
                             // ── WHOLE GRADE: every bunk in a grade shares one slot ──
                             const placements = []; // { startMin, endMin, grade }
+                            let _wgBunksPlacedToday = 0;
                             gradeEntries.forEach(({ grade, bunks, viable }) => {
+                                // Daily limit reached — defer this grade to a future day.
+                                if (_wgBunksPlacedToday >= _evtMaxBunksToday) {
+                                    _rotUnplaced.push(grade + '/' + evt.name);
+                                    return;
+                                }
                                 const slot = findGradeSlot(bunks, grade, placements);
                                 if (slot) {
                                     placements.push({ startMin: slot.startMin, endMin: slot.endMin, grade });
                                     bunks.forEach(b => placeWall(b, grade, slot));
+                                    _wgBunksPlacedToday += bunks.length;
                                     if (_verbose) log('[Phase2.4]   ✓ ' + grade + ' → ' + _fmt(slot.startMin) + '-' + _fmt(slot.endMin));
                                 } else {
                                     _rotUnplaced.push(grade + '/' + evt.name);
