@@ -66,32 +66,52 @@ function closeAuthModal() {
     resetFormButton();
 }
 
-function openResetModal() {
+async function openResetModal() {
     const resetModal = document.getElementById('resetPasswordModal');
     const resetRequestView = document.getElementById('resetRequestView');
     const updatePasswordView = document.getElementById('updatePasswordView');
     const resetError = document.getElementById('resetError');
     const resetSuccess = document.getElementById('resetSuccess');
-    
+
     if (resetModal) {
         resetModal.style.display = 'flex';
         if (resetRequestView) resetRequestView.style.display = 'block';
         if (updatePasswordView) updatePasswordView.style.display = 'none';
         if (resetError) resetError.textContent = '';
         if (resetSuccess) resetSuccess.style.display = 'none';
-        
+
         const emailInput = document.getElementById('resetEmail');
         const submitBtn = document.getElementById('resetSubmit');
-        if (emailInput) {
-            emailInput.disabled = false;
-            emailInput.value = '';
-        }
         if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.textContent = 'Send Reset Link';
         }
-        
-        setTimeout(() => emailInput?.focus(), 100);
+
+        // If a user is already logged in, pre-fill and lock the email field
+        // so the reset always goes to the account email on file — not a typed-in one
+        if (emailInput) {
+            emailInput.disabled = false;
+            emailInput.removeAttribute('readonly');
+            emailInput.value = '';
+
+            try {
+                const supabase = getSupabase();
+                if (supabase) {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    if (session?.user?.email) {
+                        emailInput.value = session.user.email;
+                        emailInput.setAttribute('readonly', 'readonly');
+                        emailInput.style.background = '#f1f5f9';
+                        emailInput.style.color = '#64748b';
+                        emailInput.style.cursor = 'not-allowed';
+                    }
+                }
+            } catch(e) { /* non-fatal — field stays open */ }
+
+            if (!emailInput.hasAttribute('readonly')) {
+                setTimeout(() => emailInput.focus(), 100);
+            }
+        }
     }
 }
 
@@ -615,19 +635,29 @@ if (authMode === 'signup' && data?.user && !data?.session) {
             const submitBtn = document.getElementById('resetSubmit');
             const resetError = document.getElementById('resetError');
             const resetSuccess = document.getElementById('resetSuccess');
-            const email = emailInput?.value?.trim();
-            
-            if (!email) {
-                if (resetError) resetError.textContent = 'Please enter your email address.';
-                return;
-            }
+
             if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Sending...'; }
             if (resetError) resetError.textContent = '';
             if (resetSuccess) resetSuccess.style.display = 'none';
-            
+
             try {
                 const supabase = getSupabase();
                 if (!supabase) throw new Error('Authentication service not available. Please refresh the page.');
+
+                // If a session exists, always use the account email on file — never trust the DOM field
+                let email;
+                const { data: { session } } = await supabase.auth.getSession();
+                if (session?.user?.email) {
+                    email = session.user.email;
+                } else {
+                    email = emailInput?.value?.trim();
+                    if (!email) {
+                        if (resetError) resetError.textContent = 'Please enter your email address.';
+                        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Send Reset Link'; }
+                        return;
+                    }
+                }
+
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
                     redirectTo: window.location.origin + '/index.html#reset-password'
                 });
