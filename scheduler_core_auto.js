@@ -4860,12 +4860,31 @@
                                     tmpl, { mode: "auto" })) continue;
 
                                 // Score: dead gap penalty + LCV (how much flexibility remains for others)
-                                var lGap = pos - gap.start;
-                                var rGap = gap.end - (pos + dur);
+                                // Use period-aware left/right gap so fragments in dead zones aren't penalized.
+                                var _posPeriods = window.campPeriods && window.campPeriods[grade];
+                                var _lPeriodStart = gap.start, _rPeriodEnd = gap.end;
+                                if (_posPeriods) {
+                                    for (var _ppp = 0; _ppp < _posPeriods.length; _ppp++) {
+                                        if (_posPeriods[_ppp].startMin <= pos && _posPeriods[_ppp].endMin > pos) {
+                                            _lPeriodStart = Math.max(gap.start, _posPeriods[_ppp].startMin);
+                                            _rPeriodEnd   = Math.min(gap.end,  _posPeriods[_ppp].endMin);
+                                            break;
+                                        }
+                                    }
+                                }
+                                var lGap = pos - _lPeriodStart;
+                                var rGap = _rPeriodEnd - (pos + dur);
                                 var deadCount = 0;
                                 if (lGap > 0 && lGap < fMin) deadCount++;
                                 if (rGap > 0 && rGap < fMin) deadCount++;
-                                positions.push({ start: pos, dur: dur, deadGaps: deadCount, lGap: lGap, rGap: rGap });
+                                // Bonus for starting/ending exactly on a period boundary — leaves no orphan fragment
+                                var _periodAlignBonus = 0;
+                                if (_posPeriods) {
+                                    for (var _ppb = 0; _ppb < _posPeriods.length; _ppb++) {
+                                        if (_posPeriods[_ppb].startMin === pos) { _periodAlignBonus += 2; break; }
+                                    }
+                                }
+                                positions.push({ start: pos, dur: dur, deadGaps: deadCount, lGap: lGap, rGap: rGap, _periodAlignBonus: _periodAlignBonus });
                             }
                             // Also try exact gap-end alignment (may not be on 5-min boundary).
                             // For swim+change bundles, leave post-change room at the gap's tail.
@@ -4946,7 +4965,18 @@
                         score += totalOptions * 10; // more options = better
 
                         // 2. Gap quality: simulate how well sports would fill the remaining gaps
-                        var gaps = findGaps(simTmpl, gs, ge);
+                        // Split at period boundaries — same view Phase 3 will have.
+                        var _rawScoreGaps = findGaps(simTmpl, gs, ge);
+                        var gaps = [];
+                        for (var _rsg = 0; _rsg < _rawScoreGaps.length; _rsg++) {
+                            var _sgSubs = splitGapAtPeriods(_rawScoreGaps[_rsg], grade);
+                            if (_sgSubs.length === 0) {
+                                // Entirely in dead zone — treat as dead gap
+                                gaps.push({ start: _rawScoreGaps[_rsg].start, end: _rawScoreGaps[_rsg].end });
+                            } else {
+                                for (var _sgs = 0; _sgs < _sgSubs.length; _sgs++) gaps.push(_sgSubs[_sgs]);
+                            }
+                        }
                         var perfectGaps = 0, deadGaps = 0, dirtyGaps = 0, totalGapTime = 0;
                         for (var g = 0; g < gaps.length; g++) {
                             var gSize = gaps[g].end - gaps[g].start;
@@ -4967,6 +4997,7 @@
                         score -= deadGaps  * 2500;  // unfillable — heaviest penalty
                         score -= dirtyGaps * 1200;  // dirty — medium penalty (budget-first)
                         score -= pos.deadGaps * 1000;
+                        score += (pos._periodAlignBonus || 0) * 800; // prefer period-start placements
 
                         // ★ Fix 3: Dead gap forward-check — penalize placements that leave
                         // an unfillable remainder in the gap containing this block.
@@ -4976,7 +5007,18 @@
                         for (var _pg = 0; _pg < _prePlacedGaps.length; _pg++) {
                             var _g = _prePlacedGaps[_pg];
                             if (pos.start >= _g.start && pos.start < _g.end) {
-                                var remAfter = _g.end - (pos.start + pos.dur);
+                                var _blockEnd = pos.start + pos.dur;
+                                // Cap gap end to the period boundary — don't count dead-zone tail as unfillable remainder
+                                var _remGapEnd = _g.end;
+                                var _fcPeriods = window.campPeriods && window.campPeriods[grade];
+                                if (_fcPeriods) {
+                                    for (var _fcp = 0; _fcp < _fcPeriods.length; _fcp++) {
+                                        if (_fcPeriods[_fcp].startMin <= _blockEnd && _fcPeriods[_fcp].endMin > _blockEnd) {
+                                            _remGapEnd = Math.min(_g.end, _fcPeriods[_fcp].endMin); break;
+                                        }
+                                    }
+                                }
+                                var remAfter = _remGapEnd - _blockEnd;
                                 if (remAfter > 0 && remAfter < fMin) {
                                     score -= 5000; // heavily penalize — prefer placements that leave no gap or a fillable gap
                                 }
