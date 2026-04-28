@@ -7460,31 +7460,25 @@
                             }
                         }
                         if (_zgPrevImmov && _zgNextImmov) {
-                            // Skip micro-slots that fall entirely inside a period gap (off-limits zone).
-                            var _zgPeriods = window.campPeriods && window.campPeriods[zgMeta.grade];
-                            if (_zgPeriods && _zgPeriods.length > 0) {
-                                var _zgInPeriod = false;
-                                for (var _zgPi = 0; _zgPi < _zgPeriods.length; _zgPi++) {
-                                    if (_zgPeriods[_zgPi].startMin <= zgGap.start && _zgPeriods[_zgPi].endMin >= zgGap.end) {
-                                        _zgInPeriod = true; break;
-                                    }
+                            // Split at period boundaries so only the valid portion gets a slot;
+                            // the period-gap zone is left empty.
+                            var _zgSubGaps = splitGapAtPeriods({ start: zgGap.start, end: zgGap.end }, zgMeta.grade);
+                            for (var _zgSi = 0; _zgSi < _zgSubGaps.length; _zgSi++) {
+                                var _zgSub = _zgSubGaps[_zgSi];
+                                var _zgSubDur = _zgSub.end - _zgSub.start;
+                                if (_zgSubDur < 5) continue;
+                                var zgMicroBlk = makeBlock({
+                                    startMin: _zgSub.start, endMin: _zgSub.end,
+                                    type: 'slot', event: 'Free',
+                                    layer: null, field: null,
+                                    dMin: _zgSubDur, dMax: _zgSubDur,
+                                    _source: 'micro-gap', _final: true, _microSlot: true,
+                                    _activityLocked: true
+                                });
+                                if (zgMicroBlk) {
+                                    log('[ZGF-MICRO] ' + zgBunk + ' @ ' + _zgSub.start + '-' + _zgSub.end + ' (' + _zgSubDur + 'min): micro-slot between two immovable blocks');
+                                    zgTmpl.push(zgMicroBlk);
                                 }
-                                if (!_zgInPeriod) {
-                                    log('[ZGF-MICRO] ' + zgBunk + ' @ ' + zgGap.start + '-' + zgGap.end + ' (' + zgDur + 'min): skipping — falls in period gap, leaving empty');
-                                    continue;
-                                }
-                            }
-                            var zgMicroBlk = makeBlock({
-                                startMin: zgGap.start, endMin: zgGap.end,
-                                type: 'slot', event: 'Free',
-                                layer: null, field: null,
-                                dMin: zgDur, dMax: zgDur,
-                                _source: 'micro-gap', _final: true, _microSlot: true,
-                                _activityLocked: true  // prevent rebalancer from resizing
-                            });
-                            if (zgMicroBlk) {
-                                log('[ZGF-MICRO] ' + zgBunk + ' @ ' + zgGap.start + '-' + zgGap.end + ' (' + zgDur + 'min): micro-slot between two immovable blocks');
-                                zgTmpl.push(zgMicroBlk);
                             }
                         }
                     }
@@ -7959,8 +7953,17 @@
 
                         var pg_fixed = false;
 
+                        // Determine if this gap is entirely within one bell-schedule period.
+                        // Straddling gaps (part valid, part period-gap) skip strategies 1-3
+                        // because those strategies extend neighbours across boundaries; strategy
+                        // 4 handles them by splitting at the period boundary instead.
+                        var _pgPeriodList = window.campPeriods && window.campPeriods[pg_meta.grade];
+                        var _pgGapInOnePeriod = !_pgPeriodList || _pgPeriodList.length === 0 ||
+                            _pgPeriodList.some(function(p) { return p.startMin <= pg_gap.start && p.endMin >= pg_gap.end; });
+
                         // Strategy 1: extend prev block rightward into the gap
-                        if (!pg_fixed && pg_prev && !isPhase0(pg_prev)) {
+                        // Only when gap is fully within one period (prevents pushing prev into a period gap).
+                        if (!pg_fixed && _pgGapInOnePeriod && pg_prev && !isPhase0(pg_prev)) {
                             var pg_prevDur = pg_prev.endMin - pg_prev.startMin;
                             var pg_prevC   = resolveConstraints(pg_prev.layer, (pg_prev.type || '').toLowerCase(), pg_prev);
                             var pg_prevRoom = pg_prevC.dMax - pg_prevDur;
@@ -7975,7 +7978,8 @@
                         }
 
                         // Strategy 2: extend next block leftward into the gap
-                        if (!pg_fixed && pg_next && !isPhase0(pg_next)) {
+                        // Only when gap is fully within one period (prevents pulling next into a period gap).
+                        if (!pg_fixed && _pgGapInOnePeriod && pg_next && !isPhase0(pg_next)) {
                             var pg_nextDur  = pg_next.endMin - pg_next.startMin;
                             var pg_nextC    = resolveConstraints(pg_next.layer, (pg_next.type || '').toLowerCase(), pg_next);
                             var pg_nextRoom  = pg_nextC.dMax - pg_nextDur;
@@ -7990,7 +7994,8 @@
                         }
 
                         // Strategy 3: split the gap between both neighbors proportionally
-                        if (!pg_fixed && pg_prev && pg_next && !isPhase0(pg_prev) && !isPhase0(pg_next)) {
+                        // Only when gap is fully within one period.
+                        if (!pg_fixed && _pgGapInOnePeriod && pg_prev && pg_next && !isPhase0(pg_prev) && !isPhase0(pg_next)) {
                             var pg_prevDur2  = pg_prev.endMin - pg_prev.startMin;
                             var pg_prevC2    = resolveConstraints(pg_prev.layer, (pg_prev.type || '').toLowerCase(), pg_prev);
                             var pg_nextDur2  = pg_next.endMin - pg_next.startMin;
@@ -7999,12 +8004,10 @@
                             var pg_nextAvail = Math.floor((pg_nextC2.dMax - pg_nextDur2) / 5) * 5;
 
                             if (pg_prevAvail + pg_nextAvail >= pg_dur) {
-                                // Give as much as possible to prev first, remainder to next
                                 var pg_givePrev = Math.min(pg_prevAvail, pg_dur);
                                 pg_givePrev = Math.floor(pg_givePrev / 5) * 5;
                                 var pg_giveNext = pg_dur - pg_givePrev;
                                 if (pg_giveNext > pg_nextAvail) {
-                                    // Prev can't cover it alone — pull more from prev if next has it
                                     pg_giveNext = Math.min(pg_nextAvail, pg_dur);
                                     pg_giveNext = Math.floor(pg_giveNext / 5) * 5;
                                     pg_givePrev = pg_dur - pg_giveNext;
@@ -8021,54 +8024,41 @@
                             }
                         }
 
-                        // Strategy 4: create a forced mini-slot for ANY gap >= 5min.
-                        // Previous threshold was pg_meta.fillMinDur (e.g. 45 for grade 4),
-                        // which silently abandoned structural gaps smaller than that value
-                        // (25min@800-825 for grade 4, 15min@955-970 for grade 1, etc.).
-                        //
-                        // Fix: always create a slot if gap >= 5min.  Use dMin = pg_dur so
-                        // makeBlock's strict dMin guard (blockDur < dMin → return null) cannot
-                        // reject the block — the block IS exactly dMin in size.  dMax is set to
-                        // the larger of pg_dur and the grade's sport ceiling so the auto-solver
-                        // can extend it if a larger assignment happens to fit.
-                        //
-                        // These "micro-slots" cover structural holes trapped between two Phase-0
-                        // walls (e.g. a guaranteed-swim block with dMin=dMax=30 and a dismissal).
-                        // The auto-solver will label them General Activity Slot if no sport fits.
+                        // Strategy 4: create a forced slot for each valid period sub-gap.
+                        // Uses splitGapAtPeriods so straddling gaps get their valid portions
+                        // filled while the period-gap zone is left empty.
+                        // Strips the sportLayer's time window from makeBlock so gaps in late
+                        // periods (e.g. Period 8 at 3:05-3:45) aren't clamped to null by a
+                        // sports layer that ends at 2:10 PM.
                         if (!pg_fixed && pg_dur >= 5) {
-                            // Skip gaps that fall entirely inside a period gap (off-limits zone).
-                            var _pgSkipPeriods = window.campPeriods && window.campPeriods[pg_meta.grade];
-                            if (_pgSkipPeriods && _pgSkipPeriods.length > 0) {
-                                var _pgInPeriod = false;
-                                for (var _pgPi = 0; _pgPi < _pgSkipPeriods.length; _pgPi++) {
-                                    if (_pgSkipPeriods[_pgPi].startMin <= pg_gap.start && _pgSkipPeriods[_pgPi].endMin >= pg_gap.end) {
-                                        _pgInPeriod = true; break;
-                                    }
-                                }
-                                if (!_pgInPeriod) {
-                                    log('[POST-GAP] bunk=' + pg_bunk + ' skipping gap @' + pg_gap.start + '-' + pg_gap.end + ' — falls in period gap, leaving empty');
-                                    continue;
+                            var _pgSubGaps = splitGapAtPeriods({ start: pg_gap.start, end: pg_gap.end }, pg_meta.grade);
+                            var _pgGapLayer = pg_meta.sportLayer
+                                ? Object.assign({}, pg_meta.sportLayer, { startMin: null, endMin: null })
+                                : null;
+                            for (var _pgSi = 0; _pgSi < _pgSubGaps.length; _pgSi++) {
+                                var _pgSub = _pgSubGaps[_pgSi];
+                                var _pgSubDur = _pgSub.end - _pgSub.start;
+                                if (_pgSubDur < 5) continue;
+                                var pg_fillName = pickFillActivity(_pgSubDur, pg_meta.grade) || 'Free';
+                                var pg_blk = makeBlock({
+                                    startMin: _pgSub.start, endMin: _pgSub.end,
+                                    type: 'slot', event: pg_fillName,
+                                    layer: _pgGapLayer, field: null,
+                                    dMin: _pgSubDur,
+                                    dMax: Math.max(_pgSubDur, pg_meta.sportCeiling || 60),
+                                    _source: 'post-gap-forced', _final: true
+                                });
+                                if (pg_blk) {
+                                    pg_tmpl.push(pg_blk);
+                                    pgClosed++;
+                                    pg_changed = true;
+                                    pg_fixed   = true;
+                                    log('[POST-GAP] bunk=' + pg_bunk + ' forced ' + _pgSubDur +
+                                        'min slot "' + pg_fillName + '" @' + _pgSub.start + '-' + _pgSub.end +
+                                        (_pgSubDur < (pg_meta.fillMinDur || 25) ? ' [micro-slot]' : ''));
                                 }
                             }
-                            var pg_fillName = pickFillActivity(pg_dur, pg_meta.grade) || 'Free';
-                            var pg_blk = makeBlock({
-                                startMin: pg_gap.start, endMin: pg_gap.end,
-                                type: 'slot', event: pg_fillName,
-                                layer: pg_meta.sportLayer, field: null,
-                                dMin: pg_dur,                                // exact-fit: always passes makeBlock guard
-                                dMax: Math.max(pg_dur, pg_meta.sportCeiling || 60),
-                                _source: 'post-gap-forced', _final: true
-                            });
-                            if (pg_blk) {
-                                pg_tmpl.push(pg_blk);
-                                pg_tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
-                                pgClosed++;
-                                pg_changed = true;
-                                pg_fixed   = true;
-                                log('[POST-GAP] bunk=' + pg_bunk + ' forced ' + pg_dur +
-                                    'min slot "' + pg_fillName + '" @' + pg_gap.start + '-' + pg_gap.end +
-                                    (pg_dur < (pg_meta.fillMinDur || 25) ? ' [micro-slot]' : ''));
-                            }
+                            if (pg_changed) pg_tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
                         }
 
                         if (pg_changed) break; // re-scan gap list after any fix
