@@ -9212,6 +9212,30 @@
                             return true;
                         };
 
+                        // Returns true if placing [t, tEnd] would leave an unfillable gap
+                        // (0 < gap < smallest activity) between the placement and the nearest
+                        // fixed block already in the bunk's timeline. Such gaps can never be
+                        // filled by Phase 3, so we reject these positions early.
+                        const _MIN_FILLABLE = TYPE_FLOORS.snack || 15;
+                        const wouldCreateSmallGapForBunk = (bunk, t, tEnd) => {
+                            const tl = bunkTimelines[bunk] || [];
+                            let prevEnd = null, nextStart = null;
+                            for (const blk of tl) {
+                                if (!blk) continue;
+                                if (!(blk._activityLocked || blk._fixed || blk._classification === 'pinned')) continue;
+                                const bt = String(blk.type || '').toLowerCase();
+                                if (bt === 'pre-change' || bt === 'post-change') continue;
+                                const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
+                                const bEnd = blk.endMin != null ? blk.endMin : blk._endMin;
+                                if (bStart == null || bEnd == null) continue;
+                                if (bEnd <= t && (prevEnd === null || bEnd > prevEnd)) prevEnd = bEnd;
+                                if (bStart >= tEnd && (nextStart === null || bStart < nextStart)) nextStart = bStart;
+                            }
+                            if (prevEnd !== null && t - prevEnd > 0 && t - prevEnd < _MIN_FILLABLE) return true;
+                            if (nextStart !== null && nextStart - tEnd > 0 && nextStart - tEnd < _MIN_FILLABLE) return true;
+                            return false;
+                        };
+
                         // Sequence constraint: the rotation event must be adjacent to
                         // another activity (e.g. water slides right before/after swim
                         // so campers stay in bathing suits). Hard preference when set.
@@ -9244,6 +9268,7 @@
                             const tryWindow = (t, tEnd) => {
                                 if (tEnd > winEnd || t < winStart) return false;
                                 if (placements.some(p => t < p.endMin && tEnd > p.startMin)) return false;
+                                if (bunks.some(b => wouldCreateSmallGapForBunk(b, t, tEnd))) return false;
                                 return bunks.every(b => isWindowFreeForBunk(t, tEnd, b));
                             };
 
@@ -9341,7 +9366,9 @@
                                         return { startMin: p.startMin, endMin: p.startMin + dur };
                                     }
                                 }
-                                return null;
+                                // No gap-safe period slot found — fall through to 5-min scan
+                                // so the activity lands at a non-period-aligned time rather
+                                // than being dropped if a scan position avoids dead gaps.
                             }
                             for (let t = winStart; t + dur <= winEnd; t += 5) {
                                 if (tryWindow(t, t + dur)) {
@@ -9462,7 +9489,8 @@
                                                 return dA - dB;
                                             });
                                         for (const s of _adjSlots) {
-                                            if (isWindowFreeForBunk(s.startMin, s.endMin, bunk)) {
+                                            if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                                !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
                                                 _chosenSlot = s; break;
                                             }
                                         }
@@ -9470,10 +9498,12 @@
                                 }
 
                                 if (!_chosenSlot) {
-                                    // No-sequence (or sequence target not found): first slot with capacity + no conflict
+                                    // Prefer slots that don't leave unfillable gaps; if none exist,
+                                    // leave unplaced so Phase 3 can retry on a future day.
                                     _chosenSlot = _stagSlots.find(s =>
                                         s.usedCount < _evtConcurrency &&
-                                        isWindowFreeForBunk(s.startMin, s.endMin, bunk)
+                                        isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                        !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)
                                     ) || null;
                                 }
 
