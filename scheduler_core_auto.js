@@ -1901,7 +1901,7 @@
                                 startMin: rl.wsStart, endMin: rl.wsEnd,
                                 type: 'rotation_event', event: rl.evt.name,
                                 field: rl.evt.location || null,
-                                layer: null,
+                                layer: { type: 'rotation_event', durationMin: rl.wsEnd - rl.wsStart, durationMax: rl.wsEnd - rl.wsStart, periodMin: rl.wsEnd - rl.wsStart },
                                 _classification: 'pinned', _committed: true, _fixed: true,
                                 _activityLocked: true, _noBacktrack: true,
                                 _source: 'phase0-linked-bundle',
@@ -9319,7 +9319,7 @@
                                 if (gradePeriods2.length > 0 && tgt) {
                                     const tgtCenter = (tgt.startMin + tgt.endMin) / 2;
                                     const nearby = gradePeriods2
-                                        .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.endMin <= winEnd)
+                                        .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.startMin + dur <= winEnd)
                                         .map(p => ({ p, dist: Math.abs((p.startMin + p.endMin) / 2 - tgtCenter) }))
                                         .sort((a, b) => a.dist - b.dist);
                                     for (const n of nearby) {
@@ -9334,7 +9334,7 @@
                             const gradePeriods = (window.campPeriods || {})[grade] || [];
                             if (gradePeriods.length > 0) {
                                 const viable = gradePeriods
-                                    .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.endMin <= winEnd)
+                                    .filter(p => p.startMin >= winStart && p.startMin + dur <= p.endMin && p.startMin + dur <= winEnd)
                                     .sort((a, b) => a.startMin - b.startMin);
                                 for (const p of viable) {
                                     if (tryWindow(p.startMin, p.startMin + dur)) {
@@ -9353,13 +9353,13 @@
 
                         const placeWall = (bunk, grade, slot) => {
                             const tl = bunkTimelines[bunk];
-                            if (!tl) return;
-                            if (tl.some(b => b && b._rotationEventId === evt.id)) return;
+                            if (!tl) return false;
+                            if (tl.some(b => b && b._rotationEventId === evt.id)) return false;
                             const block = {
                                 startMin: slot.startMin, endMin: slot.endMin,
                                 type: 'rotation_event', event: evt.name,
                                 field: evt.location || null,
-                                layer: null,
+                                layer: { type: 'rotation_event', durationMin: dur, durationMax: dur, periodMin: dur },
                                 _classification: 'pinned', _committed: true, _fixed: true,
                                 _activityLocked: true, _noBacktrack: false,
                                 _source: 'phase0',
@@ -9377,6 +9377,7 @@
                             tl.splice(insertIdx, 0, block);
                             registerRotationEventUsage(evt.id, grade, slot.startMin, slot.endMin);
                             _rotWallCount++;
+                            return true;
                         };
 
                         // Sort grades most-constrained-first. Sequence-constrained grades
@@ -9477,8 +9478,8 @@
                                 }
 
                                 if (_chosenSlot) {
-                                    placeWall(bunk, grade, _chosenSlot);
-                                    _chosenSlot.usedCount++;
+                                    const _placed = placeWall(bunk, grade, _chosenSlot);
+                                    if (_placed) _chosenSlot.usedCount++;
                                     if (_verbose) log('[Phase2.4-stagger]   ✓ ' + bunk + '/' + grade + ' → ' + _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) + ' (slot used=' + _chosenSlot.usedCount + '/' + _evtConcurrency + ')');
                                 } else {
                                     _rotUnplaced.push(bunk + '/' + evt.name);
