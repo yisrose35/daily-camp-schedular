@@ -9483,74 +9483,79 @@
                         if (_evtQ24) log('[Phase2.4] Quota for "' + evt.name + '": daysLeft=' + _evtQ24.daysLeft + ' target=' + _evtQ24.dailyTarget + (_evtQ24.isLastDay ? ' (LAST DAY)' : '') + ' range=' + (_evtQ24._dateRangeStart || '?') + '→' + (_evtQ24._dateRangeEnd || '?'));
 
                         if (_evtGradeMode === 'individual') {
-                            // ── STAGGERED: bunks placed _evtConcurrency-at-a-time into sequential slots ──
-                            // Build a slot list for the daily window, each slot holds up to
-                            // _evtConcurrency bunks (across all grades combined).
-                            const _stagSlots = [];
-                            for (let _t = winStart; _t + dur <= winEnd; _t += dur) {
-                                _stagSlots.push({ startMin: _t, endMin: _t + dur, usedCount: 0 });
-                            }
+                            // ── STAGGERED: each grade gets its own independent slot pool ──
+                            // Bunks within a grade are staggered _evtConcurrency-at-a-time;
+                            // grades do NOT share time slots, preventing cross-grade mixing.
+                            let _stagBunksPlacedToday = 0;
+                            gradeEntries.forEach(({ grade, bunks }) => {
+                                // Fresh slot pool per grade — grade-isolated stagger
+                                const _stagSlots = [];
+                                for (let _t = winStart; _t + dur <= winEnd; _t += dur) {
+                                    _stagSlots.push({ startMin: _t, endMin: _t + dur, usedCount: 0 });
+                                }
 
-                            // Flatten all bunks across grades; order by grade (already sorted most-constrained-first).
-                            // Slice to daily limit so remaining bunks are deferred to future days.
-                            const _allStagBunks = gradeEntries.flatMap(({ grade: g, bunks: bs }) =>
-                                bs.map(b => ({ bunk: b, grade: g }))
-                            ).slice(0, _evtMaxBunksToday);
-
-                            for (const { bunk, grade } of _allStagBunks) {
-                                let _chosenSlot = null;
-
-                                if (seqTarget) {
-                                    // Sequence-constrained: find the target block in this bunk's timeline
-                                    const _tgtKey = seqTarget.toLowerCase();
-                                    const _tl = bunkTimelines[bunk] || [];
-                                    let _tgtS = null, _tgtE = null;
-                                    for (const blk of _tl) {
-                                        if (!blk || blk.continuation) continue;
-                                        const en = (blk.event || '').toLowerCase();
-                                        const tn = (blk.type || '').toLowerCase();
-                                        const sp = (blk._assignedSport || '').toLowerCase();
-                                        if (en === _tgtKey || tn === _tgtKey || sp === _tgtKey) {
-                                            _tgtS = blk.startMin; _tgtE = blk.endMin; break;
-                                        }
+                                for (const bunk of bunks) {
+                                    // Respect overall daily bunk limit
+                                    if (_stagBunksPlacedToday >= _evtMaxBunksToday) {
+                                        _rotUnplaced.push(bunk + '/' + evt.name);
+                                        if (_verbose) log('[Phase2.4-stagger]   ✗ ' + bunk + '/' + grade + ' — daily limit reached');
+                                        continue;
                                     }
-                                    if (_tgtS != null) {
-                                        // Try slots adjacent to target (closest first)
-                                        const _adjSlots = _stagSlots
-                                            .filter(s => s.usedCount < _evtConcurrency)
-                                            .sort((a, b) => {
-                                                const dA = Math.min(Math.abs(a.endMin - _tgtS), Math.abs(a.startMin - _tgtE));
-                                                const dB = Math.min(Math.abs(b.endMin - _tgtS), Math.abs(b.startMin - _tgtE));
-                                                return dA - dB;
-                                            });
-                                        for (const s of _adjSlots) {
-                                            if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
-                                                !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
-                                                _chosenSlot = s; break;
+
+                                    let _chosenSlot = null;
+
+                                    if (seqTarget) {
+                                        // Sequence-constrained: find the target block in this bunk's timeline
+                                        const _tgtKey = seqTarget.toLowerCase();
+                                        const _tl = bunkTimelines[bunk] || [];
+                                        let _tgtS = null, _tgtE = null;
+                                        for (const blk of _tl) {
+                                            if (!blk || blk.continuation) continue;
+                                            const en = (blk.event || '').toLowerCase();
+                                            const tn = (blk.type || '').toLowerCase();
+                                            const sp = (blk._assignedSport || '').toLowerCase();
+                                            if (en === _tgtKey || tn === _tgtKey || sp === _tgtKey) {
+                                                _tgtS = blk.startMin; _tgtE = blk.endMin; break;
+                                            }
+                                        }
+                                        if (_tgtS != null) {
+                                            // Try slots adjacent to target (closest first)
+                                            const _adjSlots = _stagSlots
+                                                .filter(s => s.usedCount < _evtConcurrency)
+                                                .sort((a, b) => {
+                                                    const dA = Math.min(Math.abs(a.endMin - _tgtS), Math.abs(a.startMin - _tgtE));
+                                                    const dB = Math.min(Math.abs(b.endMin - _tgtS), Math.abs(b.startMin - _tgtE));
+                                                    return dA - dB;
+                                                });
+                                            for (const s of _adjSlots) {
+                                                if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                                    !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
+                                                    _chosenSlot = s; break;
+                                                }
                                             }
                                         }
                                     }
-                                }
 
-                                if (!_chosenSlot) {
-                                    // Prefer slots that don't leave unfillable gaps; if none exist,
-                                    // leave unplaced so Phase 3 can retry on a future day.
-                                    _chosenSlot = _stagSlots.find(s =>
-                                        s.usedCount < _evtConcurrency &&
-                                        isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
-                                        !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)
-                                    ) || null;
-                                }
+                                    if (!_chosenSlot) {
+                                        // Prefer slots that don't leave unfillable gaps; if none exist,
+                                        // leave unplaced so Phase 3 can retry on a future day.
+                                        _chosenSlot = _stagSlots.find(s =>
+                                            s.usedCount < _evtConcurrency &&
+                                            isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                            !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)
+                                        ) || null;
+                                    }
 
-                                if (_chosenSlot) {
-                                    const _placed = placeWall(bunk, grade, _chosenSlot);
-                                    if (_placed) _chosenSlot.usedCount++;
-                                    if (_verbose) log('[Phase2.4-stagger]   ✓ ' + bunk + '/' + grade + ' → ' + _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) + ' (slot used=' + _chosenSlot.usedCount + '/' + _evtConcurrency + ')');
-                                } else {
-                                    _rotUnplaced.push(bunk + '/' + evt.name);
-                                    if (_verbose) log('[Phase2.4-stagger]   ✗ ' + bunk + '/' + grade + ' — no available slot');
+                                    if (_chosenSlot) {
+                                        const _placed = placeWall(bunk, grade, _chosenSlot);
+                                        if (_placed) { _chosenSlot.usedCount++; _stagBunksPlacedToday++; }
+                                        if (_verbose) log('[Phase2.4-stagger]   ✓ ' + bunk + '/' + grade + ' → ' + _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) + ' (slot used=' + _chosenSlot.usedCount + '/' + _evtConcurrency + ')');
+                                    } else {
+                                        _rotUnplaced.push(bunk + '/' + evt.name);
+                                        if (_verbose) log('[Phase2.4-stagger]   ✗ ' + bunk + '/' + grade + ' — no available slot');
+                                    }
                                 }
-                            }
+                            });
 
                         } else {
                             // ── WHOLE GRADE: every bunk in a grade shares one slot ──
