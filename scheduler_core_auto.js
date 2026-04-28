@@ -9239,7 +9239,9 @@
                         // (0 < gap < smallest activity) between the placement and the nearest
                         // fixed block already in the bunk's timeline. Such gaps can never be
                         // filled by Phase 3, so we reject these positions early.
-                        const _MIN_FILLABLE = TYPE_FLOORS.snack || 15;
+                        // Use sport minimum as threshold: a gap smaller than a sport can't be
+                        // filled by Phase 3's sport solver, making it a guaranteed dead gap.
+                        const _MIN_FILLABLE = (TYPE_FLOORS.sport || 25);
                         const wouldCreateSmallGapForBunk = (bunk, t, tEnd) => {
                             const tl = bunkTimelines[bunk] || [];
                             let prevEnd = null, nextStart = null;
