@@ -9571,11 +9571,20 @@
                                                 _chosenSlot = s; break;
                                             }
                                         }
+                                        // Relax period boundary gap if no gap-safe adj slot found
+                                        if (!_chosenSlot) {
+                                            for (const s of _adjSlots) {
+                                                if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                                    !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
+                                                    _chosenSlot = s; break;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
 
                                 if (!_chosenSlot) {
-                                    // Find first slot owned by this grade (or unclaimed) that fits
+                                    // Pass 1: strict — period boundary gap + small gap both enforced
                                     _chosenSlot = _stagSlots.find(s =>
                                         (s.ownerGrade === null || s.ownerGrade === grade) &&
                                         s.usedCount < _evtConcurrency &&
@@ -9583,6 +9592,18 @@
                                         !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
                                         !wouldCreatePeriodBoundaryGap(bunk, grade, s.startMin, s.endMin)
                                     ) || null;
+                                }
+
+                                if (!_chosenSlot) {
+                                    // Pass 2: relax period boundary gap so stagger stays in Phase 2.4
+                                    // and doesn't fall through to Phase 3 (which has no grade exclusivity).
+                                    _chosenSlot = _stagSlots.find(s =>
+                                        (s.ownerGrade === null || s.ownerGrade === grade) &&
+                                        s.usedCount < _evtConcurrency &&
+                                        isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                        !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)
+                                    ) || null;
+                                    if (_chosenSlot && _verbose) log('[Phase2.4-stagger]   ⚠ ' + bunk + '/' + grade + ' — period boundary gap relaxed for stagger');
                                 }
 
                                 if (_chosenSlot) {
