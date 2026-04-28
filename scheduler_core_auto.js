@@ -9681,6 +9681,34 @@
                     bunkOrder.forEach(bunk => {
                         const draft = draftResults[bunk];
                         if (!draft || !draft.specials || !draft.specials.length) return;
+
+                        // Pre-compute merged period intervals for this grade so Phase 2.5
+                        // can skip positions that would cross a period gap — those blocks
+                        // would be evicted by step 2.75, creating the very gaps we want to prevent.
+                        var _sp25MergedPeriods = [];
+                        {
+                            var _sp25RawPeriods = (window.campPeriods || {})[grade];
+                            if (_sp25RawPeriods && _sp25RawPeriods.length) {
+                                var _sp25Sorted = _sp25RawPeriods.slice().sort(function(a, b) { return a.startMin - b.startMin; });
+                                _sp25Sorted.forEach(function(p) {
+                                    var _sp25Last = _sp25MergedPeriods[_sp25MergedPeriods.length - 1];
+                                    if (_sp25Last && _sp25Last.e >= p.startMin) {
+                                        _sp25Last.e = Math.max(_sp25Last.e, p.endMin);
+                                    } else {
+                                        _sp25MergedPeriods.push({ s: p.startMin, e: p.endMin });
+                                    }
+                                });
+                            }
+                        }
+                        var sp25CrossesBoundary = function(start, end) {
+                            if (!_sp25MergedPeriods.length) return false;
+                            for (var _mi = 0; _mi < _sp25MergedPeriods.length; _mi++) {
+                                var _m = _sp25MergedPeriods[_mi];
+                                if (_m.s <= start && _m.e >= end) return false;
+                            }
+                            return true;
+                        };
+
                         // ★ FIX: place EVERY drafted special as a wall, not just [0].
                         //   Previously only `draft.specials[0]` was pre-placed, so when a
                         //   layer's qty was >1 (planner correctly drafted 2+ specials per
@@ -9735,6 +9763,9 @@
                             if (gap.e - gap.s < specialDur) { _sp25_gapTooSmall++; continue; }
 
                             for (var pos = gap.s; pos + specialDur <= gap.e; pos += 5) {
+                                // Skip positions that cross a bell-schedule period gap
+                                // (step 2.75 would evict such placements, creating dead gaps).
+                                if (sp25CrossesBoundary(pos, pos + specialDur)) continue;
                                 // Resource check: can this special run at this time?
                                 if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) { _sp25_rtBlockCount++; continue; }
                                 // Scheduling rules check (cooldowns, etc.)
@@ -9799,7 +9830,8 @@
                             // Also try end-aligned position (may not be on 5-min boundary)
                             var endPos = gap.e - specialDur;
                             if (endPos >= gap.s && endPos !== gap.s && endPos % 5 !== 0) {
-                                if (canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)
+                                if (!sp25CrossesBoundary(endPos, endPos + specialDur)
+                                    && canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)
                                     && rulesAllow({ startMin: endPos, endMin: endPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) {
                                     var withSpecialEnd = existingWalls.concat([{ s: endPos, e: endPos + specialDur }]);
                                     var gapsAfterEnd = spComputeGaps(withSpecialEnd, gradeStart, gradeEnd);
