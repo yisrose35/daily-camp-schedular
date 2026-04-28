@@ -7514,9 +7514,21 @@
                 return false;
             }
 
+            // Helper: true if [startMin,endMin] fits entirely within one bell-schedule period.
+            // Prevents the rebalancer from sliding blocks across period boundaries.
+            function rbFitsInPeriod(grade, startMin, endMin) {
+                var _rbPs = window.campPeriods && window.campPeriods[grade];
+                if (!_rbPs || !_rbPs.length) return true;
+                for (var _rbPi = 0; _rbPi < _rbPs.length; _rbPi++) {
+                    if (_rbPs[_rbPi].startMin <= startMin && _rbPs[_rbPi].endMin >= endMin) return true;
+                }
+                return false;
+            }
+
             var rebalanceTotal = 0;
             for (var rbi = 0; rbi < allBunkIds.length; rbi++) {
                 var rbBunk = allBunkIds[rbi];
+                var rbGrade = bunkMeta[rbBunk] ? bunkMeta[rbBunk].grade : null;
                 var rbTmpl = bunkTimelines[rbBunk] || [];
                 rbTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
@@ -7550,11 +7562,13 @@
                                 var steal = Math.min(rbDeficit, donorSurplus);
                                 steal = Math.round(steal / 5) * 5;
                                 if (steal >= 5) {
-                                    // Apply tentatively, verify rules
+                                    // Apply tentatively, verify rules + period containment
                                     donor.endMin -= steal;
                                     rbBlk.startMin -= steal;
                                     if (!rulesAllow({ startMin: rbBlk.startMin, endMin: rbBlk.endMin, type: rbType, event: rbBlk.event, field: rbBlk.field }, rbTmpl)
-                                     || !rulesAllow({ startMin: donor.startMin, endMin: donor.endMin, type: donor.type, event: donor.event, field: donor.field }, rbTmpl)) {
+                                     || !rulesAllow({ startMin: donor.startMin, endMin: donor.endMin, type: donor.type, event: donor.event, field: donor.field }, rbTmpl)
+                                     || !rbFitsInPeriod(rbGrade, rbBlk.startMin, rbBlk.endMin)
+                                     || !rbFitsInPeriod(rbGrade, donor.startMin, donor.endMin)) {
                                         donor.endMin += steal; rbBlk.startMin += steal; // revert
                                     } else {
                                         rbChanged = true;
@@ -7578,11 +7592,13 @@
                                 var steal2 = Math.min(rbDeficit, donor2Surplus);
                                 steal2 = Math.round(steal2 / 5) * 5;
                                 if (steal2 >= 5) {
-                                    // Apply tentatively, verify rules
+                                    // Apply tentatively, verify rules + period containment
                                     donor2.startMin += steal2;
                                     rbBlk.endMin += steal2;
                                     if (!rulesAllow({ startMin: rbBlk.startMin, endMin: rbBlk.endMin, type: rbType, event: rbBlk.event, field: rbBlk.field }, rbTmpl)
-                                     || !rulesAllow({ startMin: donor2.startMin, endMin: donor2.endMin, type: donor2.type, event: donor2.event, field: donor2.field }, rbTmpl)) {
+                                     || !rulesAllow({ startMin: donor2.startMin, endMin: donor2.endMin, type: donor2.type, event: donor2.event, field: donor2.field }, rbTmpl)
+                                     || !rbFitsInPeriod(rbGrade, rbBlk.startMin, rbBlk.endMin)
+                                     || !rbFitsInPeriod(rbGrade, donor2.startMin, donor2.endMin)) {
                                         donor2.startMin -= steal2; rbBlk.endMin -= steal2; // revert
                                     } else {
                                         rbChanged = true;
