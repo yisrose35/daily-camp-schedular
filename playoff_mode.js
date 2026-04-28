@@ -263,6 +263,32 @@
         if (!mountEl) return;
         var p = getOrInit(league);
         var save = opts.onSave || function () { };
+
+        // ── AUTO-SEED FROM STANDINGS ──
+        // When the seed list is empty and the league has recorded standings,
+        // pre-populate seedOrder by sorting teams: W desc → W-L diff desc → alpha.
+        // Teams present in league.teams but absent from standings are appended at the end.
+        if (!opts.readOnly && p.seedOrder.length === 0 && league.standings) {
+            var _stKeys = Object.keys(league.standings);
+            if (_stKeys.length > 0) {
+                var _sorted = _stKeys.slice().sort(function (a, b) {
+                    var sa = league.standings[a], sb = league.standings[b];
+                    var wa = (sa.w || 0), wb = (sb.w || 0);
+                    if (wb !== wa) return wb - wa;
+                    var diffA = (sa.w || 0) - (sa.l || 0), diffB = (sb.w || 0) - (sb.l || 0);
+                    if (diffB !== diffA) return diffB - diffA;
+                    return a.localeCompare(b);
+                });
+                // Append any league.teams entries not already in standings
+                var _allTeams = league.teams || [];
+                _allTeams.forEach(function (t) {
+                    if (_sorted.indexOf(t) === -1) _sorted.push(t);
+                });
+                p.seedOrder = _sorted;
+                save();
+            }
+        }
+
         var sportsList = (opts.getSports ? opts.getSports() : null) || (league.sports || []);
         var activitiesList = (opts.getActivities ? opts.getActivities() : null) || [];
         var readOnly = !!opts.readOnly;
