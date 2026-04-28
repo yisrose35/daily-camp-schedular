@@ -395,7 +395,6 @@
             if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
             allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
-            allDailyData[dateKey]._bypassSaveAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
             console.log(`[PostEdit] ✅ Bypass: saved to localStorage before cloud save`);
         } catch (e) {
@@ -407,9 +406,7 @@
                 const result = await window.ScheduleDB.saveSchedule(dateKey, {
                     scheduleAssignments: window.scheduleAssignments,
                     leagueAssignments: window.leagueAssignments || {},
-                    unifiedTimes: window.unifiedTimes,
-                    _bypassSaveAt: Date.now(),
-                    _modifiedBunks: modifiedBunks
+                    unifiedTimes: window.unifiedTimes
                 }, { skipFilter: true, immediate: true });
                 
                 if (result?.success) console.log('[PostEdit] ✅ Bypass save successful via ScheduleDB');
@@ -568,7 +565,6 @@
         try {
             const dailyData = JSON.parse(localStorage.getItem(unifiedKeyWithDate) || '{}');
             dailyData.scheduleAssignments = window.scheduleAssignments;
-            dailyData._postEditAt = Date.now();
             localStorage.setItem(unifiedKeyWithDate, JSON.stringify(dailyData));
         } catch (e) { console.error('[PostEdit] Failed to save to unified storage (per-date):', e); }
         
@@ -578,7 +574,6 @@
             allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
             allDailyData[currentDate].leagueAssignments = window.leagueAssignments || {};
             allDailyData[currentDate].unifiedTimes = window.unifiedTimes || [];
-            allDailyData[currentDate]._postEditAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
         } catch (e) { console.error('[PostEdit] Failed to save to unified storage (nested):', e); }
         
@@ -1851,10 +1846,6 @@
         window._postEditInProgress = true;
         if (typeof window.resolveAndSaveSchedule === 'function') window.resolveAndSaveSchedule(bunk);
         else if (typeof bypassSaveAllBunks === 'function') bypassSaveAllBunks([bunk]);
-        else if (window.ScheduleDB?.saveBunkSchedule) {
-            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
-        }
         peiUpdateRotationHistory(bunk);
         setTimeout(() => { window._postEditInProgress = false; }, 500);
     }
@@ -1873,15 +1864,10 @@
             const allDaily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDaily[dateKey]) allDaily[dateKey] = {};
             allDaily[dateKey].scheduleAssignments = window.scheduleAssignments;
-            allDaily[dateKey]._postEditAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDaily));
         } catch (e) { debugLog('peiSaveQuiet localStorage error:', e); }
         // Cloud save (fire and forget — no re-render)
-        if (window.ScheduleDB?.saveBunkSchedule) {
-            window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
-        } else {
-            window.saveSchedule?.();
-        }
+        window.saveSchedule?.();
         peiUpdateRotationHistory(bunk);
         setTimeout(() => { window._postEditInProgress = false; }, 500);
     }

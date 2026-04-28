@@ -1,24 +1,11 @@
-// =============================================================================
-// cloud_sync_helpers.js — Ensures ALL Data Syncs to Cloud
-// =============================================================================
-//
-// This file provides helper functions that ensure all camp data types
-// (divisions, bunks, fields, activities, etc.) properly sync to the cloud.
-//
-// INCLUDE: After integration_hooks.js
-//
-// v1.1: ★★★ ADDED FIELD NORMALIZATION to saveGlobalFields() ★★★
-//
-// =============================================================================
+// cloud_sync_helpers.js — Helper functions for syncing camp data types to cloud
+// Include: After integration_hooks.js
 
 (function() {
     'use strict';
 
-    console.log('☁️ Cloud Sync Helpers v1.1 loading...');
-
     // =========================================================================
-    // ★★★ FIELD NORMALIZATION HELPER ★★★
-    // Ensures complete field structure before save
+    // FIELD NORMALIZATION
     // =========================================================================
     
     function parseTimeToMinutes(timeStr) {
@@ -48,36 +35,23 @@
         return hh * 60 + mm;
     }
     
-    /**
-     * Normalize a single field to ensure complete structure
-     * @param {Object} f - Field object
-     * @returns {Object} - Normalized field object
-     */
     function normalizeField(f) {
         if (!f) return null;
-        
         return {
-            // Basic properties
             name: f.name || '',
             activities: Array.isArray(f.activities) ? f.activities : [],
             available: f.available !== false,
-            
-            // ★ Sharing rules - ensure complete structure
             sharableWith: {
                 type: f.sharableWith?.type || 'not_sharable',
                 divisions: Array.isArray(f.sharableWith?.divisions) ? f.sharableWith.divisions : [],
                 capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'not_sharable' ? 1 : 2)
             },
-            
-            // ★ Access restrictions - ensure complete structure  
-             limitUsage: {
+            limitUsage: {
                 enabled: f.limitUsage?.enabled === true,
                 divisions: typeof f.limitUsage?.divisions === 'object' ? f.limitUsage.divisions : {},
                 priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : [],
                 usePriority: f.limitUsage?.usePriority === true
             },
-            
-            // ★ Time rules - ensure array with parsed times
             timeRules: Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
                 type: r.type || 'Available',
                 start: r.start || '',
@@ -85,11 +59,7 @@
                 startMin: r.startMin ?? parseTimeToMinutes(r.start),
                 endMin: r.endMin ?? parseTimeToMinutes(r.end)
             })) : [],
-            
-            // ★ Indoor/Outdoor for rainy day
             rainyDayAvailable: f.rainyDayAvailable === true,
-            
-            // Preserve any additional properties
             ...(f.transition ? { transition: f.transition } : {}),
             ...(f.preferences ? { preferences: f.preferences } : {}),
             ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {})
@@ -100,65 +70,38 @@
     // HELPER: SYNC SPECIAL ACTIVITIES
     // =========================================================================
 
-    /**
-     * Save special activities to both local and cloud
-     */
     window.saveGlobalSpecialActivities = function(activities) {
-        // Save to app1 structure (for compatibility)
         const settings = window.loadGlobalSettings?.() || {};
         if (!settings.app1) settings.app1 = {};
         settings.app1.specialActivities = activities;
-        
-        // Also save at root level for easier access
         window.saveGlobalSettings?.("app1", settings.app1);
         window.saveGlobalSettings?.("specialActivities", activities);
-        
         console.log("☁️ Special activities queued for sync:", activities.length);
     };
 
-    /**
-     * Get special activities
-     */
     window.getGlobalSpecialActivities = function() {
         const settings = window.loadGlobalSettings?.() || {};
         return settings.specialActivities || settings.app1?.specialActivities || [];
     };
 
     // =========================================================================
-    // HELPER: SYNC FIELDS - ★★★ NOW WITH NORMALIZATION ★★★
+    // HELPER: SYNC FIELDS
     // =========================================================================
 
-    /**
-     * Save fields to both local and cloud
-     * ★★★ v1.1: Now normalizes fields before save ★★★
-     */
     window.saveGlobalFields = function(fields) {
-        if (!Array.isArray(fields)) {
-            console.warn("☁️ saveGlobalFields: Invalid input, expected array");
-            return;
-        }
-        
-        // ★★★ NORMALIZE ALL FIELDS before saving ★★★
+        if (!Array.isArray(fields)) { console.warn("☁️ saveGlobalFields: Invalid input, expected array"); return; }
         const normalizedFields = fields.map(f => normalizeField(f)).filter(Boolean);
-        
         const settings = window.loadGlobalSettings?.() || {};
         if (!settings.app1) settings.app1 = {};
         settings.app1.fields = normalizedFields;
-        
         window.saveGlobalSettings?.("app1", settings.app1);
         window.saveGlobalSettings?.("fields", normalizedFields);
-        
-        console.log("☁️ Fields queued for sync (normalized):", normalizedFields.length);
-        
-        // ★★★ REFRESH ACTIVITY PROPERTIES if available ★★★
+        console.log("☁️ Fields queued for sync:", normalizedFields.length);
         if (typeof window.refreshActivityPropertiesFromFields === 'function') {
             setTimeout(() => window.refreshActivityPropertiesFromFields(), 50);
         }
     };
 
-    /**
-     * Get fields
-     */
     window.getGlobalFields = function() {
         const settings = window.loadGlobalSettings?.() || {};
         return settings.fields || settings.app1?.fields || [];
@@ -168,9 +111,6 @@
     // HELPER: SYNC SPORTS
     // =========================================================================
 
-    /**
-     * Get all global sports
-     */
     window.getAllGlobalSports = function() {
         const settings = window.loadGlobalSettings?.() || {};
         return settings.allSports || settings.app1?.allSports || [
@@ -179,9 +119,6 @@
         ];
     };
 
-    /**
-     * Add a global sport
-     */
     window.addGlobalSport = function(sportName) {
         const settings = window.loadGlobalSettings?.() || {};
         if (!settings.app1) settings.app1 = {};
@@ -196,9 +133,6 @@
         }
     };
 
-    /**
-     * Remove a global sport
-     */
     window.removeGlobalSport = function(sportName) {
         const settings = window.loadGlobalSettings?.() || {};
         if (!settings.app1) settings.app1 = {};
@@ -248,7 +182,6 @@
         const settings = window.loadGlobalSettings?.() || {};
         if (!settings.app1) settings.app1 = {};
         settings.app1.savedSkeletons = skeletons;
-        
         window.saveGlobalSettings?.("app1", settings.app1);
         window.saveGlobalSettings?.("savedSkeletons", skeletons);
         console.log("☁️ Skeletons queued for sync");
@@ -333,137 +266,69 @@
     // HELPER: BULK SYNC ALL DATA
     // =========================================================================
 
-    /**
-     * Sync all local data to cloud immediately.
-     * Call this after import operations.
-     */
     window.syncAllDataToCloud = async function() {
         console.log("☁️ Syncing all data to cloud...");
-        
         const settings = window.loadGlobalSettings?.() || {};
-        
-        // Ensure divisions and bunks are at root level
-        if (settings.app1?.divisions && !settings.divisions) {
-            settings.divisions = settings.app1.divisions;
-        }
-        if (settings.app1?.bunks && !settings.bunks) {
-            settings.bunks = settings.app1.bunks;
-        }
-        
-        // Update via setCloudState if available
+        if (settings.app1?.divisions && !settings.divisions) settings.divisions = settings.app1.divisions;
+        if (settings.app1?.bunks && !settings.bunks) settings.bunks = settings.app1.bunks;
         if (typeof window.setCloudState === 'function') {
             await window.setCloudState(settings, true);
         } else if (typeof window.forceSyncToCloud === 'function') {
             await window.forceSyncToCloud();
         }
-        
         console.log("☁️ All data synced to cloud");
     };
 
-    // =========================================================================
-    // AUTO-HOOK: WATCH FOR DATA CHANGES
-    // =========================================================================
-
-    // Debounced auto-sync when many changes happen quickly
-    let _autoSyncTimeout = null;
-    
-    function scheduleAutoSync() {
-        if (_autoSyncTimeout) {
-            clearTimeout(_autoSyncTimeout);
-        }
-        _autoSyncTimeout = setTimeout(() => {
-            if (typeof window.forceSyncToCloud === 'function') {
-                window.forceSyncToCloud();
-            }
-        }, 1000);
-    }
-
-    // Hook into common save patterns
     const originalSaveGlobalSettings = window.saveGlobalSettings;
     if (originalSaveGlobalSettings && !originalSaveGlobalSettings._cloudHelpersHooked) {
         window.saveGlobalSettings = function(key, data) {
             const result = originalSaveGlobalSettings(key, data);
-
-            // Log what's being saved
-            console.log(`☁️ [${key}] queued for cloud sync`);
-
             return result;
         };
         window.saveGlobalSettings._cloudHelpersHooked = true;
-        // Propagate the authoritative-handler flag from the inner handler.
-        // Callers (e.g. campistry_me.save()) branch on this flag to choose the
-        // fine-grained saveGlobalSettings path over a forceSyncToCloud fallback.
-        // Without it, Me falls through to forceSyncToCloud, which reads stale
-        // _localCache and pushes stale state to cloud with a fresh timestamp —
-        // causing local data (e.g. new campers) to get clobbered on next hydrate.
+        // Propagate the authoritative-handler flag so callers (e.g. campistry_me.save())
+        // use the fine-grained save path rather than falling through to forceSyncToCloud,
+        // which reads stale _localCache and would clobber fresh local data on next hydrate.
         if (originalSaveGlobalSettings._isAuthoritativeHandler) {
             window.saveGlobalSettings._isAuthoritativeHandler = true;
         }
     }
 
-    // =========================================================================
-    // ★★★ EXPORT NORMALIZATION FUNCTION for external use ★★★
-    // =========================================================================
     window.normalizeFieldForSave = normalizeField;
 
-    console.log('☁️ Cloud Sync Helpers v1.1 ready');
-// =========================================================================
+    console.log('☁️ [cloud_sync_helpers] loaded');
+    // =========================================================================
     // HELPER: SYNC PRINT TEMPLATES
     // =========================================================================
 
-    /**
-     * Save print templates to both local and cloud
-     */
     window.saveGlobalPrintTemplates = function(templates) {
-        if (!Array.isArray(templates)) {
-            console.warn("☁️ saveGlobalPrintTemplates: Invalid input, expected array");
-            return;
-        }
-        
-        // Validate templates before saving (strip oversized logos to keep payload manageable)
+        if (!Array.isArray(templates)) { console.warn("☁️ saveGlobalPrintTemplates: Invalid input, expected array"); return; }
         const validatedTemplates = templates.map(tpl => {
             const copy = { ...tpl };
-            // If logo is too large (>500KB base64), warn but still save
             if (copy.campLogo && copy.campLogo.length > 500000) {
                 console.warn("☁️ Print template logo is large:", (copy.campLogo.length / 1024).toFixed(0) + "KB");
             }
             return copy;
         });
-        
-        const settings = window.loadGlobalSettings?.() || {};
-        settings.printTemplates = validatedTemplates;
-        
-        // Save via saveGlobalSettings (handles batching + cloud sync)
         window.saveGlobalSettings?.("printTemplates", validatedTemplates);
-        
-        // Also persist to localStorage for offline access
         try {
             localStorage.setItem('campistry_print_templates', JSON.stringify(validatedTemplates));
         } catch (e) {
             console.warn("☁️ localStorage write failed for print templates:", e);
         }
-        
         console.log("☁️ Print templates queued for sync:", validatedTemplates.length);
     };
 
-    /**
-     * Get print templates
-     */
     window.getGlobalPrintTemplates = function() {
         const settings = window.loadGlobalSettings?.() || {};
         const cloudTemplates = settings.printTemplates || [];
-        
-        // If cloud has templates, use those (they're authoritative)
         if (cloudTemplates.length > 0) return cloudTemplates;
-        
-        // Fallback to localStorage
         try {
             const raw = localStorage.getItem('campistry_print_templates');
             if (raw) return JSON.parse(raw);
         } catch (e) {
             console.warn("☁️ Failed to read local print templates:", e);
         }
-        
         return [];
     };
 })();

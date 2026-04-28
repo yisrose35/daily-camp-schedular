@@ -1,54 +1,8 @@
-// =============================================================================
-// integration_hooks.js v6.8 — CAMPISTRY SCHEDULER INTEGRATION
-// =============================================================================
-//
-// v6.8 FIXES:
-// - ★★★ CRITICAL: Scheduler role guard for camp_state — moved to TOP of
-//   executeBatchSync so neither SELECT nor UPSERT is attempted for non-admin
-// - ★★★ CRITICAL: hydrateFromCloud gracefully handles RLS denial for schedulers
-// - Fixes "no grades created" error when loading as scheduler
-// - Fixes generation being blocked by 403 on camp_state write
-//
-// v6.6 FIXES:
-// - ★★★ CRITICAL: Multi-date save fix — ALL dates now cloud-synced, not just one
-// - ★ localStorage persistence restored (was silently missing for daily_schedules)
-// - ★ Secondary dates saved via ScheduleDB with skipFilter + staggered timing
-// - ★ Filters out poisoned root keys like 'updated_at' from date iteration
-//
-// v6.5 FIXES:
-// - ★ RAINY DAY PERSISTENCE - Properly saves/loads isRainyDay and rainyDayStartTime
-// - ★ BACKWARD COMPATIBILITY - Includes rainyDayMode for legacy support
-//
-// v6.4 FIXES:
-// - ★ FIXED: Duplicate save notifications - added deduplication with 3s threshold
-// - ★ FIXED: Multiple rapid saves now coalesced into single operation
-//
-// v6.3 FIXES:
-// - ★ NEW: CloudPermissions unified permission helper
-// - ★ IMPROVED: Better network awareness in save operations
-// - ★ IMPROVED: unifiedTimes hydration from cloud
-//
-// v6.2 FIXES:
-// - ★ FIXED DUPLICATE saveGlobalSettings - single authoritative handler
-// - ★ AUTO-SAVE BEFORE DATE CHANGE - prevents data loss when switching dates
-// - ★ BEFOREUNLOAD HANDLER - saves on page exit
-// - ★ SAVE VERIFICATION - confirms cloud writes with retry
-// - ★ USER NOTIFICATIONS - shows save status to user
-// - ★ CONSOLIDATED PATCHES - removed competing save handlers
-//
-// v6.1 FIXES:
-// - ★ BYPASS SAVE GUARD - Skips remote merge during _postEditInProgress
-//
-// v6.0 FIXES:
-// - ★ BATCHED GLOBAL SETTINGS SYNC - Multiple calls are batched into one cloud write
-// - ★ ALL DATA TYPES sync to camp_state (divisions, bunks, activities, fields, etc.)
-//
-// =============================================================================
+// integration_hooks.js — Camp settings sync, schedule save hooks, remote change handling
+// Requires: supabase_client.js, supabase_schedules.js, supabase_sync.js
 
 (function() {
     'use strict';
-
-    console.log('🔗 Campistry Integration Hooks v6.8 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -57,7 +11,7 @@
     const CONFIG = {
         SYNC_DEBOUNCE_MS: 500,
         LOCAL_STORAGE_KEY: 'campGlobalSettings_v1',
-        DEBUG: true,
+        DEBUG: false,
         SAVE_MAX_RETRIES: 3,
         SAVE_RETRY_DELAY_MS: 2000,
         SHOW_NOTIFICATIONS: true
@@ -77,7 +31,6 @@
     let _scheduleCloudLoadDone = false;
     let _remoteChangeDebounce = null;
     
-    // ★★★ v6.4: Deduplication state for save operations ★★★
     let _lastSaveKey = null;
     let _lastSaveTime = 0;
     let _saveInProgress = false;
@@ -101,9 +54,9 @@
     }
 
     // =========================================================================
-    // ★★★ v6.8: ROLE HELPER (available before CloudPermissions freeze) ★★★
+    // ROLE HELPERS
     // =========================================================================
-    
+
     function _canWriteCampState() {
         const role = window.AccessControl?.getCurrentRole?.() ||
                      window.CampistryDB?.getRole?.() ||
@@ -113,152 +66,66 @@
     }
 
     // =========================================================================
-    // ★★★ NEW: UNIFIED CLOUDPERMISSIONS HELPER ★★★
+    // CLOUDPERMISSIONS — unified permission checking across all systems
     // =========================================================================
-    
-    /**
-     * CloudPermissions - Unified permission checking across all systems.
-     * Provides consistent role and permission access regardless of which
-     * permission system is initialized.
-     */
+
     window.CloudPermissions = {
-        /**
-         * Get current user's role with priority chain.
-         */
         getRole() {
-            // Priority: AccessControl > CampistryDB > localStorage
             return window.AccessControl?.getCurrentRole?.() ||
                    window.CampistryDB?.getRole?.() ||
-                   localStorage.getItem('campistry_role') || 
+                   localStorage.getItem('campistry_role') ||
                    'viewer';
         },
-        
-        /**
-         * Check if user has owner or admin access.
-         */
-        hasFullAccess() {
-            const role = this.getRole();
-            return role === 'owner' || role === 'admin';
-        },
-        
-        /**
-         * Check if user is the camp owner.
-         */
-        isOwner() {
-            return this.getRole() === 'owner';
-        },
-        
-        /**
-         * Check if user is an admin (includes owner).
-         */
-        isAdmin() {
-            const role = this.getRole();
-            return role === 'owner' || role === 'admin';
-        },
-        
-        /**
-         * Get editable bunks with proper fallback chain.
-         */
+        hasFullAccess() { const r = this.getRole(); return r === 'owner' || r === 'admin'; },
+        isOwner() { return this.getRole() === 'owner'; },
+        isAdmin() { const r = this.getRole(); return r === 'owner' || r === 'admin'; },
+
         getEditableBunks() {
-            // Priority: AccessControl > PermissionsDB > compute from divisions
             const acDivisions = window.AccessControl?.getEditableDivisions?.() || [];
             if (acDivisions.length > 0) {
                 const bunks = [];
                 const divisions = window.divisions || {};
                 acDivisions.forEach(divName => {
                     const divData = divisions[divName] || divisions[String(divName)];
-                    if (divData?.bunks) {
-                        bunks.push(...divData.bunks);
-                    }
+                    if (divData?.bunks) bunks.push(...divData.bunks);
                 });
                 return bunks.map(String);
             }
-            
-            // Fallback to PermissionsDB
             const permBunks = window.PermissionsDB?.getEditableBunks?.() || [];
-            if (permBunks.length > 0) {
-                return permBunks.map(String);
-            }
-            
-            // Full access fallback
+            if (permBunks.length > 0) return permBunks.map(String);
             if (this.hasFullAccess()) {
                 const allBunks = [];
-                const divisions = window.divisions || {};
-                Object.values(divisions).forEach(div => {
-                    if (div.bunks) allBunks.push(...div.bunks);
-                });
+                Object.values(window.divisions || {}).forEach(div => { if (div.bunks) allBunks.push(...div.bunks); });
                 return allBunks.map(String);
             }
-            
             return [];
         },
-        
-        /**
-         * Get editable divisions with proper fallback chain.
-         */
+
         getEditableDivisions() {
-            // Full access gets everything
-            if (this.hasFullAccess()) {
-                return Object.keys(window.divisions || {});
-            }
-            
-            // Priority: AccessControl > PermissionsDB
+            if (this.hasFullAccess()) return Object.keys(window.divisions || {});
             const acDivisions = window.AccessControl?.getEditableDivisions?.() || [];
-            if (acDivisions.length > 0) {
-                return acDivisions;
-            }
-            
+            if (acDivisions.length > 0) return acDivisions;
             return window.PermissionsDB?.getEditableDivisions?.() || [];
         },
-        
-        /**
-         * Check if user can edit a specific division.
-         */
+
         canEditDivision(divisionName) {
-            if (this.hasFullAccess()) return true;
-            return this.getEditableDivisions().includes(divisionName);
+            return this.hasFullAccess() || this.getEditableDivisions().includes(divisionName);
         },
-        
-        /**
-         * Check if user can edit a specific bunk.
-         */
+
         canEditBunk(bunkName) {
-            if (this.hasFullAccess()) return true;
-            return this.getEditableBunks().includes(String(bunkName));
+            return this.hasFullAccess() || this.getEditableBunks().includes(String(bunkName));
         },
-        
-        /**
-         * Get current user info with fallback chain.
-         */
+
         getUserInfo() {
-            // Priority: AccessControl > CampistryDB > membership
             const acInfo = window.AccessControl?.getCurrentUserInfo?.();
             if (acInfo) return acInfo;
-            
             const membership = window._campistryMembership;
-            if (membership) {
-                return {
-                    userId: window.CampistryDB?.getUserId?.(),
-                    name: membership.name,
-                    email: window.CampistryDB?.getSession?.()?.user?.email
-                };
-            }
-            
+            if (membership) return { userId: window.CampistryDB?.getUserId?.(), name: membership.name, email: window.CampistryDB?.getSession?.()?.user?.email };
             const session = window.CampistryDB?.getSession?.();
-            if (session?.user) {
-                return {
-                    userId: session.user.id,
-                    email: session.user.email,
-                    name: session.user.email?.split('@')[0] || 'Unknown'
-                };
-            }
-            
+            if (session?.user) return { userId: session.user.id, email: session.user.email, name: session.user.email?.split('@')[0] || 'Unknown' };
             return null;
         },
-        
-        /**
-         * Diagnostic function.
-         */
+
         diagnose() {
             console.log('═══════════════════════════════════════════════════════');
             console.log('🔐 CLOUDPERMISSIONS DIAGNOSTIC');
@@ -277,7 +144,6 @@
             console.log('═══════════════════════════════════════════════════════');
         }
     };
-// ★★★ SECURITY: Freeze to prevent monkey-patching ★★★
     Object.freeze(window.CloudPermissions);
     Object.defineProperty(window, 'CloudPermissions', {
         value: window.CloudPermissions,
@@ -394,11 +260,6 @@
     function queueSettingChange(key, value) {
         updateLocalSetting(key, value);
         _pendingChanges[key] = value;
-        
-        log(`Queued change: ${key}`, typeof value === 'object' ? 
-            (Array.isArray(value) ? `[${value.length} items]` : `{${Object.keys(value).length} keys}`) : 
-            value);
-        
         scheduleBatchSync();
     }
 
@@ -413,40 +274,18 @@
     }
 
     async function executeBatchSync() {
-        if (_isSyncing) {
-            log('Sync already in progress, rescheduling...');
-            scheduleBatchSync();
-            return;
-        }
-        
-        if (Object.keys(_pendingChanges).length === 0) {
-            log('No pending changes to sync');
-            return;
-        }
-
-        // ★★★ NEW: Check if online before attempting cloud sync ★★★
-        if (!navigator.onLine) {
-            log('Offline - changes saved locally only');
-            _pendingChanges = {};
-            return;
-        }
+        if (_isSyncing) { scheduleBatchSync(); return; }
+        if (Object.keys(_pendingChanges).length === 0) return;
+        if (!navigator.onLine) { _pendingChanges = {}; return; }
 
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
-        
-        if (!client || !campId) {
-            log('No client or camp ID, changes saved locally only');
-            _pendingChanges = {};
-            return;
-        }
 
-        // ★★★ FIX v6.8: EARLY EXIT for non-admin roles ★★★
-        // camp_state table has RLS that only allows owner/admin to read/write.
-        // Schedulers/viewers must NOT attempt ANY Supabase calls to camp_state
-        // or the 403 error propagates up through forceSyncToCloud → 
-        // saveDailySkeleton → runOptimizer and kills schedule generation.
+        if (!client || !campId) { _pendingChanges = {}; return; }
+
+        // Schedulers/viewers cannot access camp_state (RLS). Attempting would
+        // propagate a 403 through forceSyncToCloud → saveDailySkeleton → generation.
         if (!_canWriteCampState()) {
-            log('Skipping camp_state sync — role cannot access camp_state table (changes saved locally)');
             _pendingChanges = {};
             _lastSyncTime = Date.now();
             return;
@@ -457,7 +296,6 @@
         _pendingChanges = {};
 
         try {
-            log('Executing batch sync:', Object.keys(changesToSync));
 
             const { data: current, error: fetchError } = await client
                 .from('camp_state')
@@ -492,9 +330,15 @@
                 throw upsertError;
             }
 
-            // Mark self-write so our own camp_state realtime subscription
-            // ignores the echo and doesn't trigger a redundant re-hydrate.
             _lastSelfWriteAt = Date.now();
+
+            if (_settingsBroadcastChannel) {
+                _settingsBroadcastChannel.send({
+                    type: 'broadcast',
+                    event: 'settings-changed',
+                    payload: {}
+                }).catch(() => {});
+            }
 
             _lastSyncTime = Date.now();
             
@@ -521,25 +365,13 @@
     }
 
     async function forceSyncToCloud() {
-        log('Force sync requested');
+        if (_syncTimeout) { clearTimeout(_syncTimeout); _syncTimeout = null; }
 
-        if (_syncTimeout) {
-            clearTimeout(_syncTimeout);
-            _syncTimeout = null;
-        }
+        if (!_canWriteCampState()) { _pendingChanges = {}; return true; }
 
-        // ★★★ FIX v6.8: Don't even queue if scheduler ★★★
-        if (!_canWriteCampState()) {
-            log('Force sync skipped — role cannot write camp_state');
-            _pendingChanges = {};
-            return true;
-        }
-
-        // Invalidate the in-memory cache so we re-read whatever was most
-        // recently written to localStorage. Callers like campistry_me.save()
-        // write directly via localStorage.setItem before invoking us, which
-        // leaves _localCache stale — pushing that stale snapshot to cloud
-        // (with a fresh timestamp) corrupts subsequent hydrations.
+        // Invalidate cache so we re-read what was most recently written to localStorage.
+        // Callers like campistry_me.save() write directly before invoking us, leaving
+        // _localCache stale — pushing a stale snapshot corrupts subsequent hydrations.
         _localCache = null;
 
         const localSettings = getLocalSettings();
@@ -558,7 +390,6 @@
     async function verifiedScheduleSave(dateKey, data, attempt = 1) {
         if (!dateKey) dateKey = window.currentScheduleDate;
         if (!data) {
-            // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
             data = {
                 scheduleAssignments: window.scheduleAssignments || {},
                 leagueAssignments: window.leagueAssignments || {},
@@ -566,61 +397,38 @@
                 divisionTimes: window.divisionTimes || {},
                 isRainyDay: window.isRainyDay || false,
                 rainyDayStartTime: window.rainyDayStartTime ?? null,
-                rainyDayMode: window.isRainyDay || false  // backward compatibility
+                rainyDayMode: window.isRainyDay || false
             };
         }
 
         const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
-        
-        // ★★★ v6.4: Deduplication check - skip if same save within threshold ★★★
         const now = Date.now();
         const saveKey = `${dateKey}:${bunkCount}`;
-        
-        if (attempt === 1) {  // Only check dedup on first attempt, not retries
-            if (_saveInProgress) {
-                log('[VERIFIED SAVE] Save already in progress, skipping duplicate');
-                return { success: true, target: 'deduplicated', reason: 'in-progress' };
-            }
-            
+
+        if (attempt === 1) {
+            if (_saveInProgress) return { success: true, target: 'deduplicated', reason: 'in-progress' };
             if (_lastSaveKey === saveKey && (now - _lastSaveTime) < SAVE_DEDUP_MS) {
-                log('[VERIFIED SAVE] Duplicate save detected, skipping (within', SAVE_DEDUP_MS, 'ms)');
                 return { success: true, target: 'deduplicated', reason: 'recent-duplicate' };
             }
-            
             _saveInProgress = true;
             _lastSaveKey = saveKey;
             _lastSaveTime = now;
         }
-        
-        log(`[VERIFIED SAVE] Attempt ${attempt}/${CONFIG.SAVE_MAX_RETRIES} - ${bunkCount} bunks for ${dateKey}`);
 
-        if (bunkCount === 0) {
-            log('[VERIFIED SAVE] No data to save');
-            _saveInProgress = false;
-            return { success: true, target: 'empty' };
-        }
+        if (bunkCount === 0) { _saveInProgress = false; return { success: true, target: 'empty' }; }
 
-        // ★★★ NEW: Check if online ★★★
         if (!navigator.onLine) {
-            log('[VERIFIED SAVE] Offline - saved to localStorage only');
             showNotification('📴 Saved locally (offline)', 'warning');
             _saveInProgress = false;
-            
-            // Queue for later via ScheduleSync if available
-            if (window.ScheduleSync?.queueSave) {
-                window.ScheduleSync.queueSave(dateKey, data);
-            }
-            
+            if (window.ScheduleSync?.queueSave) window.ScheduleSync.queueSave(dateKey, data);
             return { success: true, target: 'localStorage', offline: true };
         }
 
         if (!window.ScheduleDB?.saveSchedule) {
-            log('[VERIFIED SAVE] ScheduleDB not ready, waiting...');
             if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                 await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
                 return verifiedScheduleSave(dateKey, data, attempt + 1);
             }
-            logError('[VERIFIED SAVE] ScheduleDB never became available');
             _saveInProgress = false;
             return { success: false, error: 'ScheduleDB not available' };
         }
@@ -629,34 +437,28 @@
         const userId = window.CampistryDB?.getUserId?.();
 
         if (!campId || !userId) {
-            log('[VERIFIED SAVE] Auth not ready, waiting...');
             if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                 await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
                 return verifiedScheduleSave(dateKey, data, attempt + 1);
             }
-            logError('[VERIFIED SAVE] Auth never became available');
             _saveInProgress = false;
             return { success: false, error: 'Missing authentication' };
         }
 
         try {
             const result = await window.ScheduleDB.saveSchedule(dateKey, data);
-            
-            // ★★★ STARTER PLAN: Do NOT retry plan-limit blocks ★★★
+
             if (result?.target === 'plan-limit') {
-                log('[VERIFIED SAVE] Blocked by plan limit:', result.error?.message || result.error);
                 showNotification(result.error?.message || 'Schedule limit reached. Upgrade for unlimited.', 'warning');
                 _saveInProgress = false;
                 return result;
             }
 
             if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified')) {
-                log('✅ Schedule saved to cloud:', bunkCount, 'bunks');
                 showNotification(`Saved ${bunkCount} bunks`, 'success');
                 _saveInProgress = false;
                 return result;
             } else if (result?.target === 'local' || result?.target === 'local-fallback') {
-                console.warn('🔗 ⚠️ Schedule saved to LOCAL only, retrying cloud...');
                 if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                     await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
                     return verifiedScheduleSave(dateKey, data, attempt + 1);
@@ -665,7 +467,6 @@
                 _saveInProgress = false;
                 return result;
             } else {
-                logError('[VERIFIED SAVE] Save failed:', result?.error);
                 if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                     await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
                     return verifiedScheduleSave(dateKey, data, attempt + 1);
@@ -675,13 +476,11 @@
                 return result;
             }
         } catch (e) {
-            // ★★★ STARTER PLAN: Detect trigger rejection — do NOT retry ★★★
             if ((e.message && e.message.includes('Starter plan limit')) || e.code === 'P0001') {
                 showNotification('Starter plan limit reached. Upgrade for unlimited access.', 'warning');
                 _saveInProgress = false;
                 return { success: false, error: e.message, target: 'plan-limit' };
             }
-            logError('[VERIFIED SAVE] Exception:', e);
             if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                 await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
                 return verifiedScheduleSave(dateKey, data, attempt + 1);
@@ -698,82 +497,39 @@
 
     async function forceLoadScheduleFromCloud(dateKey) {
         if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        
-        log('[CLOUD LOAD] Force loading schedule for:', dateKey);
-
-        if (!window.ScheduleDB?.loadSchedule) {
-            log('[CLOUD LOAD] ScheduleDB not available');
-            return { success: false, error: 'ScheduleDB not available' };
-        }
+        if (!window.ScheduleDB?.loadSchedule) return { success: false, error: 'ScheduleDB not available' };
 
         try {
             const result = await window.ScheduleDB.loadSchedule(dateKey);
-            
+
             if (result?.success && result.data) {
-                const bunkCount = Object.keys(result.data.scheduleAssignments || {}).length;
-                log(`[CLOUD LOAD] Loaded ${bunkCount} bunks from ${result.source}`);
-                
-                // Hydrate window globals
-                if (result.data.scheduleAssignments) {
-                    window.scheduleAssignments = result.data.scheduleAssignments;
-                }
-                if (result.data.leagueAssignments) {
-                    window.leagueAssignments = result.data.leagueAssignments;
-                }
-                
-                // ★★★ FIX: Properly hydrate unifiedTimes ★★★
-                if (result.data.unifiedTimes?.length > 0) {
-                    window.unifiedTimes = result.data.unifiedTimes;
-                    log('[CLOUD LOAD] Hydrated unifiedTimes:', window.unifiedTimes.length, 'slots');
-                }
-                
-                if (result.data.divisionTimes) {
-                    window.divisionTimes = result.data.divisionTimes;
-                }
+                if (result.data.scheduleAssignments) window.scheduleAssignments = result.data.scheduleAssignments;
+                if (result.data.leagueAssignments) window.leagueAssignments = result.data.leagueAssignments;
+                if (result.data.unifiedTimes?.length > 0) window.unifiedTimes = result.data.unifiedTimes;
+                if (result.data.divisionTimes) window.divisionTimes = result.data.divisionTimes;
 
-                // ★★★ FIX v6.5: Hydrate rainy day state ★★★
-                if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
-                    window.isRainyDay = true;
-                    log('[CLOUD LOAD] Hydrated isRainyDay: true');
-                } else if (result.data.isRainyDay === false) {
-                    window.isRainyDay = false;
-                    log('[CLOUD LOAD] Hydrated isRainyDay: false');
-                }
-                
-                if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
-                    window.rainyDayStartTime = result.data.rainyDayStartTime;
-                    log('[CLOUD LOAD] Hydrated rainyDayStartTime:', result.data.rainyDayStartTime);
-                } else {
-                    window.rainyDayStartTime = null;
-                }
+                if (result.data.isRainyDay === true || result.data.rainyDayMode === true) window.isRainyDay = true;
+                else if (result.data.isRainyDay === false) window.isRainyDay = false;
 
-                // Update localStorage
-                const DAILY_KEY = 'campDailyData_v1';
+                window.rainyDayStartTime = (result.data.rainyDayStartTime != null) ? result.data.rainyDayStartTime : null;
+
                 try {
-                    const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                    const allData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
                     allData[dateKey] = result.data;
-                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                    localStorage.setItem('campDailyData_v1', JSON.stringify(allData));
                 } catch (e) { /* ignore */ }
 
-                // Refresh UI
-                if (window.updateTable) {
-                    window.updateTable();
-                }
+                if (window.updateTable) window.updateTable();
 
-                console.log('🔗 ✅ Schedule loaded from cloud:', bunkCount, 'bunks');
                 if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
-                    console.log('🔗 Hydrating localStorage with all cloud schedule dates...');
-                    window.SchedulerCoreUtils.hydrateLocalStorageFromCloud().then(ok => {
-                        if (ok) console.log('🔗 ✅ localStorage hydrated with cloud history');
-                    });
+                    window.SchedulerCoreUtils.hydrateLocalStorageFromCloud().catch(() => {});
                 }
                 return result;
             } else {
-                log('[CLOUD LOAD] No cloud data found');
                 return { success: true, source: 'empty', data: null };
             }
         } catch (e) {
-            logError('[CLOUD LOAD] Exception:', e);
+            logError('forceLoadScheduleFromCloud exception:', e);
             return { success: false, error: e.message };
         }
     }
@@ -782,57 +538,24 @@
     // SINGLE AUTHORITATIVE saveGlobalSettings HANDLER
     // =========================================================================
 
-    /**
-     * ★★★ SINGLE AUTHORITATIVE HANDLER — v6.6 MULTI-DATE FIX ★★★
-     * This replaces all other patches. Do NOT patch this function elsewhere.
-     *
-     * CRITICAL FIX (v6.6): When key === 'daily_schedules', callers pass the FULL
-     * campDailyData_v1 object containing ALL dates. Previous versions only saved
-     * ONE arbitrary date (Object.keys(data)[0]), silently dropping all others.
-     *
-     * Affected callers that were losing data:
-     *   - calendar.js saveCurrentDailyData() — only current date synced
-     *   - fields.js cleanupDeletedField/propagateFieldRename — multi-date cleanup lost
-     *   - special_activities.js cleanup/rename — multi-date cleanup lost
-     *   - scheduler_core_leagues.js updateFutureSchedules — future dates lost
-     *   - scheduler_core_specialty_leagues.js updateFutureSchedules — future dates lost
-     *
-     * Now we:
-     *   1. ALWAYS persist full object to localStorage (was missing entirely!)
-     *   2. Cloud-sync the CURRENT date via verifiedScheduleSave (with retry)
-     *   3. Cloud-sync ALL OTHER dates via lightweight ScheduleDB.saveSchedule
-     */
+    // When key === 'daily_schedules', callers pass the full campDailyData_v1 object
+    // (all dates). Persist the full object to localStorage, cloud-sync the current date
+    // with retry, and sync all other dates (propagation changes) without retry.
     window.saveGlobalSettings = function(key, data) {
-        // For daily_schedules, persist locally AND sync ALL dates to cloud
         if (key === 'daily_schedules') {
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 1: Always persist full object to localStorage
-            // (Previously missing! The handler returned true without saving.)
-            // ═══════════════════════════════════════════════════════════════
             try {
                 localStorage.setItem('campDailyData_v1', JSON.stringify(data));
             } catch (e) {
-                logError('[saveGlobalSettings] localStorage write failed:', e);
+                logError('saveGlobalSettings localStorage write failed:', e);
             }
 
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 2: Collect ALL valid date keys (filter out 'updated_at'
-            // and any other non-date root keys that calendar.js may add)
-            // ═══════════════════════════════════════════════════════════════
             const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
             const allDateKeys = Object.keys(data).filter(k =>
                 DATE_REGEX.test(k) && data[k] && typeof data[k] === 'object'
             );
 
-            if (allDateKeys.length === 0) {
-                log('[saveGlobalSettings] daily_schedules: no valid date keys found');
-                return true;
-            }
+            if (allDateKeys.length === 0) return true;
 
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 3: Determine the primary (current) date
-            // ═══════════════════════════════════════════════════════════════
             const currentDate = window.currentScheduleDate ||
                                 document.getElementById('schedule-date-input')?.value ||
                                 document.getElementById('datepicker')?.value;
@@ -841,67 +564,38 @@
                 ? currentDate
                 : allDateKeys.find(k => data[k]?.scheduleAssignments) || allDateKeys[0];
 
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 4: Save PRIMARY date with verified save (retry + verify)
-            // ═══════════════════════════════════════════════════════════════
             if (primaryDateKey && data[primaryDateKey]) {
                 verifiedScheduleSave(primaryDateKey, data[primaryDateKey])
-                    .then(result => {
-                        if (!result?.success) {
-                            console.warn('🔗 Primary schedule save issue:', result?.error);
-                        }
-                    })
+                    .then(result => { if (!result?.success) console.warn('🔗 Primary schedule save issue:', result?.error); })
                     .catch(e => logError('Primary schedule save failed:', e));
             }
 
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 5: Save OTHER dates via lightweight ScheduleDB.saveSchedule
-            // These are dates modified by propagation (field rename/delete,
-            // activity rename/delete, league future-date updates, etc.)
-            // Uses skipFilter:true since propagation changes affect all bunks.
-            // Staggered 500ms apart to avoid hammering the cloud.
-            // ═══════════════════════════════════════════════════════════════
+            // Secondary dates: propagation changes (field/activity rename, league future-dates).
+            // skipFilter:true because propagation changes affect all bunks, not just this scheduler's.
             const secondaryDateKeys = allDateKeys.filter(k =>
-                k !== primaryDateKey &&
-                data[k]?.scheduleAssignments &&
+                k !== primaryDateKey && data[k]?.scheduleAssignments &&
                 Object.keys(data[k].scheduleAssignments).length > 0
             );
 
             if (secondaryDateKeys.length > 0 && window.ScheduleDB?.saveSchedule) {
-                log(`[saveGlobalSettings] Syncing ${secondaryDateKeys.length} secondary date(s) to cloud...`);
-
-                // Use Promise.all so secondary saves complete before the page can close.
-                // Previously used setTimeout stagger which would silently drop saves on navigation.
                 Promise.all(
                     secondaryDateKeys.map(dk =>
                         window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
-                            .then(r => {
-                                if (r?.success) {
-                                    log(`  ✅ Secondary save: ${dk}`);
-                                } else {
-                                    console.warn(`  ⚠️ Secondary save failed: ${dk}`, r?.error);
-                                }
-                            })
-                            .catch(e => console.warn(`  ⚠️ Secondary save error: ${dk}`, e.message))
+                            .then(r => { if (!r?.success) console.warn(`🔗 Secondary save failed: ${dk}`, r?.error); })
+                            .catch(e => console.warn(`🔗 Secondary save error: ${dk}`, e.message))
                     )
                 );
             }
 
             return true;
         }
-        
-        // All other settings go through batched sync
+
         queueSettingChange(key, data);
-        
         return true;
     };
 
-    // Mark as the authoritative handler so other code doesn't re-patch
     window.saveGlobalSettings._isAuthoritativeHandler = true;
 
-    /**
-     * loadGlobalSettings - Load settings (from cache or cloud)
-     */
     window.loadGlobalSettings = function(key) {
         const settings = getLocalSettings();
         
@@ -915,7 +609,6 @@
     window.forceSyncToCloud = forceSyncToCloud;
 
     window.setCloudState = async function(newState, force = false) {
-        log('setCloudState called', force ? '(forced)' : '');
         
         setLocalSettings(newState);
         
@@ -933,7 +626,6 @@
     };
 
     window.resetCloudState = async function() {
-        log('resetCloudState called');
         
         const emptyState = {
             divisions: {},
@@ -962,7 +654,6 @@
     };
 
     window.clearCloudKeys = async function(keys) {
-        log('clearCloudKeys called:', keys);
         
         const settings = getLocalSettings();
         keys.forEach(key => {
@@ -984,15 +675,20 @@
     async function hydrateFromCloud() {
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
-        
-        if (!client || !campId) {
-            log('No client/camp ID for hydration');
-            return;
+
+        if (!client || !campId) return;
+
+        function _hydrateFromLocal() {
+            const localState = getLocalSettings();
+            if (localState && Object.keys(localState).length > 0) {
+                window.divisions = localState.divisions || window.divisions || {};
+                window.globalBunks = localState.bunks || window.globalBunks || [];
+                window.availableDivisions = Object.keys(window.divisions);
+            }
+            window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
         }
 
         try {
-            log('Hydrating from cloud...');
-            
             const { data, error } = await client
                 .from('camp_state')
                 .select('state')
@@ -1000,143 +696,113 @@
                 .single();
 
             if (error) {
-                if (error.code === 'PGRST116') {
-                    log('No cloud state found, using local');
-                } else if (error.code === '42501') {
-                    // ★★★ FIX v6.8: RLS denial — scheduler can't read camp_state ★★★
-                    // Fall back to localStorage which was populated when owner set things up.
-                    // This is expected for scheduler/viewer roles.
-                    log('RLS denied camp_state read (expected for scheduler role) — using local settings');
-                } else {
+                // PGRST116 = no rows; 42501 = RLS denial (expected for scheduler role)
+                if (error.code !== 'PGRST116' && error.code !== '42501') {
                     logError('Hydration failed:', error);
                 }
-                
-                // ★★★ FIX v6.8: Even on error, still hydrate from localStorage ★★★
-                // and fire the hydrated event so the rest of the system initializes
-                const localState = getLocalSettings();
-                if (localState && Object.keys(localState).length > 0) {
-                    window.divisions = localState.divisions || window.divisions || {};
-                    window.globalBunks = localState.bunks || window.globalBunks || [];
-                    window.availableDivisions = Object.keys(window.divisions);
-                    
-                    log('Hydrated from localStorage fallback:', {
-                        divisions: Object.keys(window.divisions).length,
-                        bunks: (window.globalBunks || []).length
-                    });
-                }
-                
-                // ★★★ CRITICAL: Always fire the event so downstream systems initialize ★★★
-                window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+                _hydrateFromLocal();
                 return;
             }
 
             if (data?.state) {
                 const cloudState = data.state;
                 const localState = getLocalSettings();
-                
                 const cloudTime = new Date(cloudState.updated_at || 0).getTime();
                 const localTime = new Date(localState.updated_at || 0).getTime();
-                
-                let mergedState;
-                if (localTime > cloudTime) {
-                    mergedState = { ...cloudState, ...localState };
-                    log('Using local state (newer)');
-                } else {
-                    mergedState = cloudState;
-                    log('Using cloud state (newer)');
-                }
 
-                // ★ Preserve app1 settings (builderMode etc.) through hydration
+                let mergedState = localTime > cloudTime
+                    ? { ...cloudState, ...localState }
+                    : cloudState;
+
                 // Deep-merge app1 so local-only keys like builderMode survive cloud sync
                 if (localState.app1 || cloudState.app1) {
                     mergedState.app1 = { ...(cloudState.app1 || {}), ...(localState.app1 || {}) };
                 }
-                
+
                 setLocalSettings(mergedState);
-                
                 window.divisions = mergedState.divisions || {};
                 window.globalBunks = mergedState.bunks || [];
                 window.availableDivisions = Object.keys(mergedState.divisions || {});
-                
+
                 console.log('☁️ Hydrated from cloud:', {
                     divisions: Object.keys(mergedState.divisions || {}).length,
                     bunks: (mergedState.bunks || []).length
                 });
-                
+
                 window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
             }
         } catch (e) {
             logError('Hydration exception:', e);
-            
-            // ★★★ FIX v6.8: Even on exception, hydrate from local and fire event ★★★
-            const localState = getLocalSettings();
-            if (localState && Object.keys(localState).length > 0) {
-                window.divisions = localState.divisions || window.divisions || {};
-                window.globalBunks = localState.bunks || window.globalBunks || [];
-                window.availableDivisions = Object.keys(window.divisions);
-                log('Hydrated from localStorage after exception');
-            }
-            window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+            _hydrateFromLocal();
         }
     }
 
     // =========================================================================
-    // ★ LIVE — camp_state realtime subscription
-    // Divisions/grades/bunks/campers come from Campistry Me. When any client
-    // (this tab, another tab, another device) writes camp_state, we re-hydrate
-    // and fire `campistry-cloud-hydrated`. app1/Me/Go all listen for that and
-    // re-render. Self-writes are ignored via _lastSelfWriteAt to prevent echo.
+    // CAMP_STATE REALTIME SUBSCRIPTION
     // =========================================================================
 
     let _campStateChannel = null;
     let _lastSelfWriteAt = 0;
     let _campStateDebounceTimer = null;
     let _campStateSubscribed = false;
+    let _settingsBroadcastChannel = null;
+    let _settingsBroadcastSubscribed = false;
+
+    // All roles subscribe to a broadcast channel so schedulers receive admin setting changes
+    // without needing postgres_changes access (which RLS blocks for non-admin roles).
+    function _subscribeToSettingsBroadcast(client, campId) {
+        if (_settingsBroadcastSubscribed) return;
+        _settingsBroadcastSubscribed = true;
+        try {
+            _settingsBroadcastChannel = client
+                .channel(`camp-settings-${campId}`)
+                .on('broadcast', { event: 'settings-changed' }, function () {
+                    if (_canWriteCampState()) return; // admin already re-hydrates via postgres_changes
+                    if (window.CloudPermissions?.loadUserSubdivisionDetails) {
+                        window.CloudPermissions.loadUserSubdivisionDetails().catch(e =>
+                            console.warn('[integration_hooks] subdivision refresh failed:', e)
+                        );
+                    }
+                })
+                .subscribe(function (status) {
+                    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        _settingsBroadcastSubscribed = false;
+                        _settingsBroadcastChannel = null;
+                    }
+                });
+        } catch (e) {
+            console.warn('[integration_hooks] settings broadcast subscribe failed:', e);
+            _settingsBroadcastSubscribed = false;
+        }
+    }
 
     async function subscribeToCampState() {
         if (_campStateSubscribed) return;
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
-        if (!client || !campId) {
-            log('camp_state realtime: no client/campId yet, deferring');
-            return;
-        }
-        // Role guard: RLS blocks scheduler/viewer from reading camp_state
-        // changes via realtime too — don't bother subscribing.
-        if (!_canWriteCampState()) {
-            log('camp_state realtime: role cannot read camp_state, skipping subscription');
-            return;
-        }
+        if (!client || !campId) return;
+
+        _subscribeToSettingsBroadcast(client, campId);
+
+        // RLS blocks scheduler/viewer from postgres_changes on camp_state
+        if (!_canWriteCampState()) return;
+
         _campStateSubscribed = true;
         try {
             const channelName = `camp-state-${campId}-${Date.now()}`;
-            log('camp_state realtime: subscribing on', channelName);
             _campStateChannel = client.channel(channelName)
                 .on('postgres_changes', {
-                    event: '*',
-                    schema: 'public',
-                    table: 'camp_state',
-                    filter: `camp_id=eq.${campId}`
-                }, function (payload) {
-                    // Self-echo guard: our own UPSERT just fired this event.
-                    if (Date.now() - _lastSelfWriteAt < 3000) {
-                        log('camp_state change ignored (self echo)');
-                        return;
-                    }
-                    // Debounce — bulk edits in Me arrive as a rapid burst.
+                    event: '*', schema: 'public', table: 'camp_state', filter: `camp_id=eq.${campId}`
+                }, function () {
+                    if (Date.now() - _lastSelfWriteAt < 3000) return; // ignore self-echo
                     if (_campStateDebounceTimer) clearTimeout(_campStateDebounceTimer);
                     _campStateDebounceTimer = setTimeout(async function () {
                         _campStateDebounceTimer = null;
-                        log('camp_state remote change — re-hydrating');
                         await hydrateFromCloud();
                     }, 200);
                 })
                 .subscribe(function (status) {
-                    log('camp_state subscription status:', status);
-                    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-                        // Reset so a later hydration retry can re-subscribe.
-                        _campStateSubscribed = false;
-                    }
+                    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') _campStateSubscribed = false;
                 });
         } catch (e) {
             logError('camp_state subscribe failed:', e);
@@ -1144,8 +810,6 @@
         }
     }
 
-    // Subscribe once the first hydration completes — guarantees CampistryDB
-    // is ready. Subsequent hydrations (realtime, manual) don't re-subscribe.
     window.addEventListener('campistry-cloud-hydrated', function () {
         if (!_campStateSubscribed) subscribeToCampState();
     });
@@ -1161,8 +825,6 @@
 
         await new Promise(r => setTimeout(r, 200));
         await hydrateFromCloud();
-
-        console.log('🔗 All systems ready, installing hooks...');
         installHooks();
     }
 
@@ -1190,11 +852,9 @@
         }
         
         _datePickerHooked = true;
-        log('Date picker found, hooking...');
-        
+
         if (datePicker.value && !window.currentScheduleDate) {
             window.currentScheduleDate = datePicker.value;
-            log('Initial date set:', datePicker.value);
         }
 
         datePicker.addEventListener('change', async (e) => {
@@ -1202,76 +862,33 @@
             if (!newDateKey) return;
 
             const oldDateKey = window.currentScheduleDate;
-            console.log('🔗 Date changed:', oldDateKey, '→', newDateKey);
 
-            // ═══════════════════════════════════════════════════════════════
-            // ★★★ AUTO-SAVE BEFORE DATE CHANGE ★★★
-            // ═══════════════════════════════════════════════════════════════
             if (oldDateKey && oldDateKey !== newDateKey) {
                 const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
                 if (currentBunks > 0) {
-                    console.log('🔗 Auto-saving before date change:', currentBunks, 'bunks');
                     showNotification('Saving...', 'info');
-                    try {
-                        await verifiedScheduleSave(oldDateKey);
-                    } catch (e) {
-                        logError('Auto-save failed:', e);
-                    }
+                    try { await verifiedScheduleSave(oldDateKey); } catch (e) { logError('Auto-save failed:', e); }
                 }
             }
 
             window.currentScheduleDate = newDateKey;
 
-            // Subscribe to realtime for this date
-            if (window.ScheduleSync?.subscribe) {
-                await window.ScheduleSync.subscribe(newDateKey);
-            }
+            if (window.ScheduleSync?.subscribe) await window.ScheduleSync.subscribe(newDateKey);
 
-            // Load schedule for this date
             if (window.ScheduleDB?.loadSchedule) {
                 const result = await window.ScheduleDB.loadSchedule(newDateKey);
-                
                 if (result?.success && result.data) {
                     window.scheduleAssignments = result.data.scheduleAssignments || {};
                     window.leagueAssignments = result.data.leagueAssignments || {};
-                    
-                    // ★★★ FIX: Properly hydrate unifiedTimes ★★★
-                    if (result.data.unifiedTimes?.length > 0) {
-                        window.unifiedTimes = result.data.unifiedTimes;
-                    }
-                    if (result.data.divisionTimes) {
-                        window.divisionTimes = result.data.divisionTimes;
-                    }
-
-                    // ★★★ FIX v6.5: Hydrate rainy day state ★★★
-                    if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
-                        window.isRainyDay = true;
-                    } else if (result.data.isRainyDay === false) {
-                        window.isRainyDay = false;
-                    }
-                    
-                    if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
-                        window.rainyDayStartTime = result.data.rainyDayStartTime;
-                    } else {
-                        window.rainyDayStartTime = null;
-                    }
-
-                    if (window.updateTable) {
-                        window.updateTable();
-                    }
-
-                    console.log('🔗 Loaded schedule for', newDateKey, {
-                        bunks: Object.keys(window.scheduleAssignments).length,
-                        slots: window.unifiedTimes?.length || 0,
-                        isRainyDay: window.isRainyDay,
-                        rainyDayStartTime: window.rainyDayStartTime,
-                        source: result.source
-                    });
+                    if (result.data.unifiedTimes?.length > 0) window.unifiedTimes = result.data.unifiedTimes;
+                    if (result.data.divisionTimes) window.divisionTimes = result.data.divisionTimes;
+                    if (result.data.isRainyDay === true || result.data.rainyDayMode === true) window.isRainyDay = true;
+                    else if (result.data.isRainyDay === false) window.isRainyDay = false;
+                    window.rainyDayStartTime = (result.data.rainyDayStartTime != null) ? result.data.rainyDayStartTime : null;
+                    if (window.updateTable) window.updateTable();
                 }
             }
         });
-
-        console.log('🔗 Date picker hook installed');
     }
 
     // =========================================================================
@@ -1281,14 +898,10 @@
     function hookScheduleSave() {
         if (window.saveCurrentDailyData) {
             const originalSave = window.saveCurrentDailyData;
-
             window.saveCurrentDailyData = function(key, value) {
                 originalSave.call(this, key, value);
-
                 const dateKey = window.currentScheduleDate;
                 if (!dateKey) return;
-
-                // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
                 const data = {
                     scheduleAssignments: window.scheduleAssignments || {},
                     leagueAssignments: window.leagueAssignments || {},
@@ -1296,15 +909,10 @@
                     divisionTimes: window.divisionTimes || {},
                     isRainyDay: window.isRainyDay || false,
                     rainyDayStartTime: window.rainyDayStartTime ?? null,
-                    rainyDayMode: window.isRainyDay || false  // backward compatibility
+                    rainyDayMode: window.isRainyDay || false
                 };
-
-                if (window.ScheduleSync?.queueSave) {
-                    window.ScheduleSync.queueSave(dateKey, data);
-                }
+                if (window.ScheduleSync?.queueSave) window.ScheduleSync.queueSave(dateKey, data);
             };
-
-            console.log('🔗 Save hook installed');
         }
     }
 
@@ -1313,33 +921,21 @@
     // =========================================================================
 
     function hookGeneration() {
-        // Single handler for generation complete
         window.addEventListener('campistry-generation-complete', async (e) => {
             const dateKey = e.detail?.dateKey || window.currentScheduleDate;
             if (!dateKey) return;
 
-            const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
-            console.log('🔗 Generation complete for', dateKey, '-', bunkCount, 'bunks');
-
-            // ★★★ Capture old schedule BEFORE overwriting localStorage ★★★
-            // reIncrementHistoricalCounts needs the pre-generation schedule to subtract old
-            // counts. If we capture it here (while localStorage still has the old data) and
-            // pass it as oldScheduleAssignments, the subtraction step uses correct data even
-            // after localStorage has been overwritten.
+            // Capture pre-generation schedule so reIncrementHistoricalCounts can subtract old counts correctly.
             let oldScheduleSnapshot = null;
             try {
-                const DAILY_KEY = 'campDailyData_v1';
-                const preSave = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                const preSave = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
                 oldScheduleSnapshot = preSave[dateKey]?.scheduleAssignments || null;
             } catch (_) {}
 
-            // ★★★ v6.9 FIX: Save to localStorage IMMEDIATELY — no delay! ★★★
-            // The old 1000ms "wait for data to settle" caused data loss on quick reload.
-            // Data is already in window.scheduleAssignments when this event fires.
+            // Merge into existing localStorage entry to preserve auto-mode keys
+            // (_perBunkSlotsData, _autoGenerated, manualSkeleton) written by the auto-builder.
             try {
-                const DAILY_KEY = 'campDailyData_v1';
-                const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                // ★★★ FIX: MERGE instead of replace — preserve auto-mode keys (_perBunkSlotsData, _autoGenerated, manualSkeleton) saved by Step 5 ★★★
+                const allData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
                 const existing = allData[dateKey] || {};
                 Object.assign(existing, {
                     scheduleAssignments: window.scheduleAssignments || {},
@@ -1351,19 +947,14 @@
                     _savedAt: Date.now()
                 });
                 allData[dateKey] = existing;
-                localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                console.log('🔗 ✅ Immediate localStorage save:', bunkCount, 'bunks');
+                localStorage.setItem('campDailyData_v1', JSON.stringify(allData));
             } catch (lsErr) {
                 console.error('🔗 localStorage save failed:', lsErr);
             }
 
-            // Then do verified cloud save (no artificial delay)
             await verifiedScheduleSave(dateKey);
 
-            // ★★★ Update rotation history for ALL bunks ★★★
-            // Manual edits call peiUpdateRotationHistory per bunk, but auto-gen never did.
-            // This stamps every scheduled activity with the current timestamp so next-day
-            // variety scoring knows what was done today.
+            // Stamp rotation history so next-day variety scoring knows what ran today
             try {
                 const newSched = window.scheduleAssignments || {};
                 const history = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
@@ -1380,209 +971,124 @@
                     });
                 });
                 window.saveRotationHistory?.(history);
-                console.log('🔗 ✅ Rotation history updated for', Object.keys(newSched).length, 'bunks');
             } catch (rhErr) {
                 console.error('🔗 Rotation history update failed:', rhErr);
             }
 
-            // ★★★ Update historicalCounts using pre-generation snapshot ★★★
-            // Pass oldScheduleSnapshot so reIncrement subtracts the correct old data
-            // rather than reading from localStorage (which now has the new schedule).
             if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-                window.SchedulerCoreUtils.reIncrementHistoricalCounts(
-                    dateKey,
-                    window.scheduleAssignments || {},
-                    true,
-                    oldScheduleSnapshot
-                );
+                window.SchedulerCoreUtils.reIncrementHistoricalCounts(dateKey, window.scheduleAssignments || {}, true, oldScheduleSnapshot);
             } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
                 window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
             }
         }, { once: false });
-        // Intercept generateSchedule if it exists
+
         if (window.generateSchedule) {
             const originalGenerate = window.generateSchedule;
-
             window.generateSchedule = async function(dateKey, ...args) {
-                // ★★★ v6.7 SECURITY: Verify write permission even on direct console call ★★★
                 if (window.AccessControl?.verifyBeforeWrite) {
                     const allowed = await window.AccessControl.verifyBeforeWrite('generate schedule');
-                    if (!allowed) {
-                        console.warn('🔗 [Hooks] Generation BLOCKED — write permission denied');
-                        return null;
-                    }
+                    if (!allowed) { console.warn('🔗 Generation BLOCKED — write permission denied'); return null; }
                 }
-
                 const result = await originalGenerate.call(this, dateKey, ...args);
-
-                window.dispatchEvent(new CustomEvent('campistry-generation-complete', {
-                    detail: { dateKey }
-                }));
-
+                window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { dateKey } }));
                 return result;
             };
-
-            console.log('🔗 Generation hook installed');
         }
     }
 
     // =========================================================================
-    // HOOK: HANDLE REMOTE CHANGES (v6.1 - WITH BYPASS GUARD)
+    // HOOK: HANDLE REMOTE CHANGES
     // =========================================================================
 
     function hookRemoteChanges() {
-        if (!window.ScheduleSync?.onRemoteChange) {
-            console.log('🔗 ScheduleSync not ready for remote hooks');
-            return;
-        }
+        if (!window.ScheduleSync?.onRemoteChange) return;
 
-       window.ScheduleSync.onRemoteChange((change) => {
-            // Skip during post-edit/bypass operations
-            if (window._postEditInProgress) {
-                console.log('🔗 Skipping remote merge - post-edit in progress');
-                return;
-            }
+        window.ScheduleSync.onRemoteChange((change) => {
+            if (window._postEditInProgress || window._generationInProgress) return;
 
-            // ★★★ v6.9 FIX: Skip during active generation ★★★
-            if (window._generationInProgress) {
-                console.log('🔗 Skipping remote merge - generation in progress');
-                return;
-            }
-
-            // Debounce: if multiple remote changes arrive in quick succession,
-            // only process the last one to avoid concurrent conflicting loads
-            if (_remoteChangeDebounce) {
-                clearTimeout(_remoteChangeDebounce);
-            }
+            if (_remoteChangeDebounce) clearTimeout(_remoteChangeDebounce);
             _remoteChangeDebounce = setTimeout(() => {
                 _remoteChangeDebounce = null;
                 _processRemoteChange(change);
             }, 400);
         });
-        console.log('🔗 Remote change hook installed');
     }
 
     function _processRemoteChange(change) {
-            console.log('🔗 Remote change received:', change.type, 'from', change.scheduler);
+        const viewingDate = window.currentScheduleDate ||
+            document.getElementById('schedule-date-input')?.value ||
+            document.getElementById('calendar-date-picker')?.value;
+        if (change.dateKey && viewingDate && change.dateKey !== viewingDate) return;
 
-            if (window.ScheduleDB?.loadSchedule && change.dateKey) {
-                window.ScheduleDB.loadSchedule(change.dateKey).then(result => {
-                    if (window._postEditInProgress || window._generationInProgress) {
-                        console.log('🔗 Skipping merge - operation in progress');
-                        return;
-                    }
-                    
-                    if (result?.success && result.data) {
-                        // ★★★ v6.9 CRITICAL FIX: Properly merge — keep MY data, add THEIR data ★★★
-                        const myBunks = new Set(
-                            window.AccessControl?.getEditableBunks?.() ||
-                            window.CloudPermissions?.getEditableBunks?.() || []
-                        );
-                        
-                        const cloudAssignments = result.data.scheduleAssignments || {};
-                        const currentAssignments = window.scheduleAssignments || {};
-                        
-                        // Start with cloud data (has ALL schedulers merged)
-                        const merged = { ...cloudAssignments };
-                        
-                        // Overlay MY current bunks (preserve my in-progress work)
-                        for (const [bunk, slots] of Object.entries(currentAssignments)) {
-                            if (myBunks.has(bunk) || myBunks.has(String(bunk))) {
-                                merged[bunk] = slots;
-                            }
-                        }
-                        
-                        window.scheduleAssignments = merged;
-                        
-                        // Also merge league assignments (keyed by DIVISION NAME, not bunk)
-                        if (result.data.leagueAssignments) {
-                            const cloudLeagues = result.data.leagueAssignments || {};
-                            const currentLeagues = window.leagueAssignments || {};
-                            const myDivisions = new Set(
-                                window.AccessControl?.getEditableDivisions?.() || []
-                            );
-                            const mergedLeagues = { ...cloudLeagues };
-                            // Overlay MY divisions' league data
-                            for (const [divName, divData] of Object.entries(currentLeagues)) {
-                                if (myDivisions.has(divName)) {
-                                    mergedLeagues[divName] = divData;
-                                }
-                            }
-                            window.leagueAssignments = mergedLeagues;
-                        }
-                        
-                        // Hydrate times
-                        if (result.data.unifiedTimes?.length > 0) {
-                            window.unifiedTimes = result.data.unifiedTimes;
-                        }
-                        if (result.data.divisionTimes) {
-                            // ★ v7.0: Don't overwrite divisionTimes if local generation is fresh
-                            var localGenTime = window._localGenerationTimestamp || 0;
-                            if (Date.now() - localGenTime > 60000) {
-                                window.divisionTimes = result.data.divisionTimes;
-                            } else {
-                                console.log('🔗 Skipped divisionTimes overwrite — local generation is fresh');
-                            }
-                        }
-                        
-                        // Update localStorage with merged data
-                        const dateKey = change.dateKey;
-                        try {
-                            const DAILY_KEY = 'campDailyData_v1';
-                            const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                            allData[dateKey] = {
-                                scheduleAssignments: merged,
-                                leagueAssignments: window.leagueAssignments || {},
-                                unifiedTimes: window.unifiedTimes || [],
-                                divisionTimes: window.divisionTimes || {}
-                            };
-                            localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                        } catch (e) { /* ignore localStorage errors */ }
-                        
-                        const totalBunks = Object.keys(merged).length;
-                        console.log(`🔗 ✅ Merged remote update: ${totalBunks} total bunks (${myBunks.size} mine preserved)`);
-                        const myAssignments = {};
-                        
-                        // Keep my current assignments
-                        Object.entries(window.scheduleAssignments || {}).forEach(([bunk, data]) => {
-                            if (myBunks.has(String(bunk))) {
-                                myAssignments[bunk] = data;
-                            }
-                        });
-                        
-                        const remoteAssignments = result.data.scheduleAssignments || {};
+        if (!window.ScheduleDB?.loadSchedule || !change.dateKey) return;
 
-                        window.scheduleAssignments = {
-                            ...remoteAssignments,
-                            ...myAssignments
-                        };
+        window.ScheduleDB.loadSchedule(change.dateKey).then(result => {
+            if (window._postEditInProgress || window._generationInProgress) return;
+            if (!result?.success || !result.data) return;
 
-                        window.leagueAssignments = result.data.leagueAssignments || window.leagueAssignments;
-                        
-                        // ★★★ FIX: Also update unifiedTimes from remote ★★★
-                        if (result.data.unifiedTimes?.length > (window.unifiedTimes?.length || 0)) {
-                            window.unifiedTimes = result.data.unifiedTimes;
-                        }
+            const myBunks = new Set(
+                window.AccessControl?.getEditableBunks?.() ||
+                window.CloudPermissions?.getEditableBunks?.() || []
+            );
 
-                        // ★★★ FIX v6.5: Also update rainy day state from remote ★★★
-                        if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
-                            window.isRainyDay = true;
-                        } else if (result.data.isRainyDay === false) {
-                            window.isRainyDay = false;
-                        }
-                        
-                        if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
-                            window.rainyDayStartTime = result.data.rainyDayStartTime;
-                        }
+            const cloudAssignments = result.data.scheduleAssignments || {};
+            const currentAssignments = window.scheduleAssignments || {};
 
-                        if (window.updateTable) {
-                            window.updateTable();
-                        }
-
-                        console.log('🔗 Merged remote changes');
-                    }
-                });
+            // Start with cloud (all schedulers merged), overlay MY current work to preserve it
+            const merged = { ...cloudAssignments };
+            for (const [bunk, slots] of Object.entries(currentAssignments)) {
+                if (myBunks.has(bunk) || myBunks.has(String(bunk))) merged[bunk] = slots;
             }
+            window.scheduleAssignments = merged;
+
+            // League assignments keyed by division name — same merge pattern
+            if (result.data.leagueAssignments) {
+                const myDivisions = new Set(window.AccessControl?.getEditableDivisions?.() || []);
+                const mergedLeagues = { ...result.data.leagueAssignments };
+                for (const [divName, divData] of Object.entries(window.leagueAssignments || {})) {
+                    if (myDivisions.has(divName)) mergedLeagues[divName] = divData;
+                }
+                window.leagueAssignments = mergedLeagues;
+            }
+
+            if (result.data.unifiedTimes?.length > (window.unifiedTimes?.length || 0)) {
+                window.unifiedTimes = result.data.unifiedTimes;
+            }
+            if (result.data.divisionTimes) {
+                const localGenTime = window._localGenerationTimestamp || 0;
+                if (Date.now() - localGenTime > 60000) window.divisionTimes = result.data.divisionTimes;
+            }
+
+            if (result.data.isRainyDay === true || result.data.rainyDayMode === true) window.isRainyDay = true;
+            else if (result.data.isRainyDay === false) window.isRainyDay = false;
+            if (result.data.rainyDayStartTime != null) window.rainyDayStartTime = result.data.rainyDayStartTime;
+
+            try {
+                const allData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                allData[change.dateKey] = {
+                    scheduleAssignments: merged,
+                    leagueAssignments: window.leagueAssignments || {},
+                    unifiedTimes: window.unifiedTimes || [],
+                    divisionTimes: window.divisionTimes || {}
+                };
+                localStorage.setItem('campDailyData_v1', JSON.stringify(allData));
+            } catch (e) { /* ignore */ }
+
+            // Warn if another user edited a bunk I'm currently working on
+            const conflictBunks = [];
+            for (const bunk of myBunks) {
+                if (cloudAssignments[bunk] && currentAssignments[bunk] &&
+                    JSON.stringify(cloudAssignments[bunk]) !== JSON.stringify(currentAssignments[bunk])) {
+                    conflictBunks.push(bunk);
+                }
+            }
+            if (conflictBunks.length > 0 && window.showToast) {
+                const names = conflictBunks.slice(0, 3).join(', ') + (conflictBunks.length > 3 ? '…' : '');
+                window.showToast(`Another user also edited ${names} — your version was kept.`, 'warning');
+            }
+
+            if (window.updateTable) window.updateTable();
+        });
     }
 
     // =========================================================================
@@ -1592,18 +1098,14 @@
     function hookBlockedCells() {
         if (window.updateTable) {
             const originalUpdate = window.updateTable;
-
             window.updateTable = function(...args) {
                 originalUpdate.apply(this, args);
                 applyBlockedCellStyles();
             };
-
-            console.log('🔗 Blocked cell hook installed');
         }
     }
 
     function applyBlockedCellStyles() {
-        // Use CloudPermissions for consistent permission checking
         if (window.CloudPermissions?.hasFullAccess?.()) {
             return;
         }
@@ -1657,16 +1159,11 @@
             const original = window.eraseAllSchedules;
             
            window.eraseAllSchedules = async function(dateKey) {
-                // ★★★ v6.7 SECURITY: Verify write permission before erase ★★★
                 if (window.AccessControl?.verifyBeforeWrite) {
                     const allowed = await window.AccessControl.verifyBeforeWrite('erase schedules');
-                    if (!allowed) {
-                        console.warn('🔗 [Hooks] Erase BLOCKED — write permission denied');
-                        return;
-                    }
+                    if (!allowed) { console.warn('🔗 Erase BLOCKED — write permission denied'); return; }
                 }
 
-                // Use CloudPermissions for consistent permission checking
                 const hasFullAccess = window.CloudPermissions?.hasFullAccess?.() || false;
                 
                 if (hasFullAccess) {
@@ -1690,14 +1187,8 @@
                     window.leagueAssignments = result.data.leagueAssignments || {};
                 }
 
-                if (window.updateTable) {
-                    window.updateTable();
-                }
-
-                console.log('🔗 Erase complete for', dateKey);
+                if (window.updateTable) window.updateTable();
             };
-
-            console.log('🔗 Erase hook installed');
         }
     }
 
@@ -1706,46 +1197,30 @@
     // =========================================================================
 
     function hookBeforeUnload() {
-        window.addEventListener('beforeunload', (e) => {
+        window.addEventListener('beforeunload', () => {
             const dateKey = window.currentScheduleDate;
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
+            if (!dateKey || bunkCount === 0) return;
 
-            if (dateKey && bunkCount > 0) {
-                console.log('🔗 Page unloading, final save...');
-                
-                // Synchronous localStorage save (guaranteed)
-                try {
-                    const DAILY_KEY = 'campDailyData_v1';
-                    const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                    allData[dateKey] = {
-                        scheduleAssignments: window.scheduleAssignments,
-                        leagueAssignments: window.leagueAssignments,
-                        unifiedTimes: window.unifiedTimes,
-                        divisionTimes: window.divisionTimes,
-                        isRainyDay: window.isRainyDay || false,
-                        rainyDayStartTime: window.rainyDayStartTime ?? null,
-                        rainyDayMode: window.isRainyDay || false,  // backward compatibility
-                        savedAt: new Date().toISOString()
-                    };
-                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                } catch (err) {
-                    logError('Final save failed:', err);
-                }
-                
-                // Attempt cloud save (may not complete)
-                window.ScheduleDB?.saveSchedule?.(dateKey, {
-                    scheduleAssignments: window.scheduleAssignments,
-                    leagueAssignments: window.leagueAssignments,
-                    unifiedTimes: window.unifiedTimes,
-                    divisionTimes: window.divisionTimes,
-                    isRainyDay: window.isRainyDay || false,
-                    rainyDayStartTime: window.rainyDayStartTime ?? null,
-                    rainyDayMode: window.isRainyDay || false
-                }).catch(() => {});
-            }
+            const payload = {
+                scheduleAssignments: window.scheduleAssignments,
+                leagueAssignments: window.leagueAssignments,
+                unifiedTimes: window.unifiedTimes,
+                divisionTimes: window.divisionTimes,
+                isRainyDay: window.isRainyDay || false,
+                rainyDayStartTime: window.rainyDayStartTime ?? null,
+                rainyDayMode: window.isRainyDay || false,
+                savedAt: new Date().toISOString()
+            };
+
+            try {
+                const allData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                allData[dateKey] = payload;
+                localStorage.setItem('campDailyData_v1', JSON.stringify(allData));
+            } catch (err) { logError('Final save failed:', err); }
+
+            window.ScheduleDB?.saveSchedule?.(dateKey, payload).catch(() => {});
         });
-
-        console.log('🔗 beforeunload hook installed');
     }
 
     // =========================================================================
@@ -1757,29 +1232,15 @@
             if (_scheduleCloudLoadDone) return;
             _scheduleCloudLoadDone = true;
 
-            log('[HOOK] Cloud hydrated, checking for schedule data...');
-
             await new Promise(r => setTimeout(r, 500));
 
-            const dateKey = window.currentScheduleDate || 
+            const dateKey = window.currentScheduleDate ||
                            document.getElementById('schedule-date-input')?.value ||
                            document.getElementById('datepicker')?.value ||
                            document.getElementById('calendar-date-picker')?.value;
-            
-            if (!dateKey) {
-                log('[HOOK] No date key available');
-                return;
-            }
 
-            const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
-            
-            if (currentBunks === 0) {
-                log('[HOOK] No local data, fetching from cloud...');
-                await forceLoadScheduleFromCloud(dateKey);
-            } else {
-                log('[HOOK] Local data exists, refreshing from cloud...');
-                await forceLoadScheduleFromCloud(dateKey);
-            }
+            if (!dateKey) return;
+            await forceLoadScheduleFromCloud(dateKey);
         });
     }
 
@@ -1798,31 +1259,22 @@
         hookBeforeUnload();
         hookCloudHydration();
 
-        // Wire up sync-error listener so users see a banner when cloud save fails
-        window.addEventListener('campistry-sync-error', (e) => {
+        window.addEventListener('campistry-sync-error', () => {
             if (typeof window.showToast === 'function') {
                 window.showToast('Cloud save failed — your changes are queued and will retry. Check your connection.', 'error');
             }
         });
 
-        // When connection comes back, push any settings that were changed while offline.
-        // updateLocalSetting() saves to localStorage immediately, but executeBatchSync()
-        // bails early when offline — so those changes never reach the cloud without this.
+        // Flush settings saved while offline once reconnected
         window.addEventListener('online', () => {
-            log('[integration_hooks] Back online — flushing locally-saved settings to cloud...');
             setTimeout(() => {
-                if (typeof forceSyncToCloud === 'function') {
-                    forceSyncToCloud().catch(e => console.warn('[integration_hooks] Reconnect sync failed:', e));
-                }
-            }, 1500); // wait 1.5s for Supabase client to re-establish connection
+                forceSyncToCloud().catch(e => console.warn('[integration_hooks] Reconnect sync failed:', e));
+            }, 1500);
         });
 
-        // Expose helper functions globally
         window.scheduleCloudSync = function() {
             const dateKey = window.currentScheduleDate;
             if (!dateKey) return;
-
-            // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
             const data = {
                 scheduleAssignments: window.scheduleAssignments || {},
                 leagueAssignments: window.leagueAssignments || {},
@@ -1832,10 +1284,7 @@
                 rainyDayStartTime: window.rainyDayStartTime ?? null,
                 rainyDayMode: window.isRainyDay || false
             };
-
-            if (window.ScheduleSync?.queueSave) {
-                window.ScheduleSync.queueSave(dateKey, data);
-            }
+            if (window.ScheduleSync?.queueSave) window.ScheduleSync.queueSave(dateKey, data);
         };
 
         window.forceCloudSync = async function() {
@@ -1843,19 +1292,13 @@
             await forceSyncToCloud();
         };
 
-        // Expose verified save functions
         window.verifiedScheduleSave = verifiedScheduleSave;
         window.forceLoadScheduleFromCloud = forceLoadScheduleFromCloud;
-
-        console.log('🔗 All hooks installed!');
 
         window.dispatchEvent(new CustomEvent('campistry-integration-ready'));
 
         const currentDate = window.currentScheduleDate || document.getElementById('schedule-date-input')?.value || document.getElementById('calendar-date-picker')?.value;
-        if (currentDate && window.ScheduleSync?.subscribe) {
-            console.log('🔗 Auto-subscribing to current date:', currentDate);
-            window.ScheduleSync.subscribe(currentDate);
-        }
+        if (currentDate && window.ScheduleSync?.subscribe) window.ScheduleSync.subscribe(currentDate);
     }
 
     // =========================================================================
@@ -1869,7 +1312,7 @@
         const client = window.CampistryDB?.getClient?.();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('SCHEDULE SYNC DIAGNOSTIC v6.8');
+        console.log('SCHEDULE SYNC DIAGNOSTIC');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
         console.log('Online:', navigator.onLine);
@@ -1943,8 +1386,6 @@
         setTimeout(waitForSystems, 300);
     }
 
-    console.log('🔗 Campistry Integration Hooks v6.8 loaded');
-    console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
-    console.log('   v6.8: Scheduler role guard for camp_state + localStorage fallback hydration');
+    console.log('🔗 [integration_hooks] loaded');
 
 })();

@@ -404,9 +404,7 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
                                     unifiedTimes: d.unifiedTimes || [],
                                     divisionTimes: d.divisionTimes || {}
                                 },
-                                updated_at: d._postEditAt
-                                    ? new Date(d._postEditAt).toISOString()
-                                    : (d.savedAt || new Date().toISOString())
+                                updated_at: d.savedAt || new Date().toISOString()
                             }];
                         }
                     }

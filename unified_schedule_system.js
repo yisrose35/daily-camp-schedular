@@ -38,7 +38,6 @@
     
     const RENDER_DEBOUNCE_MS = 150;
     let DEBUG = false;
-    const HIDE_VERSION_TOOLBAR = true;
     const MODAL_ID = 'post-edit-modal';
     const OVERLAY_ID = 'post-edit-overlay';
     const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
@@ -49,9 +48,6 @@
     const INTEGRATED_EDIT_MODAL_ID = 'integrated-edit-modal';
     const INTEGRATED_EDIT_OVERLAY_ID = 'integrated-edit-overlay';
     const PROPOSAL_MODAL_ID = 'proposal-review-modal';
-    const AUTO_BACKUP_PREFIX = 'Auto-backup before';
-    const MAX_AUTO_BACKUPS_PER_DATE = 10;
-    
     let _lastRenderTime = 0;
     let _renderQueued = false;
     let _renderTimeout = null;
@@ -61,6 +57,8 @@
     // v4.0.3 State
     let _pendingProposals = [];
     let _claimInProgress = false;
+    let _proposalChannel = null;
+    let _proposalChannelSubscribed = false;
     let _currentEditContext = null;
     let _multiBunkEditContext = null;
     let _multiBunkPreviewResult = null;
@@ -329,21 +327,6 @@ function shouldHighlightBunk(bunkName) {
 
     function debugLog(...args) {
         if (DEBUG) console.log('[UnifiedSchedule]', ...args);
-    }
-
-    // =========================================================================
-    // HIDE VERSION TOOLBAR
-    // =========================================================================
-    
-    function hideVersionToolbar() {
-        if (!HIDE_VERSION_TOOLBAR) return;
-        const toolbar = document.getElementById('version-toolbar-container');
-        if (toolbar) {
-            toolbar.style.display = 'none';
-            const parent = toolbar.parentElement;
-            if (parent && parent.children.length === 1) parent.style.display = 'none';
-            debugLog('Hidden version toolbar');
-        }
     }
 
     // =========================================================================
@@ -2632,7 +2615,6 @@ if (bypassStatus.highlight) {
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
             allDailyData[dateKey].leagueAssignments = window.leagueAssignments || {};
             allDailyData[dateKey].divisionTimes = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
-            allDailyData[dateKey]._bypassSaveAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
             console.log('[UnifiedSchedule] ✅ Bypass: saved to localStorage');
         } catch (e) { 
@@ -2803,12 +2785,10 @@ if (bypassStatus.highlight) {
         let cloudResult = { success: false };
         if (window.ScheduleDB?.saveSchedule) {
             try {
-                cloudResult = await window.ScheduleDB.saveSchedule(dateKey, { 
-                    scheduleAssignments: window.scheduleAssignments, 
-                    leagueAssignments: window.leagueAssignments || {}, 
-                    divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes,
-                    _bypassSaveAt: Date.now(), 
-                    _modifiedBunks: modifiedBunks 
+                cloudResult = await window.ScheduleDB.saveSchedule(dateKey, {
+                    scheduleAssignments: window.scheduleAssignments,
+                    leagueAssignments: window.leagueAssignments || {},
+                    divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes
                 }, { skipFilter: true, immediate: true, forceSync: true });
             } catch (e) { 
                 console.error('[UnifiedSchedule] Fallback bypass save exception:', e); 
@@ -3013,7 +2993,6 @@ if (bypassStatus.highlight) {
             allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
             allDailyData[currentDate].leagueAssignments = window.leagueAssignments || {};
             allDailyData[currentDate].divisionTimes = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
-            allDailyData[currentDate]._postEditAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
         } catch (e) { console.error('[UnifiedSchedule] Failed to save to localStorage:', e); }
         setTimeout(() => { window._postEditInProgress = false; }, 8000);
@@ -4359,99 +4338,6 @@ if (softBlocks.length > 0) {
     }
 
     // =========================================================================
-    // AUTO-BACKUP SYSTEM
-    // =========================================================================
-
-    async function createAutoBackup(activityName, divisionName) {
-        if (window.__CAMPISTRY_DEMO_MODE__) {
-            console.log('[AutoBackup] 🎭 Demo mode — skipping auto-backup');
-            return { success: true, reason: 'demo_mode' };
-        }
-        if (!VersionManager?.saveVersion) {
-            console.log('[AutoBackup] VersionManager not available, skipping backup');
-            return { success: false, reason: 'VersionManager not available' };
-        }
-
-        const backupName = `${AUTO_BACKUP_PREFIX} ${activityName} (${divisionName})`;
-        console.log(`[AutoBackup] ★ Creating restore point: ${backupName}`);
-
-        try {
-            const result = await VersionManager.saveVersion(backupName);
-            
-            if (result?.success) {
-                console.log(`[AutoBackup] ✅ Backup created successfully`);
-                cleanupOldAutoBackups().catch(e => 
-                    console.warn('[AutoBackup] Cleanup error (non-critical):', e)
-                );
-                return { success: true, name: backupName };
-            } else {
-                console.warn('[AutoBackup] Backup may have failed:', result);
-                return { success: false, reason: 'Save returned unsuccessful' };
-            }
-        } catch (e) {
-            console.error('[AutoBackup] Error creating backup:', e);
-            return { success: false, reason: e.message };
-        }
-    }
-
-    async function cleanupOldAutoBackups(dateKey = null) {
-        if (!VersionManager?.saveVersion || !window.ScheduleVersionsDB) {
-            return { cleaned: 0 };
-        }
-
-        const targetDate = dateKey || window.currentDate || new Date().toISOString().split('T')[0];
-        
-        try {
-            const versions = await window.ScheduleVersionsDB.listVersions(targetDate);
-            if (!versions || !Array.isArray(versions)) return { cleaned: 0 };
-
-            const autoBackups = versions.filter(v => 
-                v.name && v.name.startsWith(AUTO_BACKUP_PREFIX)
-            );
-
-            if (autoBackups.length <= MAX_AUTO_BACKUPS_PER_DATE) {
-                console.log(`[AutoBackup] ${autoBackups.length} auto-backups exist, within limit of ${MAX_AUTO_BACKUPS_PER_DATE}`);
-                return { cleaned: 0 };
-            }
-
-            const toDelete = autoBackups.slice(MAX_AUTO_BACKUPS_PER_DATE);
-            let cleaned = 0;
-
-            for (const old of toDelete) {
-                try {
-                    if (window.ScheduleVersionsDB.deleteVersion) {
-                        await window.ScheduleVersionsDB.deleteVersion(old.id);
-                        cleaned++;
-                        console.log(`[AutoBackup] 🗑️ Deleted old backup: ${old.name}`);
-                    }
-                } catch (e) {
-                    console.warn(`[AutoBackup] Failed to delete ${old.name}:`, e);
-                }
-            }
-
-            console.log(`[AutoBackup] Cleanup complete: removed ${cleaned} old backups`);
-            return { cleaned };
-        } catch (e) {
-            console.error('[AutoBackup] Cleanup error:', e);
-            return { cleaned: 0, error: e.message };
-        }
-    }
-
-    async function listAutoBackups(dateKey = null) {
-        if (!window.ScheduleVersionsDB) return [];
-        
-        const targetDate = dateKey || window.currentDate || new Date().toISOString().split('T')[0];
-        
-        try {
-            const versions = await window.ScheduleVersionsDB.listVersions(targetDate);
-            return (versions || []).filter(v => v.name?.startsWith(AUTO_BACKUP_PREFIX));
-        } catch (e) {
-            console.error('[AutoBackup] Error listing backups:', e);
-            return [];
-        }
-    }
-
-    // =========================================================================
     // APPLY MULTI-BUNK EDIT
     // =========================================================================
 
@@ -4567,8 +4453,6 @@ if (softBlocks.length > 0) {
 
     async function applyMultiBunkEdit(result, notifyAfter = false) {
         const { location, slots, divName, activity, bunks, plan } = result;
-
-        await createAutoBackup(activity, divName);
 
        const divSlots = window.divisionTimes?.[divName] || [];
         const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
@@ -5079,8 +4963,6 @@ if (softBlocks.length > 0) {
 
         const claim = proposal.claim || {};
         
-        await createAutoBackup(claim.activity || 'Approved Proposal', claim.division || 'Unknown');
-
         const { field: location, slots, division: divName, activity, bunks } = claim;
         const plan = proposal.reassignments || [];
 
@@ -5193,119 +5075,6 @@ if (softBlocks.length > 0) {
     }
 
     // =========================================================================
-    // VERSION MANAGEMENT
-    // =========================================================================
-    
-    const VersionManager = {
-        async saveVersion(name) {
-            const dateKey = getDateKey();
-            if (!dateKey) { alert('Please select a date first.'); return { success: false }; }
-            if (!name) { name = prompt('Enter a name for this version:'); if (!name) return { success: false }; }
-            const dailyData = loadDailyData(); 
-            const dateData = dailyData[dateKey] || {};
-            const payload = {
-                scheduleAssignments: window.scheduleAssignments || dateData.scheduleAssignments || {},
-                scheduleSegments: window.scheduleSegments || dateData.scheduleSegments || {},
-                leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {},
-                divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {}
-            };
-            if (Object.keys(payload.scheduleAssignments).length === 0) { alert('No schedule data to save.'); return { success: false }; }
-            if (!window.ScheduleVersionsDB) { alert('Version database not available.'); return { success: false }; }
-            try {
-                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
-                const existing = versions.find(v => v.name.toLowerCase() === name.toLowerCase());
-                if (existing) { 
-                    if (!confirm(`Version "${existing.name}" already exists. Overwrite?`)) return { success: false }; 
-                    if (window.ScheduleVersionsDB.updateVersion) { 
-                        const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload); 
-                        if (result.success) { alert('✅ Version updated!'); return { success: true }; } 
-                        else { alert('❌ Error: ' + result.error); return { success: false }; } 
-                    } 
-                }
-                const result = await window.ScheduleVersionsDB.createVersion(dateKey, name, payload);
-                if (result.success) { alert('✅ Version saved!'); return { success: true }; } 
-                else { alert('❌ Error: ' + result.error); return { success: false }; }
-            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
-        },
-        async loadVersion() {
-            const dateKey = getDateKey();
-            if (!dateKey || !window.ScheduleVersionsDB) { alert('Not available.'); return; }
-            try {
-                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
-                if (!versions?.length) { alert('No saved versions.'); return; }
-                let msg = 'Select a version:\n\n'; 
-                versions.forEach((v, i) => { msg += `${i + 1}. ${v.name} (${new Date(v.created_at).toLocaleTimeString()})\n`; });
-                const choice = prompt(msg); 
-                if (!choice) return;
-                const index = parseInt(choice) - 1; 
-                if (isNaN(index) || !versions[index]) { alert('Invalid selection'); return; }
-                const selected = versions[index]; 
-                if (!confirm(`Load "${selected.name}"?`)) return;
-                let data = selected.schedule_data; 
-                if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
-                window.scheduleAssignments = data.scheduleAssignments || data;
-                // Phase 4: restore segments from the version, or rebuild from assignments.
-                if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
-                    window.scheduleSegments = data.scheduleSegments;
-                } else {
-                    try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
-                }
-                if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
-                if (data.divisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
-                saveSchedule();
-                updateTable();
-                alert('✅ Version loaded!');
-            } catch (err) { alert('Error: ' + err.message); }
-        },
-        async mergeVersions() {
-            const dateKey = getDateKey();
-            if (!dateKey || !window.ScheduleVersionsDB) { alert('Not available.'); return { success: false }; }
-            if (!confirm(`Merge ALL versions for ${dateKey}?`)) return { success: false };
-            try {
-                const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
-                if (!versions?.length) { alert('No versions to merge.'); return { success: false }; }
-                const mergedAssignments = {};
-                const mergedSegments = {};
-                const bunksTouched = new Set();
-                let latestLeagueData = null;
-                let latestDivisionTimes = null;
-                versions.forEach(ver => {
-                    let scheduleData = ver.schedule_data || ver.data || ver.payload;
-                    if (typeof scheduleData === 'string') try { scheduleData = JSON.parse(scheduleData); } catch(e) {}
-                    if (!scheduleData) return;
-                    const assignments = scheduleData.scheduleAssignments || scheduleData;
-                    if (assignments && typeof assignments === 'object') {
-                        Object.entries(assignments).forEach(([bunkId, slots]) => {
-                            mergedAssignments[bunkId] = slots;
-                            bunksTouched.add(bunkId);
-                        });
-                    }
-                    // Phase 4: merge scheduleSegments per-bunk (same ownership pattern)
-                    if (scheduleData.scheduleSegments && typeof scheduleData.scheduleSegments === 'object') {
-                        Object.entries(scheduleData.scheduleSegments).forEach(([bunkId, row]) => {
-                            mergedSegments[bunkId] = row;
-                        });
-                    }
-                    if (scheduleData.leagueAssignments) latestLeagueData = scheduleData.leagueAssignments;
-                    if (scheduleData.divisionTimes) latestDivisionTimes = scheduleData.divisionTimes;
-                });
-                window.scheduleAssignments = mergedAssignments;
-                if (Object.keys(mergedSegments).length > 0) {
-                    window.scheduleSegments = mergedSegments;
-                } else {
-                    try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
-                }
-                if (latestLeagueData) window.leagueAssignments = latestLeagueData;
-                if (latestDivisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(latestDivisionTimes) || latestDivisionTimes;
-                saveSchedule(); 
-                updateTable();
-                alert(`✅ Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
-                return { success: true, count: versions.length, bunks: bunksTouched.size };
-            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
-        }
-    };
-
-    // =========================================================================
     // SCHEDULER HOOKS FOR PINNED ACTIVITIES
     // =========================================================================
 
@@ -5367,15 +5136,64 @@ if (softBlocks.length > 0) {
     // EVENT LISTENERS
     // =========================================================================
 
-    window.addEventListener('campistry-cloud-hydrated', () => { 
-        if (window._postEditInProgress) return; 
-        _cloudHydrated = true; 
-        setTimeout(() => { 
-            if (!window._postEditInProgress) { 
-                loadScheduleForDate(getDateKey()); 
-                updateTable(); 
-            } 
-        }, 100); 
+    function subscribeToProposals() {
+        if (_proposalChannelSubscribed) return;
+        const client = window.CampistryDB?.getClient?.() || window.supabase;
+        const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
+        if (!client || !campId) return;
+        _proposalChannelSubscribed = true;
+        try {
+            _proposalChannel = client
+                .channel(`proposals-${campId}`)
+                .on('postgres_changes', {
+                    event: '*',
+                    schema: 'public',
+                    table: 'schedule_proposals',
+                    filter: `camp_id=eq.${campId}`
+                }, function (payload) {
+                    const proposal = payload.new || payload.old;
+                    if (!proposal) return;
+                    const myDivisions = new Set(getMyDivisions());
+                    const affects = (proposal.affected_divisions || []).some(d => myDivisions.has(d));
+                    if (!affects) return;
+
+                    if (payload.eventType === 'INSERT' && proposal.status === 'pending') {
+                        if (window.showToast) {
+                            window.showToast('New schedule proposal waiting for your review.', 'info');
+                        }
+                    } else if (payload.eventType === 'UPDATE' && proposal.status === 'approved') {
+                        if (window.showToast) {
+                            window.showToast('A proposal was approved — schedule may have changed.', 'info');
+                        }
+                    }
+
+                    // Refresh local proposal list so the UI reflects the change
+                    loadMyPendingProposals().then(proposals => {
+                        _pendingProposals = proposals;
+                    }).catch(() => {});
+                })
+                .subscribe(function (status) {
+                    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        _proposalChannelSubscribed = false;
+                        _proposalChannel = null;
+                    }
+                });
+        } catch (e) {
+            console.warn('[unified_schedule_system] proposal subscribe failed:', e);
+            _proposalChannelSubscribed = false;
+        }
+    }
+
+    window.addEventListener('campistry-cloud-hydrated', () => {
+        if (window._postEditInProgress) return;
+        _cloudHydrated = true;
+        subscribeToProposals();
+        setTimeout(() => {
+            if (!window._postEditInProgress) {
+                loadScheduleForDate(getDateKey());
+                updateTable();
+            }
+        }, 100);
     });
     
     window.addEventListener('campistry-cloud-schedule-loaded', () => { 
@@ -5415,12 +5233,6 @@ if (softBlocks.length > 0) {
     window.addEventListener('campistry-generation-starting', (e) => { 
         capturePinnedActivities(e.detail?.allowedDivisions || null); 
     });
-
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hideVersionToolbar);
-    else hideVersionToolbar();
-    setTimeout(hideVersionToolbar, 500); 
-    setTimeout(hideVersionToolbar, 1500); 
-    setTimeout(hideVersionToolbar, 3000);
 
     // =========================================================================
     // EXPORTS
@@ -5489,15 +5301,6 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
         return count; 
     };
 
-    // Legacy compatibility
-    window.ScheduleVersionManager = VersionManager;
-    window.ScheduleVersionMerger = { 
-        mergeAndPush: async (dateKey) => { 
-            window.currentScheduleDate = dateKey; 
-            return await VersionManager.mergeVersions(); 
-        } 
-    };
-
     // System objects
     window.SmartRegenSystem = { 
         smartRegenerateConflicts, 
@@ -5546,7 +5349,6 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
         TimeBasedFieldUsage: window.TimeBasedFieldUsage,
         
         // Sub-systems
-        VersionManager,
         SmartRegenSystem: window.SmartRegenSystem, 
         PinnedActivitySystem: window.PinnedActivitySystem, 
         ROTATION_CONFIG,

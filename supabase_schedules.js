@@ -1,51 +1,14 @@
-// =============================================================================
-// supabase_schedules.js v5.4 — CAMPISTRY SCHEDULE DATABASE OPERATIONS
-// =============================================================================
-//
-// Pure data operations for schedules.
-//
-// REPLACES: Schedule CRUD scattered across cloud_storage_bridge, 
-//           unified_cloud_schedule_system, scheduler_data_management
-//
-// PROVIDES:
-// - Load/save schedules per date
-// - Multi-scheduler merge logic
-// - UnifiedTimes serialization
-// - Version management
-// - Local storage sync
-//
-// REQUIRES: supabase_client.js, supabase_permissions.js
-//
-// v5.4 SECURITY:
-// - ★ CRITICAL: Permission-aware error handling in saveSchedule()
-// - ★ Detects RLS violations (Postgres 42501, PostgREST 401/403)
-// - ★ Separates permission errors (requires reauth) from network errors (retry-safe)
-// - ★ Dispatches 'campistry-permission-revoked' event for other modules
-// - ★ Forces RBAC re-initialization on permission errors
-//
-// v5.3 FIXES:
-// - ★ CRITICAL: unifiedTimes now properly included in mergeSchedules return
-// - ★ Added mergedUnifiedTimes tracking (uses longest array)
-// - ★ Improved save verification with exponential backoff
-//
-// v5.2 UPDATE:
-// - Added divisionTimes support in save payload and merge logic
-//
-// v5.1 FIXES:
-// - Fixed filtering to use AccessControl instead of PermissionsDB
-// - PermissionsDB was returning empty bunks, causing 0 bunks to be saved
-//
-// =============================================================================
+// supabase_schedules.js — Schedule DB operations (load, save, merge, delete)
+// Requires: supabase_client.js, supabase_permissions.js
 (function() {
     'use strict';
-    console.log('📅 Campistry Schedule DB v5.4 loading...');
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
     const CONFIG = {
         TABLE_NAME: 'daily_schedules',
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
-        DEBUG: true,  // Enable debug logging
+        DEBUG: false,
         VERIFY_MAX_ATTEMPTS: 3,
         VERIFY_BASE_DELAY_MS: 500
     };
@@ -97,22 +60,14 @@
         return window.CampistryDB?.getUserId?.();
     }
     function getSchedulerName() {
-        // Try AccessControl first
         if (window.AccessControl?.getCurrentUserInfo) {
             const info = window.AccessControl.getCurrentUserInfo();
             if (info?.name) return info.name;
         }
-        
-        // Try membership data
         const membership = window._campistryMembership;
         if (membership?.name) return membership.name;
-        
-        // Fallback to email
         const session = window.CampistryDB?.getSession?.();
-        if (session?.user?.email) {
-            return session.user.email.split('@')[0];
-        }
-        
+        if (session?.user?.email) return session.user.email.split('@')[0];
         return 'Unknown Scheduler';
     }
     // =========================================================================
@@ -204,11 +159,7 @@
             }
         }
 
-        // ★★★ FIX: Preserve local-only fields that cloud never stores.
-        // Cloud data (scheduleAssignments etc) always wins, but any field
-        // in LOCAL_ONLY_FIELDS that is missing from the new data is carried
-        // forward from the existing local record — preventing data wipe on
-        // every save/load cycle.
+        // Carry forward local-only fields not stored in cloud
         const merged = Object.assign({}, safe);
         LOCAL_ONLY_FIELDS.forEach(field => {
             if (merged[field] === undefined && existing[field] !== undefined) {
@@ -226,13 +177,8 @@
     }
 
     // =========================================================================
-    // ★★★ v5.4 SECURITY: PERMISSION ERROR DETECTION ★★★
+    // PERMISSION ERROR DETECTION
     // =========================================================================
-
-    /**
-     * Detect whether a Supabase error is a permission/RLS violation.
-     * These errors mean the user's role was revoked and retrying is futile.
-     */
     function isPermissionError(error) {
         if (!error) return false;
         return (
@@ -245,9 +191,6 @@
         );
     }
 
-    /**
-     * Handle a confirmed permission error: notify user, refresh RBAC, dispatch event.
-     */
     async function handlePermissionError(operation, error) {
         logError('🚨 PERMISSION ERROR during', operation, '— user may have been revoked');
 
@@ -270,124 +213,59 @@
     }
 
     // =========================================================================
-    // HELPERS: PERMISSIONS (FIXED - Uses AccessControl)
+    // HELPERS: PERMISSIONS
     // =========================================================================
-    
-    /**
-     * Get bunks that the current user can edit.
-     * Uses AccessControl (which has correct permissions) instead of PermissionsDB.
-     */
     function getMyEditableBunks() {
         const role = window.CampistryDB?.getRole?.() || 
                      window.AccessControl?.getCurrentRole?.() || 'viewer';
         
-        // Owners and admins can edit all bunks
         if (role === 'owner' || role === 'admin') {
             const allBunks = [];
-            const divisions = window.divisions || {};
-            Object.values(divisions).forEach(div => {
+            Object.values(window.divisions || {}).forEach(div => {
                 if (div.bunks) allBunks.push(...div.bunks);
             });
-            log('Owner/admin - all bunks:', allBunks.length);
             return allBunks.map(String);
         }
-        
-        // For schedulers, use AccessControl's editable divisions (it's properly initialized)
         const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
-        log('Editable divisions from AccessControl:', editableDivisions);
-        
         if (editableDivisions.length === 0) {
-            log('WARNING: No editable divisions from AccessControl, trying PermissionsDB...');
-            // Fallback: try PermissionsDB
             const permBunks = window.PermissionsDB?.getEditableBunks?.() || [];
-            if (permBunks.length > 0) {
-                log('Using PermissionsDB fallback:', permBunks.length, 'bunks');
-                return permBunks.map(String);
-            }
+            if (permBunks.length > 0) return permBunks.map(String);
             logError('No editable bunks found from any source!');
             return [];
         }
-        
-        // Get bunks for editable divisions
         const divisions = window.divisions || {};
         const bunks = [];
-        
         editableDivisions.forEach(divName => {
             const divData = divisions[divName] || divisions[String(divName)];
-            if (divData?.bunks) {
-                bunks.push(...divData.bunks);
-            }
+            if (divData?.bunks) bunks.push(...divData.bunks);
         });
-        
-        log('Editable bunks:', bunks.length, 'from divisions:', editableDivisions);
         return bunks.map(String);
     }
 
-    /**
-     * Filter schedule data to only include bunks the user can edit.
-     * FIXED: Uses AccessControl instead of PermissionsDB.
-     */
     function filterScheduleToMyBunks(scheduleAssignments) {
         const role = window.CampistryDB?.getRole?.() || 
                      window.AccessControl?.getCurrentRole?.() || 'viewer';
         
-        // Owners and admins get everything
-        if (role === 'owner' || role === 'admin') {
-            log('Full access - no filtering needed');
-            return scheduleAssignments;
-        }
-        
+        if (role === 'owner' || role === 'admin') return scheduleAssignments;
         const myBunks = new Set(getMyEditableBunks());
-        
         if (myBunks.size === 0) {
-            logError('WARNING: No editable bunks found! Cannot filter properly.');
-            logError('AccessControl divisions:', window.AccessControl?.getEditableDivisions?.());
-            logError('PermissionsDB bunks:', window.PermissionsDB?.getEditableBunks?.());
-            // Return original to avoid saving empty - let RLS handle it
+            logError('No editable bunks found — returning unfiltered, RLS will enforce.');
             return scheduleAssignments;
         }
-        
         const filtered = {};
-        let filteredCount = 0;
-        let totalCount = 0;
-        
         Object.entries(scheduleAssignments || {}).forEach(([bunkId, slots]) => {
-            totalCount++;
-            if (myBunks.has(String(bunkId))) {
-                filtered[bunkId] = slots;
-                filteredCount++;
-            }
+            if (myBunks.has(String(bunkId))) filtered[bunkId] = slots;
         });
-        
-        log(`Filtered to my bunks: ${filteredCount} of ${totalCount}`);
-        
-        if (filteredCount === 0 && totalCount > 0) {
-            logError('WARNING: All bunks were filtered out!');
-            logError('My editable bunks:', [...myBunks]);
-            logError('Schedule bunk IDs:', Object.keys(scheduleAssignments));
-        }
-        
         return filtered;
     }
 
-    /**
-     * Get editable divisions - prefers AccessControl over PermissionsDB
-     */
     function getMyEditableDivisions() {
         const role = window.CampistryDB?.getRole?.() || 
                      window.AccessControl?.getCurrentRole?.() || 'viewer';
         
-        if (role === 'owner' || role === 'admin') {
-            return Object.keys(window.divisions || {});
-        }
-        
-        // Prefer AccessControl (properly initialized)
+        if (role === 'owner' || role === 'admin') return Object.keys(window.divisions || {});
         const acDivisions = window.AccessControl?.getEditableDivisions?.() || [];
-        if (acDivisions.length > 0) {
-            return acDivisions;
-        }
-        
-        // Fallback to PermissionsDB
+        if (acDivisions.length > 0) return acDivisions;
         return window.PermissionsDB?.getEditableDivisions?.() || [];
     }
 
@@ -484,20 +362,15 @@
         }
     }
     // =========================================================================
-    // MERGE LOGIC - ★★★ FIXED v5.3: unifiedTimes now properly returned ★★★
+    // MERGE LOGIC
     // =========================================================================
-    /**
-     * Merge multiple scheduler records into a single schedule.
-     * Each scheduler's bunk data takes precedence for their bunks.
-     * UnifiedTimes uses the longest array.
-     */
     function mergeSchedules(records) {
         if (!records || records.length === 0) return null;
         
         const mergedAssignments = {};
         const mergedSegments = {};
         const mergedLeagues = {};
-        let mergedUnifiedTimes = [];  // ★★★ FIX: Track unifiedTimes ★★★
+        let mergedUnifiedTimes = [];
         let mergedDivisionTimes = {};
         let maxSlots = 0;
         let isRainyDay = false;
@@ -505,11 +378,6 @@
 
         records.forEach(record => {
             const data = record.schedule_data || {};
-
-            log('Merging from', record.scheduler_name || 'unknown', {
-                bunks: Object.keys(data.scheduleAssignments || {}).length,
-                slots: data.unifiedTimes?.length || 0
-            });
 
             // Merge scheduleAssignments (each scheduler owns their bunks)
             if (data.scheduleAssignments) {
@@ -532,7 +400,7 @@
                 });
             }
             
-            // ★★★ FIX: Track unifiedTimes - use longest array ★★★
+            // Use longest unifiedTimes array across all records
             if (data.unifiedTimes && Array.isArray(data.unifiedTimes)) {
                 if (data.unifiedTimes.length > mergedUnifiedTimes.length) {
                     mergedUnifiedTimes = data.unifiedTimes;
@@ -568,20 +436,13 @@
             }
         });
         
-        // ★★★ FIX: Deserialize unifiedTimes if needed ★★★
         const deserializedTimes = deserializeUnifiedTimes(mergedUnifiedTimes);
-        
-        log('Merge complete:', {
-            bunks: Object.keys(mergedAssignments).length,
-            unifiedTimes: deserializedTimes.length,
-            divisionTimes: Object.keys(mergedDivisionTimes).length
-        });
-        
+
         return {
             scheduleAssignments: mergedAssignments,
             scheduleSegments: mergedSegments,
             leagueAssignments: mergedLeagues,
-            unifiedTimes: deserializedTimes,  // ★★★ FIX: Now included! ★★★
+            unifiedTimes: deserializedTimes,
             divisionTimes: window.DivisionTimesSystem?.deserialize(mergedDivisionTimes) || mergedDivisionTimes,
             slotCount: maxSlots,
             isRainyDay,
@@ -591,17 +452,9 @@
         };
     }
     // =========================================================================
-    // SAVE OPERATIONS — ★★★ v5.4: PERMISSION-AWARE ERROR HANDLING ★★★
+    // SAVE OPERATIONS
     // =========================================================================
-    /**
-     * Save schedule for a date.
-     * Automatically filters to user's divisions and UPSERTs.
-     * FIXED in v5.1: Uses AccessControl instead of PermissionsDB for filtering
-     * FIXED in v5.3: Improved verification with exponential backoff
-     * FIXED in v5.4: Permission-aware error handling (RLS violations vs network errors)
-     */
-   async function saveSchedule(dateKey, data, options = {}) {
-        // ★★★ v5.5 SECURITY: Verify write permission before cloud write ★★★
+    async function saveSchedule(dateKey, data, options = {}) {
         if (window.AccessControl?.verifyBeforeWrite && !options.skipVerify) {
             const allowed = await window.AccessControl.verifyBeforeWrite('save schedule to cloud');
             if (!allowed) {
@@ -615,7 +468,6 @@
         const schedulerName = getSchedulerName();
 
         const originalBunkCount = Object.keys(data?.scheduleAssignments || {}).length;
-        log('saveSchedule called:', dateKey, 'with', originalBunkCount, 'bunks');
 
         if (!client || !campId) {
             log('No client or camp ID, saving to local only');
@@ -627,18 +479,14 @@
         // not here — auto-saves and edits to existing dates should never be blocked.
 
         try {
-            // ★★★ FIXED FILTERING - Uses AccessControl instead of PermissionsDB ★★★
             let filteredAssignments;
             if (options.skipFilter) {
                 filteredAssignments = data.scheduleAssignments || {};
-                log('Skipping filter per options');
             } else {
-                // Use our fixed filtering function
                 filteredAssignments = filterScheduleToMyBunks(data.scheduleAssignments || {});
             }
 
             const filteredBunkCount = Object.keys(filteredAssignments).length;
-            log(`After filtering: ${filteredBunkCount} bunks (was ${originalBunkCount})`);
 
             // Phase 4: persist scheduleSegments alongside assignments, filtered
             // by the same bunk-ownership rules so we never leak foreign data.
@@ -656,9 +504,7 @@
                 divisionTimes: window.DivisionTimesSystem?.serialize(window.divisionTimes) || {}
             };
 
-            // Get user's divisions (use AccessControl)
             const divisions = getMyEditableDivisions();
-            log('Saving with divisions:', divisions);
 
             // UPSERT: Insert or update based on (camp_id, date_key, scheduler_id)
             const { data: result, error } = await client
@@ -678,44 +524,18 @@
                 })
                 .select();
 
-            // ═══════════════════════════════════════════════════════════════
-            // ★★★ v5.4 SECURITY: Permission-aware error handling ★★★
-            // Separate RLS/permission errors (requires reauth) from
-            // transient network errors (safe to retry / fallback to local)
-            // ═══════════════════════════════════════════════════════════════
             if (error) {
                 logError('Save failed:', error);
-                logError('Error details:', JSON.stringify(error));
-
                 if (isPermissionError(error)) {
-                    // ─── PERMISSION ERROR: user's role was likely revoked ───
                     await handlePermissionError('saveSchedule', error);
-
-                    return { 
-                        success: false, 
-                        error: 'Permission denied', 
-                        target: 'permission-error',
-                        requiresReauth: true 
-                    };
+                    return { success: false, error: 'Permission denied', target: 'permission-error', requiresReauth: true };
                 }
-
-                // ─── TRANSIENT ERROR: safe to fall back to local storage ───
                 setLocalSchedule(dateKey, data);
                 return { success: false, error: error.message, target: 'local-fallback' };
             }
 
-            // Update local storage with full data (for offline access)
             setLocalSchedule(dateKey, data);
 
-            log('✅ Saved successfully:', {
-                bunks: filteredBunkCount,
-                slots: payload.slotCount,
-                divisions
-            });
-
-            // ★★★ IMPROVED v5.3: Verify save with exponential backoff ★★★
-            log('Verifying save reached cloud...');
-            
             let verified = false;
             let verifyAttempt = 0;
             
@@ -734,28 +554,17 @@
                         .single();
 
                     if (!verifyError && verifyData) {
-                        const cloudBunks = Object.keys(verifyData.schedule_data?.scheduleAssignments || {}).length;
-                        log(`✅ Save VERIFIED (attempt ${verifyAttempt}): ${cloudBunks} bunks at ${verifyData.updated_at}`);
                         verified = true;
-                    } else {
-                        log(`Verify attempt ${verifyAttempt} failed:`, verifyError?.message);
                     }
                 } catch (verifyErr) {
-                    log(`Verify attempt ${verifyAttempt} exception:`, verifyErr.message);
+                    // retry
                 }
             }
             
             if (!verified) {
-                logError('Save verification failed after', CONFIG.VERIFY_MAX_ATTEMPTS, 'attempts');
-                return { 
-                    success: true, 
-                    target: 'cloud-unverified',
-                    bunks: filteredBunkCount,
-                    verified: false
-                };
+                return { success: true, target: 'cloud-unverified', bunks: filteredBunkCount, verified: false };
             }
 
-            // ★ Update starter banner days count after successful save
             if (window.refreshStarterBanner) window.refreshStarterBanner();
 
             return {
@@ -773,11 +582,7 @@
     // =========================================================================
     // DELETE OPERATIONS
     // =========================================================================
-    /**
-     * Delete ALL schedule data for a date (owners only).
-     */
-   async function deleteSchedule(dateKey) {
-        // ★★★ v5.5 SECURITY: Verify write permission before cloud delete ★★★
+    async function deleteSchedule(dateKey) {
         if (window.AccessControl?.verifyBeforeWrite) {
             const allowed = await window.AccessControl.verifyBeforeWrite('delete schedule from cloud');
             if (!allowed) {
@@ -801,9 +606,7 @@
                 logError('Delete failed:', error);
                 return { success: false, error: error.message };
             }
-            // Clear local storage
             deleteLocalSchedule(dateKey);
-            log('Deleted all schedules for', dateKey);
             return { success: true };
         } catch (e) {
             logError('Delete exception:', e);
@@ -811,207 +614,60 @@
         }
     }
 
-    /**
-     * Delete MY bunks from ALL schedule records for a date.
-     * This is necessary because another scheduler (like the owner) may have
-     * saved records that include my bunks. Simply deleting my own record
-     * won't remove my bunks from their records.
-     */
+    // Removes this scheduler's bunks from all records for a date.
+    // Necessary because an owner's record may contain copies of this scheduler's bunks.
     async function deleteMyScheduleOnly(dateKey) {
         const client = getClient();
         const campId = getCampId();
         const userId = getUserId();
-        log('deleteMyScheduleOnly called for', dateKey);
         try {
-            // Step 1: Get my editable bunks
             const myBunks = getMyEditableBunks();
-            log('My bunks to delete:', myBunks);
-            if (myBunks.length === 0) {
-                log('No bunks to delete');
-                return { success: true, message: 'No bunks assigned' };
-            }
-            // Step 2: Load ALL records for this date
+            if (myBunks.length === 0) return { success: true, message: 'No bunks assigned' };
+
             const allRecords = await loadAllSchedulersForDate(dateKey);
-            log('Found', allRecords.length, 'records for', dateKey);
             if (!allRecords || allRecords.length === 0) {
-                // No records in cloud, just clear local
                 deleteLocalSchedule(dateKey);
                 return { success: true, message: 'No cloud records' };
             }
-            // Step 3: For EACH record, remove my bunks and update
-            const myBunkSet = new Set(myBunks);
+
             let recordsModified = 0;
             let recordsDeleted = 0;
+
             for (const record of allRecords) {
                 const scheduleData = record.schedule_data || {};
                 const assignments = scheduleData.scheduleAssignments || {};
                 const leagues = scheduleData.leagueAssignments || {};
-                // Count bunks before
-                const bunksBefore = Object.keys(assignments).length;
-                // Remove my bunks from this record
+
                 let modified = false;
                 for (const bunk of myBunks) {
-                    if (assignments[bunk] !== undefined) {
-                        delete assignments[bunk];
-                        modified = true;
-                    }
-                    if (leagues[bunk] !== undefined) {
-                        delete leagues[bunk];
-                    }
+                    if (assignments[bunk] !== undefined) { delete assignments[bunk]; modified = true; }
+                    if (leagues[bunk] !== undefined) { delete leagues[bunk]; }
                 }
-                const bunksAfter = Object.keys(assignments).length;
-                log(`Record ${record.scheduler_name}: ${bunksBefore} → ${bunksAfter} bunks`);
-                if (!modified) {
-                    log('  Skipping - no changes needed');
-                    continue;
-                }
-                // If record is now empty, delete it entirely
-                if (bunksAfter === 0) {
-                    log('  Record now empty, deleting...');
-                    const { error } = await client
-                        .from(CONFIG.TABLE_NAME)
-                        .delete()
-                        .eq('id', record.id);
-                    if (error) {
-                        logError(`  Delete record ${record.id} failed:`, error);
-                    } else {
-                        recordsDeleted++;
-                        log('  ✅ Deleted empty record');
-                    }
+                if (!modified) continue;
+
+                if (Object.keys(assignments).length === 0) {
+                    const { error } = await client.from(CONFIG.TABLE_NAME).delete().eq('id', record.id);
+                    if (error) logError(`Delete record ${record.id} failed:`, error);
+                    else recordsDeleted++;
                 } else {
-                    // Update the record with bunks removed
-                    log(`  Updating record with ${bunksAfter} remaining bunks...`);
-                    
-                    const updatedData = {
-                        ...scheduleData,
-                        scheduleAssignments: assignments,
-                        leagueAssignments: leagues
-                    };
                     const { error } = await client
                         .from(CONFIG.TABLE_NAME)
-                        .update({
-                            schedule_data: updatedData,
-                            updated_at: new Date().toISOString()
-                        })
+                        .update({ schedule_data: { ...scheduleData, scheduleAssignments: assignments, leagueAssignments: leagues }, updated_at: new Date().toISOString() })
                         .eq('id', record.id);
-                    if (error) {
-                        logError(`  Update record ${record.id} failed:`, error);
-                    } else {
-                        recordsModified++;
-                        log('  ✅ Updated record');
-                    }
+                    if (error) logError(`Update record ${record.id} failed:`, error);
+                    else recordsModified++;
                 }
             }
-            log(`Delete complete: ${recordsModified} modified, ${recordsDeleted} deleted`);
-            // Step 4: Reload remaining data and update local storage
+
             const remaining = await loadAllSchedulersForDate(dateKey);
             if (remaining.length > 0) {
-                const merged = mergeSchedules(remaining);
-                setLocalSchedule(dateKey, merged);
-                log('Updated local storage with remaining data:', Object.keys(merged.scheduleAssignments || {}).length, 'bunks');
+                setLocalSchedule(dateKey, mergeSchedules(remaining));
             } else {
                 deleteLocalSchedule(dateKey);
-                log('Cleared local storage - no remaining data');
             }
-            return { 
-                success: true, 
-                recordsModified,
-                recordsDeleted,
-                bunksRemoved: myBunks.length
-            };
+            return { success: true, recordsModified, recordsDeleted, bunksRemoved: myBunks.length };
         } catch (e) {
             logError('deleteMyScheduleOnly exception:', e);
-            return { success: false, error: e.message };
-        }
-    }
-
-    // =========================================================================
-    // VERSIONING
-    // =========================================================================
-    /**
-     * Create a named version of the current schedule.
-     */
-    async function createVersion(dateKey, versionName) {
-        const client = getClient();
-        const campId = getCampId();
-        const userId = getUserId();
-        // Load current data
-        const current = await loadAllSchedulersForDate(dateKey);
-        if (!current || current.length === 0) {
-            return { success: false, error: 'No schedule data to version' };
-        }
-        const merged = mergeSchedules(current);
-        try {
-            const { data, error } = await client
-                .from('schedule_versions')
-                .insert({
-                    camp_id: campId,
-                    date_key: dateKey,
-                    name: versionName,
-                    schedule_data: {
-                        scheduleAssignments: merged.scheduleAssignments,
-                        leagueAssignments: merged.leagueAssignments,
-                        unifiedTimes: serializeUnifiedTimes(merged.unifiedTimes)
-                    },
-                    created_by: userId
-                })
-                .select()
-                .single();
-            if (error) {
-                logError('Create version failed:', error);
-                return { success: false, error: error.message };
-            }
-            log('Created version:', versionName);
-            return { success: true, version: data };
-        } catch (e) {
-            logError('Create version exception:', e);
-            return { success: false, error: e.message };
-        }
-    }
-    /**
-     * Load all versions for a date.
-     */
-    async function loadVersions(dateKey) {
-        const client = getClient();
-        const campId = getCampId();
-        try {
-            const { data, error } = await client
-                .from('schedule_versions')
-                .select('*')
-                .eq('camp_id', campId)
-                .eq('date_key', dateKey)
-                .order('created_at', { ascending: false });
-            if (error) {
-                logError('Load versions failed:', error);
-                return [];
-            }
-            return data || [];
-        } catch (e) {
-            logError('Load versions exception:', e);
-            return [];
-        }
-    }
-    /**
-     * Restore a version.
-     */
-    async function restoreVersion(versionId) {
-        const client = getClient();
-        try {
-            // Load the version
-            const { data: version, error: loadError } = await client
-                .from('schedule_versions')
-                .select('*')
-                .eq('id', versionId)
-                .single();
-            if (loadError || !version) {
-                return { success: false, error: 'Version not found' };
-            }
-            // Save as current schedule
-            const result = await saveSchedule(version.date_key, version.schedule_data, { skipFilter: true });
-            
-            return { success: result.success, dateKey: version.date_key };
-        } catch (e) {
-            logError('Restore version exception:', e);
             return { success: false, error: e.message };
         }
     }
@@ -1029,7 +685,7 @@
         const userId = getUserId();
 
         console.log('═══════════════════════════════════════════════════════');
-        console.log('📅 SCHEDULE DB DIAGNOSTIC v5.4');
+        console.log('📅 SCHEDULE DB DIAGNOSTIC');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date Key:', dateKey);
         console.log('');
@@ -1038,12 +694,12 @@
         console.log('  Camp ID:', campId || '❌ MISSING');
         console.log('  User ID:', userId || '❌ MISSING');
         console.log('');
-        console.log('Permissions (FIXED):');
+        console.log('Permissions:');
         console.log('  Role (CampistryDB):', window.CampistryDB?.getRole?.() || 'unknown');
         console.log('  Role (AccessControl):', window.AccessControl?.getCurrentRole?.() || 'unknown');
         console.log('  Editable Divisions (AccessControl):', window.AccessControl?.getEditableDivisions?.() || []);
         console.log('  Editable Bunks (PermissionsDB):', window.PermissionsDB?.getEditableBunks?.()?.length || 0);
-        console.log('  Editable Bunks (FIXED getMyEditableBunks):', getMyEditableBunks().length);
+        console.log('  Editable Bunks:', getMyEditableBunks().length);
         console.log('');
 
         if (!client || !campId) {
@@ -1118,11 +774,6 @@
         // Merge
         mergeSchedules,
         
-        // Versioning
-        createVersion,
-        loadVersions,
-        restoreVersion,
-        
         // Local storage helpers
         getLocalSchedule,
         setLocalSchedule,
@@ -1154,7 +805,6 @@
         });
     }
 
-    console.log('📅 [ScheduleDB] v5.4 loaded — permission-aware error handling');
-    console.log('   Run: ScheduleDB.diagnose() to check sync status');
+    console.log('📅 [ScheduleDB] loaded');
 
 })();

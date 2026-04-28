@@ -1,40 +1,9 @@
-// =============================================================================
-// supabase_sync.js v6.1 — CAMPISTRY REALTIME SYNC ENGINE
-// =============================================================================
-//
-// INTEGRATES:
-// - Realtime Supabase subscriptions
-// - Debounced auto-save with offline queue
-// - Multi-scheduler sync (from multi_scheduler_sync_master_patch.js)
-// - Hydration flags (from hydration_lock.js, global_bootstrap.js)
-// - Force hydration and empty state handling
-//
-// v6.1 FIXES:
-// - ★ CRITICAL: Subscription memory leak fix - proper channel cleanup
-// - ★ CRITICAL: Offline queue now persisted to localStorage
-// - ★ NEW: Network reconnection handler with exponential backoff
-// - ★ IMPROVED: Better subscription status tracking
-//
-// REPLACES: 
-// - realtime_schedule_sync.js
-// - multi_scheduler_sync_master_patch.js  
-// - hydration_lock.js
-// - global_bootstrap.js
-// - schedule_autoloader.js
-//
-// REQUIRES: supabase_client.js, supabase_schedules.js
-//
-// =============================================================================
+// supabase_sync.js — Realtime sync engine (subscriptions, debounced save, offline queue)
+// Requires: supabase_client.js, supabase_schedules.js
 
 (function() {
     'use strict';
 
-    console.log('🔄 Campistry Sync Engine v6.1 loading...');
-
-    // =========================================================================
-    // MIGRATED FLAGS (from hydration_lock.js and global_bootstrap.js)
-    // =========================================================================
-    
     if (typeof window.__CAMPISTRY_HYDRATED__ === 'undefined') {
         window.__CAMPISTRY_HYDRATED__ = false;
     }
@@ -61,7 +30,7 @@
         MAX_RETRY_ATTEMPTS: 5,
         RETRY_DELAY_MS: 2000,
         DEBUG: false,
-        OFFLINE_QUEUE_KEY: 'campistry_offline_queue_v1',  // ★ NEW: Persistent queue
+        OFFLINE_QUEUE_KEY: 'campistry_offline_queue_v1',
         RECONNECT_BASE_DELAY_MS: 1000,
         RECONNECT_MAX_DELAY_MS: 30000
     };
@@ -75,7 +44,7 @@
     let _isInitialized = false;
     let _initPromise = null;
     let _subscription = null;
-    let _subscriptionChannel = null;  // ★ NEW: Track channel separately
+    let _subscriptionChannel = null;
     let _currentDateKey = null;
     let _isOnline = navigator.onLine;
     let _syncStatus = 'idle';
@@ -86,8 +55,8 @@
     let _remoteChangeCallbacks = [];
     let _statusChangeCallbacks = [];
     let _initialHydrationDone = false;
-    let _reconnectAttempts = 0;  // ★ NEW: Track reconnection attempts
-    let _reconnectTimeout = null;  // ★ NEW: Reconnect timer
+    let _reconnectAttempts = 0;
+    let _reconnectTimeout = null;
 
     // =========================================================================
     // LOGGING
@@ -115,15 +84,14 @@
     }
 
     // =========================================================================
-    // ★★★ NEW: OFFLINE QUEUE PERSISTENCE ★★★
+    // OFFLINE QUEUE PERSISTENCE
     // =========================================================================
-    
+
     function loadOfflineQueue() {
         try {
             const persisted = localStorage.getItem(CONFIG.OFFLINE_QUEUE_KEY);
             if (persisted) {
                 _offlineQueue = JSON.parse(persisted);
-                log('Loaded offline queue:', _offlineQueue.length, 'items');
             }
         } catch (e) {
             logError('Failed to load offline queue:', e);
@@ -154,78 +122,64 @@
 
     function forceHydrateFromLocalStorage(dateKey, forceOverwrite = false) {
         if (!dateKey) dateKey = getCurrentDateKey();
-        
-        log(`Force hydrating for date: ${dateKey}, forceOverwrite: ${forceOverwrite}`);
-        
+
         try {
             const raw = localStorage.getItem(DAILY_DATA_KEY);
             if (!raw) {
-                log('No data in localStorage - clearing window globals');
                 window.scheduleAssignments = {};
                 window.leagueAssignments = {};
                 return false;
             }
-            
+
             const dailyData = JSON.parse(raw);
             const dateData = dailyData[dateKey];
-            
+
             if (!dateData) {
-                log('No data for date:', dateKey, '- clearing window globals');
                 window.scheduleAssignments = {};
                 window.leagueAssignments = {};
                 return false;
             }
-            
+
             let hydrated = false;
-            
-            // Hydrate scheduleAssignments
+
             if (dateData.scheduleAssignments) {
-                const localBunkCount = Object.keys(dateData.scheduleAssignments).length;
                 const windowBunkCount = Object.keys(window.scheduleAssignments || {}).length;
-                
                 const localGenTime = window._localGenerationTimestamp || 0;
                 const timeSinceGen = Date.now() - localGenTime;
                 if ((forceOverwrite && timeSinceGen > 60000) || windowBunkCount === 0) {
                     window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
                     hydrated = true;
-                    log('✅ Hydrated scheduleAssignments:', localBunkCount, 'bunks');
-                } else if (timeSinceGen <= 60000) {
-                    log('⏭️ Skipped scheduleAssignments hydration — local generation is fresh');
                 }
             } else {
                 window.scheduleAssignments = window.scheduleAssignments || {};
             }
-            
-            // Hydrate leagueAssignments
+
             if (dateData.leagueAssignments) {
                 if (forceOverwrite || !window.leagueAssignments || Object.keys(window.leagueAssignments).length === 0) {
                     window.leagueAssignments = JSON.parse(JSON.stringify(dateData.leagueAssignments));
-                    log('✅ Hydrated leagueAssignments');
                     hydrated = true;
                 }
             } else {
                 window.leagueAssignments = window.leagueAssignments || {};
             }
-            
-            // ★★★ FIX: Hydrate unifiedTimes if present ★★★
+
             if (dateData.unifiedTimes && Array.isArray(dateData.unifiedTimes) && dateData.unifiedTimes.length > 0) {
                 if (forceOverwrite || !window.unifiedTimes || window.unifiedTimes.length === 0) {
                     window.unifiedTimes = dateData.unifiedTimes;
-                    log('✅ Hydrated unifiedTimes:', window.unifiedTimes.length, 'slots');
                     hydrated = true;
                 }
             }
-            
-            // Hydrate divisionTimes if present — but ONLY if not freshly generated locally
-            // A local generation sets _localGenerationTimestamp. If it's recent (< 60s),
-            // cloud data is stale and must NOT overwrite the local divisionTimes.
+
+            // Only hydrate divisionTimes if no fresh local generation is active.
+            // _localGenerationTimestamp is set when auto-build runs; cloud data
+            // would be stale relative to the freshly-generated per-bunk slots.
             if (dateData.divisionTimes && window.DivisionTimesSystem?.deserialize) {
                 const localGenTime = window._localGenerationTimestamp || 0;
                 const timeSinceGen = Date.now() - localGenTime;
                 if (timeSinceGen > 60000 || !window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
                     window.divisionTimes = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
-                    // Reattach _perBunkSlots from sidecar — JSON.stringify strips custom
-                    // array properties, so per-bunk data is stored separately.
+                    // Reattach _perBunkSlots from sidecar field — JSON.stringify strips
+                    // custom array properties, so they are stored separately.
                     if (dateData._perBunkSlotsData) {
                         Object.keys(dateData._perBunkSlotsData).forEach(function(g) {
                             if (window.divisionTimes[g]) {
@@ -234,9 +188,6 @@
                             }
                         });
                     }
-                    log('✅ Hydrated divisionTimes from cloud');
-                } else {
-                    log('⏭️ Skipped divisionTimes hydration — local generation is fresh (' + Math.round(timeSinceGen / 1000) + 's ago)');
                 }
             }
             
@@ -288,10 +239,7 @@
 
    async function refreshMultiSchedulerView(dateKey, forceOverwrite = false) {
         if (!dateKey) dateKey = getCurrentDateKey();
-        
-        log('Refreshing Multi-Scheduler view for:', dateKey);
-        
-        // ★★★ v6.2 FIX: Load from CLOUD first so we get all schedulers' data ★★★
+
         try {
             if (window.ScheduleDB?.loadSchedule && navigator.onLine) {
                 const cloudResult = await window.ScheduleDB.loadSchedule(dateKey);
@@ -320,43 +268,25 @@
                         allData[dateKey]._perBunkSlotsData = _cloudPbs;
                     }
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                    log('☁️ Updated localStorage from cloud:', 
-                        Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks');
                 }
             }
         } catch (e) {
-            log('Cloud refresh failed, using localStorage:', e.message);
             if (typeof window.showToast === 'function') window.showToast('Could not reach cloud — showing locally cached schedule.', 'error');
         }
-        
-        // Step 1: Force hydrate from localStorage (now contains cloud data)
+
         forceHydrateFromLocalStorage(dateKey, forceOverwrite);
-        
-        // Step 2: Ensure empty state for unscheduled divisions
         ensureEmptyStateForUnscheduledDivisions();
-        
-        // Step 3: Refresh Multi-Scheduler System if available
+
         if (window.MultiSchedulerSystem?.refresh) {
-            try {
-                await window.MultiSchedulerSystem.refresh();
-                log('✅ MSS refresh complete');
-            } catch (err) {
-                console.warn('[Sync] MSS refresh error:', err);
-            }
+            try { await window.MultiSchedulerSystem.refresh(); } catch (err) { console.warn('[Sync] MSS refresh error:', err); }
         } else if (window.MultiSchedulerSystem?.initializeView) {
             try {
                 await window.MultiSchedulerSystem.initializeView(dateKey);
                 window.MultiSchedulerSystem.applyBlockingToGrid?.();
-            } catch (err) {
-                console.warn('[Sync] MSS init error:', err);
-            }
+            } catch (err) { console.warn('[Sync] MSS init error:', err); }
         }
-        
-        // Step 4: Update the table
-        if (window.updateTable) {
-            window.updateTable();
-            log('✅ Table updated');
-        }
+
+        if (window.updateTable) window.updateTable();
     }
 
     // =========================================================================
@@ -367,7 +297,7 @@
         const dateKey = getCurrentDateKey();
         
         console.log('═══════════════════════════════════════════════════════');
-        console.log('🔍 SCHEDULE SYNC DIAGNOSIS v6.1');
+        console.log('🔍 SCHEDULE SYNC DIAGNOSIS');
         console.log('═══════════════════════════════════════════════════════');
         console.log('Date:', dateKey);
         console.log('Initial hydration done:', _initialHydrationDone);
@@ -484,7 +414,7 @@
             syncing: '#3b82f6',
             error: '#ef4444',
             offline: '#6b7280',
-            reconnecting: '#8b5cf6'  // ★ NEW: Purple for reconnecting
+            reconnecting: '#8b5cf6'
         };
 
         indicator.style.background = colors[status] || colors.idle;
@@ -560,59 +490,41 @@
     }
 
     // =========================================================================
-    // ★★★ FIXED: REALTIME SUBSCRIPTION WITH PROPER CLEANUP ★★★
+    // REALTIME SUBSCRIPTION
     // =========================================================================
 
     async function subscribe(dateKey) {
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
 
-        if (!client || !campId) {
-            log('Cannot subscribe: no client or camp ID');
-            return false;
-        }
+        if (!client || !campId) return false;
 
-        // ★★★ FIX: Proper cleanup before new subscription ★★★
         if (_subscription || _subscriptionChannel) {
-            log('Cleaning up existing subscription before creating new one...');
             await unsubscribe();
-            // Give Supabase a moment to clean up
             await new Promise(r => setTimeout(r, 100));
         }
 
         _currentDateKey = dateKey;
 
         try {
-            const channelName = `schedules-${campId}-${dateKey}-${Date.now()}`;  // Unique channel name
-            log('Creating subscription channel:', channelName);
-            
+            const channelName = `schedules-${campId}-${dateKey}-${Date.now()}`;
             _subscriptionChannel = client.channel(channelName);
-            
+
             _subscription = _subscriptionChannel
-                .on('postgres_changes', 
-                    {
-                        event: '*',
-                        schema: 'public',
-                        table: 'daily_schedules',
-                        filter: `camp_id=eq.${campId}`
-                    },
+                .on('postgres_changes',
+                    { event: '*', schema: 'public', table: 'daily_schedules', filter: `camp_id=eq.${campId}` },
                     handleRealtimeChange
                 )
                 .subscribe((status) => {
-                    log('Subscription status:', status);
                     if (status === 'SUBSCRIBED') {
                         updateStatus('idle');
-                        _reconnectAttempts = 0;  // Reset on successful subscription
-                    } else if (status === 'CHANNEL_ERROR') {
-                        updateStatus('error');
-                        scheduleReconnect();  // ★ NEW: Auto-reconnect on error
-                    } else if (status === 'TIMED_OUT') {
+                        _reconnectAttempts = 0;
+                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
                         updateStatus('error');
                         scheduleReconnect();
                     }
                 });
 
-            log('Subscribed to', dateKey);
             return true;
 
         } catch (e) {
@@ -622,87 +534,57 @@
         }
     }
 
-    // ★★★ FIXED: Proper unsubscribe with channel removal ★★★
     async function unsubscribe() {
         if (_subscriptionChannel) {
             try {
-                log('Removing subscription channel...');
                 const client = window.CampistryDB?.getClient?.();
-                if (client) {
-                    await client.removeChannel(_subscriptionChannel);
-                }
-            } catch (e) {
-                log('Channel removal error (non-fatal):', e.message);
-            }
+                if (client) await client.removeChannel(_subscriptionChannel);
+            } catch (e) { /* non-fatal */ }
             _subscriptionChannel = null;
         }
-        
         if (_subscription) {
-            try {
-                await _subscription.unsubscribe();
-            } catch (e) {
-                log('Unsubscribe error (non-fatal):', e.message);
-            }
+            try { await _subscription.unsubscribe(); } catch (e) { /* non-fatal */ }
             _subscription = null;
         }
-        
         _currentDateKey = null;
     }
 
-    // ★★★ NEW: Network Reconnection Handler ★★★
     function scheduleReconnect() {
-        if (_reconnectTimeout) {
-            clearTimeout(_reconnectTimeout);
-        }
-        
+        if (_reconnectTimeout) clearTimeout(_reconnectTimeout);
+
         _reconnectAttempts++;
-        
-        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+
+        // Exponential backoff capped at RECONNECT_MAX_DELAY_MS
         const delay = Math.min(
             CONFIG.RECONNECT_BASE_DELAY_MS * Math.pow(2, _reconnectAttempts - 1),
             CONFIG.RECONNECT_MAX_DELAY_MS
         );
-        
-        log(`Scheduling reconnect attempt ${_reconnectAttempts} in ${delay}ms`);
+
         updateStatus('reconnecting');
-        
+
         _reconnectTimeout = setTimeout(async () => {
-            if (!_isOnline) {
-                log('Still offline, skipping reconnect');
-                return;
-            }
-            
-            log(`Reconnect attempt ${_reconnectAttempts}...`);
-            
+            if (!_isOnline) return;
+
             const dateKey = _currentDateKey || getCurrentDateKey();
             const success = await subscribe(dateKey);
-            
-            if (success) {
-                log('✅ Reconnection successful');
-                
-                // Process any queued saves
-                await processOfflineQueue();
-                
-                // ★★★ AUTO MODE GUARD: Skip cloud refresh if local schedule is fresh ★★★
-                var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
-                var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
-                var _hasFreshGeneration = window._localGenerationTimestamp && (Date.now() - window._localGenerationTimestamp) < 300000; // 5 min
 
-                if (_isAutoMode && (_hasLivePerBunk || _hasFreshGeneration)) {
-                    log('Skipping cloud refresh on reconnect — local schedule is fresh');
-                } else {
-                    // Refresh data from cloud (safe — no per-bunk data to lose)
+            if (success) {
+                await processOfflineQueue();
+
+                // Skip cloud refresh if auto-build per-bunk data or a fresh generation is active
+                const isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+                const hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(dt => dt?._isPerBunk);
+                const hasFreshGeneration = window._localGenerationTimestamp && (Date.now() - window._localGenerationTimestamp) < 300000;
+
+                if (!isAutoMode || (!hasLivePerBunk && !hasFreshGeneration)) {
                     if (window.ScheduleDB?.loadSchedule) {
                         const result = await window.ScheduleDB.loadSchedule(dateKey);
-                        if (result?.success && result.data) {
-                            refreshMultiSchedulerView(dateKey, true);
-                        }
+                        if (result?.success && result.data) refreshMultiSchedulerView(dateKey, true);
                     }
                 }
             } else if (_reconnectAttempts < CONFIG.MAX_RETRY_ATTEMPTS) {
                 scheduleReconnect();
             } else {
-                log('Max reconnect attempts reached');
                 updateStatus('error');
                 showSyncToast('⚠️ Connection lost - refresh page', true);
             }
@@ -711,18 +593,9 @@
 
     function handleRealtimeChange(payload) {
         const myUserId = window.CampistryDB?.getUserId?.();
-        
-        if (payload.new?.scheduler_id === myUserId) {
-            log('Ignoring own change');
-            return;
-        }
 
-        if (payload.new?.date_key !== _currentDateKey) {
-            log('Ignoring change for different date:', payload.new?.date_key);
-            return;
-        }
-
-        log('Remote change received:', payload.eventType, 'from', payload.new?.scheduler_name);
+        if (payload.new?.scheduler_id === myUserId) return;
+        if (payload.new?.date_key !== _currentDateKey) return;
 
         _lastSyncTime = Date.now();
 
@@ -736,27 +609,32 @@
         });
 
         showSyncToast(`📥 Update from ${payload.new?.scheduler_name || 'another scheduler'}`);
-        
-        // ★★★ AUTO MODE GUARD: Don't refresh from cloud if _perBunkSlots are live ★★★
-        var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
-        var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
-        
-        if (_isAutoMode && _hasLivePerBunk) {
-            log('Skipping remote refresh — auto mode _perBunkSlots active in memory');
-        } else {
-            // Auto-refresh after remote change (safe — no per-bunk data to lose)
-            setTimeout(() => {
-                refreshMultiSchedulerView(_currentDateKey, true);
-            }, 500);
+
+        // Don't overwrite live auto-mode per-bunk data with cloud data
+        const isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+        const hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(dt => dt?._isPerBunk);
+
+        if (!isAutoMode || !hasLivePerBunk) {
+            setTimeout(() => refreshMultiSchedulerView(_currentDateKey, true), 500);
         }
     }
 
     // =========================================================================
-    // ★★★ FIXED: SAVE QUEUE WITH PERSISTENT OFFLINE QUEUE ★★★
+    // SAVE QUEUE
     // =========================================================================
 
     function queueSave(dateKey, data) {
-        _pendingSave = { dateKey, data, timestamp: Date.now() };
+        // Ensure all required schedule fields are present before queuing.
+        // Guards against incomplete data surviving an offline period.
+        const safeData = {
+            scheduleAssignments: data.scheduleAssignments || {},
+            leagueAssignments:   data.leagueAssignments   || {},
+            divisionTimes:       data.divisionTimes       || {},
+            isRainyDay:          data.isRainyDay          ?? false,
+            rainyDayStartTime:   data.rainyDayStartTime   ?? null,
+            ...data
+        };
+        _pendingSave = { dateKey, data: safeData, timestamp: Date.now() };
 
         if (_saveTimeout) {
             clearTimeout(_saveTimeout);
@@ -776,9 +654,8 @@
         _pendingSave = null;
 
         if (!_isOnline) {
-            log('Offline - queueing for later');
             _offlineQueue.push({ dateKey, data, timestamp: Date.now() });
-            saveOfflineQueue();  // ★★★ FIX: Persist queue ★★★
+            saveOfflineQueue();
             updateStatus('offline');
             showSyncToast('📴 Saved offline - will sync when connected');
             return;
@@ -786,25 +663,22 @@
 
         try {
             updateStatus('syncing');
-
             const result = await window.ScheduleDB?.saveSchedule?.(dateKey, data);
 
             if (result?.success) {
                 _lastSyncTime = Date.now();
                 updateStatus('idle');
-                log('Save complete');
             } else {
                 logError('Save failed:', result?.error);
                 updateStatus('error');
                 _offlineQueue.push({ dateKey, data, timestamp: Date.now(), retries: 0 });
-                saveOfflineQueue();  // ★★★ FIX: Persist queue ★★★
+                saveOfflineQueue();
             }
-
         } catch (e) {
             logError('Save exception:', e);
             updateStatus('error');
             _offlineQueue.push({ dateKey, data, timestamp: Date.now(), retries: 0 });
-            saveOfflineQueue();  // ★★★ FIX: Persist queue ★★★
+            saveOfflineQueue();
         }
     }
 
@@ -817,11 +691,10 @@
     }
 
     // =========================================================================
-    // ★★★ FIXED: OFFLINE QUEUE PROCESSING WITH PERSISTENCE ★★★
+    // OFFLINE QUEUE PROCESSING
     // =========================================================================
 
     function handleOnline() {
-        log('Back online');
         _isOnline = true;
         updateStatus('idle');
         
@@ -836,24 +709,20 @@
     }
 
     function handleOffline() {
-        log('Gone offline');
         _isOnline = false;
         updateStatus('offline');
     }
 
     async function processOfflineQueue() {
-        // Load from persistence first
         loadOfflineQueue();
-        
         if (_offlineQueue.length === 0) return;
 
-        log('Processing offline queue:', _offlineQueue.length, 'items');
         updateStatus('syncing');
         showSyncToast(`🔄 Syncing ${_offlineQueue.length} queued change(s)...`);
 
         const queue = [..._offlineQueue];
         _offlineQueue = [];
-        saveOfflineQueue();  // Clear persisted queue
+        saveOfflineQueue();
 
         let successCount = 0;
         let failCount = 0;
@@ -868,7 +737,6 @@
                         _offlineQueue.push(item);
                         failCount++;
                     } else {
-                        logError('Gave up on save after', item.retries, 'retries');
                         failCount++;
                     }
                 } else {
@@ -908,7 +776,6 @@
         if (_syncStatus === status) return;
         
         _syncStatus = status;
-        log('Status:', status);
 
         updateStatusIndicator(status);
 
@@ -932,7 +799,7 @@
             initialHydrationDone: _initialHydrationDone,
             reconnectAttempts: _reconnectAttempts,
             subscriptionActive: isActive,
-            isSubscribed: isActive  // ★ Alias for compatibility
+            isSubscribed: isActive
         };
     }
 
@@ -1007,30 +874,21 @@
     // EVENT LISTENERS
     // =========================================================================
 
-    // After cloud hydration, force hydrate window globals
-    window.addEventListener('campistry-cloud-hydrated', (e) => {
-        console.log('[Sync] Cloud hydration event received');
-        
+    window.addEventListener('campistry-cloud-hydrated', () => {
         setTimeout(() => {
             const dateKey = getCurrentDateKey();
             const hydrated = forceHydrateFromLocalStorage(dateKey, true);
-            
             if (hydrated) {
-                console.log('[Sync] ✅ Window globals updated from localStorage');
                 ensureEmptyStateForUnscheduledDivisions();
                 if (window.updateTable) window.updateTable();
             }
-            
             _initialHydrationDone = true;
             window.__CAMPISTRY_HYDRATED__ = true;
         }, 300);
     });
 
-    // After date change, ensure proper hydration
     window.addEventListener('campistry-date-changed', (e) => {
         const dateKey = e.detail?.dateKey || getCurrentDateKey();
-        console.log('[Sync] Date changed to:', dateKey);
-        
         setTimeout(() => {
             forceHydrateFromLocalStorage(dateKey, true);
             ensureEmptyStateForUnscheduledDivisions();
@@ -1038,9 +896,7 @@
         }, 100);
     });
 
-    // Listen for realtime updates
-    window.addEventListener('campistry-realtime-update', (e) => {
-        console.log('[Sync] Realtime update event received');
+    window.addEventListener('campistry-realtime-update', () => {
         refreshMultiSchedulerView(getCurrentDateKey(), true);
     });
 
@@ -1052,32 +908,25 @@
         if (_isInitialized) return;
         if (_initPromise) return _initPromise;
         _initPromise = (async () => {
-            // Restore generation timestamp so a fresh schedule isn't overwritten
-            // by a cloud sync immediately after a page reload
+            // Restore generation timestamp across page reloads so a fresh schedule
+            // isn't overwritten by cloud sync within the first 5 minutes.
             if (!window._localGenerationTimestamp) {
                 const stored = parseInt(localStorage.getItem('campistry_gen_ts') || '0', 10);
-                if (stored && (Date.now() - stored) < 300000) { // protect for up to 5 minutes
+                if (stored && (Date.now() - stored) < 300000) {
                     window._localGenerationTimestamp = stored;
-                    log('Restored generation timestamp from localStorage:', new Date(stored).toLocaleTimeString());
                 }
             }
 
-            if (window.CampistryDB?.ready) {
-                await window.CampistryDB.ready;
-            }
+            if (window.CampistryDB?.ready) await window.CampistryDB.ready;
 
             loadOfflineQueue();
-
             window.addEventListener('online', handleOnline);
             window.addEventListener('offline', handleOffline);
-
             createStatusIndicator();
 
             _isInitialized = true;
-            log('Initialized');
 
             if (_offlineQueue.length > 0 && _isOnline) {
-                log('Found persisted offline queue, processing...');
                 setTimeout(processOfflineQueue, 2000);
             }
 
@@ -1086,14 +935,11 @@
         return _initPromise;
     }
 
-    // Initialize after RBAC is ready
     function initAfterRBAC() {
         if (_initialHydrationDone) return;
         const waitForRBAC = setInterval(() => {
             if (!window.AccessControl?.isInitialized) return;
-            
             clearInterval(waitForRBAC);
-            console.log('[Sync] RBAC ready, performing initial hydration');
             
             const dateKey = getCurrentDateKey();
             forceHydrateFromLocalStorage(dateKey, true);
@@ -1118,7 +964,6 @@
     // EXPORTS
     // =========================================================================
 
-    // Main ScheduleSync object
     window.ScheduleSync = {
         initialize,
         
@@ -1146,7 +991,6 @@
         // Toast
         showToast: showSyncToast,
         
-        // ★ EXPOSED FOR VERIFICATION - Fix 6
         scheduleReconnect,
         get _reconnectAttempts() { return _reconnectAttempts; },
         
@@ -1156,7 +1000,6 @@
         get offlineQueueLength() { return _offlineQueue.length; }
     };
 
-    // Multi-scheduler sync exports (globally accessible)
     window.forceHydrateFromLocalStorage = forceHydrateFromLocalStorage;
     window.ensureEmptyStateForUnscheduledDivisions = ensureEmptyStateForUnscheduledDivisions;
     window.refreshMultiSchedulerView = refreshMultiSchedulerView;
@@ -1179,7 +1022,6 @@
         });
     }
 
-    // Fallback initialization
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             setTimeout(initialize, 500);
@@ -1190,11 +1032,6 @@
         setTimeout(initAfterRBAC, 600);
     }
 
-    console.log('🔄 Campistry Sync Engine v6.1 loaded');
-    console.log('   ✅ Realtime subscriptions (with proper cleanup)');
-    console.log('   ✅ Multi-scheduler sync integrated');
-    console.log('   ✅ Persistent offline queue');
-    console.log('   ✅ Network reconnection handler');
-    console.log('   Run: diagnoseScheduleSync() to check status');
+    console.log('🔄 [Sync] loaded');
 
 })();
