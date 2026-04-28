@@ -5763,9 +5763,13 @@
                     var gbMeta = bunkMeta[gradeBunks[gb2]];
                     var gbGaps = findGaps(gbMeta.template, gbMeta.gradeStart, gbMeta.gradeEnd);
                     for (var gg2 = 0; gg2 < gbGaps.length; gg2++) {
-                        var gPlan = planGapSplit(gbGaps[gg2].start, gbGaps[gg2].end, gbMeta.sportCeiling, gbMeta.fillMinDur);
-                        for (var gp = 0; gp < gPlan.length; gp++) {
-                            allGapBlocks.push({ bunk: gradeBunks[gb2], start: gPlan[gp].start, end: gPlan[gp].end, filled: false });
+                        var _gbSubGaps = splitGapAtPeriods(gbGaps[gg2], gbMeta.grade);
+                        for (var _gbSi = 0; _gbSi < _gbSubGaps.length; _gbSi++) {
+                            var _gbSub = _gbSubGaps[_gbSi];
+                            var gPlan = planGapSplit(_gbSub.start, _gbSub.end, gbMeta.sportCeiling, gbMeta.fillMinDur);
+                            for (var gp = 0; gp < gPlan.length; gp++) {
+                                allGapBlocks.push({ bunk: gradeBunks[gb2], start: gPlan[gp].start, end: gPlan[gp].end, filled: false });
+                            }
                         }
                     }
                 }
@@ -6128,6 +6132,11 @@
                 tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
 
                 var remainingGaps = findGaps(tmpl, fMeta.gradeStart, fMeta.gradeEnd);
+                var _rgPeriodSplit = [];
+                for (var _rgi = 0; _rgi < remainingGaps.length; _rgi++) {
+                    splitGapAtPeriods(remainingGaps[_rgi], fMeta.grade).forEach(function(s) { _rgPeriodSplit.push(s); });
+                }
+                remainingGaps = _rgPeriodSplit;
                 for (var rg = 0; rg < remainingGaps.length; rg++) {
                     var rgap = remainingGaps[rg];
                     var gapSize = rgap.end - rgap.start;
@@ -6375,6 +6384,12 @@
                 vTmpl = bunkTimelines[vBunk];
 
                 var vGaps = findGaps(vTmpl, vMeta.gradeStart, vMeta.gradeEnd);
+                // Split vGaps at period boundaries — prevents strategies 1/2 from extending blocks across periods
+                var _vGapsSplit = [];
+                vGaps.forEach(function(vg) {
+                    splitGapAtPeriods(vg, vMeta.grade).forEach(function(s) { _vGapsSplit.push(s); });
+                });
+                vGaps = _vGapsSplit;
                 // ★ v10.1: PERFECTION PASS — fill remaining gaps by extending neighbors or creating blocks
                 if (vGaps.length > 0) {
                     for (var vgi = 0; vgi < vGaps.length; vgi++) {
