@@ -75,6 +75,7 @@
     let _datePickerHooked = false;
     let _datePickerRetries = 0;
     let _scheduleCloudLoadDone = false;
+    let _remoteChangeDebounce = null;
     
     // ★★★ v6.4: Deduplication state for save operations ★★★
     let _lastSaveKey = null;
@@ -869,8 +870,10 @@
             if (secondaryDateKeys.length > 0 && window.ScheduleDB?.saveSchedule) {
                 log(`[saveGlobalSettings] Syncing ${secondaryDateKeys.length} secondary date(s) to cloud...`);
 
-                secondaryDateKeys.forEach((dk, index) => {
-                    setTimeout(() => {
+                // Use Promise.all so secondary saves complete before the page can close.
+                // Previously used setTimeout stagger which would silently drop saves on navigation.
+                Promise.all(
+                    secondaryDateKeys.map(dk =>
                         window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
                             .then(r => {
                                 if (r?.success) {
@@ -879,9 +882,9 @@
                                     console.warn(`  ⚠️ Secondary save failed: ${dk}`, r?.error);
                                 }
                             })
-                            .catch(e => console.warn(`  ⚠️ Secondary save error: ${dk}`, e.message));
-                    }, (index + 1) * 500); // 500ms stagger
-                });
+                            .catch(e => console.warn(`  ⚠️ Secondary save error: ${dk}`, e.message))
+                    )
+                );
             }
 
             return true;
@@ -1439,13 +1442,27 @@
                 console.log('🔗 Skipping remote merge - post-edit in progress');
                 return;
             }
-            
+
             // ★★★ v6.9 FIX: Skip during active generation ★★★
             if (window._generationInProgress) {
                 console.log('🔗 Skipping remote merge - generation in progress');
                 return;
             }
-            
+
+            // Debounce: if multiple remote changes arrive in quick succession,
+            // only process the last one to avoid concurrent conflicting loads
+            if (_remoteChangeDebounce) {
+                clearTimeout(_remoteChangeDebounce);
+            }
+            _remoteChangeDebounce = setTimeout(() => {
+                _remoteChangeDebounce = null;
+                _processRemoteChange(change);
+            }, 400);
+        });
+        console.log('🔗 Remote change hook installed');
+    }
+
+    function _processRemoteChange(change) {
             console.log('🔗 Remote change received:', change.type, 'from', change.scheduler);
 
             if (window.ScheduleDB?.loadSchedule && change.dateKey) {
@@ -1566,9 +1583,6 @@
                     }
                 });
             }
-        });
-
-        console.log('🔗 Remote change hook installed');
     }
 
     // =========================================================================

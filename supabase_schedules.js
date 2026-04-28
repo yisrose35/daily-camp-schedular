@@ -441,7 +441,11 @@
                 .eq('date_key', dateKey);
             if (error) {
                 logError('Query error:', error);
-                if (typeof window.showToast === 'function') window.showToast('Failed to load schedule data — check your connection.', 'error');
+                if (isPermissionError(error)) {
+                    await handlePermissionError('loadAllSchedulersForDate', error);
+                } else {
+                    if (typeof window.showToast === 'function') window.showToast('Failed to load schedule data — check your connection.', 'error');
+                }
                 return [];
             }
             log(`Loaded ${data?.length || 0} records for ${dateKey}`);
