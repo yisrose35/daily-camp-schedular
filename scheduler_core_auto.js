@@ -9261,6 +9261,41 @@
                             return false;
                         };
 
+                        // Detect gaps between a proposed placement and bell-schedule period
+                        // boundaries that are too small to fill. E.g. placing Lice at 11:00
+                        // when the period starts at 10:50 leaves a 10-min dead zone that no
+                        // activity can fill — so that position must be rejected.
+                        // Any existing block already occupying [periodStart, t) "extends" the
+                        // lead wall, so only truly empty leading/trailing gaps are penalized.
+                        const wouldCreatePeriodBoundaryGap = (bunk, grade, t, tEnd) => {
+                            const periods = (window.campPeriods || {})[grade];
+                            if (!periods || !periods.length) return false;
+                            const tl = bunkTimelines[bunk] || [];
+                            for (let _pbpi = 0; _pbpi < periods.length; _pbpi++) {
+                                const p = periods[_pbpi];
+                                if (p.startMin > t || p.endMin < tEnd) continue; // block must sit inside period
+                                // Leading gap: treat period start as a wall; existing blocks extend it
+                                let leadWall = p.startMin;
+                                for (let _bi = 0; _bi < tl.length; _bi++) {
+                                    const blk = tl[_bi];
+                                    if (!blk) continue;
+                                    const bEnd = blk.endMin != null ? blk.endMin : blk._endMin;
+                                    if (bEnd != null && bEnd > leadWall && bEnd <= t) leadWall = bEnd;
+                                }
+                                if (t - leadWall > 0 && t - leadWall < _MIN_FILLABLE) return true;
+                                // Trailing gap: treat period end as a wall; existing blocks shrink it
+                                let trailWall = p.endMin;
+                                for (let _bi = 0; _bi < tl.length; _bi++) {
+                                    const blk = tl[_bi];
+                                    if (!blk) continue;
+                                    const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
+                                    if (bStart != null && bStart >= tEnd && bStart < trailWall) trailWall = bStart;
+                                }
+                                if (trailWall - tEnd > 0 && trailWall - tEnd < _MIN_FILLABLE) return true;
+                            }
+                            return false;
+                        };
+
                         // Sequence constraint: the rotation event must be adjacent to
                         // another activity (e.g. water slides right before/after swim
                         // so campers stay in bathing suits). Hard preference when set.
@@ -9293,7 +9328,7 @@
                             const tryWindow = (t, tEnd) => {
                                 if (tEnd > winEnd || t < winStart) return false;
                                 if (placements.some(p => t < p.endMin && tEnd > p.startMin)) return false;
-                                if (bunks.some(b => wouldCreateSmallGapForBunk(b, t, tEnd))) return false;
+                                if (bunks.some(b => wouldCreateSmallGapForBunk(b, t, tEnd) || wouldCreatePeriodBoundaryGap(b, grade, t, tEnd))) return false;
                                 return bunks.every(b => isWindowFreeForBunk(t, tEnd, b));
                             };
 
@@ -9531,7 +9566,8 @@
                                             });
                                         for (const s of _adjSlots) {
                                             if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
-                                                !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
+                                                !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
+                                                !wouldCreatePeriodBoundaryGap(bunk, grade, s.startMin, s.endMin)) {
                                                 _chosenSlot = s; break;
                                             }
                                         }
@@ -9544,7 +9580,8 @@
                                         (s.ownerGrade === null || s.ownerGrade === grade) &&
                                         s.usedCount < _evtConcurrency &&
                                         isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
-                                        !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)
+                                        !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
+                                        !wouldCreatePeriodBoundaryGap(bunk, grade, s.startMin, s.endMin)
                                     ) || null;
                                 }
 
