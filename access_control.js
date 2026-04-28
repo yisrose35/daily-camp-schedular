@@ -124,14 +124,14 @@
             
             // Validate: same user, not stale (max 30 minutes)
             if (cache.userId !== currentUserId) {
-                console.log("🔐 Cache userId mismatch, ignoring");
+                debugLog("Cache userId mismatch, ignoring");
                 sessionStorage.removeItem('campistry_rbac_cache');
                 return false;
             }
-            
+
             const ageMinutes = (Date.now() - cache.cachedAt) / 60000;
             if (ageMinutes > 30) {
-                console.log("🔐 Cache expired (" + Math.round(ageMinutes) + "m), ignoring");
+                debugLog("Cache expired (" + Math.round(ageMinutes) + "m), ignoring");
                 sessionStorage.removeItem('campistry_rbac_cache');
                 return false;
             }
@@ -469,8 +469,8 @@
     // ⭐ FIXED v3.6: Check team membership FIRST, then camp ownership
     // =========================================================================
     async function determineUserContext() {
-        console.log("🔐 Determining user context...");
-        
+        debugLog("Determining user context...");
+
         // =====================================================================
         // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
         // =====================================================================
@@ -481,13 +481,9 @@
                 .eq('user_id', _currentUser.id)
                 .not('accepted_at', 'is', null)
                 .maybeSingle();
-            
-            console.log("🔐 Team member check result:", { 
-                found: !!memberData, 
-                role: memberData?.role,
-                error: error?.message 
-            });
-            
+
+            debugLog("Team member check:", { found: !!memberData, role: memberData?.role });
+
             if (memberData && !error) {
                 console.log("🔐 ✅ User IS a team member:", memberData.role);
                 _currentRole = memberData.role || ROLES.VIEWER;
@@ -510,9 +506,9 @@
                 localStorage.setItem('campistry_auth_user_id', _currentUser.id);
                 
                 if (_userSubdivisionIds.length > 0) {
-                    console.log("🔐 User has subdivision assignments:", _userSubdivisionIds);
+                    debugLog("User has subdivision assignments:", _userSubdivisionIds);
                 } else if (_directDivisionAssignments.length > 0) {
-                    console.log("🔐 User has direct division assignments:", _directDivisionAssignments);
+                    debugLog("User has direct division assignments:", _directDivisionAssignments);
                 } else if (_currentRole === ROLES.SCHEDULER) {
                     console.warn("🔐 ⚠️ SCHEDULER HAS NO DIVISION ASSIGNMENTS!");
                 }
@@ -642,7 +638,7 @@
             }
 
             _subdivisions = data || [];
-            console.log("🔐 Loaded subdivisions:", _subdivisions.length);
+            debugLog("Loaded subdivisions:", _subdivisions.length);
             
             if (_subdivisions.length > 0) {
                 debugLog("Subdivision details:", _subdivisions.map(s => ({
@@ -681,7 +677,7 @@
             }
 
             _userSubdivisionDetails = data || [];
-            console.log("🔐 Loaded user subdivision details:", _userSubdivisionDetails.length);
+            debugLog("Loaded user subdivision details:", _userSubdivisionDetails.length);
 
         } catch (e) {
             console.error("🔐 Error loading user subdivision details:", e);
@@ -735,13 +731,13 @@
         
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
             _editableDivisions = [...allDivisions];
-            console.log("🔐 Full edit access:", _editableDivisions.length, "divisions");
+            debugLog("Full edit access:", _editableDivisions.length, "divisions");
             return;
         }
-        
+
         if (_currentRole === ROLES.VIEWER) {
             _editableDivisions = [];
-            console.log("🔐 View-only access");
+            debugLog("View-only access");
             return;
         }
         
@@ -775,11 +771,11 @@
             // use the divisions from subdivisions directly without filtering ★★★
             if (allDivisions.length === 0 && editableDivs.size > 0) {
                 _editableDivisions = [...editableDivs];
-                console.log("🔐 Scheduler edit access (from subdivisions):", _editableDivisions.length, "divisions", _editableDivisions);
+                debugLog("Scheduler edit access (from subdivisions):", _editableDivisions.length, "divisions", _editableDivisions);
             } else {
                 // Filter against window.divisions if it's populated
                 _editableDivisions = allDivisions.filter(d => editableDivs.has(d));
-                console.log("🔐 Scheduler edit access:", _editableDivisions.length, "divisions", _editableDivisions);
+                debugLog("Scheduler edit access:", _editableDivisions.length, "divisions", _editableDivisions);
             }
             
             if (_editableDivisions.length === 0 && editableDivs.size === 0) {
@@ -1554,84 +1550,76 @@
     }
 
     async function deleteMyDivisionsOnly(dateKey) {
-        console.log('🗑️ [AccessControl] deleteMyDivisionsOnly called for:', dateKey);
-        
+        debugLog("deleteMyDivisionsOnly called for:", dateKey);
+
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            console.log('🗑️ [AccessControl] Owner/Admin - use full delete instead');
+            debugLog("Owner/Admin - use full delete instead");
             return null;
         }
-        
+
         const myDivisions = getEditableDivisions();
         if (myDivisions.length === 0) {
             return { error: "No divisions assigned" };
         }
-        
-        console.log('🗑️ [AccessControl] Deleting divisions:', myDivisions);
-        
+
+        debugLog("Deleting divisions:", myDivisions);
+
         try {
             if (window.ScheduleDB?.deleteMyScheduleOnly) {
-                console.log('🗑️ [AccessControl] Calling ScheduleDB.deleteMyScheduleOnly...');
                 const cloudResult = await window.ScheduleDB.deleteMyScheduleOnly(dateKey);
-                console.log('🗑️ [AccessControl] Cloud delete result:', cloudResult);
-                
                 if (!cloudResult?.success) {
-                    console.error('🗑️ [AccessControl] Cloud delete failed:', cloudResult?.error);
+                    console.error('🔐 [AccessControl] Cloud delete failed:', cloudResult?.error);
                 }
             } else {
-                console.warn('🗑️ [AccessControl] ScheduleDB.deleteMyScheduleOnly not available!');
+                console.warn('🔐 [AccessControl] ScheduleDB.deleteMyScheduleOnly not available — using fallback');
                 const client = window.CampistryDB?.getClient?.() || window.supabase;
                 const campId = window.CampistryDB?.getCampId?.() || getCampId();
                 const userId = window.CampistryDB?.getUserId?.();
-                
+
                 if (client && campId && userId) {
-                    console.log('🗑️ [AccessControl] Fallback: direct Supabase delete...');
                     const { error } = await client
                         .from('daily_schedules')
                         .delete()
                         .eq('camp_id', campId)
                         .eq('date_key', dateKey)
                         .eq('scheduler_id', userId);
-                        
+
                     if (error) {
-                        console.error('🗑️ [AccessControl] Fallback delete error:', error);
-                    } else {
-                        console.log('🗑️ [AccessControl] Fallback delete successful');
+                        console.error('🔐 [AccessControl] Fallback delete error:', error);
                     }
                 }
             }
-            
+
             const divisions = window.divisions || {};
             const bunksToRemove = new Set();
-            
+
             for (const divName of myDivisions) {
                 const divInfo = divisions[divName];
                 if (divInfo?.bunks) {
                     divInfo.bunks.forEach(b => bunksToRemove.add(b));
                 }
             }
-            
+
             if (window.scheduleAssignments) {
                 bunksToRemove.forEach(bunk => {
                     delete window.scheduleAssignments[bunk];
                 });
-                console.log('🗑️ [AccessControl] Cleared', bunksToRemove.size, 'bunks from window.scheduleAssignments');
             }
-            
+
             if (window.leagueAssignments) {
                 bunksToRemove.forEach(bunk => {
                     delete window.leagueAssignments[bunk];
                 });
             }
-            
+
             if (window.ScheduleDB?.loadSchedule) {
-                console.log('🗑️ [AccessControl] Reloading remaining data...');
                 await window.ScheduleDB.loadSchedule(dateKey);
             }
-            
+
             return { success: true, deletedDivisions: myDivisions };
-            
+
         } catch (e) {
-            console.error('🗑️ [AccessControl] deleteMyDivisionsOnly error:', e);
+            console.error('🔐 [AccessControl] deleteMyDivisionsOnly error:', e);
             return { error: e.message };
         }
     }
