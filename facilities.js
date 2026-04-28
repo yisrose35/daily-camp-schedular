@@ -778,6 +778,11 @@ function renderSportsConfig(container, fac) {
 }
 
 function saveFieldData() {
+    // ★ RBAC: field config is camp-wide setup — only owner/admin can save
+    if (!window.AccessControl?.canEditFields?.()) {
+        console.warn('[Facilities] saveFieldData blocked — insufficient permissions');
+        return;
+    }
     const settings = window.loadGlobalSettings?.() || {};
     const app1 = settings.app1 || {};
     app1.sportMetaData = sportMetaData;

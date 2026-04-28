@@ -1155,6 +1155,11 @@ function loadDAWLayers() {
 }
 
 function saveDAWLayers(forceTemplateName = null) {
+  // ★ RBAC: master schedule templates are camp-wide config — require edit access
+  if (!window.AccessControl?.canEditAnything?.()) {
+    console.warn('[MasterScheduler] saveDAWLayers blocked — insufficient permissions');
+    return;
+  }
   // Always save as a draft while editing, unless a specific template name is forced (Save/Update)
   const templateKey = forceTemplateName || '_current';
   const g = window.loadGlobalSettings?.() || {};
@@ -1717,8 +1722,14 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
     track.addEventListener('drop', (e) => {
       e.preventDefault();
       track.classList.remove('drop-target');
-      
+
       const grade = track.dataset.grade;
+
+      // ★ RBAC: block write if user cannot edit this division
+      if (!window.AccessControl?.canEditDivision?.(grade)) {
+        window.AccessControl?.showPermissionDenied?.(`edit ${grade}`);
+        return;
+      }
       const rect = track.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const dropMin = Math.round((x / DAW_PIXELS_PER_MINUTE + globalStart) / SNAP_MINS) * SNAP_MINS;
@@ -2466,6 +2477,8 @@ function getColumnOrder() {
 }
 
 function saveColumnOrder(order) {
+  // ★ RBAC: column order is a setup-level preference — require edit access
+  if (!window.AccessControl?.canEditAnything?.()) return;
   const g = window.loadGlobalSettings?.() || {};
   if (!g.app1) g.app1 = {};
   g.app1.manualColumnOrder = [...order];
@@ -2729,8 +2742,14 @@ function addDropListeners(selector) {
         const eventId = e.dataTransfer.getData('text/event-move');
         const event = dailySkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
+
         const divName = cell.dataset.div;
+
+        // ★ RBAC: block write if user cannot edit this division
+        if (!window.AccessControl?.canEditDivision?.(divName)) {
+          window.AccessControl?.showPermissionDenied?.(`edit ${divName}`);
+          return;
+        }
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
         const rect = cell.getBoundingClientRect();
         const y = e.clientY - rect.top;

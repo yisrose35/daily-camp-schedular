@@ -263,6 +263,11 @@
     // ========================================================================
 
     function writeFill(bunk, slotIdx, pick) {
+        // ★ RBAC: verify the user can edit this bunk before writing
+        if (!window.AccessControl?.canEditBunk?.(bunk)) {
+            console.warn('[AutoFill] writeFill blocked — no edit access to bunk:', bunk);
+            return;
+        }
         if (typeof window.applyDirectEdit === 'function') {
             window.applyDirectEdit(bunk, [slotIdx], pick.activity, pick.field || null, false);
         } else {
@@ -288,6 +293,13 @@
     // ========================================================================
 
     async function autoFillSlot(bunk, slotIdx) {
+        // ★ RBAC: check division access before doing any work
+        const _divCheck = getDivision(bunk);
+        if (_divCheck && !window.AccessControl?.canEditDivision?.(_divCheck)) {
+            window.AccessControl?.showPermissionDenied?.(`auto-fill ${_divCheck}`);
+            return;
+        }
+
         // 1. Resolve division + slot time
         const divName = getDivision(bunk);
         if (!divName) { toast('Cannot find division for ' + bunk, 'error'); return; }

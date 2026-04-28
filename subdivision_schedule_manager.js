@@ -123,6 +123,11 @@
     }
 
     function saveSubdivisionSchedules() {
+        // ★ RBAC: must have at least some edit access to save subdivision schedules
+        if (!window.AccessControl?.canEditAnything?.()) {
+            console.warn('[SubdivisionScheduler] saveSubdivisionSchedules blocked — insufficient permissions');
+            return;
+        }
         // Save to the correct date key
         const dailyData = window.loadCurrentDailyData?.() || {};
         

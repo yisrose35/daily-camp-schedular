@@ -1735,6 +1735,8 @@ function getColumnOrder() {
 }
 
 function saveColumnOrder(order) {
+  // ★ RBAC: column order is a setup-level preference — require edit access
+  if (!window.AccessControl?.canEditAnything?.()) return;
   const g = window.loadGlobalSettings?.() || {};
   if (!g.app1) g.app1 = {};
   g.app1.manualColumnOrder = [...order];
@@ -2344,14 +2346,20 @@ function addDragToRepositionListeners(gridEl) {
     cell.addEventListener('drop', (e) => {
       cell.style.background = '';
       if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
-      
+
       if (e.dataTransfer.types.includes('text/event-move')) {
         e.preventDefault();
         const eventId = e.dataTransfer.getData('text/event-move');
         const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
+
         const divName = cell.dataset.div;
+
+        // ★ RBAC: block write if user cannot edit this division
+        if (!window.AccessControl?.canEditDivision?.(divName)) {
+          window.AccessControl?.showPermissionDenied?.(`edit ${divName}`);
+          return;
+        }
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
         const rect = cell.getBoundingClientRect();
         const y = e.clientY - rect.top;
@@ -2391,15 +2399,21 @@ function addDropListeners(gridEl) {
     };
     cell.ondragleave = () => { cell.style.background = ''; };
     
-   cell.ondrop = async (e) => {
+    cell.ondrop = async (e) => {
       if (e.dataTransfer.types.includes('text/event-move')) return;
       e.preventDefault();
       cell.style.background = '';
-      
+
       let tileData;
       try { tileData = JSON.parse(e.dataTransfer.getData('application/json')); } catch { return; }
-      
+
       const divName = cell.dataset.div;
+
+      // ★ RBAC: block write if user cannot edit this division
+      if (!window.AccessControl?.canEditDivision?.(divName)) {
+        window.AccessControl?.showPermissionDenied?.(`edit ${divName}`);
+        return;
+      }
       const earliestMin = parseInt(cell.dataset.startMin);
       const div = window.divisions[divName] || {};
       const divStartMin = parseTimeToMinutes(div.startTime);

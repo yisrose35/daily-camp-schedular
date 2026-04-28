@@ -611,6 +611,11 @@ function renderDurationSettings(item) {
     }
     
     function persistDuration(val) {
+        // ★ RBAC: special activity config is camp-wide setup — only owner/admin
+        if (!window.AccessControl?.canEditSetup?.()) {
+            console.warn('[SpecialActivities] persistDuration blocked — insufficient permissions');
+            return;
+        }
         var live = getLiveItem();
         live.duration = val;
         try {
