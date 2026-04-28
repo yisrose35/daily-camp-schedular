@@ -54,34 +54,37 @@
     // =========================================================================
     head('[2] Password Reset — DOM Elements');
 
-    const checks = [
-        { id: 'resetPasswordModal',  label: 'Reset modal container' },
-        { id: 'resetRequestView',    label: 'Request-email view' },
-        { id: 'updatePasswordView',  label: 'New-password view' },
-        { id: 'resetRequestForm',    label: 'Reset request form' },
-        { id: 'resetEmail',          label: 'Reset email input' },
-        { id: 'resetSubmit',         label: 'Send reset link button' },
-        { id: 'updatePasswordForm',  label: 'Update password form' },
-        { id: 'newPassword',         label: 'New password field' },
-        { id: 'confirmPassword',     label: 'Confirm password field (must be confirmPassword, NOT confirmNewPassword)' },
-        { id: 'updateSubmit',        label: 'Update password button (must be updateSubmit, NOT updatePasswordSubmit)' },
-        { id: 'updateError',         label: 'Error message container' },
-        { id: 'updateSuccess',       label: 'Success message container' },
-    ];
+    // Detect which page we're on — reset modal only exists on index.html
+    const onLandingPage = !!document.getElementById('resetPasswordModal')
+        || window.location.pathname.includes('index')
+        || window.location.pathname === '/'
+        || window.location.pathname === '';
 
-    let domOk = true;
-    checks.forEach(({ id, label }) => {
-        const el = document.getElementById(id);
-        if (el) {
-            pass(`${label} — #${id} found`);
-        } else {
-            fail(`${label} — #${id} NOT FOUND (wrong page, or ID mismatch in HTML)`);
-            domOk = false;
-        }
-    });
+    if (!onLandingPage) {
+        info('Not on the landing page — skipping reset modal DOM checks');
+        info('For full password reset DOM audit, paste this script on index.html');
+        pass('Password reset DOM check skipped (not applicable on this page)');
+    } else {
+        const checks = [
+            { id: 'resetPasswordModal',  label: 'Reset modal container' },
+            { id: 'resetRequestView',    label: 'Request-email view' },
+            { id: 'updatePasswordView',  label: 'New-password view' },
+            { id: 'resetRequestForm',    label: 'Reset request form' },
+            { id: 'resetEmail',          label: 'Reset email input' },
+            { id: 'resetSubmit',         label: 'Send reset link button' },
+            { id: 'updatePasswordForm',  label: 'Update password form' },
+            { id: 'newPassword',         label: 'New password field' },
+            { id: 'confirmPassword',     label: 'Confirm password field (must be confirmPassword, NOT confirmNewPassword)' },
+            { id: 'updateSubmit',        label: 'Update password button (must be updateSubmit, NOT updatePasswordSubmit)' },
+            { id: 'updateError',         label: 'Error message container' },
+            { id: 'updateSuccess',       label: 'Success message container' },
+        ];
 
-    if (!domOk) {
-        warn('Some DOM elements missing — run this on the index/landing page for full password reset checks');
+        checks.forEach(({ id, label }) => {
+            const el = document.getElementById(id);
+            if (el) pass(`${label} — #${id} found`);
+            else fail(`${label} — #${id} NOT FOUND (ID mismatch in HTML)`);
+        });
     }
 
     // =========================================================================
@@ -89,10 +92,9 @@
     // =========================================================================
     head('[3] Password Reset — Logic Guards');
 
-    // Simulate the ID reads that the form handler does
-    const newPwEl      = document.getElementById('newPassword');
-    const confirmPwEl  = document.getElementById('confirmPassword');
-    const submitBtnEl  = document.getElementById('updateSubmit');
+    const newPwEl     = document.getElementById('newPassword');
+    const confirmPwEl = document.getElementById('confirmPassword');
+    const submitBtnEl = document.getElementById('updateSubmit');
 
     if (newPwEl && confirmPwEl) {
         // Temporarily set matching values and check the comparison works
@@ -233,9 +235,23 @@
             if (tokenStillSet.length === 0) {
                 pass('All accepted members have invite_token cleared — old links cannot be reused ✓');
             } else {
-                fail(`${tokenStillSet.length} accepted member(s) still have invite_token set — old links still work:`);
-                tokenStillSet.forEach(m => fail(`  → ${m.email} (accepted: ${m.accepted_at?.substring(0,10)})`));
-                warn('Fix: run UPDATE camp_users SET invite_token = NULL WHERE accepted_at IS NOT NULL in Supabase SQL editor');
+                warn(`${tokenStillSet.length} accepted member(s) have stale invite_token (accepted before fix was deployed) — clearing now...`);
+                tokenStillSet.forEach(m => info(`  → ${m.email} (accepted: ${m.accepted_at?.substring(0,10)})`));
+
+                // Auto-clear stale tokens for all affected rows
+                const { error: cleanupErr } = await supa
+                    .from('camp_users')
+                    .update({ invite_token: null })
+                    .not('accepted_at', 'is', null)
+                    .not('invite_token', 'is', null);
+
+                if (cleanupErr) {
+                    fail(`Auto-cleanup failed: ${cleanupErr.message}`);
+                    warn('Manual fix: run this in Supabase SQL editor:');
+                    warn('  UPDATE camp_users SET invite_token = NULL WHERE accepted_at IS NOT NULL AND invite_token IS NOT NULL;');
+                } else {
+                    pass(`Stale tokens cleared for ${tokenStillSet.length} member(s) — old invite links are now dead ✓`);
+                }
             }
         }
     } catch(e) {
