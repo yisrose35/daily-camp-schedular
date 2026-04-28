@@ -536,9 +536,15 @@
             }
             redirectToLogin(); return;
         }
-        
+
+        // ★ Wire sign-out listener immediately — active for ALL boot paths
+        // (fast-pass, normal, and error-recovery) so sign-out in any tab redirects here too
+        window.supabase.auth.onAuthStateChange((event) => {
+            if (event === 'SIGNED_OUT') redirectToLogin();
+        });
+
         const { data: { session }, error } = await window.supabase.auth.getSession();
-        
+
         if (error || !session) {
             if (hasLocalAuth) {
                 console.warn('🔑 [Auth] No Supabase session yet, but cached auth exists — proceeding');
@@ -561,10 +567,6 @@
             }
             redirectToLogin(); return;
         }
-            // Listen for sign-out after client is confirmed ready
-            window.supabase.auth.onAuthStateChange((event) => {
-                if (event === 'SIGNED_OUT') redirectToLogin();
-            });
             if (loadingScreen) {
                 const subtext = loadingScreen.querySelector('.auth-loading-subtext');
                 if (subtext) subtext.textContent = 'Loading your camp data...';
