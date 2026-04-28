@@ -4581,12 +4581,52 @@
                                 c = { dMin: spCfgDur, dMax: spCfgDur };
                             }
                         }
+                        // ── Period containment: snap pre-placed blocks to a single period ──
+                        var _p0Start = b.startMin, _p0End = b.endMin;
+                        var _p0Periods = window.campPeriods && window.campPeriods[grade];
+                        if (_p0Periods && _p0Periods.length > 0) {
+                            var _p0Duration = _p0End - _p0Start;
+                            var _p0PS = null; // period containing startMin
+                            for (var _pi0 = 0; _pi0 < _p0Periods.length; _pi0++) {
+                                if (_p0Periods[_pi0].startMin <= _p0Start && _p0Periods[_pi0].endMin > _p0Start) {
+                                    _p0PS = _p0Periods[_pi0]; break;
+                                }
+                            }
+                            // Check if block overflows the period boundary
+                            if (_p0PS && _p0End > _p0PS.endMin) {
+                                // Try to fit duration in current period (startMin period)
+                                if (_p0Duration <= (_p0PS.endMin - _p0PS.startMin)) {
+                                    // Block fits if we push startMin back to period start
+                                    _p0Start = _p0PS.startMin;
+                                    _p0End = _p0PS.startMin + _p0Duration;
+                                } else {
+                                    // Try the next period whose size can accommodate the duration
+                                    var _p0Fixed = false;
+                                    for (var _pi1 = 0; _pi1 < _p0Periods.length; _pi1++) {
+                                        var _p0PN = _p0Periods[_pi1];
+                                        if (_p0PN.startMin <= _p0PS.startMin) continue; // earlier period
+                                        if (_p0Duration <= (_p0PN.endMin - _p0PN.startMin)) {
+                                            _p0Start = _p0PN.startMin;
+                                            _p0End = _p0PN.startMin + _p0Duration;
+                                            _p0Fixed = true; break;
+                                        }
+                                    }
+                                    if (!_p0Fixed) {
+                                        // No period is large enough — clip to current period end
+                                        _p0End = _p0PS.endMin;
+                                    }
+                                }
+                                log('[Phase0] Snapped "' + (b.event || b.type) + '" bunk=' + bunk +
+                                    ' from ' + b.startMin + '-' + b.endMin +
+                                    ' to ' + _p0Start + '-' + _p0End + ' (period boundary)');
+                            }
+                        }
                         template.push(makeBlock({
-                            startMin: b.startMin, endMin: b.endMin,
+                            startMin: _p0Start, endMin: _p0End,
                             type: b.type, event: b.event,
                             layer: b.layer, field: b.field || null,
-                            dMin: c ? c.dMin : (b.endMin - b.startMin),
-                            dMax: c ? c.dMax : (b.endMin - b.startMin),
+                            dMin: c ? c.dMin : (_p0End - _p0Start),
+                            dMax: c ? c.dMax : (_p0End - _p0Start),
                             _fixed: true, _source: 'phase0',
                             _gradeWide: b._gradeWide || false,
                             _activityLocked: true,

@@ -492,7 +492,7 @@
     async function applyEdit(bunk, editData) {
         const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
         const unifiedTimes = window.unifiedTimes || [];
-        
+
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
             console.error('[PostEdit] ❌ Demo: applyEdit called with undefined activity:', editData);
             alert('Error: No activity specified.');
@@ -501,13 +501,27 @@
 
         const isClear = !activity || activity.toUpperCase() === 'CLEAR' || activity.toUpperCase() === 'FREE' || activity === '';
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
-        
+
         if (slots.length === 0) {
             console.error('[PostEdit] ❌ No slots found for time range:', startMin, '-', endMin);
             alert('Error: Could not find time slots for the specified range.');
             return;
         }
-        
+
+        // ── Period boundary check — block placements that span period gaps ──
+        if (!isClear) {
+            const _peDivName = peiGetDivForBunk(bunk);
+            const _pePeriods = _peDivName && window.campPeriods && window.campPeriods[_peDivName];
+            if (_pePeriods && _pePeriods.length > 0) {
+                const _peInPeriod = _pePeriods.some(p => p.startMin <= startMin && p.endMin >= endMin);
+                if (!_peInPeriod) {
+                    const _pePNames = _pePeriods.filter(p => p.endMin > startMin && p.startMin < endMin).map(p => p.name || '').filter(Boolean);
+                    const _peMsg = 'This placement spans a period boundary' + (_pePNames.length > 1 ? ' (' + _pePNames.join(' → ') + ')' : '') + '.\n\nActivities must fit entirely within one bell-schedule period.\n\nPlace anyway?';
+                    if (!window.confirm(_peMsg)) return;
+                }
+            }
+        }
+
         console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear });
 
         // ★ Manual-mode cooldown check — soft confirm if the edit would violate a rule
