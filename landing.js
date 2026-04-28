@@ -679,16 +679,20 @@ if (authMode === 'signup' && data?.user && !data?.session) {
     if (updatePasswordForm) {
         updatePasswordForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const newPassword = document.getElementById('newPassword')?.value;
-            const confirmPassword = document.getElementById('confirmPassword')?.value;
+            const newPassword = document.getElementById('newPassword')?.value?.trim();
+            const confirmPassword = document.getElementById('confirmPassword')?.value?.trim();
             const submitBtn = document.getElementById('updateSubmit');
             const updateError = document.getElementById('updateError');
             const updateSuccess = document.getElementById('updateSuccess');
-            
+
             if (updateError) updateError.textContent = '';
             if (updateSuccess) updateSuccess.style.display = 'none';
             if (!newPassword || newPassword.length < 6) {
                 if (updateError) updateError.textContent = 'Password must be at least 6 characters.';
+                return;
+            }
+            if (!confirmPassword) {
+                if (updateError) updateError.textContent = 'Please confirm your password.';
                 return;
             }
             if (newPassword !== confirmPassword) {
