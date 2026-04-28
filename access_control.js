@@ -523,14 +523,17 @@
         // ⭐ STEP 2: Check for PENDING INVITE (auto-accept if found)
         // =====================================================================
         try {
-            const { data: pendingInvite } = await window.supabase
+            const { data: pendingInvite, error: inviteError } = await window.supabase
                 .from('camp_users')
                 .select('*')
                 .eq('email', _currentUser.email.toLowerCase())
                 .is('user_id', null)
                 .maybeSingle();
-            
-            if (pendingInvite) {
+
+            if (inviteError) {
+                console.warn("🔐 Error checking pending invite:", inviteError);
+                if (typeof window.showToast === 'function') window.showToast('Could not check for pending invitations. Please refresh and try again.', 'error');
+            } else if (pendingInvite) {
                 console.log("🔐 Found pending invite - auto-accepting:", pendingInvite.role);
                 
                 const { error: acceptError } = await window.supabase
@@ -616,6 +619,7 @@
 
             if (error) {
                 console.warn("🔐 Error loading subdivisions:", error);
+                if (typeof window.showToast === 'function') window.showToast('Failed to load division data — some permissions may not work correctly.', 'error');
                 _subdivisions = [];
                 return;
             }
@@ -654,6 +658,7 @@
 
             if (error) {
                 console.warn("🔐 Error loading user subdivision details:", error);
+                if (typeof window.showToast === 'function') window.showToast('Failed to load your division assignments — contact your administrator.', 'error');
                 _userSubdivisionDetails = [];
                 return;
             }
@@ -1833,7 +1838,10 @@
                     .eq('camp_id', campId)
                     .select();
 
-                if (fallbackError) throw fallbackError;
+                if (fallbackError) {
+                    if (typeof window.showToast === 'function') window.showToast('Failed to remove team member — check your permissions and try again.', 'error');
+                    throw fallbackError;
+                }
                 if (!fallbackData || fallbackData.length === 0) {
                     return { error: "Could not delete team member. You may need to update your database permissions." };
                 }
@@ -1963,6 +1971,7 @@
 
         } catch (e) {
             console.error("🔐 Error saving field locks:", e);
+            if (typeof window.showToast === 'function') window.showToast('Failed to save field locks — your changes may not be preserved.', 'error');
             return { error: e.message };
         }
     }
@@ -1984,6 +1993,7 @@
 
         } catch (e) {
             console.error("🔐 Error loading field locks:", e);
+            if (typeof window.showToast === 'function') window.showToast('Failed to load field locks — locked fields may appear editable.', 'error');
             return { locks: {} };
         }
     }
@@ -2004,6 +2014,7 @@
 
         } catch (e) {
             console.error("🔐 Error clearing field locks:", e);
+            if (typeof window.showToast === 'function') window.showToast('Failed to clear field locks — please try again.', 'error');
             return { error: e.message };
         }
     }

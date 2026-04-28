@@ -1784,6 +1784,13 @@
         hookBeforeUnload();
         hookCloudHydration();
 
+        // Wire up sync-error listener so users see a banner when cloud save fails
+        window.addEventListener('campistry-sync-error', (e) => {
+            if (typeof window.showToast === 'function') {
+                window.showToast('Cloud save failed — your changes are queued and will retry. Check your connection.', 'error');
+            }
+        });
+
         // Expose helper functions globally
         window.scheduleCloudSync = function() {
             const dateKey = window.currentScheduleDate;

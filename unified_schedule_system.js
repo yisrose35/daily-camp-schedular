@@ -2925,8 +2925,8 @@ if (bypassStatus.highlight) {
                     if (divData.bunks?.some(b => String(b) === String(bunk))) affectedDivisions.add(divName); 
                 } 
             }
-            const { data: schedulers } = await supabase.from('camp_users').select('user_id, divisions').eq('camp_id', campId).neq('user_id', userId);
-            if (!schedulers) return;
+            const { data: schedulers, error: schedulersErr } = await supabase.from('camp_users').select('user_id, divisions').eq('camp_id', campId).neq('user_id', userId);
+            if (schedulersErr || !schedulers) return;
             const notifyUsers = schedulers.filter(s => (s.divisions || []).some(d => affectedDivisions.has(d))).map(s => s.user_id);
             if (notifyUsers.length === 0) return;
             const notifications = notifyUsers.map(targetUserId => ({
@@ -2937,7 +2937,8 @@ if (bypassStatus.highlight) {
                 metadata: { dateKey, bunks: affectedBunks, location, activity, initiatedBy: userId },
                 read: false, created_at: new Date().toISOString()
             }));
-            await supabase.from('notifications').insert(notifications);
+            const { error: notifyErr } = await supabase.from('notifications').insert(notifications);
+            if (notifyErr) console.error('[UnifiedSchedule] Notification insert error:', notifyErr);
         } catch (e) { console.error('[UnifiedSchedule] Notification error:', e); }
     }
 
@@ -4861,9 +4862,13 @@ if (softBlocks.length > 0) {
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
         if (supabase && campId) {
             try {
-                await supabase.from('schedule_proposals').insert(proposal);
+                const { error: proposalErr } = await supabase.from('schedule_proposals').insert(proposal);
+                if (proposalErr) throw proposalErr;
                 await notifySchedulersOfProposal(proposal);
-            } catch (e) { console.error('[CreateProposal] Error:', e); }
+            } catch (e) {
+                console.error('[CreateProposal] Error:', e);
+                if (typeof window.showToast === 'function') window.showToast('Failed to send proposal — please try again.', 'error');
+            }
         }
 
         showIntegratedToast(`📧 Proposal sent to ${affectedDivisions.length} scheduler(s)`, 'info');
@@ -4874,13 +4879,13 @@ if (softBlocks.length > 0) {
         if (!supabase) return;
 
         try {
-            const { data: schedulers } = await supabase
+            const { data: schedulers, error: schedulersErr } = await supabase
                 .from('camp_users')
                 .select('user_id, divisions')
                 .eq('camp_id', proposal.camp_id)
                 .neq('user_id', proposal.created_by);
 
-            if (!schedulers) return;
+            if (schedulersErr || !schedulers) return;
 
             const notifyUsers = schedulers.filter(s => 
                 (s.divisions || []).some(d => proposal.affected_divisions.includes(d))
@@ -4898,18 +4903,20 @@ if (softBlocks.length > 0) {
                 created_at: new Date().toISOString()
             }));
 
-            await supabase.from('notifications').insert(notifications);
+            const { error: notifyErr } = await supabase.from('notifications').insert(notifications);
+            if (notifyErr) console.error('[NotifyProposal] Insert error:', notifyErr);
         } catch (e) { console.error('[NotifyProposal] Error:', e); }
     }
 
     async function loadProposal(proposalId) {
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
         if (supabase) {
-            const { data } = await supabase
+            const { data, error: loadErr } = await supabase
                 .from('schedule_proposals')
                 .select('*')
                 .eq('id', proposalId)
                 .single();
+            if (loadErr) { console.error('[LoadProposal] Error:', loadErr); return null; }
             return data;
         }
         return _pendingProposals.find(p => p.id === proposalId);
@@ -4922,13 +4929,14 @@ if (softBlocks.length > 0) {
 
         if (supabase && campId) {
             try {
-                const { data } = await supabase
+                const { data, error: loadErr } = await supabase
                     .from('schedule_proposals')
                     .select('*')
                     .eq('camp_id', campId)
                     .eq('status', 'pending');
-                
-                return (data || []).filter(p => 
+
+                if (loadErr) throw loadErr;
+                return (data || []).filter(p =>
                     p.affected_divisions?.some(d => myDivisions.includes(d))
                 );
             } catch (e) {
@@ -5022,7 +5030,8 @@ if (softBlocks.length > 0) {
                 .single();
 
             if (error || !proposal) {
-                alert('Proposal not found');
+                if (typeof window.showToast === 'function') window.showToast('Proposal not found or could not be loaded.', 'error');
+                else alert('Proposal not found');
                 return;
             }
 
@@ -5040,10 +5049,11 @@ if (softBlocks.length > 0) {
             if (allApproved) newStatus = 'approved';
             if (anyRejected) newStatus = 'rejected';
 
-            await supabase
+            const { error: updateErr } = await supabase
                 .from('schedule_proposals')
                 .update({ approvals, status: newStatus })
                 .eq('id', proposalId);
+            if (updateErr) throw updateErr;
 
             if (allApproved && !proposal.applied) {
                 await applyApprovedProposal(proposal);
@@ -5059,7 +5069,8 @@ if (softBlocks.length > 0) {
 
         } catch (e) {
             console.error('[RespondProposal] Error:', e);
-            alert('Error responding to proposal');
+            if (typeof window.showToast === 'function') window.showToast('Failed to respond to proposal — please try again.', 'error');
+            else alert('Error responding to proposal');
         }
     }
 
@@ -5133,10 +5144,11 @@ if (softBlocks.length > 0) {
 
         const supabase = window.CampistryDB?.getClient?.() || window.supabase;
         if (supabase) {
-            await supabase
+            const { error: applyErr } = await supabase
                 .from('schedule_proposals')
                 .update({ applied: true, applied_at: new Date().toISOString() })
                 .eq('id', proposal.id);
+            if (applyErr) console.error('[ApplyProposal] Mark applied error:', applyErr);
         }
 
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
@@ -5148,7 +5160,7 @@ if (softBlocks.length > 0) {
         if (!supabase || !proposal.created_by) return;
 
         try {
-            await supabase.from('notifications').insert({
+            const { error: notifyErr } = await supabase.from('notifications').insert({
                 camp_id: proposal.camp_id,
                 user_id: proposal.created_by,
                 type: 'proposal_response',
@@ -5158,6 +5170,7 @@ if (softBlocks.length > 0) {
                 read: false,
                 created_at: new Date().toISOString()
             });
+            if (notifyErr) throw notifyErr;
         } catch (e) { console.error('[NotifyProposer] Error:', e); }
     }
 

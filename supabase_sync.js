@@ -325,6 +325,7 @@
             }
         } catch (e) {
             log('Cloud refresh failed, using localStorage:', e.message);
+            if (typeof window.showToast === 'function') window.showToast('Could not reach cloud — showing locally cached schedule.', 'error');
         }
         
         // Step 1: Force hydrate from localStorage (now contains cloud data)

@@ -93,6 +93,7 @@
 
             if (error) {
                 console.warn('🔐 Error loading subdivisions:', error);
+                if (typeof window.showToast === 'function') window.showToast('Failed to load division permissions — some features may be restricted.', 'error');
                 _subdivisions = [];
                 return;
             }

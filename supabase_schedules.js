@@ -437,6 +437,7 @@
                 .eq('date_key', dateKey);
             if (error) {
                 logError('Query error:', error);
+                if (typeof window.showToast === 'function') window.showToast('Failed to load schedule data — check your connection.', 'error');
                 return [];
             }
             log(`Loaded ${data?.length || 0} records for ${dateKey}`);
@@ -464,6 +465,7 @@
                 .lte('date_key', endDate);
             if (error) {
                 logError('Date range query error:', error);
+                if (typeof window.showToast === 'function') window.showToast('Failed to load schedule range — check your connection.', 'error');
                 return [];
             }
             return data || [];
