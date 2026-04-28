@@ -14,9 +14,6 @@
 (function() {
     'use strict';
 
-    const DEBUG = false;
-    function log(...args) { if (DEBUG) console.log('🔗 [RBACIntegration]', ...args); }
-
     console.log("🔗 RBAC Integration v1.1 loading...");
 
     // =========================================================================
@@ -24,7 +21,7 @@
     // =========================================================================
 
     async function initialize() {
-        log("Initializing RBAC integration...");
+        console.log("🔗 Initializing RBAC integration...");
 
         // Wait for all required modules
         await waitForModules([
@@ -53,7 +50,7 @@
         // Hook into scheduler core
         hookSchedulerCore();
 
-        log("RBAC Integration complete");
+        console.log("🔗 RBAC Integration complete");
     }
 
     async function waitForModules(modules) {
@@ -117,7 +114,7 @@
         }
 
         if (!generateBtn) {
-            log("Generate button not found, will retry on DOM changes");
+            console.log("🔗 Generate button not found, will retry on DOM changes");
             setupButtonObserver();
             return;
         }
@@ -144,17 +141,17 @@
             window.DivisionSelector.renderDivisionSelector(
                 // On confirm
                 async (selection) => {
-                    log("Generation requested:", selection);
+                    console.log("🔗 Generation requested:", selection);
                     await handleGeneration(selection, originalOnClick, originalHandler);
                 },
                 // On cancel
                 () => {
-                    log("Generation cancelled");
+                    console.log("🔗 Generation cancelled");
                 }
             );
         });
 
-        log("Generate button hooked");
+        console.log("🔗 Generate button hooked");
     }
 
     function setupButtonObserver() {
@@ -199,7 +196,7 @@
 
         const { divisions, clearExisting, existingLocks, previouslyGenerated } = selection;
 
-        log("Starting generation for:", divisions);
+        console.log("🔗 Starting generation for:", divisions);
 
         // Set global state for scheduler to read
         window._rbacGenerationConfig = {
@@ -236,7 +233,7 @@
             // After generation, save the new locks
             await saveGenerationLocks(divisions);
 
-            log("Generation complete");
+            console.log("🔗 Generation complete");
 
         } catch (e) {
             console.error("🔗 Generation error:", e);
@@ -280,7 +277,7 @@
             input.addEventListener('change', async (e) => {
                 const newDate = e.target.value;
                 if (newDate) {
-                    log("Date changed to:", newDate);
+                    console.log("🔗 Date changed to:", newDate);
                     await window.DivisionSelector.initialize(newDate);
                     window.EditRestrictions.refresh();
                 }
@@ -359,7 +356,7 @@
                         const fieldKey = typeof field === 'string' ? field : field.name;
                         const locks = window.existingFieldLocks[fieldKey];
                         if (locks && locks.includes(timeSlot)) {
-                            log(`Field ${fieldKey} is locked at ${timeSlot}, skipping`);
+                            console.log(`🔗 Field ${fieldKey} is locked at ${timeSlot}, skipping`);
                             return false;
                         }
                     }
@@ -496,6 +493,6 @@
         setTimeout(initialize, 500);
     }
 
-    console.log("🔗 RBAC Integration loaded");  // keep — one-time module banner
+    console.log("🔗 RBAC Integration loaded");
 
 })();

@@ -24,36 +24,33 @@
 (function() {
     'use strict';
 
-    const DEBUG = false;
-    function log(...args) { if (DEBUG) console.log('🚀 [RBACInit]', ...args); }
-
-    console.log("🚀 RBAC Init v1.4 loading...");
+    console.log("🚀 RBAC Init v1.4 (SESSION CACHE) starting...");
 
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
     async function initializeRBAC() {
-        log("Initializing RBAC system...");
+        console.log("🚀 Initializing RBAC system...");
 
         try {
             // Step 1: Wait for and initialize AccessControl
             // (reads sessionStorage cache — should be near-instant)
             await initializeAccessControl();
-
+            
             // Step 2: Initialize SubdivisionScheduleManager
             await initializeSubdivisionManager();
-
+            
             // Step 3: Initialize Visual Restrictions
             await initializeVisualRestrictions();
-
+            
             // Step 4: Apply initial restrictions
             applyInitialRestrictions();
-
+            
             // Step 5: Logic-gate destructive action handlers
             installDestructiveActionGuards();
-
-            log("RBAC system fully initialized");
+            
+            console.log("🚀 RBAC system fully initialized");
             
             // Build event detail once
             const eventDetail = {
@@ -77,7 +74,7 @@
                 detail: eventDetail
             }));
             
-            log("Dispatched rbac-system-ready and campistry-rbac-ready events");
+            console.log("🚀 Dispatched both rbac-system-ready and campistry-rbac-ready events");
             
         } catch (error) {
             console.error("🚀 RBAC initialization error:", error);
@@ -114,7 +111,7 @@
         // Initialize AccessControl
         await window.AccessControl.initialize();
         
-        log("AccessControl initialized:", {
+        console.log("🚀 AccessControl initialized:", {
             role: window.AccessControl.getCurrentRole(),
             isInitialized: window.AccessControl.isInitialized
         });
@@ -135,7 +132,7 @@
 
         await window.SubdivisionScheduleManager.initialize();
         
-        log("SubdivisionScheduleManager initialized:", {
+        console.log("🚀 SubdivisionScheduleManager initialized:", {
             isInitialized: window.SubdivisionScheduleManager.isInitialized
         });
     }
@@ -157,7 +154,7 @@
 
         await restrictionsModule.initialize();
         
-        log("VisualRestrictions initialized");
+        console.log("🚀 VisualRestrictions initialized");
     }
 
     // =========================================================================
@@ -167,7 +164,7 @@
     function applyInitialRestrictions() {
         const role = window.AccessControl?.getCurrentRole();
         
-        log("Applying restrictions for role:", role);
+        console.log("🚀 Applying restrictions for role:", role);
         
         // Apply restrictions based on role
         if (role === 'viewer') {
@@ -197,7 +194,7 @@
     }
 
     function applySchedulerRestrictions() {
-        log("Applying scheduler restrictions...");
+        console.log("🚀 Applying scheduler restrictions...");
         
         // Schedulers can edit their assigned divisions only
         // This is handled by EditRestrictions/VisualRestrictions modules
@@ -216,7 +213,7 @@
     }
 
     function applyAdminRestrictions() {
-        log("Applying admin restrictions...");
+        console.log("🚀 Applying admin restrictions...");
         
         // Admins can do everything except:
         // 1. Invite users
@@ -237,7 +234,7 @@
     // =========================================================================
 
     function installDestructiveActionGuards() {
-        log("Installing destructive action guards...");
+        console.log("🚀 Installing destructive action guards...");
 
         // Guard: Erase All Camp Data (owner-only)
         const eraseAllBtn = document.getElementById('eraseAllBtn');
@@ -291,7 +288,7 @@
             }, true);
         }
 
-        log("Destructive action guards installed");
+        console.log("🚀 Destructive action guards installed");
     }
 
     // =========================================================================
@@ -382,6 +379,6 @@
         }
     };
 
-    console.log("🚀 RBAC Init v1.4 loaded");  // keep — one-time module banner
+    console.log("🚀 RBAC Init v1.4 loaded");
 
 })();

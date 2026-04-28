@@ -23,9 +23,6 @@
 (function() {
     'use strict';
 
-    const DEBUG = false;
-    function log(...args) { if (DEBUG) console.log('🚫 [VisualRestrictions]', ...args); }
-
     console.log("🚫 Visual Restrictions v2.1 loading...");
 
     // =========================================================================
@@ -83,7 +80,7 @@
         window.addEventListener('campistry-access-loaded', (e) => {
             _editableDivisions = e.detail.editableDivisions || [];
             _currentRole = e.detail.role;
-            log("Access loaded event:", { role: _currentRole, editable: _editableDivisions });
+            console.log("🚫 Access loaded event:", { role: _currentRole, editable: _editableDivisions });
             applyRestrictions();
         });
 
@@ -99,7 +96,7 @@
         // Set up mutation observer to handle dynamic content
         setupObserver();
 
-        log("Visual Restrictions v2.1 initialized:", {
+        console.log("🚫 Visual Restrictions v2.1 initialized:", {
             role: _currentRole,
             editableDivisions: _editableDivisions
         });
@@ -115,7 +112,7 @@
         // ★★★ v2.2: Owner/Admin NEVER gets restrictions ★★★
         if (_isOwnerOrAdmin()) return;
 
-        log("Applying restrictions for role:", _currentRole);
+        console.log("🚫 Applying restrictions for role:", _currentRole);
         // Inject styles
         injectStyles();
 
@@ -178,7 +175,7 @@
 
         const canDesign = canEditPrintTemplates();
 
-        log(`Print Center restrictions: role=${_currentRole}, canDesign=${canDesign}`);
+        console.log(`🚫 Print Center restrictions: role=${_currentRole}, canDesign=${canDesign}`);
 
         // 1. Design panel toggle button in topbar
         const designToggleBtn = pcContainer.querySelector('[onclick*="_pcToggleDesignPanel"]');
