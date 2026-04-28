@@ -478,6 +478,17 @@
                 }
                 
                 // =====================================================================
+                // Reject expired invites (7-day TTL) — check before showing accept UI
+                // =====================================================================
+                if (inviteData.created_at) {
+                    const ageMs = Date.now() - new Date(inviteData.created_at).getTime();
+                    if (ageMs > 7 * 24 * 60 * 60 * 1000) {
+                        showError('This invite link has expired. Please ask your camp administrator to send a new invite.');
+                        return;
+                    }
+                }
+
+                // =====================================================================
                 // Handle already-accepted invites gracefully
                 // =====================================================================
                 if (inviteData.accepted_at) {
@@ -812,26 +823,25 @@
         }
         
         // =====================================================================
-        // ★★★ SECURITY FIX: Match by email + camp_id instead of row id
-        // The lookup_invite RPC doesn't return the row id for security.
-        // Keep invite_token active (not cleared) for re-use/sharing.
+        // ★★★ SECURITY FIX: Match by email + camp_id instead of row id.
+        // Clears invite_token on acceptance to prevent link reuse.
         // =====================================================================
         async function acceptInviteAndRedirect(userName = null) {
             try {
                 if (!currentUser) {
                     throw new Error('Not logged in. Please refresh and try again.');
                 }
-                
+
                 if (currentUser.email.toLowerCase() !== inviteData.email.toLowerCase()) {
                     throw new Error(`Email mismatch. Please sign in with ${inviteData.email}`);
                 }
-                
+
                 console.log('[Invite] Updating invite record for:', inviteData.email);
-                
+
                 const updateData = {
                     user_id: currentUser.id,
-                    accepted_at: new Date().toISOString()
-                    // NOTE: invite_token is NOT cleared - link stays active!
+                    accepted_at: new Date().toISOString(),
+                    invite_token: null   // ★ Clear token — prevents the link from being reused
                 };
                 
                 // Add name if provided (from signup)

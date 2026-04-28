@@ -217,22 +217,58 @@
                 .eq('email', currentUser.email.toLowerCase())
                 .is('user_id', null)
                 .maybeSingle();
-            
+
             if (pendingInvite) {
-                console.log('📊 Found pending invite - auto-accepting:', pendingInvite.role);
-                
-                const { error: acceptError } = await window.supabase
-                    .from('camp_users')
-                    .update({
-                        user_id: currentUser.id,
-                        accepted_at: new Date().toISOString()
-                    })
-                    .eq('id', pendingInvite.id);
-                
-                if (!acceptError) {
-                    console.log('📊 ✅ Invite auto-accepted!');
-                    // Recursively call to properly set up role
-                    return await determineUserRole();
+                // Reject invites older than 7 days
+                let isExpired = false;
+                if (pendingInvite.created_at) {
+                    const ageMs = Date.now() - new Date(pendingInvite.created_at).getTime();
+                    isExpired = ageMs > 7 * 24 * 60 * 60 * 1000;
+                }
+
+                if (isExpired) {
+                    console.warn('📊 ⚠️ Pending invite has expired (> 7 days) — skipping auto-accept');
+                } else {
+                    console.log('📊 Found pending invite — auto-accepting:', pendingInvite.role);
+
+                    const { error: acceptError } = await window.supabase
+                        .from('camp_users')
+                        .update({
+                            user_id: currentUser.id,
+                            accepted_at: new Date().toISOString(),
+                            invite_token: null   // ★ Clear token — prevents link reuse
+                        })
+                        .eq('id', pendingInvite.id);
+
+                    if (!acceptError) {
+                        console.log('📊 ✅ Invite auto-accepted — setting up role from invite data');
+
+                        // Set up role state directly (avoids recursive determineUserRole call)
+                        userRole = pendingInvite.role;
+                        isTeamMember = true;
+                        membership = {
+                            ...pendingInvite,
+                            user_id: currentUser.id,
+                            accepted_at: new Date().toISOString(),
+                            invite_token: null
+                        };
+                        userName = pendingInvite.name || null;
+
+                        // Fetch camp info
+                        const { data: inviteCampInfo } = await window.supabase
+                            .from('camps')
+                            .select('name, address')
+                            .eq('owner', pendingInvite.camp_id)
+                            .maybeSingle();
+
+                        if (inviteCampInfo) {
+                            campData = inviteCampInfo;
+                            campName = inviteCampInfo.name || null;
+                        }
+
+                        localStorage.setItem('campistry_user_id', pendingInvite.camp_id);
+                        return;
+                    }
                 }
             }
         } catch (e) {
