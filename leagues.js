@@ -1228,7 +1228,7 @@
                 var globalFields = settings.fields || settings.app1?.fields || [];
                 var zoneSports = new Set();
                 zoneFieldNames.forEach(function(fn) { var fc = globalFields.find(function(f){return f.name===fn;}); if (fc && fc.activities) fc.activities.forEach(function(s){zoneSports.add(s);}); });
-                if (zoneSports.size > 0) infoDiv.innerHTML += '<br><span style="color:#6B7280; font-style:italic;">Sports at ' + escapeHtml(league.offCampus.zone) + ': ' + Array.from(zoneSports).join(', ') + '</span>';
+                if (zoneSports.size > 0) infoDiv.innerHTML += '<br><span style="color:#6B7280; font-style:italic;">Sports at ' + escapeHtml(league.offCampus.zone) + ': ' + Array.from(zoneSports).map(s => escapeHtml(s)).join(', ') + '</span>';
                 offCampusCard.appendChild(infoDiv);
                 if (numTeamsAway >= totalTeams) {
                     var warnDiv = document.createElement('div');

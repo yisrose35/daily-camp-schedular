@@ -352,7 +352,7 @@
         }
 
         box.innerHTML = matches.slice(0, 15).map(name =>
-            `<div class="suggestion-item" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid #eee;">${name} <span style="color:#888; font-size:0.85rem;">(${camperRoster[name].bunk})</span></div>`
+            `<div class="suggestion-item" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid #eee;">${escapeHtml(name)} <span style="color:#888; font-size:0.85rem;">(${escapeHtml(camperRoster[name].bunk)})</span></div>`
         ).join("");
 
         box.style.display = 'block';
@@ -398,7 +398,7 @@
 
         if (!camperName) {
             resultContainer.style.display = 'block';
-            resultContainer.innerHTML = `<h3 style="color:red; margin:0;">🚫 Camper "${nameQuery}" not found.</h3><p>Make sure the camper has been added in <strong>Campistry Me</strong>.</p>`;
+            resultContainer.innerHTML = `<h3 style="color:red; margin:0;">🚫 Camper "${escapeHtml(nameQuery)}" not found.</h3><p>Make sure the camper has been added in <strong>Campistry Me</strong>.</p>`;
             return;
         }
 

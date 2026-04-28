@@ -123,9 +123,9 @@ function daShowModal(config) {
       fieldEl.className = 'da-modal-field';
 
       if (field.type === 'text' || field.type === 'time') {
-        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
-          '<input type="text" class="da-input da-modal-focusable" data-field="' + field.name + '"' +
-          ' value="' + (field.default || '') + '" placeholder="' + (field.placeholder || '') + '">';
+        fieldEl.innerHTML = '<label>' + escapeHtml(field.label) + '</label>' +
+          '<input type="text" class="da-input da-modal-focusable" data-field="' + escapeHtml(field.name) + '"' +
+          ' value="' + escapeHtml(field.default || '') + '" placeholder="' + escapeHtml(field.placeholder || '') + '">';
         inputs[field.name] = function() { return fieldEl.querySelector('input').value.trim(); };
       }
       else if (field.type === 'select') {
@@ -1952,7 +1952,7 @@ function overlayTripsOnDAW(gridEl) {
       'border:2px solid #ef4444; border-radius:4px; z-index:8; pointer-events:none;' +
       'display:flex; align-items:center; justify-content:center;';
     el.innerHTML = '<span style="background:#ef4444; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700; pointer-events:none; white-space:nowrap;">' +
-      'Trip: ' + (trip.event || 'Trip') + ' (' + minutesToTime(tStart) + '–' + minutesToTime(tEnd) + ')' +
+      'Trip: ' + escapeHtml(trip.event || 'Trip') + ' (' + minutesToTime(tStart) + '–' + minutesToTime(tEnd) + ')' +
       '</span>';
     track.appendChild(el);
   });
@@ -2282,7 +2282,7 @@ function addDragToRepositionListeners(gridEl) {
       e.dataTransfer.setData('text/event-move', eventId);
       e.dataTransfer.effectAllowed = 'move';
       
-      ghost.innerHTML = `<strong>${event.event}</strong><br><span>${event.startTime} - ${event.endTime}</span>`;
+      ghost.innerHTML = `<strong>${escapeHtml(event.event)}</strong><br><span>${escapeHtml(event.startTime)} - ${escapeHtml(event.endTime)}</span>`;
       ghost.style.display = 'block';
       
       const img = new Image();
@@ -4371,7 +4371,7 @@ function renderOverrideDetailPane() {
           const isEnabled = !disabledToday.includes(sport);
           const label = document.createElement('label');
           label.className = 'da-sport-checkbox';
-          label.innerHTML = `<input type="checkbox" ${isEnabled ? 'checked' : ''}> ${sport}`;
+          label.innerHTML = `<input type="checkbox" ${isEnabled ? 'checked' : ''}> ${escapeHtml(sport)}`;
           label.querySelector('input').onchange = (e) => {
             let list = currentOverrides.dailyDisabledSportsByField[name] || [];
             if (e.target.checked) list = list.filter(s => s !== sport);

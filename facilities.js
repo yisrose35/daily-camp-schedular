@@ -474,7 +474,7 @@ function renderMasterList() {
     const visible = facilities.filter(fac => facilityMatchesQuery(fac, _facilitySearchQuery));
 
     if (visible.length === 0) {
-        facilitiesListEl.innerHTML = `<div style="padding:20px; text-align:center; color:#9CA3AF;">No facilities match "<strong>${_facilitySearchQuery}</strong>".</div>`;
+        facilitiesListEl.innerHTML = `<div style="padding:20px; text-align:center; color:#9CA3AF;">No facilities match "<strong>${escapeHtml(_facilitySearchQuery)}</strong>".</div>`;
         return;
     }
 

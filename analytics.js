@@ -767,7 +767,7 @@
         if (!windows.length) { cont.innerHTML = `<div style="padding:8px 0;color:#94a3b8;font-size:0.82rem;text-align:center;">No fields have a free ${dur}-minute window.</div>`; return; }
         cont.innerHTML = windows.map(w => `
             <div style="padding:7px 12px;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:5px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;background:#fff;">
-                <span style="font-size:0.8rem;font-weight:700;color:#1e293b;min-width:110px;">${w.field}</span>
+                <span style="font-size:0.8rem;font-weight:700;color:#1e293b;min-width:110px;">${escapeHtml(w.field)}</span>
                 <div style="display:flex;flex-wrap:wrap;gap:5px;">
                     ${w.gaps.map(g => `<span style="padding:2px 8px;background:#dcfce7;border:1px solid #86efac;border-radius:999px;font-size:0.72rem;color:#15803d;font-weight:600;">${minutesToTimeLabel(g.start)} – ${minutesToTimeLabel(g.end)} (${g.end - g.start}m)</span>`).join('')}
                 </div>
@@ -1054,7 +1054,7 @@
         if (!sel) return;
         sel.innerHTML = '<option value="">All Bunks</option>';
         if (!divName) return;
-        (divisionsDat[divName]?.bunks || []).forEach(b => { sel.innerHTML += `<option value="${b}">${b}</option>`; });
+        (divisionsDat[divName]?.bunks || []).forEach(b => { sel.innerHTML += `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`; });
     }
 
     function renderRotationTable(divName) {
