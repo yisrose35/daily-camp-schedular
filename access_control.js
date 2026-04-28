@@ -1062,14 +1062,8 @@
     }
 
     function hasRoleAtLeast(requiredRole) {
-        // ★★★ v3.12: If role is known, check it even before _initialized ★★★
-        if (_currentRole) {
-            return (ROLE_HIERARCHY[_currentRole] || 0) >= (ROLE_HIERARCHY[requiredRole] || 0);
-        }
-        if (!_initialized) return false;
-        const currentLevel = ROLE_HIERARCHY[_currentRole] || 0;
-        const requiredLevel = ROLE_HIERARCHY[requiredRole] || 0;
-        return currentLevel >= requiredLevel;
+        if (!_currentRole) return _initialized ? false : false;
+        return (ROLE_HIERARCHY[_currentRole] || 0) >= (ROLE_HIERARCHY[requiredRole] || 0);
     }
 
     // =========================================================================

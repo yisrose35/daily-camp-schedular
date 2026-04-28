@@ -238,15 +238,14 @@
     }
 
     function canEditBunk(bunkId) {
+        // Delegate to AccessControl for consistency — it always has the freshest state.
+        // canEditDivision already does this; canEditBunk must match or they diverge.
+        if (window.AccessControl?.canEditBunk) return window.AccessControl.canEditBunk(bunkId);
+
+        // Fallback when AccessControl not yet loaded
         const role = window.CampistryDB?.getRole?.() || 'viewer';
-        
-        // Owners and admins can edit everything
         if (role === 'owner' || role === 'admin') return true;
-        
-        // Viewers can't edit
         if (role === 'viewer') return false;
-        
-        // Schedulers - check specific permissions
         return _editableBunks.includes(String(bunkId));
     }
 
@@ -372,7 +371,9 @@
 
     async function refresh() {
         log('Refreshing permissions...');
-        // Re-sync bunk list from AccessControl's current division assignments
+        // Re-load subdivisions in case admin changed assignments remotely,
+        // then recalculate. Without re-loading, new subdivisions never appear.
+        await loadSubdivisions();
         await calculateEditableResources();
         return {
             divisions: _editableDivisions,

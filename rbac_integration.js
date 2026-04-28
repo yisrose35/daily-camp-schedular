@@ -30,8 +30,9 @@
             'EditRestrictions'
         ]);
 
-        // Initialize access control first
-        await window.AccessControl.initialize();
+        // AccessControl is already initialized by rbac_init.js Step 1 before
+        // this module loads. Calling initialize() again is a no-op (guarded
+        // internally) but signals false dependency — removed to avoid confusion.
 
         // Initialize division selector with today's date
         const today = new Date().toISOString().split('T')[0];
@@ -169,6 +170,11 @@
         });
 
         observer.observe(document.body, { childList: true, subtree: true });
+
+        // Disconnect after 30s regardless — if the button hasn't appeared by then
+        // it's either a viewer page (no generate button) or a load failure.
+        // Leaving the observer running forever wastes memory on every DOM mutation.
+        setTimeout(() => observer.disconnect(), 30000);
     }
 
     // =========================================================================
@@ -239,14 +245,13 @@
     }
 
     async function saveGenerationLocks(generatedDivisions) {
-        // Collect field locks from GlobalFieldLocks
-        if (!window.GlobalFieldLocks) {
-            console.warn("🔗 GlobalFieldLocks not found");
+        if (!window.GlobalFieldLocks || typeof window.GlobalFieldLocks !== 'object') {
+            console.warn("🔗 GlobalFieldLocks not found or invalid");
             return;
         }
 
         const locks = {};
-        
+
         // Convert GlobalFieldLocks to serializable format
         for (const [key, value] of Object.entries(window.GlobalFieldLocks)) {
             if (value && typeof value === 'object') {
