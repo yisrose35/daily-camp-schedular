@@ -1,20 +1,10 @@
-// =============================================================================
-// supabase_permissions.js v5.0 — CAMPISTRY PERMISSIONS LAYER
-// =============================================================================
-//
-// RBAC integration layer for schedule operations.
-//
-// REPLACES: Permission checking scattered across multiple files
-//
-// PROVIDES:
-// - Division/bunk edit permissions
-// - Data filtering by user's divisions
-// - Integration with AccessControl module
-// - Blocked cell detection for UI
-//
-// REQUIRES: supabase_client.js
-//
-// =============================================================================
+// ============================================================================
+// supabase_permissions.js — RBAC Permissions Layer
+// ============================================================================
+// Derives edit access for divisions and bunks from AccessControl.
+// Used for data filtering (filterToMyDivisions) and blocked-cell detection.
+// AccessControl is the authoritative source — this module delegates to it.
+// ============================================================================
 
 (function() {
     'use strict';

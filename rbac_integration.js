@@ -1,14 +1,10 @@
 // ============================================================================
-// rbac_integration.js — Integrates RBAC into Existing Scheduler
+// rbac_integration.js — Hooks RBAC into the existing scheduler
 // ============================================================================
-// Hooks into existing scheduler code to:
-// - Replace Generate button with division selector
-// - Pass existing locks to scheduler core
-// - Save locks after generation
-// - Apply edit restrictions
-//
-// v1.1 SECURITY: Removed eval(originalHandler). Inline onclick is now resolved
-//      via allowlist (invokeOriginalHandlerSafely) — only known fn names, no args.
+// - Replaces Generate button with division selector
+// - Passes existing locks to scheduler core
+// - Saves locks after generation
+// - Applies edit restrictions on date change
 // ============================================================================
 
 (function() {
@@ -21,8 +17,6 @@
     // =========================================================================
 
     async function initialize() {
-        console.log("🔗 Initializing RBAC integration...");
-
         // Wait for all required modules
         await waitForModules([
             'AccessControl',
@@ -49,8 +43,6 @@
 
         // Hook into scheduler core
         hookSchedulerCore();
-
-        console.log("🔗 RBAC Integration complete");
     }
 
     async function waitForModules(modules) {
@@ -114,7 +106,6 @@
         }
 
         if (!generateBtn) {
-            console.log("🔗 Generate button not found, will retry on DOM changes");
             setupButtonObserver();
             return;
         }
@@ -141,17 +132,14 @@
             window.DivisionSelector.renderDivisionSelector(
                 // On confirm
                 async (selection) => {
-                    console.log("🔗 Generation requested:", selection);
                     await handleGeneration(selection, originalOnClick, originalHandler);
                 },
                 // On cancel
                 () => {
-                    console.log("🔗 Generation cancelled");
                 }
             );
         });
 
-        console.log("🔗 Generate button hooked");
     }
 
     function setupButtonObserver() {
@@ -182,7 +170,7 @@
     // =========================================================================
 
     async function handleGeneration(selection, originalOnClick, originalHandler) {
-        // ★★★ SECURITY: Re-verify role from DB before generation ★★★
+        // Re-verify role from DB before generation (prevents cache poisoning)
         if (window.AccessControl?.verifyBeforeWrite) {
             const allowed = await window.AccessControl.verifyBeforeWrite('generate schedule');
             if (!allowed) {
@@ -195,8 +183,6 @@
         }
 
         const { divisions, clearExisting, existingLocks, previouslyGenerated } = selection;
-
-        console.log("🔗 Starting generation for:", divisions);
 
         // Set global state for scheduler to read
         window._rbacGenerationConfig = {
@@ -232,8 +218,6 @@
 
             // After generation, save the new locks
             await saveGenerationLocks(divisions);
-
-            console.log("🔗 Generation complete");
 
         } catch (e) {
             console.error("🔗 Generation error:", e);
@@ -277,7 +261,6 @@
             input.addEventListener('change', async (e) => {
                 const newDate = e.target.value;
                 if (newDate) {
-                    console.log("🔗 Date changed to:", newDate);
                     await window.DivisionSelector.initialize(newDate);
                     window.EditRestrictions.refresh();
                 }
@@ -356,7 +339,6 @@
                         const fieldKey = typeof field === 'string' ? field : field.name;
                         const locks = window.existingFieldLocks[fieldKey];
                         if (locks && locks.includes(timeSlot)) {
-                            console.log(`🔗 Field ${fieldKey} is locked at ${timeSlot}, skipping`);
                             return false;
                         }
                     }
@@ -378,7 +360,6 @@
                          document.querySelector('main');
         
         if (!dashboard) {
-            console.log("🔗 Dashboard container not found");
             return;
         }
 
@@ -427,8 +408,8 @@
      * Get role-based UI configuration
      */
    function getUIConfig() {
-        // ★★★ v3.12: Fallback chain — never default to viewer if role is known ★★★
-        const role = window.AccessControl?.getCurrentRole() || 
+        // Fallback chain — never default to viewer if role is already known
+        const role = window.AccessControl?.getCurrentRole() ||
                      localStorage.getItem('campistry_role') || 
                      'viewer';
         

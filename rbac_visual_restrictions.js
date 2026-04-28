@@ -1,23 +1,11 @@
 // ============================================================================
-// rbac_visual_restrictions.js — Visual Editing Restrictions v2.1
+// rbac_visual_restrictions.js — Visual Editing Restrictions
 // ============================================================================
-// Adds visual indicators and blocks editing for divisions user can't access
-// 
-// ROLE BEHAVIOR:
-// - OWNER: Full access, no restrictions
-// - ADMIN: Full access, no restrictions  
-// - SCHEDULER: Editable divisions normal, others greyed out (view-only)
-// - VIEWER: Everything greyed out except Print Center & Camper Locator
+// Greys out and disables editing for divisions the user cannot access.
 //
-// EXCEPTIONS (always accessible):
-// - Daily Schedule View (view for all)
-// - Print Center (full for all — but design panel Owner/Admin only)
-// - Camper Locator (full for all)
-//
-// v2.1 CHANGES:
-// - ★ NEW: applyPrintCenterRestrictions() — hides design panel + save
-//          buttons for Scheduler/Viewer roles
-// - ★ NEW: Print tab triggers restrictions on tab switch via observer
+// OWNER / ADMIN : no restrictions
+// SCHEDULER     : editable divisions normal, others view-only
+// VIEWER        : everything view-only (Print Center & Camper Locator open to all)
 // ============================================================================
 
 (function() {
@@ -35,7 +23,7 @@
    let _observer = null;
 
     // =========================================================================
-    // ★★★ v2.2: OWNER/ADMIN LIVE CHECK ★★★
+    // OWNER/ADMIN LIVE CHECK
     // Checks 3 sources so owners are NEVER blocked, even during init races.
     // =========================================================================
 
@@ -80,7 +68,6 @@
         window.addEventListener('campistry-access-loaded', (e) => {
             _editableDivisions = e.detail.editableDivisions || [];
             _currentRole = e.detail.role;
-            console.log("🚫 Access loaded event:", { role: _currentRole, editable: _editableDivisions });
             applyRestrictions();
         });
 
@@ -92,14 +79,9 @@
         
         // Apply initial restrictions
         applyRestrictions();
-        
+
         // Set up mutation observer to handle dynamic content
         setupObserver();
-
-        console.log("🚫 Visual Restrictions v2.1 initialized:", {
-            role: _currentRole,
-            editableDivisions: _editableDivisions
-        });
     }
 
     // =========================================================================
@@ -109,10 +91,8 @@
    function applyRestrictions() {
         if (!_initialized) return;
 
-        // ★★★ v2.2: Owner/Admin NEVER gets restrictions ★★★
         if (_isOwnerOrAdmin()) return;
 
-        console.log("🚫 Applying restrictions for role:", _currentRole);
         // Inject styles
         injectStyles();
 
@@ -125,8 +105,8 @@
         applyToFieldsTab();
         applyToDailyAdjustments();
         applyToMasterScheduler();
-        
-        // ★ v2.1: Apply print center restrictions if that tab is visible
+
+        // Apply print center restrictions if that tab is visible
         applyPrintCenterRestrictions();
         
         // Show access banner
@@ -139,7 +119,6 @@
 
     function canEditDivision(divisionName) {
         if (!divisionName) return false;
-        // ★★★ v2.2: Use live check, not just cached _currentRole ★★★
         if (_isOwnerOrAdmin()) return true;
         if (_currentRole === 'viewer') return false;
         return _editableDivisions.includes(divisionName);
@@ -152,13 +131,13 @@
         return _currentRole === 'scheduler' && _editableDivisions.length > 0;
     }
 
-    // ★ v2.1: Check if user can edit print templates
+    // Check if user can edit print templates
     function canEditPrintTemplates() {
         return _currentRole === 'owner' || _currentRole === 'admin';
     }
 
     // =========================================================================
-    // ★ v2.1: APPLY TO PRINT CENTER
+    // APPLY TO PRINT CENTER
     // =========================================================================
     // Controls who sees the design panel, template save/update/delete buttons.
     // ALL roles can still preview, print, and export — but only Owner/Admin
@@ -174,8 +153,6 @@
         if (!pcContainer) return;
 
         const canDesign = canEditPrintTemplates();
-
-        console.log(`🚫 Print Center restrictions: role=${_currentRole}, canDesign=${canDesign}`);
 
         // 1. Design panel toggle button in topbar
         const designToggleBtn = pcContainer.querySelector('[onclick*="_pcToggleDesignPanel"]');
@@ -442,7 +419,7 @@
     // APPLY TO FIELDS TAB
     // =========================================================================
 
-    // ★ v2.2: Check if a field is relevant to the scheduler's assigned divisions
+    // Check if field is relevant to scheduler's assigned divisions
     function isFieldRelevantToScheduler(field) {
         if (!field) return false;
         // If field has no access restrictions, it's open to all — scheduler can view but not edit
@@ -471,13 +448,13 @@
         }
 
         if (_currentRole === 'scheduler') {
-            // ★ v2.2: Disable add field input + button by ID
+            // Disable add field input + button
             const addInput = document.getElementById('new-field-input');
             const addBtn = document.getElementById('add-field-btn');
             if (addInput) { addInput.disabled = true; addInput.placeholder = 'Only owner/admin can add fields'; addInput.classList.add('rbac-input-disabled'); }
             if (addBtn) { addBtn.disabled = true; addBtn.title = 'Only owner/admin can add fields'; addBtn.classList.add('rbac-btn-disabled'); }
 
-            // ★ v2.2: Restrict availability toggles in master list for non-relevant fields
+            // Restrict availability toggles in master list for non-relevant fields
             const allFields = window.getFields?.() || [];
             const masterList = document.getElementById('fields-master-list');
             if (masterList) {
@@ -502,7 +479,7 @@
                 });
             }
             
-            // ★ v2.2: Restrict detail pane for non-relevant fields
+            // Restrict detail pane for non-relevant fields
             const detailPane = document.getElementById('fields-detail-pane');
             if (detailPane && detailPane.children.length > 0) {
                 // Find which field is selected by reading the title/header
@@ -733,7 +710,7 @@
                                 shouldReapply = true;
                                 break;
                             }
-                            // ★ v2.1: Detect print center content being added
+                            // Detect print center content being added
                             if (node.matches?.('.pc-container') || node.querySelector?.('.pc-container')) {
                                 printTabChanged = true;
                                 shouldReapply = true;
@@ -743,7 +720,7 @@
                     }
                 }
                 
-                // ★ v2.1: Also watch for class changes (tab switching adds .active)
+                // Also watch for class changes (tab switching adds .active)
                 if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                     const target = mutation.target;
                     if (target.id === 'print' && target.classList.contains('active')) {
@@ -782,7 +759,6 @@
    function setupEditInterceptors() {
         // Intercept drag start
         document.addEventListener('dragstart', (e) => {
-            // ★★★ v2.2: Owner/Admin is NEVER blocked ★★★
             if (_isOwnerOrAdmin()) return;
             const divisionName = getDivisionFromElement(e.target);
             if (divisionName && !canEditDivision(divisionName)) {
@@ -793,7 +769,6 @@
 
         // Intercept click on edit/delete buttons
         document.addEventListener('click', (e) => {
-            // ★★★ v2.2: Owner/Admin is NEVER blocked ★★★
             if (_isOwnerOrAdmin()) return;
             const editBtn = e.target.closest('[data-action="edit"], [data-action="delete"], .edit-btn, .delete-btn');
             if (!editBtn) return;
@@ -1027,8 +1002,8 @@
         refresh,
         applyRestrictions,
         canEditDivision,
-        canEditPrintTemplates,           // ★ v2.1
-        applyPrintCenterRestrictions,    // ★ v2.1
+        canEditPrintTemplates,
+        applyPrintCenterRestrictions,
         isElementEditable,
         guardedAction,
         showAccessDeniedToast,
@@ -1049,7 +1024,7 @@
         injectStyles();
         setupEditInterceptors();
     }
-// ★★★ v2.2 SECURITY: Freeze to prevent monkey-patching ★★★
+    // Freeze to prevent monkey-patching
     Object.freeze(VisualRestrictions);
     try {
         Object.defineProperty(window, 'VisualRestrictions', {

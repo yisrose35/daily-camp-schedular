@@ -1,47 +1,15 @@
 // ============================================================================
-// access_control.js — Campistry Role-Based Access Control (Multi-Tenant) v3.9
+// access_control.js — Campistry Role-Based Access Control
 // ============================================================================
-// 
-// v3.9 SECURITY HARDENING:
-// - Write-time role verification: verifyBeforeWrite() re-checks role from
-//   Supabase before any save/delete/generate. Blocks session cache poisoning.
-// - Background DB verification after cache restore (non-blocking for reads)
-// - _roleVerifiedFromDB flag prevents client-side escalation attacks
-// - Reset verification flags on refresh() and sign-out
-//
-// v3.8 SESSION CACHE:
-// - Reads RBAC context from sessionStorage (written by dashboard.js v2.4)
-// - Skips all Supabase queries on cache hit → near-instant initialization
-// - Cache validated by userId match + 30-minute TTL
-// - Eliminates white screen gap between auth and RBAC on Flow/Me pages
-//
-// v3.7 SECURITY PATCHES:
-// - V-002 FIX: All permission checks now fail-closed when !_initialized
-// - Removed duplicate canEditPrintTemplates/canDeletePrintTemplates/canPrintSchedules
-// - Added real-time Supabase subscription for remote membership changes
-// - XSS-safe: showNoAccessWarning uses textContent instead of innerHTML
-//
-// v3.6 CHANGES:
-// - CRITICAL FIX: Invitees no longer get owner permissions (STEP 4 fallback)
-// - canEraseData() now allows Admin (not just Owner)
-// - Added canEraseAllCampData() for Owner-only nuclear option
-//
-// v3.5: Check team membership BEFORE camp ownership
-// 
 // Permission model:
 // - OWNER: Full access to everything
 // - ADMIN: Full access except delete camp data and invite users
-// - SCHEDULER: Edit only assigned divisions, view all (greyed out for others)
-// - VIEWER: View only, but can use Print Center and Camper Locator
+// - SCHEDULER: Edit only assigned divisions, view all (others greyed out)
+// - VIEWER: View only — Print Center and Camper Locator accessible to all
 //
-// Division assignment methods (scheduler):
+// Scheduler division assignment:
 // 1. Via subdivisions (preferred): scheduler assigned to subdivision_ids
 // 2. Via direct assignment (fallback): scheduler has assigned_divisions array
-//
-// EXCEPTIONS (accessible by all roles including viewers):
-// - Daily Schedule View (read-only for viewers)
-// - Print Center (full functionality)
-// - Camper Locator (full functionality)
 // ============================================================================
 
 (function() {
@@ -67,9 +35,9 @@
     let _isTeamMember = false;
     let _membership = null;
     let _lastDivisionsHash = null;
-    let _membershipSubscription = null;  // ★★★ v3.7: Real-time subscription ★★★
-    let _restoredFromCache = false;       // ★★★ v3.9: Track if role came from cache ★★★
-    let _roleVerifiedFromDB = false;      // ★★★ v3.9: Track if role confirmed by Supabase ★★★
+    let _membershipSubscription = null;
+    let _restoredFromCache = false;
+    let _roleVerifiedFromDB = false;
 
     const ROLES = {
         OWNER: 'owner',
@@ -103,7 +71,7 @@
     }
 
     // =========================================================================
-    // ★★★ v3.8: SESSION CACHE — Skip Supabase queries on cache hit ★★★
+    // SESSION CACHE — Skip Supabase queries on cache hit
     // Dashboard writes RBAC context to sessionStorage after role resolution.
     // On Flow/Me pages, we read it here for near-instant initialization.
     // =========================================================================
@@ -115,7 +83,7 @@
             
             const cache = JSON.parse(raw);
             
-            // ★★★ v3.9: Guard against prototype pollution (Hack #16) ★★★
+            // Guard against prototype pollution (Hack #16)
             if (!cache.hasOwnProperty('userId') || !cache.hasOwnProperty('role') || !cache.hasOwnProperty('cachedAt')) {
                 console.warn("🔐 Cache missing required own properties, ignoring");
                 sessionStorage.removeItem('campistry_rbac_cache');
@@ -124,14 +92,12 @@
             
             // Validate: same user, not stale (max 30 minutes)
             if (cache.userId !== currentUserId) {
-                console.log("🔐 Cache userId mismatch, ignoring");
                 sessionStorage.removeItem('campistry_rbac_cache');
                 return false;
             }
-            
+
             const ageMinutes = (Date.now() - cache.cachedAt) / 60000;
             if (ageMinutes > 30) {
-                console.log("🔐 Cache expired (" + Math.round(ageMinutes) + "m), ignoring");
                 sessionStorage.removeItem('campistry_rbac_cache');
                 return false;
             }
@@ -151,7 +117,7 @@
             localStorage.setItem('campistry_role', _currentRole);
             localStorage.setItem('campistry_is_team_member', String(_isTeamMember));
             
-            _restoredFromCache = true;  // ★★★ v3.9: Mark as unverified cache ★★★
+            _restoredFromCache = true;
             return true;
             
         } catch (e) {
@@ -161,7 +127,7 @@
     }
 
     // =========================================================================
-    // ★★★ v3.12: LOCALSTORAGE ROLE FALLBACK ★★★
+    // LOCALSTORAGE ROLE FALLBACK
     // When sessionStorage cache misses, check localStorage for a persisted role.
     // This prevents the owner from being locked out on fresh tabs.
     // =========================================================================
@@ -193,7 +159,7 @@
     }
 
     // =========================================================================
-    // ★★★ v3.9: WRITE-TIME ROLE VERIFICATION ★★★
+    // WRITE-TIME ROLE VERIFICATION
     // Before any destructive operation (save/delete/generate), re-verify
     // role from Supabase. Prevents session cache poisoning (Hack #1)
     // and localStorage injection (Hack #2) from granting write access.
@@ -285,7 +251,7 @@
             return true;
         }
 
-        // ★★★ v3.12 FIX: Owner/Admin fast-path — don't block on background verify ★★★
+        // Owner/Admin fast-path — don't block on background verify.
         // If we have a role from cache or localStorage and it's owner/admin,
         // allow the write immediately. The background verify will catch any
         // escalation (viewer pretending to be owner) by downgrading _currentRole,
@@ -322,7 +288,6 @@
             return;
         }
         
-        console.log("🔐 Initializing access control...");
         
         let attempts = 0;
         while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
@@ -343,19 +308,17 @@
 
         _currentUser = user;
         
-        // ★★★ v3.8: TRY SESSION CACHE FIRST, v3.12: THEN LOCALSTORAGE ★★★
         if (tryRestoreFromCache(user.id) || tryRestoreFromLocalStorage(user.id)) {
-            console.log("🔐 ⚡ Restored from session cache/local storage — skipping Supabase queries");
-            
-           // ★★★ v3.13: Instant-init for ALL roles from cache ★★★
+            console.log("🔐 ⚡ Restored from session cache");
+
             // Cache already has role, subdivisionIds, and assignedDivisions.
             // Calculate permissions immediately — no network calls needed.
             // Subdivision details load in background for UI enrichment only.
             calculateEditableDivisions();
             _initialized = true;
             console.log("🔐 ⚡ Instant-init from cache —", _currentRole, "with", _editableDivisions.length, "divisions");
-            
-            // ★★★ v3.9: Background-verify the cached role (non-blocking) ★★★
+
+            // Background-verify the cached role (non-blocking)
             verifyRoleFromDB().then(() => {
                 debugLog("Background role verification complete:", _currentRole);
             });
@@ -364,19 +327,16 @@
             await determineUserContext();
             _roleVerifiedFromDB = true;
 
-            // ★★★ v3.13: Instant-init for ALL roles from DB too ★★★
             calculateEditableDivisions();
             _initialized = true;
             console.log("🔐 ⚡ Instant-init from DB —", _currentRole, "with", _editableDivisions.length, "divisions");
         }
-        
-        // ★★★ v3.13: Subdivision loading is now NON-BLOCKING ★★★
-        // Loads in background for UI enrichment (colors, names, "Managed by X" labels).
-        // Does NOT gate _initialized or permission checks.
+
+        // Subdivision data loads in background — does not block permission checks
         _loadSubdivisionsInBackground();
-        
+
         setupDivisionChangeObserver();
-        setupMembershipSubscription();  // ★★★ v3.7: Real-time membership updates ★★★
+        setupMembershipSubscription();
         
         if (_currentRole === ROLES.SCHEDULER && _editableDivisions.length === 0) {
             showNoAccessWarning();
@@ -436,7 +396,7 @@
     }
 
     // =========================================================================
-    // ★★★ v3.7: REAL-TIME MEMBERSHIP SUBSCRIPTION ★★★
+    // REAL-TIME MEMBERSHIP SUBSCRIPTION
     // If an admin changes this user's role/subdivisions remotely,
     // refresh permissions without requiring a page reload.
     // =========================================================================
@@ -469,8 +429,6 @@
     // ⭐ FIXED v3.6: Check team membership FIRST, then camp ownership
     // =========================================================================
     async function determineUserContext() {
-        console.log("🔐 Determining user context...");
-        
         // =====================================================================
         // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
         // =====================================================================
@@ -481,13 +439,7 @@
                 .eq('user_id', _currentUser.id)
                 .not('accepted_at', 'is', null)
                 .maybeSingle();
-            
-            console.log("🔐 Team member check result:", { 
-                found: !!memberData, 
-                role: memberData?.role,
-                error: error?.message 
-            });
-            
+
             if (memberData && !error) {
                 console.log("🔐 ✅ User IS a team member:", memberData.role);
                 _currentRole = memberData.role || ROLES.VIEWER;
@@ -509,11 +461,7 @@
                 localStorage.setItem('campistry_user_id', _campId);
                 localStorage.setItem('campistry_auth_user_id', _currentUser.id);
                 
-                if (_userSubdivisionIds.length > 0) {
-                    console.log("🔐 User has subdivision assignments:", _userSubdivisionIds);
-                } else if (_directDivisionAssignments.length > 0) {
-                    console.log("🔐 User has direct division assignments:", _directDivisionAssignments);
-                } else if (_currentRole === ROLES.SCHEDULER) {
+                if (_currentRole === ROLES.SCHEDULER && _userSubdivisionIds.length === 0 && _directDivisionAssignments.length === 0) {
                     console.warn("🔐 ⚠️ SCHEDULER HAS NO DIVISION ASSIGNMENTS!");
                 }
                 
@@ -600,11 +548,11 @@
         
         // =====================================================================
         // ⭐ STEP 4: Fallback - No camp association found
-        // ★★★ CRITICAL FIX v3.6: Default to VIEWER for safety ★★★
-        // Invited users who fell through should NOT get owner access
+        // CRITICAL FIX v3.6: Default to VIEWER for safety.
+        // Invited users who fell through should NOT get owner access.
         // =====================================================================
-        console.log("🔐 ⚠️ No camp association found - defaulting to VIEWER for safety");
-        _currentRole = ROLES.VIEWER;  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
+        console.log("🔐 ⚠️ No camp association found");
+        _currentRole = ROLES.VIEWER;
         _isTeamMember = false;
         _campId = _currentUser.id;
         _campName = 'Unknown Camp';
@@ -642,8 +590,7 @@
             }
 
             _subdivisions = data || [];
-            console.log("🔐 Loaded subdivisions:", _subdivisions.length);
-            
+
             if (_subdivisions.length > 0) {
                 debugLog("Subdivision details:", _subdivisions.map(s => ({
                     id: s.id,
@@ -681,7 +628,6 @@
             }
 
             _userSubdivisionDetails = data || [];
-            console.log("🔐 Loaded user subdivision details:", _userSubdivisionDetails.length);
 
         } catch (e) {
             console.error("🔐 Error loading user subdivision details:", e);
@@ -689,7 +635,7 @@
         }
     }
 // =========================================================================
-    // ★★★ v3.13: NON-BLOCKING SUBDIVISION LOADING ★★★
+    // NON-BLOCKING SUBDIVISION LOADING
     // Subdivision data is needed for UI labels and colors, not for permission
     // checks. Loading it in background prevents slow internet from blocking
     // any user role from using the app.
@@ -709,7 +655,6 @@
                 calculateEditableDivisions();
                 
                 if (_editableDivisions.length !== prevCount) {
-                    console.log("🔐 Subdivision data refined permissions:", prevCount, "→", _editableDivisions.length, "divisions");
                     window.VisualRestrictions?.refresh?.();
                 }
                 
@@ -737,13 +682,11 @@
             _editableDivisions = [...allDivisions];
             // Note: if window.divisions isn't loaded yet, _editableDivisions will be [].
             // That's fine — getEditableDivisions() always reads window.divisions live for owner/admin.
-            console.log("🔐 Full edit access:", allDivisions.length > 0 ? `${allDivisions.length} divisions` : '(divisions load dynamically — window.divisions not populated yet)');
             return;
         }
-        
+
         if (_currentRole === ROLES.VIEWER) {
             _editableDivisions = [];
-            console.log("🔐 View-only access");
             return;
         }
         
@@ -773,15 +716,13 @@
                 _directDivisionAssignments.forEach(d => editableDivs.add(d));
             }
             
-            // ★★★ FIX: If window.divisions is empty (e.g., on dashboard), 
-            // use the divisions from subdivisions directly without filtering ★★★
+            // If window.divisions is empty (e.g., on dashboard),
+            // use the divisions from subdivisions directly without filtering.
             if (allDivisions.length === 0 && editableDivs.size > 0) {
                 _editableDivisions = [...editableDivs];
-                console.log("🔐 Scheduler edit access (from subdivisions):", _editableDivisions.length, "divisions", _editableDivisions);
             } else {
                 // Filter against window.divisions if it's populated
                 _editableDivisions = allDivisions.filter(d => editableDivs.has(d));
-                console.log("🔐 Scheduler edit access:", _editableDivisions.length, "divisions", _editableDivisions);
             }
             
             if (_editableDivisions.length === 0 && editableDivs.size === 0) {
@@ -790,7 +731,7 @@
         }
     }
 
-    // ★★★ v3.7: XSS-safe — uses textContent instead of innerHTML ★★★
+    // XSS-safe — uses textContent instead of innerHTML
     function showNoAccessWarning() {
         const banner = document.createElement('div');
         banner.id = 'no-access-warning';
@@ -844,9 +785,9 @@
 
     async function refresh() {
         _initialized = false;
-        _restoredFromCache = false;     // ★★★ v3.9: Reset verification flags ★★★
-        _roleVerifiedFromDB = false;    // ★★★ v3.9: Force re-verification ★★★
-        // ★★★ v3.8: Clear session cache so fresh Supabase data is used ★★★
+        _restoredFromCache = false;
+        _roleVerifiedFromDB = false;
+        // Clear session cache so fresh Supabase data is used
         try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
         // Clean up old subscription before reinitializing
         if (_membershipSubscription) {
@@ -858,12 +799,12 @@
 
     // =========================================================================
     // PERMISSION CHECKS - Division Level
-    // ★★★ V-002: All checks fail-closed when !_initialized ★★★
+    // All checks fail-closed when !_initialized (V-002 fix)
     // =========================================================================
 
     function canEditDivision(divisionName) {
         if (!divisionName) return false;
-        // ★★★ v3.12: Owner/Admin bypass — role is known before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
@@ -872,7 +813,7 @@
 
     function canEditBunk(bunkName) {
         if (!bunkName) return false;
-        // ★★★ v3.12: Owner/Admin bypass — role is known before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
@@ -898,48 +839,46 @@
 
     // =========================================================================
     // PERMISSION CHECKS - Feature Level
-    // ★★★ V-002: All checks fail-closed when !_initialized ★★★
+    // All checks fail-closed when !_initialized (V-002 fix)
     // =========================================================================
 
     function canInviteUsers() {
-        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        // Owner bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized) return false;
         return false;
     }
 
     function canManageSubdivisions() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return false;
     }
 
     function canManageTeam() {
-        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        // Owner bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized) return false;
         return false;
     }
 
     function canDeleteCampData() {
-        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        // Owner bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized) return false;
         return false;
     }
 
-    // ★★★ FIXED v3.6: Admin can now erase schedules/history ★★★
     function canEraseData() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return false;
     }
 
-    // ★★★ NEW v3.6: Owner-only for nuclear option ★★★
     function canEraseAllCampData() {
-        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        // Owner bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized) return false;
         return false;
@@ -950,7 +889,7 @@
      * Owner and Admin can edit templates; Scheduler and Viewer cannot.
      */
     function canEditPrintTemplates() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized || !_currentRole) return false;
         return false;
@@ -961,7 +900,7 @@
      * All roles can print (per existing Print Center exception).
      */
     function canPrintSchedules() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return true; // Print Center is accessible to all roles
@@ -972,35 +911,35 @@
      * Only Owner can delete templates.
      */
     function canDeletePrintTemplates() {
-        // ★★★ v3.12: Owner bypass before _initialized ★★★
+        // Owner bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER) return true;
         if (!_initialized || !_currentRole) return false;
         return false;
     }
 
     function canEditSetup() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return _currentRole === ROLES.SCHEDULER;
     }
 
     function canEditFields() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return false;
     }
 
     function canEditGlobalFields() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return false;
     }
 
     function canEditAnything() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
@@ -1008,7 +947,7 @@
     }
     
     function canSave() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return _currentRole !== ROLES.VIEWER;
@@ -1019,7 +958,7 @@
     }
 
     function canRunGenerator() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
@@ -1031,17 +970,17 @@
     // =========================================================================
 
     function canPrint() {
-        // ★★★ v3.12: Allow if role is known, even before full init ★★★
+        // Allow if role is known, even before full init
         return _initialized || !!_currentRole;
     }
 
     function canUseCamperLocator() {
-        // ★★★ v3.12: Allow if role is known, even before full init ★★★
+        // Allow if role is known, even before full init
         return _initialized || !!_currentRole;
     }
 
     function canViewDailySchedule() {
-        // ★★★ v3.12: Allow if role is known, even before full init ★★★
+        // Allow if role is known, even before full init
         return _initialized || !!_currentRole;
     }
 
@@ -1073,7 +1012,7 @@
     // =========================================================================
 
     function getEditableDivisions() {
-        // ★★★ v3.11/v3.12 FIX: Owner/Admin always gets ALL current divisions dynamically ★★★
+        // Owner/Admin always gets ALL current divisions dynamically.
         // _editableDivisions may be empty if window.divisions wasn't loaded at init time.
         // The polling interval recalculates eventually, but there's a gap where
         // getEditableDivisions() returns [] causing cells to render as non-editable.
@@ -1356,7 +1295,7 @@
     }
 
     function showPermissionDenied(action = 'perform this action') {
-        // ★★★ v3.7: XSS-safe — uses textContent instead of innerHTML ★★★
+        // XSS-safe — uses textContent instead of innerHTML
         if (typeof window.showToast === 'function') {
             window.showToast(`You don't have permission to ${action}`, 'error');
         } else {
@@ -1415,7 +1354,7 @@
             font-size: 0.9rem;
         `;
         
-        // ★★★ v3.7: XSS-safe — build DOM elements instead of innerHTML ★★★
+        // XSS-safe — build DOM elements instead of innerHTML
         const icon = document.createElement('span');
         icon.style.fontSize = '1.2rem';
         const textContainer = document.createElement('div');
@@ -1465,7 +1404,7 @@
     // =========================================================================
 
     function canEdit() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
+        // Owner/Admin bypass — role is known before _initialized
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         if (!_initialized) return false;
         return canEditAnything();
@@ -1479,7 +1418,6 @@
         return true;
     }
 
-   // ★★★ v3.10: Granular per-section setup permissions ★★★
     // Admin-only sections: fields, divisions, locations, special activities
     // Scheduler+ : schedule templates, leagues, skeleton assignments
     function checkSetupAccess(action) {
@@ -1556,84 +1494,72 @@
     }
 
     async function deleteMyDivisionsOnly(dateKey) {
-        console.log('🗑️ [AccessControl] deleteMyDivisionsOnly called for:', dateKey);
-        
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            console.log('🗑️ [AccessControl] Owner/Admin - use full delete instead');
             return null;
         }
-        
+
         const myDivisions = getEditableDivisions();
         if (myDivisions.length === 0) {
             return { error: "No divisions assigned" };
         }
-        
-        console.log('🗑️ [AccessControl] Deleting divisions:', myDivisions);
-        
+
         try {
             if (window.ScheduleDB?.deleteMyScheduleOnly) {
-                console.log('🗑️ [AccessControl] Calling ScheduleDB.deleteMyScheduleOnly...');
                 const cloudResult = await window.ScheduleDB.deleteMyScheduleOnly(dateKey);
-                console.log('🗑️ [AccessControl] Cloud delete result:', cloudResult);
-                
+
                 if (!cloudResult?.success) {
-                    console.error('🗑️ [AccessControl] Cloud delete failed:', cloudResult?.error);
+                    console.error('🔐 [AccessControl] Cloud delete failed:', cloudResult?.error);
                 }
             } else {
-                console.warn('🗑️ [AccessControl] ScheduleDB.deleteMyScheduleOnly not available!');
+                console.warn('🔐 [AccessControl] ScheduleDB.deleteMyScheduleOnly not available!');
                 const client = window.CampistryDB?.getClient?.() || window.supabase;
                 const campId = window.CampistryDB?.getCampId?.() || getCampId();
                 const userId = window.CampistryDB?.getUserId?.();
-                
+
                 if (client && campId && userId) {
-                    console.log('🗑️ [AccessControl] Fallback: direct Supabase delete...');
                     const { error } = await client
                         .from('daily_schedules')
                         .delete()
                         .eq('camp_id', campId)
                         .eq('date_key', dateKey)
                         .eq('scheduler_id', userId);
-                        
+
                     if (error) {
-                        console.error('🗑️ [AccessControl] Fallback delete error:', error);
-                    } else {
-                        console.log('🗑️ [AccessControl] Fallback delete successful');
+                        console.error('🔐 [AccessControl] Fallback delete error:', error);
                     }
                 }
             }
-            
+
             const divisions = window.divisions || {};
             const bunksToRemove = new Set();
-            
+
             for (const divName of myDivisions) {
                 const divInfo = divisions[divName];
                 if (divInfo?.bunks) {
                     divInfo.bunks.forEach(b => bunksToRemove.add(b));
                 }
             }
-            
+
             if (window.scheduleAssignments) {
                 bunksToRemove.forEach(bunk => {
                     delete window.scheduleAssignments[bunk];
                 });
-                console.log('🗑️ [AccessControl] Cleared', bunksToRemove.size, 'bunks from window.scheduleAssignments');
             }
-            
+
             if (window.leagueAssignments) {
                 bunksToRemove.forEach(bunk => {
                     delete window.leagueAssignments[bunk];
                 });
             }
-            
+
             if (window.ScheduleDB?.loadSchedule) {
-                console.log('🗑️ [AccessControl] Reloading remaining data...');
                 await window.ScheduleDB.loadSchedule(dateKey);
             }
-            
+
             return { success: true, deletedDivisions: myDivisions };
-            
+
         } catch (e) {
-            console.error('🗑️ [AccessControl] deleteMyDivisionsOnly error:', e);
+            console.error('🔐 [AccessControl] deleteMyDivisionsOnly error:', e);
             return { error: e.message };
         }
     }
@@ -1758,7 +1684,7 @@
         const campId = getCampId();
 
         try {
-            // ★ Check for existing member with this email (prevents duplicates)
+            // Check for existing member with this email (prevents duplicates)
             const { data: existing } = await window.supabase
                 .from('camp_users')
                 .select('id, email, accepted_at')
@@ -1831,8 +1757,8 @@
         try {
             const campId = getCampId();
             
-            // ★★★ v4.0: Full cleanup — deletes camp_users + auth.users + auth.identities
-            // Uses SECURITY DEFINER RPC so client doesn't need service role access
+            // Full cleanup — deletes camp_users + auth.users + auth.identities.
+            // Uses SECURITY DEFINER RPC so client doesn't need service role access.
             const { data, error } = await window.supabase
                 .rpc('delete_team_member_full', {
                     member_row_id: id,
@@ -1896,7 +1822,7 @@
                 return { error: "This invite was sent to a different email address" };
             }
 
-            // ★★★ v3.9: Reject expired invites (7-day TTL) ★★★
+            // Reject expired invites (7-day TTL)
             if (invite.created_at) {
                 const inviteAgeMs = Date.now() - new Date(invite.created_at).getTime();
                 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -2074,7 +2000,7 @@
         canManageTeam,
         canDeleteCampData,
         canEraseData,
-        canEraseAllCampData,  // ★ NEW v3.6
+        canEraseAllCampData,
         canEditSetup,
         canEditFields,
         canEditGlobalFields,
@@ -2158,7 +2084,6 @@
         deleteMyDivisionsOnly,
         filterDivisionsForGeneration,
         
-        // ★★★ v3.9: Write-time verification ★★★
         verifyBeforeWrite,
         verifyRoleFromDB,
         get isRoleVerified() { return _roleVerifiedFromDB; },
@@ -2168,7 +2093,7 @@
     };
 
     // =========================================================================
-    // ★★★ v3.9 SECURITY: Freeze exports to prevent monkey-patching ★★★
+    // SECURITY: Freeze exports to prevent monkey-patching.
     // Attacks #11 and #20: Attacker replaces window.AccessControl or
     // patches individual methods like verifyBeforeWrite. Object.freeze
     // makes ALL properties read-only and non-configurable.
@@ -2194,9 +2119,9 @@
                     try { window.supabase?.removeChannel?.(_membershipSubscription); } catch(e) {}
                     _membershipSubscription = null;
                 }
-                // ★★★ v3.8: Clear session cache on logout ★★★
+                // Clear session cache on logout
                 try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
-                // ★★★ v3.13: Clear localStorage role on logout (prevents stale role on next login) ★★★
+                // Clear localStorage role on logout (prevents stale role on next login)
                 try {
                     localStorage.removeItem('campistry_role');
                     localStorage.removeItem('campistry_user_id');
@@ -2204,8 +2129,8 @@
                     localStorage.removeItem('campistry_is_team_member');
                 } catch(e) {}
                 _initialized = false;
-                _restoredFromCache = false;     // ★★★ v3.9 ★★★
-                _roleVerifiedFromDB = false;    // ★★★ v3.9 ★★★
+                _restoredFromCache = false;
+                _roleVerifiedFromDB = false;
                 _currentUser = null;
                 _currentRole = null;
                 _campId = null;

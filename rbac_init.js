@@ -1,24 +1,11 @@
 // ============================================================================
-// rbac_init.js — Master RBAC Initialization v1.4 (SESSION CACHE)
+// rbac_init.js — Master RBAC Initialization
 // ============================================================================
-// Initializes all RBAC modules in the correct order and handles dependencies
-// 
-// v1.4: Removed loading screen manipulation — AccessControl now reads from
-//        sessionStorage cache (written by dashboard.js), making init near-instant.
-//        No more white screen gap between auth and RBAC.
-// v1.2 SECURITY PATCHES:
-//   - V-001 FIX: Hide app shell during init to prevent flash of unauthorized content
-//   - V-004 FIX: Logic-gate destructive actions at handler level (not just CSS)
-//
-// v1.1 FIX: Added 'campistry-rbac-ready' event dispatch for cloud_storage_bridge
-//           Previously only dispatched 'rbac-system-ready' which cloud bridge
-//           doesn't listen for, causing schedule merge to never complete.
-//
-// Load order:
-// 1. access_control.js (core permissions)
-// 2. subdivision_schedule_manager.js (multi-scheduler state)
-// 3. scheduler_subdivision_integration.js (scheduler hooks)
-// 4. rbac_visual_restrictions.js (UI restrictions)
+// Initializes all RBAC modules in the correct order:
+// 1. access_control.js  — core permissions
+// 2. subdivision_schedule_manager.js  — multi-scheduler state
+// 3. rbac_visual_restrictions.js  — UI restrictions
+// Dispatches 'rbac-system-ready' and 'campistry-rbac-ready' when done.
 // ============================================================================
 
 (function() {
@@ -31,8 +18,6 @@
     // =========================================================================
 
     async function initializeRBAC() {
-        console.log("🚀 Initializing RBAC system...");
-
         try {
             // Step 1: Wait for and initialize AccessControl
             // (reads sessionStorage cache — should be near-instant)
@@ -50,8 +35,6 @@
             // Step 5: Logic-gate destructive action handlers
             installDestructiveActionGuards();
             
-            console.log("🚀 RBAC system fully initialized");
-            
             // Build event detail once
             const eventDetail = {
                 role: window.AccessControl?.getCurrentRole(),
@@ -67,14 +50,10 @@
                 detail: eventDetail
             }));
             
-            // ★★★ v1.1 FIX: Also dispatch campistry-rbac-ready ★★★
-            // cloud_storage_bridge.js listens for this event to re-merge
-            // with correct permissions after conservative initial merge
+            // Also dispatch campistry-rbac-ready — cloud_storage_bridge.js listens for this event
             window.dispatchEvent(new CustomEvent('campistry-rbac-ready', {
                 detail: eventDetail
             }));
-            
-            console.log("🚀 Dispatched both rbac-system-ready and campistry-rbac-ready events");
             
         } catch (error) {
             console.error("🚀 RBAC initialization error:", error);
@@ -111,10 +90,6 @@
         // Initialize AccessControl
         await window.AccessControl.initialize();
         
-        console.log("🚀 AccessControl initialized:", {
-            role: window.AccessControl.getCurrentRole(),
-            isInitialized: window.AccessControl.isInitialized
-        });
     }
 
     async function initializeSubdivisionManager() {
@@ -132,9 +107,6 @@
 
         await window.SubdivisionScheduleManager.initialize();
         
-        console.log("🚀 SubdivisionScheduleManager initialized:", {
-            isInitialized: window.SubdivisionScheduleManager.isInitialized
-        });
     }
 
     async function initializeVisualRestrictions() {
@@ -154,7 +126,6 @@
 
         await restrictionsModule.initialize();
         
-        console.log("🚀 VisualRestrictions initialized");
     }
 
     // =========================================================================
@@ -163,8 +134,6 @@
 
     function applyInitialRestrictions() {
         const role = window.AccessControl?.getCurrentRole();
-        
-        console.log("🚀 Applying restrictions for role:", role);
         
         // Apply restrictions based on role
         if (role === 'viewer') {
@@ -194,8 +163,6 @@
     }
 
     function applySchedulerRestrictions() {
-        console.log("🚀 Applying scheduler restrictions...");
-        
         // Schedulers can edit their assigned divisions only
         // This is handled by EditRestrictions/VisualRestrictions modules
         
@@ -213,8 +180,6 @@
     }
 
     function applyAdminRestrictions() {
-        console.log("🚀 Applying admin restrictions...");
-        
         // Admins can do everything except:
         // 1. Invite users
         // 2. Delete all camp data
@@ -234,8 +199,6 @@
     // =========================================================================
 
     function installDestructiveActionGuards() {
-        console.log("🚀 Installing destructive action guards...");
-
         // Guard: Erase All Camp Data (owner-only)
         const eraseAllBtn = document.getElementById('eraseAllBtn');
         if (eraseAllBtn) {
@@ -288,7 +251,6 @@
             }, true);
         }
 
-        console.log("🚀 Destructive action guards installed");
     }
 
     // =========================================================================
