@@ -9448,14 +9448,20 @@
                         const _evtGradeMode = evt.gradeMode || 'whole_grade';
                         const _evtConcurrency = Math.max(1, parseInt(evt.concurrency) || 1);
 
-                        // Spread bunks evenly across the date range so all bunks don't
-                        // pile onto day 1. Remaining eligible bunks ÷ remaining days gives
-                        // the target for today; the rest are deferred to future scheduler runs.
+                        // Taper bunks across the date range: try harder on early days so
+                        // there is buffer toward the end. Formula: factor = 2.5/(daysRemaining+1)
+                        // gives the progression 8,5,2,1 for 16 bunks over 4 days.
+                        // A "reserve" floor ensures each future day can get at least 1 bunk.
                         const _evtDaysRemaining = Math.max(1,
                             Math.round((new Date(evt.dateRange.end) - new Date(currentDate)) / 86400000) + 1
                         );
                         const _evtTotalEligible = Object.values(bunksByGrade).reduce((s, bs) => s + bs.length, 0);
-                        const _evtMaxBunksToday = Math.ceil(_evtTotalEligible / _evtDaysRemaining);
+                        const _evtTaperFactor = Math.min(1, 2.5 / (_evtDaysRemaining + 1));
+                        const _evtMaxFromReserve = _evtTotalEligible - Math.max(0, _evtDaysRemaining - 1);
+                        const _evtMaxBunksToday = Math.max(1, Math.min(
+                            Math.ceil(_evtTotalEligible * _evtTaperFactor),
+                            _evtMaxFromReserve
+                        ));
 
                         if (_evtGradeMode === 'individual') {
                             // ── STAGGERED: bunks placed _evtConcurrency-at-a-time into sequential slots ──
