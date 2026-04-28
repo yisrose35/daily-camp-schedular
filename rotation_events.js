@@ -1284,7 +1284,9 @@ function getRotationQuotas(dateKey) {
             daysLeft: daysLeft,
             dailyTarget: dailyTarget,
             isLastDay: isLastDay,
-            placed: 0
+            placed: 0,
+            _dateRangeStart: evt.dateRange.start,
+            _dateRangeEnd: evt.dateRange.end
         };
     });
     return quotas;

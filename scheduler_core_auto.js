@@ -4185,10 +4185,25 @@
                     if (_rqKeys.length > 0) {
                         _rqKeys.forEach(function(eid) {
                             var q = rotationQuotas[eid];
-                            log('[Phase3] Rotation "' + q.eventName + '": ' + q.remainingCount + ' remaining, ' + q.daysLeft + ' days left, target=' + q.dailyTarget + (q.isLastDay ? ' (LAST DAY)' : ''));
+                            log('[Phase3] Rotation "' + q.eventName + '": ' + q.remainingCount + ' remaining, ' + q.daysLeft + ' days left, target=' + q.dailyTarget + (q.isLastDay ? ' (LAST DAY)' : '') + (q._dateRangeStart ? ' [range: ' + q._dateRangeStart + ' → ' + q._dateRangeEnd + ']' : ''));
                         });
                     }
                 } catch (e) { console.warn('[Phase3] rotation quota computation failed:', e); }
+            }
+
+            // Pre-seed rotationQuotas.placed with Phase 2.4 walls already in bunkTimelines
+            // so Phase 3 doesn't place additional bunks on top of the Phase 2.4 quota.
+            if (rotationQuotas) {
+                Object.keys(rotationQuotas).forEach(function(eid) {
+                    allGrades.forEach(function(grade) {
+                        getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                            var tl = bunkTimelines[bunk] || [];
+                            if (tl.some(function(b) { return b && b._rotationEventId === eid; })) {
+                                rotationQuotas[eid].placed++;
+                            }
+                        });
+                    });
+                });
             }
 
             // ── Pre-register Phase-0 placed blocks into fieldLedger ──────────────────
@@ -9161,6 +9176,14 @@
                     const _rotEvents = window.RotationEvents.loadRotationEvents() || [];
                     let _rotWallCount = 0;
                     const _rotUnplaced = [];
+                    // Use the same quota formula as Phase 3 so Phase 2.4 and Phase 3
+                    // don't independently place their own full quotas on the same day.
+                    let _phase24Quotas = {};
+                    try {
+                        if (typeof window.RotationEvents.getRotationQuotas === 'function') {
+                            _phase24Quotas = window.RotationEvents.getRotationQuotas(currentDate) || {};
+                        }
+                    } catch (_e) {}
 
                     _rotEvents.forEach(evt => {
                         if (!currentDate || !evt || !evt.dateRange) return;
@@ -9216,7 +9239,9 @@
                         // (0 < gap < smallest activity) between the placement and the nearest
                         // fixed block already in the bunk's timeline. Such gaps can never be
                         // filled by Phase 3, so we reject these positions early.
-                        const _MIN_FILLABLE = TYPE_FLOORS.snack || 15;
+                        // Use sport minimum as threshold: a gap smaller than a sport can't be
+                        // filled by Phase 3's sport solver, making it a guaranteed dead gap.
+                        const _MIN_FILLABLE = (TYPE_FLOORS.sport || 25);
                         const wouldCreateSmallGapForBunk = (bunk, t, tEnd) => {
                             const tl = bunkTimelines[bunk] || [];
                             let prevEnd = null, nextStart = null;
@@ -9235,6 +9260,42 @@
                             if (nextStart !== null && nextStart - tEnd > 0 && nextStart - tEnd < _MIN_FILLABLE) return true;
                             return false;
                         };
+
+                        // Detect gaps between a proposed placement and bell-schedule period
+                        // boundaries that are too small to fill. E.g. placing Lice at 11:00
+                        // when the period starts at 10:50 leaves a 10-min dead zone that no
+                        // activity can fill — so that position must be rejected.
+                        // Any existing block already occupying [periodStart, t) "extends" the
+                        // lead wall, so only truly empty leading/trailing gaps are penalized.
+                        const wouldCreatePeriodBoundaryGap = (bunk, grade, t, tEnd) => {
+                            const periods = (window.campPeriods || {})[grade];
+                            if (!periods || !periods.length) return false;
+                            const tl = bunkTimelines[bunk] || [];
+                            for (let _pbpi = 0; _pbpi < periods.length; _pbpi++) {
+                                const p = periods[_pbpi];
+                                if (p.startMin > t || p.endMin < tEnd) continue; // block must sit inside period
+                                // Leading gap: treat period start as a wall; existing blocks extend it
+                                let leadWall = p.startMin;
+                                for (let _bi = 0; _bi < tl.length; _bi++) {
+                                    const blk = tl[_bi];
+                                    if (!blk) continue;
+                                    const bEnd = blk.endMin != null ? blk.endMin : blk._endMin;
+                                    if (bEnd != null && bEnd > leadWall && bEnd <= t) leadWall = bEnd;
+                                }
+                                if (t - leadWall > 0 && t - leadWall < _MIN_FILLABLE) return true;
+                                // Trailing gap: treat period end as a wall; existing blocks shrink it
+                                let trailWall = p.endMin;
+                                for (let _bi = 0; _bi < tl.length; _bi++) {
+                                    const blk = tl[_bi];
+                                    if (!blk) continue;
+                                    const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
+                                    if (bStart != null && bStart >= tEnd && bStart < trailWall) trailWall = bStart;
+                                }
+                                if (trailWall - tEnd > 0 && trailWall - tEnd < _MIN_FILLABLE) return true;
+                            }
+                            return false;
+                        };
+
 
                         // Sequence constraint: the rotation event must be adjacent to
                         // another activity (e.g. water slides right before/after swim
@@ -9268,7 +9329,7 @@
                             const tryWindow = (t, tEnd) => {
                                 if (tEnd > winEnd || t < winStart) return false;
                                 if (placements.some(p => t < p.endMin && tEnd > p.startMin)) return false;
-                                if (bunks.some(b => wouldCreateSmallGapForBunk(b, t, tEnd))) return false;
+                                if (bunks.some(b => wouldCreateSmallGapForBunk(b, t, tEnd) || wouldCreatePeriodBoundaryGap(b, grade, t, tEnd))) return false;
                                 return bunks.every(b => isWindowFreeForBunk(t, tEnd, b));
                             };
 
@@ -9448,37 +9509,37 @@
                         const _evtGradeMode = evt.gradeMode || 'whole_grade';
                         const _evtConcurrency = Math.max(1, parseInt(evt.concurrency) || 1);
 
-                        // Taper bunks across the date range: try harder on early days so
-                        // there is buffer toward the end. Formula: factor = 2.5/(daysRemaining+1)
-                        // gives the progression 8,5,2,1 for 16 bunks over 4 days.
-                        // A "reserve" floor ensures each future day can get at least 1 bunk.
-                        const _evtDaysRemaining = Math.max(1,
-                            Math.round((new Date(evt.dateRange.end) - new Date(currentDate)) / 86400000) + 1
-                        );
+                        // Use the same daily target as Phase 3's quota system so Phase 2.4
+                        // and Phase 3 don't each place a full quota independently.
                         const _evtTotalEligible = Object.values(bunksByGrade).reduce((s, bs) => s + bs.length, 0);
-                        const _evtTaperFactor = Math.min(1, 2.5 / (_evtDaysRemaining + 1));
-                        const _evtMaxFromReserve = _evtTotalEligible - Math.max(0, _evtDaysRemaining - 1);
-                        const _evtMaxBunksToday = Math.max(1, Math.min(
-                            Math.ceil(_evtTotalEligible * _evtTaperFactor),
-                            _evtMaxFromReserve
-                        ));
+                        const _evtQ24 = _phase24Quotas[evt.id];
+                        const _evtMaxBunksToday = _evtQ24
+                            ? (_evtQ24.isLastDay ? _evtTotalEligible : Math.min(_evtTotalEligible, _evtQ24.dailyTarget))
+                            : _evtTotalEligible;
+                        if (_evtQ24) log('[Phase2.4] Quota for "' + evt.name + '": daysLeft=' + _evtQ24.daysLeft + ' target=' + _evtQ24.dailyTarget + (_evtQ24.isLastDay ? ' (LAST DAY)' : '') + ' range=' + (_evtQ24._dateRangeStart || '?') + '→' + (_evtQ24._dateRangeEnd || '?'));
 
                         if (_evtGradeMode === 'individual') {
-                            // ── STAGGERED: bunks placed _evtConcurrency-at-a-time into sequential slots ──
-                            // Build a slot list for the daily window, each slot holds up to
-                            // _evtConcurrency bunks (across all grades combined).
+                            // ── STAGGERED: shared slot pool with per-slot grade exclusivity ──
+                            // All grades share one pool so they're aware of each other's placements.
+                            // Each slot is claimed by the first grade to use it (ownerGrade); only
+                            // bunks from that grade may fill it up to _evtConcurrency. Grades are
+                            // interleaved round-robin so each grade claims a different time slot.
                             const _stagSlots = [];
                             for (let _t = winStart; _t + dur <= winEnd; _t += dur) {
-                                _stagSlots.push({ startMin: _t, endMin: _t + dur, usedCount: 0 });
+                                _stagSlots.push({ startMin: _t, endMin: _t + dur, usedCount: 0, ownerGrade: null });
                             }
 
-                            // Flatten all bunks across grades; order by grade (already sorted most-constrained-first).
-                            // Slice to daily limit so remaining bunks are deferred to future days.
-                            const _allStagBunks = gradeEntries.flatMap(({ grade: g, bunks: bs }) =>
-                                bs.map(b => ({ bunk: b, grade: g }))
-                            ).slice(0, _evtMaxBunksToday);
+                            // Round-robin interleave: grade1[0], grade2[0], grade3[0], grade1[1], ...
+                            const _maxBunksPerGrade = Math.max(...gradeEntries.map(e => e.bunks.length), 0);
+                            const _interleavedBunks = [];
+                            for (let _ri = 0; _ri < _maxBunksPerGrade; _ri++) {
+                                for (const { grade: _rg, bunks: _rb } of gradeEntries) {
+                                    if (_ri < _rb.length) _interleavedBunks.push({ bunk: _rb[_ri], grade: _rg });
+                                }
+                            }
+                            const _stagLimitedBunks = _interleavedBunks.slice(0, _evtMaxBunksToday);
 
-                            for (const { bunk, grade } of _allStagBunks) {
+                            for (const { bunk, grade } of _stagLimitedBunks) {
                                 let _chosenSlot = null;
 
                                 if (seqTarget) {
@@ -9496,9 +9557,9 @@
                                         }
                                     }
                                     if (_tgtS != null) {
-                                        // Try slots adjacent to target (closest first)
+                                        // Try slots owned by this grade (or unclaimed) adjacent to target
                                         const _adjSlots = _stagSlots
-                                            .filter(s => s.usedCount < _evtConcurrency)
+                                            .filter(s => (s.ownerGrade === null || s.ownerGrade === grade) && s.usedCount < _evtConcurrency)
                                             .sort((a, b) => {
                                                 const dA = Math.min(Math.abs(a.endMin - _tgtS), Math.abs(a.startMin - _tgtE));
                                                 const dB = Math.min(Math.abs(b.endMin - _tgtS), Math.abs(b.startMin - _tgtE));
@@ -9506,27 +9567,51 @@
                                             });
                                         for (const s of _adjSlots) {
                                             if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
-                                                !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
+                                                !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
+                                                !wouldCreatePeriodBoundaryGap(bunk, grade, s.startMin, s.endMin)) {
                                                 _chosenSlot = s; break;
+                                            }
+                                        }
+                                        // Relax period boundary gap if no gap-safe adj slot found
+                                        if (!_chosenSlot) {
+                                            for (const s of _adjSlots) {
+                                                if (isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                                    !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
+                                                    _chosenSlot = s; break;
+                                                }
                                             }
                                         }
                                     }
                                 }
 
                                 if (!_chosenSlot) {
-                                    // Prefer slots that don't leave unfillable gaps; if none exist,
-                                    // leave unplaced so Phase 3 can retry on a future day.
+                                    // Pass 1: strict — period boundary gap + small gap both enforced
                                     _chosenSlot = _stagSlots.find(s =>
+                                        (s.ownerGrade === null || s.ownerGrade === grade) &&
+                                        s.usedCount < _evtConcurrency &&
+                                        isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
+                                        !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
+                                        !wouldCreatePeriodBoundaryGap(bunk, grade, s.startMin, s.endMin)
+                                    ) || null;
+                                }
+
+                                if (!_chosenSlot) {
+                                    // Pass 2: relax period boundary gap so stagger stays in Phase 2.4
+                                    // and doesn't fall through to Phase 3 (which has no grade exclusivity).
+                                    _chosenSlot = _stagSlots.find(s =>
+                                        (s.ownerGrade === null || s.ownerGrade === grade) &&
                                         s.usedCount < _evtConcurrency &&
                                         isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
                                         !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)
                                     ) || null;
+                                    if (_chosenSlot && _verbose) log('[Phase2.4-stagger]   ⚠ ' + bunk + '/' + grade + ' — period boundary gap relaxed for stagger');
                                 }
 
                                 if (_chosenSlot) {
+                                    _chosenSlot.ownerGrade = grade; // claim slot exclusively for this grade
                                     const _placed = placeWall(bunk, grade, _chosenSlot);
                                     if (_placed) _chosenSlot.usedCount++;
-                                    if (_verbose) log('[Phase2.4-stagger]   ✓ ' + bunk + '/' + grade + ' → ' + _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) + ' (slot used=' + _chosenSlot.usedCount + '/' + _evtConcurrency + ')');
+                                    if (_verbose) log('[Phase2.4-stagger]   ✓ ' + bunk + '/' + grade + ' → ' + _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) + ' (grade=' + grade + ' used=' + _chosenSlot.usedCount + '/' + _evtConcurrency + ')');
                                 } else {
                                     _rotUnplaced.push(bunk + '/' + evt.name);
                                     if (_verbose) log('[Phase2.4-stagger]   ✗ ' + bunk + '/' + grade + ' — no available slot');
@@ -9663,6 +9748,34 @@
                     bunkOrder.forEach(bunk => {
                         const draft = draftResults[bunk];
                         if (!draft || !draft.specials || !draft.specials.length) return;
+
+                        // Pre-compute merged period intervals for this grade so Phase 2.5
+                        // can skip positions that would cross a period gap — those blocks
+                        // would be evicted by step 2.75, creating the very gaps we want to prevent.
+                        var _sp25MergedPeriods = [];
+                        {
+                            var _sp25RawPeriods = (window.campPeriods || {})[grade];
+                            if (_sp25RawPeriods && _sp25RawPeriods.length) {
+                                var _sp25Sorted = _sp25RawPeriods.slice().sort(function(a, b) { return a.startMin - b.startMin; });
+                                _sp25Sorted.forEach(function(p) {
+                                    var _sp25Last = _sp25MergedPeriods[_sp25MergedPeriods.length - 1];
+                                    if (_sp25Last && _sp25Last.e >= p.startMin) {
+                                        _sp25Last.e = Math.max(_sp25Last.e, p.endMin);
+                                    } else {
+                                        _sp25MergedPeriods.push({ s: p.startMin, e: p.endMin });
+                                    }
+                                });
+                            }
+                        }
+                        var sp25CrossesBoundary = function(start, end) {
+                            if (!_sp25MergedPeriods.length) return false;
+                            for (var _mi = 0; _mi < _sp25MergedPeriods.length; _mi++) {
+                                var _m = _sp25MergedPeriods[_mi];
+                                if (_m.s <= start && _m.e >= end) return false;
+                            }
+                            return true;
+                        };
+
                         // ★ FIX: place EVERY drafted special as a wall, not just [0].
                         //   Previously only `draft.specials[0]` was pre-placed, so when a
                         //   layer's qty was >1 (planner correctly drafted 2+ specials per
@@ -9717,6 +9830,9 @@
                             if (gap.e - gap.s < specialDur) { _sp25_gapTooSmall++; continue; }
 
                             for (var pos = gap.s; pos + specialDur <= gap.e; pos += 5) {
+                                // Skip positions that cross a bell-schedule period gap
+                                // (step 2.75 would evict such placements, creating dead gaps).
+                                if (sp25CrossesBoundary(pos, pos + specialDur)) continue;
                                 // Resource check: can this special run at this time?
                                 if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) { _sp25_rtBlockCount++; continue; }
                                 // Scheduling rules check (cooldowns, etc.)
@@ -9781,7 +9897,8 @@
                             // Also try end-aligned position (may not be on 5-min boundary)
                             var endPos = gap.e - specialDur;
                             if (endPos >= gap.s && endPos !== gap.s && endPos % 5 !== 0) {
-                                if (canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)
+                                if (!sp25CrossesBoundary(endPos, endPos + specialDur)
+                                    && canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)
                                     && rulesAllow({ startMin: endPos, endMin: endPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) {
                                     var withSpecialEnd = existingWalls.concat([{ s: endPos, e: endPos + specialDur }]);
                                     var gapsAfterEnd = spComputeGaps(withSpecialEnd, gradeStart, gradeEnd);
