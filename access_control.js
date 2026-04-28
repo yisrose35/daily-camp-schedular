@@ -735,7 +735,9 @@
         
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
             _editableDivisions = [...allDivisions];
-            console.log("🔐 Full edit access:", _editableDivisions.length, "divisions");
+            // Note: if window.divisions isn't loaded yet, _editableDivisions will be [].
+            // That's fine — getEditableDivisions() always reads window.divisions live for owner/admin.
+            console.log("🔐 Full edit access:", allDivisions.length > 0 ? `${allDivisions.length} divisions` : '(divisions load dynamically — window.divisions not populated yet)');
             return;
         }
         
