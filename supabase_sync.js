@@ -1052,6 +1052,16 @@
         if (_isInitialized) return;
         if (_initPromise) return _initPromise;
         _initPromise = (async () => {
+            // Restore generation timestamp so a fresh schedule isn't overwritten
+            // by a cloud sync immediately after a page reload
+            if (!window._localGenerationTimestamp) {
+                const stored = parseInt(localStorage.getItem('campistry_gen_ts') || '0', 10);
+                if (stored && (Date.now() - stored) < 300000) { // protect for up to 5 minutes
+                    window._localGenerationTimestamp = stored;
+                    log('Restored generation timestamp from localStorage:', new Date(stored).toLocaleTimeString());
+                }
+            }
+
             if (window.CampistryDB?.ready) {
                 await window.CampistryDB.ready;
             }

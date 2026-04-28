@@ -1805,6 +1805,18 @@
             }
         });
 
+        // When connection comes back, push any settings that were changed while offline.
+        // updateLocalSetting() saves to localStorage immediately, but executeBatchSync()
+        // bails early when offline — so those changes never reach the cloud without this.
+        window.addEventListener('online', () => {
+            log('[integration_hooks] Back online — flushing locally-saved settings to cloud...');
+            setTimeout(() => {
+                if (typeof forceSyncToCloud === 'function') {
+                    forceSyncToCloud().catch(e => console.warn('[integration_hooks] Reconnect sync failed:', e));
+                }
+            }, 1500); // wait 1.5s for Supabase client to re-establish connection
+        });
+
         // Expose helper functions globally
         window.scheduleCloudSync = function() {
             const dateKey = window.currentScheduleDate;

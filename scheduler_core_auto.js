@@ -12603,6 +12603,7 @@
 
         // ★ v7.0: Mark local generation time — prevents cloud sync from overwriting fresh results
         window._localGenerationTimestamp = Date.now();
+        try { localStorage.setItem('campistry_gen_ts', String(window._localGenerationTimestamp)); } catch(e) {}
 
         // ── Seam-merge travel: consecutive same-off-campus-zone blocks share no middle travel ──
         try {

@@ -501,6 +501,7 @@
         let mergedDivisionTimes = {};
         let maxSlots = 0;
         let isRainyDay = false;
+        let rainyDayStartTime = null;
 
         records.forEach(record => {
             const data = record.schedule_data || {};
@@ -557,9 +558,13 @@
                 });
             }
 
-            // Rainy day flag
-            if (record.is_rainy_day) {
+            // Rainy day flag — read from both column and schedule_data for backward compat
+            if (record.is_rainy_day || data.isRainyDay || data.rainyDayMode) {
                 isRainyDay = true;
+            }
+            // rainyDayStartTime only lives inside schedule_data
+            if (data.rainyDayStartTime != null && rainyDayStartTime == null) {
+                rainyDayStartTime = data.rainyDayStartTime;
             }
         });
         
@@ -580,6 +585,7 @@
             divisionTimes: window.DivisionTimesSystem?.deserialize(mergedDivisionTimes) || mergedDivisionTimes,
             slotCount: maxSlots,
             isRainyDay,
+            rainyDayStartTime,
             _mergedAt: new Date().toISOString(),
             _recordCount: records.length
         };
