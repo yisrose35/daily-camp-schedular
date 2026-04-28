@@ -4775,6 +4775,21 @@
                                     ok = canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency || 1, grade, pos, pos + dur);
                                 }
                                 if (!ok) continue;
+                                // Period containment: if bell-schedule periods are defined, reject any
+                                // position that spans a period gap. Activities must fit inside one period.
+                                // Swim is exempt — staggered swim intentionally crosses periods.
+                                if (_needType15 !== 'swim') {
+                                    var _gvpPeriods = window.campPeriods && window.campPeriods[grade];
+                                    if (_gvpPeriods && _gvpPeriods.length > 0) {
+                                        var _gvpFits = false;
+                                        for (var _gvpPi = 0; _gvpPi < _gvpPeriods.length; _gvpPi++) {
+                                            if (_gvpPeriods[_gvpPi].startMin <= pos && _gvpPeriods[_gvpPi].endMin >= pos + dur) {
+                                                _gvpFits = true; break;
+                                            }
+                                        }
+                                        if (!_gvpFits) continue;
+                                    }
+                                }
 
                                 // ★ Cooldown rule check
                                 if (window.SchedulingRules && !window.SchedulingRules.isCandidateAllowed(
@@ -4807,6 +4822,19 @@
                                           _assignedSpecial: need._assignedSpecial || null,
                                           _specialLocation: need._specialLocation || null },
                                         tmpl, { mode: "auto" });
+                                }
+                                // Period containment for end-aligned candidate (same rule as scan loop)
+                                if (ok2 && _needType15 !== 'swim') {
+                                    var _gvpP2 = window.campPeriods && window.campPeriods[grade];
+                                    if (_gvpP2 && _gvpP2.length > 0) {
+                                        var _gvpF2 = false;
+                                        for (var _gvpPi2 = 0; _gvpPi2 < _gvpP2.length; _gvpPi2++) {
+                                            if (_gvpP2[_gvpPi2].startMin <= endAligned && _gvpP2[_gvpPi2].endMin >= endAligned + dur) {
+                                                _gvpF2 = true; break;
+                                            }
+                                        }
+                                        if (!_gvpF2) ok2 = false;
+                                    }
                                 }
                                 if (ok2) {
                                     var rG = gap.end - (endAligned + dur);
@@ -5590,6 +5618,37 @@
 
                     // Try durations from "ideal" (large) to "minimum" (small).
                     var maxDur = Math.min(remaining, ceiling);
+                    // If bell-schedule periods are active, cap maxDur so sport blocks
+                    // don't cross into a period gap. If cursor is in a gap, skip to
+                    // the next period start (gaps are normally pre-split by splitGapAtPeriods
+                    // but this handles edge cases like the second caller at line ~6365).
+                    var _sgbPeriods = window.campPeriods && window.campPeriods[grade];
+                    if (_sgbPeriods && _sgbPeriods.length > 0) {
+                        var _sgbPeriodEnd = null;
+                        for (var _sgbPi = 0; _sgbPi < _sgbPeriods.length; _sgbPi++) {
+                            var _sgbP = _sgbPeriods[_sgbPi];
+                            if (_sgbP.startMin <= cursor && _sgbP.endMin > cursor) {
+                                _sgbPeriodEnd = _sgbP.endMin; break;
+                            }
+                        }
+                        if (_sgbPeriodEnd !== null) {
+                            maxDur = Math.min(maxDur, _sgbPeriodEnd - cursor);
+                        } else {
+                            // cursor is in a period gap — skip to next period start
+                            var _sgbNext = null;
+                            for (var _sgbPi2 = 0; _sgbPi2 < _sgbPeriods.length; _sgbPi2++) {
+                                if (_sgbPeriods[_sgbPi2].startMin > cursor) {
+                                    if (_sgbNext === null || _sgbPeriods[_sgbPi2].startMin < _sgbNext) {
+                                        _sgbNext = _sgbPeriods[_sgbPi2].startMin;
+                                    }
+                                }
+                            }
+                            if (_sgbNext !== null && _sgbNext < gapEnd) {
+                                return recurse(_sgbNext, sequence, depth);
+                            }
+                            return sequence.length > 0 ? sequence : null;
+                        }
+                    }
                     for (var dur = maxDur; dur >= fillMin; dur -= 5) {
                         var blockEnd = cursor + dur;
                         var leftover = remaining - dur;
@@ -5859,6 +5918,28 @@
                 gradeFieldBudget[cKey] = { total: entry.supply, demand: entry.demand, perBunk: entry.demand > 0 ? Math.floor(entry.supply / entry.demand) : entry.supply };
             });
 
+            // Split a raw gap at bell-schedule period boundaries so that each
+            // sub-gap is entirely within one period. Period gaps become invisible
+            // dead zones — no sport block can span them.
+            function splitGapAtPeriods(gap, grade) {
+                var periods = window.campPeriods && window.campPeriods[grade];
+                if (!periods || !periods.length) return [gap];
+                var sorted = periods.slice().sort(function(a, b) { return a.startMin - b.startMin; });
+                var result = [];
+                var cur = gap.start;
+                for (var _spi = 0; _spi < sorted.length; _spi++) {
+                    var _sp = sorted[_spi];
+                    if (_sp.endMin <= cur) continue;
+                    if (_sp.startMin >= gap.end) break;
+                    var subStart = Math.max(cur, _sp.startMin);
+                    var subEnd = Math.min(gap.end, _sp.endMin);
+                    if (subEnd > subStart) result.push({ start: subStart, end: subEnd });
+                    cur = _sp.endMin;
+                    if (cur >= gap.end) break;
+                }
+                return result.length > 0 ? result : [gap];
+            }
+
             // Build contention-sorted gap queue for Phase B
             var gapQueue = [];
             allBunkIds.forEach(function(qBunk) {
@@ -5866,13 +5947,17 @@
                 if (!qMeta) return;
                 var qGaps = findGaps(qMeta.template, qMeta.gradeStart, qMeta.gradeEnd);
                 qGaps.forEach(function(qGap) {
-                    if (qGap.end - qGap.start < qMeta.fillMinDur) return;
-                    var maxDeficit = 0;
-                    for (var qt = Math.floor(qGap.start / 30) * 30; qt < qGap.end; qt += 30) {
-                        var qEntry = contentionMap[qt + ':' + qMeta.grade];
-                        if (qEntry && qEntry.deficit > maxDeficit) maxDeficit = qEntry.deficit;
-                    }
-                    gapQueue.push({ bunk: qBunk, gap: qGap, contention: maxDeficit });
+                    // Split at period boundaries — prevents sport blocks from spanning gaps
+                    var subGaps = splitGapAtPeriods(qGap, qMeta.grade);
+                    subGaps.forEach(function(sGap) {
+                        if (sGap.end - sGap.start < qMeta.fillMinDur) return;
+                        var maxDeficit = 0;
+                        for (var qt = Math.floor(sGap.start / 30) * 30; qt < sGap.end; qt += 30) {
+                            var qEntry = contentionMap[qt + ':' + qMeta.grade];
+                            if (qEntry && qEntry.deficit > maxDeficit) maxDeficit = qEntry.deficit;
+                        }
+                        gapQueue.push({ bunk: qBunk, gap: sGap, contention: maxDeficit });
+                    });
                 });
             });
             gapQueue.sort(function(a, b) { return b.contention - a.contention; });
@@ -5916,11 +6001,15 @@
                         });
                         if (solved.complete) continue; // gap fully filled — done
                         // Partial fill: cursor below picks up remaining gap(s).
-                        // Recompute remaining gaps in this region.
+                        // Recompute remaining gaps in this region (split at period boundaries).
                         sMeta.template.sort(function(a, b) { return a.startMin - b.startMin; });
                         var subGaps = findGaps(sMeta.template, gap.start, gap.end);
-                        if (subGaps.length === 0) continue;
-                        sGaps = sGaps.concat(subGaps);
+                        var subGapsSplit = [];
+                        subGaps.forEach(function(sg) {
+                            splitGapAtPeriods(sg, sMeta.grade).forEach(function(s) { subGapsSplit.push(s); });
+                        });
+                        if (subGapsSplit.length === 0) continue;
+                        sGaps = sGaps.concat(subGapsSplit);
                         continue;
                     }
 
@@ -9676,7 +9765,7 @@
                         allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => ensureTimelineIntegrity(bunk)));
                     }
                     if (_rotUnplaced.length > 0) {
-                        log('[Phase2.4] Unplaced (' + (_evtGradeMode === 'individual' ? 'staggered' : 'whole-grade') + '): ' + _rotUnplaced.join(', ') + ' — Phase 3 will attempt');
+                        log('[Phase2.4] Unplaced: ' + _rotUnplaced.join(', ') + ' — Phase 3 will attempt');
                     }
                 } catch (e) { console.warn('[Phase2.4] rotation pre-placement failed:', e); }
             }
