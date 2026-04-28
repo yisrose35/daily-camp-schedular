@@ -5961,7 +5961,10 @@
                     cur = _sp.endMin;
                     if (cur >= gap.end) break;
                 }
-                return result.length > 0 ? result : [gap];
+                // If no period intersection found, the gap is entirely in a dead zone —
+                // return [] so callers skip it rather than filling across period boundaries.
+                // When no bell schedule is configured, the early-return [gap] above handles it.
+                return result;
             }
 
             // Build contention-sorted gap queue for Phase B
@@ -6168,19 +6171,24 @@
                         // Too small for a sport — absorb into adjacent non-fixed block
                         tmpl.sort(function(a, b) { return a.startMin - b.startMin; });
                         var absorbed = false;
+                        var _absPs = window.campPeriods && window.campPeriods[fMeta.grade];
                         // ★ v10.5: Use block's own dMax for absorb limit, not sportCeiling
                         for (var m2 = 0; m2 < tmpl.length; m2++) {
-                            // Find block ending at gap start
+                            // Find block ending at gap start — extend its end
                             if (tmpl[m2].endMin === rgap.start && !tmpl[m2]._fixed) {
                                 var m2Dur = tmpl[m2].endMin - tmpl[m2].startMin;
                                 var m2Max = tmpl[m2].dMax || fMeta.sportCeiling;
-                                if (m2Dur + gapSize <= m2Max) { tmpl[m2].endMin += gapSize; absorbed = true; break; }
+                                var _newEnd = tmpl[m2].endMin + gapSize;
+                                var _endOk = !_absPs || _absPs.some(function(p) { return p.startMin <= tmpl[m2].startMin && p.endMin >= _newEnd; });
+                                if (m2Dur + gapSize <= m2Max && _endOk) { tmpl[m2].endMin = _newEnd; absorbed = true; break; }
                             }
-                            // Find block starting at gap end
+                            // Find block starting at gap end — shrink its start backward
                             if (tmpl[m2].startMin === rgap.end && !tmpl[m2]._fixed) {
                                 var m2Dur2 = tmpl[m2].endMin - tmpl[m2].startMin;
                                 var m2Max2 = tmpl[m2].dMax || fMeta.sportCeiling;
-                                if (m2Dur2 + gapSize <= m2Max2) { tmpl[m2].startMin -= gapSize; absorbed = true; break; }
+                                var _newStart = tmpl[m2].startMin - gapSize;
+                                var _startOk = !_absPs || _absPs.some(function(p) { return p.startMin <= _newStart && p.endMin >= tmpl[m2].endMin; });
+                                if (m2Dur2 + gapSize <= m2Max2 && _startOk) { tmpl[m2].startMin = _newStart; absorbed = true; break; }
                             }
                         }
                         if (!absorbed) {
@@ -6409,10 +6417,12 @@
                             }
                         }
                         // ★ v10.5: Use block's own dMax for extension limit
+                        var _vPs = window.campPeriods && window.campPeriods[vMeta.grade];
                         if (prevBlock && prevBlock.endMin === vGap.start) {
                             var maxExt = prevBlock.dMax || vMeta.sportCeiling || 60;
                             var newDur = (vGap.end) - prevBlock.startMin;
-                            if (newDur <= maxExt) {
+                            var _ext1Ok = !_vPs || _vPs.some(function(p) { return p.startMin <= prevBlock.startMin && p.endMin >= vGap.end; });
+                            if (newDur <= maxExt && _ext1Ok) {
                                 prevBlock.endMin = vGap.end;
                                 filled = true;
                             }
@@ -6430,7 +6440,8 @@
                             if (nextBlock && nextBlock.startMin === vGap.end) {
                                 var newDur2 = nextBlock.endMin - vGap.start;
                                 var maxExt2 = nextBlock.dMax || vMeta.sportCeiling || 60;
-                                if (newDur2 <= maxExt2) {
+                                var _ext2Ok = !_vPs || _vPs.some(function(p) { return p.startMin <= vGap.start && p.endMin >= nextBlock.endMin; });
+                                if (newDur2 <= maxExt2 && _ext2Ok) {
                                     nextBlock.startMin = vGap.start;
                                     filled = true;
                                 }
