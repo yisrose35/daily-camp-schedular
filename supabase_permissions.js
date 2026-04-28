@@ -26,6 +26,7 @@
     // =========================================================================
 
     let _isInitialized = false;
+    let _initPromise = null;
     let _editableDivisions = [];
     let _editableBunks = [];
     let _subdivisions = [];
@@ -50,21 +51,18 @@
 
     async function initialize() {
         if (_isInitialized) return;
-
-        // Wait for CampistryDB to be ready
-        if (window.CampistryDB?.ready) {
-            await window.CampistryDB.ready;
-        }
-
-        // Load subdivisions and calculate permissions
-        await loadSubdivisions();
-        await calculateEditableResources();
-
-        _isInitialized = true;
-        log('Initialized');
-
-        // Dispatch ready event
-        window.dispatchEvent(new CustomEvent('campistry-permissions-ready'));
+        if (_initPromise) return _initPromise;
+        _initPromise = (async () => {
+            if (window.CampistryDB?.ready) {
+                await window.CampistryDB.ready;
+            }
+            await loadSubdivisions();
+            await calculateEditableResources();
+            _isInitialized = true;
+            log('Initialized');
+            window.dispatchEvent(new CustomEvent('campistry-permissions-ready'));
+        })();
+        return _initPromise;
     }
 
     // =========================================================================

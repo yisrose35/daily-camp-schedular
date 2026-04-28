@@ -53,6 +53,7 @@
     // STATE
     // =========================================================================
     let _isInitialized = false;
+    let _initPromise = null;
     // =========================================================================
     // LOGGING
     // =========================================================================
@@ -72,13 +73,16 @@
     // =========================================================================
     async function initialize() {
         if (_isInitialized) return;
-        // Wait for dependencies
-        if (window.CampistryDB?.ready) {
-            await window.CampistryDB.ready;
-        }
-        _isInitialized = true;
-        log('Initialized');
-        window.dispatchEvent(new CustomEvent('campistry-scheduledb-ready'));
+        if (_initPromise) return _initPromise;
+        _initPromise = (async () => {
+            if (window.CampistryDB?.ready) {
+                await window.CampistryDB.ready;
+            }
+            _isInitialized = true;
+            log('Initialized');
+            window.dispatchEvent(new CustomEvent('campistry-scheduledb-ready'));
+        })();
+        return _initPromise;
     }
     // =========================================================================
     // HELPERS: SUPABASE ACCESS

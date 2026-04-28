@@ -440,6 +440,7 @@
 
     function setupMembershipSubscription() {
         if (!_isTeamMember || !_currentUser || !window.supabase) return;
+        if (_membershipSubscription) return; // already subscribed — prevent duplicate channels
 
         try {
             _membershipSubscription = window.supabase

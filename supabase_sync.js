@@ -73,6 +73,7 @@
     // =========================================================================
 
     let _isInitialized = false;
+    let _initPromise = null;
     let _subscription = null;
     let _subscriptionChannel = null;  // ★ NEW: Track channel separately
     let _currentDateKey = null;
@@ -1049,33 +1050,35 @@
 
     async function initialize() {
         if (_isInitialized) return;
+        if (_initPromise) return _initPromise;
+        _initPromise = (async () => {
+            if (window.CampistryDB?.ready) {
+                await window.CampistryDB.ready;
+            }
 
-        if (window.CampistryDB?.ready) {
-            await window.CampistryDB.ready;
-        }
+            loadOfflineQueue();
 
-        // ★★★ NEW: Load persisted offline queue ★★★
-        loadOfflineQueue();
-        
-        window.addEventListener('online', handleOnline);
-        window.addEventListener('offline', handleOffline);
+            window.addEventListener('online', handleOnline);
+            window.addEventListener('offline', handleOffline);
 
-        createStatusIndicator();
+            createStatusIndicator();
 
-        _isInitialized = true;
-        log('Initialized');
+            _isInitialized = true;
+            log('Initialized');
 
-        // Process any queued items from previous session
-        if (_offlineQueue.length > 0 && _isOnline) {
-            log('Found persisted offline queue, processing...');
-            setTimeout(processOfflineQueue, 2000);
-        }
+            if (_offlineQueue.length > 0 && _isOnline) {
+                log('Found persisted offline queue, processing...');
+                setTimeout(processOfflineQueue, 2000);
+            }
 
-        window.dispatchEvent(new CustomEvent('campistry-sync-ready'));
+            window.dispatchEvent(new CustomEvent('campistry-sync-ready'));
+        })();
+        return _initPromise;
     }
 
     // Initialize after RBAC is ready
     function initAfterRBAC() {
+        if (_initialHydrationDone) return;
         const waitForRBAC = setInterval(() => {
             if (!window.AccessControl?.isInitialized) return;
             
