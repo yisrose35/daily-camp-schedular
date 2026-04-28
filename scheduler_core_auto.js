@@ -7457,6 +7457,20 @@
                             }
                         }
                         if (_zgPrevImmov && _zgNextImmov) {
+                            // Skip micro-slots that fall entirely inside a period gap (off-limits zone).
+                            var _zgPeriods = window.campPeriods && window.campPeriods[zgMeta.grade];
+                            if (_zgPeriods && _zgPeriods.length > 0) {
+                                var _zgInPeriod = false;
+                                for (var _zgPi = 0; _zgPi < _zgPeriods.length; _zgPi++) {
+                                    if (_zgPeriods[_zgPi].startMin <= zgGap.start && _zgPeriods[_zgPi].endMin >= zgGap.end) {
+                                        _zgInPeriod = true; break;
+                                    }
+                                }
+                                if (!_zgInPeriod) {
+                                    log('[ZGF-MICRO] ' + zgBunk + ' @ ' + zgGap.start + '-' + zgGap.end + ' (' + zgDur + 'min): skipping — falls in period gap, leaving empty');
+                                    continue;
+                                }
+                            }
                             var zgMicroBlk = makeBlock({
                                 startMin: zgGap.start, endMin: zgGap.end,
                                 type: 'slot', event: 'Free',
@@ -8019,6 +8033,20 @@
                         // walls (e.g. a guaranteed-swim block with dMin=dMax=30 and a dismissal).
                         // The auto-solver will label them General Activity Slot if no sport fits.
                         if (!pg_fixed && pg_dur >= 5) {
+                            // Skip gaps that fall entirely inside a period gap (off-limits zone).
+                            var _pgSkipPeriods = window.campPeriods && window.campPeriods[pg_meta.grade];
+                            if (_pgSkipPeriods && _pgSkipPeriods.length > 0) {
+                                var _pgInPeriod = false;
+                                for (var _pgPi = 0; _pgPi < _pgSkipPeriods.length; _pgPi++) {
+                                    if (_pgSkipPeriods[_pgPi].startMin <= pg_gap.start && _pgSkipPeriods[_pgPi].endMin >= pg_gap.end) {
+                                        _pgInPeriod = true; break;
+                                    }
+                                }
+                                if (!_pgInPeriod) {
+                                    log('[POST-GAP] bunk=' + pg_bunk + ' skipping gap @' + pg_gap.start + '-' + pg_gap.end + ' — falls in period gap, leaving empty');
+                                    continue;
+                                }
+                            }
                             var pg_fillName = pickFillActivity(pg_dur, pg_meta.grade) || 'Free';
                             var pg_blk = makeBlock({
                                 startMin: pg_gap.start, endMin: pg_gap.end,
