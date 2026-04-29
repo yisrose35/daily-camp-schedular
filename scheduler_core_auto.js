@@ -10204,6 +10204,14 @@
                         // Draft duration may be wrong; getSpecialDuration() is authoritative.
                         const configuredDur = getSpecialDuration(special.name || special.event || '', activityProperties, globalSettings);
                         const specialDur = configuredDur || special.duration || (special.claimedTime.endMin - special.claimedTime.startMin);
+                        // ★ DEBUG: trace duration resolution for Triple Fun
+                        if ((special.name || special.event || '').toLowerCase().includes('triple')) {
+                            log('[P2.5-DEBUG] "' + (special.name || special.event) + '" bunk=' + bunk +
+                                ' | configuredDur=' + configuredDur +
+                                ' | special.duration=' + special.duration +
+                                ' | claimedTime=' + special.claimedTime.startMin + '-' + special.claimedTime.endMin + ' (' + (special.claimedTime.endMin - special.claimedTime.startMin) + 'min)' +
+                                ' | → specialDur=' + specialDur);
+                        }
                         const fieldName = special.claimedField || special.location;
                         const draftStart = special.claimedTime.startMin;
 
