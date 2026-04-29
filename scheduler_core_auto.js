@@ -11602,6 +11602,27 @@
                         }
                     }
 
+                    // Fallback: if post-change is still missing (e.g. a special activity is
+                    // pinned right after swim and cannot be trimmed), try to place Change
+                    // before the swim instead — carve from the trimmable block preceding it.
+                    if (!anchors.post && !anchors.pre && postChangeDur > 0) {
+                        const fallbackDur = postChangeDur;
+                        const prev2 = tl278
+                            .filter(b => b && b.endMin <= bundleStart && b.endMin > bundleStart - (fallbackDur + 10))
+                            .sort((a, b) => b.endMin - a.endMin)[0] || null;
+                        const prev2Type = prev2 ? String(prev2.type || '').toLowerCase() : '';
+                        if (prev2 && TRIMMABLE_TYPES.has(prev2Type)) {
+                            const prev2Dur = prev2.endMin - prev2.startMin;
+                            const preStart2 = bundleStart - fallbackDur;
+                            if (prev2Dur - fallbackDur >= (prev2.dMin || GAP_MIN_DUR) && preStart2 >= _schedStart278) {
+                                prev2.endMin -= fallbackDur;
+                                if (prev2.endTime) prev2.endTime = minutesToTimeLabel(prev2.endMin);
+                                anchors = { pre: { startMin: preStart2, endMin: bundleStart }, post: null };
+                                log('[2.78] Post-change blocked by special; placed pre-change before bundle at ' + bunk);
+                            }
+                        }
+                    }
+
                     if (!anchors.pre && !anchors.post) return;
                     const groupId = sw._swimGroupId || nextSwimGroupId();
                     sw._swimGroupId = groupId;
