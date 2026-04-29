@@ -752,7 +752,8 @@ if (authMode === 'signup' && data?.user && !data?.session) {
         // If the URL contains a password recovery token, never auto-redirect to dashboard.
         // The PASSWORD_RECOVERY auth event will open the reset modal instead.
         const hash = window.location.hash;
-        if (hash.includes('type=recovery') || hash.includes('access_token')) {
+        const search = window.location.search;
+        if (hash.includes('type=recovery') || hash.includes('access_token') || hash === '#reset-password' || search.includes('code=')) {
             console.log('[Landing] checkSession: recovery token in URL — skipping auto-redirect');
             return;
         }
