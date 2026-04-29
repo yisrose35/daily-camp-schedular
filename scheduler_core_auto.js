@@ -10174,6 +10174,133 @@
                 } catch (e) { console.warn('[Phase2.4] rotation pre-placement failed:', e); }
             }
 
+            // ── Phase 2.3: Pre-assign staggered swim + change blocks before specials ──
+            // Staggered swim (fullGrade:false) is normally placed by Phase 3 CSP, which runs
+            // AFTER Phase 2.5 pre-places specials. This means Phase 2.5 sees no swim blocks
+            // in bunkTimelines and cannot protect change windows — specials fill them.
+            // Phase 2.3 fixes this by committing swim+change as walls NOW so Phase 2.5
+            // naturally works around them, just like it does for fullGrade swim.
+            {
+                var _p23Count = 0;
+                allGrades.forEach(function(grade) {
+                    var _p23SwimLayer = (layersByGrade[grade] || []).find(function(l) {
+                        return (l.type || '').toLowerCase() === 'swim' && !l.fullGrade;
+                    });
+                    if (!_p23SwimLayer) return;
+                    if (!todaysSwimmers[grade] || todaysSwimmers[grade].size === 0) return;
+
+                    var _p23SC = resolveConstraints(_p23SwimLayer, 'swim');
+                    var _p23SwimDur = _p23SC.dMin || 40;
+                    var _p23GradeStart = parseTimeToMinutes(divisions[grade] && divisions[grade].startTime) || 540;
+                    var _p23GradeEnd   = parseTimeToMinutes(divisions[grade] && divisions[grade].endTime)   || 960;
+                    var _p23WinStart = Math.max(_p23SwimLayer.startMin || 0, _p23GradeStart);
+                    var _p23WinEnd   = Math.min(_p23SwimLayer.endMin   || 1440, _p23GradeEnd);
+
+                    var _p23Periods = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                        : [];
+                    if (!_p23Periods.length) return;
+
+                    // Narrow window using resource calendar (same logic as Phase 3 CSP)
+                    var _p23MRC = getSwimWindow(grade);
+                    if (_p23MRC) {
+                        _p23WinStart = Math.max(_p23MRC.start, _p23WinStart);
+                        _p23WinEnd   = Math.min(_p23MRC.end,   _p23WinEnd);
+                    }
+
+                    // Periods that fit swim duration, lie within swim window, and have pool available
+                    var _p23Candidates = _p23Periods.filter(function(p) {
+                        return (p.endMin - p.startMin) >= _p23SwimDur
+                            && p.startMin >= _p23WinStart
+                            && p.endMin   <= _p23WinEnd
+                            && canUsePoolAtTime(grade, p.startMin, p.startMin + _p23SwimDur);
+                    });
+
+                    getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                        if (!todaysSwimmers[grade].has(String(bunk))) return;
+                        if ((bunkTimelines[bunk] || []).some(function(b) {
+                            return (b.type || '').toLowerCase() === 'swim';
+                        })) return;
+
+                        // Find the first candidate period whose time window is free in this bunk's timeline
+                        var _p23Chosen = null;
+                        for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
+                            var _p23P = _p23Candidates[_p23i];
+                            var _p23S = _p23P.startMin;
+                            var _p23E = _p23S + _p23SwimDur;
+                            var _p23Free = true;
+                            var _p23TL = bunkTimelines[bunk] || [];
+                            for (var _p23ti = 0; _p23ti < _p23TL.length && _p23Free; _p23ti++) {
+                                var _p23B = _p23TL[_p23ti];
+                                if (!_p23B) continue;
+                                if (!(_p23B._activityLocked || _p23B._fixed || _p23B._classification === 'pinned')) continue;
+                                var _p23Bt = (_p23B.type || '').toLowerCase();
+                                if (_p23Bt === 'pre-change' || _p23Bt === 'post-change') continue;
+                                var _p23Bs = _p23B.startMin, _p23Be = _p23B.endMin;
+                                if (_p23Bs < _p23E && _p23Be > _p23S) _p23Free = false;
+                            }
+                            if (_p23Free) { _p23Chosen = _p23P; break; }
+                        }
+
+                        if (!_p23Chosen) {
+                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free period for staggered swim (will fall through to Phase 3)');
+                            return;
+                        }
+
+                        var _p23SwimS = _p23Chosen.startMin;
+                        var _p23SwimE = _p23SwimS + _p23SwimDur;
+                        var _p23GId   = nextSwimGroupId();
+                        var _p23Anch  = computeSwimChangeAnchors(
+                            _p23SwimS, _p23SwimE, _p23SwimLayer, grade,
+                            bunkTimelines[bunk] || [], _p23SwimS, _p23SwimE
+                        );
+
+                        if (_p23Anch.pre) {
+                            bunkTimelines[bunk].push({
+                                startMin: _p23Anch.pre.startMin, endMin: _p23Anch.pre.endMin,
+                                type: 'pre-change', event: 'Change', layer: null,
+                                dMin: _p23Anch.pre.endMin - _p23Anch.pre.startMin,
+                                dMax: _p23Anch.pre.endMin - _p23Anch.pre.startMin,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: false,
+                                _source: 'phase2.3-swim-pre-change', _swimGroupId: _p23GId
+                            });
+                        }
+                        bunkTimelines[bunk].push({
+                            startMin: _p23SwimS, endMin: _p23SwimE,
+                            type: 'swim', event: _p23SwimLayer.event || 'Swim',
+                            layer: _p23SwimLayer, _classification: 'pinned', _committed: true,
+                            _fixed: true, _activityLocked: true, _noBacktrack: false,
+                            _changeAttached: true, _swimGroupId: _p23GId, _source: 'phase2.3'
+                        });
+                        if (_p23Anch.post) {
+                            bunkTimelines[bunk].push({
+                                startMin: _p23Anch.post.startMin, endMin: _p23Anch.post.endMin,
+                                type: 'post-change', event: 'Change', layer: null,
+                                dMin: _p23Anch.post.endMin - _p23Anch.post.startMin,
+                                dMax: _p23Anch.post.endMin - _p23Anch.post.startMin,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: false,
+                                _source: 'phase2.3-swim-post-change', _swimGroupId: _p23GId
+                            });
+                        }
+
+                        registerPoolUsage(grade, _p23SwimS, _p23SwimE);
+                        _p23Count++;
+                        log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
+                            + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
+                            + ((_p23Anch.post ? ' +post:' + minutesToTimeLabel(_p23Anch.post.startMin) + '-' + minutesToTimeLabel(_p23Anch.post.endMin) : '')));
+                    });
+                });
+
+                if (_p23Count > 0) {
+                    log('[Phase2.3] ★ PRE-PLACED ' + _p23Count + ' staggered swim+change blocks as walls');
+                    allGrades.forEach(function(grade) {
+                        getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
+                    });
+                }
+            }
+
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
             // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
             // By converting these to immovable walls BEFORE the packer runs,
