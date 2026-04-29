@@ -4638,8 +4638,16 @@
                                         }
                                     }
                                     if (!_p0Fixed) {
-                                        // No period is large enough — clip to current period end
+                                        // No period is large enough — clip to current period end,
+                                        // but shift startMin back so we preserve at least dMin
+                                        // (or the full period width, whichever is smaller).
                                         _p0End = _p0PS.endMin;
+                                        var _p0ClipDur = _p0End - _p0Start;
+                                        var _p0DMin = c ? c.dMin : _p0Duration;
+                                        if (_p0ClipDur < _p0DMin) {
+                                            var _p0Ideal = _p0End - _p0DMin;
+                                            _p0Start = Math.max(_p0PS.startMin, _p0Ideal);
+                                        }
                                     }
                                 }
                                 log('[Phase0] Snapped "' + (b.event || b.type) + '" bunk=' + bunk +
@@ -7263,6 +7271,8 @@
             var rebalanceTotal = 0;
             for (var rbi = 0; rbi < allBunkIds.length; rbi++) {
                 var rbBunk = allBunkIds[rbi];
+                var rbMeta  = bunkMeta[rbBunk];
+                var rbGrade = rbMeta ? rbMeta.grade : null;
                 var rbTmpl = bunkTimelines[rbBunk] || [];
                 rbTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
                 var rbChanged = true, rbPasses = 0;
@@ -7283,8 +7293,12 @@
                             var surplus = Math.floor(((don.endMin - don.startMin) - donC.dMin) / 5) * 5;
                             if (surplus >= 5) {
                                 var steal = Math.min(rbDeficit, surplus);
-                                don.endMin -= steal; rbBlk.startMin -= steal;
-                                rbChanged = true; rebalanceTotal++; continue;
+                                // Guard: ensure neither block crosses a period boundary
+                                if (staysInPeriod(don.startMin, don.endMin - steal, rbGrade) &&
+                                    staysInPeriod(rbBlk.startMin - steal, rbBlk.endMin, rbGrade)) {
+                                    don.endMin -= steal; rbBlk.startMin -= steal;
+                                    rbChanged = true; rebalanceTotal++; continue;
+                                }
                             }
                         }
                         // Steal from next neighbor
@@ -7294,8 +7308,12 @@
                             var surplus2 = Math.floor(((don2.endMin - don2.startMin) - don2C.dMin) / 5) * 5;
                             if (surplus2 >= 5) {
                                 var steal2 = Math.min(rbDeficit, surplus2);
-                                don2.startMin += steal2; rbBlk.endMin += steal2;
-                                rbChanged = true; rebalanceTotal++; continue;
+                                // Guard: ensure neither block crosses a period boundary
+                                if (staysInPeriod(rbBlk.startMin, rbBlk.endMin + steal2, rbGrade) &&
+                                    staysInPeriod(don2.startMin + steal2, don2.endMin, rbGrade)) {
+                                    don2.startMin += steal2; rbBlk.endMin += steal2;
+                                    rbChanged = true; rebalanceTotal++; continue;
+                                }
                             }
                         }
                     }
@@ -7979,21 +7997,27 @@
                         var eNextStart = (ej < eTmpl.length - 1) ? eTmpl[ej+1].startMin : (eMeta.gradeEnd || 960);
                         var eAvailR = eNextStart - eBlk.endMin;
                         var eFixed = false;
+                        var eGrade = eMeta ? eMeta.grade : null;
                         if (eDur + eAvailR >= eDMin) {
-                            eBlk.endMin = eBlk.startMin + Math.min(eDMin, eDMax);
-                            eBlk.endMin = Math.round(eBlk.endMin / 5) * 5;
-                            enforceFixCount++;
-                            eFixed = true;
-                            log('[Phase3] ENFORCE: extended ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + (eBlk.endMin - eBlk.startMin) + 'min (dMin)');
-                        } else {
+                            var eNewEnd = Math.round((eBlk.startMin + Math.min(eDMin, eDMax)) / 5) * 5;
+                            if (staysInPeriod(eBlk.startMin, eNewEnd, eGrade)) {
+                                eBlk.endMin = eNewEnd;
+                                enforceFixCount++;
+                                eFixed = true;
+                                log('[Phase3] ENFORCE: extended ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + (eBlk.endMin - eBlk.startMin) + 'min (dMin)');
+                            }
+                        }
+                        if (!eFixed) {
                             var ePrevEnd = (ej > 0) ? eTmpl[ej-1].endMin : (eMeta.gradeStart || 540);
                             var eAvailL = eBlk.startMin - ePrevEnd;
                             if (eDur + eAvailL >= eDMin) {
-                                eBlk.startMin = eBlk.endMin - Math.min(eDMin, eDMax);
-                                eBlk.startMin = Math.round(eBlk.startMin / 5) * 5;
-                                enforceFixCount++;
-                                eFixed = true;
-                                log('[Phase3] ENFORCE: extended-left ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + (eBlk.endMin - eBlk.startMin) + 'min (dMin)');
+                                var eNewStart = Math.round((eBlk.endMin - Math.min(eDMin, eDMax)) / 5) * 5;
+                                if (staysInPeriod(eNewStart, eBlk.endMin, eGrade)) {
+                                    eBlk.startMin = eNewStart;
+                                    enforceFixCount++;
+                                    eFixed = true;
+                                    log('[Phase3] ENFORCE: extended-left ' + eType + ' for bunk ' + eBunk + ' from ' + eDur + ' to ' + (eBlk.endMin - eBlk.startMin) + 'min (dMin)');
+                                }
                             }
                         }
                         // ★ v14.0: If neither extension worked, merge into nearest sport/slot neighbor
@@ -8210,6 +8234,28 @@
                             }
                         }
 
+                        // Strategy 3b: micro-gap absorption — for gaps smaller than fillMinDur,
+                        // force-extend the adjacent non-pinned block rather than leaving a
+                        // tiny unfillable slot.  Extends prev first, then next.
+                        var _pgFillMin = pg_meta.fillMinDur || 25;
+                        if (!pg_fixed && _pgGapInOnePeriod && pg_dur < _pgFillMin && pg_dur >= 5) {
+                            if (pg_prev && !isPhase0(pg_prev)) {
+                                pg_prev.endMin += pg_dur;
+                                pgClosed++;
+                                pg_changed = true;
+                                pg_fixed   = true;
+                                log('[POST-GAP] bunk=' + pg_bunk + ' micro-absorbed +' + pg_dur + 'min into prev "' +
+                                    (pg_prev.event || pg_prev.type || '') + '" @' + pg_gap.start + '-' + pg_gap.end);
+                            } else if (pg_next && !isPhase0(pg_next)) {
+                                pg_next.startMin -= pg_dur;
+                                pgClosed++;
+                                pg_changed = true;
+                                pg_fixed   = true;
+                                log('[POST-GAP] bunk=' + pg_bunk + ' micro-absorbed -' + pg_dur + 'min into next "' +
+                                    (pg_next.event || pg_next.type || '') + '" @' + pg_gap.start + '-' + pg_gap.end);
+                            }
+                        }
+
                         // Strategy 4: create a forced slot for each valid period sub-gap.
                         // Uses splitGapAtPeriods so straddling gaps get their valid portions
                         // filled while the period-gap zone is left empty.
@@ -8301,14 +8347,22 @@
                 }
 
                 if (cv_gaps.length > 0) {
-                    coverageErrors++;
-                    var cv_gapStr = cv_gaps.map(function(g) {
-                        return g.dur + 'min@' + g.start + '-' + g.end;
-                    }).join(', ');
-                    warn('[COVERAGE] bunk=' + cv_bunk +
-                         ' expected=' + cv_expected + 'min' +
-                         ' actual=' + cv_actual + 'min' +
-                         ' gaps=[' + cv_gapStr + ']');
+                    // Filter out gaps that fall entirely within a bell-schedule dead zone —
+                    // those 5-min inter-period pauses are intentional and should not be
+                    // flagged as scheduling holes.
+                    var cv_realGaps = cv_gaps.filter(function(g) {
+                        return !isInDeadZone(g.start, g.end, cv_meta.grade);
+                    });
+                    if (cv_realGaps.length > 0) {
+                        coverageErrors++;
+                        var cv_gapStr = cv_realGaps.map(function(g) {
+                            return g.dur + 'min@' + g.start + '-' + g.end;
+                        }).join(', ');
+                        warn('[COVERAGE] bunk=' + cv_bunk +
+                             ' expected=' + cv_expected + 'min' +
+                             ' actual=' + cv_actual + 'min' +
+                             ' gaps=[' + cv_gapStr + ']');
+                    }
                 }
             }
             if (coverageErrors === 0) {
