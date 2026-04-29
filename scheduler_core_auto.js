@@ -11552,15 +11552,29 @@
                                 anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: postEnd278 } };
                             }
                         } else if (nxt && TRIMMABLE_TYPES.has(nxtType)) {
-                            const needToCarve = postChangeDur - alreadyFreePost;
                             const nxtDur = nxt.endMin - nxt.startMin;
-                            if ((needToCarve <= 0 || nxtDur > needToCarve) && postEnd278 <= _schedEnd278) {
-                                if (needToCarve > 0) {
-                                    nxt.startMin += needToCarve;
-                                    if (nxt.startTime) nxt.startTime = minutesToTimeLabel(nxt.startMin);
+                            const nxtDMin = nxt.dMin || 25;
+                            // If the gap [bundleEnd, nxt.startMin] is an inter-period gap,
+                            // snap Change to the period boundary so it doesn't straddle the gap.
+                            const _gapIsIPG = alreadyFreePost > 0 && _gp278.some((p, pi) =>
+                                pi < _gp278.length - 1 &&
+                                bundleEnd >= p.endMin && nxt.startMin <= _gp278[pi + 1].startMin
+                            );
+                            const chStart = _gapIsIPG ? nxt.startMin : bundleEnd;
+                            const chEnd = chStart + postChangeDur;
+                            // How much of nxt is consumed by Change
+                            const carveAmt = chEnd - nxt.startMin;
+                            if (carveAmt <= 0) {
+                                // Change fits entirely in free space before nxt — no carving needed
+                                if (chEnd <= _schedEnd278) {
+                                    anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
                                 }
-                                anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: postEnd278 } };
-                                log('[2.78] Carved ' + Math.max(0, needToCarve) + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
+                            } else if (chEnd <= _schedEnd278 && nxtDur - carveAmt >= nxtDMin) {
+                                // Carve from nxt, preserving at least nxtDMin
+                                nxt.startMin = chEnd;
+                                if (nxt.startTime) nxt.startTime = minutesToTimeLabel(chEnd);
+                                anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
+                                log('[2.78] Carved ' + carveAmt + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
                             }
                         }
                     }
@@ -11576,14 +11590,16 @@
                             const bt = String(blk.type || '').toLowerCase();
                             if (!['slot', 'sport'].includes(bt)) return;
                             if (blk._fixed) return;
-                            if (blk.startMin < preE && blk.endMin > preS) {
-                                if (blk.endMin <= preE) {
-                                    blk.endMin = preS;
-                                    if (blk.endTime) blk.endTime = minutesToTimeLabel(preS);
-                                } else {
-                                    blk.startMin = preE;
-                                    if (blk.startTime) blk.startTime = minutesToTimeLabel(preE);
-                                }
+                            if (!(blk.startMin < preE && blk.endMin > preS)) return;
+                            const blkDMin = blk.dMin || 25;
+                            if (blk.endMin <= preE) {
+                                const newDur = preS - blk.startMin;
+                                if (newDur >= blkDMin) { blk.endMin = preS; if (blk.endTime) blk.endTime = minutesToTimeLabel(preS); }
+                                else { blk.endMin = blk.startMin; } // zero-duration, filtered at sort
+                            } else {
+                                const newDur = blk.endMin - preE;
+                                if (newDur >= blkDMin) { blk.startMin = preE; if (blk.startTime) blk.startTime = minutesToTimeLabel(preE); }
+                                else { blk.endMin = blk.startMin; } // zero-duration, filtered at sort
                             }
                         });
                         tl278.push({
@@ -11606,14 +11622,16 @@
                             const bt = String(blk.type || '').toLowerCase();
                             if (!['slot', 'sport'].includes(bt)) return;
                             if (blk._fixed) return;
-                            if (blk.startMin < postE && blk.endMin > postS) {
-                                if (blk.endMin <= postE) {
-                                    blk.endMin = postS;
-                                    if (blk.endTime) blk.endTime = minutesToTimeLabel(postS);
-                                } else {
-                                    blk.startMin = postE;
-                                    if (blk.startTime) blk.startTime = minutesToTimeLabel(postE);
-                                }
+                            if (!(blk.startMin < postE && blk.endMin > postS)) return;
+                            const blkDMin = blk.dMin || 25;
+                            if (blk.endMin <= postE) {
+                                const newDur = postS - blk.startMin;
+                                if (newDur >= blkDMin) { blk.endMin = postS; if (blk.endTime) blk.endTime = minutesToTimeLabel(postS); }
+                                else { blk.endMin = blk.startMin; } // zero-duration, filtered at sort
+                            } else {
+                                const newDur = blk.endMin - postE;
+                                if (newDur >= blkDMin) { blk.startMin = postE; if (blk.startTime) blk.startTime = minutesToTimeLabel(postE); }
+                                else { blk.endMin = blk.startMin; } // zero-duration, filtered at sort
                             }
                         });
                         tl278.push({
@@ -11629,7 +11647,9 @@
                         _reanchorPlaced++;
                     }
                 });
-                bunkTimelines[bunk].sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
+                bunkTimelines[bunk] = bunkTimelines[bunk]
+                    .filter(b => b && b.endMin > b.startMin)
+                    .sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
             });
         });
         log('[2.78] Re-anchored: dropped ' + _reanchorDropped + ' old change blocks, placed ' + _reanchorPlaced + ' period-anchored ones');
@@ -11658,14 +11678,16 @@
                         const st = String(s.type || '').toLowerCase();
                         if (!['slot', 'sport'].includes(st)) return;
                         if (s._fixed) return;
-                        if (s.startMin < ce && s.endMin > cs) {
-                            if (s.endMin <= ce) {
-                                s.endMin = cs;
-                                s.endTime = minutesToTimeLabel(cs);
-                            } else {
-                                s.startMin = ce;
-                                s.startTime = minutesToTimeLabel(ce);
-                            }
+                        if (!(s.startMin < ce && s.endMin > cs)) return;
+                        const sDMin = s.dMin || 25;
+                        if (s.endMin <= ce) {
+                            const newDur = cs - s.startMin;
+                            if (newDur >= sDMin) { s.endMin = cs; s.endTime = minutesToTimeLabel(cs); }
+                            else { s.endMin = s.startMin; } // zero-duration, filtered below
+                        } else {
+                            const newDur = s.endMin - ce;
+                            if (newDur >= sDMin) { s.startMin = ce; s.startTime = minutesToTimeLabel(ce); }
+                            else { s.endMin = s.startMin; } // zero-duration, filtered below
                         }
                     });
                     // Remove zero-duration entries created by trimming
