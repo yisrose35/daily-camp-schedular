@@ -1308,6 +1308,22 @@
             return gaps.filter(g => g.end - g.start >= 5);
         }
 
+        // Returns true when [start, end) falls entirely within a bell-schedule dead zone
+        // (i.e., between periods — no period overlaps this interval).
+        function isInDeadZone(start, end, grade) {
+            var periods = window.campPeriods && window.campPeriods[grade];
+            if (!periods || !periods.length) return false;
+            return !periods.some(function(p) { return p.startMin < end && p.endMin > start; });
+        }
+
+        // Returns true when extending a block whose current range is [blkStart, blkEnd]
+        // to [blkStart, newEnd] stays entirely within one bell-schedule period.
+        function staysInPeriod(blkStart, newEnd, grade) {
+            var periods = window.campPeriods && window.campPeriods[grade];
+            if (!periods || !periods.length) return true;
+            return periods.some(function(p) { return p.startMin <= blkStart && p.endMin >= newEnd; });
+        }
+
         const _minFillableByGrade = {};
         function getMinFillable(grade) {
             if (_minFillableByGrade[grade]) return _minFillableByGrade[grade];
@@ -6284,6 +6300,8 @@
                             }
                         }
                         if (!absorbed) {
+                            // Dead-zone gaps between periods should not get a Free block.
+                            if (isInDeadZone(rgap.start, rgap.end, fMeta.grade)) continue;
                             // Can't absorb — create slot only if >= dMin
                             var _lastResort = makeBlock({
                                 startMin: rgap.start, endMin: rgap.end,
@@ -7298,24 +7316,28 @@
                     var fgGap = fcGaps[fg];
                     var fgDur = fgGap.end - fgGap.start;
                     if (fgDur <= 0) continue;
-                    // Try extending previous block
+                    // Skip gaps that fall entirely in a bell-schedule dead zone.
+                    if (isInDeadZone(fgGap.start, fgGap.end, fcMeta.grade)) continue;
+                    // Try extending previous block (must stay within same period)
                     var extended = false;
                     for (var fe = fcTl.length - 1; fe >= 0; fe--) {
                         // ★ v15.2: Never extend _activityLocked blocks (snack/swim/special)
                         if (fcTl[fe].endMin === fgGap.start && !isPhase0(fcTl[fe]) && !fcTl[fe]._activityLocked) {
                             var feMax = fcTl[fe].dMax || (TYPE_CEILINGS[(fcTl[fe].type || '').toLowerCase()] || 60);
-                            if ((fcTl[fe].endMin - fcTl[fe].startMin) + fgDur <= feMax) {
+                            if ((fcTl[fe].endMin - fcTl[fe].startMin) + fgDur <= feMax &&
+                                staysInPeriod(fcTl[fe].startMin, fgGap.end, fcMeta.grade)) {
                                 fcTl[fe].endMin = fgGap.end; extended = true; break;
                             }
                         }
                     }
                     if (extended) continue;
-                    // Try extending next block
+                    // Try extending next block (must stay within same period)
                     for (var fn = 0; fn < fcTl.length; fn++) {
                         // ★ v15.2: Never extend _activityLocked blocks (snack/swim/special)
                         if (fcTl[fn].startMin === fgGap.end && !isPhase0(fcTl[fn]) && !fcTl[fn]._activityLocked) {
                             var fnMax = fcTl[fn].dMax || (TYPE_CEILINGS[(fcTl[fn].type || '').toLowerCase()] || 60);
-                            if ((fcTl[fn].endMin - fcTl[fn].startMin) + fgDur <= fnMax) {
+                            if ((fcTl[fn].endMin - fcTl[fn].startMin) + fgDur <= fnMax &&
+                                staysInPeriod(fgGap.start, fcTl[fn].endMin, fcMeta.grade)) {
                                 fcTl[fn].startMin = fgGap.start; extended = true; break;
                             }
                         }
@@ -7370,8 +7392,14 @@
                     var zgDur = zgGap.end - zgGap.start;
                     if (zgDur <= 0) continue;
 
+                    // Dead zones between bell-schedule periods are structural —
+                    // skip them entirely; Strategy 4's splitGapAtPeriods already
+                    // handles partial overlaps, but pure dead-zone gaps need no slot.
+                    if (isInDeadZone(zgGap.start, zgGap.end, zgMeta.grade)) continue;
+
                     // Strategy 1: Extend previous non-fixed block to cover gap
                     // ★ v15.2: Skip _activityLocked blocks (snack/swim/special — must not grow)
+                    // Period boundary check prevents extending across dead zones.
                     var zgPrev = null;
                     for (var zp = zgTmpl.length - 1; zp >= 0; zp--) {
                         if (zgTmpl[zp].endMin === zgGap.start && !zgTmpl[zp]._fixed && !zgTmpl[zp]._activityLocked) { zgPrev = zgTmpl[zp]; break; }
@@ -7379,13 +7407,16 @@
                     if (zgPrev) {
                         var zgPrevDur = zgPrev.endMin - zgPrev.startMin;
                         var zgPrevMax = zgPrev.dMax || (TYPE_CEILINGS[(zgPrev.type || '').toLowerCase()] || 60);
-                        // Only extend if within dMax — respect constraints
-                        if (zgPrevDur + zgDur <= zgPrevMax) {
+                        // Only extend if within dMax AND stays within the same period
+                        if (zgPrevDur + zgDur <= zgPrevMax &&
+                            staysInPeriod(zgPrev.startMin, zgGap.end, zgMeta.grade)) {
                             zgPrev.endMin = zgGap.end;
                             continue;
                         }
-                        // Partial extend: take as much as dMax allows
+                        // Partial extend: take as much as dMax allows (cap at period end)
                         var zgCanTake = zgPrevMax - zgPrevDur;
+                        var _zgPP = window.campPeriods && window.campPeriods[zgMeta.grade];
+                        if (_zgPP) { var _zgPE = Infinity; _zgPP.forEach(function(p) { if (p.startMin <= zgPrev.startMin && p.endMin > zgPrev.startMin && p.endMin < _zgPE) _zgPE = p.endMin; }); zgCanTake = Math.min(zgCanTake, _zgPE - zgPrev.endMin); }
                         if (zgCanTake >= 5) {
                             zgPrev.endMin += zgCanTake;
                             zgGap.start = zgPrev.endMin;
@@ -7396,6 +7427,7 @@
 
                     // Strategy 2: Pull next non-fixed block backward
                     // ★ v15.2: Skip _activityLocked blocks (snack/swim/special — must not grow)
+                    // Period boundary check prevents extending across dead zones.
                     var zgNext = null;
                     for (var zn = 0; zn < zgTmpl.length; zn++) {
                         if (zgTmpl[zn].startMin === zgGap.end && !zgTmpl[zn]._fixed && !zgTmpl[zn]._activityLocked) { zgNext = zgTmpl[zn]; break; }
@@ -7403,11 +7435,14 @@
                     if (zgNext) {
                         var zgNextDur = zgNext.endMin - zgNext.startMin;
                         var zgNextMax = zgNext.dMax || (TYPE_CEILINGS[(zgNext.type || '').toLowerCase()] || 60);
-                        if (zgNextDur + zgDur <= zgNextMax) {
+                        if (zgNextDur + zgDur <= zgNextMax &&
+                            staysInPeriod(zgGap.start, zgNext.endMin, zgMeta.grade)) {
                             zgNext.startMin = zgGap.start;
                             continue;
                         }
                         var zgCanTake2 = zgNextMax - zgNextDur;
+                        var _zgNP = window.campPeriods && window.campPeriods[zgMeta.grade];
+                        if (_zgNP) { var _zgPS = -Infinity; _zgNP.forEach(function(p) { if (p.startMin <= zgNext.startMin && p.endMin >= zgNext.startMin && p.startMin > _zgPS) _zgPS = p.startMin; }); zgCanTake2 = Math.min(zgCanTake2, zgNext.startMin - Math.max(zgGap.start, _zgPS)); }
                         if (zgCanTake2 >= 5) {
                             // ★ LNS fix: partial absorb from the right — update gap bounds
                             // and fall through to Strategy 2.5/3 rather than continuing.
@@ -10708,7 +10743,10 @@
                 tl.forEach(b => { if (b.startMin == null || b.endMin == null || b.endMin <= b.startMin) validationPassed = false; });
                 // ★ v15.0: Per-gap reason analysis — for each remaining Free,
                 //   probe the priority list to figure out WHY it stayed unfilled.
-                const remGaps = getFreeGaps(bunk, gs, ge);
+                // Dead-zone gaps between bell-schedule periods are structural and expected —
+                // exclude them from warnings so they don't mask real coverage problems.
+                const remGapsAll = getFreeGaps(bunk, gs, ge);
+                const remGaps = remGapsAll.filter(g => !isInDeadZone(g.start, g.end, grade));
                 if (remGaps.length > 0) {
                     warnings.push({ type: 'remaining_gap', bunk, grade, gaps: remGaps });
                     const sl = (typeof shoppingLists !== 'undefined') ? shoppingLists[bunk] : null;
