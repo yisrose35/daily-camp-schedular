@@ -1511,10 +1511,17 @@
                 }
             }
             if (preChange > 0 && !pre) {
-                // Only place Change in the gap immediately before swim — not in a period
-                // further back. Walking back multiple periods puts Change hours before swim.
+                // If swimStart is at a period boundary, snap preGapEnd to the previous
+                // period's end so the Change block stays fully within one period and
+                // doesn't straddle the inter-period gap.
                 var _preGapEnd = swimStart;
-                var _preGapStart = swimStart - preChange;
+                for (var _piPre = 1; _piPre < gp.length; _piPre++) {
+                    if (gp[_piPre].startMin === swimStart && gp[_piPre - 1].endMin < swimStart) {
+                        _preGapEnd = gp[_piPre - 1].endMin;
+                        break;
+                    }
+                }
+                var _preGapStart = _preGapEnd - preChange;
                 var _schedStart = gp[0].startMin;
                 if (_preGapStart >= _schedStart && !rangeOccupied(_preGapStart, _preGapEnd)) {
                     pre = { startMin: _preGapStart, endMin: _preGapEnd };
@@ -11542,19 +11549,29 @@
                     const _schedStart278 = _gp278.length > 0 ? _gp278[0].startMin : 0;
                     const _schedEnd278   = _gp278.length > 0 ? _gp278[_gp278.length - 1].endMin : 24 * 60;
                     if (!anchors.pre && preChangeDur > 0) {
-                        // Find the trimmable block ending closest to bundleStart
+                        // If bundleStart is at a period boundary, snap preEnd to the previous
+                        // period's end so Change stays fully within one period.
+                        let _preEnd278 = bundleStart;
+                        for (let _piPre278 = 1; _piPre278 < _gp278.length; _piPre278++) {
+                            if (_gp278[_piPre278].startMin === bundleStart && _gp278[_piPre278 - 1].endMin < bundleStart) {
+                                _preEnd278 = _gp278[_piPre278 - 1].endMin;
+                                break;
+                            }
+                        }
+                        const preStart = _preEnd278 - preChangeDur;
+                        // Find the trimmable block whose end falls inside the Change window
                         const prev = tl278
-                            .filter(b => b && b.endMin <= bundleStart && b.endMin > bundleStart - (preChangeDur + 10))
+                            .filter(b => b && !b._fixed && b.endMin > preStart && b.endMin <= _preEnd278)
                             .sort((a, b) => b.endMin - a.endMin)[0] || null;
                         const prevType = prev ? String(prev.type || '').toLowerCase() : '';
                         if (prev && TRIMMABLE_TYPES.has(prevType)) {
-                            const prevDur = prev.endMin - prev.startMin;
-                            const preStart = bundleStart - preChangeDur;
-                            if (prevDur - preChangeDur >= (prev.dMin || GAP_MIN_DUR) && preStart >= _schedStart278) {
-                                prev.endMin -= preChangeDur;
-                                if (prev.endTime) prev.endTime = minutesToTimeLabel(prev.endMin);
-                                anchors = { pre: { startMin: preStart, endMin: bundleStart }, post: anchors.post };
-                                log('[2.78] Carved ' + preChangeDur + 'm from "' + (prev.event || prev.type) + '" for pre-change before bundle at ' + bunk);
+                            // After carve, prev will end at preStart; check its remaining duration.
+                            const newPrevDur = preStart - prev.startMin;
+                            if (newPrevDur >= (prev.dMin || GAP_MIN_DUR) && preStart >= _schedStart278) {
+                                prev.endMin = preStart;
+                                if (prev.endTime) prev.endTime = minutesToTimeLabel(preStart);
+                                anchors = { pre: { startMin: preStart, endMin: _preEnd278 }, post: anchors.post };
+                                log('[2.78] Carved to ' + preStart + ' for pre-change [' + preStart + ',' + _preEnd278 + '] at ' + bunk);
                             }
                         }
                     }
@@ -11638,6 +11655,32 @@
                                     if (nxt.endTime) nxt.endTime = minutesToTimeLabel(_newStart + specialDur);
                                     anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
                                 }
+                            }
+                        }
+                    }
+
+                    // Last resort: relocation failed (no period has room for the special).
+                    // Try pre-change before swim — period-boundary-aware placement.
+                    if (!anchors.post && !anchors.pre && postChangeDur > 0) {
+                        let _preEndLR = bundleStart;
+                        for (let _piLR = 1; _piLR < _gp278.length; _piLR++) {
+                            if (_gp278[_piLR].startMin === bundleStart && _gp278[_piLR - 1].endMin < bundleStart) {
+                                _preEndLR = _gp278[_piLR - 1].endMin;
+                                break;
+                            }
+                        }
+                        const _preLRStart = _preEndLR - postChangeDur;
+                        const _prevLR = tl278
+                            .filter(b => b && !b._fixed && b.endMin > _preLRStart && b.endMin <= _preEndLR)
+                            .sort((a, b) => b.endMin - a.endMin)[0] || null;
+                        const _prevLRType = _prevLR ? String(_prevLR.type || '').toLowerCase() : '';
+                        if (_prevLR && TRIMMABLE_TYPES.has(_prevLRType)) {
+                            const _newPrevDurLR = _preLRStart - _prevLR.startMin;
+                            if (_newPrevDurLR >= (_prevLR.dMin || GAP_MIN_DUR) && _preLRStart >= _schedStart278) {
+                                _prevLR.endMin = _preLRStart;
+                                if (_prevLR.endTime) _prevLR.endTime = minutesToTimeLabel(_preLRStart);
+                                anchors = { pre: { startMin: _preLRStart, endMin: _preEndLR }, post: null };
+                                log('[2.78] Last-resort pre-change [' + _preLRStart + ',' + _preEndLR + '] (special could not be relocated) at ' + bunk);
                             }
                         }
                     }
