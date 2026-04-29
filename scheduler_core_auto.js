@@ -11599,26 +11599,35 @@
                                 anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
                                 log('[2.78] Carved ' + carveAmt + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
                             }
-                        }
-                    }
-
-                    // Fallback: if post-change is still missing (e.g. a special activity is
-                    // pinned right after swim and cannot be trimmed), try to place Change
-                    // before the swim instead — carve from the trimmable block preceding it.
-                    if (!anchors.post && !anchors.pre && postChangeDur > 0) {
-                        const fallbackDur = postChangeDur;
-                        const prev2 = tl278
-                            .filter(b => b && b.endMin <= bundleStart && b.endMin > bundleStart - (fallbackDur + 10))
-                            .sort((a, b) => b.endMin - a.endMin)[0] || null;
-                        const prev2Type = prev2 ? String(prev2.type || '').toLowerCase() : '';
-                        if (prev2 && TRIMMABLE_TYPES.has(prev2Type)) {
-                            const prev2Dur = prev2.endMin - prev2.startMin;
-                            const preStart2 = bundleStart - fallbackDur;
-                            if (prev2Dur - fallbackDur >= (prev2.dMin || GAP_MIN_DUR) && preStart2 >= _schedStart278) {
-                                prev2.endMin -= fallbackDur;
-                                if (prev2.endTime) prev2.endTime = minutesToTimeLabel(prev2.endMin);
-                                anchors = { pre: { startMin: preStart2, endMin: bundleStart }, post: null };
-                                log('[2.78] Post-change blocked by special; placed pre-change before bundle at ' + bunk);
+                        } else if (nxt && nxt._fixed) {
+                            // Swim + Change is one atomic unit. A fixed special (or other pinned
+                            // block) is occupying the post-change window — relocate it so Change
+                            // can be placed immediately after swim.
+                            const specialDur = nxt.endMin - nxt.startMin;
+                            const _gapIsIPGS = alreadyFreePost > 0 && _gp278.some((p, pi) =>
+                                pi < _gp278.length - 1 &&
+                                bundleEnd >= p.endMin && nxt.startMin <= _gp278[pi + 1].startMin
+                            );
+                            const chStart = _gapIsIPGS ? nxt.startMin : bundleEnd;
+                            const chEnd = chStart + postChangeDur;
+                            if (chEnd <= _schedEnd278) {
+                                // Find the earliest free slot at or after chEnd that fits the special.
+                                // Build a sorted list of blocks excluding nxt itself.
+                                const _tlOther = tl278.filter(b => b && b !== nxt && b.endMin > b.startMin)
+                                    .sort((a, b) => a.startMin - b.startMin);
+                                let _cursor = chEnd;
+                                for (const _ob of _tlOther) {
+                                    if (_ob.startMin >= _cursor + specialDur) break;
+                                    if (_ob.endMin > _cursor) _cursor = _ob.endMin;
+                                }
+                                if (_cursor + specialDur <= _schedEnd278) {
+                                    log('[2.78] Relocating "' + (nxt.event || nxt.type) + '" from [' + nxt.startMin + ',' + nxt.endMin + '] to [' + _cursor + ',' + (_cursor + specialDur) + '] to make room for post-change at ' + bunk);
+                                    nxt.startMin = _cursor;
+                                    nxt.endMin = _cursor + specialDur;
+                                    if (nxt.startTime) nxt.startTime = minutesToTimeLabel(_cursor);
+                                    if (nxt.endTime) nxt.endTime = minutesToTimeLabel(_cursor + specialDur);
+                                    anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
+                                }
                             }
                         }
                     }
