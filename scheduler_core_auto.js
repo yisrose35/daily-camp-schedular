@@ -13912,6 +13912,10 @@
 
         try { window.AutoSegmentModel?.rebuildFromAssignments(); } catch (_e) { warn('Segment rebuild failed: ' + _e.message); }
 
+        // Expose for post-run diagnostics
+        window._dbgBT = bunkTimelines;
+        window._dbgDivisions = divisions;
+
         return { success: true, warnings, elapsed, blocksScheduled: solverBlocks.length, specialBlocksLocked: specialWriteCount };
     };
 
