@@ -4948,7 +4948,7 @@
                                     // Path B: staggered swim not yet placed — protect all potential change windows
                                     if (!_gvpChgBlocked) {
                                         var _gvpStagLyr = (layersByGrade[grade]||[]).find(function(l){
-                                            return (l.type||'').toLowerCase()==='swim' && !l.fullGrade;
+                                            return (l.type||'').toLowerCase()==='swim';
                                         });
                                         var _gvpHasSwimInTmpl = tmpl.some(function(b){ return b && (b.type||'').toLowerCase()==='swim'; });
                                         if (_gvpStagLyr && !_gvpHasSwimInTmpl) {
@@ -10183,8 +10183,13 @@
             {
                 var _p23Count = 0;
                 allGrades.forEach(function(grade) {
+                    // Find any swim layer not yet placed by Phase 0.
+                    // Don't filter on !fullGrade — some fullGrade:true layers are not pinned
+                    // and therefore skipped by Phase 0, landing in Phase 3 as "needs".
+                    // The per-bunk check below (swim already in bunkTimelines?) guards
+                    // against double-placing the rare fullGrade swim that Phase 0 DID place.
                     var _p23SwimLayer = (layersByGrade[grade] || []).find(function(l) {
-                        return (l.type || '').toLowerCase() === 'swim' && !l.fullGrade;
+                        return (l.type || '').toLowerCase() === 'swim';
                     });
                     if (!_p23SwimLayer) return;
                     if (!todaysSwimmers[grade] || todaysSwimmers[grade].size === 0) return;
@@ -10502,7 +10507,7 @@
                         // windows from the swim layer config so specials can't pre-claim those slots.
                         if (_p25SwimWindows.length === 0) {
                             var _stagSwimLayer = (layersByGrade[grade] || []).find(function(l){
-                                return (l.type || '').toLowerCase() === 'swim' && !l.fullGrade;
+                                return (l.type || '').toLowerCase() === 'swim';
                             });
                             var _bunkSwimsToday = (typeof todaysSwimmers !== 'undefined' && todaysSwimmers[grade])
                                 ? todaysSwimmers[grade].has(String(bunk)) : true;
