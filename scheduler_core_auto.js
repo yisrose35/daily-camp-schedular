@@ -1515,7 +1515,8 @@
                 // further back. Walking back multiple periods puts Change hours before swim.
                 var _preGapEnd = swimStart;
                 var _preGapStart = swimStart - preChange;
-                if (_preGapStart >= 0 && !rangeOccupied(_preGapStart, _preGapEnd)) {
+                var _schedStart = gp[0].startMin;
+                if (_preGapStart >= _schedStart && !rangeOccupied(_preGapStart, _preGapEnd)) {
                     pre = { startMin: _preGapStart, endMin: _preGapEnd };
                 }
             }
@@ -1525,7 +1526,8 @@
             if (postChange > 0) {
                 var _postGapStart = swimEnd;
                 var _postGapEnd = swimEnd + postChange;
-                if (!rangeOccupied(_postGapStart, _postGapEnd)) {
+                var _schedEnd = gp[gp.length - 1].endMin;
+                if (_postGapEnd <= _schedEnd && !rangeOccupied(_postGapStart, _postGapEnd)) {
                     post = { startMin: _postGapStart, endMin: _postGapEnd };
                 }
             }
@@ -11510,6 +11512,12 @@
                     // are never carved.
                     const tl278 = bunkTimelines[bunk];
                     const TRIMMABLE_TYPES = new Set(['sport', 'slot']);
+                    // Derive schedule boundaries for this grade so carve results stay in-hours.
+                    const _gp278 = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
+                        : [];
+                    const _schedStart278 = _gp278.length > 0 ? _gp278[0].startMin : 0;
+                    const _schedEnd278   = _gp278.length > 0 ? _gp278[_gp278.length - 1].endMin : 24 * 60;
                     if (!anchors.pre && preChangeDur > 0) {
                         // Find the trimmable block ending closest to bundleStart (within 15 min gap window)
                         const prev = tl278
@@ -11518,10 +11526,11 @@
                         const prevType = prev ? String(prev.type || '').toLowerCase() : '';
                         if (prev && TRIMMABLE_TYPES.has(prevType)) {
                             const prevDur = prev.endMin - prev.startMin;
-                            if (prevDur > preChangeDur) {
+                            const preStart = bundleStart - preChangeDur;
+                            if (prevDur > preChangeDur && preStart >= _schedStart278) {
                                 prev.endMin -= preChangeDur;
                                 if (prev.endTime) prev.endTime = minutesToTimeLabel(prev.endMin);
-                                anchors = { pre: { startMin: bundleStart - preChangeDur, endMin: bundleStart }, post: anchors.post };
+                                anchors = { pre: { startMin: preStart, endMin: bundleStart }, post: anchors.post };
                                 log('[2.78] Carved ' + preChangeDur + 'm from "' + (prev.event || prev.type) + '" for pre-change before bundle at ' + bunk);
                             }
                         }
@@ -11534,18 +11543,23 @@
                         const nxtType = nxt ? String(nxt.type || '').toLowerCase() : '';
                         // Gap between swimEnd and next activity may already be free (inter-period gap)
                         const alreadyFreePost = nxt ? (nxt.startMin - bundleEnd) : postChangeDur;
+                        const postEnd278 = bundleEnd + postChangeDur;
                         if (!nxt && alreadyFreePost >= postChangeDur) {
-                            // Entire post-change window is already free
-                            anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: bundleEnd + postChangeDur } };
+                            // No block starts nearby — verify the window is within schedule hours
+                            // and no spanning block (started before bundleEnd) occupies this range.
+                            const noOverlap = !tl278.some(b => b && b.endMin > bundleEnd && b.startMin < postEnd278);
+                            if (postEnd278 <= _schedEnd278 && noOverlap) {
+                                anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: postEnd278 } };
+                            }
                         } else if (nxt && TRIMMABLE_TYPES.has(nxtType)) {
                             const needToCarve = postChangeDur - alreadyFreePost;
                             const nxtDur = nxt.endMin - nxt.startMin;
-                            if (needToCarve <= 0 || nxtDur > needToCarve) {
+                            if ((needToCarve <= 0 || nxtDur > needToCarve) && postEnd278 <= _schedEnd278) {
                                 if (needToCarve > 0) {
                                     nxt.startMin += needToCarve;
                                     if (nxt.startTime) nxt.startTime = minutesToTimeLabel(nxt.startMin);
                                 }
-                                anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: bundleEnd + postChangeDur } };
+                                anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: postEnd278 } };
                                 log('[2.78] Carved ' + Math.max(0, needToCarve) + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
                             }
                         }
