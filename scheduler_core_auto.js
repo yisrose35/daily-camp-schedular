@@ -11511,13 +11511,14 @@
                     const tl278 = bunkTimelines[bunk];
                     const TRIMMABLE_TYPES = new Set(['sport', 'slot']);
                     if (!anchors.pre && preChangeDur > 0) {
-                        // Find the block that ends at bundleStart (immediately before bundle)
-                        const prev = tl278.find(b => b && b.endMin === bundleStart);
+                        // Find the trimmable block ending closest to bundleStart (within 15 min gap window)
+                        const prev = tl278
+                            .filter(b => b && b.endMin <= bundleStart && b.endMin > bundleStart - 15)
+                            .sort((a, b) => b.endMin - a.endMin)[0] || null;
                         const prevType = prev ? String(prev.type || '').toLowerCase() : '';
                         if (prev && TRIMMABLE_TYPES.has(prevType)) {
                             const prevDur = prev.endMin - prev.startMin;
                             if (prevDur > preChangeDur) {
-                                // Trim the sport and place pre-change in freed space
                                 prev.endMin -= preChangeDur;
                                 if (prev.endTime) prev.endTime = minutesToTimeLabel(prev.endMin);
                                 anchors = { pre: { startMin: bundleStart - preChangeDur, endMin: bundleStart }, post: anchors.post };
@@ -11526,16 +11527,26 @@
                         }
                     }
                     if (!anchors.post && postChangeDur > 0) {
-                        // Find the block that starts at bundleEnd (immediately after bundle)
-                        const nxt = tl278.find(b => b && b.startMin === bundleEnd);
+                        // Find first trimmable block at or after bundleEnd, within 15-min inter-period gap window
+                        const nxt = tl278
+                            .filter(b => b && b.startMin >= bundleEnd && b.startMin < bundleEnd + 15)
+                            .sort((a, b) => a.startMin - b.startMin)[0] || null;
                         const nxtType = nxt ? String(nxt.type || '').toLowerCase() : '';
-                        if (nxt && TRIMMABLE_TYPES.has(nxtType)) {
+                        // Gap between swimEnd and next activity may already be free (inter-period gap)
+                        const alreadyFreePost = nxt ? (nxt.startMin - bundleEnd) : postChangeDur;
+                        if (!nxt && alreadyFreePost >= postChangeDur) {
+                            // Entire post-change window is already free
+                            anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: bundleEnd + postChangeDur } };
+                        } else if (nxt && TRIMMABLE_TYPES.has(nxtType)) {
+                            const needToCarve = postChangeDur - alreadyFreePost;
                             const nxtDur = nxt.endMin - nxt.startMin;
-                            if (nxtDur > postChangeDur) {
-                                nxt.startMin += postChangeDur;
-                                if (nxt.startTime) nxt.startTime = minutesToTimeLabel(nxt.startMin);
+                            if (needToCarve <= 0 || nxtDur > needToCarve) {
+                                if (needToCarve > 0) {
+                                    nxt.startMin += needToCarve;
+                                    if (nxt.startTime) nxt.startTime = minutesToTimeLabel(nxt.startMin);
+                                }
                                 anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: bundleEnd + postChangeDur } };
-                                log('[2.78] Carved ' + postChangeDur + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
+                                log('[2.78] Carved ' + Math.max(0, needToCarve) + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
                             }
                         }
                     }
