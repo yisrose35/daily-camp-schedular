@@ -10542,6 +10542,19 @@
                             }
                         }
 
+                        // Pre-compute change block positions for adjacency bonus.
+                        // When a special ends at a pre-change start or starts at a post-change end
+                        // it leaves any dead gap at the EDGE of the period (looks clean) rather
+                        // than sandwiched in the middle ([special][slush][change] is ugly;
+                        // [slush][special][change] is acceptable).
+                        var _p25PreChgStarts = {}, _p25PostChgEnds = {};
+                        (bunkTimelines[bunk] || []).forEach(function(_p25chb) {
+                            if (!_p25chb) return;
+                            var _p25chbt = (_p25chb.type || '').toLowerCase();
+                            if (_p25chbt === 'pre-change')  _p25PreChgStarts[_p25chb.startMin] = true;
+                            if (_p25chbt === 'post-change') _p25PostChgEnds[_p25chb.endMin]   = true;
+                        });
+
                         for (var gi = 0; gi < allGapsForBunk.length; gi++) {
                             var gap = allGapsForBunk[gi];
                             if (gap.e - gap.s < specialDur) { _sp25_gapTooSmall++; continue; }
@@ -10617,6 +10630,12 @@
                                 // Draft position bonus (preserve GlobalPlanner's intent)
                                 if (pos === draftStart) score += 200;
 
+                                // Change-adjacency bonus: special ends right at pre-change start,
+                                // or starts right at post-change end. Outweighs draft position so
+                                // the dead gap lands at the period edge, not between activities.
+                                if (_p25PreChgStarts[pos + specialDur]) score += 350;
+                                if (_p25PostChgEnds[pos])               score += 350;
+
                                 candidatePositions.push({ pos: pos, score: score, deadGapCount: deadGapCount });
                             }
 
@@ -10644,6 +10663,8 @@
                                             else if (egSize > 0) endScore += 50;
                                         }
                                         if (endPos === draftStart) endScore += 200;
+                                        if (_p25PreChgStarts[endPos + specialDur]) endScore += 350;
+                                        if (_p25PostChgEnds[endPos])               endScore += 350;
                                         candidatePositions.push({ pos: endPos, score: endScore, deadGapCount: endDeadGaps });
                                     }
                                 }
