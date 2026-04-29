@@ -4908,6 +4908,45 @@
                                     }
                                 }
 
+                                // Swim change-window protection: don't place specials in pre/post change slots
+                                if (_needType15 === 'special') {
+                                    var _gvpChgBlocked = false;
+                                    var _gvpChgPds = (window.campPeriods && window.campPeriods[grade])
+                                        ? window.campPeriods[grade].slice().sort(function(a,b){return a.startMin-b.startMin;}) : [];
+                                    for (var _gvpTi = 0; _gvpTi < tmpl.length && !_gvpChgBlocked; _gvpTi++) {
+                                        var _gvpSwm = tmpl[_gvpTi];
+                                        if (!_gvpSwm || (_gvpSwm.type||'').toLowerCase() !== 'swim') continue;
+                                        var _gvpSwLyr = (layersByGrade[grade]||[]).find(function(l){return(l.type||'').toLowerCase()==='swim';}) || _gvpSwm.layer || {};
+                                        var _gvpPreDur  = (_gvpSwLyr.preChangeMin  > 0) ? _gvpSwLyr.preChangeMin  : 0;
+                                        var _gvpPostDur = (_gvpSwLyr.postChangeMin > 0) ? _gvpSwLyr.postChangeMin : 0;
+                                        if (_gvpChgPds.length > 0) {
+                                            if (_gvpSwm.startMin === _gvpChgPds[0].startMin) _gvpPreDur = 0;
+                                            if (_gvpSwm.endMin   === _gvpChgPds[_gvpChgPds.length-1].endMin) _gvpPostDur = 0;
+                                        }
+                                        if (_gvpPreDur > 0) {
+                                            for (var _gvpPi3 = 1; _gvpPi3 < _gvpChgPds.length; _gvpPi3++) {
+                                                if (_gvpChgPds[_gvpPi3].startMin === _gvpSwm.startMin) {
+                                                    var _gvpPrWs = _gvpChgPds[_gvpPi3-1].endMin - _gvpPreDur;
+                                                    var _gvpPrWe = _gvpChgPds[_gvpPi3-1].endMin;
+                                                    if (pos < _gvpPrWe && pos + dur > _gvpPrWs) _gvpChgBlocked = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if (!_gvpChgBlocked && _gvpPostDur > 0) {
+                                            for (var _gvpPj3 = 0; _gvpPj3 < _gvpChgPds.length - 1; _gvpPj3++) {
+                                                if (_gvpChgPds[_gvpPj3].endMin === _gvpSwm.endMin) {
+                                                    var _gvpPoWs = _gvpChgPds[_gvpPj3+1].startMin;
+                                                    var _gvpPoWe = _gvpPoWs + _gvpPostDur;
+                                                    if (pos < _gvpPoWe && pos + dur > _gvpPoWs) _gvpChgBlocked = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (_gvpChgBlocked) continue;
+                                }
+
                                 // ★ Cooldown rule check
                                 if (window.SchedulingRules && !window.SchedulingRules.isCandidateAllowed(
                                     { startMin: pos, endMin: pos + dur, type: need.type, event: need.event,
