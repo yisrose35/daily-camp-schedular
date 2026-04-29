@@ -11611,21 +11611,31 @@
                             const chStart = _gapIsIPGS ? nxt.startMin : bundleEnd;
                             const chEnd = chStart + postChangeDur;
                             if (chEnd <= _schedEnd278) {
-                                // Find the earliest free slot at or after chEnd that fits the special.
-                                // Build a sorted list of blocks excluding nxt itself.
+                                // Find the earliest free slot at or after chEnd that fits the
+                                // special's full duration AND stays within one period boundary.
                                 const _tlOther = tl278.filter(b => b && b !== nxt && b.endMin > b.startMin)
                                     .sort((a, b) => a.startMin - b.startMin);
-                                let _cursor = chEnd;
-                                for (const _ob of _tlOther) {
-                                    if (_ob.startMin >= _cursor + specialDur) break;
-                                    if (_ob.endMin > _cursor) _cursor = _ob.endMin;
+                                let _newStart = null;
+                                for (const _period of _gp278) {
+                                    if (_period.endMin <= chEnd) continue; // period already passed
+                                    if (_period.endMin - Math.max(chEnd, _period.startMin) < specialDur) continue; // won't fit
+                                    // Walk through blocks inside this period to find a free gap
+                                    let _pc = Math.max(chEnd, _period.startMin);
+                                    for (const _ob of _tlOther) {
+                                        if (_ob.startMin >= _pc + specialDur) break;
+                                        if (_ob.endMin > _pc && _ob.startMin < _period.endMin) _pc = _ob.endMin;
+                                    }
+                                    if (_pc + specialDur <= _period.endMin) {
+                                        _newStart = _pc;
+                                        break;
+                                    }
                                 }
-                                if (_cursor + specialDur <= _schedEnd278) {
-                                    log('[2.78] Relocating "' + (nxt.event || nxt.type) + '" from [' + nxt.startMin + ',' + nxt.endMin + '] to [' + _cursor + ',' + (_cursor + specialDur) + '] to make room for post-change at ' + bunk);
-                                    nxt.startMin = _cursor;
-                                    nxt.endMin = _cursor + specialDur;
-                                    if (nxt.startTime) nxt.startTime = minutesToTimeLabel(_cursor);
-                                    if (nxt.endTime) nxt.endTime = minutesToTimeLabel(_cursor + specialDur);
+                                if (_newStart !== null) {
+                                    log('[2.78] Relocating "' + (nxt.event || nxt.type) + '" from [' + nxt.startMin + ',' + nxt.endMin + '] to [' + _newStart + ',' + (_newStart + specialDur) + '] to make room for post-change at ' + bunk);
+                                    nxt.startMin = _newStart;
+                                    nxt.endMin = _newStart + specialDur;
+                                    if (nxt.startTime) nxt.startTime = minutesToTimeLabel(_newStart);
+                                    if (nxt.endTime) nxt.endTime = minutesToTimeLabel(_newStart + specialDur);
                                     anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
                                 }
                             }
