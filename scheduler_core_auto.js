@@ -4048,8 +4048,12 @@
                         if (dur1 >= dur2) tl[i+1].startMin = tl[i].endMin;
                         else tl[i].endMin = tl[i+1].startMin;
                     } else {
-                        // Both fixed — force trim the later one
-                        tl[i+1].startMin = tl[i].endMin;
+                        // Both fixed — Change blocks win; trim the non-change block.
+                        // If neither or both are change, force trim the later one.
+                        var _iIsChg = ['pre-change','post-change','change'].includes((tl[i].type||'').toLowerCase());
+                        var _i1IsChg = ['pre-change','post-change','change'].includes((tl[i+1].type||'').toLowerCase());
+                        if (_i1IsChg && !_iIsChg) tl[i].endMin = tl[i+1].startMin;
+                        else tl[i+1].startMin = tl[i].endMin;
                     }
                 }
             }
@@ -11553,7 +11557,7 @@
                             }
                         } else if (nxt && TRIMMABLE_TYPES.has(nxtType)) {
                             const nxtDur = nxt.endMin - nxt.startMin;
-                            const nxtDMin = nxt.dMin || 25;
+                            const nxtDMin = nxt.dMin || GAP_MIN_DUR;
                             // If the gap [bundleEnd, nxt.startMin] is an inter-period gap,
                             // snap Change to the period boundary so it doesn't straddle the gap.
                             const _gapIsIPG = alreadyFreePost > 0 && _gp278.some((p, pi) =>
@@ -11591,7 +11595,7 @@
                             if (!['slot', 'sport'].includes(bt)) return;
                             if (blk._fixed) return;
                             if (!(blk.startMin < preE && blk.endMin > preS)) return;
-                            const blkDMin = blk.dMin || 25;
+                            const blkDMin = blk.dMin || GAP_MIN_DUR;
                             if (blk.endMin <= preE) {
                                 const newDur = preS - blk.startMin;
                                 if (newDur >= blkDMin) { blk.endMin = preS; if (blk.endTime) blk.endTime = minutesToTimeLabel(preS); }
@@ -11623,7 +11627,7 @@
                             if (!['slot', 'sport'].includes(bt)) return;
                             if (blk._fixed) return;
                             if (!(blk.startMin < postE && blk.endMin > postS)) return;
-                            const blkDMin = blk.dMin || 25;
+                            const blkDMin = blk.dMin || GAP_MIN_DUR;
                             if (blk.endMin <= postE) {
                                 const newDur = postS - blk.startMin;
                                 if (newDur >= blkDMin) { blk.endMin = postS; if (blk.endTime) blk.endTime = minutesToTimeLabel(postS); }
@@ -11679,7 +11683,7 @@
                         if (!['slot', 'sport'].includes(st)) return;
                         if (s._fixed) return;
                         if (!(s.startMin < ce && s.endMin > cs)) return;
-                        const sDMin = s.dMin || 25;
+                        const sDMin = s.dMin || GAP_MIN_DUR;
                         if (s.endMin <= ce) {
                             const newDur = cs - s.startMin;
                             if (newDur >= sDMin) { s.endMin = cs; s.endTime = minutesToTimeLabel(cs); }
