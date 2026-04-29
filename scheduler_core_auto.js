@@ -11569,12 +11569,28 @@
                     const groupId = sw._swimGroupId || nextSwimGroupId();
                     sw._swimGroupId = groupId;
                     if (anchors.pre) {
+                        const preS = anchors.pre.startMin, preE = anchors.pre.endMin;
+                        // Trim any slot/sport block that overlaps the pre-change window
+                        tl278.forEach(blk => {
+                            if (!blk) return;
+                            const bt = String(blk.type || '').toLowerCase();
+                            if (!['slot', 'sport'].includes(bt)) return;
+                            if (blk._fixed) return;
+                            if (blk.startMin < preE && blk.endMin > preS) {
+                                if (blk.endMin <= preE) {
+                                    blk.endMin = preS;
+                                    if (blk.endTime) blk.endTime = minutesToTimeLabel(preS);
+                                } else {
+                                    blk.startMin = preE;
+                                    if (blk.startTime) blk.startTime = minutesToTimeLabel(preE);
+                                }
+                            }
+                        });
                         tl278.push({
-                            startMin: anchors.pre.startMin, endMin: anchors.pre.endMin,
+                            startMin: preS, endMin: preE,
                             type: 'pre-change', event: 'Change',
                             layer: null,
-                            dMin: anchors.pre.endMin - anchors.pre.startMin,
-                            dMax: anchors.pre.endMin - anchors.pre.startMin,
+                            dMin: preE - preS, dMax: preE - preS,
                             _classification: 'pinned', _committed: true,
                             _fixed: true, _activityLocked: true,
                             _source: 'swim-pre-change',
@@ -11583,12 +11599,28 @@
                         _reanchorPlaced++;
                     }
                     if (anchors.post) {
+                        const postS = anchors.post.startMin, postE = anchors.post.endMin;
+                        // Trim any slot/sport block that overlaps the post-change window
+                        tl278.forEach(blk => {
+                            if (!blk) return;
+                            const bt = String(blk.type || '').toLowerCase();
+                            if (!['slot', 'sport'].includes(bt)) return;
+                            if (blk._fixed) return;
+                            if (blk.startMin < postE && blk.endMin > postS) {
+                                if (blk.endMin <= postE) {
+                                    blk.endMin = postS;
+                                    if (blk.endTime) blk.endTime = minutesToTimeLabel(postS);
+                                } else {
+                                    blk.startMin = postE;
+                                    if (blk.startTime) blk.startTime = minutesToTimeLabel(postE);
+                                }
+                            }
+                        });
                         tl278.push({
-                            startMin: anchors.post.startMin, endMin: anchors.post.endMin,
+                            startMin: postS, endMin: postE,
                             type: 'post-change', event: 'Change',
                             layer: null,
-                            dMin: anchors.post.endMin - anchors.post.startMin,
-                            dMax: anchors.post.endMin - anchors.post.startMin,
+                            dMin: postE - postS, dMax: postE - postS,
                             _classification: 'pinned', _committed: true,
                             _fixed: true, _activityLocked: true,
                             _source: 'swim-post-change',
@@ -11611,7 +11643,7 @@
                 const slots = pbs[String(bunk)];
                 if (!Array.isArray(slots)) return;
                 // Drop existing pre-change/post-change slots
-                const filtered = slots.filter(s => {
+                let filtered = slots.filter(s => {
                     const t = String(s.type || '').toLowerCase();
                     return t !== 'pre-change' && t !== 'post-change';
                 });
@@ -11620,10 +11652,28 @@
                     if (!b) return;
                     const bt = String(b.type || '').toLowerCase();
                     if (bt !== 'pre-change' && bt !== 'post-change') return;
+                    const cs = b.startMin, ce = b.endMin;
+                    // Trim any slot/sport entry in _perBunkSlots that overlaps this Change block
+                    filtered.forEach(s => {
+                        const st = String(s.type || '').toLowerCase();
+                        if (!['slot', 'sport'].includes(st)) return;
+                        if (s._fixed) return;
+                        if (s.startMin < ce && s.endMin > cs) {
+                            if (s.endMin <= ce) {
+                                s.endMin = cs;
+                                s.endTime = minutesToTimeLabel(cs);
+                            } else {
+                                s.startMin = ce;
+                                s.startTime = minutesToTimeLabel(ce);
+                            }
+                        }
+                    });
+                    // Remove zero-duration entries created by trimming
+                    filtered = filtered.filter(s => s.endMin > s.startMin);
                     filtered.push({
-                        startMin: b.startMin, endMin: b.endMin,
-                        startTime: minutesToTimeLabel(b.startMin),
-                        endTime: minutesToTimeLabel(b.endMin),
+                        startMin: cs, endMin: ce,
+                        startTime: minutesToTimeLabel(cs),
+                        endTime: minutesToTimeLabel(ce),
                         type: b.type, event: b.event || 'Change',
                         _swimGroupId: b._swimGroupId || null,
                         _fixed: true, _activityLocked: true
