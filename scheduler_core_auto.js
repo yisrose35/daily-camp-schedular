@@ -10258,6 +10258,42 @@
                         // ★ Try ALL valid positions for this special
                         var candidatePositions = [];
                         var _sp25_rtBlockCount = 0, _sp25_layerBlockCount = 0, _sp25_gapTooSmall = 0;
+
+                        // Pre-compute swim change windows for this bunk once (used inside the hot loop).
+                        // Swim+Change is one atomic unit — specials must not occupy the protected
+                        // change window adjacent to swim (last preChangeMin of the period before swim,
+                        // first postChangeMin of the period after swim).
+                        // First/last period is naturally excluded: no previous/next period → no window.
+                        var _p25Periods = (window.campPeriods && window.campPeriods[grade])
+                            ? window.campPeriods[grade].slice().sort(function(a,b){return a.startMin-b.startMin;}) : [];
+                        var _p25SwimWindows = []; // [{preWs,preWe,postWs,postWe}] per swim block
+                        (bunkTimelines[bunk] || []).forEach(function(_p25b) {
+                            if (!_p25b || (_p25b.type || '').toLowerCase() !== 'swim') return;
+                            var _p25sl = _p25b.layer || (layersByGrade[grade] || []).find(function(l){ return (l.type||'').toLowerCase()==='swim'; }) || {};
+                            var _preDur  = (_p25sl.preChangeMin  > 0) ? _p25sl.preChangeMin  : 0;
+                            var _postDur = (_p25sl.postChangeMin > 0) ? _p25sl.postChangeMin : 0;
+                            var _win = {};
+                            if (_preDur > 0) {
+                                for (var _wpi = 1; _wpi < _p25Periods.length; _wpi++) {
+                                    if (_p25Periods[_wpi].startMin === _p25b.startMin) {
+                                        _win.preWe = _p25Periods[_wpi - 1].endMin;
+                                        _win.preWs = _win.preWe - _preDur;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (_postDur > 0) {
+                                for (var _wpj = 0; _wpj < _p25Periods.length - 1; _wpj++) {
+                                    if (_p25Periods[_wpj].endMin === _p25b.endMin) {
+                                        _win.postWs = _p25Periods[_wpj + 1].startMin;
+                                        _win.postWe = _win.postWs + _postDur;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (_win.preWs != null || _win.postWs != null) _p25SwimWindows.push(_win);
+                        });
+
                         for (var gi = 0; gi < allGapsForBunk.length; gi++) {
                             var gap = allGapsForBunk[gi];
                             if (gap.e - gap.s < specialDur) { _sp25_gapTooSmall++; continue; }
@@ -10266,6 +10302,15 @@
                                 // Skip positions that cross a bell-schedule period gap
                                 // (step 2.75 would evict such placements, creating dead gaps).
                                 if (sp25CrossesBoundary(pos, pos + specialDur)) continue;
+                                // Skip positions that would consume the protected change window
+                                // adjacent to a swim block (swim+change is one atomic unit).
+                                var _chgBlocked = false;
+                                for (var _cwi = 0; _cwi < _p25SwimWindows.length; _cwi++) {
+                                    var _cw = _p25SwimWindows[_cwi];
+                                    if (_cw.preWs  != null && pos < _cw.preWe  && pos + specialDur > _cw.preWs)  { _chgBlocked = true; break; }
+                                    if (_cw.postWs != null && pos < _cw.postWe && pos + specialDur > _cw.postWs) { _chgBlocked = true; break; }
+                                }
+                                if (_chgBlocked) continue;
                                 // Resource check: can this special run at this time?
                                 if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) { _sp25_rtBlockCount++; continue; }
                                 // Scheduling rules check (cooldowns, etc.)
@@ -11523,8 +11568,11 @@
                         (l.startMin == null || l.startMin === layer.startMin) &&
                         (l.endMin   == null || l.endMin   === layer.endMin)
                     ) || layer;
-                    const preChangeDur  = (_liveSl.preChangeMin  > 0) ? _liveSl.preChangeMin  : 0;
-                    const postChangeDur = (_liveSl.postChangeMin > 0) ? _liveSl.postChangeMin : 0;
+                    // Requirement: no pre-change for first-period swim, no post-change for last-period swim.
+                    const _isFirstPeriod = _gp278.length > 0 && bundleStart === _gp278[0].startMin;
+                    const _isLastPeriod  = _gp278.length > 0 && bundleEnd   === _gp278[_gp278.length - 1].endMin;
+                    const preChangeDur  = (_isFirstPeriod || !(_liveSl.preChangeMin  > 0)) ? 0 : _liveSl.preChangeMin;
+                    const postChangeDur = (_isLastPeriod  || !(_liveSl.postChangeMin > 0)) ? 0 : _liveSl.postChangeMin;
                     // Pass merged layer so computeSwimChangeAnchors uses live values too
                     const _layerWithChange = Object.assign({}, layer, {
                         preChangeMin: preChangeDur, postChangeMin: postChangeDur
