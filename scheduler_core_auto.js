@@ -11568,14 +11568,11 @@
                         (l.startMin == null || l.startMin === layer.startMin) &&
                         (l.endMin   == null || l.endMin   === layer.endMin)
                     ) || layer;
-                    // Requirement: no pre-change for first-period swim, no post-change for last-period swim.
-                    const _isFirstPeriod = _gp278.length > 0 && bundleStart === _gp278[0].startMin;
-                    const _isLastPeriod  = _gp278.length > 0 && bundleEnd   === _gp278[_gp278.length - 1].endMin;
-                    const preChangeDur  = (_isFirstPeriod || !(_liveSl.preChangeMin  > 0)) ? 0 : _liveSl.preChangeMin;
-                    const postChangeDur = (_isLastPeriod  || !(_liveSl.postChangeMin > 0)) ? 0 : _liveSl.postChangeMin;
+                    const preChangeDurRaw  = (_liveSl.preChangeMin  > 0) ? _liveSl.preChangeMin  : 0;
+                    const postChangeDurRaw = (_liveSl.postChangeMin > 0) ? _liveSl.postChangeMin : 0;
                     // Pass merged layer so computeSwimChangeAnchors uses live values too
                     const _layerWithChange = Object.assign({}, layer, {
-                        preChangeMin: preChangeDur, postChangeMin: postChangeDur
+                        preChangeMin: preChangeDurRaw, postChangeMin: postChangeDurRaw
                     });
                     let anchors = computeSwimChangeAnchors(
                         sw.startMin, sw.endMin, _layerWithChange, grade, bunkTimelines[bunk],
@@ -11596,6 +11593,11 @@
                         : [];
                     const _schedStart278 = _gp278.length > 0 ? _gp278[0].startMin : 0;
                     const _schedEnd278   = _gp278.length > 0 ? _gp278[_gp278.length - 1].endMin : 24 * 60;
+                    // No pre-change for first-period swim; no post-change for last-period swim.
+                    const _isFirstPeriod = _gp278.length > 0 && bundleStart === _gp278[0].startMin;
+                    const _isLastPeriod  = _gp278.length > 0 && bundleEnd   === _gp278[_gp278.length - 1].endMin;
+                    const preChangeDur  = _isFirstPeriod ? 0 : preChangeDurRaw;
+                    const postChangeDur = _isLastPeriod  ? 0 : postChangeDurRaw;
                     if (!anchors.pre && preChangeDur > 0) {
                         // If bundleStart is at a period boundary, snap preEnd to the previous
                         // period's end so Change stays fully within one period.
