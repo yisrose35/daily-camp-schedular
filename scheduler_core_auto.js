@@ -4913,6 +4913,7 @@
                                     var _gvpChgBlocked = false;
                                     var _gvpChgPds = (window.campPeriods && window.campPeriods[grade])
                                         ? window.campPeriods[grade].slice().sort(function(a,b){return a.startMin-b.startMin;}) : [];
+                                    // Path A: swim already placed — check its actual change windows
                                     for (var _gvpTi = 0; _gvpTi < tmpl.length && !_gvpChgBlocked; _gvpTi++) {
                                         var _gvpSwm = tmpl[_gvpTi];
                                         if (!_gvpSwm || (_gvpSwm.type||'').toLowerCase() !== 'swim') continue;
@@ -4940,6 +4941,38 @@
                                                     var _gvpPoWe = _gvpPoWs + _gvpPostDur;
                                                     if (pos < _gvpPoWe && pos + dur > _gvpPoWs) _gvpChgBlocked = true;
                                                     break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // Path B: staggered swim not yet placed — protect all potential change windows
+                                    if (!_gvpChgBlocked) {
+                                        var _gvpStagLyr = (layersByGrade[grade]||[]).find(function(l){
+                                            return (l.type||'').toLowerCase()==='swim' && !l.fullGrade;
+                                        });
+                                        var _gvpHasSwimInTmpl = tmpl.some(function(b){ return b && (b.type||'').toLowerCase()==='swim'; });
+                                        if (_gvpStagLyr && !_gvpHasSwimInTmpl) {
+                                            var _gvpSPreDur  = (_gvpStagLyr.preChangeMin  > 0) ? _gvpStagLyr.preChangeMin  : 0;
+                                            var _gvpSPostDur = (_gvpStagLyr.postChangeMin > 0) ? _gvpStagLyr.postChangeMin : 0;
+                                            if (_gvpSPreDur > 0 || _gvpSPostDur > 0) {
+                                                var _gvpSSc = resolveConstraints(_gvpStagLyr, 'swim');
+                                                var _gvpSDur = _gvpSSc.dMin || 40;
+                                                var _gvpSWs = _gvpStagLyr.startMin != null ? _gvpStagLyr.startMin : gs;
+                                                var _gvpSWe = _gvpStagLyr.endMin   != null ? _gvpStagLyr.endMin   : ge;
+                                                for (var _gvpSPi = 0; _gvpSPi < _gvpChgPds.length && !_gvpChgBlocked; _gvpSPi++) {
+                                                    var _gvpSPd = _gvpChgPds[_gvpSPi];
+                                                    if ((_gvpSPd.endMin - _gvpSPd.startMin) < _gvpSDur) continue;
+                                                    if (_gvpSPd.startMin < _gvpSWs || _gvpSPd.endMin > _gvpSWe) continue;
+                                                    if (_gvpSPreDur > 0 && _gvpSPi > 0) {
+                                                        var _gvpSPrWs = _gvpChgPds[_gvpSPi-1].endMin - _gvpSPreDur;
+                                                        var _gvpSPrWe = _gvpChgPds[_gvpSPi-1].endMin;
+                                                        if (pos < _gvpSPrWe && pos + dur > _gvpSPrWs) _gvpChgBlocked = true;
+                                                    }
+                                                    if (!_gvpChgBlocked && _gvpSPostDur > 0 && _gvpSPi < _gvpChgPds.length - 1) {
+                                                        var _gvpSPoWs = _gvpChgPds[_gvpSPi+1].startMin;
+                                                        var _gvpSPoWe = _gvpSPoWs + _gvpSPostDur;
+                                                        if (pos < _gvpSPoWe && pos + dur > _gvpSPoWs) _gvpChgBlocked = true;
+                                                    }
                                                 }
                                             }
                                         }
@@ -10334,6 +10367,42 @@
                             }
                             if (_win.preWs != null || _win.postWs != null) _p25SwimWindows.push(_win);
                         });
+
+                        // For staggered swim (not fullGrade/pinned), the swim block is placed by
+                        // Phase 3 CSP and is NOT in bunkTimelines yet. Build potential change
+                        // windows from the swim layer config so specials can't pre-claim those slots.
+                        if (_p25SwimWindows.length === 0) {
+                            var _stagSwimLayer = (layersByGrade[grade] || []).find(function(l){
+                                return (l.type || '').toLowerCase() === 'swim' && !l.fullGrade;
+                            });
+                            var _bunkSwimsToday = (typeof todaysSwimmers !== 'undefined' && todaysSwimmers[grade])
+                                ? todaysSwimmers[grade].has(String(bunk)) : true;
+                            if (_stagSwimLayer && _bunkSwimsToday) {
+                                var _stagPreDur  = (_stagSwimLayer.preChangeMin  > 0) ? _stagSwimLayer.preChangeMin  : 0;
+                                var _stagPostDur = (_stagSwimLayer.postChangeMin > 0) ? _stagSwimLayer.postChangeMin : 0;
+                                if (_stagPreDur > 0 || _stagPostDur > 0) {
+                                    var _stagSc = resolveConstraints(_stagSwimLayer, 'swim');
+                                    var _stagDur = _stagSc.dMin || 40;
+                                    var _stagWinStart = _stagSwimLayer.startMin != null ? _stagSwimLayer.startMin : gradeStart;
+                                    var _stagWinEnd   = _stagSwimLayer.endMin   != null ? _stagSwimLayer.endMin   : gradeEnd;
+                                    for (var _sppi = 0; _sppi < _p25Periods.length; _sppi++) {
+                                        var _spp = _p25Periods[_sppi];
+                                        if ((_spp.endMin - _spp.startMin) < _stagDur) continue;
+                                        if (_spp.startMin < _stagWinStart || _spp.endMin > _stagWinEnd) continue;
+                                        var _stagWin = {};
+                                        if (_stagPreDur > 0 && _sppi > 0) {
+                                            _stagWin.preWe = _p25Periods[_sppi - 1].endMin;
+                                            _stagWin.preWs = _stagWin.preWe - _stagPreDur;
+                                        }
+                                        if (_stagPostDur > 0 && _sppi < _p25Periods.length - 1) {
+                                            _stagWin.postWs = _p25Periods[_sppi + 1].startMin;
+                                            _stagWin.postWe = _stagWin.postWs + _stagPostDur;
+                                        }
+                                        if (_stagWin.preWs != null || _stagWin.postWs != null) _p25SwimWindows.push(_stagWin);
+                                    }
+                                }
+                            }
+                        }
 
                         for (var gi = 0; gi < allGapsForBunk.length; gi++) {
                             var gap = allGapsForBunk[gi];
