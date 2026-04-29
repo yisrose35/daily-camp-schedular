@@ -5574,7 +5574,7 @@
                         }
                         // ★ v11.0: Cross-bunk awareness — defer scarce fields
                         if (gradeFieldBudget) {
-                            var _bk = grade + ':' + timeSlot;
+                            var _bk = timeSlot + ':' + grade;
                             var _bi = gradeFieldBudget[_bk];
                             if (_bi && _bi.demand > _bi.total && candidates.length >= 3) {
                                 score -= 200; // I have alternatives, leave scarce fields for others
@@ -10561,8 +10561,9 @@
                                     }
                                     if (blocked) continue;
 
-                                    // Exact time match
-                                    if (overlapping.length > 0 && cap > 1) {
+                                    // Exact time match — only enforce when field has strictTiming set,
+                                    // matching the isFieldAvailable() behavior exactly.
+                                    if (ledger.strictTiming === true && overlapping.length > 0 && cap > 1) {
                                         const sameGrade = overlapping.filter(e => e.grade === grade);
                                         if (sameGrade.length > 0 && sameGrade.some(e => e.startMin !== startMin || e.endMin !== endMin)) continue;
                                     }
