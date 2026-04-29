@@ -1,3 +1,8 @@
+// Flag set synchronously when a recovery token is detected in the URL.
+// The SIGNED_IN auth event fires AFTER Supabase clears the hash, so we
+// cannot check window.location.hash there — we use this flag instead.
+let _recoveryFlowActive = false;
+
 // ============================================================================
 // landing.js — Campistry Landing Page (HARDENED v3.1)
 // ============================================================================
@@ -706,6 +711,7 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                 if (!supabase) throw new Error('Authentication service not available');
                 const { error } = await supabase.auth.updateUser({ password: newPassword });
                 if (error) throw error;
+                _recoveryFlowActive = false; // flow complete — normal auth can proceed
                 if (updateSuccess) { updateSuccess.textContent = 'Password updated! Redirecting...'; updateSuccess.style.display = 'block'; }
                 if (submitBtn) submitBtn.textContent = 'Password Updated';
                 setTimeout(() => { closeResetModal(); window.location.href = 'dashboard.html'; }, 2000);
@@ -726,6 +732,10 @@ if (authMode === 'signup' && data?.user && !data?.session) {
     function checkForPasswordResetToken() {
         const hash = window.location.hash;
         if (hash.includes('access_token') || hash.includes('type=recovery') || hash === '#reset-password') {
+            // Set flag NOW — before Supabase processes and clears the hash.
+            // The SIGNED_IN handler reads this flag instead of the (already-cleared) hash.
+            _recoveryFlowActive = true;
+
             const resetModal = document.getElementById('resetPasswordModal');
             const resetRequestView = document.getElementById('resetRequestView');
             const updatePasswordView = document.getElementById('updatePasswordView');
@@ -770,11 +780,10 @@ if (authMode === 'signup' && data?.user && !data?.session) {
         const supabase = getSupabase();
         if (!supabase) { setTimeout(setupAuthListener, 500); return; }
         supabase.auth.onAuthStateChange((event, session) => {
-           if (event === 'SIGNED_IN' && session?.user) {
-                // Never redirect to dashboard mid-recovery — PASSWORD_RECOVERY fires right after SIGNED_IN
-                // during the reset flow. Let PASSWORD_RECOVERY handle it.
-                const hash = window.location.hash;
-                if (hash.includes('type=recovery') || hash.includes('access_token')) {
+            if (event === 'SIGNED_IN' && session?.user) {
+                // _recoveryFlowActive was set synchronously before Supabase cleared the hash.
+                // Do NOT check window.location.hash here — it is already empty at this point.
+                if (_recoveryFlowActive) {
                     console.log('[Landing] SIGNED_IN during recovery flow — skipping redirect');
                     return;
                 }
@@ -787,8 +796,10 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                 }
                 updateUIForLoggedInState(session.user);
             } else if (event === 'SIGNED_OUT') {
+                _recoveryFlowActive = false;
                 updateUIForLoggedOutState();
             } else if (event === 'PASSWORD_RECOVERY') {
+                _recoveryFlowActive = true; // ensure flag stays set even if SIGNED_IN fires first
                 const resetModal = document.getElementById('resetPasswordModal');
                 const resetRequestView = document.getElementById('resetRequestView');
                 const updatePasswordView = document.getElementById('updatePasswordView');
