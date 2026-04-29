@@ -10221,16 +10221,22 @@
                             && canUsePoolAtTime(grade, p.startMin, p.startMin + _p23SwimDur);
                     });
 
+                    // Track which periods have already been assigned within this grade
+                    // so each bunk gets a different swim slot (true staggering).
+                    var _p23UsedPeriods = new Set();
                     getBunksForGrade(grade, divisions).forEach(function(bunk) {
                         if (!todaysSwimmers[grade].has(String(bunk))) return;
                         if ((bunkTimelines[bunk] || []).some(function(b) {
                             return (b.type || '').toLowerCase() === 'swim';
                         })) return;
 
-                        // Find the first candidate period whose time window is free in this bunk's timeline
+                        // Find the first candidate period not yet used by another bunk in this grade
+                        // and whose time window is free in this bunk's timeline.
                         var _p23Chosen = null;
                         for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
                             var _p23P = _p23Candidates[_p23i];
+                            var _p23Key = _p23P.startMin + '-' + _p23P.endMin;
+                            if (_p23UsedPeriods.has(_p23Key)) continue; // already assigned to a sibling bunk
                             var _p23S = _p23P.startMin;
                             var _p23E = _p23S + _p23SwimDur;
                             var _p23Free = true;
@@ -10291,6 +10297,7 @@
                         }
 
                         registerPoolUsage(grade, _p23SwimS, _p23SwimE);
+                        _p23UsedPeriods.add(_p23Chosen.startMin + '-' + _p23Chosen.endMin);
                         _p23Count++;
                         log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
                             + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
