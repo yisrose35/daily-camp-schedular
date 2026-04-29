@@ -11609,8 +11609,10 @@
                                 if (chEnd <= _schedEnd278) {
                                     anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
                                 }
-                            } else if (chEnd <= _schedEnd278 && nxtDur - carveAmt >= nxtDMin) {
-                                // Carve from nxt, preserving at least nxtDMin
+                            } else if (chEnd <= _schedEnd278 && nxtDur - carveAmt >= postChangeDur) {
+                                // Carve from nxt. Change is required (swim+change is one unit), so
+                                // allow the remaining sport to shrink to postChangeDur minimum rather
+                                // than the stricter nxtDMin — a short sport is better than no Change.
                                 nxt.startMin = chEnd;
                                 if (nxt.startTime) nxt.startTime = minutesToTimeLabel(chEnd);
                                 anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
