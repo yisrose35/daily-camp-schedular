@@ -10269,7 +10269,9 @@
                         var _p25SwimWindows = []; // [{preWs,preWe,postWs,postWe}] per swim block
                         (bunkTimelines[bunk] || []).forEach(function(_p25b) {
                             if (!_p25b || (_p25b.type || '').toLowerCase() !== 'swim') return;
-                            var _p25sl = _p25b.layer || (layersByGrade[grade] || []).find(function(l){ return (l.type||'').toLowerCase()==='swim'; }) || {};
+                            // Always use layersByGrade for live preChangeMin/postChangeMin —
+                            // _p25b.layer may not have those fields set (stale Phase-0 object).
+                            var _p25sl = (layersByGrade[grade] || []).find(function(l){ return (l.type||'').toLowerCase()==='swim'; }) || _p25b.layer || {};
                             var _preDur  = (_p25sl.preChangeMin  > 0) ? _p25sl.preChangeMin  : 0;
                             var _postDur = (_p25sl.postChangeMin > 0) ? _p25sl.postChangeMin : 0;
                             var _win = {};
@@ -11659,10 +11661,10 @@
                                 if (chEnd <= _schedEnd278) {
                                     anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
                                 }
-                            } else if (chEnd <= _schedEnd278 && nxtDur - carveAmt >= postChangeDur) {
+                            } else if (chEnd <= _schedEnd278 && nxtDur >= carveAmt) {
                                 // Carve from nxt. Change is required (swim+change is one unit), so
-                                // allow the remaining sport to shrink to postChangeDur minimum rather
-                                // than the stricter nxtDMin — a short sport is better than no Change.
+                                // allow the block to shrink to zero (it gets filtered later) rather
+                                // than blocking Change. A consumed/short sport is better than no Change.
                                 nxt.startMin = chEnd;
                                 if (nxt.startTime) nxt.startTime = minutesToTimeLabel(chEnd);
                                 anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
