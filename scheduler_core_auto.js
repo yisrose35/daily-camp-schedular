@@ -408,6 +408,16 @@
         }
 
         const globalSettings = getGlobalSettings();
+
+        // Bootstrap window.campPeriods from saved global settings if it wasn't
+        // loaded by period_editor.js (scheduler runs independently of the editor UI).
+        if (!window.campPeriods || Object.keys(window.campPeriods).length === 0) {
+            if (globalSettings.campPeriods && Object.keys(globalSettings.campPeriods).length > 0) {
+                window.campPeriods = globalSettings.campPeriods;
+                log('[STEP 1] Bootstrapped campPeriods from globalSettings: ' + Object.keys(window.campPeriods).join(', '));
+            }
+        }
+
         const divisions = window.divisions || (globalSettings.app1 && globalSettings.app1.divisions) || {};
         const activityProperties = window.activityProperties || {};
         const dailyData = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
