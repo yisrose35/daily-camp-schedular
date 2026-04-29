@@ -7444,6 +7444,26 @@
                         }
                     }
 
+                    // Strategy 1b: micro-gap (≤10 min) — extend the preceding pre-placed
+                    // special to absorb it. Pre-placed specials are auto-generated walls,
+                    // not user-pinned; a few extra minutes is better than a dead Free slot.
+                    // dMin is updated to prevent the v11.5b REBAL from stealing it back.
+                    if (!zgPrev && zgDur <= 10) {
+                        for (var zp2 = zgTmpl.length - 1; zp2 >= 0; zp2--) {
+                            var _zpB = zgTmpl[zp2];
+                            if (_zpB.endMin !== zgGap.start || _zpB._source !== 'pre-placed') continue;
+                            var _zpDur = _zpB.endMin - _zpB.startMin;
+                            var _zpMax = _zpB.dMax || (TYPE_CEILINGS[(_zpB.type || '').toLowerCase()] || 60);
+                            if (_zpDur + zgDur <= _zpMax) {
+                                _zpB.endMin = zgGap.end;
+                                _zpB.dMin = _zpDur + zgDur; // lock: REBAL can't steal this back
+                                zgDur = 0; // gap consumed
+                            }
+                            break;
+                        }
+                        if (zgDur <= 0) continue;
+                    }
+
                     // Strategy 2: Pull next non-fixed block backward
                     // ★ v15.2: Skip _activityLocked blocks (snack/swim/special — must not grow)
                     // Period boundary check prevents extending across dead zones.
@@ -8073,6 +8093,10 @@
                     if (!sCfgDur || sCfgDur <= 0) continue;
                     var sActualDur = sBlk.endMin - sBlk.startMin;
                     if (sActualDur === sCfgDur) continue;
+                    // ★ v15.1: Tolerate small absorptions (≤5 min) made by the ZGF/REBAL
+                    // to close micro-gaps — don't revert them, they traded a dead gap for
+                    // a slightly longer activity which is the better user experience.
+                    if (sActualDur > sCfgDur && sActualDur - sCfgDur <= 5) continue;
                     // Duration mismatch — fix it
                     var sNewEnd = sBlk.startMin + sCfgDur;
                     // Check we don't overlap the next block
