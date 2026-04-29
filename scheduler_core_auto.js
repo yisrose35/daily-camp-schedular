@@ -12981,11 +12981,20 @@
                     diagnoses.push(diagnosis);
                 }
 
-                // Check for dead gaps
+                // Check for dead gaps (skip inter-period gaps from bell schedule)
+                const _gpDiag = (window.campPeriods && window.campPeriods[grade])
+                    ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin) : [];
+                const _isInterPeriodGap = (gs, ge) => {
+                    for (let pi = 0; pi < _gpDiag.length - 1; pi++) {
+                        if (gs >= _gpDiag[pi].endMin && ge <= _gpDiag[pi + 1].startMin) return true;
+                    }
+                    return false;
+                };
                 const sorted = [...tl].sort((a, b) => a.startMin - b.startMin);
                 for (let i = 0; i < sorted.length - 1; i++) {
-                    const gapSize = sorted[i + 1].startMin - sorted[i].endMin;
-                    if (gapSize > 0 && gapSize < 25) {
+                    const gapStart = sorted[i].endMin, gapEnd = sorted[i + 1].startMin;
+                    const gapSize = gapEnd - gapStart;
+                    if (gapSize > 0 && gapSize < 25 && !_isInterPeriodGap(gapStart, gapEnd)) {
                         diagnoses.push('Bunk ' + bunk + ' dead gap ' + gapSize + 'min between ' + (sorted[i].event || sorted[i].type) + ' and ' + (sorted[i+1].event || sorted[i+1].type) + '. FIX: adjust adjacent activity durations or layer windows.');
                     }
                 }
@@ -13112,11 +13121,20 @@
                         }
                     }
 
-                    // Fix dead gaps: extend adjacent sport blocks
+                    // Fix dead gaps: extend adjacent sport blocks (skip inter-period gaps)
+                    var _gpHeal = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; }) : [];
+                    var _isInterPeriodGapH = function(gs, ge) {
+                        for (var pi = 0; pi < _gpHeal.length - 1; pi++) {
+                            if (gs >= _gpHeal[pi].endMin && ge <= _gpHeal[pi + 1].startMin) return true;
+                        }
+                        return false;
+                    };
                     sorted.sort(function(a, b) { return a.startMin - b.startMin; });
                     for (var di = 0; di < sorted.length - 1; di++) {
-                        var gapSize = sorted[di + 1].startMin - sorted[di].endMin;
-                        if (gapSize > 0 && gapSize < 25) {
+                        var healGapStart = sorted[di].endMin, healGapEnd = sorted[di + 1].startMin;
+                        var gapSize = healGapEnd - healGapStart;
+                        if (gapSize > 0 && gapSize < 25 && !_isInterPeriodGapH(healGapStart, healGapEnd)) {
                             // Extend prev if it's a sport/slot
                             var prevT = (sorted[di].type || '').toLowerCase();
                             var nextT = (sorted[di + 1].type || '').toLowerCase();
