@@ -4965,11 +4965,15 @@
                                                     if (_gvpSPd.startMin < _gvpSWs || _gvpSPd.endMin > _gvpSWe) continue;
                                                     // Only periods where pool is available for this grade
                                                     if (!canUsePoolAtTime(grade, _gvpSPd.startMin, _gvpSPd.endMin)) continue;
-                                                    // Pre-change only (post-change handled by Step 2.78 relocation)
                                                     if (_gvpSPreDur > 0 && _gvpSPi > 0) {
                                                         var _gvpSPrWs = _gvpChgPds[_gvpSPi-1].endMin - _gvpSPreDur;
                                                         var _gvpSPrWe = _gvpChgPds[_gvpSPi-1].endMin;
                                                         if (pos < _gvpSPrWe && pos + dur > _gvpSPrWs) _gvpChgBlocked = true;
+                                                    }
+                                                    if (!_gvpChgBlocked && _gvpSPostDur > 0 && _gvpSPi < _gvpChgPds.length - 1) {
+                                                        var _gvpSPoWs = _gvpChgPds[_gvpSPi+1].startMin;
+                                                        var _gvpSPoWe = _gvpSPoWs + _gvpSPostDur;
+                                                        if (pos < _gvpSPoWe && pos + dur > _gvpSPoWs) _gvpChgBlocked = true;
                                                     }
                                                 }
                                             }
@@ -10392,15 +10396,15 @@
                                         // hold this grade's staggered swim so no protection is needed.
                                         if (!canUsePoolAtTime(grade, _spp.startMin, _spp.endMin)) continue;
                                         var _stagWin = {};
-                                        // Pre-change only: post-change conflicts for staggered swim are
-                                        // handled by Step 2.78's special-relocation fallback. Protecting
-                                        // post-change windows here doubles the blocked slots and causes
-                                        // too many specials to be unplaceable.
                                         if (_stagPreDur > 0 && _sppi > 0) {
                                             _stagWin.preWe = _p25Periods[_sppi - 1].endMin;
                                             _stagWin.preWs = _stagWin.preWe - _stagPreDur;
                                         }
-                                        if (_stagWin.preWs != null) _p25SwimWindows.push(_stagWin);
+                                        if (_stagPostDur > 0 && _sppi < _p25Periods.length - 1) {
+                                            _stagWin.postWs = _p25Periods[_sppi + 1].startMin;
+                                            _stagWin.postWe = _stagWin.postWs + _stagPostDur;
+                                        }
+                                        if (_stagWin.preWs != null || _stagWin.postWs != null) _p25SwimWindows.push(_stagWin);
                                     }
                                 }
                             }
