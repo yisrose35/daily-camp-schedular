@@ -7494,6 +7494,28 @@
                         }
                     }
 
+                    // Strategy 2b: micro-gap (≤10 min) — pull the following pre-placed
+                    // special backward to absorb it. Mirrors Strategy 1b but checks the
+                    // NEXT block. Handles: swim(dMin)→gap→special and special→gap→special.
+                    if (zgDur > 0 && zgDur <= 10) {
+                        for (var zp3 = 0; zp3 < zgTmpl.length; zp3++) {
+                            var _zp3B = zgTmpl[zp3];
+                            if (_zp3B.startMin !== zgGap.end || _zp3B._source !== 'pre-placed') continue;
+                            var _zp3Dur = _zp3B.endMin - _zp3B.startMin;
+                            // Pulling back only shrinks its start — duration grows, which is fine
+                            // as long as we don't push it before the previous block ends.
+                            var _zp3NewStart = _zp3B.startMin - zgDur;
+                            if (_zp3NewStart >= zgGap.start &&
+                                staysInPeriod(_zp3NewStart, _zp3B.endMin, zgMeta.grade)) {
+                                _zp3B.startMin = _zp3NewStart;
+                                _zp3B.dMin = _zp3Dur + zgDur; // lock against REBAL shrinking it
+                                zgDur = 0;
+                            }
+                            break;
+                        }
+                        if (zgDur <= 0) continue;
+                    }
+
                     // ★ v15.4: Strategy 1b — Snack/slot extension into sub-fillMin gaps
                     // ─────────────────────────────────────────────────────────────────
                     // Strategies 1 & 2 skip _activityLocked blocks.  But snack blocks
