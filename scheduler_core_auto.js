@@ -10221,44 +10221,48 @@
                             && canUsePoolAtTime(grade, p.startMin, p.startMin + _p23SwimDur);
                     });
 
-                    // Track which periods have already been assigned within this grade
-                    // so each bunk gets a different swim slot (true staggering).
-                    var _p23UsedPeriods = new Set();
+                    // Track which swim START MINUTES have been assigned within this grade.
+                    // Using start minutes (not period keys) allows multiple bunks to stagger
+                    // within the same long period (e.g. an 80-min period fits two 40-min swims).
+                    var _p23UsedStarts = new Set();
                     getBunksForGrade(grade, divisions).forEach(function(bunk) {
                         if (!todaysSwimmers[grade].has(String(bunk))) return;
                         if ((bunkTimelines[bunk] || []).some(function(b) {
                             return (b.type || '').toLowerCase() === 'swim';
                         })) return;
 
-                        // Find the first candidate period not yet used by another bunk in this grade
-                        // and whose time window is free in this bunk's timeline.
+                        // For each candidate period, try every swimDur-aligned start offset.
+                        // Skip offsets already claimed by a sibling bunk in this grade.
                         var _p23Chosen = null;
-                        for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
+                        var _p23ChosenStart = null;
+                        outer23: for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
                             var _p23P = _p23Candidates[_p23i];
-                            var _p23Key = _p23P.startMin + '-' + _p23P.endMin;
-                            if (_p23UsedPeriods.has(_p23Key)) continue; // already assigned to a sibling bunk
-                            var _p23S = _p23P.startMin;
-                            var _p23E = _p23S + _p23SwimDur;
-                            var _p23Free = true;
-                            var _p23TL = bunkTimelines[bunk] || [];
-                            for (var _p23ti = 0; _p23ti < _p23TL.length && _p23Free; _p23ti++) {
-                                var _p23B = _p23TL[_p23ti];
-                                if (!_p23B) continue;
-                                if (!(_p23B._activityLocked || _p23B._fixed || _p23B._classification === 'pinned')) continue;
-                                var _p23Bt = (_p23B.type || '').toLowerCase();
-                                if (_p23Bt === 'pre-change' || _p23Bt === 'post-change') continue;
-                                var _p23Bs = _p23B.startMin, _p23Be = _p23B.endMin;
-                                if (_p23Bs < _p23E && _p23Be > _p23S) _p23Free = false;
+                            for (var _p23tryS = _p23P.startMin;
+                                     _p23tryS + _p23SwimDur <= _p23P.endMin;
+                                     _p23tryS += _p23SwimDur) {
+                                if (_p23UsedStarts.has(_p23tryS)) continue; // sibling bunk already here
+                                var _p23tryE = _p23tryS + _p23SwimDur;
+                                var _p23Free = true;
+                                var _p23TL = bunkTimelines[bunk] || [];
+                                for (var _p23ti = 0; _p23ti < _p23TL.length && _p23Free; _p23ti++) {
+                                    var _p23B = _p23TL[_p23ti];
+                                    if (!_p23B) continue;
+                                    if (!(_p23B._activityLocked || _p23B._fixed || _p23B._classification === 'pinned')) continue;
+                                    var _p23Bt = (_p23B.type || '').toLowerCase();
+                                    if (_p23Bt === 'pre-change' || _p23Bt === 'post-change') continue;
+                                    var _p23Bs = _p23B.startMin, _p23Be = _p23B.endMin;
+                                    if (_p23Bs < _p23tryE && _p23Be > _p23tryS) _p23Free = false;
+                                }
+                                if (_p23Free) { _p23Chosen = _p23P; _p23ChosenStart = _p23tryS; break outer23; }
                             }
-                            if (_p23Free) { _p23Chosen = _p23P; break; }
                         }
 
                         if (!_p23Chosen) {
-                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free period for staggered swim (will fall through to Phase 3)');
+                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free slot for staggered swim (will fall through to Phase 3)');
                             return;
                         }
 
-                        var _p23SwimS = _p23Chosen.startMin;
+                        var _p23SwimS = _p23ChosenStart;
                         var _p23SwimE = _p23SwimS + _p23SwimDur;
                         var _p23GId   = nextSwimGroupId();
                         var _p23Anch  = computeSwimChangeAnchors(
@@ -10297,7 +10301,7 @@
                         }
 
                         registerPoolUsage(grade, _p23SwimS, _p23SwimE);
-                        _p23UsedPeriods.add(_p23Chosen.startMin + '-' + _p23Chosen.endMin);
+                        _p23UsedStarts.add(_p23SwimS);
                         _p23Count++;
                         log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
                             + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
