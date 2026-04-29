@@ -10572,6 +10572,16 @@
                                     if (_cw.postWs != null && pos < _cw.postWe && pos + specialDur > _cw.postWs) { _chgBlocked = true; break; }
                                 }
                                 if (_chgBlocked) continue;
+
+                                // HARD REJECT: placement leaves an unfillable remainder inside this gap.
+                                // spComputeGaps boundaries are always fixed walls, so any remainder
+                                // between 0 and sportFillMin cannot be absorbed or filled as a slot
+                                // (makeBlock rejects sub-dMin slots). Guarantee clean gaps.
+                                var _p25LRem = pos - gap.s;
+                                var _p25RRem = gap.e - (pos + specialDur);
+                                if ((_p25LRem > 0 && _p25LRem < sportFillMin) ||
+                                    (_p25RRem > 0 && _p25RRem < sportFillMin)) continue;
+
                                 // Resource check: can this special run at this time?
                                 if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) { _sp25_rtBlockCount++; continue; }
                                 // Scheduling rules check (cooldowns, etc.)
@@ -10642,7 +10652,12 @@
                             // Also try end-aligned position (may not be on 5-min boundary)
                             var endPos = gap.e - specialDur;
                             if (endPos >= gap.s && endPos !== gap.s && endPos % 5 !== 0) {
-                                if (!sp25CrossesBoundary(endPos, endPos + specialDur)
+                                var _p25EPLRem = endPos - gap.s;
+                                var _p25EPRRem = gap.e - (endPos + specialDur); // always 0 for end-aligned
+                                var _p25EPReject = (_p25EPLRem > 0 && _p25EPLRem < sportFillMin) ||
+                                                   (_p25EPRRem > 0 && _p25EPRRem < sportFillMin);
+                                if (!_p25EPReject
+                                    && !sp25CrossesBoundary(endPos, endPos + specialDur)
                                     && canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)
                                     && rulesAllow({ startMin: endPos, endMin: endPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) {
                                     var withSpecialEnd = existingWalls.concat([{ s: endPos, e: endPos + specialDur }]);
