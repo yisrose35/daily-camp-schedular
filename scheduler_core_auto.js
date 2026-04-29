@@ -13412,9 +13412,13 @@
         window._localGenerationTimestamp = Date.now();
 
         // Expose for post-gen diagnostics (console tools)
-        window._diagBunkTimelines  = bunkTimelines;
-        window._diagLayersByGrade  = layersByGrade;
-        window._diagBunkGradeCache = _bgc;
+        window._diagBunkTimelines = bunkTimelines;
+        window._diagLayersByGrade = layersByGrade;
+        window._diagBunkGradeCache = (() => {
+            const m = {};
+            allGrades.forEach(g => getBunksForGrade(g, divisions).forEach(b => { m[String(b)] = g; }));
+            return m;
+        })();
 
         // ── Seam-merge travel: consecutive same-off-campus-zone blocks share no middle travel ──
         try {
