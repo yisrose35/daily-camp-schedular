@@ -1522,10 +1522,18 @@
             }
 
             // POST: place Change in the gap immediately after swim (not multiple periods ahead).
+            // If swimEnd lands exactly on a period boundary, snap to the next period start
+            // so Change stays within a period rather than straddling the inter-period gap.
             var post = null;
             if (postChange > 0) {
                 var _postGapStart = swimEnd;
-                var _postGapEnd = swimEnd + postChange;
+                for (var _ppi = 0; _ppi < gp.length - 1; _ppi++) {
+                    if (swimEnd === gp[_ppi].endMin && gp[_ppi + 1].startMin > swimEnd) {
+                        _postGapStart = gp[_ppi + 1].startMin;
+                        break;
+                    }
+                }
+                var _postGapEnd = _postGapStart + postChange;
                 var _schedEnd = gp[gp.length - 1].endMin;
                 if (_postGapEnd <= _schedEnd && !rangeOccupied(_postGapStart, _postGapEnd)) {
                     post = { startMin: _postGapStart, endMin: _postGapEnd };
@@ -11523,9 +11531,9 @@
                     const _schedStart278 = _gp278.length > 0 ? _gp278[0].startMin : 0;
                     const _schedEnd278   = _gp278.length > 0 ? _gp278[_gp278.length - 1].endMin : 24 * 60;
                     if (!anchors.pre && preChangeDur > 0) {
-                        // Find the trimmable block ending closest to bundleStart (within 15 min gap window)
+                        // Find the trimmable block ending closest to bundleStart
                         const prev = tl278
-                            .filter(b => b && b.endMin <= bundleStart && b.endMin > bundleStart - 15)
+                            .filter(b => b && b.endMin <= bundleStart && b.endMin > bundleStart - (preChangeDur + 10))
                             .sort((a, b) => b.endMin - a.endMin)[0] || null;
                         const prevType = prev ? String(prev.type || '').toLowerCase() : '';
                         if (prev && TRIMMABLE_TYPES.has(prevType)) {
@@ -11540,9 +11548,9 @@
                         }
                     }
                     if (!anchors.post && postChangeDur > 0) {
-                        // Find first trimmable block at or after bundleEnd, within 15-min inter-period gap window
+                        // Find first trimmable block at or after bundleEnd, within change window + gap buffer
                         const nxt = tl278
-                            .filter(b => b && b.startMin >= bundleEnd && b.startMin < bundleEnd + 15)
+                            .filter(b => b && b.startMin >= bundleEnd && b.startMin < bundleEnd + postChangeDur + 10)
                             .sort((a, b) => a.startMin - b.startMin)[0] || null;
                         const nxtType = nxt ? String(nxt.type || '').toLowerCase() : '';
                         // Gap between swimEnd and next activity may already be free (inter-period gap)
