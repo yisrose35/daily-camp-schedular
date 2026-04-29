@@ -13411,6 +13411,11 @@
         // ★ v7.0: Mark local generation time — prevents cloud sync from overwriting fresh results
         window._localGenerationTimestamp = Date.now();
 
+        // Expose for post-gen diagnostics (console tools)
+        window._diagBunkTimelines  = bunkTimelines;
+        window._diagLayersByGrade  = layersByGrade;
+        window._diagBunkGradeCache = _bgc;
+
         // ── Seam-merge travel: consecutive same-off-campus-zone blocks share no middle travel ──
         try {
             if (typeof window.seamMergeTravelTime === 'function') {
