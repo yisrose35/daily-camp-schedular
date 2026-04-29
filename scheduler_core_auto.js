@@ -11509,10 +11509,21 @@
                         // Adjacent after?
                         if (adj.startMin === sw.endMin) bundleEnd = Math.max(bundleEnd, adj.endMin);
                     });
-                    const preChangeDur = (layer.preChangeMin > 0) ? layer.preChangeMin : 0;
-                    const postChangeDur = (layer.postChangeMin > 0) ? layer.postChangeMin : 0;
+                    // Always read change durations from the live grade-level swim layer config
+                    // so we get the current user-configured values, not a stale Phase-0 copy.
+                    const _liveSl = (layersByGrade[grade] || []).find(l =>
+                        (l.type || '').toLowerCase() === 'swim' &&
+                        (l.startMin == null || l.startMin === layer.startMin) &&
+                        (l.endMin   == null || l.endMin   === layer.endMin)
+                    ) || layer;
+                    const preChangeDur  = (_liveSl.preChangeMin  > 0) ? _liveSl.preChangeMin  : 0;
+                    const postChangeDur = (_liveSl.postChangeMin > 0) ? _liveSl.postChangeMin : 0;
+                    // Pass merged layer so computeSwimChangeAnchors uses live values too
+                    const _layerWithChange = Object.assign({}, layer, {
+                        preChangeMin: preChangeDur, postChangeMin: postChangeDur
+                    });
                     let anchors = computeSwimChangeAnchors(
-                        sw.startMin, sw.endMin, layer, grade, bunkTimelines[bunk],
+                        sw.startMin, sw.endMin, _layerWithChange, grade, bunkTimelines[bunk],
                         bundleStart, bundleEnd
                     );
 
@@ -11539,7 +11550,7 @@
                         if (prev && TRIMMABLE_TYPES.has(prevType)) {
                             const prevDur = prev.endMin - prev.startMin;
                             const preStart = bundleStart - preChangeDur;
-                            if (prevDur > preChangeDur && preStart >= _schedStart278) {
+                            if (prevDur - preChangeDur >= (prev.dMin || GAP_MIN_DUR) && preStart >= _schedStart278) {
                                 prev.endMin -= preChangeDur;
                                 if (prev.endTime) prev.endTime = minutesToTimeLabel(prev.endMin);
                                 anchors = { pre: { startMin: preStart, endMin: bundleStart }, post: anchors.post };
