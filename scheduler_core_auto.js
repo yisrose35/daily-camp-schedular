@@ -10596,17 +10596,18 @@
                             if (_p25chbt === 'post-change') _p25PostChgEnds[_p25chb.endMin]   = true;
                         });
 
-                        // ★ Pre-compute short special durations available for this grade.
+                        // ★ Pre-compute short special durations THIS BUNK actually has scheduled.
                         // Used by the period-boundary check below: a dead sub-period segment
-                        // of size S is only acceptable if a configured special of exactly S
-                        // minutes exists (it can fill that slot cleanly).
+                        // of size S is only acceptable if this bunk has another special of exactly
+                        // S minutes that can fill that slot.
+                        // Previously checked all globally-configured activities — too permissive:
+                        // a single 10-min activity in config allowed the engine to leave a 10-min
+                        // dead gap for every bunk, even those without that 10-min activity.
                         var _p25ShortSpecDurs = {};
-                        if (activityProperties) {
-                            Object.keys(activityProperties).forEach(function(_psSn) {
-                                var _psDur = getSpecialDuration(_psSn, activityProperties, globalSettings);
-                                if (_psDur && _psDur > 0 && _psDur < sportFillMin) _p25ShortSpecDurs[_psDur] = true;
-                            });
-                        }
+                        (draft.specials || []).forEach(function(_psSp) {
+                            var _psDur = getSpecialDuration(_psSp.name || _psSp.event || '', activityProperties, globalSettings);
+                            if (_psDur && _psDur > 0 && _psDur < sportFillMin) _p25ShortSpecDurs[_psDur] = true;
+                        });
 
                         for (var gi = 0; gi < allGapsForBunk.length; gi++) {
                             var gap = allGapsForBunk[gi];
@@ -10821,6 +10822,10 @@
                                     if (!rulesAllow({ startMin: _fbPos, endMin: _fbPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) continue;
                                     var _fbLRem = _fbPos - _fbGap.s;
                                     var _fbRRem = _fbGap.e - (_fbPos + specialDur);
+                                    // Fallback still must not create a gap this bunk has no activity to fill.
+                                    // Use bunk-specific _p25ShortSpecDurs (not global) for the check.
+                                    if (_fbLRem > 0 && _fbLRem < sportFillMin && !_p25ShortSpecDurs[_fbLRem]) continue;
+                                    if (_fbRRem > 0 && _fbRRem < sportFillMin && !_p25ShortSpecDurs[_fbRRem]) continue;
                                     var _fbScore = -2500 * ((_fbLRem > 0 && _fbLRem < sportFillMin ? 1 : 0) + (_fbRRem > 0 && _fbRRem < sportFillMin ? 1 : 0));
                                     // Prefer start- or end-aligned (gap at gap boundary, not between activities)
                                     if (_fbPos === _fbGap.s)                  _fbScore += 100;
