@@ -7544,10 +7544,15 @@
                     // special to absorb it. Pre-placed specials are auto-generated walls,
                     // not user-pinned; a few extra minutes is better than a dead Free slot.
                     // dMin is updated to prevent the v11.5b REBAL from stealing it back.
+                    // ★ Skip specials with a user-configured duration (_specialDuration set):
+                    // extending them violates the configured length and SPECIAL-ENFORCE will
+                    // revert the change anyway — leaving the block in the wrong position.
+                    // The ZGF micro-slot (Strategy 3 else-branch) handles these gaps instead.
                     if (!zgPrev && zgDur <= 10) {
                         for (var zp2 = zgTmpl.length - 1; zp2 >= 0; zp2--) {
                             var _zpB = zgTmpl[zp2];
                             if (_zpB.endMin !== zgGap.start || _zpB._source !== 'pre-placed') continue;
+                            if (_zpB._specialDuration) continue; // configured duration — don't extend
                             var _zpDur = _zpB.endMin - _zpB.startMin;
                             var _zpMax = _zpB.dMax || (TYPE_CEILINGS[(_zpB.type || '').toLowerCase()] || 60);
                             if (_zpDur + zgDur <= _zpMax) {
@@ -7593,10 +7598,15 @@
                     // Strategy 2b: micro-gap (≤10 min) — pull the following pre-placed
                     // special backward to absorb it. Mirrors Strategy 1b but checks the
                     // NEXT block. Handles: swim(dMin)→gap→special and special→gap→special.
+                    // ★ Skip specials with a user-configured duration (_specialDuration set):
+                    // moving their start violates the configured position and SPECIAL-ENFORCE
+                    // reverts only the endMin — leaving the special left-shifted with the
+                    // gap reopened on the right. The ZGF micro-slot handles these instead.
                     if (zgDur > 0 && zgDur <= 10) {
                         for (var zp3 = 0; zp3 < zgTmpl.length; zp3++) {
                             var _zp3B = zgTmpl[zp3];
                             if (_zp3B.startMin !== zgGap.end || _zp3B._source !== 'pre-placed') continue;
+                            if (_zp3B._specialDuration) continue; // configured duration — don't move
                             var _zp3Dur = _zp3B.endMin - _zp3B.startMin;
                             // Pulling back only shrinks its start — duration grows, which is fine
                             // as long as we don't push it before the previous block ends.
@@ -8380,6 +8390,10 @@
                         // Strategy 3b: micro-gap absorption — for gaps smaller than fillMinDur,
                         // force-extend the adjacent non-pinned block rather than leaving a
                         // tiny unfillable slot.  Extends prev first, then next.
+                        // ★ Guard: only extend a neighbor if it STARTS within the same period
+                        // as the gap. Extending pg_next that lives in the NEXT period (e.g.,
+                        // Playground at 12:15 pulled into the 12:00–12:10 gap) crosses the
+                        // bell boundary and creates a cross-period block.
                         var _pgFillMin = pg_meta.fillMinDur || 25;
                         if (!pg_fixed && _pgGapInOnePeriod && pg_dur < _pgFillMin && pg_dur >= 5) {
                             if (pg_prev && !isPhase0(pg_prev)) {
@@ -8389,7 +8403,8 @@
                                 pg_fixed   = true;
                                 log('[POST-GAP] bunk=' + pg_bunk + ' micro-absorbed +' + pg_dur + 'min into prev "' +
                                     (pg_prev.event || pg_prev.type || '') + '" @' + pg_gap.start + '-' + pg_gap.end);
-                            } else if (pg_next && !isPhase0(pg_next)) {
+                            } else if (pg_next && !isPhase0(pg_next) &&
+                                       staysInPeriod(pg_gap.start, pg_next.endMin, pg_meta.grade)) {
                                 pg_next.startMin -= pg_dur;
                                 pgClosed++;
                                 pg_changed = true;
@@ -10563,6 +10578,18 @@
                             if (_p25chbt === 'post-change') _p25PostChgEnds[_p25chb.endMin]   = true;
                         });
 
+                        // ★ Pre-compute short special durations available for this grade.
+                        // Used by the period-boundary check below: a dead sub-period segment
+                        // of size S is only acceptable if a configured special of exactly S
+                        // minutes exists (it can fill that slot cleanly).
+                        var _p25ShortSpecDurs = {};
+                        if (activityProperties) {
+                            Object.keys(activityProperties).forEach(function(_psSn) {
+                                var _psDur = getSpecialDuration(_psSn, activityProperties, globalSettings);
+                                if (_psDur && _psDur > 0 && _psDur < sportFillMin) _p25ShortSpecDurs[_psDur] = true;
+                            });
+                        }
+
                         for (var gi = 0; gi < allGapsForBunk.length; gi++) {
                             var gap = allGapsForBunk[gi];
                             if (gap.e - gap.s < specialDur) { _sp25_gapTooSmall++; continue; }
@@ -10589,6 +10616,44 @@
                                 var _p25RRem = gap.e - (pos + specialDur);
                                 if ((_p25LRem > 0 && _p25LRem < sportFillMin) ||
                                     (_p25RRem > 0 && _p25RRem < sportFillMin)) continue;
+
+                                // ★ Period-boundary remainder check: the raw remainders above use
+                                // the gap's outer walls, but bell-schedule boundaries INSIDE the gap
+                                // can create unfillable sub-period segments.
+                                //
+                                // Example: Nernitas (20 min) at 11:40 in a large gap (11:40–12:55)
+                                // passes the raw check (_p25RRem = 55). But the bell boundary at
+                                // 12:10 splits the right side: 12:00–12:10 = 10 min (dead) and
+                                // 12:15–12:55 = 40 min (OK). The 10-min dead segment is unfillable
+                                // unless a 10-min special exists.
+                                //
+                                // Rule: placing this special must not create an immediate sub-period
+                                // segment of size 0 < S < sportFillMin on either side — UNLESS a
+                                // configured special of exactly S minutes exists to fill it.
+                                var _p25BadPeriodSeg = false;
+                                if (_sp25MergedPeriods.length > 0) {
+                                    var _p25SE = pos + specialDur; // special end
+                                    var _p25SS = pos;              // special start
+                                    for (var _pbi = 0; _pbi < _sp25MergedPeriods.length && !_p25BadPeriodSeg; _pbi++) {
+                                        var _pbP = _sp25MergedPeriods[_pbi];
+                                        if (_pbP.e <= _p25SS || _pbP.s >= _p25SE) continue;
+                                        // Right sub-segment: special ends INSIDE this period
+                                        if (_p25SE > _pbP.s && _p25SE < _pbP.e) {
+                                            var _pbR = _pbP.e - _p25SE;
+                                            if (_pbR > 0 && _pbR < sportFillMin && !_p25ShortSpecDurs[_pbR]) {
+                                                _p25BadPeriodSeg = true;
+                                            }
+                                        }
+                                        // Left sub-segment: special starts INSIDE this period
+                                        if (_p25SS > _pbP.s && _p25SS < _pbP.e) {
+                                            var _pbL = _p25SS - _pbP.s;
+                                            if (_pbL > 0 && _pbL < sportFillMin && !_p25ShortSpecDurs[_pbL]) {
+                                                _p25BadPeriodSeg = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (_p25BadPeriodSeg) continue;
 
                                 // Resource check: can this special run at this time?
                                 if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) { _sp25_rtBlockCount++; continue; }
