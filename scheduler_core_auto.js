@@ -10678,11 +10678,19 @@
                         // Previously checked all globally-configured activities — too permissive:
                         // a single 10-min activity in config allowed the engine to leave a 10-min
                         // dead gap for every bunk, even those without that 10-min activity.
+                        // ★ Only include FUTURE specials (draft.specials[_sIdx+1:]) — the current
+                        // special can't fill its own dead gap, and already-placed specials are
+                        // walls in bunkTimelines and don't need to be listed here.
+                        // Bug: previously all specials including the current one were included,
+                        // causing Neranitas (20 min) to "accept" a 20-min dead gap it created
+                        // because _p25ShortSpecDurs[20] was true from Neranitas itself.
                         var _p25ShortSpecDurs = {};
-                        (draft.specials || []).forEach(function(_psSp) {
-                            var _psDur = getSpecialDuration(_psSp.name || _psSp.event || '', activityProperties, globalSettings);
-                            if (_psDur && _psDur > 0 && _psDur < sportFillMin) _p25ShortSpecDurs[_psDur] = true;
-                        });
+                        for (var _p25SSi = _sIdx + 1; _p25SSi < (draft.specials || []).length; _p25SSi++) {
+                            var _p25SSp = draft.specials[_p25SSi];
+                            if (!_p25SSp) continue;
+                            var _p25SDur = getSpecialDuration(_p25SSp.name || _p25SSp.event || '', activityProperties, globalSettings);
+                            if (_p25SDur && _p25SDur > 0 && _p25SDur < sportFillMin) _p25ShortSpecDurs[_p25SDur] = true;
+                        }
 
                         for (var gi = 0; gi < allGapsForBunk.length; gi++) {
                             var gap = allGapsForBunk[gi];
