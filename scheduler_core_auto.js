@@ -6964,15 +6964,15 @@
                     var rhBunk = allBunkIds[rhi];
                     var rhMeta = bunkMeta[rhBunk];
                     var rhTmpl = rhMeta.template;
-                    // Check if bunk has a rotation event block already
-                    var rhHasRot = rhTmpl.some(function(b) { return b && b._rotationEventId; });
-                    if (rhHasRot) continue;
                     // Get rotation needs for this bunk
                     try {
                         var rhNeeds = window.RotationEvents.getNeedsForBunk(String(rhBunk), currentDate);
                         if (!rhNeeds || !rhNeeds.length) continue;
                         for (var rni = 0; rni < rhNeeds.length; rni++) {
                             var rhNeed = rhNeeds[rni];
+                            // Skip if this specific rotation event is already in the template
+                            var _rhAlreadyPlaced = rhTmpl.some(function(b) { return b && b._rotationEventId === rhNeed._rotationEventId; });
+                            if (_rhAlreadyPlaced) continue;
                             // Check quota — only self-heal if under target or last day
                             if (rotationQuotas[rhNeed._rotationEventId]) {
                                 var rhQ = rotationQuotas[rhNeed._rotationEventId];
@@ -7010,7 +7010,7 @@
                                     _rotationEventColor: rhNeed._rotationEventColor,
                                     _sequenceTarget: rhNeed._sequenceTarget || null
                                 }) || rhTmpl[rhBestIdx];
-                                // Fill remainder with sport slot
+                                // Fill remainder with sport slot; extend rotation event if too small to fill
                                 if (rhRemainEnd - rhRemainStart >= rhMeta.fillMinDur) {
                                     addSportBlocks(rhTmpl, rhRemainStart, rhRemainEnd, {
                                         type: 'slot', event: pickFillActivity(rhRemainEnd - rhRemainStart, rhMeta.grade) || 'Free',
@@ -7028,7 +7028,8 @@
                                     rotationQuotas[rhNeed._rotationEventId].placed++;
                                 }
                                 rotHealCount++;
-                                break; // one rotation event per bunk
+                                // Re-sort so the next need's victim search sees correct order
+                                rhTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
                             }
                         }
                     } catch (e) { /* skip */ }
