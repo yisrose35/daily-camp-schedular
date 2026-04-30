@@ -8315,6 +8315,54 @@
             if (enforceFixCount > 0) log('[Phase3] ★ ENFORCE: fixed ' + enforceFixCount + ' constraint violations in final sweep');
 
             // ══════════════════════════════════════════════════════════════════════
+            // ★ PERFECTION-FILL ROTATION ABSORB PASS
+            // Phase 3 perfection-fill converts sub-fillMinDur dead gaps into tiny
+            // slot BLOCKS (_source:'perfection-fill'). PEGC only sees actual empty
+            // spaces — not blocks — so Strategy 3c never fires for these. This pass
+            // runs first: for every sub-fillMinDur perfection-fill block adjacent to
+            // a rotation_event block, absorb it into that rotation event and remove
+            // the slot block so PEGC sees a clean timeline.
+            // ══════════════════════════════════════════════════════════════════════
+            (function _pfAbsorbPass() {
+                for (var _pfbi = 0; _pfbi < allBunkIds.length; _pfbi++) {
+                    var _pfBunk = allBunkIds[_pfbi];
+                    var _pfMeta = bunkMeta[_pfBunk];
+                    if (!_pfMeta) continue;
+                    var _pfFillMin = _pfMeta.fillMinDur || 25;
+                    var _pfTmpl = bunkTimelines[_pfBunk] || allTemplates[_pfBunk] || [];
+                    _pfTmpl.sort(function(a, b) { return a.startMin - b.startMin; });
+                    var _pfChanged = true;
+                    while (_pfChanged) {
+                        _pfChanged = false;
+                        for (var _pfj = 0; _pfj < _pfTmpl.length; _pfj++) {
+                            var _pfBlk = _pfTmpl[_pfj];
+                            if (!_pfBlk || _pfBlk._source !== 'perfection-fill') continue;
+                            var _pfDur = _pfBlk.endMin - _pfBlk.startMin;
+                            if (_pfDur <= 0 || _pfDur >= _pfFillMin) continue;
+                            // Look for adjacent rotation_event neighbor
+                            var _pfPrev = _pfj > 0 ? _pfTmpl[_pfj - 1] : null;
+                            var _pfNext = _pfj < _pfTmpl.length - 1 ? _pfTmpl[_pfj + 1] : null;
+                            var _pfAbsorbed = false;
+                            if (_pfPrev && (_pfPrev.type || '').toLowerCase() === 'rotation_event' &&
+                                _pfPrev.endMin === _pfBlk.startMin) {
+                                _pfPrev.endMin = _pfBlk.endMin;
+                                _pfTmpl.splice(_pfj, 1);
+                                _pfChanged = true; _pfAbsorbed = true;
+                                log('[PFABSORB] bunk=' + _pfBunk + ' absorbed ' + _pfDur + 'min perfection-fill into prev rotation_event "' + (_pfPrev.event || '') + '"');
+                            } else if (_pfNext && (_pfNext.type || '').toLowerCase() === 'rotation_event' &&
+                                       _pfNext.startMin === _pfBlk.endMin) {
+                                _pfNext.startMin = _pfBlk.startMin;
+                                _pfTmpl.splice(_pfj, 1);
+                                _pfChanged = true; _pfAbsorbed = true;
+                                log('[PFABSORB] bunk=' + _pfBunk + ' absorbed ' + _pfDur + 'min perfection-fill into next rotation_event "' + (_pfNext.event || '') + '"');
+                            }
+                            if (_pfAbsorbed) break;
+                        }
+                    }
+                }
+            })();
+
+            // ══════════════════════════════════════════════════════════════════════
             // ★ POST-ENFORCEMENT GAP CLOSER
             // The rebalancer and enforcement sweeps run AFTER the zero-gap finalizer
             // and can open new gaps (e.g. enforcement shrinks a block that was
