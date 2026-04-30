@@ -6963,7 +6963,9 @@
                 for (var rhi = 0; rhi < allBunkIds.length; rhi++) {
                     var rhBunk = allBunkIds[rhi];
                     var rhMeta = bunkMeta[rhBunk];
-                    var rhTmpl = rhMeta.template;
+                    // Use the live bunkTimelines (updated at line ~6637) so the victim
+                    // search sees Phase-3 CSP sport blocks, not just Phase-2.4 walls.
+                    var rhTmpl = bunkTimelines[rhBunk] || rhMeta.template;
                     // Get rotation needs for this bunk
                     try {
                         var rhNeeds = window.RotationEvents.getNeedsForBunk(String(rhBunk), currentDate);
@@ -6981,14 +6983,17 @@
                             var rhDur = rhNeed.dMin || 15;
                             var rhWinStart = Math.max(rhNeed.windowStart || 0, rhMeta.gradeStart);
                             var rhWinEnd = Math.min(rhNeed.windowEnd || 1440, rhMeta.gradeEnd);
-                            // Find a sport/slot block to sacrifice within the window
+                            // Find a sport/slot block to sacrifice within the window.
+                            // Only require the block to START within the window — it may end
+                            // slightly beyond (e.g. sport 12:30-1:00, window ends at 12:55)
+                            // and the carved rotation event will still land inside the window.
                             var rhBestIdx = -1, rhBestFit = Infinity;
                             for (var rhsi = 0; rhsi < rhTmpl.length; rhsi++) {
                                 var rhblk = rhTmpl[rhsi];
                                 if (rhblk._fixed) continue;
                                 var rhbt = (rhblk.type || '').toLowerCase();
                                 if (!['sport', 'slot'].includes(rhbt)) continue;
-                                if (rhblk.startMin < rhWinStart || rhblk.endMin > rhWinEnd) continue;
+                                if (rhblk.startMin < rhWinStart || rhblk.startMin >= rhWinEnd) continue;
                                 var rhblkDur = rhblk.endMin - rhblk.startMin;
                                 if (rhblkDur < rhDur) continue;
                                 var rhfit = Math.abs(rhblkDur - rhDur);
