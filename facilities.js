@@ -566,11 +566,14 @@ function renderDetailPane() {
         if (fac.usedFor.includes('sports')) {
             propagateFieldRename(oldName, newName);
             handleComboFieldRenamed(oldName, newName);
-            // Rename in app1.fields
+            // Rename in app1.fields and keep root fields key in sync
             const settings = window.loadGlobalSettings?.() || {};
             const field = (settings.app1?.fields || []).find(f => f.name === oldName);
             if (field) field.name = newName;
-            if (settings.app1) window.saveGlobalSettings?.("app1", settings.app1);
+            if (settings.app1) {
+                window.saveGlobalSettings?.("app1", settings.app1);
+                window.saveGlobalSettings?.("fields", settings.app1.fields || []);
+            }
         }
 
         saveData();
@@ -733,6 +736,7 @@ function renderSportsConfig(container, fac) {
         if (!app1.fields) app1.fields = [];
         app1.fields.push(fieldData);
         window.saveGlobalSettings?.("app1", app1);
+        window.saveGlobalSettings?.("fields", app1.fields);
     }
 
     const allSports = window.getAllGlobalSports?.() || [];
@@ -782,8 +786,12 @@ function saveFieldData() {
     const app1 = settings.app1 || {};
     app1.sportMetaData = sportMetaData;
     app1.fieldCombos = fieldCombos;
+    // Normalize every field before persisting so the scheduler always gets
+    // a complete, well-structured object (sharableWith, limitUsage, timeRules, etc.)
+    const normalize = window.normalizeFieldForSave || (f => f);
+    app1.fields = (app1.fields || []).map(normalize).filter(Boolean);
     window.saveGlobalSettings?.("app1", app1);
-    window.saveGlobalSettings?.("fields", app1.fields || []);
+    window.saveGlobalSettings?.("fields", app1.fields);
     saveFacilitiesMetadata();
 
     if (typeof window.refreshActivityPropertiesFromFields === 'function') {
