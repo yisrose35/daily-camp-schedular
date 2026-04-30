@@ -10779,6 +10779,49 @@
                                 }
                                 if (!allLayersFit) { _sp25_layerBlockCount++; continue; }
 
+                                // ★ Rotation-event guard: unplaced rotation events (Lice, Slush…)
+                                // will consume part of the gaps left after this special.  A gap of
+                                // exactly sportFillMin that must also fit a 10-min rotation event
+                                // leaves only 15 min — a dead gap that nothing can fill.
+                                // Hard-reject positions where any unplaced rotation event would turn
+                                // a currently-fillable gap into a dead zone.
+                                var _p25RotBad = false;
+                                if (!_p25RotBad && window.RotationEvents &&
+                                    typeof window.RotationEvents.getNeedsForBunk === 'function') {
+                                    try {
+                                        var _p25RotNeeds = window.RotationEvents.getNeedsForBunk(String(bunk), currentDate) || [];
+                                        var _bunkTLNow = bunkTimelines[bunk] || [];
+                                        for (var _p25ri = 0; _p25ri < _p25RotNeeds.length && !_p25RotBad; _p25ri++) {
+                                            var _p25rn = _p25RotNeeds[_p25ri];
+                                            if (!_p25rn) continue;
+                                            // Skip already-placed rotation events
+                                            var _p25rnId = _p25rn._rotationEventId;
+                                            var _p25rnPlaced = _bunkTLNow.some(function(b) { return b && b._rotationEventId === _p25rnId; });
+                                            if (_p25rnPlaced) continue;
+                                            var _p25rnDur = _p25rn.dMin || 15;
+                                            var _p25rnWS = _p25rn.windowStart || 0;
+                                            var _p25rnWE = _p25rn.windowEnd || 1440;
+                                            // For each gap remaining after this special placement,
+                                            // check if placing this rotation event there would leave
+                                            // an unfillable sub-fillMin remainder.
+                                            for (var _p25gj = 0; _p25gj < gapsAfter.length && !_p25RotBad; _p25gj++) {
+                                                var _p25ga = gapsAfter[_p25gj];
+                                                var _p25gSize = _p25ga.e - _p25ga.s;
+                                                // Only gaps that overlap this rotation event's window
+                                                if (_p25ga.e <= _p25rnWS || _p25ga.s >= _p25rnWE) continue;
+                                                // Already dead — not caused by us
+                                                if (_p25gSize < sportFillMin) continue;
+                                                // After rotation event: effective remainder
+                                                var _p25eff = _p25gSize - _p25rnDur;
+                                                if (_p25eff > 0 && _p25eff < sportFillMin) {
+                                                    _p25RotBad = true;
+                                                }
+                                            }
+                                        }
+                                    } catch (e) { /* skip */ }
+                                }
+                                if (_p25RotBad) continue;
+
                                 // Score this position
                                 var score = 0;
                                 var deadGapCount = 0;
