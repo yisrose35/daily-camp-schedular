@@ -243,9 +243,7 @@ function saveData() {
     // Sync each facility to legacy structures
     syncAllToLegacy();
 
-    if (typeof window.requestCloudSync === 'function') {
-        window.requestCloudSync();
-    }
+    window.forceSyncToCloud?.();
 
     console.log('☁️ [FACILITIES] Saved', facilities.length, 'facilities');
 }
@@ -377,8 +375,9 @@ function addFacility() {
     });
 
     addFacilityInput.value = "";
+    const newFac = facilities[facilities.length - 1];
     saveData();
-    selectedFacilityId = `fac-${n}`;
+    selectedFacilityId = newFac.id;
     renderMasterList();
     renderDetailPane();
 }
@@ -397,6 +396,7 @@ function deleteFacility(fac) {
         const app1 = settings.app1 || {};
         app1.fields = (app1.fields || []).filter(f => f.name !== fac.name);
         window.saveGlobalSettings?.("app1", app1);
+        window.saveGlobalSettings?.("fields", app1.fields);
 
         // Cleanup schedule references
         cleanupDeletedField(fac.name);

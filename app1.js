@@ -1197,6 +1197,10 @@
     window.saveGlobalSpecialActivities = (updatedActivities) => {
         state.specialActivities = updatedActivities;
         saveData();
+        // Also write the root-level key that all readers check first —
+        // without this, the cloud_sync_helpers version's dual-write is lost
+        // once app1 initialises and replaces that function.
+        window.saveGlobalSettings?.('specialActivities', updatedActivities);
     };
     
     window.addDivisionBunk = (divName, bunkName) => {
