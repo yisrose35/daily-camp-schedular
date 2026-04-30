@@ -9799,6 +9799,31 @@
                                     const bStart = blk.startMin != null ? blk.startMin : blk._startMin;
                                     if (bStart != null && bStart >= tEnd && bStart < trailWall) trailWall = bStart;
                                 }
+                                // ★ Swim pre-change windows as virtual trail walls.
+                                // Phase 2.4 runs BEFORE Phase 2.3 (which places swim), so swim
+                                // blocks are not yet in bunkTimelines when this check runs.
+                                // Use the swim layer config to infer where the pre-change window
+                                // would land and treat its start as a virtual boundary — this
+                                // prevents rotation events from leaving an unfillable gap just
+                                // before the pre-change slot.
+                                const _pbSwimL = (layersByGrade[grade] || []).find(
+                                    l => (l.type || '').toLowerCase() === 'swim'
+                                );
+                                if (_pbSwimL && _pbSwimL.preChangeMin > 0) {
+                                    const _pbSrtP = periods.slice().sort((a, b) => a.startMin - b.startMin);
+                                    const _pbSwWS = _pbSwimL.startMin != null ? _pbSwimL.startMin : 0;
+                                    const _pbSwWE = _pbSwimL.endMin   != null ? _pbSwimL.endMin   : 1440;
+                                    const _pbSwDmin = (_pbSwimL.constraints && _pbSwimL.constraints.dMin) || 40;
+                                    for (let _pbSi = 1; _pbSi < _pbSrtP.length; _pbSi++) {
+                                        const _pbSP = _pbSrtP[_pbSi]; // candidate swim period
+                                        if (_pbSP.endMin - _pbSP.startMin < _pbSwDmin) continue;
+                                        if (_pbSP.startMin < _pbSwWS || _pbSP.endMin > _pbSwWE) continue;
+                                        // Pre-change: last preChangeMin of the preceding period
+                                        const _pbPrevP = _pbSrtP[_pbSi - 1];
+                                        const _pbPreWs = _pbPrevP.endMin - _pbSwimL.preChangeMin;
+                                        if (_pbPreWs >= tEnd && _pbPreWs < trailWall) trailWall = _pbPreWs;
+                                    }
+                                }
                                 if (trailWall - tEnd > 0 && trailWall - tEnd < _MIN_FILLABLE) return true;
                             }
                             return false;
@@ -10625,9 +10650,21 @@
                                                 _p25BadPeriodSeg = true;
                                             }
                                         }
-                                        // Left sub-segment: special starts INSIDE this period
+                                        // Left sub-segment: special starts INSIDE this period.
+                                        // Use effective lead wall (last block end before _p25SS
+                                        // within this period) rather than the raw period start —
+                                        // pre-placed blocks that already occupy [period.s, _p25SS)
+                                        // extend the wall and eliminate the apparent gap.
                                         if (_p25SS > _pbP.s && _p25SS < _pbP.e) {
-                                            var _pbL = _p25SS - _pbP.s;
+                                            var _pbLW = _pbP.s;
+                                            var _p25BunkTL = bunkTimelines[bunk] || [];
+                                            for (var _pbLi = 0; _pbLi < _p25BunkTL.length; _pbLi++) {
+                                                var _pbLB = _p25BunkTL[_pbLi];
+                                                if (!_pbLB) continue;
+                                                var _pbLBE = _pbLB.endMin != null ? _pbLB.endMin : (_pbLB._endMin || 0);
+                                                if (_pbLBE > _pbLW && _pbLBE <= _p25SS) _pbLW = _pbLBE;
+                                            }
+                                            var _pbL = _p25SS - _pbLW;
                                             if (_pbL > 0 && _pbL < sportFillMin && !_p25ShortSpecDurs[_pbL]) {
                                                 _p25BadPeriodSeg = true;
                                             }
@@ -10750,12 +10787,44 @@
 
                         // Pick the best position
                         if (candidatePositions.length === 0) {
-                            if (totalIters < 1) {
-                                var gapSummary = allGapsForBunk.map(function(g) { return (g.e - g.s) + 'min'; }).join(', ');
-                                warn('[Phase2.5] Cannot pre-place ' + special.name + ' (' + specialDur + 'min) for bunk ' + bunk + ' in ' + grade +
-                                    ' — gaps: [' + gapSummary + '] | blocked: RT=' + _sp25_rtBlockCount + ' layers=' + _sp25_layerBlockCount + ' gapTooSmall=' + _sp25_gapTooSmall);
+                            // Fallback: no gap-safe position found. Re-scan without hard
+                            // rejects, using score penalties only. This keeps placement in
+                            // Phase 2.5's smarter framework instead of deferring to CSP,
+                            // which has no dead-gap awareness and would create the same gap
+                            // anyway. Prefer start- or end-aligned positions (gap at period
+                            // boundary is less disruptive than a gap between two specials).
+                            for (var _fbGi = 0; _fbGi < allGapsForBunk.length; _fbGi++) {
+                                var _fbGap = allGapsForBunk[_fbGi];
+                                if (_fbGap.e - _fbGap.s < specialDur) continue;
+                                for (var _fbPos = _fbGap.s; _fbPos + specialDur <= _fbGap.e; _fbPos += 5) {
+                                    if (sp25CrossesBoundary(_fbPos, _fbPos + specialDur)) continue;
+                                    var _fbChgBlk = false;
+                                    for (var _fbCi = 0; _fbCi < _p25SwimWindows.length; _fbCi++) {
+                                        var _fbCw = _p25SwimWindows[_fbCi];
+                                        if (_fbCw.preWs  != null && _fbPos < _fbCw.preWe  && _fbPos + specialDur > _fbCw.preWs)  { _fbChgBlk = true; break; }
+                                        if (_fbCw.postWs != null && _fbPos < _fbCw.postWe && _fbPos + specialDur > _fbCw.postWs) { _fbChgBlk = true; break; }
+                                    }
+                                    if (_fbChgBlk) continue;
+                                    if (!canUseSpecialAtTime(special.name, grade, _fbPos, _fbPos + specialDur)) continue;
+                                    if (!rulesAllow({ startMin: _fbPos, endMin: _fbPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) continue;
+                                    var _fbLRem = _fbPos - _fbGap.s;
+                                    var _fbRRem = _fbGap.e - (_fbPos + specialDur);
+                                    var _fbScore = -2500 * ((_fbLRem > 0 && _fbLRem < sportFillMin ? 1 : 0) + (_fbRRem > 0 && _fbRRem < sportFillMin ? 1 : 0));
+                                    // Prefer start- or end-aligned (gap at gap boundary, not between activities)
+                                    if (_fbPos === _fbGap.s)                  _fbScore += 100;
+                                    if (_fbPos + specialDur === _fbGap.e)     _fbScore += 100;
+                                    if (_fbPos === draftStart)                _fbScore += 200;
+                                    candidatePositions.push({ pos: _fbPos, score: _fbScore, deadGapCount: 1 });
+                                }
                             }
-                            continue; // defer to CSP — skip this special, try next drafted one
+                            if (candidatePositions.length === 0) {
+                                if (totalIters < 1) {
+                                    var gapSummary = allGapsForBunk.map(function(g) { return (g.e - g.s) + 'min'; }).join(', ');
+                                    warn('[Phase2.5] Cannot pre-place ' + special.name + ' (' + specialDur + 'min) for bunk ' + bunk + ' in ' + grade +
+                                        ' — gaps: [' + gapSummary + '] | blocked: RT=' + _sp25_rtBlockCount + ' layers=' + _sp25_layerBlockCount + ' gapTooSmall=' + _sp25_gapTooSmall);
+                                }
+                                continue; // truly no placement possible → defer to CSP
+                            }
                         }
 
                         // ★ HARD CONSTRAINT: Special durations are honored exactly as
