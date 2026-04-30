@@ -10486,10 +10486,16 @@
                                     if (seqPosition === 'after' || seqPosition === 'either') {
                                         for (let _pi = _swimPi + 1; _pi < _sp.length; _pi++) {
                                             const _p = _sp[_pi];
-                                            if (_p.startMin < winStart || _p.endMin > winEnd) continue;
-                                            if (_p.endMin - _p.startMin < dur) continue;
+                                            // Clamp slots to the event window rather than requiring the
+                                            // entire period to sit inside it — this prevents valid
+                                            // adjacent periods from being skipped when they start slightly
+                                            // before winStart (e.g., a period starting at 10:40 when
+                                            // winStart is 10:50 still has usable sub-slots from 10:50+).
+                                            const _aCStart = Math.max(_p.startMin, winStart);
+                                            const _aCEnd   = Math.min(_p.endMin, winEnd);
+                                            if (_aCEnd - _aCStart < dur) continue;
                                             let _firstSlot = true;
-                                            for (let _wsS = _p.startMin; _wsS + dur <= _p.endMin; _wsS += dur) {
+                                            for (let _wsS = _aCStart; _wsS + dur <= _aCEnd; _wsS += dur) {
                                                 _pool.push({
                                                     startMin: _wsS, endMin: _wsS + dur,
                                                     usedCount: 0, dir: 'after',
@@ -10501,16 +10507,18 @@
                                         }
                                     }
                                     // 'before': fill the period immediately preceding swim
-                                    // with multiple slots. The last slot (period end − dur)
+                                    // with multiple slots. The last slot (closest to swim)
                                     // is "immediately adjacent" to swim.
                                     if ((seqPosition === 'before' || seqPosition === 'either') &&
                                         _pool.length === 0) {
                                         for (let _pi = _swimPi - 1; _pi >= 0; _pi--) {
                                             const _p = _sp[_pi];
-                                            if (_p.startMin < winStart || _p.endMin > winEnd) continue;
-                                            if (_p.endMin - _p.startMin < dur) continue;
+                                            // Clamp to event window — same logic as 'after' above.
+                                            const _bCStart = Math.max(_p.startMin, winStart);
+                                            const _bCEnd   = Math.min(_p.endMin, winEnd);
+                                            if (_bCEnd - _bCStart < dur) continue;
                                             const _slotsInPeriod = [];
-                                            for (let _wsS = _p.startMin; _wsS + dur <= _p.endMin; _wsS += dur) {
+                                            for (let _wsS = _bCStart; _wsS + dur <= _bCEnd; _wsS += dur) {
                                                 _slotsInPeriod.push(_wsS);
                                             }
                                             _slotsInPeriod.forEach(function(_wsS, _sIdx) {
@@ -10756,6 +10764,49 @@
                                     _rotUnplaced.push(bunk + '/' + evt.name);
                                     if (_verbose) log('[Phase2.4-stagger]   ✗ ' + bunk + '/' + grade + ' — no available slot');
                                 }
+                            }
+
+                            // ── Post-bundle cleanup ──
+                            // After placing all bunks, sweep every processed bunk and remove
+                            // any change block that ended up sandwiched between the rotation
+                            // event and swim.  This is a safety net for cases where the
+                            // per-bunk rebundling couldn't fire (e.g. slot wasn't marked
+                            // immediatelyAdjacent because the clamped range shifted it) but
+                            // the two wet activities are still directly adjacent across the
+                            // period boundary (gap ≤ 20 min).
+                            if (_isBundleEvent) {
+                                const _BCLEAN_GAP = 20;
+                                for (const { bunk: _cleanBunk } of _stagLimitedBunks) {
+                                    const _cTL = bunkTimelines[_cleanBunk] || [];
+                                    const _cRE = _cTL.find(b => b && b._rotationEventId === evt.id);
+                                    const _cSW = _cTL.find(b => b && (b.type || '').toLowerCase() === 'swim');
+                                    if (!_cRE || !_cSW) continue;
+                                    // Rotation event AFTER swim → remove post-change between them
+                                    if (_cRE.startMin >= _cSW.endMin &&
+                                        _cRE.startMin - _cSW.endMin <= _BCLEAN_GAP) {
+                                        let _ci;
+                                        while ((_ci = _cTL.findIndex(b => b &&
+                                            (b.type || '').toLowerCase() === 'post-change' &&
+                                            b.startMin >= _cSW.endMin - 1 &&
+                                            b.endMin   <= _cRE.startMin + 1)) >= 0) {
+                                            if (_verbose) log('[Phase2.4-bundle-cleanup] ' + _cleanBunk + ' removed post-change @ ' + _fmt(_cTL[_ci].startMin) + ' sandwiched between swim→rot');
+                                            _cTL.splice(_ci, 1);
+                                        }
+                                    }
+                                    // Rotation event BEFORE swim → remove pre-change between them
+                                    if (_cSW.startMin >= _cRE.endMin &&
+                                        _cSW.startMin - _cRE.endMin <= _BCLEAN_GAP) {
+                                        let _ci;
+                                        while ((_ci = _cTL.findIndex(b => b &&
+                                            (b.type || '').toLowerCase() === 'pre-change' &&
+                                            b.startMin >= _cRE.endMin - 1 &&
+                                            b.endMin   <= _cSW.startMin + 1)) >= 0) {
+                                            if (_verbose) log('[Phase2.4-bundle-cleanup] ' + _cleanBunk + ' removed pre-change @ ' + _fmt(_cTL[_ci].startMin) + ' sandwiched between rot→swim');
+                                            _cTL.splice(_ci, 1);
+                                        }
+                                    }
+                                }
+                                _stagLimitedBunks.forEach(({ bunk: _eb }) => ensureTimelineIntegrity(_eb));
                             }
 
                         } else {
