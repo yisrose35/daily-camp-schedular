@@ -1657,6 +1657,9 @@
                             }
                             const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
                             if (rGrades && !rGrades.has(grade)) continue;
+                            // Individual-mode events stagger per-bunk — Phase 2.4 handles them.
+                            // Phase 0 only places whole-grade walls, so skip individual events here.
+                            if (rEvt.gradeMode === 'individual') continue;
                             const rDur = parseInt(rEvt.durationPerBunk) || 0;
                             if (rDur <= 0) continue;
                             _linkedRotDur = rDur;
@@ -1921,6 +1924,9 @@
                                 }
                                 const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
                                 if (rGrades && !rGrades.has(grade)) continue;
+                                // Individual-mode events are staggered per-bunk by Phase 2.4.
+                                // Phase 0 must not place a whole-grade wall for them.
+                                if (rEvt.gradeMode === 'individual') continue;
                                 _linkedRotPlaced = { wsStart: _wsS, wsEnd: _wsE, evt: rEvt };
                                 break;
                             }
@@ -10025,7 +10031,8 @@
                                     const typeName = (b.type || '').toLowerCase();
                                     const sport = (b._assignedSport || '').toLowerCase();
                                     const spec = (b._assignedSpecial || '').toLowerCase();
-                                    if (eventName === tgt || typeName === tgt || sport === tgt || spec === tgt) {
+                                    const disp = (b.displayName || '').toLowerCase();
+                                    if (eventName === tgt || typeName === tgt || sport === tgt || spec === tgt || disp === tgt) {
                                         return { startMin: b.startMin, endMin: b.endMin };
                                     }
                                 }
@@ -10265,17 +10272,30 @@
                                         const en = (blk.event || '').toLowerCase();
                                         const tn = (blk.type || '').toLowerCase();
                                         const sp = (blk._assignedSport || '').toLowerCase();
-                                        if (en === _tgtKey || tn === _tgtKey || sp === _tgtKey) {
+                                        const sc = (blk._assignedSpecial || '').toLowerCase();
+                                        const dn = (blk.displayName || '').toLowerCase();
+                                        if (en === _tgtKey || tn === _tgtKey || sp === _tgtKey || sc === _tgtKey || dn === _tgtKey) {
                                             _tgtS = blk.startMin; _tgtE = blk.endMin; break;
                                         }
                                     }
                                     if (_tgtS != null) {
-                                        // Try slots owned by this grade (or unclaimed) adjacent to target
+                                        // Try slots owned by this grade (or unclaimed) adjacent to target.
+                                        // Filter by seqPosition first so 'after' only considers slots that
+                                        // start at or after the target ends (and vice-versa for 'before').
                                         const _adjSlots = _stagSlots
-                                            .filter(s => (s.ownerGrade === null || s.ownerGrade === grade) && s.usedCount < _evtConcurrency)
+                                            .filter(s => {
+                                                if ((s.ownerGrade !== null && s.ownerGrade !== grade) || s.usedCount >= _evtConcurrency) return false;
+                                                if (seqPosition === 'after')  return s.startMin >= _tgtE;
+                                                if (seqPosition === 'before') return s.endMin   <= _tgtS;
+                                                return true; // 'either' — any direction, sort by proximity
+                                            })
                                             .sort((a, b) => {
-                                                const dA = Math.min(Math.abs(a.endMin - _tgtS), Math.abs(a.startMin - _tgtE));
-                                                const dB = Math.min(Math.abs(b.endMin - _tgtS), Math.abs(b.startMin - _tgtE));
+                                                const dA = seqPosition === 'after'  ? (a.startMin - _tgtE) :
+                                                           seqPosition === 'before' ? (_tgtS - a.endMin)   :
+                                                           Math.min(Math.abs(a.endMin - _tgtS), Math.abs(a.startMin - _tgtE));
+                                                const dB = seqPosition === 'after'  ? (b.startMin - _tgtE) :
+                                                           seqPosition === 'before' ? (_tgtS - b.endMin)   :
+                                                           Math.min(Math.abs(b.endMin - _tgtS), Math.abs(b.startMin - _tgtE));
                                                 return dA - dB;
                                             });
                                         for (const s of _adjSlots) {
