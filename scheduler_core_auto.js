@@ -10114,31 +10114,32 @@
                                     if (bStart != null && bStart >= tEnd && bStart < trailWall) trailWall = bStart;
                                 }
                                 // ★ Swim pre-change windows as virtual trail walls.
-                                // Phase 2.4 runs AFTER Phase 2.3 (which places swim), so swim
-                                // blocks are already in bunkTimelines when this check runs.
-                                // Use the swim layer config to infer where the pre-change window
-                                // would land and treat its start as a virtual boundary — this
-                                // prevents rotation events from leaving an unfillable gap just
-                                // before the pre-change slot.
-                                const _pbSwimL = (layersByGrade[grade] || []).find(
-                                    l => (l.type || '').toLowerCase() === 'swim'
-                                );
-                                if (_pbSwimL && _pbSwimL.preChangeMin > 0) {
-                                    const _pbSrtP = periods.slice().sort((a, b) => a.startMin - b.startMin);
-                                    const _pbSwWS = _pbSwimL.startMin != null ? _pbSwimL.startMin : 0;
-                                    const _pbSwWE = _pbSwimL.endMin   != null ? _pbSwimL.endMin   : 1440;
-                                    const _pbSwDmin = (_pbSwimL.constraints && _pbSwimL.constraints.dMin) || 40;
-                                    for (let _pbSi = 1; _pbSi < _pbSrtP.length; _pbSi++) {
-                                        const _pbSP = _pbSrtP[_pbSi]; // candidate swim period
-                                        if (_pbSP.endMin - _pbSP.startMin < _pbSwDmin) continue;
-                                        if (_pbSP.startMin < _pbSwWS || _pbSP.endMin > _pbSwWE) continue;
-                                        // Pre-change: last preChangeMin of the preceding period
-                                        const _pbPrevP = _pbSrtP[_pbSi - 1];
-                                        const _pbPreWs = _pbPrevP.endMin - _pbSwimL.preChangeMin;
-                                        // Hard reject: placement overlaps the reserved pre-change window
-                                        if (t < _pbPrevP.endMin && tEnd > _pbPreWs) return true;
-                                        // Virtual trail wall: gap between placement end and pre-change start
-                                        if (_pbPreWs >= tEnd && _pbPreWs < trailWall) trailWall = _pbPreWs;
+                                // Only apply when swim has NOT already been placed for this bunk
+                                // (e.g., Phase 2.3 hasn't run yet). If swim IS already in
+                                // bunkTimelines, the real pre/post-change blocks are already walls
+                                // and this virtual inference would cause false rejections.
+                                const _bunkHasSwim = tl.some(b => b && (b.type || '').toLowerCase() === 'swim');
+                                if (!_bunkHasSwim) {
+                                    const _pbSwimL = (layersByGrade[grade] || []).find(
+                                        l => (l.type || '').toLowerCase() === 'swim'
+                                    );
+                                    if (_pbSwimL && _pbSwimL.preChangeMin > 0) {
+                                        const _pbSrtP = periods.slice().sort((a, b) => a.startMin - b.startMin);
+                                        const _pbSwWS = _pbSwimL.startMin != null ? _pbSwimL.startMin : 0;
+                                        const _pbSwWE = _pbSwimL.endMin   != null ? _pbSwimL.endMin   : 1440;
+                                        const _pbSwDmin = (_pbSwimL.constraints && _pbSwimL.constraints.dMin) || 40;
+                                        for (let _pbSi = 1; _pbSi < _pbSrtP.length; _pbSi++) {
+                                            const _pbSP = _pbSrtP[_pbSi]; // candidate swim period
+                                            if (_pbSP.endMin - _pbSP.startMin < _pbSwDmin) continue;
+                                            if (_pbSP.startMin < _pbSwWS || _pbSP.endMin > _pbSwWE) continue;
+                                            // Pre-change: last preChangeMin of the preceding period
+                                            const _pbPrevP = _pbSrtP[_pbSi - 1];
+                                            const _pbPreWs = _pbPrevP.endMin - _pbSwimL.preChangeMin;
+                                            // Hard reject: placement overlaps the reserved pre-change window
+                                            if (t < _pbPrevP.endMin && tEnd > _pbPreWs) return true;
+                                            // Virtual trail wall: gap between placement end and pre-change start
+                                            if (_pbPreWs >= tEnd && _pbPreWs < trailWall) trailWall = _pbPreWs;
+                                        }
                                     }
                                 }
                                 if (trailWall - tEnd > 0 && trailWall - tEnd < _MIN_FILLABLE) return true;
@@ -10173,7 +10174,18 @@
                                     const spec = (b._assignedSpecial || '').toLowerCase();
                                     const disp = (b.displayName || '').toLowerCase();
                                     if (eventName === tgt || typeName === tgt || sport === tgt || spec === tgt || disp === tgt) {
-                                        return { startMin: b.startMin, endMin: b.endMin };
+                                        let sMin = b.startMin, eMin = b.endMin;
+                                        // Extend past attached pre/post-change blocks so adjacency
+                                        // is relative to the full activity+change combo.
+                                        for (const cb of tl) {
+                                            if (!cb || cb.continuation) continue;
+                                            const ct = (cb.type || '').toLowerCase();
+                                            if (ct === 'post-change' && cb.startMin >= eMin - 1 && cb.startMin <= eMin + 15)
+                                                eMin = Math.max(eMin, cb.endMin);
+                                            if (ct === 'pre-change' && cb.endMin >= sMin - 15 && cb.endMin <= sMin + 1)
+                                                sMin = Math.min(sMin, cb.startMin);
+                                        }
+                                        return { startMin: sMin, endMin: eMin };
                                     }
                                 }
                             }
@@ -10419,6 +10431,25 @@
                                         }
                                     }
                                     if (_tgtS != null) {
+                                        // Extend _tgtE past any attached post-change block so
+                                        // 'after' adjacency starts after the full swim+change
+                                        // combo, not in the middle of the changing window.
+                                        // Extend _tgtS before any attached pre-change block
+                                        // so 'before' adjacency ends before changing starts.
+                                        for (const _chgBlk of _tl) {
+                                            if (!_chgBlk || _chgBlk.continuation) continue;
+                                            const _ct = (_chgBlk.type || '').toLowerCase();
+                                            if (_ct === 'post-change' &&
+                                                _chgBlk.startMin >= _tgtE - 1 &&
+                                                _chgBlk.startMin <= _tgtE + 15) {
+                                                _tgtE = Math.max(_tgtE, _chgBlk.endMin);
+                                            }
+                                            if (_ct === 'pre-change' &&
+                                                _chgBlk.endMin >= _tgtS - 15 &&
+                                                _chgBlk.endMin <= _tgtS + 1) {
+                                                _tgtS = Math.min(_tgtS, _chgBlk.startMin);
+                                            }
+                                        }
                                         // Try slots owned by this grade (or unclaimed) adjacent to target.
                                         // Filter by seqPosition first so 'after' only considers slots that
                                         // start at or after the target ends (and vice-versa for 'before').
