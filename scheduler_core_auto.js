@@ -9821,6 +9821,9 @@
                                         // Pre-change: last preChangeMin of the preceding period
                                         const _pbPrevP = _pbSrtP[_pbSi - 1];
                                         const _pbPreWs = _pbPrevP.endMin - _pbSwimL.preChangeMin;
+                                        // Hard reject: placement overlaps the reserved pre-change window
+                                        if (t < _pbPrevP.endMin && tEnd > _pbPreWs) return true;
+                                        // Virtual trail wall: gap between placement end and pre-change start
                                         if (_pbPreWs >= tEnd && _pbPreWs < trailWall) trailWall = _pbPreWs;
                                     }
                                 }
