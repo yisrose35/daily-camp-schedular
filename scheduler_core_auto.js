@@ -5013,6 +5013,19 @@
                                 // carve the event from a sport block and extend it to fill any small
                                 // remainder — far better than a dead 10-min slot no activity can use.
                                 if (deadCount > 0 && _needType15 === 'rotation_event') continue;
+                                // Hard reject for specials: don't leave an unfillable dead gap unless
+                                // another need in the current solve can exactly fill that remainder.
+                                if (deadCount > 0 && _needType15 === 'special') {
+                                    var _spGapFillable = false;
+                                    for (var _sgfi = 0; _sgfi < (otherNeeds || []).length && !_spGapFillable; _sgfi++) {
+                                        var _sgfn = otherNeeds[_sgfi];
+                                        var _sgfDMin = _sgfn.dMin || 0;
+                                        var _sgfDMax = _sgfn.dMax != null ? _sgfn.dMax : Infinity;
+                                        if (lGap > 0 && lGap < fMin && _sgfDMin <= lGap && _sgfDMax >= lGap) _spGapFillable = true;
+                                        if (rGap > 0 && rGap < fMin && _sgfDMin <= rGap && _sgfDMax >= rGap) _spGapFillable = true;
+                                    }
+                                    if (!_spGapFillable) continue;
+                                }
                                 // Bonus for starting/ending exactly on a period boundary — leaves no orphan fragment
                                 var _periodAlignBonus = 0;
                                 if (_posPeriods) {
@@ -5055,8 +5068,19 @@
                                     var rG = gap.end - (endAligned + dur);
                                     var lG_ea = endAligned - gap.start;
                                     var _eaDeadCount = (lG_ea > 0 && lG_ea < fMin ? 1 : 0) + (rG > 0 && rG < fMin ? 1 : 0);
-                                    // Same hard reject for rotation events as the main scan above
+                                    // Same hard rejects as the main scan above
                                     if (_eaDeadCount > 0 && _needType15 === 'rotation_event') ok2 = false;
+                                    if (ok2 && _eaDeadCount > 0 && _needType15 === 'special') {
+                                        var _eaSpFillable = false;
+                                        for (var _eaSgfi = 0; _eaSgfi < (otherNeeds || []).length && !_eaSpFillable; _eaSgfi++) {
+                                            var _eaSgfn = otherNeeds[_eaSgfi];
+                                            var _eaSgfDMin = _eaSgfn.dMin || 0;
+                                            var _eaSgfDMax = _eaSgfn.dMax != null ? _eaSgfn.dMax : Infinity;
+                                            if (lG_ea > 0 && lG_ea < fMin && _eaSgfDMin <= lG_ea && _eaSgfDMax >= lG_ea) _eaSpFillable = true;
+                                            if (rG > 0 && rG < fMin && _eaSgfDMin <= rG && _eaSgfDMax >= rG) _eaSpFillable = true;
+                                        }
+                                        if (!_eaSpFillable) ok2 = false;
+                                    }
                                     if (ok2) positions.push({ start: endAligned, dur: dur, deadGaps: _eaDeadCount, lGap: lG_ea, rGap: rG });
                                 }
                             }
