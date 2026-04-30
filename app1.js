@@ -853,30 +853,49 @@
                         gradeNameCounts[gradeName] = (gradeNameCounts[gradeName] || 0) + 1;
                     });
                 });
-                
+
+                // Count bunk name occurrences across ALL grades to detect cross-grade collisions
+                const bunkNameCounts = {};
                 Object.entries(campStructure).forEach(([divName, divData]) => {
                     if (typeof divData !== 'object' || divData === null) return;
-                    
+                    Object.entries(divData.grades || {}).forEach(([, gradeData]) => {
+                        (gradeData.bunks || []).forEach(b => {
+                            bunkNameCounts[b] = (bunkNameCounts[b] || 0) + 1;
+                        });
+                    });
+                });
+
+                Object.entries(campStructure).forEach(([divName, divData]) => {
+                    if (typeof divData !== 'object' || divData === null) return;
+
                     const parentColor = divData.color || getNextUniqueDivisionColor(gradeBasedDivisions);
                     const gradeNames = Object.keys(divData.grades || {});
-                    
+
                     divGroups[divName] = { color: parentColor, grades: [] };
-                    
+
                     gradeNames.forEach(gradeName => {
                         const gradeData = divData.grades[gradeName];
-                        const bunks = gradeData.bunks || [];
-                        bunks.forEach(b => { if (!allBunks.includes(b)) allBunks.push(b); });
-                        
+                        const rawBunks = gradeData.bunks || [];
+
                         const key = gradeNameCounts[gradeName] > 1
                             ? `${divName} > ${gradeName}`
                             : gradeName;
-                        
+
                         if (gradeNameCounts[gradeName] > 1) {
                             console.warn(`[app1 v5.2] Grade "${gradeName}" exists in multiple divisions — using "${key}"`);
                         }
-                        
+
+                        // Qualify bunk names that appear in more than one grade to prevent
+                        // key collisions in scheduleAssignments (e.g. Grade 1 "Bunk 1" vs Grade 2 "Bunk 1")
+                        const bunks = rawBunks.map(b => bunkNameCounts[b] > 1 ? `${key}:${b}` : b);
+                        if (bunks.some((b, i) => b !== rawBunks[i])) {
+                            console.warn(`[app1 v5.2] Grade "${key}" has bunk name conflicts — qualified:`, bunks);
+                        }
+
+                        bunks.forEach(b => { if (!allBunks.includes(b)) allBunks.push(b); });
+
                         const times = existingTimes[key] || existingTimes[gradeName] || existingTimes[divName] || {};
-                        
+
                         gradeBasedDivisions[key] = {
                             startTime: times.startTime || "",
                             endTime: times.endTime || "",
@@ -884,7 +903,7 @@
                             color: parentColor,
                             parentDivision: divName
                         };
-                        
+
                         divGroups[divName].grades.push(key);
                     });
                 });
@@ -973,11 +992,17 @@
                     state.bunkMetaData[bunk].size = count;
                 }
             });
+
+            const orphanedBunks = Object.keys(bunkCounts).filter(b => !state.bunks.includes(b));
+            if (orphanedBunks.length > 0) {
+                console.warn('[app1] Campers assigned to bunks not found in any grade:', orphanedBunks);
+            }
             
             updateWindowApp1();
-            
+            syncSpine();
+
             console.log(`[app1 v5.2] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
-            
+
         } catch (e) {
             console.error("Error loading app1 data:", e);
         }
@@ -1172,6 +1197,10 @@
     window.saveGlobalSpecialActivities = (updatedActivities) => {
         state.specialActivities = updatedActivities;
         saveData();
+        // Also write the root-level key that all readers check first —
+        // without this, the cloud_sync_helpers version's dual-write is lost
+        // once app1 initialises and replaces that function.
+        window.saveGlobalSettings?.('specialActivities', updatedActivities);
     };
     
     window.addDivisionBunk = (divName, bunkName) => {

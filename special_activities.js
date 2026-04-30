@@ -102,7 +102,12 @@ function setupBeforeUnloadHandler() {
 function validateSpecialActivity(activity, activityName) {
     if (!activity || typeof activity !== 'object') return createDefaultActivity(activityName || 'Unknown');
     let validDivisions = null;
-    try { const settings = window.loadGlobalSettings?.() || {}; validDivisions = new Set(Object.keys(settings.divisions || {})); } catch (e) { validDivisions = null; }
+    try {
+        // Use window.divisions (grade-based, built by app1 from campStructure) rather
+        // than settings.divisions (flat top-level key that may be stale or empty).
+        const divs = window.divisions || window.getGlobalDivisions?.() || {};
+        validDivisions = Object.keys(divs).length > 0 ? new Set(Object.keys(divs)) : null;
+    } catch (e) { validDivisions = null; }
 
    let sharableWith = activity.sharableWith;
     if (!sharableWith || typeof sharableWith !== 'object') { sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 }; }

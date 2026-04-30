@@ -94,11 +94,26 @@
     }
 
     /**
+     * Resolve the slot array for a given division + bunk.
+     * In auto mode, divisionTimes[division] may carry _perBunkSlots with
+     * per-bunk arrays that differ from the division-wide array.
+     */
+    function resolveDivSlots(divisionName, bunk) {
+        const divData = window.divisionTimes?.[divisionName];
+        if (!divData) return [];
+        if (divData._isPerBunk && bunk && divData._perBunkSlots?.[String(bunk)]) {
+            return divData._perBunkSlots[String(bunk)];
+        }
+        return Array.isArray(divData) ? divData : [];
+    }
+
+    /**
      * Find the correct division-specific slot index for a given time.
      * Uses divisionTimes (per-division time structure) instead of unifiedTimes.
+     * Accepts optional bunk to support auto-mode per-bunk slot arrays.
      */
-    function findDivisionSlotForTime(divisionName, timeMinutes) {
-        const divSlots = window.divisionTimes?.[divisionName] || [];
+    function findDivisionSlotForTime(divisionName, timeMinutes, bunk) {
+        const divSlots = resolveDivSlots(divisionName, bunk);
 
         if (divSlots.length === 0) {
             if (window.SchedulerCoreUtils?.findSlotForTime) {
@@ -109,22 +124,25 @@
 
         for (let i = 0; i < divSlots.length; i++) {
             const slot = divSlots[i];
+            if (!slot) continue;
             if (slot.startMin <= timeMinutes && timeMinutes < slot.endMin) {
                 return i;
             }
         }
 
-        if (timeMinutes < divSlots[0].startMin) return 0;
-        if (timeMinutes >= divSlots[divSlots.length - 1].endMin) return divSlots.length - 1;
+        if (divSlots[0] && timeMinutes < divSlots[0].startMin) return 0;
+        const lastSlot = divSlots[divSlots.length - 1];
+        if (lastSlot && timeMinutes >= lastSlot.endMin) return divSlots.length - 1;
 
         return -1;
     }
 
     /**
      * Get the time label for a division slot.
+     * Accepts optional bunk to support auto-mode per-bunk slot arrays.
      */
-    function getDivisionSlotLabel(divisionName, slotIdx) {
-        const divSlots = window.divisionTimes?.[divisionName] || [];
+    function getDivisionSlotLabel(divisionName, slotIdx, bunk) {
+        const divSlots = resolveDivSlots(divisionName, bunk);
         const slot = divSlots[slotIdx];
         if (!slot) return "Unknown Time";
         return slot.label || `${minutesToTimeLabel(slot.startMin)} - ${minutesToTimeLabel(slot.endMin)}`;
@@ -456,16 +474,19 @@
         let assignment = null;
 
         const bunkAssignments = window.scheduleAssignments?.[bunk];
-        const divSlots = window.divisionTimes?.[division] || [];
+        // In auto mode, bunks may have their own per-bunk slot arrays stored in
+        // divisionTimes[division]._perBunkSlots[bunk] — use those when present.
+        const divSlots = resolveDivSlots(division, bunk);
 
         if (bunkAssignments && divSlots.length > 0) {
             // PRIMARY: Scan divisionTimes for the slot whose time range contains targetTimeMin
             for (let i = 0; i < divSlots.length; i++) {
                 const ds = divSlots[i];
+                if (!ds) continue;
                 if (ds.startMin <= targetTimeMin && targetTimeMin < ds.endMin) {
                     slotIdx = i;
                     assignment = bunkAssignments[i] || null;
-                    slotTimeLabel = getDivisionSlotLabel(division, i);
+                    slotTimeLabel = getDivisionSlotLabel(division, i, bunk);
                     break;
                 }
             }
@@ -524,17 +545,19 @@
         if (!assignment) {
             // Check: is the target time even within schedule hours?
             let isOutsideSchedule = false;
-            if (divSlots.length > 0) {
-                const scheduleStart = divSlots[0].startMin;
-                const scheduleEnd = divSlots[divSlots.length - 1].endMin;
+            const firstSlot = divSlots.find(s => s != null);
+            const lastSlot = [...divSlots].reverse().find(s => s != null);
+            if (firstSlot && lastSlot) {
+                const scheduleStart = firstSlot.startMin;
+                const scheduleEnd = lastSlot.endMin;
                 if (targetTimeMin < scheduleStart || targetTimeMin >= scheduleEnd) {
                     isOutsideSchedule = true;
                 }
             }
 
             if (isOutsideSchedule) {
-                const scheduleStart = minutesToTimeLabel(divSlots[0].startMin);
-                const scheduleEnd = minutesToTimeLabel(divSlots[divSlots.length - 1].endMin);
+                const scheduleStart = minutesToTimeLabel(firstSlot.startMin);
+                const scheduleEnd = minutesToTimeLabel(lastSlot.endMin);
                 locationHtml = `<span style="color:#999;">Outside Schedule Hours</span>`;
                 detailsHtml = `${division}'s schedule runs from <strong>${scheduleStart}</strong> to <strong>${scheduleEnd}</strong>. The selected time is outside those hours.`;
             } else {
@@ -596,6 +619,7 @@
                 if (!leagueData && bunkAssignments) {
                     for (let i = 0; i < divSlots.length; i++) {
                         const ds = divSlots[i];
+                        if (!ds) continue;
                         if (ds.startMin <= targetTimeMin && targetTimeMin < ds.endMin) {
                             const a = bunkAssignments[i];
                             if (a && (a._h2h || String(a.field || '').toLowerCase().includes('league'))) {
