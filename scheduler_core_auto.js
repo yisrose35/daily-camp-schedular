@@ -6993,20 +6993,29 @@
                                 if (rhblk._fixed) continue;
                                 var rhbt = (rhblk.type || '').toLowerCase();
                                 if (!['sport', 'slot'].includes(rhbt)) continue;
-                                if (rhblk.startMin < rhWinStart || rhblk.startMin >= rhWinEnd) continue;
-                                var rhblkDur = rhblk.endMin - rhblk.startMin;
-                                if (rhblkDur < rhDur) continue;
-                                var rhfit = Math.abs(rhblkDur - rhDur);
+                                // Use overlap check: block must overlap the rotation event window.
+                                // Previously used startMin-in-window, which failed when the only
+                                // available block started at or just before the window boundary.
+                                if (rhblk.endMin <= rhWinStart || rhblk.startMin >= rhWinEnd) continue;
+                                var _rhOverlapStart = Math.max(rhblk.startMin, rhWinStart);
+                                var _rhOverlapDur = rhblk.endMin - _rhOverlapStart;
+                                if (_rhOverlapDur < rhDur) continue;
+                                var rhfit = Math.abs(_rhOverlapDur - rhDur);
                                 if (rhfit < rhBestFit) { rhBestFit = rhfit; rhBestIdx = rhsi; }
                             }
                             if (rhBestIdx >= 0) {
                                 var rhVictim = rhTmpl[rhBestIdx];
-                                var rhNewEnd = Math.min(rhVictim.startMin + (rhNeed.dMax || rhDur), rhVictim.endMin);
+                                // Carve rotation event at window-adjusted start so it lands
+                                // within its configured window even if the victim block starts earlier.
+                                var rhEvtStart = Math.max(rhVictim.startMin, rhWinStart);
+                                var rhNewEnd = Math.min(rhEvtStart + (rhNeed.dMax || rhDur), rhVictim.endMin);
+                                var rhPreStart = rhVictim.startMin;
+                                var rhPreEnd = rhEvtStart;
                                 var rhRemainStart = rhNewEnd;
                                 var rhRemainEnd = rhVictim.endMin;
-                                // Replace with rotation event block
+                                // Replace victim with rotation event block
                                 rhTmpl[rhBestIdx] = makeBlock({
-                                    startMin: rhVictim.startMin, endMin: rhNewEnd,
+                                    startMin: rhEvtStart, endMin: rhNewEnd,
                                     type: 'rotation_event', event: rhNeed.event,
                                     layer: rhNeed.layer, dMin: rhDur, dMax: rhNeed.dMax || rhDur,
                                     _source: 'rotation_event', _activityLocked: true, _final: true,
@@ -7015,7 +7024,18 @@
                                     _rotationEventColor: rhNeed._rotationEventColor,
                                     _sequenceTarget: rhNeed._sequenceTarget || null
                                 }) || rhTmpl[rhBestIdx];
-                                // Fill remainder with sport slot; extend rotation event if too small to fill
+                                // Push pre-remainder (victim start → rotation event window start)
+                                if (rhPreEnd > rhPreStart) {
+                                    addSportBlocks(rhTmpl, rhPreStart, rhPreEnd, {
+                                        type: 'slot', event: pickFillActivity(rhPreEnd - rhPreStart, rhMeta.grade) || 'Free',
+                                        layer: rhMeta.sportLayer, field: null,
+                                        dMin: rhMeta.sportC.dMin, dMax: rhMeta.sportCeiling,
+                                        _source: 'self-heal',
+                                        _sportFallbacks: rhMeta.priorityList.map(function(s) { return s.name; }),
+                                        _final: true
+                                    }, rhMeta.sportCeiling, rhMeta.fillMinDur, rhMeta.grade);
+                                }
+                                // Fill post-remainder; extend rotation event if too small to fill
                                 if (rhRemainEnd - rhRemainStart >= rhMeta.fillMinDur) {
                                     addSportBlocks(rhTmpl, rhRemainStart, rhRemainEnd, {
                                         type: 'slot', event: pickFillActivity(rhRemainEnd - rhRemainStart, rhMeta.grade) || 'Free',
@@ -8450,6 +8470,31 @@
                                 pg_fixed   = true;
                                 log('[POST-GAP] bunk=' + pg_bunk + ' micro-absorbed -' + pg_dur + 'min into next "' +
                                     (pg_next.event || pg_next.type || '') + '" @' + pg_gap.start + '-' + pg_gap.end);
+                            }
+                        }
+
+                        // Strategy 3c: rotation-event micro-absorption — when both neighbors
+                        // are Phase0 (e.g. two pinned rotation events like Lice + Slush),
+                        // Strategy 3b can't extend either. Instead, extend the rotation event
+                        // block bordering the dead gap so no "Free" slot is needed.
+                        if (!pg_fixed && _pgGapInOnePeriod && pg_dur < _pgFillMin && pg_dur >= 5) {
+                            if (pg_prev && (pg_prev.type || '').toLowerCase() === 'rotation_event') {
+                                pg_prev.endMin += pg_dur;
+                                pgClosed++;
+                                pg_changed = true;
+                                pg_fixed   = true;
+                                log('[POST-GAP] bunk=' + pg_bunk + ' micro-absorbed +' + pg_dur +
+                                    'min into rotation_event "' + (pg_prev.event || '') +
+                                    '" @' + pg_gap.start + '-' + pg_gap.end);
+                            } else if (pg_next && (pg_next.type || '').toLowerCase() === 'rotation_event' &&
+                                       staysInPeriod(pg_gap.start, pg_next.endMin, pg_meta.grade)) {
+                                pg_next.startMin -= pg_dur;
+                                pgClosed++;
+                                pg_changed = true;
+                                pg_fixed   = true;
+                                log('[POST-GAP] bunk=' + pg_bunk + ' micro-absorbed -' + pg_dur +
+                                    'min into rotation_event "' + (pg_next.event || '') +
+                                    '" @' + pg_gap.start + '-' + pg_gap.end);
                             }
                         }
 
