@@ -5008,6 +5008,11 @@
                                 var deadCount = 0;
                                 if (lGap > 0 && lGap < fMin) deadCount++;
                                 if (rGap > 0 && rGap < fMin) deadCount++;
+                                // Hard reject for rotation events: never accept a position that leaves
+                                // an unfillable sub-period gap. The self-heal pass (line ~6929) will
+                                // carve the event from a sport block and extend it to fill any small
+                                // remainder — far better than a dead 10-min slot no activity can use.
+                                if (deadCount > 0 && _needType15 === 'rotation_event') continue;
                                 // Bonus for starting/ending exactly on a period boundary — leaves no orphan fragment
                                 var _periodAlignBonus = 0;
                                 if (_posPeriods) {
@@ -5048,7 +5053,11 @@
                                 }
                                 if (ok2) {
                                     var rG = gap.end - (endAligned + dur);
-                                    positions.push({ start: endAligned, dur: dur, deadGaps: rG > 0 && rG < fMin ? 1 : 0, lGap: endAligned - gap.start, rGap: rG });
+                                    var lG_ea = endAligned - gap.start;
+                                    var _eaDeadCount = (lG_ea > 0 && lG_ea < fMin ? 1 : 0) + (rG > 0 && rG < fMin ? 1 : 0);
+                                    // Same hard reject for rotation events as the main scan above
+                                    if (_eaDeadCount > 0 && _needType15 === 'rotation_event') ok2 = false;
+                                    if (ok2) positions.push({ start: endAligned, dur: dur, deadGaps: _eaDeadCount, lGap: lG_ea, rGap: rG });
                                 }
                             }
                         }
