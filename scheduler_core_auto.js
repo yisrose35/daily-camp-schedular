@@ -10206,19 +10206,18 @@
                         : [];
                     if (!_p23Periods.length) return;
 
-                    // Narrow window using resource calendar (same logic as Phase 3 CSP)
-                    var _p23MRC = getSwimWindow(grade);
-                    if (_p23MRC) {
-                        _p23WinStart = Math.max(_p23MRC.start, _p23WinStart);
-                        _p23WinEnd   = Math.min(_p23MRC.end,   _p23WinEnd);
-                    }
+                    // Do NOT narrow by getSwimWindow here — that function returns the first
+                    // available window and is designed for fullGrade (all-at-once) swim.
+                    // For staggered swim we need all periods in the layer window; pool
+                    // availability is checked per-slot inside the bunk loop below.
 
-                    // Periods that fit swim duration, lie within swim window, and have pool available
+                    // Periods that fit swim duration and lie within the swim layer window.
+                    // canUsePoolAtTime is checked per offset inside the bunk loop (not here)
+                    // so cross-grade conflicts are caught at the exact attempted start time.
                     var _p23Candidates = _p23Periods.filter(function(p) {
                         return (p.endMin - p.startMin) >= _p23SwimDur
                             && p.startMin >= _p23WinStart
-                            && p.endMin   <= _p23WinEnd
-                            && canUsePoolAtTime(grade, p.startMin, p.startMin + _p23SwimDur);
+                            && p.endMin   <= _p23WinEnd;
                     });
 
                     // Track which swim START MINUTES have been assigned within this grade.
@@ -10242,6 +10241,7 @@
                                      _p23tryS += _p23SwimDur) {
                                 if (_p23UsedStarts.has(_p23tryS)) continue; // sibling bunk already here
                                 var _p23tryE = _p23tryS + _p23SwimDur;
+                                if (!canUsePoolAtTime(grade, _p23tryS, _p23tryE)) continue; // cross-grade conflict
                                 var _p23Free = true;
                                 var _p23TL = bunkTimelines[bunk] || [];
                                 for (var _p23ti = 0; _p23ti < _p23TL.length && _p23Free; _p23ti++) {
