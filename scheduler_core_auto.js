@@ -10220,18 +10220,17 @@
                             && p.endMin   <= _p23WinEnd;
                     });
 
-                    // Track which swim START MINUTES have been assigned within this grade.
-                    // Using start minutes (not period keys) allows multiple bunks to stagger
-                    // within the same long period (e.g. an 80-min period fits two 40-min swims).
-                    var _p23UsedStarts = new Set();
+                    // Each bunk independently finds its earliest free slot.
+                    // Multiple bunks CAN share a slot — stagger just means they don't
+                    // all have to be together. Bunks with conflicting pinned activities
+                    // at slot A naturally fall to slot B, creating the stagger organically.
                     getBunksForGrade(grade, divisions).forEach(function(bunk) {
                         if (!todaysSwimmers[grade].has(String(bunk))) return;
                         if ((bunkTimelines[bunk] || []).some(function(b) {
                             return (b.type || '').toLowerCase() === 'swim';
                         })) return;
 
-                        // For each candidate period, try every swimDur-aligned start offset.
-                        // Skip offsets already claimed by a sibling bunk in this grade.
+                        // Try every swimDur-aligned start within each candidate period.
                         var _p23Chosen = null;
                         var _p23ChosenStart = null;
                         outer23: for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
@@ -10239,7 +10238,6 @@
                             for (var _p23tryS = _p23P.startMin;
                                      _p23tryS + _p23SwimDur <= _p23P.endMin;
                                      _p23tryS += _p23SwimDur) {
-                                if (_p23UsedStarts.has(_p23tryS)) continue; // sibling bunk already here
                                 var _p23tryE = _p23tryS + _p23SwimDur;
                                 if (!canUsePoolAtTime(grade, _p23tryS, _p23tryE)) continue; // cross-grade conflict
                                 var _p23Free = true;
@@ -10301,7 +10299,6 @@
                         }
 
                         registerPoolUsage(grade, _p23SwimS, _p23SwimE);
-                        _p23UsedStarts.add(_p23SwimS);
                         _p23Count++;
                         log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
                             + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
