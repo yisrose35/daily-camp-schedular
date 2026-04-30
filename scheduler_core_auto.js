@@ -6790,11 +6790,13 @@
                             if (_rapPrev && (_rapPrev.type || '').toLowerCase() === 'rotation_event' &&
                                 _rapPrev.endMin === vGap.start) {
                                 _rapPrev.endMin = vGap.end;
+                                _rapPrev.dMax = Math.max(_rapPrev.dMax || 0, _rapPrev.endMin - _rapPrev.startMin);
                                 filled = true;
                                 log('[Phase3-pf] bunk=' + vBunk + ' Strategy2.6: extended prev rotation_event "' + (_rapPrev.event || '') + '" by ' + vGapDur + 'min to absorb dead gap @' + vGap.start + '-' + vGap.end);
                             } else if (_rapNext && (_rapNext.type || '').toLowerCase() === 'rotation_event' &&
                                        _rapNext.startMin === vGap.end) {
                                 _rapNext.startMin = vGap.start;
+                                _rapNext.dMax = Math.max(_rapNext.dMax || 0, _rapNext.endMin - _rapNext.startMin);
                                 filled = true;
                                 log('[Phase3-pf] bunk=' + vBunk + ' Strategy2.6: extended next rotation_event "' + (_rapNext.event || '') + '" by ' + vGapDur + 'min to absorb dead gap @' + vGap.start + '-' + vGap.end);
                             }
@@ -7073,6 +7075,7 @@
                                     }, rhMeta.sportCeiling, rhMeta.fillMinDur, rhMeta.grade);
                                 } else if (rhRemainEnd - rhRemainStart > 0) {
                                     rhTmpl[rhBestIdx].endMin = rhRemainEnd;
+                                    rhTmpl[rhBestIdx].dMax = Math.max(rhTmpl[rhBestIdx].dMax || 0, rhTmpl[rhBestIdx].endMin - rhTmpl[rhBestIdx].startMin);
                                 }
                                 // Increment quota counter
                                 if (rotationQuotas[rhNeed._rotationEventId]) {
@@ -8375,15 +8378,17 @@
                             if (_pfPrev && (_pfPrev.type || '').toLowerCase() === 'rotation_event' &&
                                 _pfPrev.endMin === _pfBlk.startMin) {
                                 _pfPrev.endMin = _pfBlk.endMin;
+                                _pfPrev.dMax = Math.max(_pfPrev.dMax || 0, _pfPrev.endMin - _pfPrev.startMin);
                                 _pfTmpl.splice(_pfj, 1);
                                 _pfChanged = true; _pfAbsorbed = true;
-                                log('[PFABSORB] bunk=' + _pfBunk + ' absorbed ' + _pfDur + 'min perfection-fill into prev rotation_event "' + (_pfPrev.event || '') + '"');
+                                log('[PFABSORB] bunk=' + _pfBunk + ' absorbed ' + _pfDur + 'min slot into prev rotation_event "' + (_pfPrev.event || '') + '"');
                             } else if (_pfNext && (_pfNext.type || '').toLowerCase() === 'rotation_event' &&
                                        _pfNext.startMin === _pfBlk.endMin) {
                                 _pfNext.startMin = _pfBlk.startMin;
+                                _pfNext.dMax = Math.max(_pfNext.dMax || 0, _pfNext.endMin - _pfNext.startMin);
                                 _pfTmpl.splice(_pfj, 1);
                                 _pfChanged = true; _pfAbsorbed = true;
-                                log('[PFABSORB] bunk=' + _pfBunk + ' absorbed ' + _pfDur + 'min perfection-fill into next rotation_event "' + (_pfNext.event || '') + '"');
+                                log('[PFABSORB] bunk=' + _pfBunk + ' absorbed ' + _pfDur + 'min slot into next rotation_event "' + (_pfNext.event || '') + '"');
                             }
                             if (_pfAbsorbed) break;
                         }
@@ -8557,6 +8562,7 @@
                         if (!pg_fixed && _pgGapInOnePeriod && pg_dur < _pgFillMin && pg_dur >= 5) {
                             if (pg_prev && (pg_prev.type || '').toLowerCase() === 'rotation_event') {
                                 pg_prev.endMin += pg_dur;
+                                pg_prev.dMax = Math.max(pg_prev.dMax || 0, pg_prev.endMin - pg_prev.startMin);
                                 pgClosed++;
                                 pg_changed = true;
                                 pg_fixed   = true;
@@ -8566,6 +8572,7 @@
                             } else if (pg_next && (pg_next.type || '').toLowerCase() === 'rotation_event' &&
                                        staysInPeriod(pg_gap.start, pg_next.endMin, pg_meta.grade)) {
                                 pg_next.startMin -= pg_dur;
+                                pg_next.dMax = Math.max(pg_next.dMax || 0, pg_next.endMin - pg_next.startMin);
                                 pgClosed++;
                                 pg_changed = true;
                                 pg_fixed   = true;
