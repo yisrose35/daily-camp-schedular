@@ -9892,26 +9892,45 @@
                             && p.endMin   <= _p23WinEnd;
                     });
 
-                    // Each bunk independently finds its earliest free slot.
-                    // Multiple bunks CAN share a slot — stagger just means they don't
-                    // all have to be together. Bunks with conflicting pinned activities
-                    // at slot A naturally fall to slot B, creating the stagger organically.
+                    // Bundle-aware swim placement: pre-load wet bundle rotation events
+                    // for this grade so candidate periods can be scored by how well
+                    // they set up an adjacent slot for the rotation event.
+                    var _p23BundleEvts = [];
+                    try {
+                        if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                            var _p23AllRot = window.RotationEvents.loadRotationEvents() || [];
+                            _p23BundleEvts = _p23AllRot.filter(function(e) {
+                                if (!e || !e.dateRange) return false;
+                                if (currentDate < e.dateRange.start || currentDate > e.dateRange.end) return false;
+                                if (e.gradeMode !== 'individual') return false;
+                                if (!e.sequence || !e.sequence.targetActivity) return false;
+                                return e.sequence.targetActivity.toLowerCase() === 'swim';
+                            });
+                        }
+                    } catch (_p23be) {}
+
+                    // Each bunk independently finds its best free slot.
+                    // "Best" = bundle-friendly (adjacent period has room for the rotation
+                    // event) > earliest. Bunks with conflicting pinned activities at
+                    // slot A naturally fall to slot B, creating the stagger organically.
                     getBunksForGrade(grade, divisions).forEach(function(bunk) {
                         if (!todaysSwimmers[grade].has(String(bunk))) return;
                         if ((bunkTimelines[bunk] || []).some(function(b) {
                             return (b.type || '').toLowerCase() === 'swim';
                         })) return;
 
-                        // Try every swimDur-aligned start within each candidate period.
-                        var _p23Chosen = null;
-                        var _p23ChosenStart = null;
-                        outer23: for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
+                        // Collect ALL free swim slots with a bundle-friendliness score.
+                        // score=2 → adjacent period has a full dur-sized slot for the rotation event
+                        // score=1 → adjacent period exists but smaller than rotation event duration
+                        // score=0 → no bundle event, or no adjacent period
+                        var _p23AllFree = [];
+                        for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
                             var _p23P = _p23Candidates[_p23i];
                             for (var _p23tryS = _p23P.startMin;
                                      _p23tryS + _p23SwimDur <= _p23P.endMin;
                                      _p23tryS += _p23SwimDur) {
                                 var _p23tryE = _p23tryS + _p23SwimDur;
-                                if (!canUsePoolAtTime(grade, _p23tryS, _p23tryE)) continue; // cross-grade conflict
+                                if (!canUsePoolAtTime(grade, _p23tryS, _p23tryE)) continue;
                                 var _p23Free = true;
                                 var _p23TL = bunkTimelines[bunk] || [];
                                 for (var _p23ti = 0; _p23ti < _p23TL.length && _p23Free; _p23ti++) {
@@ -9923,9 +9942,28 @@
                                     var _p23Bs = _p23B.startMin, _p23Be = _p23B.endMin;
                                     if (_p23Bs < _p23tryE && _p23Be > _p23tryS) _p23Free = false;
                                 }
-                                if (_p23Free) { _p23Chosen = _p23P; _p23ChosenStart = _p23tryS; break outer23; }
+                                if (!_p23Free) continue;
+                                // Score by bundle-friendliness
+                                var _p23Score = 0;
+                                if (_p23BundleEvts.length > 0) {
+                                    var _p23PiIdx = _p23Periods.indexOf(_p23P);
+                                    if (_p23PiIdx < _p23Periods.length - 1) {
+                                        var _p23AdjP = _p23Periods[_p23PiIdx + 1];
+                                        var _p23BEvtDur = parseInt(_p23BundleEvts[0].durationPerBunk) || 0;
+                                        var _p23AdjRoom = _p23AdjP.endMin - _p23AdjP.startMin;
+                                        _p23Score = (_p23AdjRoom >= _p23BEvtDur) ? 2 : 1;
+                                    }
+                                }
+                                _p23AllFree.push({ period: _p23P, start: _p23tryS, score: _p23Score });
                             }
                         }
+                        // Pick best: highest score first, then earliest start
+                        _p23AllFree.sort(function(a, b) {
+                            if (b.score !== a.score) return b.score - a.score;
+                            return a.start - b.start;
+                        });
+                        var _p23Chosen = _p23AllFree.length > 0 ? _p23AllFree[0].period : null;
+                        var _p23ChosenStart = _p23AllFree.length > 0 ? _p23AllFree[0].start : null;
 
                         if (!_p23Chosen) {
                             log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free slot for staggered swim (will fall through to Phase 3)');
@@ -10436,29 +10474,51 @@
                                     );
                                     if (_swimPi < 0) return;
                                     const _pool = [];
-                                    // 'after': start of the period immediately following swim
+                                    // 'after': fill the period immediately following swim with
+                                    // multiple dur-sized slots so more bunks can be bundled
+                                    // on the same day. The very first slot (period start) is
+                                    // "immediately adjacent" — the gap between swim period end
+                                    // and that slot is too small to schedule anything, so there
+                                    // is literally nothing between swim and water slide.
+                                    // Subsequent slots within the same period are still in the
+                                    // adjacent period but not guaranteed to be back-to-back
+                                    // (Phase 3 may fill the earlier sub-slots for that bunk).
                                     if (seqPosition === 'after' || seqPosition === 'either') {
                                         for (let _pi = _swimPi + 1; _pi < _sp.length; _pi++) {
                                             const _p = _sp[_pi];
                                             if (_p.startMin < winStart || _p.endMin > winEnd) continue;
                                             if (_p.endMin - _p.startMin < dur) continue;
-                                            _pool.push({
-                                                startMin: _p.startMin, endMin: _p.startMin + dur,
-                                                usedCount: 0, dir: 'after'
-                                            });
+                                            let _firstSlot = true;
+                                            for (let _wsS = _p.startMin; _wsS + dur <= _p.endMin; _wsS += dur) {
+                                                _pool.push({
+                                                    startMin: _wsS, endMin: _wsS + dur,
+                                                    usedCount: 0, dir: 'after',
+                                                    immediatelyAdjacent: _firstSlot
+                                                });
+                                                _firstSlot = false;
+                                            }
                                             break; // only the immediately adjacent period
                                         }
                                     }
-                                    // 'before': end of the period immediately preceding swim
+                                    // 'before': fill the period immediately preceding swim
+                                    // with multiple slots. The last slot (period end − dur)
+                                    // is "immediately adjacent" to swim.
                                     if ((seqPosition === 'before' || seqPosition === 'either') &&
                                         _pool.length === 0) {
                                         for (let _pi = _swimPi - 1; _pi >= 0; _pi--) {
                                             const _p = _sp[_pi];
                                             if (_p.startMin < winStart || _p.endMin > winEnd) continue;
                                             if (_p.endMin - _p.startMin < dur) continue;
-                                            _pool.push({
-                                                startMin: _p.endMin - dur, endMin: _p.endMin,
-                                                usedCount: 0, dir: 'before'
+                                            const _slotsInPeriod = [];
+                                            for (let _wsS = _p.startMin; _wsS + dur <= _p.endMin; _wsS += dur) {
+                                                _slotsInPeriod.push(_wsS);
+                                            }
+                                            _slotsInPeriod.forEach(function(_wsS, _sIdx) {
+                                                _pool.push({
+                                                    startMin: _wsS, endMin: _wsS + dur,
+                                                    usedCount: 0, dir: 'before',
+                                                    immediatelyAdjacent: _sIdx === _slotsInPeriod.length - 1
+                                                });
                                             });
                                             break;
                                         }
@@ -10599,9 +10659,16 @@
 
                                     if (_bundleDir) {
                                         // ── WET BUNDLE PLACEMENT ──
-                                        // Remove the change window Phase 2.3 attached to swim,
-                                        // place the rotation event in the adjacent period, then
-                                        // re-attach the change window at the bundle's outer edge.
+                                        // The slot was chosen from the bundle pool (adjacent period).
+                                        // If the slot is "immediately adjacent" (first slot in the pool,
+                                        // gap to swim period too small for anything to fit), move the
+                                        // change window to the bundle's outer edge:
+                                        //   Pre-change → Swim → [gap] → Water Slide → Post-change
+                                        // For non-immediately-adjacent slots (later in the same period),
+                                        // keep change windows with swim — Phase 3 will schedule a sport
+                                        // in the earlier part of the adjacent period for this bunk, so
+                                        // the bunk needs to change after swim before that sport.
+                                        const _isImmAdj = !!_chosenSlot.immediatelyAdjacent;
                                         const _swLayerB = (layersByGrade[grade] || []).find(
                                             l => (l.type || '').toLowerCase() === 'swim'
                                         );
@@ -10612,23 +10679,24 @@
                                         const _gIdB = _swimBlkB ? _swimBlkB._swimGroupId : null;
                                         let _savedChgBlk = null;
 
-                                        // Remove the change window that Phase 2.3 placed between
-                                        // swim and where the rotation event will go.
-                                        if (_bundleDir === 'after' && _swLayerB && _swLayerB.postChangeMin > 0) {
-                                            const _pcI = _bunkTLB.findIndex(b => b &&
-                                                (b.type || '').toLowerCase() === 'post-change' &&
-                                                (_gIdB == null || b._swimGroupId === _gIdB));
-                                            if (_pcI >= 0) {
-                                                _savedChgBlk = { blk: _bunkTLB[_pcI], idx: _pcI };
-                                                _bunkTLB.splice(_pcI, 1);
-                                            }
-                                        } else if (_bundleDir === 'before' && _swLayerB && _swLayerB.preChangeMin > 0) {
-                                            const _pcI = _bunkTLB.findIndex(b => b &&
-                                                (b.type || '').toLowerCase() === 'pre-change' &&
-                                                (_gIdB == null || b._swimGroupId === _gIdB));
-                                            if (_pcI >= 0) {
-                                                _savedChgBlk = { blk: _bunkTLB[_pcI], idx: _pcI };
-                                                _bunkTLB.splice(_pcI, 1);
+                                        if (_isImmAdj) {
+                                            // Remove the change window between swim and the rotation event.
+                                            if (_bundleDir === 'after' && _swLayerB && _swLayerB.postChangeMin > 0) {
+                                                const _pcI = _bunkTLB.findIndex(b => b &&
+                                                    (b.type || '').toLowerCase() === 'post-change' &&
+                                                    (_gIdB == null || b._swimGroupId === _gIdB));
+                                                if (_pcI >= 0) {
+                                                    _savedChgBlk = { blk: _bunkTLB[_pcI], idx: _pcI };
+                                                    _bunkTLB.splice(_pcI, 1);
+                                                }
+                                            } else if (_bundleDir === 'before' && _swLayerB && _swLayerB.preChangeMin > 0) {
+                                                const _pcI = _bunkTLB.findIndex(b => b &&
+                                                    (b.type || '').toLowerCase() === 'pre-change' &&
+                                                    (_gIdB == null || b._swimGroupId === _gIdB));
+                                                if (_pcI >= 0) {
+                                                    _savedChgBlk = { blk: _bunkTLB[_pcI], idx: _pcI };
+                                                    _bunkTLB.splice(_pcI, 1);
+                                                }
                                             }
                                         }
 
@@ -10636,35 +10704,39 @@
 
                                         if (_bundlePlaced) {
                                             _chosenSlot.usedCount++;
-                                            // Re-attach change window at the outer edge of the bundle
-                                            if (_bundleDir === 'after' && _swLayerB && _swLayerB.postChangeMin > 0) {
-                                                _bunkTLB.push({
-                                                    startMin: _chosenSlot.endMin,
-                                                    endMin: _chosenSlot.endMin + _swLayerB.postChangeMin,
-                                                    type: 'post-change', event: 'Change', layer: null,
-                                                    dMin: _swLayerB.postChangeMin, dMax: _swLayerB.postChangeMin,
-                                                    _classification: 'pinned', _committed: true, _fixed: true,
-                                                    _activityLocked: true, _noBacktrack: false,
-                                                    _source: 'phase2.4-bundle', _swimGroupId: _gIdB
-                                                });
-                                            } else if (_bundleDir === 'before' && _swLayerB && _swLayerB.preChangeMin > 0) {
-                                                _bunkTLB.push({
-                                                    startMin: _chosenSlot.startMin - _swLayerB.preChangeMin,
-                                                    endMin: _chosenSlot.startMin,
-                                                    type: 'pre-change', event: 'Change', layer: null,
-                                                    dMin: _swLayerB.preChangeMin, dMax: _swLayerB.preChangeMin,
-                                                    _classification: 'pinned', _committed: true, _fixed: true,
-                                                    _activityLocked: true, _noBacktrack: false,
-                                                    _source: 'phase2.4-bundle', _swimGroupId: _gIdB
-                                                });
+                                            if (_isImmAdj) {
+                                                // Re-attach change window at the outer edge of the bundle
+                                                if (_bundleDir === 'after' && _swLayerB && _swLayerB.postChangeMin > 0) {
+                                                    _bunkTLB.push({
+                                                        startMin: _chosenSlot.endMin,
+                                                        endMin: _chosenSlot.endMin + _swLayerB.postChangeMin,
+                                                        type: 'post-change', event: 'Change', layer: null,
+                                                        dMin: _swLayerB.postChangeMin, dMax: _swLayerB.postChangeMin,
+                                                        _classification: 'pinned', _committed: true, _fixed: true,
+                                                        _activityLocked: true, _noBacktrack: false,
+                                                        _source: 'phase2.4-bundle', _swimGroupId: _gIdB
+                                                    });
+                                                } else if (_bundleDir === 'before' && _swLayerB && _swLayerB.preChangeMin > 0) {
+                                                    _bunkTLB.push({
+                                                        startMin: _chosenSlot.startMin - _swLayerB.preChangeMin,
+                                                        endMin: _chosenSlot.startMin,
+                                                        type: 'pre-change', event: 'Change', layer: null,
+                                                        dMin: _swLayerB.preChangeMin, dMax: _swLayerB.preChangeMin,
+                                                        _classification: 'pinned', _committed: true, _fixed: true,
+                                                        _activityLocked: true, _noBacktrack: false,
+                                                        _source: 'phase2.4-bundle', _swimGroupId: _gIdB
+                                                    });
+                                                }
                                             }
                                             ensureTimelineIntegrity(bunk);
                                             if (_verbose) log('[Phase2.4-bundle]   ✓ ' + bunk + '/' + grade +
-                                                ' bundle(' + _bundleDir + '): ' + evt.name + ' @ ' +
-                                                _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) +
-                                                ((_bundleDir === 'after' && _swLayerB)
+                                                ' bundle(' + _bundleDir + (_isImmAdj ? ' ★adj' : '') + '): ' +
+                                                evt.name + ' @ ' + _fmt(_chosenSlot.startMin) + '-' + _fmt(_chosenSlot.endMin) +
+                                                (_isImmAdj && _bundleDir === 'after' && _swLayerB
                                                     ? ' post-change→' + _fmt(_chosenSlot.endMin + _swLayerB.postChangeMin)
-                                                    : (_swLayerB ? ' pre-change←' + _fmt(_chosenSlot.startMin - _swLayerB.preChangeMin) : '')));
+                                                    : _isImmAdj && _swLayerB
+                                                        ? ' pre-change←' + _fmt(_chosenSlot.startMin - _swLayerB.preChangeMin)
+                                                        : ' (change stays with swim)'));
                                         } else {
                                             // placeWall failed — restore the removed change window
                                             if (_savedChgBlk) {
