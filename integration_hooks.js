@@ -1010,19 +1010,7 @@
                 
                 // ★★★ FIX v6.8: Even on error, still hydrate from localStorage ★★★
                 // and fire the hydrated event so the rest of the system initializes
-                const localState = getLocalSettings();
-                if (localState && Object.keys(localState).length > 0) {
-                    window.divisions = localState.divisions || window.divisions || {};
-                    window.globalBunks = localState.bunks || window.globalBunks || [];
-                    window.availableDivisions = Object.keys(window.divisions);
-                    
-                    log('Hydrated from localStorage fallback:', {
-                        divisions: Object.keys(window.divisions).length,
-                        bunks: (window.globalBunks || []).length
-                    });
-                }
-                
-                // ★★★ CRITICAL: Always fire the event so downstream systems initialize ★★★
+                // Let the campistry-cloud-hydrated event trigger app1 to rebuild from campStructure
                 window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
                 return;
             }
@@ -1050,29 +1038,21 @@
                 }
                 
                 setLocalSettings(mergedState);
-                
-                window.divisions = mergedState.divisions || {};
-                window.globalBunks = mergedState.bunks || [];
-                window.availableDivisions = Object.keys(mergedState.divisions || {});
-                
+
+                // Do NOT assign window.divisions directly from the flat top-level key —
+                // that bypasses the campStructure → grade-based transformation in app1.loadData().
+                // The campistry-cloud-hydrated event triggers app1 to rebuild from campStructure.
                 console.log('☁️ Hydrated from cloud:', {
                     divisions: Object.keys(mergedState.divisions || {}).length,
                     bunks: (mergedState.bunks || []).length
                 });
-                
+
                 window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
             }
         } catch (e) {
             logError('Hydration exception:', e);
             
-            // ★★★ FIX v6.8: Even on exception, hydrate from local and fire event ★★★
-            const localState = getLocalSettings();
-            if (localState && Object.keys(localState).length > 0) {
-                window.divisions = localState.divisions || window.divisions || {};
-                window.globalBunks = localState.bunks || window.globalBunks || [];
-                window.availableDivisions = Object.keys(window.divisions);
-                log('Hydrated from localStorage after exception');
-            }
+            // Let the campistry-cloud-hydrated event trigger app1 to rebuild from campStructure
             window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
         }
     }

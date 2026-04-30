@@ -88,7 +88,7 @@
       if (window._globalRegistryRefreshTimer) clearTimeout(window._globalRegistryRefreshTimer);
       window._globalRegistryRefreshTimer = setTimeout(() => {
         window._globalRegistryRefreshTimer = null;
-        window.initApp1?.();
+        // app1 refreshes itself via its own campistry-cloud-hydrated listener — no need to call initApp1 here
         window.initLeagues?.();
         window.initScheduleSystem?.();
         window.updateTable?.();
