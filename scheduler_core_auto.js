@@ -10090,17 +10090,8 @@
                                                 _chosenSlot = s; break;
                                             }
                                         }
-                                        // Relax period boundary gap if no gap-safe adj slot found
-                                        // (isWithinSinglePeriod is always a hard constraint)
-                                        if (!_chosenSlot) {
-                                            for (const s of _adjSlots) {
-                                                if (isWithinSinglePeriod(grade, s.startMin, s.endMin) &&
-                                                    isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
-                                                    !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)) {
-                                                    _chosenSlot = s; break;
-                                                }
-                                            }
-                                        }
+                                        // No gap-safe adjacent slot — adjacent placement skipped to avoid dead gaps
+                                        // (isWithinSinglePeriod is always a hard constraint; period-boundary gap never relaxed)
                                     }
                                 }
 
@@ -10116,18 +10107,8 @@
                                     ) || null;
                                 }
 
-                                if (!_chosenSlot) {
-                                    // Pass 2: relax boundary-gap constraint but keep period containment
-                                    // (isWithinSinglePeriod is never relaxed — crossing a gap is hard-wrong).
-                                    _chosenSlot = _stagSlots.find(s =>
-                                        (s.ownerGrade === null || s.ownerGrade === grade) &&
-                                        s.usedCount < _evtConcurrency &&
-                                        isWithinSinglePeriod(grade, s.startMin, s.endMin) &&
-                                        isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
-                                        !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin)
-                                    ) || null;
-                                    if (_chosenSlot && _verbose) log('[Phase2.4-stagger]   ⚠ ' + bunk + '/' + grade + ' — period boundary gap relaxed for stagger');
-                                }
+                                // Pass 2 (relaxed boundary-gap) removed — creating an unfillable sub-period
+                                // gap is never acceptable, even as a stagger fallback.
 
                                 if (_chosenSlot) {
                                     _chosenSlot.ownerGrade = grade; // claim slot exclusively for this grade
