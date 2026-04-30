@@ -9846,13 +9846,153 @@
                 }
             });
 
+            // ── Phase 2.3: Pre-assign staggered swim + change blocks before specials ──
+            // Staggered swim (fullGrade:false) is normally placed by Phase 3 CSP, which runs
+            // AFTER Phase 2.5 pre-places specials. This means Phase 2.5 sees no swim blocks
+            // in bunkTimelines and cannot protect change windows — specials fill them.
+            // Phase 2.3 fixes this by committing swim+change as walls NOW so Phase 2.5
+            // naturally works around them, just like it does for fullGrade swim.
+            {
+                var _p23Count = 0;
+                allGrades.forEach(function(grade) {
+                    // Find any swim layer not yet placed by Phase 0.
+                    // Don't filter on !fullGrade — some fullGrade:true layers are not pinned
+                    // and therefore skipped by Phase 0, landing in Phase 3 as "needs".
+                    // The per-bunk check below (swim already in bunkTimelines?) guards
+                    // against double-placing the rare fullGrade swim that Phase 0 DID place.
+                    var _p23SwimLayer = (layersByGrade[grade] || []).find(function(l) {
+                        return (l.type || '').toLowerCase() === 'swim';
+                    });
+                    if (!_p23SwimLayer) return;
+                    if (!todaysSwimmers[grade] || todaysSwimmers[grade].size === 0) return;
+
+                    var _p23SC = resolveConstraints(_p23SwimLayer, 'swim');
+                    var _p23SwimDur = _p23SC.dMin || 40;
+                    var _p23GradeStart = parseTimeToMinutes(divisions[grade] && divisions[grade].startTime) || 540;
+                    var _p23GradeEnd   = parseTimeToMinutes(divisions[grade] && divisions[grade].endTime)   || 960;
+                    var _p23WinStart = Math.max(_p23SwimLayer.startMin || 0, _p23GradeStart);
+                    var _p23WinEnd   = Math.min(_p23SwimLayer.endMin   || 1440, _p23GradeEnd);
+
+                    var _p23Periods = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                        : [];
+                    if (!_p23Periods.length) return;
+
+                    // Do NOT narrow by getSwimWindow here — that function returns the first
+                    // available window and is designed for fullGrade (all-at-once) swim.
+                    // For staggered swim we need all periods in the layer window; pool
+                    // availability is checked per-slot inside the bunk loop below.
+
+                    // Periods that fit swim duration and lie within the swim layer window.
+                    // canUsePoolAtTime is checked per offset inside the bunk loop (not here)
+                    // so cross-grade conflicts are caught at the exact attempted start time.
+                    var _p23Candidates = _p23Periods.filter(function(p) {
+                        return (p.endMin - p.startMin) >= _p23SwimDur
+                            && p.startMin >= _p23WinStart
+                            && p.endMin   <= _p23WinEnd;
+                    });
+
+                    // Each bunk independently finds its earliest free slot.
+                    // Multiple bunks CAN share a slot — stagger just means they don't
+                    // all have to be together. Bunks with conflicting pinned activities
+                    // at slot A naturally fall to slot B, creating the stagger organically.
+                    getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                        if (!todaysSwimmers[grade].has(String(bunk))) return;
+                        if ((bunkTimelines[bunk] || []).some(function(b) {
+                            return (b.type || '').toLowerCase() === 'swim';
+                        })) return;
+
+                        // Try every swimDur-aligned start within each candidate period.
+                        var _p23Chosen = null;
+                        var _p23ChosenStart = null;
+                        outer23: for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
+                            var _p23P = _p23Candidates[_p23i];
+                            for (var _p23tryS = _p23P.startMin;
+                                     _p23tryS + _p23SwimDur <= _p23P.endMin;
+                                     _p23tryS += _p23SwimDur) {
+                                var _p23tryE = _p23tryS + _p23SwimDur;
+                                if (!canUsePoolAtTime(grade, _p23tryS, _p23tryE)) continue; // cross-grade conflict
+                                var _p23Free = true;
+                                var _p23TL = bunkTimelines[bunk] || [];
+                                for (var _p23ti = 0; _p23ti < _p23TL.length && _p23Free; _p23ti++) {
+                                    var _p23B = _p23TL[_p23ti];
+                                    if (!_p23B) continue;
+                                    if (!(_p23B._activityLocked || _p23B._fixed || _p23B._classification === 'pinned')) continue;
+                                    var _p23Bt = (_p23B.type || '').toLowerCase();
+                                    if (_p23Bt === 'pre-change' || _p23Bt === 'post-change') continue;
+                                    var _p23Bs = _p23B.startMin, _p23Be = _p23B.endMin;
+                                    if (_p23Bs < _p23tryE && _p23Be > _p23tryS) _p23Free = false;
+                                }
+                                if (_p23Free) { _p23Chosen = _p23P; _p23ChosenStart = _p23tryS; break outer23; }
+                            }
+                        }
+
+                        if (!_p23Chosen) {
+                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free slot for staggered swim (will fall through to Phase 3)');
+                            return;
+                        }
+
+                        var _p23SwimS = _p23ChosenStart;
+                        var _p23SwimE = _p23SwimS + _p23SwimDur;
+                        var _p23GId   = nextSwimGroupId();
+                        var _p23Anch  = computeSwimChangeAnchors(
+                            _p23SwimS, _p23SwimE, _p23SwimLayer, grade,
+                            bunkTimelines[bunk] || [], _p23SwimS, _p23SwimE
+                        );
+
+                        if (_p23Anch.pre) {
+                            bunkTimelines[bunk].push({
+                                startMin: _p23Anch.pre.startMin, endMin: _p23Anch.pre.endMin,
+                                type: 'pre-change', event: 'Change', layer: null,
+                                dMin: _p23Anch.pre.endMin - _p23Anch.pre.startMin,
+                                dMax: _p23Anch.pre.endMin - _p23Anch.pre.startMin,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: false,
+                                _source: 'phase2.3-swim-pre-change', _swimGroupId: _p23GId
+                            });
+                        }
+                        bunkTimelines[bunk].push({
+                            startMin: _p23SwimS, endMin: _p23SwimE,
+                            type: 'swim', event: _p23SwimLayer.event || 'Swim',
+                            layer: _p23SwimLayer, _classification: 'pinned', _committed: true,
+                            _fixed: true, _activityLocked: true, _noBacktrack: false,
+                            _changeAttached: true, _swimGroupId: _p23GId, _source: 'phase2.3'
+                        });
+                        if (_p23Anch.post) {
+                            bunkTimelines[bunk].push({
+                                startMin: _p23Anch.post.startMin, endMin: _p23Anch.post.endMin,
+                                type: 'post-change', event: 'Change', layer: null,
+                                dMin: _p23Anch.post.endMin - _p23Anch.post.startMin,
+                                dMax: _p23Anch.post.endMin - _p23Anch.post.startMin,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _activityLocked: true, _noBacktrack: false,
+                                _source: 'phase2.3-swim-post-change', _swimGroupId: _p23GId
+                            });
+                        }
+
+                        registerPoolUsage(grade, _p23SwimS, _p23SwimE);
+                        _p23Count++;
+                        log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
+                            + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
+                            + ((_p23Anch.post ? ' +post:' + minutesToTimeLabel(_p23Anch.post.startMin) + '-' + minutesToTimeLabel(_p23Anch.post.endMin) : '')));
+                    });
+                });
+
+                if (_p23Count > 0) {
+                    log('[Phase2.3] ★ PRE-PLACED ' + _p23Count + ' staggered swim+change blocks as walls');
+                    allGrades.forEach(function(grade) {
+                        getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
+                    });
+                }
+            }
+
             // ── Phase 2.4: Pre-place rotation events as walls (STRICT whole-grade) ──
             // Rotation events (Scheduled Activities) are camp-wide — every bunk in
-            // the date range must pass through. Runs BEFORE Phase 2.5 so specials
-            // don't claim the rotation slot. Strict whole-grade: each grade gets
-            // exactly ONE slot, all bunks in that grade go to that slot. No per-bunk
-            // spreading (previously caused grades 1-2 to fill all 6 periods and
-            // starve grade 3 via not_sharable).
+            // the date range must pass through. Runs AFTER Phase 2.3 (swim placement)
+            // and BEFORE Phase 2.5 so specials don't claim the rotation slot. Strict
+            // whole-grade: each grade gets exactly ONE slot, all bunks in that grade
+            // go to that slot. No per-bunk spreading (previously caused grades 1-2 to
+            // fill all 6 periods and starve grade 3 via not_sharable).
             if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
                 try {
                     const _rotEvents = window.RotationEvents.loadRotationEvents() || [];
@@ -9974,8 +10114,8 @@
                                     if (bStart != null && bStart >= tEnd && bStart < trailWall) trailWall = bStart;
                                 }
                                 // ★ Swim pre-change windows as virtual trail walls.
-                                // Phase 2.4 runs BEFORE Phase 2.3 (which places swim), so swim
-                                // blocks are not yet in bunkTimelines when this check runs.
+                                // Phase 2.4 runs AFTER Phase 2.3 (which places swim), so swim
+                                // blocks are already in bunkTimelines when this check runs.
                                 // Use the swim layer config to infer where the pre-change window
                                 // would land and treat its start as a virtual boundary — this
                                 // prevents rotation events from leaving an unfillable gap just
@@ -10384,146 +10524,6 @@
                         log('[Phase2.4] Unplaced: ' + _rotUnplaced.join(', ') + ' — Phase 3 will attempt');
                     }
                 } catch (e) { console.warn('[Phase2.4] rotation pre-placement failed:', e); }
-            }
-
-            // ── Phase 2.3: Pre-assign staggered swim + change blocks before specials ──
-            // Staggered swim (fullGrade:false) is normally placed by Phase 3 CSP, which runs
-            // AFTER Phase 2.5 pre-places specials. This means Phase 2.5 sees no swim blocks
-            // in bunkTimelines and cannot protect change windows — specials fill them.
-            // Phase 2.3 fixes this by committing swim+change as walls NOW so Phase 2.5
-            // naturally works around them, just like it does for fullGrade swim.
-            {
-                var _p23Count = 0;
-                allGrades.forEach(function(grade) {
-                    // Find any swim layer not yet placed by Phase 0.
-                    // Don't filter on !fullGrade — some fullGrade:true layers are not pinned
-                    // and therefore skipped by Phase 0, landing in Phase 3 as "needs".
-                    // The per-bunk check below (swim already in bunkTimelines?) guards
-                    // against double-placing the rare fullGrade swim that Phase 0 DID place.
-                    var _p23SwimLayer = (layersByGrade[grade] || []).find(function(l) {
-                        return (l.type || '').toLowerCase() === 'swim';
-                    });
-                    if (!_p23SwimLayer) return;
-                    if (!todaysSwimmers[grade] || todaysSwimmers[grade].size === 0) return;
-
-                    var _p23SC = resolveConstraints(_p23SwimLayer, 'swim');
-                    var _p23SwimDur = _p23SC.dMin || 40;
-                    var _p23GradeStart = parseTimeToMinutes(divisions[grade] && divisions[grade].startTime) || 540;
-                    var _p23GradeEnd   = parseTimeToMinutes(divisions[grade] && divisions[grade].endTime)   || 960;
-                    var _p23WinStart = Math.max(_p23SwimLayer.startMin || 0, _p23GradeStart);
-                    var _p23WinEnd   = Math.min(_p23SwimLayer.endMin   || 1440, _p23GradeEnd);
-
-                    var _p23Periods = (window.campPeriods && window.campPeriods[grade])
-                        ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
-                        : [];
-                    if (!_p23Periods.length) return;
-
-                    // Do NOT narrow by getSwimWindow here — that function returns the first
-                    // available window and is designed for fullGrade (all-at-once) swim.
-                    // For staggered swim we need all periods in the layer window; pool
-                    // availability is checked per-slot inside the bunk loop below.
-
-                    // Periods that fit swim duration and lie within the swim layer window.
-                    // canUsePoolAtTime is checked per offset inside the bunk loop (not here)
-                    // so cross-grade conflicts are caught at the exact attempted start time.
-                    var _p23Candidates = _p23Periods.filter(function(p) {
-                        return (p.endMin - p.startMin) >= _p23SwimDur
-                            && p.startMin >= _p23WinStart
-                            && p.endMin   <= _p23WinEnd;
-                    });
-
-                    // Each bunk independently finds its earliest free slot.
-                    // Multiple bunks CAN share a slot — stagger just means they don't
-                    // all have to be together. Bunks with conflicting pinned activities
-                    // at slot A naturally fall to slot B, creating the stagger organically.
-                    getBunksForGrade(grade, divisions).forEach(function(bunk) {
-                        if (!todaysSwimmers[grade].has(String(bunk))) return;
-                        if ((bunkTimelines[bunk] || []).some(function(b) {
-                            return (b.type || '').toLowerCase() === 'swim';
-                        })) return;
-
-                        // Try every swimDur-aligned start within each candidate period.
-                        var _p23Chosen = null;
-                        var _p23ChosenStart = null;
-                        outer23: for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
-                            var _p23P = _p23Candidates[_p23i];
-                            for (var _p23tryS = _p23P.startMin;
-                                     _p23tryS + _p23SwimDur <= _p23P.endMin;
-                                     _p23tryS += _p23SwimDur) {
-                                var _p23tryE = _p23tryS + _p23SwimDur;
-                                if (!canUsePoolAtTime(grade, _p23tryS, _p23tryE)) continue; // cross-grade conflict
-                                var _p23Free = true;
-                                var _p23TL = bunkTimelines[bunk] || [];
-                                for (var _p23ti = 0; _p23ti < _p23TL.length && _p23Free; _p23ti++) {
-                                    var _p23B = _p23TL[_p23ti];
-                                    if (!_p23B) continue;
-                                    if (!(_p23B._activityLocked || _p23B._fixed || _p23B._classification === 'pinned')) continue;
-                                    var _p23Bt = (_p23B.type || '').toLowerCase();
-                                    if (_p23Bt === 'pre-change' || _p23Bt === 'post-change') continue;
-                                    var _p23Bs = _p23B.startMin, _p23Be = _p23B.endMin;
-                                    if (_p23Bs < _p23tryE && _p23Be > _p23tryS) _p23Free = false;
-                                }
-                                if (_p23Free) { _p23Chosen = _p23P; _p23ChosenStart = _p23tryS; break outer23; }
-                            }
-                        }
-
-                        if (!_p23Chosen) {
-                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free slot for staggered swim (will fall through to Phase 3)');
-                            return;
-                        }
-
-                        var _p23SwimS = _p23ChosenStart;
-                        var _p23SwimE = _p23SwimS + _p23SwimDur;
-                        var _p23GId   = nextSwimGroupId();
-                        var _p23Anch  = computeSwimChangeAnchors(
-                            _p23SwimS, _p23SwimE, _p23SwimLayer, grade,
-                            bunkTimelines[bunk] || [], _p23SwimS, _p23SwimE
-                        );
-
-                        if (_p23Anch.pre) {
-                            bunkTimelines[bunk].push({
-                                startMin: _p23Anch.pre.startMin, endMin: _p23Anch.pre.endMin,
-                                type: 'pre-change', event: 'Change', layer: null,
-                                dMin: _p23Anch.pre.endMin - _p23Anch.pre.startMin,
-                                dMax: _p23Anch.pre.endMin - _p23Anch.pre.startMin,
-                                _classification: 'pinned', _committed: true, _fixed: true,
-                                _activityLocked: true, _noBacktrack: false,
-                                _source: 'phase2.3-swim-pre-change', _swimGroupId: _p23GId
-                            });
-                        }
-                        bunkTimelines[bunk].push({
-                            startMin: _p23SwimS, endMin: _p23SwimE,
-                            type: 'swim', event: _p23SwimLayer.event || 'Swim',
-                            layer: _p23SwimLayer, _classification: 'pinned', _committed: true,
-                            _fixed: true, _activityLocked: true, _noBacktrack: false,
-                            _changeAttached: true, _swimGroupId: _p23GId, _source: 'phase2.3'
-                        });
-                        if (_p23Anch.post) {
-                            bunkTimelines[bunk].push({
-                                startMin: _p23Anch.post.startMin, endMin: _p23Anch.post.endMin,
-                                type: 'post-change', event: 'Change', layer: null,
-                                dMin: _p23Anch.post.endMin - _p23Anch.post.startMin,
-                                dMax: _p23Anch.post.endMin - _p23Anch.post.startMin,
-                                _classification: 'pinned', _committed: true, _fixed: true,
-                                _activityLocked: true, _noBacktrack: false,
-                                _source: 'phase2.3-swim-post-change', _swimGroupId: _p23GId
-                            });
-                        }
-
-                        registerPoolUsage(grade, _p23SwimS, _p23SwimE);
-                        _p23Count++;
-                        log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
-                            + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
-                            + ((_p23Anch.post ? ' +post:' + minutesToTimeLabel(_p23Anch.post.startMin) + '-' + minutesToTimeLabel(_p23Anch.post.endMin) : '')));
-                    });
-                });
-
-                if (_p23Count > 0) {
-                    log('[Phase2.3] ★ PRE-PLACED ' + _p23Count + ' staggered swim+change blocks as walls');
-                    allGrades.forEach(function(grade) {
-                        getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
-                    });
-                }
             }
 
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
