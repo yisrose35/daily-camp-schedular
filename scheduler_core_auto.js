@@ -6774,6 +6774,32 @@
                             }
                         }
 
+                        // Strategy 2.6: Extend adjacent rotation_event block to absorb sub-fillMinDur gap.
+                        // rotation_event blocks are _fixed and excluded from EXTENDABLE_TYPES so
+                        // strategies 1/2 skip them. When the dead gap borders a rotation event and
+                        // no sport neighbor can absorb it, stretch the rotation event rather than
+                        // creating an unfillable placeholder slot.
+                        if (!filled && vGapDur < vMeta.fillMinDur) {
+                            var _rapPrev = null, _rapNext = null;
+                            for (var _rapb = vTmpl.length - 1; _rapb >= 0; _rapb--) {
+                                if (vTmpl[_rapb].endMin <= vGap.start) { _rapPrev = vTmpl[_rapb]; break; }
+                            }
+                            for (var _ranb = 0; _ranb < vTmpl.length; _ranb++) {
+                                if (vTmpl[_ranb].startMin >= vGap.end) { _rapNext = vTmpl[_ranb]; break; }
+                            }
+                            if (_rapPrev && (_rapPrev.type || '').toLowerCase() === 'rotation_event' &&
+                                _rapPrev.endMin === vGap.start) {
+                                _rapPrev.endMin = vGap.end;
+                                filled = true;
+                                log('[Phase3-pf] bunk=' + vBunk + ' Strategy2.6: extended prev rotation_event "' + (_rapPrev.event || '') + '" by ' + vGapDur + 'min to absorb dead gap @' + vGap.start + '-' + vGap.end);
+                            } else if (_rapNext && (_rapNext.type || '').toLowerCase() === 'rotation_event' &&
+                                       _rapNext.startMin === vGap.end) {
+                                _rapNext.startMin = vGap.start;
+                                filled = true;
+                                log('[Phase3-pf] bunk=' + vBunk + ' Strategy2.6: extended next rotation_event "' + (_rapNext.event || '') + '" by ' + vGapDur + 'min to absorb dead gap @' + vGap.start + '-' + vGap.end);
+                            }
+                        }
+
                         // Strategy 3: Create a new sport block to fill the gap (even if short)
                         if (!filled) {
                             addSportBlocks(vTmpl, vGap.start, vGap.end, {
@@ -8336,7 +8362,10 @@
                         _pfChanged = false;
                         for (var _pfj = 0; _pfj < _pfTmpl.length; _pfj++) {
                             var _pfBlk = _pfTmpl[_pfj];
-                            if (!_pfBlk || _pfBlk._source !== 'perfection-fill') continue;
+                            if (!_pfBlk) continue;
+                            var _pfType = (_pfBlk.type || '').toLowerCase();
+                            // Match any sub-fillMinDur slot/sport block (perfection-fill, self-heal remnant, etc.)
+                            if (_pfType !== 'slot' && _pfType !== 'sport' && _pfType !== 'sports') continue;
                             var _pfDur = _pfBlk.endMin - _pfBlk.startMin;
                             if (_pfDur <= 0 || _pfDur >= _pfFillMin) continue;
                             // Look for adjacent rotation_event neighbor
