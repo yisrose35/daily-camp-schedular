@@ -70,6 +70,7 @@
     let _pendingChanges = {};
     let _syncTimeout = null;
     let _isSyncing = false;
+    let _onlineRetryRegistered = false;
     let _localCache = null;
     let _lastSyncTime = 0;
     let _datePickerHooked = false;
@@ -423,19 +424,32 @@
             return;
         }
 
-        // ★★★ NEW: Check if online before attempting cloud sync ★★★
         if (!navigator.onLine) {
-            log('Offline - changes saved locally only');
-            _pendingChanges = {};
+            log('Offline — changes held in _pendingChanges, will sync on reconnect');
+            // Do NOT clear _pendingChanges — keep them so they sync when back online
+            if (!_onlineRetryRegistered) {
+                _onlineRetryRegistered = true;
+                window.addEventListener('online', function _onlineRetry() {
+                    _onlineRetryRegistered = false;
+                    window.removeEventListener('online', _onlineRetry);
+                    if (Object.keys(_pendingChanges).length > 0) {
+                        log('Back online — retrying', Object.keys(_pendingChanges).length, 'pending change(s)');
+                        scheduleBatchSync();
+                    }
+                });
+            }
             return;
         }
 
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
-        
+
         if (!client || !campId) {
-            log('No client or camp ID, changes saved locally only');
-            _pendingChanges = {};
+            log('Client/campId not ready — holding changes, will retry shortly');
+            // Do NOT clear _pendingChanges — schedule a retry once client initialises
+            setTimeout(() => {
+                if (Object.keys(_pendingChanges).length > 0) scheduleBatchSync();
+            }, 2000);
             return;
         }
 
@@ -876,11 +890,19 @@
                                 if (r?.success) {
                                     log(`  ✅ Secondary save: ${dk}`);
                                 } else {
-                                    console.warn(`  ⚠️ Secondary save failed: ${dk}`, r?.error);
+                                    console.warn(`  ⚠️ Secondary save failed: ${dk} — retrying via verifiedScheduleSave`, r?.error);
+                                    verifiedScheduleSave(dk, data[dk]).catch(e =>
+                                        logError(`  ✗ Secondary save retry failed: ${dk}`, e)
+                                    );
                                 }
                             })
-                            .catch(e => console.warn(`  ⚠️ Secondary save error: ${dk}`, e.message));
-                    }, (index + 1) * 500); // 500ms stagger
+                            .catch(e => {
+                                console.warn(`  ⚠️ Secondary save error: ${dk} — retrying via verifiedScheduleSave`, e.message);
+                                verifiedScheduleSave(dk, data[dk]).catch(e2 =>
+                                    logError(`  ✗ Secondary save retry failed: ${dk}`, e2)
+                                );
+                            });
+                    }, (index + 1) * 500);
                 });
             }
 
