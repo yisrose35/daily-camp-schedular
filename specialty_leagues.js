@@ -287,8 +287,7 @@
      */
     function getValidDivisionNames() {
         try {
-            const settings = window.loadGlobalSettings?.() || {};
-            const divisions = settings.divisions || settings.app1?.divisions || {};
+            const divisions = window.divisions || window.getGlobalDivisions?.() || {};
             return new Set(Object.keys(divisions));
         } catch (e) {
             return null;
@@ -300,8 +299,7 @@
      */
     function getAvailableDivisions() {
         try {
-            const settings = window.loadGlobalSettings?.() || {};
-            return settings.app1?.availableDivisions || Object.keys(settings.divisions || {}) || [];
+            return window.availableDivisions || Object.keys(window.divisions || window.getGlobalDivisions?.() || {}) || [];
         } catch (e) {
             return window.availableDivisions || [];
         }
