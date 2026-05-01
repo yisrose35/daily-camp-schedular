@@ -53,7 +53,18 @@ function getSpecialActivityNames() {
     const specials = (window.getAllSpecialActivities && window.getAllSpecialActivities()) || [];
     const names = new Set();
     specials.forEach(sp => { if (sp && sp.name) names.add(sp.name); });
+    return [...names].sort();
+}
+function getGeneralActivityNames() {
     const s = loadSettings();
+    const facs = s.facilities || [];
+    const names = new Set();
+    facs.forEach(fac => {
+        if (Array.isArray(fac.generalActivities)) {
+            fac.generalActivities.forEach(ga => { if (ga && ga.name) names.add(ga.name); });
+        }
+    });
+    // Also include pinnedTileDefaults keys (Lunch, Snacks, Dismissal, etc.)
     const pinned = s.pinnedTileDefaults || {};
     Object.keys(pinned).forEach(n => names.add(n));
     return [...names].sort();
@@ -629,6 +640,7 @@ function renderFieldGroupsList(listEl) {
 function descriptorPickerHTML(id, currentDesc, allowTypes) {
     const sports = getSportNames();
     const specials = getSpecialActivityNames();
+    const generals = getGeneralActivityNames();
     const facilities = getFacilityNames();
     const cur = currentDesc || (allowTypes ? { kind: 'type', value: 'sport' } : { kind: 'activity', value: '' });
 
@@ -638,13 +650,16 @@ function descriptorPickerHTML(id, currentDesc, allowTypes) {
         `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
     const specialSel = specials.map(n =>
         `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+    const generalSel = generals.map(n =>
+        `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
     const facSel = facilities.map(n =>
         `<option value="facility:${escapeHtml(n)}"${cur.kind === 'facility' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
 
     return `<select class="rules-select" id="${id}">
             ${allowTypes ? `<optgroup label="Category">${typeSel}</optgroup>` : ''}
             ${sportSel ? `<optgroup label="Sport">${sportSel}</optgroup>` : ''}
-            ${specialSel ? `<optgroup label="Special / Pinned Activity">${specialSel}</optgroup>` : ''}
+            ${specialSel ? `<optgroup label="Special Activity">${specialSel}</optgroup>` : ''}
+            ${generalSel ? `<optgroup label="General Activity">${generalSel}</optgroup>` : ''}
             ${facSel ? `<optgroup label="Facility">${facSel}</optgroup>` : ''}
         </select>`;
 }
@@ -676,9 +691,10 @@ function renderCooldownCard(container) {
             </div>
             <div class="rules-card-body" id="rules-cd-body" style="display:none;">
                 <div class="rules-helper">
-                    <strong>Applies to the auto-builder only.</strong>
-                    Example: "Don't place <em>Any Sport</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
-                    "Don't place <em>Basketball</em> within <em>0 min</em> <em>after</em> <em>Painting</em>" to forbid back-to-back.
+                    Keep certain activities or facilities apart in time.
+                    Example: "Don't place <em>Basketball</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
+                    "Don't place <em>Swimming Pool</em> within <em>0 min</em> <em>after</em> <em>Archery</em>" to forbid back-to-back.
+                    Set <strong>Applies in</strong> to control whether the rule runs in the auto-builder, manual mode, or both.
                 </div>
                 <div id="rules-cd-list" style="margin-top:14px;"></div>
                 <div style="margin-top:12px; display:flex; justify-content:flex-end;">
@@ -734,7 +750,7 @@ function renderCooldownList() {
 
     rules.forEach((rule, idx) => {
         const mode = rule.mode || 'both';
-        const allowTypesInTarget = (mode === 'auto'); // manual/both → no Category options
+        const allowTypes = (mode === 'auto'); // manual/both → specific named items only, no Category options
         const card = document.createElement('div');
         card.className = 'cd-row';
         card.innerHTML = `
@@ -749,7 +765,7 @@ function renderCooldownList() {
                 </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Don't place</span>
-                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypesInTarget)}
+                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypes)}
                 </div>
                 <div class="cd-col cd-middle-wrap">
                     <span class="rules-sub-title">Within</span>
@@ -766,7 +782,7 @@ function renderCooldownList() {
                 </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Of</span>
-                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, true)}
+                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, allowTypes)}
                 </div>
             </div>
             <div class="cd-delete-wrap">
@@ -790,9 +806,12 @@ function renderCooldownList() {
             r.reference = parseDescValue(refEl.value);
             r.minutes   = Math.max(0, parseInt(minEl.value) || 0);
             r.timing    = timEl.value;
-            // If mode no longer allows types but target is a type, reset target
+            // If mode no longer allows types but target/reference is a type, reset them
             if (r.mode !== 'auto' && r.target && r.target.kind === 'type') {
                 r.target = { kind: 'activity', value: '' };
+            }
+            if (r.mode !== 'auto' && r.reference && r.reference.kind === 'type') {
+                r.reference = { kind: 'activity', value: '' };
             }
             saveCooldownRules(all);
         }
