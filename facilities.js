@@ -3315,17 +3315,33 @@ function propagateFieldRename(oldName, newName) {
 
         Object.keys(dailySchedules).forEach(dateKey => {
             const dayData = dailySchedules[dateKey];
-            if (!dayData?.scheduleAssignments) return;
-            Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
-                const slots = dayData.scheduleAssignments[bunkKey];
-                if (!Array.isArray(slots)) return;
-                slots.forEach((slot) => {
-                    if (slot?.location === oldName) slot.location = newName;
-                    if (slot?.field === oldName) slot.field = newName;
+            if (!dayData) return;
+            // Rename in schedule slot references
+            if (dayData.scheduleAssignments) {
+                Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                    const slots = dayData.scheduleAssignments[bunkKey];
+                    if (!Array.isArray(slots)) return;
+                    slots.forEach((slot) => {
+                        if (slot?.location === oldName) slot.location = newName;
+                        if (slot?.field === oldName) slot.field = newName;
+                    });
                 });
-            });
+            }
+            // Rename in per-date disabled field overrides
+            if (Array.isArray(dayData.overrides?.disabledFields)) {
+                dayData.overrides.disabledFields = dayData.overrides.disabledFields.map(
+                    n => n === oldName ? newName : n
+                );
+            }
         });
         window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+
+        // Rename in app1.disabledFields global list
+        const app1 = settings.app1 || {};
+        if (Array.isArray(app1.disabledFields)) {
+            app1.disabledFields = app1.disabledFields.map(n => n === oldName ? newName : n);
+            window.saveGlobalSettings?.('app1', app1);
+        }
 
         const locationZones = settings.locationZones || {};
         Object.values(locationZones).forEach(zone => {

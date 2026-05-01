@@ -173,6 +173,15 @@ function validateSpecialActivity(activity, activityName) {
         // ★ v3.7: Multi-Part Special support (simple N parts)
 
 
+        // ★ rotationCohort: filter grades against valid divisions so deleted grades
+        //   don't stay in the cohort list and skew the equal-visits tracking.
+        rotationCohort: (activity.rotationCohort && typeof activity.rotationCohort === 'object') ? (function() {
+            const raw = Array.isArray(activity.rotationCohort.grades) ? activity.rotationCohort.grades.slice() : [];
+            const filtered = validDivisions && validDivisions.size > 0
+                ? raw.filter(function(g) { return validDivisions.has(g); })
+                : raw;
+            return { enabled: activity.rotationCohort.enabled === true, grades: filtered };
+        })() : { enabled: false, grades: [] },
         multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? (function() {
             var tp = parseInt(activity.multiPart.totalParts, 10); if (isNaN(tp) || tp < 2 || tp > 10) tp = 2;
             var db = parseInt(activity.multiPart.daysBetween, 10); if (isNaN(db) || db < 1 || db > 14) db = 3;
@@ -212,15 +221,6 @@ function validateSpecialActivity(activity, activityName) {
             ? parseInt(activity.duration, 10)
             : (Array.isArray(activity.durations) && activity.durations[0] > 0
                 ? parseInt(activity.durations[0], 10) : null),
-        // Rotation cohort: when enabled, every bunk listed in `grades`
-        // must visit this special the same number of times before any
-        // bunk visits it again. Auto-resets on completion of each round.
-        rotationCohort: (activity.rotationCohort && typeof activity.rotationCohort === 'object') ? {
-            enabled: activity.rotationCohort.enabled === true,
-            grades: Array.isArray(activity.rotationCohort.grades)
-                ? activity.rotationCohort.grades.slice()
-                : []
-        } : { enabled: false, grades: [] }
     };
 }
 
@@ -723,6 +723,7 @@ function renderDayAvailability(item) {
     };
     if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) {
         item.availableDays = [...allDays];
+        saveData();
     }
     const note = document.createElement('div');
     note.style.cssText = 'font-size:0.82rem; color:#6B7280; margin-bottom:12px;';
@@ -744,11 +745,6 @@ function renderDayAvailability(item) {
                 item.availableDays.push(day);
             }
             saveData();
-            container.innerHTML = '';
-            container.appendChild(note.cloneNode(true));
-            const newGrid = renderDayAvailability(item).querySelector('div') || container;
-            saveData();
-            // re-render cleanly
             const p = container.parentElement;
             if (p) { p.innerHTML = ''; p.appendChild(renderDayAvailability(item)); }
             updateSummary();
