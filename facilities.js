@@ -377,7 +377,9 @@ function addFacility() {
     addFacilityInput.value = "";
     const newFac = facilities[facilities.length - 1];
     saveData();
-    selectedFacilityId = newFac.id;
+    // renderDetailPane looks up facilities by name after stripping the 'fac-' prefix,
+    // so selectedFacilityId must use the 'fac-<name>' format, not the numeric id.
+    selectedFacilityId = `fac-${newFac.name}`;
     renderMasterList();
     renderDetailPane();
 }
