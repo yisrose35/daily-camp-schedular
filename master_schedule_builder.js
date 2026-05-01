@@ -3151,6 +3151,31 @@ function addDropListeners(selector) {
           }
         }
 
+        // Soft cooldown check for manual-mode rules
+        if (window.SchedulingRules) {
+          const _cdLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || null;
+          const _cdCandidate = {
+            startMin: newStartVal, endMin: newEndVal,
+            type: window.SchedulingRules.inferTypeFromActivity(newEvent.event || ''),
+            event: newEvent.event || '', field: _cdLoc
+          };
+          const _cdTemplate = dailySkeleton
+            .filter(ev => ev.division === divName)
+            .map(ev => {
+              const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+              if (s == null || e == null) return null;
+              const loc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || null;
+              return { startMin: s, endMin: e, type: window.SchedulingRules.inferTypeFromActivity(ev.event || ''), event: ev.event || '', field: loc };
+            })
+            .filter(Boolean);
+          const _cdResult = window.SchedulingRules.checkCandidateDetailed(_cdCandidate, _cdTemplate, { mode: 'manual' });
+          if (!_cdResult.allowed) {
+            const _cdMsg = _cdResult.violated.map(r => '• ' + window.SchedulingRules.describeRule(r)).join('\n');
+            const _cdOk = await showConfirm(`This placement may violate the following cooldown rule(s):\n\n${_cdMsg}\n\nPlace anyway?`);
+            if (!_cdOk) return;
+          }
+        }
+
         dailySkeleton.push(newEvent);
         markUnsavedChanges();
         saveDraftToLocalStorage();
