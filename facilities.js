@@ -312,8 +312,14 @@ function syncAllToLegacy() {
 
     window.saveGlobalSpecialActivities?.(newSpecials);
 
-    // Update pinned tile defaults for general activities
+    // Rebuild pinned tile defaults for general activities.
+    // Clear all existing pins that point to a known facility first so that
+    // removing an activity from a facility's list doesn't leave a stale pin.
     const pinned = window.getPinnedTileDefaults?.() || {};
+    const facilityNameSet = new Set(facilities.map(f => f.name));
+    Object.keys(pinned).forEach(actName => {
+        if (facilityNameSet.has(pinned[actName])) delete pinned[actName];
+    });
     facilities.forEach(fac => {
         if (fac.usedFor.includes('general')) {
             (fac.generalActivities || []).forEach(ga => {
