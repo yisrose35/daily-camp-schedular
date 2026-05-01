@@ -711,10 +711,9 @@
         else { var actPrefProps2 = activityProperties[act]; if (actPrefProps2?.preferences?.enabled) { var prefIdx2 = (actPrefProps2.preferences.list || []).indexOf(blockDivName); if (prefIdx2 !== -1) penalty -= (50 - prefIdx2 * 5); else penalty += 8000; } }
 
         // Sharing incentive
-        // ★★★ FIELD GROUP SENIORITY PENALTY ★★★
-        // Rule: senior divisions (higher grade number) earn the best fields.
-        // BUT if a better field is genuinely free at this time, any division may use it.
-        // Only block a division from a better field when that field is already occupied.
+        // ★★★ FIELD GROUP QUALITY PREFERENCE ★★★
+        // Always prefer best available free field (lowest qualityRank).
+        // Yield to more senior divisions only when the field is already occupied.
         if (fieldName && fieldName !== 'Free') {
             var fgInfo = _fieldGroupMap[fieldName];
             if (fgInfo) {
@@ -723,39 +722,41 @@
                 if (groupMembers && divSeniority !== undefined) {
                     var fieldQR = fgInfo.qualityRank;
                     var totalInGroup = groupMembers.length;
-                    var idealRank = divSeniority + 1;
-                    if (fieldQR === idealRank) {
-                        // Perfect match: this division's seniority = this field's quality
-                        penalty -= 8000;
-                    } else if (idealRank <= totalInGroup) {
-                        var rankDiff = Math.abs(fieldQR - idealRank);
-                        if (fieldQR < idealRank) {
-                            // This field is better than the division's ideal.
-                            // Only penalise if it's already occupied by another bunk —
-                            // meaning a more senior division may be using it or have claimed it.
-                            // If it's free, allow any division to use the best available field.
-                            var fgFieldOccupied = false;
-                            if (blockStart !== undefined && blockEnd !== undefined) {
-                                var fgEntries = _fieldTimeIndex.get(fieldNorm) || [];
-                                for (var fgei = 0; fgei < fgEntries.length; fgei++) {
-                                    var fge = fgEntries[fgei];
-                                    if (fge.bunk === bunk) continue;
-                                    if (fge.endMin <= blockStart || fge.startMin >= blockEnd) continue;
-                                    fgFieldOccupied = true;
-                                    break;
-                                }
-                            }
-                            if (fgFieldOccupied) {
-                                penalty += 4000 + rankDiff * 2000; // occupied — leave it for who has it
-                            }
-                            // else: field is free → no penalty, any division may use the best available
-                        } else {
-                            // Getting a WORSE field than ideal — soft penalty regardless
-                            penalty += 1000 + rankDiff * 500;
+
+                    // Check occupancy and track most-senior occupier
+                    var fgOccupied = false;
+                    var fgOccupierSeniority = Infinity;
+                    if (blockStart !== undefined && blockEnd !== undefined) {
+                        var fgEntries = _fieldTimeIndex.get(fieldNorm) || [];
+                        for (var fgei = 0; fgei < fgEntries.length; fgei++) {
+                            var fge = fgEntries[fgei];
+                            if (fge.bunk === bunk) continue;
+                            if (fge.endMin <= blockStart || fge.startMin >= blockEnd) continue;
+                            fgOccupied = true;
+                            var fgOS = _divisionSeniorityMap[fge.divName];
+                            if (fgOS !== undefined && fgOS < fgOccupierSeniority) fgOccupierSeniority = fgOS;
                         }
+                    }
+
+                    // Quality bonus: rank 1 (best) = biggest bonus, rank N = smallest
+                    var fgQualityBonus = (totalInGroup - fieldQR + 1) * 1500;
+
+                    if (!fgOccupied) {
+                        // Free field: full quality bonus — always prefer best available
+                        penalty -= fgQualityBonus;
+                    } else if (divSeniority <= fgOccupierSeniority) {
+                        // As/more senior than occupier — can co-use; sharing block handles same-activity bonus
+                        penalty -= Math.round(fgQualityBonus * 0.5);
                     } else {
-                        // More divisions than fields in group — prefer lower-ranked fields
-                        penalty += (totalInGroup - fieldQR) * 1500;
+                        // Less senior than occupier — yield if field is better than our tier
+                        var idealRank = divSeniority + 1;
+                        if (fieldQR < idealRank) {
+                            // Better-than-ideal, held by more senior — strong yield
+                            penalty += 3000 + (idealRank - fieldQR) * 1500;
+                        } else {
+                            // Our tier or worse — mild quality preference still applies
+                            penalty -= Math.round(fgQualityBonus * 0.25);
+                        }
                     }
                 }
             }
