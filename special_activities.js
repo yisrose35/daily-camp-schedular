@@ -522,12 +522,13 @@ function renderDetailPane() {
 
     // ── HOW ───────────────────────────────────────────────────────────────────
     const howSections = [
-        section('Scheduling Mode', summarySchedulingMode(item), () => renderSchedulingMode(item)),
         section('Usage & Frequency', summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section('Prep Duration', summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
         section('Multi-Part Activity', summaryMultiPart(item), () => renderMultiPartSettings(item))
     ];
     if (window.getCampBuilderMode?.() === 'auto' || window._daBuilderMode === 'auto') {
+        // Duration and Scheduling Mode only apply when the auto-builder is active
+        howSections.unshift(section('Scheduling Mode', summarySchedulingMode(item), () => renderSchedulingMode(item)));
         howSections.splice(1, 0, section('Activity Duration', summaryDuration(item), () => renderDurationSettings(item)));
     }
     detailPaneEl.appendChild(sectionGroup('How', howSections));

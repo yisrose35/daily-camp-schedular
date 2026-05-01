@@ -180,6 +180,41 @@
         return null;
     }
 
+    // Grade-aware variant of getSpecialTimeWindow. Filters timeRules to only
+    // those that apply to the given grade before computing the union window.
+    // Falls back to grade-agnostic behaviour when grade is null/undefined.
+    function getSpecialTimeWindowForGrade(cfg, grade) {
+        if (!cfg) return null;
+        const start = cfg.availableFrom || cfg.windowStart || cfg.startTime;
+        const end = cfg.availableTo || cfg.windowEnd || cfg.endTime;
+        if (start && end) {
+            return {
+                startMin: typeof start === 'number' ? start : parseTimeToMinutes(start),
+                endMin: typeof end === 'number' ? end : parseTimeToMinutes(end)
+            };
+        }
+        if (Array.isArray(cfg.timeRules) && cfg.timeRules.length > 0) {
+            // Only keep rules that are not scoped to specific grades, or that
+            // include this grade. Scoped rules for OTHER grades are ignored.
+            const applicable = cfg.timeRules.filter(function(r) {
+                if (!grade) return true;
+                return !r.divisions || r.divisions.length === 0 || r.divisions.indexOf(grade) >= 0;
+            });
+            const available = applicable.filter(function(r) { return r.type === 'Available' || !r.type; });
+            if (available.length > 0) {
+                let earliest = Infinity, latest = -Infinity;
+                available.forEach(function(r) {
+                    const rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.start);
+                    const re = r.endMin != null ? r.endMin : parseTimeToMinutes(r.end);
+                    if (rs != null && rs < earliest) earliest = rs;
+                    if (re != null && re > latest) latest = re;
+                });
+                if (earliest < Infinity && latest > -Infinity) return { startMin: earliest, endMin: latest };
+            }
+        }
+        return null;
+    }
+
     // Return all user-configured allowed durations for a special, in ascending
     // order. Empty array = user has not configured any → caller should fall
     // back to the layer's dMin/dMax range. Used by the period-packer integration
@@ -559,6 +594,7 @@
         // ★ v7.0: Filter out daily-disabled specials from resource overrides
         const dailyDisabledSpecials = (dailyData?.overrides?.disabledSpecials) || [];
         const todaysSpecials = allSpecials.filter(s => {
+            if (s.available === false) return false;
             if (!isSpecialAvailableOnDay(s.name, dayName, isRainy, globalSettings)) return false;
             if (dailyDisabledSpecials.includes(s.name)) return false;
             return true;
@@ -649,6 +685,16 @@
             (config.fields || fields || []).forEach(f => {
                 if (f.limitUsage?.usePriority && Array.isArray(f.limitUsage.priorityList) && f.limitUsage.priorityList.length > 0) {
                     f.limitUsage.priorityList.forEach((g, idx) => {
+                        gradeScore[g] = (gradeScore[g] || 0) + idx;
+                        gradeCount[g] = (gradeCount[g] || 0) + 1;
+                    });
+                }
+            });
+            // Also incorporate per-special grade priority votes
+            todaysSpecials.forEach(function(_spri) {
+                const _scfg = getSpecialConfig(_spri.name, globalSettings);
+                if (_scfg && _scfg.limitUsage && _scfg.limitUsage.usePriority && Array.isArray(_scfg.limitUsage.priorityList) && _scfg.limitUsage.priorityList.length > 0) {
+                    _scfg.limitUsage.priorityList.forEach(function(g, idx) {
                         gradeScore[g] = (gradeScore[g] || 0) + idx;
                         gradeCount[g] = (gradeCount[g] || 0) + 1;
                     });
@@ -2571,6 +2617,9 @@
                 const maxUsage = parseInt(props.maxUsage) || 0;
                 const maxUsagePeriod = props.maxUsagePeriod || 'half';
                 if (maxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= maxUsage) return;
+                // Per-grade cap overrides the global cap for this grade
+                const gradeMaxUsage = parseInt((props.maxUsagePerGrade || {})[grade]) || 0;
+                if (gradeMaxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= gradeMaxUsage) return;
                 // Rotation cohort: every bunk in the cohort must visit this
                 // special the same number of times before any bunk visits it
                 // again. Skip this special for `bunk` if its lifetime count
@@ -2622,15 +2671,50 @@
                     }
                 }
 
+                // Cooldown: frequencyDays = minimum days between visits for this bunk.
+                // Informs users this is to force breaks — the schedule cycles on its own.
+                {
+                    const _cdDays = parseInt(props.frequencyDays) || 0;
+                    if (_cdDays > 0) {
+                        const _cdKeys = Object.keys(allDailyData).sort();
+                        for (let _cdk = _cdKeys.length - 1; _cdk >= 0; _cdk--) {
+                            if (_cdKeys[_cdk] >= currentDate) continue;
+                            const _cdSlots = allDailyData[_cdKeys[_cdk]]?.scheduleAssignments?.[String(bunk)];
+                            if (Array.isArray(_cdSlots) && _cdSlots.some(function(e) {
+                                return e && !e.continuation && (e._activity === s.name || e.field === s.name);
+                            })) {
+                                const _cdDiff = Math.floor((new Date(currentDate) - new Date(_cdKeys[_cdk])) / 86400000);
+                                if (_cdDiff < _cdDays) {
+                                    log('[cooldown] skip ' + s.name + ' for ' + bunk + ' (' + _cdDiff + 'd since last, need ' + _cdDays + 'd)');
+                                    return;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 const specificDuration = getSpecialDuration(s.name, activityProperties, globalSettings);
                 const cfg = getSpecialConfig(s.name, globalSettings);
                 const location = getLocationForSpecial(s.name, activityProperties, globalSettings);
                 const scarce = isScarce(s.name, dayName, globalSettings);
-                const timeWindow = getSpecialTimeWindow(cfg);
+                const timeWindow = getSpecialTimeWindowForGrade(cfg, grade);
                 const prepDuration = cfg?.prepDuration || 0;
                 const prepCfgEntry = cfg?.prepConfig || null;
                 const prepAttached = !prepCfgEntry || prepCfgEntry.timing !== 'flexible';
                 const effectivePrepDur = prepAttached ? prepDuration : 0;
+
+                // Min frequency floor: if this bunk is below the required minimum
+                // visits, heavily boost priority so the scheduler fills the gap first.
+                // Per-grade override takes precedence over the global minimum.
+                {
+                    const _mfMin = parseInt((props.minFrequencyPerGrade || {})[grade]) || parseInt(props.minFrequency) || parseInt(cfg?.minFrequency) || 0;
+                    if (_mfMin > 0) {
+                        const _mfPeriod = props.minFrequencyPeriod || cfg?.minFrequencyPeriod || 'week';
+                        const _mfCount = getPeriodCount(bunk, s.name, _mfPeriod);
+                        if (_mfCount < _mfMin) score -= 100000 * (_mfMin - _mfCount);
+                    }
+                }
 
                 specialPriorityList.push({
                     name: s.name, type: 'special', rotationScore: score,
