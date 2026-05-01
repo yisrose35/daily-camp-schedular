@@ -30,26 +30,97 @@
     };
 
     // =========================================================================
-    // STEP 1 — Run the real pipeline
+    // STEP 1 — Run the real pipeline (mirrors daily_adjustments.js runOptimizer)
     // =========================================================================
 
     async function generate() {
         c.h1('Generating schedule...');
 
+        const isAuto = window._daBuilderMode === 'auto';
+        c.info('Mode: ' + (isAuto ? 'AUTO (runAutoScheduler)' : 'MANUAL (runSkeletonOptimizer)'));
+
+        // ── AUTO MODE ────────────────────────────────────────────────────────
+        if (isAuto) {
+            if (typeof window.runAutoScheduler !== 'function') {
+                c.bad('window.runAutoScheduler not found — open the scheduler page first');
+                return false;
+            }
+
+            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            let layers = {};
+
+            // Fallback chain mirrors runOptimizer() in daily_adjustments.js
+            // 1. localStorage date-specific
+            try {
+                const stored = localStorage.getItem('campAutoLayers_' + dateKey);
+                if (stored) { layers = JSON.parse(stored); c.info('Layers source: localStorage (' + dateKey + ')'); }
+            } catch(_) {}
+
+            // 2. Cloud date-specific
+            if (!Object.keys(layers).length) {
+                const g = window.loadGlobalSettings?.() || {};
+                const cl = g.app1?.dailyAutoLayers?.[dateKey];
+                if (cl && Object.keys(cl).length) { layers = JSON.parse(JSON.stringify(cl)); c.info('Layers source: cloud date (' + dateKey + ')'); }
+            }
+
+            // 3. Template fallback
+            if (!Object.keys(layers).length) {
+                const g = window.loadGlobalSettings?.() || {};
+                const autoTemplates = g.app1?.autoLayerTemplates || {};
+                const assignments = g.app1?.skeletonAssignments || {};
+                const [Y, M, D] = dateKey.split('-').map(Number);
+                const dow = (Y && M && D) ? new Date(Y, M - 1, D).getDay() : 0;
+                const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                const tmpl = assignments[dayNames[dow]] || assignments['Default'];
+                if (tmpl && autoTemplates[tmpl]) {
+                    layers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+                    c.info('Layers source: template "' + tmpl + '"');
+                } else if (autoTemplates['_current']) {
+                    layers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+                    c.info('Layers source: template "_current"');
+                }
+            }
+
+            const allLayers = [];
+            Object.keys(layers).forEach(grade => {
+                (layers[grade] || []).forEach(layer => allLayers.push({ ...layer, grade }));
+            });
+
+            if (!allLayers.length) {
+                c.bad('No auto layers found — open the auto scheduler, configure layers, then retry');
+                return false;
+            }
+
+            c.info('Calling runAutoScheduler with ' + allLayers.length + ' layer(s)...');
+            const ok = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
+            if (!ok) { c.bad('runAutoScheduler returned false — check console for errors'); return false; }
+            c.ok('Auto generation complete');
+            return true;
+        }
+
+        // ── MANUAL MODE ──────────────────────────────────────────────────────
         if (typeof window.runSkeletonOptimizer !== 'function') {
             c.bad('window.runSkeletonOptimizer not found — open the scheduler page first');
             return false;
         }
 
-        c.info('Calling runSkeletonOptimizer (same as pressing Generate)...');
-        const ok = await window.runSkeletonOptimizer(null, null);
-
-        if (!ok) {
-            c.bad('runSkeletonOptimizer returned false — check console for errors (plan limit, no layers, etc.)');
+        // Try to get the skeleton the same way DA does
+        let skeleton = window.dailyOverrideSkeleton;
+        if (!skeleton || !skeleton.length) {
+            const dailyData = window.loadCurrentDailyData?.() || {};
+            skeleton = dailyData.manualSkeleton || [];
+        }
+        if (!skeleton || !skeleton.length) {
+            c.bad('No skeleton found. In the DA page, load a skeleton first, then retry.');
+            c.info('Tip: if you use Auto Mode, make sure the DA page is showing "Auto" (not "Manual")');
             return false;
         }
 
-        c.ok('Generation complete');
+        const overrides = window.loadCurrentDailyData?.() || {};
+        c.info('Calling runSkeletonOptimizer with ' + skeleton.length + ' skeleton item(s)...');
+        const ok = await window.runSkeletonOptimizer(skeleton, overrides);
+        if (!ok) { c.bad('runSkeletonOptimizer returned false — check console for errors'); return false; }
+        c.ok('Manual generation complete');
         return true;
     }
 
