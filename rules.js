@@ -380,7 +380,7 @@ function injectRulesStyles() {
             display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
         }
         .cd-fields {
-            display: grid; grid-template-columns: 1.2fr auto 1.2fr; gap: 14px;
+            display: grid; grid-template-columns: auto 1.2fr auto 1.2fr; gap: 14px;
             align-items: end;
         }
         .cd-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -749,13 +749,23 @@ function renderCooldownList() {
     }
 
     rules.forEach((rule, idx) => {
+        const mode = rule.mode || 'both';
+        const allowTypes = (mode === 'auto');
         const card = document.createElement('div');
         card.className = 'cd-row';
         card.innerHTML = `
             <div class="cd-fields">
+                <div class="cd-col cd-col-mode">
+                    <span class="rules-sub-title">Applies in</span>
+                    <select class="rules-select" id="cd-mode-${idx}">
+                        <option value="auto"   ${mode === 'auto'   ? 'selected' : ''}>Auto Builder</option>
+                        <option value="manual" ${mode === 'manual' ? 'selected' : ''}>Manual Mode</option>
+                        <option value="both"   ${mode === 'both'   ? 'selected' : ''}>Both</option>
+                    </select>
+                </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Don't place</span>
-                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, true)}
+                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypes)}
                 </div>
                 <div class="cd-col cd-middle-wrap">
                     <span class="rules-sub-title">Within</span>
@@ -772,7 +782,7 @@ function renderCooldownList() {
                 </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Of</span>
-                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, true)}
+                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, allowTypes)}
                 </div>
             </div>
             <div class="cd-delete-wrap">
@@ -780,23 +790,35 @@ function renderCooldownList() {
             </div>`;
         listEl.appendChild(card);
 
-        const tgtEl = document.getElementById('cd-target-' + idx);
-        const refEl = document.getElementById('cd-ref-' + idx);
-        const minEl = document.getElementById('cd-min-' + idx);
-        const timEl = document.getElementById('cd-timing-' + idx);
+        const modeEl = document.getElementById('cd-mode-' + idx);
+        const tgtEl  = document.getElementById('cd-target-' + idx);
+        const refEl  = document.getElementById('cd-ref-' + idx);
+        const minEl  = document.getElementById('cd-min-' + idx);
+        const timEl  = document.getElementById('cd-timing-' + idx);
         const delBtn = document.getElementById('cd-del-' + idx);
 
         function persist() {
             const all = getCooldownRules();
             const r = all[idx];
             if (!r) return;
-            r.mode      = 'both';
+            r.mode      = modeEl.value;
             r.target    = parseDescValue(tgtEl.value);
             r.reference = parseDescValue(refEl.value);
             r.minutes   = Math.max(0, parseInt(minEl.value) || 0);
             r.timing    = timEl.value;
+            // If switching away from auto, reset any category-type descriptors to empty named item
+            if (r.mode !== 'auto' && r.target && r.target.kind === 'type') {
+                r.target = { kind: 'activity', value: '' };
+            }
+            if (r.mode !== 'auto' && r.reference && r.reference.kind === 'type') {
+                r.reference = { kind: 'activity', value: '' };
+            }
             saveCooldownRules(all);
         }
+        if (modeEl) modeEl.addEventListener('change', () => {
+            persist();
+            renderCooldownList();
+        });
         [tgtEl, refEl, minEl, timEl].forEach(el => el && el.addEventListener('change', persist));
         if (delBtn) delBtn.onclick = () => {
             const all = getCooldownRules();
