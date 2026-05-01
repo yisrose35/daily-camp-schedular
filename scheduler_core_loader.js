@@ -521,8 +521,8 @@
             specialActivityNames: effectiveSpecialActivityNames,
             dailyFieldAvailability: dailyOverrides.dailyFieldAvailability || {},
             masterZones: window.loadZones?.() || {},
-            bunkMetaData: window.bunkMetaData || {},
-            sportMetaData: window.sportMetaData || {},
+            bunkMetaData: window.getBunkMetaData?.() || window.bunkMetaData || {},
+            sportMetaData: window.getSportMetaData?.() || window.sportMetaData || {},
             isRainyDayMode: isRainyMode
         };
     }
