@@ -1004,6 +1004,15 @@ else penalty += 200;
                     for (var existBunk in allocated) { if (allocated[existBunk] === wish.activity) projectedPlayers += (bunkSizes[existBunk] || 0); }
                     var maxReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(wish.activity);
                     if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers * 1.3) continue;
+                    // ★ Min player check: hard-skip if combined count is still deeply under minimum
+                    if (maxReqs?.minPlayers && projectedPlayers < maxReqs.minPlayers) {
+                        if ((maxReqs.minPlayers - projectedPlayers) / maxReqs.minPlayers > 0.4) continue;
+                    }
+                    // ★ Unpaired small-bunk guard: bunk can't reach min alone and no pair is available —
+                    // only allow if already-allocated bunks bring the combined total to minimum
+                    if (wish.needsSharing && !pairedBunks.has(aBunk)) {
+                        if (!maxReqs?.minPlayers || projectedPlayers < maxReqs.minPlayers) continue;
+                    }
                     allocated[aBunk] = wish.activity; activityUsed[wish.activity] = (activityUsed[wish.activity] || 0) + 1;
                     if (pairedBunks.has(aBunk) && !allocated[pairedBunks.get(aBunk)]) { var prt = pairedBunks.get(aBunk); if ((wishLists[prt] || []).some(function(w) { return w.activity === wish.activity; }) && (activityUsed[wish.activity] || 0) < (activitySupply[wish.activity] || 0)) { allocated[prt] = wish.activity; activityUsed[wish.activity]++; } }
                     break;
@@ -1472,6 +1481,27 @@ else penalty += 200;
                     }
                 }
               // v15.8: Hard capacity check removed — primary check now uses time index directly
+
+                // ★ Player count check: validate min/max against this bunk + concurrent bunks at same activity
+                if (canFit && cAn && cAn !== 'free' && cAn !== 'free play' && window.SchedulerCoreUtils?.getSportPlayerRequirements) {
+                    var _pcSReqs = window.SchedulerCoreUtils.getSportPlayerRequirements(c2.activityName);
+                    if (_pcSReqs && (_pcSReqs.minPlayers || _pcSReqs.maxPlayers)) {
+                        var _pcBMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+                        var _pcTotal = _pcBMeta[b2.bunk]?.size || 0;
+                        for (var _pcRi = 0; _pcRi < results.length; _pcRi++) {
+                            var _pcR = results[_pcRi]; if (_pcR.candIdx === -1) continue;
+                            var _pcRan = normName(_pcR.pick._activity || _pcR.pick.field);
+                            if (_pcRan !== cAn) continue;
+                            var _pcRb = activityBlocks[_pcR.blockIdx];
+                            if (!_pcRb || _pcRb.bunk === b2.bunk) continue;
+                            if (_pcRb.startTime < b2.endTime && _pcRb.endTime > b2.startTime) _pcTotal += (_pcBMeta[_pcRb.bunk]?.size || 0);
+                        }
+                        if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers * 1.3) canFit = false;
+                        if (canFit && _pcSReqs.minPlayers && _pcTotal < _pcSReqs.minPlayers) {
+                            if ((_pcSReqs.minPlayers - _pcTotal) / _pcSReqs.minPlayers > 0.4) canFit = false;
+                        }
+                    }
+                }
 
                 if (canFit) {
                     var newPk = S.clonePick(c2);
