@@ -46,8 +46,14 @@
     // Synchronous call to loadGlobalSettings
     const settings = window.loadGlobalSettings?.() || {};
     
-    _divisionCache = structuredClone(settings.divisions || {});
-    _bunkCache = structuredClone(settings.bunks || []);
+    // Prefer app1.divisions (grade-based, built from campStructure by app1.loadData)
+    // over the flat root 'divisions' key which may be stale or empty.
+    _divisionCache = structuredClone(
+        settings.app1?.divisions || settings.divisions || {}
+    );
+    _bunkCache = structuredClone(
+        settings.app1?.bunks || settings.bunks || []
+    );
 
     // Also sync to window for legacy compatibility
     window.divisions = _divisionCache;
