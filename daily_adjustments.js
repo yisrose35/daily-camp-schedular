@@ -3543,6 +3543,7 @@ async function runOptimizer() {
         if (allLayers.length === 0) { await daShowAlert("No layers defined. Add layers before generating."); return; }
 
         try {
+            window.invalidateSmartLogicSpecialsCache?.();
             const success = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
             if (!success) await daShowAlert("Auto scheduler did not complete successfully.");
         } catch (e) {
@@ -3629,6 +3630,7 @@ async function runOptimizer() {
   
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
+  window.invalidateSmartLogicSpecialsCache?.();
   const success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
 
   // ★★★ POST-GENERATION CLEANUP ★★★

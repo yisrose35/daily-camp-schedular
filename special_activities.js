@@ -2069,7 +2069,6 @@ window.getGlobalSpecialActivities = function(respectRainyDay=true) {
         console.log('[SpecialActivities] Rainy mode - filtering for indoor/rainy activities');
         return allActivities.filter(s=>s.rainyDayOnly===true||s.rainyDayExclusive===true||s.isIndoor===true);
     }
-    console.log('[SpecialActivities] Normal mode - excluding rainy-day-only activities');
     return allActivities.filter(s=>s.rainyDayOnly!==true&&s.rainyDayExclusive!==true);
 };
 window.getRainyDayOnlySpecials = function() { return rainyDayActivities.filter(s=>s.available!==false); };

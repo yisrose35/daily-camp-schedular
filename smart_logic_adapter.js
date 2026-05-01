@@ -12,6 +12,13 @@
 (function() {
     "use strict";
 
+    // Cache the specials list for the duration of one solve run so
+    // getAvailableSpecialsForTimeBlock doesn't call getGlobalSpecialActivities
+    // (and iterate 864+ rainy-only entries) on every single block.
+    let _specialsCache = null;
+    let _specialsCacheRainyMode = null;
+    window.invalidateSmartLogicSpecialsCache = function() { _specialsCache = null; _specialsCacheRainyMode = null; };
+
     // =========================================================================
     // STORAGE KEYS
     // =========================================================================
@@ -224,33 +231,18 @@
      * @returns {{ name: string, capacity: number, maxUsage: number, remainingSlots: number }[]}
      */
     function getAvailableSpecialsForTimeBlock(startMin, endMin, divisionName, activityProps, dailyFieldAvailability) {
-        // Get all specials from the global registry
-        let allSpecials = window.getGlobalSpecialActivities?.() || [];
-        
-        // ★★★ FIX V44.1: Filter out rainy day exclusive activities on normal days ★★★
+        // ★ Cached per solve run — invalidated by window.invalidateSmartLogicSpecialsCache()
         const isRainyMode = window.isRainyDayModeActive?.() || false;
-        
-        if (!isRainyMode) {
-            // Normal day: exclude rainy-day-only activities
-            const beforeCount = allSpecials.length;
-            allSpecials = allSpecials.filter(s => 
-                s.rainyDayExclusive !== true && s.rainyDayOnly !== true
-            );
-            const filtered = beforeCount - allSpecials.length;
-            if (filtered > 0) {
-                log(`  [RainyDay] Filtered out ${filtered} rainy-day-only activities (normal day)`);
-            }
-        } else {
-            // Rainy day: exclude activities not available on rainy days
-            const beforeCount = allSpecials.length;
-            allSpecials = allSpecials.filter(s => 
-                s.rainyDayAvailable !== false && s.availableOnRainyDay !== false
-            );
-            const filtered = beforeCount - allSpecials.length;
-            if (filtered > 0) {
-                log(`  [RainyDay] Filtered out ${filtered} activities unavailable on rainy days`);
+        if (_specialsCache === null || _specialsCacheRainyMode !== isRainyMode) {
+            const raw = window.getGlobalSpecialActivities?.() || [];
+            _specialsCacheRainyMode = isRainyMode;
+            if (!isRainyMode) {
+                _specialsCache = raw.filter(s => s.rainyDayExclusive !== true && s.rainyDayOnly !== true);
+            } else {
+                _specialsCache = raw.filter(s => s.rainyDayAvailable !== false && s.availableOnRainyDay !== false);
             }
         }
+        let allSpecials = _specialsCache;
         
         // Also check activityProperties for specials (backup source)
         const propsSpecials = [];

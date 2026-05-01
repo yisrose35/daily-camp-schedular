@@ -205,18 +205,16 @@
     // =========================================================================
 
     function auditCooldowns(timeline) {
-        c.h1('Audit 1: Cooldown Rules');
+        c.h2('1. Cooldown Rules');
 
         const SR = window.SchedulingRules;
         if (!SR) { c.bad('window.SchedulingRules not found'); return { pass: 0, fail: 1 }; }
 
         const rules = SR.getCooldownRules?.() || [];
         if (!rules.length) {
-            c.skip('No cooldown rules configured — nothing to check');
+            c.skip('No cooldown rules configured');
             return { pass: 0, fail: 0, skip: 1 };
         }
-
-        c.info(`Checking ${rules.length} cooldown rule(s) across all bunks...`);
 
         // Group timeline by bunk
         const byBunk = {};
@@ -267,7 +265,7 @@
     // =========================================================================
 
     function auditPlayerCounts(timeline) {
-        c.h1('Audit 2: Sport Player Count Rules');
+        c.h2('2. Sport Player Count Rules');
 
         const Utils = window.SchedulerCoreUtils;
         if (!Utils?.checkPlayerCountForSport) {
@@ -279,11 +277,9 @@
         const sportsWithRules = Object.keys(meta).filter(s => meta[s]?.minPlayers || meta[s]?.maxPlayers);
 
         if (!sportsWithRules.length) {
-            c.skip('No sports have player count rules configured — nothing to check');
+            c.skip('No sports have player count rules configured');
             return { pass: 0, fail: 0, skip: 1 };
         }
-
-        c.info(`Checking player count rules for ${sportsWithRules.length} sport(s)...`);
 
         const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
 
@@ -312,7 +308,6 @@
             }
         });
 
-        if (skipped > 0) c.info(`${skipped} blocks skipped (bunk size unknown)`);
 
         if (hard === 0 && soft === 0) {
             c.ok(`All ${ok} sport blocks pass player count rules`);
@@ -329,86 +324,79 @@
     // =========================================================================
 
     function auditFieldQuality(timeline) {
-        c.h1('Audit 3: Field Quality Groups');
+        c.h2('3. Field Quality Groups');
 
         const settings = window.loadGlobalSettings?.() || {};
         const fields = settings.app1?.fields || settings.fields || [];
 
-        // Build group map: fieldName → { group, rank }
+        // Build group map: fieldName → { group, rank, activities[] }
         const fieldMeta = {};
         fields.forEach(f => {
-            if (f.fieldGroup) fieldMeta[f.name] = { group: f.fieldGroup, rank: f.qualityRank ?? 999 };
+            if (f.fieldGroup) fieldMeta[f.name] = {
+                group: f.fieldGroup,
+                rank: f.qualityRank ?? 999,
+                activities: new Set((f.activities || []).map(a => (a || '').toLowerCase().trim()))
+            };
         });
 
         const groups = new Set(Object.values(fieldMeta).map(m => m.group));
 
         if (!groups.size) {
-            c.skip('No field quality groups configured — nothing to check');
+            c.skip('No field quality groups configured');
             return { pass: 0, fail: 0, skip: 1 };
         }
 
-        c.info(`Checking field quality group adherence across ${groups.size} group(s)...`);
-
-        // Build: at each time slot, which fields are in use per group?
-        // Then check if a lower-rank field was used while a higher-rank field was free.
-
-        // Collect all field assignments, grouped by time window and group
         // slot key = "groupName|startMin|endMin"
-        const slotUsage = {}; // key → [{ bunk, fieldName, rank }]
+        // value = [{ bunk, field, rank, activity }]
+        const slotUsage = {};
 
         timeline.forEach(entry => {
             if (!entry.field || entry._isTransition) return;
             const fm = fieldMeta[entry.field];
-            if (!fm) return; // field not in any group
-
+            if (!fm) return;
             const key = `${fm.group}|${entry.startMin}|${entry.endMin}`;
             if (!slotUsage[key]) slotUsage[key] = [];
-            slotUsage[key].push({ bunk: entry.bunk, field: entry.field, rank: fm.rank });
+            slotUsage[key].push({ bunk: entry.bunk, field: entry.field, rank: fm.rank, activity: (entry.activity || entry.sport || '').toLowerCase().trim() });
         });
 
-        // For each group, build the fields sorted by rank
-        const groupFields = {}; // groupName → sorted [{ name, rank }]
+        const groupFields = {};
         Object.entries(fieldMeta).forEach(([name, m]) => {
             if (!groupFields[m.group]) groupFields[m.group] = [];
-            groupFields[m.group].push({ name, rank: m.rank });
+            groupFields[m.group].push({ name, rank: m.rank, activities: m.activities });
         });
         Object.values(groupFields).forEach(arr => arr.sort((a, b) => a.rank - b.rank));
 
         let violations = 0;
         let checked = 0;
 
-        // At each time window where grouped fields are in use, check ordering
         Object.entries(slotUsage).forEach(([key, usedList]) => {
             const [groupName, startStr] = key.split('|');
             const startMin = parseInt(startStr);
-
             const allGroupFields = groupFields[groupName] || [];
             const usedNames = new Set(usedList.map(u => u.field));
-            const unusedFields = allGroupFields.filter(f => !usedNames.has(f.name));
-            const usedSorted = usedList.slice().sort((a, b) => a.rank - b.rank);
 
-            // If the highest-rank used field has a lower rank (worse) than
-            // an unused field with higher rank (better), that's a violation
-            if (unusedFields.length === 0 || usedSorted.length === 0) { checked++; return; }
+            usedList.forEach(used => {
+                // A violation only counts if a better-rank field that also supports
+                // this activity was sitting unused at this exact time window.
+                const betterFree = allGroupFields.filter(f =>
+                    f.rank < used.rank &&
+                    !usedNames.has(f.name) &&
+                    (f.activities.size === 0 || f.activities.has(used.activity))
+                );
 
-            const worstUsed = Math.max(...usedList.map(u => u.rank));
-            const bestUnused = Math.min(...unusedFields.map(f => f.rank));
-
-            if (bestUnused < worstUsed) {
-                violations++;
-                const unusedName = unusedFields.find(f => f.rank === bestUnused)?.name;
-                const worstEntry = usedList.find(u => u.rank === worstUsed);
-                c.warn(`Group "${groupName}" at ${_fmt(startMin)}: bunk ${worstEntry?.bunk} used "${worstEntry?.field}" (rank ${worstUsed}) while "${unusedName}" (rank ${bestUnused}) was free`);
-            }
-
-            checked++;
+                if (betterFree.length > 0) {
+                    violations++;
+                    const best = betterFree[0];
+                    c.warn(`Group "${groupName}" at ${_fmt(startMin)}: bunk ${used.bunk} → "${used.field}" (rank ${used.rank}) but "${best.name}" (rank ${best.rank}) was free and supports "${used.activity}"`);
+                }
+                checked++;
+            });
         });
 
         if (violations === 0) {
-            c.ok(`All ${checked} time windows checked — field quality order respected`);
+            c.ok(`${checked} field assignment(s) checked — quality order respected`);
         } else {
-            c.warn(`${violations} window(s) where a lower-rank field was used while a better one was free`);
-            c.info('Note: sharing conflicts, time rules, or access restrictions can legitimately cause this');
+            c.warn(`${violations} case(s) where a better field was available and supports the same activity`);
         }
 
         return { pass: checked - violations, fail: 0, warn: violations };
@@ -418,23 +406,53 @@
     // SUMMARY + SCHEDULE OVERVIEW
     // =========================================================================
 
-    function printScheduleOverview(timeline) {
-        c.h1('Schedule Overview');
+    // =========================================================================
+    // AUDIT 4 — Activity variety (same activity not given too many times)
+    // =========================================================================
+
+    function auditVariety(timeline) {
+        c.h2('4. Activity Variety');
+
+        const settings = window.loadGlobalSettings?.() || {};
+        const maxRepeat = settings.app1?.maxSameActivityPerDay ?? 2;
 
         const byBunk = {};
         timeline.forEach(e => {
-            if (!byBunk[e.bunk]) byBunk[e.bunk] = [];
-            byBunk[e.bunk].push(e);
+            if (!e.activity || e._isTransition || e._fixed) return;
+            if (!byBunk[e.bunk]) byBunk[e.bunk] = {};
+            byBunk[e.bunk][e.activity] = (byBunk[e.bunk][e.activity] || 0) + 1;
         });
 
-        const bunks = Object.keys(byBunk).sort();
-        c.info(`${bunks.length} bunk(s) scheduled, ${timeline.length} total blocks`);
-
-        bunks.forEach(bunk => {
-            const entries = byBunk[bunk].sort((a, b) => a.startMin - b.startMin);
-            const line = entries.map(e => `${_fmt(e.startMin)} ${e.activity}${e.field && e.field !== e.activity ? ' @' + e.field : ''}`).join('  •  ');
-            c.data(`Bunk ${bunk}:  ${line}`);
+        let violations = 0;
+        Object.entries(byBunk).forEach(([bunk, counts]) => {
+            Object.entries(counts).forEach(([act, n]) => {
+                if (n > maxRepeat) {
+                    violations++;
+                    c.warn(`Bunk ${bunk}: "${act}" appears ${n}x (max ${maxRepeat})`);
+                }
+            });
         });
+
+        const bunksChecked = Object.keys(byBunk).length;
+        if (violations === 0) {
+            c.ok(`${bunksChecked} bunk(s) — all activities within repeat limit (≤${maxRepeat}x)`);
+        } else {
+            c.warn(`${violations} over-repeated activity instance(s)`);
+        }
+        return { pass: bunksChecked - violations, fail: 0, warn: violations };
+    }
+
+    // =========================================================================
+    // SUMMARY + OVERVIEW
+    // =========================================================================
+
+    function printStats(timeline) {
+        const bunks = new Set(timeline.map(e => e.bunk));
+        const acts  = new Set(timeline.filter(e => !e._isTransition).map(e => e.activity));
+        const sport = new Set(timeline.filter(e => e.sport).map(e => e.sport));
+        const fields = new Set(timeline.filter(e => e.field).map(e => e.field));
+        c.info(`${bunks.size} bunks  •  ${timeline.length} blocks  •  ${acts.size} unique activities  •  ${sport.size} sports  •  ${fields.size} fields`);
+        c.info(`Activities seen: ${[...acts].sort().join(', ')}`);
     }
 
     function printSummary(results) {
@@ -442,7 +460,6 @@
         const totalWarn = Object.values(results).reduce((s, r) => s + (r.warn || 0), 0);
         const totalPass = Object.values(results).reduce((s, r) => s + (r.pass || 0), 0);
         const totalSkip = Object.values(results).reduce((s, r) => s + (r.skip || 0), 0);
-
         console.log('');
         if (totalFail === 0 && totalWarn === 0) {
             console.log(`%c  ALL CHECKS PASSED  ${totalPass} ✓  ${totalSkip} skipped  `,
@@ -457,63 +474,61 @@
         console.log('');
     }
 
+    // Full per-bunk dump (call PipelineRunAudit.detail() when you want it)
+    function printDetail(timeline) {
+        c.h2('Full Schedule — per bunk');
+        const byBunk = {};
+        timeline.forEach(e => { if (!byBunk[e.bunk]) byBunk[e.bunk] = []; byBunk[e.bunk].push(e); });
+        Object.keys(byBunk).sort().forEach(bunk => {
+            const entries = byBunk[bunk].sort((a, b) => a.startMin - b.startMin);
+            const line = entries.map(e => `${_fmt(e.startMin)} ${e.activity}${e.field && e.field !== e.activity ? ' @' + e.field : ''}`).join('  •  ');
+            c.data(`Bunk ${bunk}: ${line}`);
+        });
+    }
+
     // =========================================================================
     // ENTRY POINTS
     // =========================================================================
 
     let _lastTimeline = null;
 
-    async function run() {
-        console.clear();
-        console.log('%c Pipeline Run Audit ',
-            'font-size:15px;font-weight:bold;background:#37474f;color:#fff;padding:6px 14px;border-radius:6px');
-        console.log('Date:', new Date().toLocaleString());
-        console.log('⚠️  This will REGENERATE today\'s schedule.');
-
-        const ok = await generate();
-        if (!ok) return;
-
-        const timeline = buildTimeline();
-        _lastTimeline = timeline;
-
-        printScheduleOverview(timeline);
-
+    async function _audit(timeline) {
+        printStats(timeline);
+        console.log('');
         const results = {};
         results.cooldowns    = auditCooldowns(timeline);
         results.playerCounts = auditPlayerCounts(timeline);
         results.fieldQuality = auditFieldQuality(timeline);
-
+        results.variety      = auditVariety(timeline);
         printSummary(results);
+        c.info('Tip: PipelineRunAudit.detail() to see full per-bunk schedule');
+    }
+
+    async function run() {
+        console.clear();
+        console.log('%c Pipeline Run Audit ', 'font-size:15px;font-weight:bold;background:#37474f;color:#fff;padding:6px 14px;border-radius:6px');
+        console.log('Date:', new Date().toLocaleString(), '  ⚠️ This will REGENERATE today\'s schedule.');
+        const ok = await generate();
+        if (!ok) return;
+        const timeline = buildTimeline();
+        _lastTimeline = timeline;
+        await _audit(timeline);
     }
 
     async function auditOnly() {
         console.clear();
-        console.log('%c Pipeline Run Audit (existing schedule) ',
-            'font-size:15px;font-weight:bold;background:#37474f;color:#fff;padding:6px 14px;border-radius:6px');
+        console.log('%c Pipeline Run Audit (existing schedule) ', 'font-size:15px;font-weight:bold;background:#37474f;color:#fff;padding:6px 14px;border-radius:6px');
         console.log('Date:', new Date().toLocaleString());
-
         const sa = window.scheduleAssignments || {};
-        if (!Object.keys(sa).length) {
-            c.warn('window.scheduleAssignments is empty — run PipelineRunAudit.run() to generate first');
-            return;
-        }
-
+        if (!Object.keys(sa).length) { c.warn('window.scheduleAssignments is empty — generate a schedule first'); return; }
         const timeline = buildTimeline();
         _lastTimeline = timeline;
-
-        printScheduleOverview(timeline);
-
-        const results = {};
-        results.cooldowns    = auditCooldowns(timeline);
-        results.playerCounts = auditPlayerCounts(timeline);
-        results.fieldQuality = auditFieldQuality(timeline);
-
-        printSummary(results);
+        await _audit(timeline);
     }
 
-    function report() {
-        if (!_lastTimeline) { c.warn('No audit run yet — call PipelineRunAudit.run() first'); return; }
-        printScheduleOverview(_lastTimeline);
+    function detail() {
+        if (!_lastTimeline) { c.warn('No audit run yet — call PipelineRunAudit.auditOnly() first'); return; }
+        printDetail(_lastTimeline);
     }
 
     // =========================================================================
@@ -528,8 +543,8 @@
         return (h > 12 ? h - 12 : h || 12) + ':' + String(m).padStart(2, '0') + ampm;
     }
 
-    window.PipelineRunAudit = { run, auditOnly, report };
+    window.PipelineRunAudit = { run, auditOnly, detail };
 
-    console.log('%c PipelineRunAudit loaded.  await PipelineRunAudit.run()  to generate + audit. ',
+    console.log('%c PipelineRunAudit loaded — await PipelineRunAudit.run()  /  auditOnly()  /  detail() ',
         'background:#546e7a;color:#fff;padding:3px 8px;border-radius:4px');
 })();
