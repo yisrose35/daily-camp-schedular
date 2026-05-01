@@ -89,6 +89,11 @@
             // ★ Indoor/Outdoor for rainy day
             rainyDayAvailable: f.rainyDayAvailable === true,
             
+            // Preserve per-grade sharing overrides
+            ...(f.gradeShareRules ? { gradeShareRules: f.gradeShareRules } : {}),
+            // Preserve field quality group membership
+            ...(f.fieldGroup != null ? { fieldGroup: f.fieldGroup } : {}),
+            ...(f.qualityRank != null ? { qualityRank: f.qualityRank } : {}),
             // Preserve any additional properties
             ...(f.transition ? { transition: f.transition } : {}),
             ...(f.preferences ? { preferences: f.preferences } : {}),

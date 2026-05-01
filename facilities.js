@@ -794,10 +794,11 @@ function saveFieldData() {
     const app1 = settings.app1 || {};
     app1.sportMetaData = sportMetaData;
     app1.fieldCombos = fieldCombos;
-    // Normalize every field before persisting so the scheduler always gets
-    // a complete, well-structured object (sharableWith, limitUsage, timeRules, etc.)
-    const normalize = window.normalizeFieldForSave || (f => f);
-    app1.fields = (app1.fields || []).map(normalize).filter(Boolean);
+    // Do NOT remap app1.fields through normalizeField here — that creates new objects
+    // and breaks the reference held by all the renderSportsConfig UI closures, causing
+    // every save after the first to silently discard mutations made to fieldData.
+    // The mutations are already on the in-memory objects inside app1.fields.
+    if (!app1.fields) app1.fields = [];
     window.saveGlobalSettings?.("app1", app1);
     window.saveGlobalSettings?.("fields", app1.fields);
     saveFacilitiesMetadata();
