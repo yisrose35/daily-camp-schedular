@@ -2792,6 +2792,19 @@ function addDropListeners(gridEl) {
           const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
           return !overlaps;
         });
+
+        // Stamp travel info for off-campus facilities
+        const _travelLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || '';
+        if (_travelLoc) {
+          const _ti = window.getTravelForField?.(_travelLoc, true) || window.getTravelForSpecialActivity?.(_travelLoc, true);
+          if (_ti) {
+            newEvent._travelPre = _ti.preMin;
+            newEvent._travelPost = _ti.postMin;
+            newEvent._travelZone = _ti.zoneName;
+            newEvent._travelMode = _ti.mode;
+          }
+        }
+
         dailyOverrideSkeleton.push(newEvent);
         saveDailySkeleton();
         renderGrid();
@@ -2990,6 +3003,22 @@ async function editTile(id) {
       ev.location = result.reservedFields.length === 1 ? result.reservedFields[0] : (result.reservedFields.length > 1 ? null : ev.location);
     }
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  // Re-stamp travel info since location may have changed
+  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+  if (_editTravelLoc) {
+    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+    if (_eti) {
+      ev._travelPre = _eti.preMin;
+      ev._travelPost = _eti.postMin;
+      ev._travelZone = _eti.zoneName;
+      ev._travelMode = _eti.mode;
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
+  } else {
+    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
   }
 
   saveDailySkeleton();
