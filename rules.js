@@ -27,6 +27,9 @@
 
 console.log('[RULES] rules.js v1.1 loading...');
 
+// Pending group names created in UI but not yet backed by any field data
+var _pendingFQGroups = [];
+
 // ──────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ──────────────────────────────────────────────────────────────────────────
@@ -433,18 +436,15 @@ function injectRulesStyles() {
             padding: 2px 10px; border-radius: 99px;
         }
         .fq-member {
-            display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+            display: flex; align-items: center; gap: 10px; padding: 6px 10px;
             background: #F8FAFC; border-radius: 8px; border: 1px solid #F1F5F9;
             margin-bottom: 4px;
         }
-        .fq-member-rank {
-            width: 26px; height: 26px; line-height: 26px; text-align: center;
-            border-radius: 50%; font-weight: 700; font-size: 0.78rem;
-            background: #F1F5F9; color: #64748B;
-        }
-        .fq-member-rank.best { background: #DCFCE7; color: #166534; }
         .fq-member-name { flex: 1; font-size: 0.88rem; font-weight: 500; color: #0F172A; }
-        .fq-member-label { font-size: 0.72rem; color: #94A3B8; }
+        .fq-name-input { font-weight: 700; font-size: 0.93rem; }
+        .fq-rank-in { width: 52px; text-align: center; font-weight: 700; }
+        .fq-add-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+        .fq-add-row .rules-select { flex: 1; }
     `;
     const style = document.createElement('style');
     style.id = 'rules-tab-styles';
@@ -551,6 +551,31 @@ function renderSportsRulesCard(container) {
 // ──────────────────────────────────────────────────────────────────────────
 // FIELD QUALITY GROUPS CARD
 // ──────────────────────────────────────────────────────────────────────────
+function getAllFieldNamesForGroups() {
+    const s = loadSettings();
+    return ((s.app1 && s.app1.fields) || []).map(f => f.name).filter(Boolean).sort();
+}
+
+function applyFieldGroupUpdates(updates) {
+    // updates: [{ fieldName, fieldGroup: string|null, qualityRank: number|null }]
+    const s = loadSettings();
+    const fields = [...((s.app1 && s.app1.fields) || [])];
+    updates.forEach(u => {
+        const idx = fields.findIndex(f => f.name === u.fieldName);
+        if (idx === -1) return;
+        if (u.fieldGroup == null) {
+            const f2 = { ...fields[idx] };
+            delete f2.fieldGroup;
+            delete f2.qualityRank;
+            fields[idx] = f2;
+        } else {
+            fields[idx] = { ...fields[idx], fieldGroup: u.fieldGroup, qualityRank: u.qualityRank };
+        }
+    });
+    const app1 = { ...(s.app1 || {}), fields };
+    saveKey('app1', app1);
+}
+
 function getExistingFieldGroups() {
     const s = loadSettings();
     const fields = (s.app1 && s.app1.fields) || [];
@@ -570,8 +595,9 @@ function getExistingFieldGroups() {
 function renderFieldQualityCard(container) {
     if (!container) return;
     const groups = getExistingFieldGroups();
-    const groupNames = [...groups.keys()];
-    const groupCount = groupNames.length;
+    const savedCount = groups.size;
+    const pendingExtra = _pendingFQGroups.filter(n => !groups.has(n)).length;
+    const groupCount = savedCount + pendingExtra;
 
     container.innerHTML = `
         <div class="rules-card">
@@ -581,7 +607,7 @@ function renderFieldQualityCard(container) {
                         Field Quality Groups
                         ${groupCount ? `<span class="rules-badge">${groupCount} group${groupCount !== 1 ? 's' : ''}</span>` : ''}
                     </div>
-                    <div class="rules-card-subtitle">Rank related fields. The best field goes to the most senior grade.</div>
+                    <div class="rules-card-subtitle">Group related fields and rank them. Rank 1 = best. Senior grades are matched to higher-ranked fields automatically.</div>
                 </div>
                 <span class="rules-caret" id="rules-fq-caret">
                     <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
@@ -589,6 +615,9 @@ function renderFieldQualityCard(container) {
             </div>
             <div class="rules-card-body" id="rules-fq-body" style="display:none;">
                 <div id="rules-fq-list"></div>
+                <div style="margin-top:12px; display:flex; justify-content:flex-end;">
+                    <button class="rules-btn-dark" id="rules-fq-add">+ Add Group</button>
+                </div>
             </div>
         </div>`;
 
@@ -600,6 +629,15 @@ function renderFieldQualityCard(container) {
         caret.classList.toggle('open', hidden);
     };
 
+    document.getElementById('rules-fq-add').onclick = () => {
+        const existing = getExistingFieldGroups();
+        let name = 'New Group';
+        let n = 1;
+        while (existing.has(name) || _pendingFQGroups.includes(name)) { name = `New Group ${++n}`; }
+        _pendingFQGroups.push(name);
+        renderFieldGroupsList(document.getElementById('rules-fq-list'));
+    };
+
     renderFieldGroupsList(document.getElementById('rules-fq-list'));
 }
 
@@ -607,29 +645,92 @@ function renderFieldGroupsList(listEl) {
     if (!listEl) return;
     listEl.innerHTML = '';
     const groups = getExistingFieldGroups();
-    const groupNames = [...groups.keys()];
-    if (groupNames.length === 0) {
-        listEl.innerHTML = '<div class="rules-empty">No field groups yet. Assign a Field Group to a facility in the Facilities tab.</div>';
+    const allGroupNames = [...groups.keys()];
+    _pendingFQGroups.forEach(n => { if (!groups.has(n)) allGroupNames.push(n); });
+
+    if (allGroupNames.length === 0) {
+        listEl.innerHTML = '<div class="rules-empty">No field quality groups yet. Click <strong>+ Add Group</strong> to create one.</div>';
         return;
     }
-    groupNames.forEach(groupName => {
-        const members = groups.get(groupName);
+
+    const allFieldNames = getAllFieldNamesForGroups();
+
+    allGroupNames.forEach(groupName => {
+        const members = groups.get(groupName) || [];
+        const memberNames = new Set(members.map(m => m.name));
+        const availFields = allFieldNames.filter(f => !memberNames.has(f));
+
         const card = document.createElement('div');
         card.className = 'fq-group';
+
         card.innerHTML = `
             <div class="fq-group-head">
-                <span class="fq-group-name">${escapeHtml(groupName)}</span>
-                <span class="fq-group-count">${members.length} field${members.length !== 1 ? 's' : ''}</span>
+                <input type="text" class="rules-input fq-name-input" value="${escapeHtml(groupName)}" placeholder="Group name" style="flex:1;">
+                <button class="rules-btn-ghost-danger fq-del-group">Delete Group</button>
+            </div>
+            <div class="fq-members-list">
+                ${members.length === 0 ? '<div class="rules-empty" style="padding:6px 0 4px; font-size:0.8rem;">No fields yet — add one below.</div>' : ''}
+            </div>
+            <div class="fq-add-row">
+                <select class="rules-select fq-field-picker">
+                    <option value="">— Add a field —</option>
+                    ${availFields.map(f => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('')}
+                </select>
+                <button class="rules-btn-dark fq-add-field">Add</button>
             </div>`;
-        members.forEach((m, idx) => {
+
+        const membersList = card.querySelector('.fq-members-list');
+
+        members.forEach(m => {
             const row = document.createElement('div');
             row.className = 'fq-member';
             row.innerHTML = `
-                <div class="fq-member-rank ${idx === 0 ? 'best' : ''}">${m.qualityRank || (idx + 1)}</div>
+                <input type="number" class="rules-input fq-rank-in" value="${m.qualityRank || 1}" min="1" max="99" title="Rank (1 = best field)">
                 <span class="fq-member-name">${escapeHtml(m.name)}</span>
-                <span class="fq-member-label">${idx === 0 ? 'Best' : idx === members.length - 1 ? 'Lowest' : ''}</span>`;
-            card.appendChild(row);
+                <button class="rules-btn-ghost-danger fq-rem-member" style="font-size:0.75rem; padding:3px 8px;">✕</button>`;
+
+            row.querySelector('.fq-rank-in').addEventListener('change', e => {
+                applyFieldGroupUpdates([{ fieldName: m.name, fieldGroup: groupName, qualityRank: Math.max(1, parseInt(e.target.value) || 1) }]);
+                renderFieldGroupsList(listEl);
+            });
+            row.querySelector('.fq-rem-member').addEventListener('click', () => {
+                applyFieldGroupUpdates([{ fieldName: m.name, fieldGroup: null, qualityRank: null }]);
+                renderFieldGroupsList(listEl);
+            });
+            membersList.appendChild(row);
         });
+
+        // Rename group
+        card.querySelector('.fq-name-input').addEventListener('change', e => {
+            const newName = e.target.value.trim();
+            if (!newName || newName === groupName) return;
+            const updates = members.map(m => ({ fieldName: m.name, fieldGroup: newName, qualityRank: m.qualityRank }));
+            if (updates.length > 0) applyFieldGroupUpdates(updates);
+            const pi = _pendingFQGroups.indexOf(groupName);
+            if (pi !== -1) _pendingFQGroups[pi] = newName;
+            renderFieldGroupsList(listEl);
+        });
+
+        // Delete group
+        card.querySelector('.fq-del-group').addEventListener('click', () => {
+            applyFieldGroupUpdates(members.map(m => ({ fieldName: m.name, fieldGroup: null, qualityRank: null })));
+            const pi = _pendingFQGroups.indexOf(groupName);
+            if (pi !== -1) _pendingFQGroups.splice(pi, 1);
+            renderFieldGroupsList(listEl);
+        });
+
+        // Add field to group
+        const picker = card.querySelector('.fq-field-picker');
+        card.querySelector('.fq-add-field').addEventListener('click', () => {
+            const fname = picker.value;
+            if (!fname) return;
+            const nextRank = members.length + 1;
+            applyFieldGroupUpdates([{ fieldName: fname, fieldGroup: groupName, qualityRank: nextRank }]);
+            const pi = _pendingFQGroups.indexOf(groupName);
+            if (pi !== -1) _pendingFQGroups.splice(pi, 1);
+            renderFieldGroupsList(listEl);
+        });
+
         listEl.appendChild(card);
     });
 }
