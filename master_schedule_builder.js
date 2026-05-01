@@ -3176,6 +3176,34 @@ function addDropListeners(selector) {
           }
         }
 
+        // Sport player count check
+        if (newEvent.type === 'sport' && newEvent.event && window.SchedulerCoreUtils?.checkPlayerCountForSport) {
+          const _pcBunkMeta = window.getBunkMetaData?.() || {};
+          const _pcDivObj   = (window.divisions || {})[divName] || {};
+          const _pcDivBunks = _pcDivObj.bunks || [];
+          const _pcDivPlayers = _pcDivBunks.reduce((s, b) => s + (_pcBunkMeta[b]?.size || 0), 0);
+          const _pcSportName  = (newEvent.event || '').toLowerCase();
+          const _pcConcurrent = dailySkeleton
+            .filter(ev => ev.division !== divName && ev.type === 'sport' &&
+              (ev.event || '').toLowerCase() === _pcSportName &&
+              parseTimeToMinutes(ev.startTime) < newEndVal &&
+              parseTimeToMinutes(ev.endTime)   > newStartVal)
+            .reduce((s, ev) => {
+              const d = (window.divisions || {})[ev.division] || {};
+              return s + (d.bunks || []).reduce((ss, b) => ss + (_pcBunkMeta[b]?.size || 0), 0);
+            }, 0);
+          const _pcTotal = _pcDivPlayers + _pcConcurrent;
+          if (_pcTotal > 0) {
+            const _pcResult = window.SchedulerCoreUtils.checkPlayerCountForSport(newEvent.event, _pcTotal);
+            if (!_pcResult.valid && _pcResult.reason) {
+              const _pcNote = _pcConcurrent > 0
+                ? `\n(Includes ${_pcConcurrent} players from other divisions at the same time)` : '';
+              const _pcOk = await showConfirm(`Player count warning for "${newEvent.event}":\n${_pcResult.reason}${_pcNote}\n\nPlace anyway?`);
+              if (!_pcOk) return;
+            }
+          }
+        }
+
         dailySkeleton.push(newEvent);
         markUnsavedChanges();
         saveDraftToLocalStorage();
