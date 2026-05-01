@@ -1061,6 +1061,7 @@ window.SchedulingRules = {
     findForbiddenRanges: findForbiddenRanges,
     blockMatchesDescriptor: blockMatchesDescriptor,
     getExistingFieldGroups: getExistingFieldGroups,
+    applyFieldGroupUpdates: applyFieldGroupUpdates,
     inferTypeFromActivity: inferTypeFromActivity,
     buildTemplateFromBunkSlots: buildTemplateFromBunkSlots,
     describeRule: describeRule
