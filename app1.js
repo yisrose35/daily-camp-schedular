@@ -1137,7 +1137,11 @@
     
     window.getDivisions = () => state.divisions;
     window.getBunkMetaData = () => state.bunkMetaData;
-    window.getSportMetaData = () => state.sportMetaData;
+    // Read fresh from storage so facilities.js changes are always visible
+    window.getSportMetaData = () => {
+        const fresh = window.loadGlobalSettings?.()?.app1?.sportMetaData;
+        return fresh || state.sportMetaData;
+    };
     window.getGlobalSpecialActivities = () => state.specialActivities;
     window.getAllGlobalSports = () => [...state.allSports].sort();
     window.getSavedSkeletons = () => state.savedSkeletons || {};
