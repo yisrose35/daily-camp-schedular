@@ -640,6 +640,31 @@
 
         const allGrades = Object.keys(divisions).filter(g => !allowedSet || allowedSet.has(String(g)));
 
+        // ★ PRIORITY ORDERING: sort grades so higher-priority grades are processed first.
+        // Each field with usePriority=true contributes rank votes; grades that rank first
+        // across the most fields get processed earliest → they claim contested fields first.
+        {
+            const gradeScore = {}; // grade → sum of rank indices (lower = higher priority)
+            const gradeCount = {}; // grade → how many priority fields mention it
+            (config.fields || fields || []).forEach(f => {
+                if (f.limitUsage?.usePriority && Array.isArray(f.limitUsage.priorityList) && f.limitUsage.priorityList.length > 0) {
+                    f.limitUsage.priorityList.forEach((g, idx) => {
+                        gradeScore[g] = (gradeScore[g] || 0) + idx;
+                        gradeCount[g] = (gradeCount[g] || 0) + 1;
+                    });
+                }
+            });
+            if (Object.keys(gradeScore).length > 0) {
+                allGrades.sort((a, b) => {
+                    const cA = gradeCount[a] || 0, cB = gradeCount[b] || 0;
+                    if (cA === 0 && cB === 0) return 0;
+                    if (cA === 0) return 1;
+                    if (cB === 0) return -1;
+                    return (gradeScore[a] / cA) - (gradeScore[b] / cB);
+                });
+                log('[STEP 1] Grade processing order (priority-sorted): ' + allGrades.join(', '));
+            }
+        }
 
         // =====================================================================
         // MUTABLE STATE
@@ -1116,10 +1141,16 @@
                     name: field.name, capacity, shareType,
                     allowedDivisions: props.sharableWith?.divisions || field.sharableWith?.divisions || [],
                     allowedPairs: props.sharableWith?.allowedPairs || field.sharableWith?.allowedPairs || {},
-                    isIndoor: field.isIndoor || false,
+                    isIndoor: field.isIndoor || field.rainyDayAvailable || false,
                     timeRules, unavailableRules,
                     disabledSports: dailyDisabledSports[field.name] || [],
                     activities: field.activities || [],
+                    // Access restriction — which grades are allowed + priority order
+                    limitUsage: props.limitUsage || field.limitUsage || { enabled: false },
+                    usePriority: props.limitUsage?.usePriority || field.limitUsage?.usePriority || false,
+                    priorityList: props.limitUsage?.priorityList || field.limitUsage?.priorityList || [],
+                    // Per-grade sharing overrides
+                    gradeShareRules: props.gradeShareRules || field.gradeShareRules || {},
                     claims: []
                 };
             });
@@ -1168,16 +1199,71 @@
             });
             if (!timeOk) return false;
 
+            // ★ GRADE ACCESS RESTRICTION (limitUsage)
+            if (ledger.limitUsage?.enabled) {
+                const divRules = ledger.limitUsage.divisions || {};
+                if (!(grade in divRules)) return false;
+            }
+
             // Capacity
             const overlapping = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
             if (overlapping.length >= ledger.capacity) return false;
 
-            // Sharing rules
-            if (ledger.shareType === 'not_sharable' && overlapping.length > 0) return false;
-            if (ledger.shareType === 'same_division') {
+            // ★ PRIORITY ENFORCEMENT: if field uses priority order and this grade has lower
+            // priority than a grade that is already at capacity, or if a higher-priority grade
+            // that hasn't yet been assigned would be blocked by this claim, defer.
+            if (ledger.usePriority && ledger.priorityList.length > 0 && overlapping.length > 0) {
+                const myRank = ledger.priorityList.indexOf(grade);
+                if (myRank > 0) {
+                    // If all remaining capacity would be consumed by this claim and a higher-
+                    // priority grade is among the current claimants, allow it (they co-use).
+                    // But if a LOWER-priority grade has claimed a slot that a higher-priority
+                    // grade should have had, that means we processed in wrong order — the
+                    // grade sort at the top prevents this for single-cap fields.
+                    // For shared fields: reject if every current claimant outranks this grade
+                    // and we're at the last slot — protects the slot for equally-ranked peers.
+                    const remainingSlots = ledger.capacity - overlapping.length;
+                    if (remainingSlots === 1) {
+                        const higherRankClaimants = overlapping.filter(c => {
+                            const r = ledger.priorityList.indexOf(c.grade);
+                            return r >= 0 && r < myRank;
+                        });
+                        // If higher-priority grades have already claimed AND there are other
+                        // priority-eligible grades that haven't claimed yet, hold the slot.
+                        const unclaimedHigherPriorityGrades = ledger.priorityList.slice(0, myRank).filter(g =>
+                            !overlapping.some(c => c.grade === g)
+                        );
+                        if (higherRankClaimants.length > 0 && unclaimedHigherPriorityGrades.length === 0) {
+                            // All higher-priority grades have been served; lower grade may proceed.
+                        } else if (unclaimedHigherPriorityGrades.length > 0) {
+                            // Hold last slot for unclaimed higher-priority grades.
+                            log('[PRIORITY] ' + grade + ' deferred from ' + fieldName + ' — holding slot for ' + unclaimedHigherPriorityGrades.join(', '));
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            // ★ PER-GRADE SHARING OVERRIDE: if this grade has a custom rule, apply it
+            // instead of the global shareType / capacity for this grade's claims.
+            const gradeOverride = ledger.gradeShareRules?.[grade];
+            const effectiveShareType = gradeOverride ? (gradeOverride.type || 'not_sharable') : ledger.shareType;
+            const effectiveCapacity = gradeOverride
+                ? (parseInt(gradeOverride.capacity) || (gradeOverride.type === 'not_sharable' ? 1 : 2))
+                : ledger.capacity;
+
+            // Re-check capacity with the effective (possibly overridden) capacity
+            if (overlapping.length >= effectiveCapacity) return false;
+
+            // Sharing rules (using effective values)
+            if (effectiveShareType === 'not_sharable' && overlapping.length > 0) return false;
+            if (effectiveShareType === 'same_division') {
                 if (overlapping.some(c => c.grade !== grade)) return false;
             }
-            if (ledger.shareType === 'custom') {
+            if (effectiveShareType === 'custom' || (effectiveShareType !== 'not_sharable' && effectiveShareType !== 'same_division' && effectiveShareType !== 'cross_division')) {
+                // fall through to original custom logic
+            }
+            if (ledger.shareType === 'custom' && !gradeOverride) {
                 const allowedDivs = ledger.allowedDivisions || [];
                 if (allowedDivs.length > 0) {
                     if (overlapping.some(c => c.grade !== grade && !allowedDivs.includes(c.grade))) return false;
@@ -1212,6 +1298,47 @@
             // Sport restriction check — field may have certain sports disabled for the day
             if (activity && ledger.disabledSports && ledger.disabledSports.length > 0) {
                 if (ledger.disabledSports.includes(activity)) return false;
+            }
+
+            // ★ COMBINED FIELD ENFORCEMENT
+            // Rule: combined field (A+B) in use → neither A nor B can be used.
+            //       sub-field A in use → combined field (A+B) cannot be used.
+            //       sub-field A in use → sub-field B can still be used independently.
+            const comboLookup = window.getFieldComboLookup?.();
+            if (comboLookup) {
+                const normFn = (n) => (n || '').toLowerCase().trim();
+                const normField = normFn(fieldName);
+
+                // Case 1: requesting the combined field — block if any sub-field is in use
+                const subs = comboLookup.combinedToSubs[normField];
+                if (subs) {
+                    for (const subField of subs) {
+                        // find the ledger by normalised name
+                        const subLedger = fieldLedger[subField] ||
+                            fieldLedger[Object.keys(fieldLedger).find(k => normFn(k) === normFn(subField)) || ''];
+                        if (subLedger) {
+                            const subOverlap = subLedger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
+                            if (subOverlap.length > 0) {
+                                log('[COMBO] ' + fieldName + ' blocked — sub-field ' + subField + ' is in use');
+                                return false;
+                            }
+                        }
+                    }
+                }
+
+                // Case 2: requesting a sub-field — block if the combined field is in use
+                const combinedField = comboLookup.subToCombined[normField];
+                if (combinedField) {
+                    const comboLedgerKey = Object.keys(fieldLedger).find(k => normFn(k) === normFn(combinedField));
+                    const comboLedger = comboLedgerKey ? fieldLedger[comboLedgerKey] : null;
+                    if (comboLedger) {
+                        const comboOverlap = comboLedger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
+                        if (comboOverlap.length > 0) {
+                            log('[COMBO] ' + fieldName + ' blocked — combined field ' + combinedField + ' is in use');
+                            return false;
+                        }
+                    }
+                }
             }
 
             return true;

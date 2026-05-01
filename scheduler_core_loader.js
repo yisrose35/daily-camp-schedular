@@ -272,7 +272,8 @@
             const normalizedLimitUsage = f.limitUsage ? {
                 enabled: f.limitUsage.enabled === true,
                 divisions: typeof f.limitUsage.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage.priorityList) ? f.limitUsage.priorityList : []
+                priorityList: Array.isArray(f.limitUsage.priorityList) ? f.limitUsage.priorityList : [],
+                usePriority: f.limitUsage.usePriority === true
             } : null;
             
             // ★ Parse timeRules to include startMin/endMin
@@ -297,7 +298,9 @@
                 // ★★★ v2.2: Include rainyDayAvailable for fields ★★★
                 rainyDayAvailable: f.rainyDayAvailable === true,
                 // ★★★ Include activities array (sports this field supports) ★★★
-                activities: Array.isArray(f.activities) ? f.activities : []
+                activities: Array.isArray(f.activities) ? f.activities : [],
+                // Per-grade sharing overrides (keyed by grade name)
+                gradeShareRules: (f.gradeShareRules && typeof f.gradeShareRules === 'object') ? f.gradeShareRules : {}
             });
         });
 

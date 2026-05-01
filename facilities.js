@@ -1236,11 +1236,18 @@ function renderSharing(item) {
 
     const renderContent = () => {
         container.innerHTML = "";
+        if (!item.gradeShareRules) item.gradeShareRules = {};
         const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 1 };
         const isSharable = rules.type !== 'not_sharable';
 
+        // -- Global sharing toggle --
+        const globalHeader = document.createElement("div");
+        globalHeader.style.cssText = "font-weight:600; font-size:0.88rem; color:#374151; margin-bottom:8px;";
+        globalHeader.textContent = "Global Default (applies to all grades without an override)";
+        container.appendChild(globalHeader);
+
         const toggleRow = document.createElement("div");
-        toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
+        toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:12px;";
 
         const tog = document.createElement("label"); tog.className = "switch";
         const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isSharable;
@@ -1263,15 +1270,15 @@ function renderSharing(item) {
 
         if (!isSharable) {
             const note = document.createElement("div");
-            note.style.cssText = "color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px;";
-            note.textContent = "Only 1 bunk can use this field at a time.";
+            note.style.cssText = "color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px; margin-bottom:16px;";
+            note.textContent = "Only 1 bunk can use this field at a time (default for all grades).";
             container.appendChild(note);
         } else {
             const det = document.createElement("div");
-            det.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #147D91;";
+            det.style.cssText = "margin-bottom:16px; padding-left:12px; border-left:2px solid #147D91;";
 
             const capRow = document.createElement("div");
-            capRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
+            capRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:8px;";
             capRow.innerHTML = `<span style="font-size:0.85rem;">Max bunks at once:</span>`;
             const capIn = document.createElement("input");
             capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = rules.capacity || 2;
@@ -1286,10 +1293,106 @@ function renderSharing(item) {
             det.appendChild(capRow);
 
             const note = document.createElement("div");
-            note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
-            note.innerHTML = `Up to <strong>${rules.capacity || 2}</strong> bunks <strong>within the same grade</strong> can use this simultaneously.`;
+            note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:8px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
+            note.innerHTML = `Up to <strong>${rules.capacity || 2}</strong> bunks <strong>within the same grade</strong> can share this field simultaneously.`;
             det.appendChild(note);
             container.appendChild(det);
+        }
+
+        // -- Per-Grade Overrides --
+        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+        if (allDivs.length > 0) {
+            const divider = document.createElement("div");
+            divider.style.cssText = "border-top:1px dashed #E5E7EB; margin-bottom:12px;";
+            container.appendChild(divider);
+
+            const pgHeader = document.createElement("div");
+            pgHeader.style.cssText = "font-weight:600; font-size:0.88rem; color:#374151; margin-bottom:4px;";
+            pgHeader.textContent = "Per-Grade Overrides";
+            const pgSub = document.createElement("div");
+            pgSub.style.cssText = "font-size:0.78rem; color:#6B7280; margin-bottom:10px;";
+            pgSub.textContent = "Override the global default for specific grades.";
+            container.appendChild(pgHeader);
+            container.appendChild(pgSub);
+
+            allDivs.forEach(divName => {
+                const override = item.gradeShareRules[divName];
+                const row = document.createElement("div");
+                row.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 10px; background:#FAFAFA; border:1px solid #E5E7EB; border-radius:8px; margin-bottom:6px; flex-wrap:wrap;";
+
+                const nameSpan = document.createElement("span");
+                nameSpan.style.cssText = "font-size:0.85rem; font-weight:500; min-width:90px;";
+                nameSpan.textContent = divName;
+                row.appendChild(nameSpan);
+
+                if (!override) {
+                    const defaultBadge = document.createElement("span");
+                    defaultBadge.style.cssText = "font-size:0.78rem; color:#6B7280; background:#F3F4F6; border-radius:4px; padding:2px 8px;";
+                    defaultBadge.textContent = "Uses global default";
+                    row.appendChild(defaultBadge);
+
+                    const addBtn = document.createElement("button");
+                    addBtn.textContent = "+ Override";
+                    addBtn.style.cssText = "margin-left:auto; font-size:0.78rem; padding:3px 10px; border-radius:6px; border:1px solid #D97706; background:#FEF3C7; color:#92400E; cursor:pointer;";
+                    addBtn.onclick = () => {
+                        item.gradeShareRules[divName] = { type: isSharable ? 'same_division' : 'not_sharable', capacity: rules.capacity || 2 };
+                        saveFieldData(); renderContent(); updateSummary();
+                    };
+                    row.appendChild(addBtn);
+                } else {
+                    const isOverrideSharable = override.type !== 'not_sharable';
+
+                    const overrideTog = document.createElement("label"); overrideTog.className = "switch";
+                    overrideTog.style.cssText = "transform:scale(0.85); margin-right:4px;";
+                    const overrideCb = document.createElement("input"); overrideCb.type = "checkbox"; overrideCb.checked = isOverrideSharable;
+                    overrideCb.onchange = () => {
+                        override.type = overrideCb.checked ? 'same_division' : 'not_sharable';
+                        override.capacity = overrideCb.checked ? (override.capacity > 1 ? override.capacity : 2) : 1;
+                        saveFieldData(); renderContent(); updateSummary();
+                    };
+                    const overrideSl = document.createElement("span"); overrideSl.className = "slider";
+                    overrideTog.appendChild(overrideCb); overrideTog.appendChild(overrideSl);
+                    row.appendChild(overrideTog);
+
+                    if (isOverrideSharable) {
+                        const capLabel = document.createElement("span");
+                        capLabel.style.cssText = "font-size:0.78rem; color:#374151;";
+                        capLabel.textContent = "Max:";
+                        row.appendChild(capLabel);
+
+                        const capIn = document.createElement("input");
+                        capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = override.capacity || 2;
+                        capIn.style.cssText = "width:48px; padding:3px; border-radius:5px; border:1px solid #D1D5DB; text-align:center; font-size:0.8rem;";
+                        capIn.onchange = () => {
+                            override.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
+                            capIn.value = override.capacity;
+                            saveFieldData(); updateSummary();
+                        };
+                        row.appendChild(capIn);
+
+                        const bunksNote = document.createElement("span");
+                        bunksNote.style.cssText = "font-size:0.75rem; color:#6B7280;";
+                        bunksNote.textContent = "bunks (same grade only)";
+                        row.appendChild(bunksNote);
+                    } else {
+                        const noShareNote = document.createElement("span");
+                        noShareNote.style.cssText = "font-size:0.78rem; color:#DC2626;";
+                        noShareNote.textContent = "No sharing";
+                        row.appendChild(noShareNote);
+                    }
+
+                    const removeBtn = document.createElement("button");
+                    removeBtn.textContent = "✕ Remove";
+                    removeBtn.style.cssText = "margin-left:auto; font-size:0.75rem; padding:2px 8px; border-radius:5px; border:1px solid #FECACA; background:#FEF2F2; color:#DC2626; cursor:pointer;";
+                    removeBtn.onclick = () => {
+                        delete item.gradeShareRules[divName];
+                        saveFieldData(); renderContent(); updateSummary();
+                    };
+                    row.appendChild(removeBtn);
+                }
+
+                container.appendChild(row);
+            });
         }
     };
     renderContent();
@@ -1437,14 +1540,18 @@ function renderAccess(item) {
 // -- Time Rules --
 function renderTimeRules(item) {
     const container = document.createElement("div");
+    const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
 
     if (item.timeRules?.length > 0) {
         item.timeRules.forEach((r, i) => {
             const row = document.createElement("div");
             row.style.cssText = "display:flex; justify-content:space-between; align-items:center; background:#F9FAFB; padding:8px; margin-bottom:6px; border-radius:6px; border:1px solid #E5E7EB;";
 
+            const gradeTag = (r.divisions && r.divisions.length > 0)
+                ? ` <span style="font-size:0.75rem; background:#e6f4f7; color:#0A4A56; border-radius:4px; padding:1px 5px; margin-left:4px;">${r.divisions.map(d => escapeHtml(d)).join(', ')}</span>`
+                : '';
             const txt = document.createElement("span");
-            txt.innerHTML = `<strong style="color:${r.type === 'Available' ? '#0F6A7A' : '#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}`;
+            txt.innerHTML = `<strong style="color:${r.type === 'Available' ? '#0F6A7A' : '#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}${gradeTag}`;
 
             const del = document.createElement("button");
             del.textContent = "\u2715";
@@ -1458,7 +1565,7 @@ function renderTimeRules(item) {
         container.innerHTML = `<div class="muted" style="font-size:0.8rem; margin-bottom:10px;">No time rules. Available all day.</div>`;
     }
 
-    // Add new
+    // Add new rule form
     const addSection = document.createElement("div");
     addSection.style.cssText = "margin-top:12px; padding-top:12px; border-top:1px dashed #E5E7EB;";
 
@@ -1480,14 +1587,6 @@ function renderTimeRules(item) {
     const btn = document.createElement("button");
     btn.textContent = "Add";
     btn.style.cssText = "background:#111; color:white; border:none; border-radius:6px; padding:4px 12px; cursor:pointer;";
-    btn.onclick = () => {
-        if (!startIn.value || !endIn.value) { alert("Enter both start and end times."); return; }
-        const startMinP = parseTimeToMinutes(startIn.value);
-        const endMinP = parseTimeToMinutes(endIn.value);
-        if (startMinP === null || endMinP === null) { alert("Invalid time format. Use e.g. 9:00am"); return; }
-        item.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value, startMin: startMinP, endMin: endMinP });
-        saveFieldData(); renderDetailPane();
-    };
 
     addRow.appendChild(typeSel);
     addRow.appendChild(startIn);
@@ -1495,6 +1594,61 @@ function renderTimeRules(item) {
     addRow.appendChild(endIn);
     addRow.appendChild(btn);
     addSection.appendChild(addRow);
+
+    // Per-grade selector (empty = applies to all grades)
+    if (allDivs.length > 0) {
+        const gradeSection = document.createElement("div");
+        gradeSection.style.cssText = "margin-top:8px;";
+
+        const gradeLabel = document.createElement("div");
+        gradeLabel.style.cssText = "font-size:0.78rem; color:#6B7280; margin-bottom:4px;";
+        gradeLabel.textContent = "Applies to specific grades only (leave all unselected = all grades):";
+        gradeSection.appendChild(gradeLabel);
+
+        const gradeChips = document.createElement("div");
+        gradeChips.style.cssText = "display:flex; flex-wrap:wrap; gap:4px;";
+        const selectedGrades = new Set();
+
+        allDivs.forEach(div => {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.textContent = div;
+            chip.style.cssText = "padding:3px 10px; border-radius:12px; border:1px solid #D1D5DB; background:#fff; font-size:0.78rem; cursor:pointer;";
+            chip.onclick = () => {
+                if (selectedGrades.has(div)) {
+                    selectedGrades.delete(div);
+                    chip.style.background = '#fff'; chip.style.borderColor = '#D1D5DB'; chip.style.color = '';
+                } else {
+                    selectedGrades.add(div);
+                    chip.style.background = '#e6f4f7'; chip.style.borderColor = '#147D91'; chip.style.color = '#0A4A56';
+                }
+            };
+            gradeChips.appendChild(chip);
+        });
+
+        gradeSection.appendChild(gradeChips);
+        addSection.appendChild(gradeSection);
+
+        btn.onclick = () => {
+            if (!startIn.value || !endIn.value) { alert("Enter both start and end times."); return; }
+            const startMinP = parseTimeToMinutes(startIn.value);
+            const endMinP = parseTimeToMinutes(endIn.value);
+            if (startMinP === null || endMinP === null) { alert("Invalid time format. Use e.g. 9:00am"); return; }
+            const divisions = selectedGrades.size > 0 ? [...selectedGrades] : [];
+            item.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value, startMin: startMinP, endMin: endMinP, divisions });
+            saveFieldData(); renderDetailPane();
+        };
+    } else {
+        btn.onclick = () => {
+            if (!startIn.value || !endIn.value) { alert("Enter both start and end times."); return; }
+            const startMinP = parseTimeToMinutes(startIn.value);
+            const endMinP = parseTimeToMinutes(endIn.value);
+            if (startMinP === null || endMinP === null) { alert("Invalid time format. Use e.g. 9:00am"); return; }
+            item.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value, startMin: startMinP, endMin: endMinP, divisions: [] });
+            saveFieldData(); renderDetailPane();
+        };
+    }
+
     container.appendChild(addSection);
     return container;
 }
@@ -3276,6 +3430,16 @@ window.getFacilities = function () {
 window.getFacilityByName = function (name) {
     const facs = window.getFacilities();
     return facs.find(f => f.name === name) || null;
+};
+
+// Expose combo data so schedulers can enforce combined-field constraints.
+// getFieldComboLookup() returns the in-memory lookup (rebuilt on every save).
+// getFieldCombos() falls back to fresh storage if the in-memory map is empty.
+window.getFieldComboLookup = function () { return _comboLookup; };
+window.getFieldCombos = function () {
+    if (Object.keys(fieldCombos).length > 0) return fieldCombos;
+    const settings = window.loadGlobalSettings?.() || {};
+    return settings.app1?.fieldCombos || {};
 };
 
 })();
