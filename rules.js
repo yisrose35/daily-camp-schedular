@@ -716,8 +716,8 @@ function renderCooldownCard(container) {
         current.push({
             id: uid('cd_'),
             mode: 'both',
-            target:    { kind: 'activity', value: '' },
-            reference: { kind: 'activity', value: '' },
+            target:    { kind: 'type', value: 'sport' },
+            reference: { kind: 'type', value: 'lunch' },
             timing: 'after',
             minutes: 20
         });
@@ -755,7 +755,7 @@ function renderCooldownList() {
             <div class="cd-fields">
                 <div class="cd-col">
                     <span class="rules-sub-title">Don't place</span>
-                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, false)}
+                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, true)}
                 </div>
                 <div class="cd-col cd-middle-wrap">
                     <span class="rules-sub-title">Within</span>
@@ -772,7 +772,7 @@ function renderCooldownList() {
                 </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Of</span>
-                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, false)}
+                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, true)}
                 </div>
             </div>
             <div class="cd-delete-wrap">
