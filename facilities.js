@@ -1325,7 +1325,7 @@ function renderAccess(item) {
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
-        const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
 
         if (rules.enabled) {
             const body = document.createElement("div");
@@ -1795,7 +1795,7 @@ function renderSpecialAccess(saData) {
             return;
         }
 
-        const divisions = window.loadGlobalSettings?.()?.divisions || {};
+        const divisions = window.divisions || window.getGlobalDivisions?.() || {};
         const allDivs = Object.keys(divisions);
 
         const help = document.createElement("div");
@@ -2092,7 +2092,7 @@ function renderSpecialSchedulingMode(saData) {
             rules.type = 'cross_division';
             if (!rules.capacity || rules.capacity < 2) rules.capacity = 2;
             // Default: every grade can share with itself
-            const defDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            const defDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             defDivs.forEach(g => { if (rules.allowedPairs[pk(g, g)] === undefined) rules.allowedPairs[pk(g, g)] = true; });
             saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
@@ -2128,7 +2128,7 @@ function renderSpecialSchedulingMode(saData) {
         container.appendChild(capWrap);
 
         // ── Step 4: Grade pairing ─────────────────────────────────
-        const allDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
 
         if (allDivs.length < 2) {
             const noGr = document.createElement('div');
@@ -2278,7 +2278,7 @@ function renderSpecialUsage(saData) {
             var ceilGradeGrid = document.createElement('div');
             ceilGradeGrid.style.display = hasMaxGradeOverrides ? 'flex' : 'none';
             ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            var allDivs = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            var allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             allDivs.forEach(function(div) {
                 var row = document.createElement('div');
                 row.style.cssText = 'display:flex; align-items:center; gap:8px;';
@@ -2393,7 +2393,7 @@ function renderSpecialUsage(saData) {
             var minGradeGrid = document.createElement('div');
             minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
             minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            var allDivs2 = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            var allDivs2 = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!saData.minFrequencyPerGrade) saData.minFrequencyPerGrade = {};
             allDivs2.forEach(function(div) {
                 var row = document.createElement('div');
@@ -2497,7 +2497,7 @@ function renderSpecialUsage(saData) {
         cohortDiv.appendChild(modeWrap);
 
         if (rc.enabled) {
-            var allDivs3 = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            var allDivs3 = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!Array.isArray(rc.grades)) rc.grades = [];
 
             var chipLabel = document.createElement('div');

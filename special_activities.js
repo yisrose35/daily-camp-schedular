@@ -570,7 +570,7 @@ function summarySchedulingMode(item) {
     if (item.fullGradePerGrade && typeof item.fullGradePerGrade === 'object'
         && Object.keys(item.fullGradePerGrade).length > 0) {
         var fullCount = 0, indivCount = 0;
-        var allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+        var allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
         allDivs.forEach(function(div) {
             if (window.isFullGradeForDivision?.(item.name, div)) fullCount++; else indivCount++;
         });
@@ -826,7 +826,7 @@ function renderSchedulingMode(item) {
             saveData(); renderContent(); updateSummary();
         };
         btnPerGrade.onclick = () => {
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!item.fullGradePerGrade || typeof item.fullGradePerGrade !== 'object') item.fullGradePerGrade = {};
             allDivs.forEach(div => { if (!(div in item.fullGradePerGrade)) item.fullGradePerGrade[div] = !!item.fullGrade; });
             saveData(); renderContent(); updateSummary();
@@ -856,7 +856,7 @@ function renderSchedulingMode(item) {
 
         } else if (mode === 'per_grade') {
             // ── PER GRADE MODE ──
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             const perGrade = item.fullGradePerGrade || {};
 
             const infoBox = document.createElement("div");
@@ -1097,7 +1097,7 @@ function renderMaxUsageSettings(item) {
             const ceilGradeGrid = document.createElement('div');
             ceilGradeGrid.style.display = hasGradeOverrides ? 'flex' : 'none';
             ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!item.maxUsagePerGrade) item.maxUsagePerGrade = {};
             allDivs.forEach(function(div) {
                 const row = document.createElement('div');
@@ -1216,7 +1216,7 @@ function renderMaxUsageSettings(item) {
             const minGradeGrid = document.createElement('div');
             minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
             minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            const minAllDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const minAllDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!item.minFrequencyPerGrade) item.minFrequencyPerGrade = {};
             minAllDivs.forEach(function(div) {
                 const row = document.createElement('div');
@@ -1340,7 +1340,7 @@ function renderSharing(item) {
         }
 
         if (rules.type === 'cross_division') {
-            var allDivs = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            var allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
 
             var matrixLbl = document.createElement('div');
             matrixLbl.style.cssText = 'font-size:0.82rem; color:#374151; font-weight:500; margin-bottom:8px;';
@@ -1428,7 +1428,7 @@ function renderAccess(item) {
         btnAll.onclick = () => { rules.enabled = false; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
         btnRes.onclick = () => { rules.enabled = true; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes); container.appendChild(modeWrap);
-        const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
         if (rules.enabled) {
             const body = document.createElement("div"); body.style.cssText = "padding-left:12px; border-left:2px solid #147D91; margin-bottom:16px;";
             const chipLabel = document.createElement("div"); chipLabel.style.cssText = "font-size:0.85rem; font-weight:500; margin-bottom:8px; color:#374151;"; chipLabel.textContent = "Select allowed grades:"; body.appendChild(chipLabel);
@@ -1505,7 +1505,7 @@ function renderTimeRules(item) {
     const spb = document.createElement("button"); spb.textContent = "Specific Grades"; spb.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
     let selDivs = [];
     const dcw = document.createElement("div"); dcw.style.cssText = "display:none; flex-wrap:wrap; gap:4px; margin-top:6px; margin-bottom:8px; width:100%;";
-    const allDivs = window.availableDivisions || Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+    const allDivs = window.availableDivisions || Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
     function rebuildDC() { dcw.innerHTML = ""; allDivs.forEach(d => { const a = selDivs.includes(d); const c = document.createElement("span"); c.className = "chip " + (a?"active":"inactive"); c.textContent = d; c.onclick = () => { if(a) selDivs=selDivs.filter(x=>x!==d); else selDivs.push(d); rebuildDC(); }; dcw.appendChild(c); }); }
     agb.onclick = () => { selDivs=[]; agb.style.cssText="padding:4px 10px; border-radius:6px; border:1px solid #147D91; background:#e6f4f7; color:#0F5F6E; font-size:0.8rem; cursor:pointer; font-weight:600;"; spb.style.cssText="padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;"; dcw.style.display="none"; };
     spb.onclick = () => { spb.style.cssText="padding:4px 10px; border-radius:6px; border:1px solid #147D91; background:#e6f4f7; color:#0F5F6E; font-size:0.8rem; cursor:pointer; font-weight:600;"; agb.style.cssText="padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;"; dcw.style.display="flex"; rebuildDC(); };
@@ -2087,7 +2087,7 @@ window.diagnoseSpecialActivities = function() {
     console.log('='.repeat(60));
     var settings = window.loadGlobalSettings?.() || {};
     var storedActivities = settings.specialActivities || settings.app1?.specialActivities || [];
-    var divisions = Object.keys(settings.divisions || {});
+    var divisions = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
     var isRainyMode = window.isRainyDayModeActive?.() || false;
     var indoorCount = specialActivities.filter(function(s){return s.isIndoor === true;}).length;
     var outdoorCount = specialActivities.filter(function(s){return s.isIndoor !== true;}).length;
