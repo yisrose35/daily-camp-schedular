@@ -1201,6 +1201,11 @@
         // without this, the cloud_sync_helpers version's dual-write is lost
         // once app1 initialises and replaces that function.
         window.saveGlobalSettings?.('specialActivities', updatedActivities);
+        // Sync special_activities.js in-memory cache so getAllSpecialActivities()
+        // returns the fresh list immediately without needing a storage reload.
+        // The setter defined in special_activities.js accepts an array directly.
+        try { window.specialActivities = updatedActivities; } catch(_) {}
+        window.refreshSpecialActivitiesFromStorage?.();
     };
     
     window.addDivisionBunk = (divName, bunkName) => {

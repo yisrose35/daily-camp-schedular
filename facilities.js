@@ -853,6 +853,9 @@ function renderSpecialConfig(container, fac) {
         if (!saData) {
             saData = createDefaultSpecialActivity(saName);
             saData.location = fac.name;
+            // Persist defaults immediately so the activity exists in storage
+            // even before the user opens any config section.
+            saveSpecialData(saData);
         }
 
         const saCard = document.createElement("div");
@@ -2047,7 +2050,7 @@ function renderSpecialSchedulingMode(saData) {
         // Silently migrate same_division → cross_division with self-pairs populated
         if (rules.type === 'same_division') {
             rules.type = 'cross_division';
-            const migDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            const migDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             migDivs.forEach(g => { rules.allowedPairs[pk(g, g)] = true; });
             saData.sharableWith = rules;
             saveSpecialData(saData);
@@ -2055,7 +2058,7 @@ function renderSpecialSchedulingMode(saData) {
 
         // Default same-grade sharing on for existing cross_division data with no pairs set
         if (rules.type === 'cross_division' && Object.keys(rules.allowedPairs).length === 0) {
-            const defDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            const defDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             defDivs.forEach(g => { rules.allowedPairs[pk(g, g)] = true; });
             saveSpecialData(saData);
         }
