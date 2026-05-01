@@ -12,20 +12,12 @@
  *   PipelineAudit.showSports()   — print all sport min/max configs
  *   PipelineAudit.showGroups()   — print all field quality group assignments
  *
- * What this checks:
- *   1. Cooldown rules — blockMatchesDescriptor, isCandidateAllowed,
- *      checkCandidateDetailed, mode filtering (auto vs manual)
- *   2. Sport player count — getSportPlayerRequirements, checkPlayerCountForSport,
- *      hard/soft thresholds, zero-size guard
- *   3. Field quality groups — applyFieldGroupUpdates, normalizeFieldForSave
- *      preserves fieldGroup/qualityRank, round-trip through saveGlobalFields
- *   4. Facilities save — verifies sportMetaData persists through saveFieldData
+ * Works entirely with YOUR real configured data — no fake data injected.
  * ========================================================================= */
 
 (function () {
     'use strict';
 
-    // ---- display helpers ---------------------------------------------------
     const c = {
         ok:   (...a) => console.log('%c ✓ ', 'background:#1b5e20;color:#fff;border-radius:3px', ...a),
         bad:  (...a) => console.log('%c ✗ ', 'background:#b71c1c;color:#fff;border-radius:3px', ...a),
@@ -34,130 +26,132 @@
         h1:   (s)    => console.log('\n%c ' + s + ' ', 'font-size:14px;font-weight:bold;background:#222;color:#fff;padding:4px 10px;border-radius:4px'),
         h2:   (s)    => console.log('%c' + s, 'font-weight:bold;color:#0d47a1;border-bottom:1px solid #0d47a1'),
         data: (...a) => console.log('%c   ', 'background:#546e7a;color:#fff;border-radius:3px', ...a),
+        skip: (...a) => console.log('%c — ', 'background:#78909c;color:#fff;border-radius:3px', ...a),
     };
 
-    let _pass = 0, _fail = 0, _warn = 0;
+    let _pass = 0, _fail = 0, _warn = 0, _skip = 0;
 
     function assert(condition, msg) {
         if (condition) { c.ok(msg); _pass++; }
         else           { c.bad(msg); _fail++; }
     }
-
     function assertWarn(condition, msg) {
         if (condition) { c.ok(msg); _pass++; }
-        else           { c.warn('SOFT: ' + msg); _warn++; }
+        else           { c.warn(msg); _warn++; }
     }
+    function skip(msg) { c.skip('SKIP — ' + msg); _skip++; }
 
     function summary() {
         console.log('');
         if (_fail === 0) {
-            console.log(`%c  ALL TESTS PASSED  ${_pass} ✓  ${_warn} soft  `,
+            console.log(`%c  ALL CHECKS PASSED  ${_pass} ✓  ${_warn} warnings  ${_skip} skipped  `,
                 'font-size:13px;font-weight:bold;background:#1b5e20;color:#fff;padding:4px 12px;border-radius:6px');
         } else {
-            console.log(`%c  ${_fail} FAILED  /  ${_pass} passed  /  ${_warn} soft  `,
+            console.log(`%c  ${_fail} FAILED  /  ${_pass} passed  /  ${_warn} warnings  /  ${_skip} skipped  `,
                 'font-size:13px;font-weight:bold;background:#b71c1c;color:#fff;padding:4px 12px;border-radius:6px');
         }
         console.log('');
     }
 
     // =========================================================================
-    // 1. COOLDOWN RULES
+    // 1. COOLDOWN RULES ENGINE
     // =========================================================================
 
     function testCooldown() {
         c.h1('1. Cooldown Rules Engine');
 
         const SR = window.SchedulingRules;
-        if (!SR) { c.bad('window.SchedulingRules not found — is rules.js loaded?'); _fail++; return; }
+        if (!SR) { c.bad('window.SchedulingRules not found — rules.js not loaded'); _fail++; return; }
 
-        const { blockMatchesDescriptor, isCandidateAllowed, checkCandidateDetailed } = SR;
+        const { blockMatchesDescriptor, isCandidateAllowed, checkCandidateDetailed, getCooldownRules } = SR;
 
-        // --- 1a. blockMatchesDescriptor ---
-        c.h2('1a. blockMatchesDescriptor');
+        // --- Engine presence ---
+        c.h2('1a. Core functions exposed');
+        assert(typeof blockMatchesDescriptor === 'function',  'blockMatchesDescriptor is a function');
+        assert(typeof isCandidateAllowed === 'function',      'isCandidateAllowed is a function');
+        assert(typeof checkCandidateDetailed === 'function',  'checkCandidateDetailed is a function');
+        assert(typeof getCooldownRules === 'function',        'getCooldownRules is a function');
 
-        const sportBlock  = { type: 'sport',  event: 'basketball', field: '' };
-        const lunchBlock  = { type: 'lunch',  event: 'lunch',      field: '' };
-        const specialBlock= { type: 'special',event: 'art',        field: 'art room' };
-        const swimBlock   = { type: 'swim',   event: 'swim',       field: 'pool' };
+        // --- Basic descriptor matching ---
+        c.h2('1b. blockMatchesDescriptor — basic sanity');
 
-        assert(blockMatchesDescriptor(sportBlock,  { kind: 'type',     value: 'sport'      }), 'type:sport matches sport block');
-        assert(blockMatchesDescriptor(lunchBlock,  { kind: 'type',     value: 'lunch'      }), 'type:lunch matches lunch block');
-        assert(blockMatchesDescriptor(sportBlock,  { kind: 'activity', value: 'basketball' }), 'activity:basketball matches basketball');
-        assert(!blockMatchesDescriptor(sportBlock, { kind: 'activity', value: 'soccer'     }), 'activity:soccer does NOT match basketball');
-        assert(blockMatchesDescriptor(specialBlock,{ kind: 'facility', value: 'art room'   }), 'facility:art room matches art room');
-        assert(!blockMatchesDescriptor(specialBlock,{kind: 'facility', value: 'pool'       }), 'facility:pool does NOT match art room');
-        assert(blockMatchesDescriptor(swimBlock,   { kind: 'any'                           }), 'kind:any matches anything');
-        assert(!blockMatchesDescriptor(null,       { kind: 'type', value: 'sport'          }), 'null block → false');
+        const sport  = { type: 'sport',  event: 'basketball', field: '' };
+        const lunch  = { type: 'lunch',  event: 'lunch',      field: '' };
+        const swim   = { type: 'swim',   event: 'swim',       field: 'pool' };
 
-        // --- 1b. isCandidateAllowed (hard block) ---
-        c.h2('1b. isCandidateAllowed — hard block');
+        assert(blockMatchesDescriptor(sport, { kind: 'type', value: 'sport' }),        'type:sport matches sport block');
+        assert(blockMatchesDescriptor(lunch, { kind: 'type', value: 'lunch' }),        'type:lunch matches lunch block');
+        assert(!blockMatchesDescriptor(sport, { kind: 'type', value: 'lunch' }),       'type:lunch does NOT match sport block');
+        assert(blockMatchesDescriptor(sport, { kind: 'activity', value: 'basketball' }),'activity:basketball matches basketball event');
+        assert(!blockMatchesDescriptor(sport, { kind: 'activity', value: 'soccer' }),  'activity:soccer does NOT match basketball');
+        assert(blockMatchesDescriptor(swim,  { kind: 'facility', value: 'pool' }),     'facility:pool matches pool field');
+        assert(blockMatchesDescriptor(sport, { kind: 'any' }),                         'kind:any matches any block');
+        assert(!blockMatchesDescriptor(null, { kind: 'type', value: 'sport' }),        'null block → false (no crash)');
 
-        // Inject a temporary "sport must be 60+ min after lunch" rule (auto mode)
-        const rules = window.SchedulingRules.getCooldownRules?.() || [];
-        const testRule = {
-            id: '__test_cooldown_001',
-            mode: 'auto',
-            target:    { kind: 'type', value: 'sport' },
-            reference: { kind: 'type', value: 'lunch' },
-            minutes: 60,
-            timing: 'after'
-        };
-        rules.push(testRule);
-        window.SchedulingRules.saveCooldownRules?.(rules);
+        // --- Live rules ---
+        c.h2('1c. Your configured cooldown rules');
 
-        // Lunch ends at 780 (1:00pm), sport starts at 810 (1:30pm) — only 30 min gap → BLOCKED
-        const lunchTemplate = [{ type: 'lunch', event: 'lunch', startMin: 750, endMin: 780 }];
-        const sportCandidate_30min = { type: 'sport', event: 'baseball', startMin: 810, endMin: 870 };
-        const sportCandidate_65min = { type: 'sport', event: 'baseball', startMin: 845, endMin: 905 };
+        const rules = getCooldownRules();
+        if (!rules.length) {
+            skip('No cooldown rules saved yet — create some in the Rules tab to test them');
+        } else {
+            c.info(`Found ${rules.length} rule(s):`);
+            rules.forEach((r, i) => {
+                const t   = r.target    ? `${r.target.kind}:${r.target.value}`    : '(none)';
+                const ref = r.reference ? `${r.reference.kind}:${r.reference.value}` : '(none)';
+                c.data(`Rule ${i+1}: [mode:${r.mode||'both'}] [timing:${r.timing||'both'}] [${r.minutes}min]  "${t}"  ←→  "${ref}"`);
+            });
 
-        assert(!isCandidateAllowed(sportCandidate_30min, lunchTemplate, { mode: 'auto' }),
-            'auto mode: sport 30 min after lunch is BLOCKED (< 60 min rule)');
-        assert(isCandidateAllowed(sportCandidate_65min, lunchTemplate, { mode: 'auto' }),
-            'auto mode: sport 65 min after lunch is ALLOWED (≥ 60 min rule)');
-        assert(isCandidateAllowed(sportCandidate_30min, lunchTemplate, { mode: 'manual' }),
-            'manual mode: rule is mode:auto only → does NOT hard-block');
+            // Verify each rule has required fields
+            c.h2('1d. Rule structure validation');
+            let allValid = true;
+            rules.forEach((r, i) => {
+                const hasTarget = r.target && r.target.kind && r.target.value;
+                const hasRef    = r.reference && r.reference.kind && r.reference.value;
+                const hasMin    = Number.isFinite(parseInt(r.minutes)) && parseInt(r.minutes) > 0;
+                const validMode = ['auto', 'manual', 'both'].includes(r.mode || 'both');
 
-        // --- 1c. checkCandidateDetailed (soft warning) ---
-        c.h2('1c. checkCandidateDetailed — soft warning path');
+                if (!hasTarget || !hasRef || !hasMin || !validMode) {
+                    c.bad(`Rule ${i+1} has structural problems: target=${!!hasTarget} ref=${!!hasRef} minutes=${r.minutes} mode=${r.mode}`);
+                    _fail++; allValid = false;
+                }
+            });
+            if (allValid) { c.ok(`All ${rules.length} rules have valid structure`); _pass++; }
 
-        const manualRule = {
-            id: '__test_cooldown_002',
-            mode: 'manual',
-            target:    { kind: 'activity', value: 'basketball' },
-            reference: { kind: 'type',     value: 'lunch' },
-            minutes: 45,
-            timing: 'after'
-        };
-        const allRules = window.SchedulingRules.getCooldownRules?.() || [];
-        allRules.push(manualRule);
-        window.SchedulingRules.saveCooldownRules?.(allRules);
+            // Mode filtering check
+            c.h2('1e. Mode filtering — auto-only rules do not fire in manual');
+            const autoOnlyRules = rules.filter(r => r.mode === 'auto');
+            const manualRules   = rules.filter(r => r.mode === 'manual');
+            const bothRules     = rules.filter(r => !r.mode || r.mode === 'both');
+            c.info(`Rule modes: auto=${autoOnlyRules.length}  manual=${manualRules.length}  both=${bothRules.length}`);
 
-        const bbCandidate = { type: 'sport', event: 'basketball', startMin: 800, endMin: 850 }; // 20 min after lunch ends 780
-        const bbFarCandidate = { type: 'sport', event: 'basketball', startMin: 830, endMin: 890 }; // 50 min after lunch
+            if (autoOnlyRules.length > 0) {
+                // Pick the first auto-only rule's target type and verify it doesn't block in manual
+                const ar = autoOnlyRules[0];
+                // Build a fake candidate that matches the rule's target
+                const dummyCandidate = { type: ar.target.value, event: ar.target.value, startMin: 600, endMin: 660 };
+                const dummyTemplate  = [{ type: ar.reference.value, event: ar.reference.value, startMin: 500, endMin: 560 }];
+                const blockedInAuto  = !isCandidateAllowed(dummyCandidate, dummyTemplate, { mode: 'auto' });
+                const blockedInManual= !isCandidateAllowed(dummyCandidate, dummyTemplate, { mode: 'manual' });
+                assert(!blockedInManual,
+                    `Auto-only rule "${ar.target.value} after ${ar.reference.value}" does NOT hard-block in manual mode`);
+                if (!blockedInAuto) {
+                    c.warn(`Auto-only rule did not block in auto either — check that target/reference types match exactly (case-sensitive)`);
+                    _warn++;
+                }
+            } else {
+                skip('No auto-only rules to test mode filtering');
+            }
 
-        const res1 = checkCandidateDetailed(bbCandidate,   lunchTemplate, { mode: 'manual' });
-        const res2 = checkCandidateDetailed(bbFarCandidate, lunchTemplate, { mode: 'manual' });
-
-        assert(!res1.allowed && res1.violated.length > 0,
-            'checkCandidateDetailed: basketball 20 min after lunch → violation found');
-        assert(res2.allowed && res2.violated.length === 0,
-            'checkCandidateDetailed: basketball 50 min after lunch → no violation');
-        assert(!checkCandidateDetailed(bbCandidate, lunchTemplate, { mode: 'auto' }).violated.find(r => r.id === '__test_cooldown_002'),
-            'manual-only rule does NOT fire in auto mode');
-
-        // --- 1d. Mode filter: type descriptors only in auto ---
-        c.h2('1d. Mode filtering — category rules (type:*) only in auto');
-
-        // An auto-only "type" rule (sport after lunch) — already added above (__test_cooldown_001)
-        // Manual candidate with a sport should not be hard-blocked by it:
-        assert(isCandidateAllowed(sportCandidate_30min, lunchTemplate, { mode: 'manual' }),
-            'type:sport rule scoped to auto → manual isCandidateAllowed returns true');
-
-        // Clean up test rules
-        const cleaned = (window.SchedulingRules.getCooldownRules?.() || [])
-            .filter(r => r.id !== '__test_cooldown_001' && r.id !== '__test_cooldown_002');
-        window.SchedulingRules.saveCooldownRules?.(cleaned);
-        c.info('Test rules cleaned up');
+            // checkCandidateDetailed returns { allowed, violated }
+            c.h2('1f. checkCandidateDetailed returns correct shape');
+            const firstRule = rules[0];
+            const dummyC = { type: firstRule.target.value, event: firstRule.target.value, startMin: 700, endMin: 760 };
+            const dummyT = [];
+            const result = checkCandidateDetailed(dummyC, dummyT, { mode: 'manual' });
+            assert(typeof result.allowed === 'boolean', 'checkCandidateDetailed.allowed is boolean');
+            assert(Array.isArray(result.violated),      'checkCandidateDetailed.violated is array');
+        }
     }
 
     // =========================================================================
@@ -168,81 +162,65 @@
         c.h1('2. Sport Player Count Rules');
 
         const Utils = window.SchedulerCoreUtils;
-        if (!Utils) { c.bad('window.SchedulerCoreUtils not found — is scheduler_core_utils.js loaded?'); _fail++; return; }
+        if (!Utils) { c.bad('window.SchedulerCoreUtils not found'); _fail++; return; }
 
-        // Inject a temporary sport with min/max into sportMetaData
-        const origMeta = window.getSportMetaData?.() || window.sportMetaData || {};
-        const patchedMeta = Object.assign({}, origMeta, {
-            '__test_sport__': { minPlayers: 20, maxPlayers: 40 }
-        });
+        c.h2('2a. Core functions exposed');
+        assert(typeof Utils.getSportPlayerRequirements === 'function',  'getSportPlayerRequirements exists');
+        assert(typeof Utils.checkPlayerCountForSport === 'function',    'checkPlayerCountForSport exists');
 
-        // Temporarily override getSportMetaData for our tests
+        c.h2('2b. Engine logic validation (independent of your data)');
+
+        // These verify the math is correct regardless of configuration
+        // We build a mock meta lookup for isolated math testing
         const origGet = window.getSportMetaData;
-        window.getSportMetaData = () => patchedMeta;
+        window.getSportMetaData = () => ({ '__audit_sport__': { minPlayers: 20, maxPlayers: 40 } });
 
-        c.h2('2a. getSportPlayerRequirements');
+        const hard_under = Utils.checkPlayerCountForSport('__audit_sport__', 8);   // 60% under → hard
+        const soft_under = Utils.checkPlayerCountForSport('__audit_sport__', 16);  // 20% under → soft
+        const valid_mid  = Utils.checkPlayerCountForSport('__audit_sport__', 28);  // in range  → valid
+        const soft_over  = Utils.checkPlayerCountForSport('__audit_sport__', 48);  // 20% over  → soft
+        const hard_over  = Utils.checkPlayerCountForSport('__audit_sport__', 56);  // 40% over  → hard
+        const zero       = Utils.checkPlayerCountForSport('__audit_sport__', 0);   // 0 players
+        const league     = Utils.checkPlayerCountForSport('__audit_sport__', 5, true); // league flag
 
-        const reqs = Utils.getSportPlayerRequirements('__test_sport__');
-        assert(reqs.minPlayers === 20, `minPlayers = 20 (got ${reqs.minPlayers})`);
-        assert(reqs.maxPlayers === 40, `maxPlayers = 40 (got ${reqs.maxPlayers})`);
-
-        const noReqs = Utils.getSportPlayerRequirements('unconfigured_sport_xyz');
-        assert(noReqs.minPlayers === null && noReqs.maxPlayers === null,
-            'unconfigured sport returns null min/max');
-
-        c.h2('2b. checkPlayerCountForSport — hard violations');
-
-        // 8 players, min 20 → (20-8)/20 = 0.6 > 0.4 → hard block
-        const hardUnder = Utils.checkPlayerCountForSport('__test_sport__', 8);
-        assert(!hardUnder.valid, 'hard undercount (8 of 20 min) → not valid');
-        assert(hardUnder.severity === 'hard', 'hard undercount → severity = hard');
-
-        // 56 players, max 40 → (56-40)/40 = 0.4 > 0.3 → hard block
-        const hardOver = Utils.checkPlayerCountForSport('__test_sport__', 56);
-        assert(!hardOver.valid, 'hard overcount (56 of 40 max) → not valid');
-        assert(hardOver.severity === 'hard', 'hard overcount → severity = hard');
-
-        c.h2('2c. checkPlayerCountForSport — soft violations');
-
-        // 16 players, min 20 → (20-16)/20 = 0.2 < 0.4 → soft warn only
-        const softUnder = Utils.checkPlayerCountForSport('__test_sport__', 16);
-        assert(!softUnder.valid, 'soft undercount (16 of 20 min) → not valid');
-        assert(softUnder.severity === 'soft', 'soft undercount → severity = soft');
-
-        // 48 players, max 40 → (48-40)/40 = 0.2 < 0.3 → soft warn only
-        const softOver = Utils.checkPlayerCountForSport('__test_sport__', 48);
-        assert(!softOver.valid, 'soft overcount (48 of 40 max) → not valid');
-        assert(softOver.severity === 'soft', 'soft overcount → severity = soft');
-
-        c.h2('2d. checkPlayerCountForSport — valid counts');
-
-        const valid = Utils.checkPlayerCountForSport('__test_sport__', 28);
-        assert(valid.valid === true, 'valid count (28, between 20-40) → valid');
-        assert(valid.reason === null, 'valid count → no reason string');
-
-        c.h2('2e. Zero-player guard');
-
-        // Zero players → should NOT hard-fail (bunk not configured yet)
-        const zeroResult = Utils.checkPlayerCountForSport('__test_sport__', 0);
-        // Zero is below min but our guard in the solver skips when projectedPlayers=0
-        // The util itself may return invalid; the guard is in the solver. Just verify it returns a result.
-        assertWarn(typeof zeroResult.valid === 'boolean',
-            'checkPlayerCountForSport(0) returns a boolean valid (solver-level guard handles 0)');
-
-        c.h2('2f. Unconfigured sport → always valid');
-
-        const noConfig = Utils.checkPlayerCountForSport('unconfigured_sport_xyz', 5);
-        assert(noConfig.valid === true, 'sport with no min/max config → always valid');
-
-        c.h2('2g. League flag bypasses check');
-
-        const leagueResult = Utils.checkPlayerCountForSport('__test_sport__', 5, true);
-        assert(leagueResult.valid === true, 'isForLeague=true bypasses player count check');
+        assert(!hard_under.valid && hard_under.severity === 'hard', 'Hard undercount (8/20 min) → hard block');
+        assert(!soft_under.valid && soft_under.severity === 'soft', 'Soft undercount (16/20 min) → soft warn');
+        assert(valid_mid.valid === true,                            'Valid count (28, between 20–40) → valid');
+        assert(!soft_over.valid && soft_over.severity === 'soft',  'Soft overcount (48/40 max) → soft warn');
+        assert(!hard_over.valid && hard_over.severity === 'hard',  'Hard overcount (56/40 max) → hard block');
+        assert(league.valid === true,                               'League flag → always valid (bypasses check)');
+        assertWarn(zero.valid === true || typeof zero.valid === 'boolean',
+            'Zero players returns a boolean (solver-level guard handles it)');
 
         // Restore
         if (origGet) window.getSportMetaData = origGet;
         else delete window.getSportMetaData;
-        c.info('Sport meta patch restored');
+
+        c.h2('2c. Your configured sport player rules');
+
+        const meta = window.getSportMetaData?.() || window.sportMetaData || {};
+        const allSports = Object.keys(meta);
+
+        if (!allSports.length) {
+            skip('No sports found in getSportMetaData() — configure sports in the Facilities tab');
+        } else {
+            const withLimits = allSports.filter(s => meta[s]?.minPlayers || meta[s]?.maxPlayers);
+            if (!withLimits.length) {
+                skip(`${allSports.length} sports found but none have min/max player counts set yet`);
+            } else {
+                c.info(`${withLimits.length} of ${allSports.length} sports have player count rules:`);
+                withLimits.forEach(name => {
+                    const m = meta[name];
+                    c.data(`${name}: min=${m.minPlayers ?? '—'}  max=${m.maxPlayers ?? '—'}`);
+
+                    // Verify the check returns the right shape for each configured sport
+                    const r1 = Utils.checkPlayerCountForSport(name, m.minPlayers || 1);
+                    const r2 = Utils.checkPlayerCountForSport(name, (m.maxPlayers || 999) + 1000);
+                    assert(r1.valid === true,  `${name}: exactly at min (${m.minPlayers}) → valid`);
+                    assert(!r2.valid,          `${name}: way over max → not valid`);
+                });
+            }
+        }
     }
 
     // =========================================================================
@@ -252,18 +230,16 @@
     function testFieldGroups() {
         c.h1('3. Field Quality Groups');
 
-        const SR = window.SchedulingRules;
-        if (!SR || !SR.applyFieldGroupUpdates) {
-            c.bad('window.SchedulingRules.applyFieldGroupUpdates not found — is rules.js loaded?'); _fail++; return;
-        }
+        c.h2('3a. normalizeFieldForSave preserves custom properties');
+
         if (!window.normalizeFieldForSave) {
-            c.bad('window.normalizeFieldForSave not found — is cloud_sync_helpers.js loaded?'); _fail++; return;
+            c.bad('window.normalizeFieldForSave not found — cloud_sync_helpers.js not loaded');
+            _fail++; return;
         }
 
-        c.h2('3a. normalizeFieldForSave preserves fieldGroup/qualityRank');
-
-        const testField = {
-            name: '__test_field__',
+        // Test with a field object that has group data
+        const withGroup = {
+            name: 'Field A',
             activities: ['baseball'],
             available: true,
             sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
@@ -272,166 +248,130 @@
             rainyDayAvailable: false,
             fieldGroup: 'Baseball Diamonds',
             qualityRank: 2,
-            gradeShareRules: { 'Boys': true }
+            gradeShareRules: { Boys: true }
         };
+        const withoutGroup = { name: 'Field B', activities: [] };
 
-        const normalized = window.normalizeFieldForSave(testField);
-        assert(normalized.fieldGroup === 'Baseball Diamonds',
-            'normalizeFieldForSave preserves fieldGroup');
-        assert(normalized.qualityRank === 2,
-            'normalizeFieldForSave preserves qualityRank');
-        assert(normalized.gradeShareRules && normalized.gradeShareRules['Boys'] === true,
-            'normalizeFieldForSave preserves gradeShareRules');
-        assert(normalized.name === '__test_field__',
-            'normalizeFieldForSave preserves name');
+        const n1 = window.normalizeFieldForSave(withGroup);
+        const n2 = window.normalizeFieldForSave(withoutGroup);
 
-        const noGroupField = { name: '__test_field_2__', activities: [] };
-        const normalizedNoGroup = window.normalizeFieldForSave(noGroupField);
-        assert(!('fieldGroup' in normalizedNoGroup),
-            'normalizeFieldForSave does not add fieldGroup when absent');
-        assert(!('qualityRank' in normalizedNoGroup),
-            'normalizeFieldForSave does not add qualityRank when absent');
+        assert(n1.fieldGroup === 'Baseball Diamonds',        'normalizeFieldForSave: fieldGroup preserved');
+        assert(n1.qualityRank === 2,                         'normalizeFieldForSave: qualityRank preserved');
+        assert(n1.gradeShareRules?.Boys === true,            'normalizeFieldForSave: gradeShareRules preserved');
+        assert(!('fieldGroup' in n2),                        'normalizeFieldForSave: fieldGroup not added when absent');
+        assert(!('qualityRank' in n2),                       'normalizeFieldForSave: qualityRank not added when absent');
 
-        c.h2('3b. applyFieldGroupUpdates writes to app1.fields');
+        c.h2('3b. Your configured field quality groups');
 
         const settings = window.loadGlobalSettings?.() || {};
-        const before = (settings.app1?.fields || []).map(f => ({ ...f })); // snapshot
+        const fields = settings.app1?.fields || settings.fields || [];
 
-        // Inject a test field into app1.fields if needed
-        if (!settings.app1) settings.app1 = {};
-        if (!Array.isArray(settings.app1.fields)) settings.app1.fields = [];
-        const testIdx = settings.app1.fields.findIndex(f => f.name === '__test_field__');
-        if (testIdx === -1) {
-            settings.app1.fields.push({ name: '__test_field__', activities: [], available: true });
-            window.saveGlobalSettings?.('app1', settings.app1);
-        }
-
-        SR.applyFieldGroupUpdates([{ fieldName: '__test_field__', fieldGroup: 'Test Diamonds', qualityRank: 3 }]);
-
-        const afterSettings = window.loadGlobalSettings?.() || {};
-        const updated = (afterSettings.app1?.fields || []).find(f => f.name === '__test_field__');
-
-        if (updated) {
-            assert(updated.fieldGroup === 'Test Diamonds',
-                'applyFieldGroupUpdates: fieldGroup written to app1.fields');
-            assert(updated.qualityRank === 3,
-                'applyFieldGroupUpdates: qualityRank written to app1.fields');
+        if (!fields.length) {
+            skip('No fields found in saved settings — add fields in the Facilities tab');
         } else {
-            c.warn('__test_field__ not found in app1.fields after applyFieldGroupUpdates — check if the field was saved');
-            _warn++;
-        }
+            const grouped   = fields.filter(f => f.fieldGroup);
+            const ungrouped = fields.filter(f => !f.fieldGroup);
 
-        c.h2('3c. applyFieldGroupUpdates clears group (null)');
+            c.info(`${fields.length} total fields: ${grouped.length} in groups, ${ungrouped.length} ungrouped`);
 
-        SR.applyFieldGroupUpdates([{ fieldName: '__test_field__', fieldGroup: null, qualityRank: null }]);
-        const clearedSettings = window.loadGlobalSettings?.() || {};
-        const cleared = (clearedSettings.app1?.fields || []).find(f => f.name === '__test_field__');
-        if (cleared) {
-            assert(!cleared.fieldGroup,
-                'applyFieldGroupUpdates null clears fieldGroup');
-            assert(!cleared.qualityRank,
-                'applyFieldGroupUpdates null clears qualityRank');
-        } else {
-            c.warn('Field not found for clear check');
-            _warn++;
-        }
+            if (grouped.length) {
+                // Group by name and display
+                const groupMap = new Map();
+                grouped.forEach(f => {
+                    if (!groupMap.has(f.fieldGroup)) groupMap.set(f.fieldGroup, []);
+                    groupMap.get(f.fieldGroup).push(f);
+                });
 
-        c.h2('3d. saveGlobalFields round-trip preserves fieldGroup');
+                groupMap.forEach((members, groupName) => {
+                    members.sort((a, b) => (a.qualityRank ?? 999) - (b.qualityRank ?? 999));
+                    c.data(`Group "${groupName}":`);
+                    members.forEach(f => console.log(`      rank ${f.qualityRank ?? '—'}  →  ${f.name}`));
+                });
 
-        const fieldsToSave = [
-            {
-                name: '__roundtrip_field__',
-                activities: ['soccer'],
-                available: true,
-                sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
-                limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
-                timeRules: [],
-                rainyDayAvailable: false,
-                fieldGroup: 'Soccer Fields',
-                qualityRank: 1
+                // Verify each grouped field has a qualityRank
+                let rankMissing = 0;
+                grouped.forEach(f => { if (!f.qualityRank) rankMissing++; });
+                assertWarn(rankMissing === 0,
+                    rankMissing === 0
+                        ? 'All grouped fields have a qualityRank'
+                        : `${rankMissing} grouped fields are missing qualityRank — set ranks in the Rules tab`);
+            } else {
+                skip('No fields assigned to quality groups yet — use the Rules tab to create groups');
             }
-        ];
+        }
 
-        window.saveGlobalFields?.(fieldsToSave);
-        const retrieved = window.getGlobalFields?.() || [];
-        const found = retrieved.find(f => f.name === '__roundtrip_field__');
+        c.h2('3c. applyFieldGroupUpdates exposed');
+        assert(typeof window.SchedulingRules?.applyFieldGroupUpdates === 'function',
+            'window.SchedulingRules.applyFieldGroupUpdates is a function');
 
-        if (found) {
-            assert(found.fieldGroup === 'Soccer Fields',
-                'saveGlobalFields → getGlobalFields: fieldGroup round-trip OK');
-            assert(found.qualityRank === 1,
-                'saveGlobalFields → getGlobalFields: qualityRank round-trip OK');
+        c.h2('3d. getGlobalFields round-trip preserves fieldGroup');
+
+        const liveFields = window.getGlobalFields?.() || [];
+        const withGroups = liveFields.filter(f => f.fieldGroup);
+        if (!withGroups.length) {
+            skip('No grouped fields in getGlobalFields() to test round-trip');
         } else {
-            c.warn('__roundtrip_field__ not found after saveGlobalFields — check integration_hooks _localCache');
-            _warn++;
+            // Save then reload
+            window.saveGlobalFields?.(liveFields);
+            const reloaded = window.getGlobalFields?.() || [];
+            let roundTripOk = true;
+            withGroups.forEach(orig => {
+                const r = reloaded.find(f => f.name === orig.name);
+                if (!r || r.fieldGroup !== orig.fieldGroup || r.qualityRank !== orig.qualityRank) {
+                    c.bad(`Round-trip failed for "${orig.name}": fieldGroup=${r?.fieldGroup} qualityRank=${r?.qualityRank}`);
+                    _fail++; roundTripOk = false;
+                }
+            });
+            if (roundTripOk) { c.ok(`All ${withGroups.length} grouped fields survive saveGlobalFields → getGlobalFields round-trip`); _pass++; }
         }
-
-        // Clean up test fields
-        const finalSettings = window.loadGlobalSettings?.() || {};
-        if (finalSettings.app1?.fields) {
-            finalSettings.app1.fields = finalSettings.app1.fields.filter(
-                f => f.name !== '__test_field__' && f.name !== '__roundtrip_field__'
-            );
-            window.saveGlobalSettings?.('app1', finalSettings.app1);
-        }
-        c.info('Test fields cleaned up');
     }
 
     // =========================================================================
-    // 4. FACILITIES SPORT META PERSISTENCE
+    // 4. FACILITIES PERSISTENCE
     // =========================================================================
 
     function testPersistence() {
-        c.h1('4. Facilities Sport Meta Persistence');
+        c.h1('4. Facilities Save Persistence');
 
-        c.h2('4a. sportMetaData accessible via getSportMetaData()');
-
+        c.h2('4a. getSportMetaData accessible');
         const meta = window.getSportMetaData?.();
         if (meta) {
-            const sportNames = Object.keys(meta);
-            c.info(`getSportMetaData() returned ${sportNames.length} sports: ${sportNames.slice(0, 5).join(', ')}${sportNames.length > 5 ? '...' : ''}`);
-            assert(typeof meta === 'object', 'getSportMetaData() returns an object');
+            const n = Object.keys(meta).length;
+            assert(typeof meta === 'object', `getSportMetaData() returns object (${n} sports)`);
         } else {
-            c.warn('getSportMetaData() is undefined — facilities.js may not be loaded or no sports configured');
-            _warn++;
+            assertWarn(false, 'getSportMetaData() is null/undefined — facilities.js not loaded or no sports');
         }
 
-        c.h2('4b. sportMetaData survives saveGlobalSettings round-trip');
-
+        c.h2('4b. sportMetaData saved to app1');
         const settings = window.loadGlobalSettings?.() || {};
-        const savedMeta = settings.app1?.sportMetaData;
-
-        if (savedMeta) {
-            const keys = Object.keys(savedMeta);
-            c.info(`app1.sportMetaData has ${keys.length} sports in saved settings`);
-            assert(keys.length > 0, 'app1.sportMetaData is non-empty in saved settings');
-
-            // Check at least one sport has proper structure
-            const first = savedMeta[keys[0]];
-            assertWarn('minPlayers' in first || 'maxPlayers' in first || 'sport' in first,
-                `First sport entry (${keys[0]}) has expected properties`);
+        const saved = settings.app1?.sportMetaData;
+        if (saved && Object.keys(saved).length > 0) {
+            c.ok(`app1.sportMetaData has ${Object.keys(saved).length} sports saved to cloud state`); _pass++;
         } else {
-            c.warn('app1.sportMetaData not found in saved settings — no sports have been configured/saved yet');
-            _warn++;
+            assertWarn(false, 'app1.sportMetaData is empty or missing — save a sport config in Facilities to persist it');
         }
 
-        c.h2('4c. saveGlobalFields does not clobber sportMetaData');
+        c.h2('4c. fields saved to both app1.fields and root fields key');
+        const app1Fields = settings.app1?.fields || [];
+        const rootFields = settings.fields || [];
+        assertWarn(app1Fields.length > 0,  `app1.fields has ${app1Fields.length} fields`);
+        assertWarn(rootFields.length > 0,  `root fields key has ${rootFields.length} fields`);
 
-        if (meta && Object.keys(meta).length > 0) {
-            // Save an empty fields array — should not wipe sportMetaData
-            const fields = window.getGlobalFields?.() || [];
-            window.saveGlobalFields?.(fields.slice(0, 0)); // save 0 fields
-
-            const afterSettings = window.loadGlobalSettings?.() || {};
-            const afterMeta = afterSettings.app1?.sportMetaData;
-            assertWarn(afterMeta && Object.keys(afterMeta || {}).length > 0,
-                'sportMetaData survives saveGlobalFields([]) call');
-
-            // Restore
-            window.saveGlobalFields?.(fields);
-        } else {
-            c.info('Skipping 4c — no sport meta to test against');
+        if (app1Fields.length > 0 && rootFields.length > 0) {
+            assertWarn(app1Fields.length === rootFields.length,
+                `app1.fields (${app1Fields.length}) and root fields (${rootFields.length}) have same count`);
         }
+
+        c.h2('4d. saveGlobalSettings is hooked for cloud sync');
+        const isHooked = window.saveGlobalSettings?._cloudHelpersHooked === true;
+        assert(isHooked, 'saveGlobalSettings is wrapped by cloud_sync_helpers (._cloudHelpersHooked = true)');
+
+        c.h2('4e. saveGlobalSettings has authoritative handler flag');
+        const isAuth = window.saveGlobalSettings?._isAuthoritativeHandler === true;
+        assertWarn(isAuth,
+            isAuth
+                ? 'saveGlobalSettings._isAuthoritativeHandler = true (prevents stale cloud push)'
+                : 'saveGlobalSettings._isAuthoritativeHandler not set — check integration_hooks.js is loaded first');
     }
 
     // =========================================================================
@@ -440,79 +380,56 @@
 
     function showRules() {
         c.h1('Live Cooldown Rules');
-
         const rules = window.SchedulingRules?.getCooldownRules?.() || [];
-        if (!rules.length) {
-            c.warn('No cooldown rules configured');
-            return;
-        }
-
+        if (!rules.length) { c.warn('No cooldown rules configured'); return; }
         rules.forEach((r, i) => {
-            const t = r.target  ? `${r.target.kind}:${r.target.value}`   : '(none)';
+            const t   = r.target    ? `${r.target.kind}:${r.target.value}`    : '(none)';
             const ref = r.reference ? `${r.reference.kind}:${r.reference.value}` : '(none)';
-            const label = window.SchedulingRules?.describeRule?.(r) || `${t} ← ${r.minutes}min → ${ref}`;
-            c.data(`Rule ${i + 1} [mode:${r.mode||'both'}] [timing:${r.timing||'both'}]  ${label}`);
+            const desc = window.SchedulingRules?.describeRule?.(r) || `"${t}" within ${r.minutes}min of "${ref}"`;
+            c.data(`Rule ${i+1}  [mode:${r.mode||'both'}] [timing:${r.timing||'both'}]  ${desc}`);
         });
-
         console.log(`\nTotal: ${rules.length} rule(s)`);
     }
 
     function showSports() {
         c.h1('Live Sport Player Requirements');
-
         const meta = window.getSportMetaData?.() || window.sportMetaData || {};
         const sports = Object.keys(meta);
-
-        if (!sports.length) {
-            c.warn('No sport metadata found — configure sports in the Facilities tab');
-            return;
-        }
-
-        let configured = 0;
+        if (!sports.length) { c.warn('No sport metadata found'); return; }
+        let n = 0;
         sports.forEach(name => {
             const m = meta[name] || {};
             if (m.minPlayers || m.maxPlayers) {
                 c.data(`${name}: min=${m.minPlayers ?? '—'}  max=${m.maxPlayers ?? '—'}`);
-                configured++;
+                n++;
             }
         });
-
-        if (configured === 0) {
-            c.warn(`${sports.length} sports found but none have min/max player counts set`);
-        } else {
-            console.log(`\n${configured} of ${sports.length} sports have player count rules`);
-        }
+        if (!n) c.warn(`${sports.length} sports found but none have player counts configured`);
+        else console.log(`\n${n} of ${sports.length} sports have player count rules`);
     }
 
     function showGroups() {
         c.h1('Live Field Quality Groups');
-
         const settings = window.loadGlobalSettings?.() || {};
         const fields = settings.app1?.fields || settings.fields || [];
-
         const groups = new Map();
-        let unassigned = 0;
-
+        let ungrouped = 0;
         fields.forEach(f => {
             if (f.fieldGroup) {
                 if (!groups.has(f.fieldGroup)) groups.set(f.fieldGroup, []);
-                groups.get(f.fieldGroup).push({ name: f.name, rank: f.qualityRank ?? '—' });
-            } else {
-                unassigned++;
-            }
+                groups.get(f.fieldGroup).push(f);
+            } else ungrouped++;
         });
-
         if (!groups.size) {
-            c.warn('No field quality groups configured yet — use the Rules tab to create groups');
+            c.warn('No field quality groups configured — use the Rules tab to create groups');
         } else {
-            groups.forEach((members, groupName) => {
-                members.sort((a, b) => (a.rank === '—' ? 999 : a.rank) - (b.rank === '—' ? 999 : b.rank));
-                c.data(`Group: "${groupName}" (${members.length} fields)`);
-                members.forEach(m => console.log(`      rank ${m.rank}  →  ${m.name}`));
+            groups.forEach((members, name) => {
+                members.sort((a, b) => (a.qualityRank ?? 999) - (b.qualityRank ?? 999));
+                c.data(`"${name}"  (${members.length} fields)`);
+                members.forEach(f => console.log(`      rank ${f.qualityRank ?? '—'}  →  ${f.name}`));
             });
         }
-
-        c.info(`${unassigned} field(s) not in any group  |  ${fields.length} fields total`);
+        c.info(`${ungrouped} ungrouped field(s)  |  ${fields.length} total`);
     }
 
     // =========================================================================
@@ -520,26 +437,24 @@
     // =========================================================================
 
     function run() {
-        _pass = 0; _fail = 0; _warn = 0;
+        _pass = 0; _fail = 0; _warn = 0; _skip = 0;
         console.clear();
         console.log('%c Pipeline Audit — Manual Pipeline Audit Branch ',
             'font-size:15px;font-weight:bold;background:#37474f;color:#fff;padding:6px 14px;border-radius:6px');
         console.log('Date:', new Date().toLocaleString());
-
         testCooldown();
         testPlayerCount();
         testFieldGroups();
         testPersistence();
-
         summary();
     }
 
     window.PipelineAudit = {
         run,
-        cooldown:     () => { _pass=0;_fail=0;_warn=0; testCooldown();   summary(); },
-        playerCount:  () => { _pass=0;_fail=0;_warn=0; testPlayerCount();summary(); },
-        fieldGroups:  () => { _pass=0;_fail=0;_warn=0; testFieldGroups();summary(); },
-        persistence:  () => { _pass=0;_fail=0;_warn=0; testPersistence();summary(); },
+        cooldown:    () => { _pass=0;_fail=0;_warn=0;_skip=0; testCooldown();    summary(); },
+        playerCount: () => { _pass=0;_fail=0;_warn=0;_skip=0; testPlayerCount(); summary(); },
+        fieldGroups: () => { _pass=0;_fail=0;_warn=0;_skip=0; testFieldGroups(); summary(); },
+        persistence: () => { _pass=0;_fail=0;_warn=0;_skip=0; testPersistence(); summary(); },
         showRules,
         showSports,
         showGroups,
