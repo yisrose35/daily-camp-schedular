@@ -380,7 +380,7 @@ function injectRulesStyles() {
             display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
         }
         .cd-fields {
-            display: grid; grid-template-columns: auto 1.2fr auto 1.2fr; gap: 14px;
+            display: grid; grid-template-columns: 1.2fr auto 1.2fr; gap: 14px;
             align-items: end;
         }
         .cd-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -691,10 +691,10 @@ function renderCooldownCard(container) {
             </div>
             <div class="rules-card-body" id="rules-cd-body" style="display:none;">
                 <div class="rules-helper">
-                    Keep certain activities or facilities apart in time.
+                    Keep certain activities or facilities apart in time. Rules apply in <strong>both auto and manual mode</strong> automatically.
                     Example: "Don't place <em>Basketball</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
-                    "Don't place <em>Swimming Pool</em> within <em>0 min</em> <em>after</em> <em>Archery</em>" to forbid back-to-back.
-                    Set <strong>Applies in</strong> to control whether the rule runs in the auto-builder, manual mode, or both.
+                    "Don't place <em>Gym</em> within <em>0 min</em> <em>after</em> <em>Archery</em>" to forbid back-to-back.
+                    In auto mode rules are hard constraints; in manual mode they show a warning you can override.
                 </div>
                 <div id="rules-cd-list" style="margin-top:14px;"></div>
                 <div style="margin-top:12px; display:flex; justify-content:flex-end;">
@@ -715,9 +715,9 @@ function renderCooldownCard(container) {
         const current = getCooldownRules();
         current.push({
             id: uid('cd_'),
-            mode: 'auto',
-            target:    { kind: 'type', value: 'sport' },
-            reference: { kind: 'type', value: 'lunch' },
+            mode: 'both',
+            target:    { kind: 'activity', value: '' },
+            reference: { kind: 'activity', value: '' },
             timing: 'after',
             minutes: 20
         });
@@ -749,23 +749,13 @@ function renderCooldownList() {
     }
 
     rules.forEach((rule, idx) => {
-        const mode = rule.mode || 'both';
-        const allowTypes = (mode === 'auto'); // manual/both → specific named items only, no Category options
         const card = document.createElement('div');
         card.className = 'cd-row';
         card.innerHTML = `
             <div class="cd-fields">
-                <div class="cd-col cd-col-mode">
-                    <span class="rules-sub-title">Applies in</span>
-                    <select class="rules-select" id="cd-mode-${idx}">
-                        <option value="auto"   ${mode === 'auto'   ? 'selected' : ''}>Auto Builder</option>
-                        <option value="manual" ${mode === 'manual' ? 'selected' : ''}>Manual Mode</option>
-                        <option value="both"   ${mode === 'both'   ? 'selected' : ''}>Both</option>
-                    </select>
-                </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Don't place</span>
-                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypes)}
+                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, false)}
                 </div>
                 <div class="cd-col cd-middle-wrap">
                     <span class="rules-sub-title">Within</span>
@@ -782,7 +772,7 @@ function renderCooldownList() {
                 </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Of</span>
-                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, allowTypes)}
+                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, false)}
                 </div>
             </div>
             <div class="cd-delete-wrap">
@@ -790,7 +780,6 @@ function renderCooldownList() {
             </div>`;
         listEl.appendChild(card);
 
-        const modeEl = document.getElementById('cd-mode-' + idx);
         const tgtEl = document.getElementById('cd-target-' + idx);
         const refEl = document.getElementById('cd-ref-' + idx);
         const minEl = document.getElementById('cd-min-' + idx);
@@ -801,24 +790,13 @@ function renderCooldownList() {
             const all = getCooldownRules();
             const r = all[idx];
             if (!r) return;
-            r.mode      = modeEl.value;
+            r.mode      = 'both';
             r.target    = parseDescValue(tgtEl.value);
             r.reference = parseDescValue(refEl.value);
             r.minutes   = Math.max(0, parseInt(minEl.value) || 0);
             r.timing    = timEl.value;
-            // If mode no longer allows types but target/reference is a type, reset them
-            if (r.mode !== 'auto' && r.target && r.target.kind === 'type') {
-                r.target = { kind: 'activity', value: '' };
-            }
-            if (r.mode !== 'auto' && r.reference && r.reference.kind === 'type') {
-                r.reference = { kind: 'activity', value: '' };
-            }
             saveCooldownRules(all);
         }
-        if (modeEl) modeEl.addEventListener('change', () => {
-            persist();
-            renderCooldownList(); // re-render so target options refresh for new mode
-        });
         [tgtEl, refEl, minEl, timEl].forEach(el => el && el.addEventListener('change', persist));
         if (delBtn) delBtn.onclick = () => {
             const all = getCooldownRules();
