@@ -558,22 +558,23 @@ function getAllFieldNamesForGroups() {
 
 function applyFieldGroupUpdates(updates) {
     // updates: [{ fieldName, fieldGroup: string|null, qualityRank: number|null }]
+    // Mutate in-place to preserve the reference held by facilities.js UI closures.
     const s = loadSettings();
-    const fields = [...((s.app1 && s.app1.fields) || [])];
+    const app1 = s.app1 || {};
+    const fields = app1.fields || [];
     updates.forEach(u => {
-        const idx = fields.findIndex(f => f.name === u.fieldName);
-        if (idx === -1) return;
+        const f = fields.find(f => f.name === u.fieldName);
+        if (!f) return;
         if (u.fieldGroup == null) {
-            const f2 = { ...fields[idx] };
-            delete f2.fieldGroup;
-            delete f2.qualityRank;
-            fields[idx] = f2;
+            delete f.fieldGroup;
+            delete f.qualityRank;
         } else {
-            fields[idx] = { ...fields[idx], fieldGroup: u.fieldGroup, qualityRank: u.qualityRank };
+            f.fieldGroup = u.fieldGroup;
+            f.qualityRank = u.qualityRank;
         }
     });
-    const app1 = { ...(s.app1 || {}), fields };
     saveKey('app1', app1);
+    saveKey('fields', fields); // keep root fields key in sync so getGlobalFields() sees the change
 }
 
 function getExistingFieldGroups() {

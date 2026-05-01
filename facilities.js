@@ -277,7 +277,12 @@ function syncAllToLegacy() {
 
     // Save fields
     app1.fields = newFields;
-    app1.sportMetaData = sportMetaData;
+    const storedMetaSync = app1.sportMetaData || {};
+    const mergedMetaSync = {};
+    Object.keys(sportMetaData).forEach(k => {
+        mergedMetaSync[k] = { ...sportMetaData[k], ...(storedMetaSync[k] || {}) };
+    });
+    app1.sportMetaData = mergedMetaSync;
     app1.fieldCombos = fieldCombos;
     window.saveGlobalSettings?.("app1", app1);
     window.saveGlobalSettings?.("fields", newFields);
@@ -792,7 +797,15 @@ function renderSportsConfig(container, fac) {
 function saveFieldData() {
     const settings = window.loadGlobalSettings?.() || {};
     const app1 = settings.app1 || {};
-    app1.sportMetaData = sportMetaData;
+    // Merge: preserve min/max set by the Rules tab (stored in app1.sportMetaData).
+    // sportMetaData module var knows which sports are alive (deletions applied);
+    // storedMeta (from _localCache) has any Rules-tab changes (min/max).
+    const storedMeta = app1.sportMetaData || {};
+    const mergedMeta = {};
+    Object.keys(sportMetaData).forEach(k => {
+        mergedMeta[k] = { ...sportMetaData[k], ...(storedMeta[k] || {}) };
+    });
+    app1.sportMetaData = mergedMeta;
     app1.fieldCombos = fieldCombos;
     // Do NOT remap app1.fields through normalizeField here — that creates new objects
     // and breaks the reference held by all the renderSportsConfig UI closures, causing
