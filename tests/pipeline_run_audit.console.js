@@ -295,13 +295,20 @@
         c.h2('6. Field Double-Booking');
         const settings = window.loadGlobalSettings?.() || {};
         const fields = settings.app1?.fields || settings.fields || [];
-        const fieldShareType = {};
-        fields.forEach(f => { fieldShareType[f.name] = f.sharableWith?.type || 'not_sharable'; });
+        if (!fields.length) { c.skip('No fields configured'); return { pass: 0, fail: 0, skip: 1 }; }
 
-        // Build: field|startMin|endMin → [bunks]
+        const fieldShareType = {};
+        const knownFields = new Set();
+        fields.forEach(f => {
+            knownFields.add(f.name);
+            fieldShareType[f.name] = f.sharableWith?.type || 'not_sharable';
+        });
+
+        // Build: field|startMin|endMin → [bunks] — only for configured physical fields
         const usage = {};
         timeline.forEach(entry => {
             if (!entry.field || entry._isTransition) return;
+            if (!knownFields.has(entry.field)) return; // skip activities used as field names
             const key = `${entry.field}|${entry.startMin}|${entry.endMin}`;
             if (!usage[key]) usage[key] = [];
             usage[key].push(entry.bunk);
