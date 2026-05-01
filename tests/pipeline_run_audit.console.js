@@ -221,16 +221,10 @@
                 return `access restriction: division "${entry.divName}" not permitted`;
         }
 
-        // 3. Field quality seniority — solver reserves better fields for more senior divisions
-        if (entry.divName && fieldCfg.qualityRank != null && seniorityMap) {
-            const divSeniority = seniorityMap[entry.divName];
-            if (divSeniority !== undefined) {
-                const idealRank = divSeniority + 1;
-                if (fieldCfg.qualityRank < idealRank) {
-                    return `seniority: rank-${fieldCfg.qualityRank} field reserved for more senior division (this division's ideal rank is ${idealRank})`;
-                }
-            }
-        }
+        // Note: seniority is NOT a skip reason here. The audit already filters
+        // candidates to fields that are free (not in usedNames). If a better field
+        // is free, no senior division is using it — so any division should be able
+        // to take it (per the camp's rule: "if senior doesn't need it, next grade gets it").
 
         return null;
     }

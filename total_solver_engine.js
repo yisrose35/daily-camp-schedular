@@ -712,6 +712,9 @@
 
         // Sharing incentive
         // ★★★ FIELD GROUP SENIORITY PENALTY ★★★
+        // Rule: senior divisions (higher grade number) earn the best fields.
+        // BUT if a better field is genuinely free at this time, any division may use it.
+        // Only block a division from a better field when that field is already occupied.
         if (fieldName && fieldName !== 'Free') {
             var fgInfo = _fieldGroupMap[fieldName];
             if (fgInfo) {
@@ -727,10 +730,27 @@
                     } else if (idealRank <= totalInGroup) {
                         var rankDiff = Math.abs(fieldQR - idealRank);
                         if (fieldQR < idealRank) {
-                            // Getting a BETTER field than seniority warrants — leave it for seniors
-                            penalty += 4000 + rankDiff * 2000;
+                            // This field is better than the division's ideal.
+                            // Only penalise if it's already occupied by another bunk —
+                            // meaning a more senior division may be using it or have claimed it.
+                            // If it's free, allow any division to use the best available field.
+                            var fgFieldOccupied = false;
+                            if (blockStart !== undefined && blockEnd !== undefined) {
+                                var fgEntries = _fieldTimeIndex.get(fieldNorm) || [];
+                                for (var fgei = 0; fgei < fgEntries.length; fgei++) {
+                                    var fge = fgEntries[fgei];
+                                    if (fge.bunk === bunk) continue;
+                                    if (fge.endMin <= blockStart || fge.startMin >= blockEnd) continue;
+                                    fgFieldOccupied = true;
+                                    break;
+                                }
+                            }
+                            if (fgFieldOccupied) {
+                                penalty += 4000 + rankDiff * 2000; // occupied — leave it for who has it
+                            }
+                            // else: field is free → no penalty, any division may use the best available
                         } else {
-                            // Getting a WORSE field — ok if better ones are taken
+                            // Getting a WORSE field than ideal — soft penalty regardless
                             penalty += 1000 + rankDiff * 500;
                         }
                     } else {
