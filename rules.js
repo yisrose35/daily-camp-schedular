@@ -161,7 +161,8 @@ function isCandidateAllowed(candidate, template, opts) {
     return true;
 }
 
-function findForbiddenRanges(targetDescriptor, template, _opts) {
+function findForbiddenRanges(targetDescriptor, template, opts) {
+    const mode = (opts && opts.mode) || 'auto';
     const out = [];
     const rules = getCooldownRules();
     if (!rules.length) return out;
@@ -169,6 +170,8 @@ function findForbiddenRanges(targetDescriptor, template, _opts) {
     for (let i = 0; i < rules.length; i++) {
         const r = rules[i];
         if (!r.target || !r.reference) continue;
+        const rMode = r.mode || 'both';
+        if (rMode !== 'both' && rMode !== mode) continue;
         if (!descriptorCanMatch(r.target, targetDescriptor)) continue;
         const minutes = Math.max(0, parseInt(r.minutes) || 0);
         if (minutes === 0) continue;
@@ -219,7 +222,7 @@ function buildTemplateFromBunkSlots(bunk, excludeIdx) {
         const t = times[i];
         if (excl.has(i) || !s || !s._activity || !t) { current = null; continue; }
         const act = s._activity;
-        const loc = s.location || s.field || null;
+        const loc = s._location || s.location || s.field || null;
         const startMin = (typeof t.startMin === 'number') ? t.startMin
                        : (typeof t.start === 'number') ? t.start : null;
         const endMin = (typeof t.endMin === 'number') ? t.endMin
