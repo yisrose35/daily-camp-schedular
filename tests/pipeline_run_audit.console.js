@@ -181,9 +181,29 @@
     // AUDIT 3 — Field quality groups
     // =========================================================================
 
-    // Returns a human-readable reason why a field was legitimately unavailable for
+    // Build division seniority map — mirrors total_solver_engine.js buildFieldGroupCaches()
+    // Higher grade number → lower seniority index → gets the best (rank 1) field.
+    function _buildSeniorityMap() {
+        const divisions = window.divisions || {};
+        const divWithNumbers = Object.keys(divisions).map(dn => {
+            const m = String(dn).toLowerCase().trim().match(/(\d+)/);
+            return { name: dn, gradeNum: m ? parseInt(m[1], 10) : null };
+        });
+        divWithNumbers.sort((a, b) => {
+            if (a.gradeNum !== null && b.gradeNum !== null) return b.gradeNum - a.gradeNum;
+            if (a.gradeNum !== null) return -1;
+            if (b.gradeNum !== null) return 1;
+            return a.name.localeCompare(b.name);
+        });
+        const map = {};
+        divWithNumbers.forEach((d, i) => { map[d.name] = i; });
+        return map;
+    }
+
+    // Returns a human-readable reason why a field was legitimately skipped for
     // this entry, or null if no blocking rule is found (genuine solver miss).
-    function _fieldSkipReason(fieldCfg, entry) {
+    function _fieldSkipReason(fieldCfg, entry, seniorityMap) {
+        // 1. Time rules
         const timeRules = fieldCfg.timeRules || [];
         const unavail = timeRules.filter(r => r.type === 'Unavailable' && r.startMin != null && r.endMin != null);
         const avail   = timeRules.filter(r => r.type === 'Available'   && r.startMin != null && r.endMin != null);
@@ -193,11 +213,25 @@
         }
         if (avail.length > 0 && !avail.some(r => entry.startMin >= r.startMin && entry.endMin <= r.endMin))
             return `time rule: not within any Available window`;
+
+        // 2. Division access restriction
         if (fieldCfg.limitUsage?.enabled && entry.divName) {
             const allowed = fieldCfg.limitUsage.divisions || {};
             if (!allowed[entry.divName])
                 return `access restriction: division "${entry.divName}" not permitted`;
         }
+
+        // 3. Field quality seniority — solver reserves better fields for more senior divisions
+        if (entry.divName && fieldCfg.qualityRank != null && seniorityMap) {
+            const divSeniority = seniorityMap[entry.divName];
+            if (divSeniority !== undefined) {
+                const idealRank = divSeniority + 1;
+                if (fieldCfg.qualityRank < idealRank) {
+                    return `seniority: rank-${fieldCfg.qualityRank} field reserved for more senior division (this division's ideal rank is ${idealRank})`;
+                }
+            }
+        }
+
         return null;
     }
 
@@ -206,12 +240,15 @@
         const settings = window.loadGlobalSettings?.() || {};
         const fields = settings.app1?.fields || settings.fields || [];
 
-        // Store full config so _fieldSkipReason can inspect timeRules + limitUsage
+        const seniorityMap = _buildSeniorityMap();
+
+        // Store full config so _fieldSkipReason can inspect timeRules + limitUsage + seniority
         const fieldMeta = {};
         fields.forEach(f => {
             if (f.fieldGroup) fieldMeta[f.name] = {
                 group: f.fieldGroup,
                 rank: f.qualityRank ?? 999,
+                qualityRank: f.qualityRank ?? 999,
                 activities: new Set((f.activities || []).map(a => (a || '').toLowerCase().trim())),
                 timeRules: f.timeRules || [],
                 limitUsage: f.limitUsage || {}
@@ -257,7 +294,7 @@
 
                 const fakeEntry = { startMin, endMin, divName: used.divName };
                 const best = candidates[0];
-                const reason = _fieldSkipReason(best, fakeEntry);
+                const reason = _fieldSkipReason(best, fakeEntry, seniorityMap);
 
                 if (reason) {
                     // Solver had a valid reason — log as info so you can see it, not a violation
