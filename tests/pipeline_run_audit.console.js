@@ -181,16 +181,46 @@
     // AUDIT 3 — Field quality groups
     // =========================================================================
 
+    // Returns a human-readable reason why a field was legitimately unavailable for
+    // this entry, or null if no blocking rule is found (genuine solver miss).
+    function _fieldSkipReason(fieldCfg, entry) {
+        const timeRules = fieldCfg.timeRules || [];
+        const unavail = timeRules.filter(r => r.type === 'Unavailable' && r.startMin != null && r.endMin != null);
+        const avail   = timeRules.filter(r => r.type === 'Available'   && r.startMin != null && r.endMin != null);
+        for (const r of unavail) {
+            if (entry.startMin < r.endMin && entry.endMin > r.startMin)
+                return `time rule: Unavailable ${_fmt(r.startMin)}–${_fmt(r.endMin)}`;
+        }
+        if (avail.length > 0 && !avail.some(r => entry.startMin >= r.startMin && entry.endMin <= r.endMin))
+            return `time rule: not within any Available window`;
+        if (fieldCfg.limitUsage?.enabled && entry.divName) {
+            const allowed = fieldCfg.limitUsage.divisions || {};
+            if (!allowed[entry.divName])
+                return `access restriction: division "${entry.divName}" not permitted`;
+        }
+        return null;
+    }
+
     function auditFieldQuality(timeline) {
         c.h2('3. Field Quality Groups');
         const settings = window.loadGlobalSettings?.() || {};
         const fields = settings.app1?.fields || settings.fields || [];
+
+        // Store full config so _fieldSkipReason can inspect timeRules + limitUsage
         const fieldMeta = {};
         fields.forEach(f => {
-            if (f.fieldGroup) fieldMeta[f.name] = { group: f.fieldGroup, rank: f.qualityRank ?? 999, activities: new Set((f.activities || []).map(a => (a || '').toLowerCase().trim())) };
+            if (f.fieldGroup) fieldMeta[f.name] = {
+                group: f.fieldGroup,
+                rank: f.qualityRank ?? 999,
+                activities: new Set((f.activities || []).map(a => (a || '').toLowerCase().trim())),
+                timeRules: f.timeRules || [],
+                limitUsage: f.limitUsage || {}
+            };
         });
+
         const groups = new Set(Object.values(fieldMeta).map(m => m.group));
         if (!groups.size) { c.skip('No field quality groups configured'); return { pass: 0, fail: 0, skip: 1 }; }
+
         const slotUsage = {};
         timeline.forEach(entry => {
             if (!entry.field || entry._isTransition) return;
@@ -198,25 +228,55 @@
             if (!fm) return;
             const key = `${fm.group}|${entry.startMin}|${entry.endMin}`;
             if (!slotUsage[key]) slotUsage[key] = [];
-            slotUsage[key].push({ bunk: entry.bunk, field: entry.field, rank: fm.rank, activity: (entry.activity || entry.sport || '').toLowerCase().trim() });
+            slotUsage[key].push({ bunk: entry.bunk, divName: entry.divName, field: entry.field, rank: fm.rank, activity: (entry.activity || entry.sport || '').toLowerCase().trim() });
         });
+
         const groupFields = {};
-        Object.entries(fieldMeta).forEach(([name, m]) => { if (!groupFields[m.group]) groupFields[m.group] = []; groupFields[m.group].push({ name, rank: m.rank, activities: m.activities }); });
+        Object.entries(fieldMeta).forEach(([name, m]) => {
+            if (!groupFields[m.group]) groupFields[m.group] = [];
+            groupFields[m.group].push({ name, rank: m.rank, activities: m.activities, timeRules: m.timeRules, limitUsage: m.limitUsage });
+        });
         Object.values(groupFields).forEach(arr => arr.sort((a, b) => a.rank - b.rank));
-        let violations = 0, checked = 0;
+
+        let violations = 0, explained = 0, checked = 0;
+
         Object.entries(slotUsage).forEach(([key, usedList]) => {
-            const [groupName, startStr] = key.split('|');
-            const startMin = parseInt(startStr);
+            const [groupName, startStr, endStr] = key.split('|');
+            const startMin = parseInt(startStr), endMin = parseInt(endStr);
             const allGroupFields = groupFields[groupName] || [];
             const usedNames = new Set(usedList.map(u => u.field));
+
             usedList.forEach(used => {
-                const betterFree = allGroupFields.filter(f => f.rank < used.rank && !usedNames.has(f.name) && (f.activities.size === 0 || f.activities.has(used.activity)));
-                if (betterFree.length > 0) { violations++; const best = betterFree[0]; c.warn(`Group "${groupName}" at ${_fmt(startMin)}: bunk ${used.bunk} → "${used.field}" (rank ${used.rank}) but "${best.name}" (rank ${best.rank}) was free and supports "${used.activity}"`); }
+                // Candidate better fields: higher rank (lower number), free, supports activity
+                const candidates = allGroupFields.filter(f =>
+                    f.rank < used.rank &&
+                    !usedNames.has(f.name) &&
+                    (f.activities.size === 0 || f.activities.has(used.activity))
+                );
+                if (candidates.length === 0) { checked++; return; }
+
+                const fakeEntry = { startMin, endMin, divName: used.divName };
+                const best = candidates[0];
+                const reason = _fieldSkipReason(best, fakeEntry);
+
+                if (reason) {
+                    // Solver had a valid reason — log as info so you can see it, not a violation
+                    explained++;
+                    c.info(`Group "${groupName}" at ${_fmt(startMin)}: bunk ${used.bunk} used "${used.field}" (rank ${used.rank}) — "${best.name}" (rank ${best.rank}) was blocked: ${reason}`);
+                } else {
+                    violations++;
+                    c.warn(`Group "${groupName}" at ${_fmt(startMin)}: bunk ${used.bunk} → "${used.field}" (rank ${used.rank}) — "${best.name}" (rank ${best.rank}) was free with no restriction (possible solver miss)`);
+                }
                 checked++;
             });
         });
-        if (violations === 0) c.ok(`${checked} field assignment(s) — quality order respected`);
-        else c.warn(`${violations} case(s) where a better field was free and supports the same activity`);
+
+        if (violations === 0 && explained === 0) {
+            c.ok(`${checked} field assignment(s) — quality order respected`);
+        } else {
+            if (violations > 0) c.warn(`${violations} unexplained skip(s) — better field was free with no blocking rule`);
+            if (explained > 0) c.info(`${explained} skip(s) explained by time rules or access restrictions`);
+        }
         return { pass: checked - violations, fail: 0, warn: violations };
     }
 
