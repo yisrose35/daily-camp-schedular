@@ -516,8 +516,8 @@ function getAvailableSkeletons() {
 function getRainyDayStats() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
-  const specials = g.app1?.specialActivities || [];
-  
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
+
   // Indoor fields = marked as rainyDayAvailable
   const indoorFields = fields.filter(f => f.rainyDayAvailable === true);
   // Outdoor fields = NOT marked as rainyDayAvailable
@@ -896,7 +896,7 @@ function activateFullDayRainyMode() {
 function buildRainyDayResourceOverrides() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
-  const specials = g.app1?.specialActivities || [];
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
   const overrides = {};
   
   // Fields
@@ -1441,7 +1441,7 @@ function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false
 // =================================================================
 async function promptForReservedFields(eventName) {
   const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-  const specialActivities = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+  const specialActivities = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
   if (allLocations.length === 0) return [];
 
@@ -2512,7 +2512,7 @@ function addDropListeners(gridEl) {
       // ===== ELECTIVE =====
       else if (tileData.type === 'elective') {
         const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-        const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const allSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
         const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
         const daTaken = daGetConflictingFacilities(startStr, endStr, null);
         const daSportMap = daGetSportFacilitiesMap();
@@ -2557,7 +2557,7 @@ function addDropListeners(gridEl) {
       // ===== CUSTOM PINNED =====
       else if (tileData.type === 'custom') {
         const _cAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
-        const _cAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const _cAllSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
         const _cAllLocations = [...new Set([..._cAllFields, ..._cAllSpecials])].sort();
         const customModalFields = [
           { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },

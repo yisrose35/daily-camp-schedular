@@ -490,12 +490,16 @@ function getAllLocations() {
   const directFacilities = extractNames(directSettings.facilities);
   const directApp1Locations = extractNames(directSettings.app1?.locations);
   const directApp1Facilities = extractNames(directSettings.app1?.facilities);
-  
+
+  // Live in-memory sources — more up-to-date than storage snapshots above
+  const liveFacilities = extractNames(window.getFacilities?.());
+  const liveSpecials = extractNames(window.getGlobalSpecialActivities?.());
+
   // Combine all and remove duplicates
   const all = [...new Set([
-    ...fields, 
-    ...facilities, 
-    ...locations, 
+    ...fields,
+    ...facilities,
+    ...locations,
     ...topLevelLocations,
     ...topLevelFacilities,
     ...windowLocations,
@@ -504,7 +508,9 @@ function getAllLocations() {
     ...directFacilities,
     ...directApp1Locations,
     ...directApp1Facilities,
-    ...specialActivities
+    ...specialActivities,
+    ...liveFacilities,
+    ...liveSpecials
   ])].filter(Boolean).sort();
   
   console.log('[getAllLocations] Searched sources:', { 
@@ -568,7 +574,8 @@ function getGroupedLocationOptions() {
   });
   
   // Get pinned tile defaults (Swim → Pool, Lunch → Lunchroom, etc.)
-  const pinnedDefaults = globalSettings.pinnedTileDefaults || {};
+  // Use live API so recently-saved defaults are visible immediately
+  const pinnedDefaults = window.getPinnedTileDefaults?.() || globalSettings.pinnedTileDefaults || {};
   const pinnedOptions = Object.entries(pinnedDefaults).map(([act, loc]) => ({
     value: loc, label: `${act} → ${loc}`
   }));
@@ -579,8 +586,8 @@ function getGroupedLocationOptions() {
     label: f.name + (f.rainyDayAvailable ? ' 🏠' : '')
   }));
   
-  // Get special activities
-  const allSpecials = (app1.specialActivities || []).map(s => ({
+  // Get special activities — prefer live in-memory cache over stale app1 snapshot
+  const allSpecials = (window.getGlobalSpecialActivities?.() || app1.specialActivities || []).map(s => ({
     value: s.name, label: s.name
   }));
   
