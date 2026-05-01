@@ -436,15 +436,35 @@ function injectRulesStyles() {
             padding: 2px 10px; border-radius: 99px;
         }
         .fq-member {
-            display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+            display: flex; align-items: center; gap: 8px; padding: 6px 10px;
             background: #F8FAFC; border-radius: 8px; border: 1px solid #F1F5F9;
-            margin-bottom: 4px;
+            margin-bottom: 4px; cursor: grab; user-select: none;
+        }
+        .fq-member.fq-dragging { opacity: 0.4; }
+        .fq-member.fq-drag-over { border: 2px solid #0F6A7A; background: #E6F4F7; }
+        .fq-drag-handle {
+            font-size: 1.1rem; color: #94A3B8; cursor: grab; padding: 0 2px; line-height: 1;
+        }
+        .fq-rank-badge {
+            min-width: 22px; height: 22px; border-radius: 50%; background: #0F6A7A;
+            color: #fff; font-size: 0.72rem; font-weight: 700;
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0;
         }
         .fq-member-name { flex: 1; font-size: 0.88rem; font-weight: 500; color: #0F172A; }
         .fq-name-input { font-weight: 700; font-size: 0.93rem; }
-        .fq-rank-in { width: 52px; text-align: center; font-weight: 700; }
-        .fq-add-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
-        .fq-add-row .rules-select { flex: 1; }
+        .fq-add-section { margin-top: 10px; border-top: 1px solid #F1F5F9; padding-top: 10px; }
+        .fq-add-section-label { font-size: 0.75rem; font-weight: 600; color: #64748B; margin-bottom: 6px; }
+        .fq-fields-grid {
+            display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px;
+            overflow-y: auto; margin-bottom: 8px; padding: 4px;
+        }
+        .fq-check-label {
+            display: flex; align-items: center; gap: 5px; font-size: 0.82rem;
+            background: #F1F5F9; border-radius: 6px; padding: 4px 10px;
+            cursor: pointer; border: 1px solid #E2E8F0; white-space: nowrap;
+        }
+        .fq-check-label:has(input:checked) { background: #DBEAFE; border-color: #93C5FD; }
+        .fq-check-label input { cursor: pointer; accent-color: #0F6A7A; }
     `;
     const style = document.createElement('style');
     style.id = 'rules-tab-styles';
@@ -670,34 +690,91 @@ function renderFieldGroupsList(listEl) {
                 <button class="rules-btn-ghost-danger fq-del-group">Delete Group</button>
             </div>
             <div class="fq-members-list">
-                ${members.length === 0 ? '<div class="rules-empty" style="padding:6px 0 4px; font-size:0.8rem;">No fields yet — add one below.</div>' : ''}
+                ${members.length === 0 ? '<div class="fq-empty-hint rules-empty" style="padding:6px 0 4px; font-size:0.8rem;">No fields yet — add fields below.</div>' : ''}
             </div>
-            <div class="fq-add-row">
-                <select class="rules-select fq-field-picker">
-                    <option value="">— Add a field —</option>
-                    ${availFields.map(f => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('')}
-                </select>
-                <button class="rules-btn-dark fq-add-field">Add</button>
-            </div>`;
+            ${availFields.length > 0 ? `
+            <div class="fq-add-section">
+                <div class="fq-add-section-label">Add fields to this group:</div>
+                <div class="fq-fields-grid">
+                    ${availFields.map(f => `
+                        <label class="fq-check-label">
+                            <input type="checkbox" class="fq-field-check" value="${escapeHtml(f)}">
+                            <span>${escapeHtml(f)}</span>
+                        </label>`).join('')}
+                </div>
+                <button class="rules-btn-dark fq-add-field" style="font-size:0.82rem; padding:5px 14px;">+ Add Selected</button>
+            </div>` : `<div style="font-size:0.8rem; color:#64748B; margin-top:6px;">All available fields are in this group.</div>`}`;
 
         const membersList = card.querySelector('.fq-members-list');
 
-        members.forEach(m => {
+        // Drag state scoped to this group
+        let _dragSrc = null;
+
+        members.forEach((m, mi) => {
             const row = document.createElement('div');
             row.className = 'fq-member';
+            row.draggable = true;
+            row.dataset.fieldName = m.name;
             row.innerHTML = `
-                <input type="number" class="rules-input fq-rank-in" value="${m.qualityRank || 1}" min="1" max="99" title="Rank (1 = best field)">
+                <span class="fq-drag-handle" title="Drag to reorder">⠿</span>
+                <span class="fq-rank-badge">${mi + 1}</span>
                 <span class="fq-member-name">${escapeHtml(m.name)}</span>
                 <button class="rules-btn-ghost-danger fq-rem-member" style="font-size:0.75rem; padding:3px 8px;">✕</button>`;
 
-            row.querySelector('.fq-rank-in').addEventListener('change', e => {
-                applyFieldGroupUpdates([{ fieldName: m.name, fieldGroup: groupName, qualityRank: Math.max(1, parseInt(e.target.value) || 1) }]);
-                renderFieldGroupsList(listEl);
+            // Drag-and-drop handlers
+            row.addEventListener('dragstart', e => {
+                _dragSrc = row;
+                e.dataTransfer.effectAllowed = 'move';
+                setTimeout(() => row.classList.add('fq-dragging'), 0);
             });
+            row.addEventListener('dragend', () => {
+                row.classList.remove('fq-dragging');
+                membersList.querySelectorAll('.fq-member').forEach(r => r.classList.remove('fq-drag-over'));
+                _dragSrc = null;
+            });
+            row.addEventListener('dragover', e => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (_dragSrc && _dragSrc !== row) {
+                    membersList.querySelectorAll('.fq-member').forEach(r => r.classList.remove('fq-drag-over'));
+                    row.classList.add('fq-drag-over');
+                }
+            });
+            row.addEventListener('drop', e => {
+                e.preventDefault();
+                if (!_dragSrc || _dragSrc === row) return;
+                row.classList.remove('fq-drag-over');
+
+                // Re-insert before or after based on vertical position
+                const rect = row.getBoundingClientRect();
+                const midY = rect.top + rect.height / 2;
+                if (e.clientY < midY) {
+                    membersList.insertBefore(_dragSrc, row);
+                } else {
+                    membersList.insertBefore(_dragSrc, row.nextSibling);
+                }
+
+                // Reassign ranks from new DOM order and save
+                const newOrder = [...membersList.querySelectorAll('.fq-member')];
+                const updates = newOrder.map((r, i) => ({
+                    fieldName: r.dataset.fieldName,
+                    fieldGroup: groupName,
+                    qualityRank: i + 1
+                }));
+                applyFieldGroupUpdates(updates);
+
+                // Update rank badges in-place (no full re-render needed)
+                newOrder.forEach((r, i) => {
+                    const badge = r.querySelector('.fq-rank-badge');
+                    if (badge) badge.textContent = i + 1;
+                });
+            });
+
             row.querySelector('.fq-rem-member').addEventListener('click', () => {
                 applyFieldGroupUpdates([{ fieldName: m.name, fieldGroup: null, qualityRank: null }]);
                 renderFieldGroupsList(listEl);
             });
+
             membersList.appendChild(row);
         });
 
@@ -720,17 +797,20 @@ function renderFieldGroupsList(listEl) {
             renderFieldGroupsList(listEl);
         });
 
-        // Add field to group
-        const picker = card.querySelector('.fq-field-picker');
-        card.querySelector('.fq-add-field').addEventListener('click', () => {
-            const fname = picker.value;
-            if (!fname) return;
-            const nextRank = members.length + 1;
-            applyFieldGroupUpdates([{ fieldName: fname, fieldGroup: groupName, qualityRank: nextRank }]);
-            const pi = _pendingFQGroups.indexOf(groupName);
-            if (pi !== -1) _pendingFQGroups.splice(pi, 1);
-            renderFieldGroupsList(listEl);
-        });
+        // Add selected fields — multi-select, panel stays open
+        const addBtn = card.querySelector('.fq-add-field');
+        if (addBtn) {
+            addBtn.addEventListener('click', () => {
+                const checked = [...card.querySelectorAll('.fq-field-check:checked')].map(c => c.value);
+                if (!checked.length) return;
+                let nextRank = members.length + 1;
+                const updates = checked.map(fname => ({ fieldName: fname, fieldGroup: groupName, qualityRank: nextRank++ }));
+                applyFieldGroupUpdates(updates);
+                const pi = _pendingFQGroups.indexOf(groupName);
+                if (pi !== -1) _pendingFQGroups.splice(pi, 1);
+                renderFieldGroupsList(listEl);
+            });
+        }
 
         listEl.appendChild(card);
     });
