@@ -813,7 +813,9 @@
             skeletonAssignments: state.skeletonAssignments,
             specialActivities: state.specialActivities,
             bunkMetaData: state.bunkMetaData,
-            sportMetaData: state.sportMetaData,
+            // sportMetaData is written by facilities.js — prefer the fresh storage
+            // value so that app1 saves don't overwrite facilities.js changes.
+            sportMetaData: app1Data.sportMetaData || state.sportMetaData,
             divisionGroups: state.divisionGroups
         };
         
