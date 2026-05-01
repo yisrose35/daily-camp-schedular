@@ -777,6 +777,8 @@ function renderCooldownCard(container) {
     if (!container) return;
     const rules = getCooldownRules();
     const count = rules.length;
+    // Auto-expand when rules exist so returning to the tab doesn't hide saved rules
+    const startOpen = count > 0;
     container.innerHTML = `
         <div class="rules-card">
             <div class="rules-card-header" id="rules-cd-toggle">
@@ -787,11 +789,11 @@ function renderCooldownCard(container) {
                     </div>
                     <div class="rules-card-subtitle">Tell the auto-builder to keep certain activities or facilities apart in time.</div>
                 </div>
-                <span class="rules-caret" id="rules-cd-caret">
+                <span class="rules-caret${startOpen ? ' open' : ''}" id="rules-cd-caret">
                     <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </span>
             </div>
-            <div class="rules-card-body" id="rules-cd-body" style="display:none;">
+            <div class="rules-card-body" id="rules-cd-body" style="display:${startOpen ? 'block' : 'none'};">
                 <div class="rules-helper">
                     Keep certain activities or facilities apart in time. Rules apply in <strong>both auto and manual mode</strong> automatically.
                     Example: "Don't place <em>Basketball</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
@@ -815,9 +817,11 @@ function renderCooldownCard(container) {
 
     document.getElementById('rules-cd-add').onclick = () => {
         const current = getCooldownRules();
+        // Default mode:auto so that the type-based target/reference dropdowns
+        // (Any Sport, Lunch, etc.) are visible immediately after adding the rule.
         current.push({
             id: uid('cd_'),
-            mode: 'both',
+            mode: 'auto',
             target:    { kind: 'type', value: 'sport' },
             reference: { kind: 'type', value: 'lunch' },
             timing: 'after',
@@ -921,7 +925,10 @@ function renderCooldownList() {
             persist();
             renderCooldownList();
         });
-        [tgtEl, refEl, minEl, timEl].forEach(el => el && el.addEventListener('change', persist));
+        [tgtEl, refEl, timEl].forEach(el => el && el.addEventListener('change', persist));
+        // 'input' fires on every keystroke so the value is captured even if the user
+        // navigates away before the number field fires its 'change' (blur) event.
+        if (minEl) { minEl.addEventListener('change', persist); minEl.addEventListener('input', persist); }
         if (delBtn) delBtn.onclick = () => {
             const all = getCooldownRules();
             all.splice(idx, 1);
