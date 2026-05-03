@@ -61,6 +61,8 @@
         try {
             const campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id');
             if (campId && window.supabase) {
+                const { data: kvRow } = await window.supabase.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campStructure').maybeSingle();
+                if (kvRow?.value) { _meDivisionsCache = kvRow.value; return _meDivisionsCache; }
                 const { data } = await window.supabase.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
                 if (data?.state?.campStructure) { _meDivisionsCache = data.state.campStructure; return _meDivisionsCache; }
             }

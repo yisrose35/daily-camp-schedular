@@ -3664,7 +3664,15 @@ if (success) {
       } catch (e) {
           console.warn('[Optimizer] Post-generation save failed:', e);
       }
-      await daShowAlert("✅ Schedule Generated!"); 
+      // Notify reports + any other listeners that the schedule for this date changed.
+      // Reports tab uses this to live-refresh availability/usage views.
+      try {
+          document.dispatchEvent(new CustomEvent('campistry-schedule-generated', {
+              detail: { date: dateKey, mode: 'manual' }
+          }));
+      } catch (e) { /* non-fatal */ }
+
+      await daShowAlert("✅ Schedule Generated!");
       window.showTab?.('schedule');
       // Force full re-render with clean state
       const schedEl = document.getElementById('scheduleTable');
