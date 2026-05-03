@@ -95,12 +95,44 @@ function save(){
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
         };
         g.updated_at=new Date().toISOString();
-        var json=JSON.stringify(g);
-        localStorage.setItem('campGlobalSettings_v1',json);
-        // Write to all known keys that other scripts may read
-        localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
-        try{localStorage.setItem('CAMPISTRY_UNIFIED_STATE',json)}catch(ex){}
-        console.log('[Me] Saved locally:',Object.keys(roster).length,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
+        // ★ localStorage has a ~5MB quota. With many campers + many days of
+        //   daily_schedules in the blob, JSON.stringify(g) blows past it and
+        //   the write throws QuotaExceededError, killing the entire save.
+        //   Strip the largest transient blobs from the LOCAL copy — they
+        //   live in the cloud per-key and get re-hydrated on load. We keep
+        //   campGlobalSettings_v1 small enough to never hit the quota again.
+        function _buildLiteForLocalStorage(full){
+            var lite=Object.assign({},full);
+            // Daily schedules: stored per-date in cloud, fetched on demand
+            // by schedule_orchestrator.loadSchedule(). They never need to
+            // be cached as one big blob.
+            delete lite.daily_schedules;
+            // Campistry Go heavy data — already stripped by integration_hooks
+            // setLocalSettings, but our direct write bypasses that.
+            if(lite.campistryGo){
+                lite.campistryGo=Object.assign({},lite.campistryGo);
+                delete lite.campistryGo.savedRoutes;
+                delete lite.campistryGo.addresses;
+            }
+            return lite;
+        }
+        var liteJson;
+        try{
+            liteJson=JSON.stringify(_buildLiteForLocalStorage(g));
+            localStorage.setItem('campGlobalSettings_v1',liteJson);
+            // Write to all known keys that other scripts may read
+            localStorage.setItem('CAMPISTRY_LOCAL_CACHE',liteJson);
+            try{localStorage.setItem('CAMPISTRY_UNIFIED_STATE',liteJson)}catch(ex){}
+            console.log('[Me] Saved locally:',Object.keys(roster).length,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
+        }catch(e){
+            if(e&&e.name==='QuotaExceededError'){
+                console.warn('[Me] ⚠ localStorage quota still exceeded after stripping heavy keys — relying on cloud sync. Local cache will hydrate from cloud on next load.');
+            }else{
+                throw e;
+            }
+        }
+        // ALSO use the lite blob for the verify-and-resave check below.
+        var json=liteJson||JSON.stringify(_buildLiteForLocalStorage(g));
         // Verify write after a short delay (catch overwrites from cloud hydration)
         var rosterCount=Object.keys(roster).length;
         setTimeout(function(){
