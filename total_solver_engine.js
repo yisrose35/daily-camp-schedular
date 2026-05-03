@@ -249,7 +249,17 @@
             if (!prefProps?.preferences?.enabled) { var actProps = props[cand.activityName]; if (actProps?.preferences?.enabled) prefProps = actProps; }
             if (prefProps?.preferences?.enabled) { prefList = prefProps.preferences.list || []; prefExclusive = !!prefProps.preferences.exclusive; }
 
-           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, hasProps: true });
+            // ★ Cache limitUsage so the hard-constraint check below can run without
+            //   re-traversing fieldProps on every candidate evaluation.
+            var limitUsageCache = null;
+            if (fieldProps.limitUsage && fieldProps.limitUsage.enabled === true) {
+                limitUsageCache = {
+                    enabled: true,
+                    divisions: fieldProps.limitUsage.divisions || {}
+                };
+            }
+
+           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, limitUsage: limitUsageCache, hasProps: true });
         }
 
         // ★★★ FIX v15.4: Also index SPECIALS in _fieldPropertyMap ★★★
@@ -639,6 +649,21 @@
             else { if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999; }
         }
         var fieldProp = _fieldPropertyMap.get(fieldName);
+        // ★ HARD CONSTRAINT: limitUsage division access — never assign a field
+        //   to a division that isn't in its allowed list.
+        if (fieldProp?.limitUsage?.enabled && blockDivName) {
+            if (!(blockDivName in fieldProp.limitUsage.divisions)) return 999999;
+            var luBunkRule = fieldProp.limitUsage.divisions[blockDivName];
+            if (Array.isArray(luBunkRule) && luBunkRule.length > 0) {
+                var bs = String(bunk), bn = parseInt(bunk);
+                var ok = false;
+                for (var lui = 0; lui < luBunkRule.length; lui++) {
+                    var br = luBunkRule[lui];
+                    if (String(br) === bs || parseInt(br) === bn) { ok = true; break; }
+                }
+                if (!ok) return 999999;
+            }
+        }
         if (fieldProp?.prefList) { if (fieldProp.prefList.indexOf(blockDivName) === -1 && fieldProp.prefExclusive) return 999999; }
         else { var actPrefProps = activityProperties[act]; if (actPrefProps?.preferences?.enabled && (actPrefProps.preferences.list || []).indexOf(blockDivName) === -1 && actPrefProps.preferences.exclusive) return 999999; }
         var rotationPenalty = getPrecomputedRotationScore(bunk, act);
@@ -1286,6 +1311,19 @@ else penalty += 200;
                 // ★ v15.0: Rainy time bypass — skip canBlockFit (which enforces time rules)
                 var skipTimeCheck = S._isRainyDay && S._rainyTimeBypasses.has(fn);
                 var fp = S._fieldPropertyMap.get(fn);
+                // ★ Hard filter: limitUsage division access (mirrors hard constraint in penalty)
+                if (fp?.limitUsage?.enabled && blockDiv) {
+                    if (!(blockDiv in fp.limitUsage.divisions)) continue;
+                    var dluRule = fp.limitUsage.divisions[blockDiv];
+                    if (Array.isArray(dluRule) && dluRule.length > 0) {
+                        var dbs = String(bunk), dbn = parseInt(bunk), dluOk = false;
+                        for (var dlui = 0; dlui < dluRule.length; dlui++) {
+                            var dbr = dluRule[dlui];
+                            if (String(dbr) === dbs || parseInt(dbr) === dbn) { dluOk = true; break; }
+                        }
+                        if (!dluOk) continue;
+                    }
+                }
                 if (fp?.prefExclusive && fp.prefList && fp.prefList.indexOf(blockDiv) === -1) continue;
               if (!skipTimeCheck && window.unifiedTimes) { var fits = window.SchedulerCoreUtils?.canBlockFit?.(block, fn, actProps, window.fieldUsageBySlot, c2.activityName, false); if (fits === false) continue; }
                 if (hasTime) {
