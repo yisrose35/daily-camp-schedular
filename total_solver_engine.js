@@ -1998,9 +1998,62 @@
     // higher-ranked field. We only swap when every hard constraint that
     // mattered for the original placement still holds for the better field.
     // ========================================================================
+    // Helper used by both phases: verify a candidate field passes every hard
+    // constraint that mattered for the original placement (timeRules, access,
+    // locks, capacity, sport-disabled, cross-div, sharing-mismatch). Capacity
+    // checks accept an optional `excludeBunk` so a same-time-slot re-pairing
+    // doesn't fail itself.
+    function _fqValidSwap(blk, candName, actName, excludeBunk) {
+        var actNorm = normName(actName);
+        var candProps = activityProperties && activityProperties[candName];
+        var candActs = (candProps && candProps.activities) || [];
+        if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(actNorm)) return false;
+
+        var fits = window.SchedulerCoreUtils && window.SchedulerCoreUtils.canBlockFit
+            ? window.SchedulerCoreUtils.canBlockFit(blk, candName, activityProperties, window.fieldUsageBySlot, actName, false)
+            : null;
+        if (fits === false) return false;
+
+        var sM = blk.startTime, eM = blk.endTime;
+        if (checkCrossDivisionTimeConflict(candName, blk.divName, sM, eM, excludeBunk)) return false;
+        if (checkSameFieldActivityMismatch(candName, sM, eM, actName, excludeBunk)) return false;
+
+        var candFp = _fieldPropertyMap.get(candName);
+        if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && blk.divName) {
+            if (!(blk.divName in candFp.accessRestrictions.divisions)) return false;
+        }
+        if (isFieldLockedByTime(candName, sM, eM, blk.divName)) return false;
+
+        var candCap = candFp ? candFp.capacity : getFieldCapacity(candName);
+        var candSt = candFp ? candFp.sharingType : getSharingType(candName);
+        var candNorm = normName(candName);
+        var inUse = (candSt === 'not_sharable')
+            ? getFieldUsageFromTimeIndex(candNorm, sM, eM, excludeBunk)
+            : countSameDivisionUsage(candName, blk.divName, sM, eM, excludeBunk);
+        if (inUse >= candCap) return false;
+        return true;
+    }
+
+    function _fqApplySwap(bi, blk, asgn, newField) {
+        var pick = asgn.pick;
+        var actName = pick._activity || pick.field;
+        var newPick = { field: newField, sport: pick.sport, _activity: pick._activity, _type: pick._type, _fullGrade: pick._fullGrade || false };
+        undoPickFromSchedule(blk, pick);
+        removeFromFieldTimeIndex(normName(pick.field), blk.startTime, blk.endTime, blk.bunk);
+        applyPickToSchedule(blk, newPick);
+        addToFieldTimeIndex(normName(newField), blk.startTime, blk.endTime, blk.bunk, blk.divName, normName(actName));
+        var matchedCi = -1;
+        for (var ci = 0; ci < allCandidateOptions.length; ci++) {
+            if (allCandidateOptions[ci].field === newField && (allCandidateOptions[ci].activityName === actName || allCandidateOptions[ci].sport === pick.sport)) { matchedCi = ci; break; }
+        }
+        S._assignments.set(bi, { candIdx: matchedCi, pick: newPick, cost: asgn.cost });
+        invalidateRotationCacheForBunk(blk.bunk);
+    }
+
     function fieldQualityReoptimize(activityBlocks) {
         if (!_fieldGroupMap || !_fieldGroups) return;
 
+        // PHASE A — pull each block to a free higher-ranked field where possible.
         var improved = 0, considered = 0;
         for (var bi = 0; bi < activityBlocks.length; bi++) {
             if (!S._assignedBlocks.has(bi)) continue;
@@ -2030,59 +2083,111 @@
             for (var gi = 0; gi < sorted.length; gi++) {
                 var member = sorted[gi];
                 if (member.qualityRank >= curRank) break;
-                var candName = member.name;
-
-                // Activity must be supported by the candidate field
-                var candProps = activityProperties && activityProperties[candName];
-                var candActs = (candProps && candProps.activities) || [];
-                if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(actNorm)) continue;
-
-                // canBlockFit covers timeRules / access / locks / capacity / disabled / sport-disabled
-                var fits = window.SchedulerCoreUtils && window.SchedulerCoreUtils.canBlockFit
-                    ? window.SchedulerCoreUtils.canBlockFit(blk, candName, activityProperties, window.fieldUsageBySlot, actName, false)
-                    : null;
-                if (fits === false) continue;
-
-                // Cross-division & capacity at this exact time window
-                if (checkCrossDivisionTimeConflict(candName, blk.divName, sM, eM, bunk)) continue;
-                if (checkSameFieldActivityMismatch(candName, sM, eM, actName, bunk)) continue;
-                var candFp = _fieldPropertyMap.get(candName);
-                var candCap = candFp ? candFp.capacity : getFieldCapacity(candName);
-                var candSt = candFp ? candFp.sharingType : getSharingType(candName);
-                var candNorm = normName(candName);
-                var inUse = (candSt === 'not_sharable')
-                    ? getFieldUsageFromTimeIndex(candNorm, sM, eM, bunk)
-                    : countSameDivisionUsage(candName, blk.divName, sM, eM, bunk);
-                if (inUse >= candCap) continue;
-
-                if (isFieldLockedByTime(candName, sM, eM, blk.divName)) continue;
-
-                if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && blk.divName) {
-                    if (!(blk.divName in candFp.accessRestrictions.divisions)) continue;
+                if (_fqValidSwap(blk, member.name, actName, bunk)) {
+                    bestSwapField = member.name;
+                    break;
                 }
-
-                bestSwapField = candName;
-                break; // first higher-ranked candidate that passes wins
             }
-
             if (!bestSwapField) continue;
-
-            var newPick = { field: bestSwapField, sport: pick.sport, _activity: pick._activity, _type: pick._type, _fullGrade: pick._fullGrade || false };
-            undoPickFromSchedule(blk, pick);
-            removeFromFieldTimeIndex(normName(curField), sM, eM, bunk);
-            applyPickToSchedule(blk, newPick);
-            addToFieldTimeIndex(normName(bestSwapField), sM, eM, bunk, blk.divName, normName(actName));
-
-            var matchedCi = -1;
-            for (var ci = 0; ci < allCandidateOptions.length; ci++) {
-                if (allCandidateOptions[ci].field === bestSwapField && (allCandidateOptions[ci].activityName === actName || allCandidateOptions[ci].sport === pick.sport)) { matchedCi = ci; break; }
-            }
-            S._assignments.set(bi, { candIdx: matchedCi, pick: newPick, cost: asgn.cost });
-            invalidateRotationCacheForBunk(bunk);
-            _todayCache.clear();
+            _fqApplySwap(bi, blk, asgn, bestSwapField);
             improved++;
         }
-        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + '/' + considered + ' swapped to better-ranked free fields');
+        _todayCache.clear();
+
+        // PHASE B — for each (group, time slot), re-pair so most senior grade
+        // gets the best-ranked field. Sort placements by seniority desc; sort
+        // their currently-held fields by quality rank asc; pair them up.
+        // Only commits a swap when every involved placement still passes
+        // hard checks for its new field.
+        var seniorityImproved = 0;
+        var slotKeyToPlacements = {}; // key = group + '|' + startMin + '|' + endMin
+        for (var bi2 = 0; bi2 < activityBlocks.length; bi2++) {
+            if (!S._assignedBlocks.has(bi2)) continue;
+            var asgn2 = S._assignments.get(bi2);
+            if (!asgn2) continue;
+            var p2 = asgn2.pick;
+            if (!p2.field || p2.field === 'Free') continue;
+            var fg2 = _fieldGroupMap[p2.field];
+            if (!fg2) continue;
+            var blk2 = activityBlocks[bi2];
+            if (blk2.startTime === undefined || blk2.endTime === undefined) continue;
+            var key = fg2.groupName + '|' + blk2.startTime + '|' + blk2.endTime;
+            if (!slotKeyToPlacements[key]) slotKeyToPlacements[key] = [];
+            slotKeyToPlacements[key].push({ bi: bi2, blk: blk2, asgn: asgn2, currentField: p2.field, currentRank: fg2.qualityRank });
+        }
+
+        Object.keys(slotKeyToPlacements).forEach(function(key) {
+            var list = slotKeyToPlacements[key];
+            if (list.length < 2) return; // nothing to re-pair
+
+            // Sort placements by seniority asc (0 = most senior). Stable for ties.
+            var seniority = function(divName) {
+                var s = _divisionSeniorityMap[divName];
+                return (s === undefined) ? Infinity : s;
+            };
+            list.sort(function(a, b) { return seniority(a.blk.divName) - seniority(b.blk.divName); });
+
+            // Sorted desired fields by rank asc (rank 1 first). Each placement
+            // should ideally hold the i-th best field, where i = seniority order.
+            var heldFields = list.map(function(p) { return p.currentField; });
+            heldFields.sort(function(a, b) {
+                var ra = (_fieldGroupMap[a] && _fieldGroupMap[a].qualityRank) || 999;
+                var rb = (_fieldGroupMap[b] && _fieldGroupMap[b].qualityRank) || 999;
+                return ra - rb;
+            });
+
+            // Build the desired (placement, newField) pairs
+            var swaps = [];
+            var anyChange = false;
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].currentField !== heldFields[i]) anyChange = true;
+                swaps.push({ p: list[i], newField: heldFields[i] });
+            }
+            if (!anyChange) return;
+
+            // Validate every swap simultaneously: each placement's new field
+            // must support its activity + division, and any held field that's
+            // moving away should be considered free for its taker. Since we're
+            // re-pairing fields among the same time-slot users, capacity at
+            // that field is unchanged — but support/access can differ.
+            for (var si = 0; si < swaps.length; si++) {
+                var sp = swaps[si];
+                if (sp.p.currentField === sp.newField) continue;
+                var actNm = sp.p.asgn.pick._activity || sp.p.asgn.pick.field;
+                var candProps = activityProperties && activityProperties[sp.newField];
+                var candActs = (candProps && candProps.activities) || [];
+                if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(normName(actNm))) return;
+                var candFp = _fieldPropertyMap.get(sp.newField);
+                if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && sp.p.blk.divName) {
+                    if (!(sp.p.blk.divName in candFp.accessRestrictions.divisions)) return;
+                }
+                // timeRules check on the new field for this division
+                if (candFp && candFp.unavailableRules) {
+                    for (var ri = 0; ri < candFp.unavailableRules.length; ri++) {
+                        var ur = candFp.unavailableRules[ri];
+                        if (ur.divisions && ur.divisions.length > 0 && sp.p.blk.divName && ur.divisions.indexOf(sp.p.blk.divName) === -1) continue;
+                        if (ur.startMin < sp.p.blk.endTime && ur.endMin > sp.p.blk.startTime) return;
+                    }
+                }
+            }
+
+            // Apply atomically: undo all olds first, then apply all news.
+            // (Field-time index gets rebuilt at the end to avoid intermediate
+            // inconsistencies.)
+            swaps.forEach(function(sp) {
+                if (sp.p.currentField === sp.newField) return;
+                undoPickFromSchedule(sp.p.blk, sp.p.asgn.pick);
+                removeFromFieldTimeIndex(normName(sp.p.currentField), sp.p.blk.startTime, sp.p.blk.endTime, sp.p.blk.bunk);
+            });
+            swaps.forEach(function(sp) {
+                if (sp.p.currentField === sp.newField) return;
+                _fqApplySwap(sp.p.bi, sp.p.blk, sp.p.asgn, sp.newField);
+                seniorityImproved++;
+            });
+        });
+        _todayCache.clear();
+
+        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s) (' + considered + ' grouped placements considered)');
     }
 
     // ========================================================================
