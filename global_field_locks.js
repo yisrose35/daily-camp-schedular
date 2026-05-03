@@ -259,7 +259,11 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
 
         // Check TIME OVERLAP (not slot index match)
         if (lockStartMin < queryEndMin && lockEndMin > queryStartMin) {
-            console.log(`[GLOBAL_LOCKS] ⏰ TIME-BASED LOCK HIT: "${fieldName}" locked ${lockStartMin}-${lockEndMin} overlaps query ${queryStartMin}-${queryEndMin} (by ${lock.lockedBy}: ${lock.leagueName || lock.activity})`);
+            // NOTE: This function is called per-candidate inside the solver hot loop —
+            // logging every hit floods devtools and dominates solve time. Gate on a debug flag.
+            if (window.DEBUG_GLOBAL_LOCKS) {
+                console.log(`[GLOBAL_LOCKS] ⏰ TIME-BASED LOCK HIT: "${fieldName}" locked ${lockStartMin}-${lockEndMin} overlaps query ${queryStartMin}-${queryEndMin} (by ${lock.lockedBy}: ${lock.leagueName || lock.activity})`);
+            }
             return lock;
         }
     }
