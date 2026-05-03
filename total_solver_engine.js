@@ -735,7 +735,32 @@
         if (fieldProp?.prefList) { var prefIdx = fieldProp.prefList.indexOf(blockDivName); if (prefIdx !== -1) penalty -= (50 - prefIdx * 5); else penalty += 8000; }
         else { var actPrefProps2 = activityProperties[act]; if (actPrefProps2?.preferences?.enabled) { var prefIdx2 = (actPrefProps2.preferences.list || []).indexOf(blockDivName); if (prefIdx2 !== -1) penalty -= (50 - prefIdx2 * 5); else penalty += 8000; } }
 
-        // Sharing incentive
+        // ★★★ UNIFIED FIELD-OCCUPANCY SCAN ★★★
+        // Three penalty blocks (field-group quality, sharing incentive, fill-to-capacity)
+        // each previously walked _fieldTimeIndex.get(fieldNorm) independently for every
+        // candidate evaluation. Combine into a single pass — same conditions, three
+        // sets of counters — to cut the per-candidate work to ~1/3.
+        var _hasTime = blockStart !== undefined && blockEnd !== undefined;
+        var _wantOccupancy = fieldName && fieldName !== 'Free' && _hasTime;
+        var occOccupied = false, occSameAct = false, occOccupierSeniority = Infinity;
+        var occSameDivCount = 0, occSameDivSameAct = true;
+        if (_wantOccupancy) {
+            var occEntries = _fieldTimeIndex.get(fieldNorm) || [];
+            for (var occi = 0; occi < occEntries.length; occi++) {
+                var occE = occEntries[occi];
+                if (occE.bunk === bunk) continue;
+                if (occE.endMin <= blockStart || occE.startMin >= blockEnd) continue;
+                occOccupied = true;
+                if (occE.activityName && occE.activityName === actNorm) occSameAct = true;
+                var _occSen = _divisionSeniorityMap[occE.divName];
+                if (_occSen !== undefined && _occSen < occOccupierSeniority) occOccupierSeniority = _occSen;
+                if (occE.divName === blockDivName) {
+                    occSameDivCount++;
+                    if (occE.activityName && occE.activityName !== actNorm) occSameDivSameAct = false;
+                }
+            }
+        }
+
         // ★★★ FIELD GROUP QUALITY PREFERENCE ★★★
         // Always prefer best available free field (lowest qualityRank).
         // Yield to more senior divisions only when the field is already occupied.
@@ -747,64 +772,39 @@
                 if (groupMembers && divSeniority !== undefined) {
                     var fieldQR = fgInfo.qualityRank;
                     var totalInGroup = groupMembers.length;
-
-                    // Check occupancy and track most-senior occupier
-                    var fgOccupied = false;
-                    var fgOccupierSeniority = Infinity;
-                    if (blockStart !== undefined && blockEnd !== undefined) {
-                        var fgEntries = _fieldTimeIndex.get(fieldNorm) || [];
-                        for (var fgei = 0; fgei < fgEntries.length; fgei++) {
-                            var fge = fgEntries[fgei];
-                            if (fge.bunk === bunk) continue;
-                            if (fge.endMin <= blockStart || fge.startMin >= blockEnd) continue;
-                            fgOccupied = true;
-                            var fgOS = _divisionSeniorityMap[fge.divName];
-                            if (fgOS !== undefined && fgOS < fgOccupierSeniority) fgOccupierSeniority = fgOS;
-                        }
-                    }
-
-                    // Quality bonus: rank 1 (best) = biggest bonus, rank N = smallest
                     var fgQualityBonus = (totalInGroup - fieldQR + 1) * 1500;
 
-                    if (!fgOccupied) {
-                        // Free field: full quality bonus — always prefer best available
+                    if (!occOccupied) {
                         penalty -= fgQualityBonus;
-                    } else if (divSeniority <= fgOccupierSeniority) {
-                        // As/more senior than occupier — can co-use; sharing block handles same-activity bonus
+                    } else if (divSeniority <= occOccupierSeniority) {
                         penalty -= Math.round(fgQualityBonus * 0.5);
                     } else {
-                        // Less senior than occupier — yield if field is better than our tier
                         var idealRank = divSeniority + 1;
                         if (fieldQR < idealRank) {
-                            // Better-than-ideal, held by more senior — strong yield
                             penalty += 3000 + (idealRank - fieldQR) * 1500;
                         } else {
-                            // Our tier or worse — mild quality preference still applies
                             penalty -= Math.round(fgQualityBonus * 0.25);
                         }
                     }
                 }
             }
         }
-        if (fieldName && fieldName !== 'Free' && slots.length > 0 && blockStart !== undefined && blockEnd !== undefined) {
-            var sharingEntries = _fieldTimeIndex.get(fieldNorm) || [];
-            var fieldOccupied = false, sameActivityOnField = false;
-            for (var sei = 0; sei < sharingEntries.length; sei++) { var se = sharingEntries[sei]; if (se.bunk === bunk) continue; if (se.endMin <= blockStart || se.startMin >= blockEnd) continue; fieldOccupied = true; if (se.activityName && se.activityName === actNorm) sameActivityOnField = true; }
-           if (sameActivityOnField) penalty -= 1500;
-else if (fieldOccupied) penalty += 500;
-else penalty += 200;
+
+        // Sharing incentive — uses occupancy data computed above
+        if (_wantOccupancy && slots.length > 0) {
+            if (occSameAct) penalty -= 1500;
+            else if (occOccupied) penalty += 500;
+            else penalty += 200;
         }
-        // Fill-to-capacity
-        if (fieldName && fieldName !== 'Free' && blockStart !== undefined && blockEnd !== undefined) {
+
+        // Fill-to-capacity — uses same-division counters from the scan above
+        if (_wantOccupancy) {
             var fcFp = _fieldPropertyMap.get(fieldName);
             var fcCap = fcFp ? fcFp.capacity : getFieldCapacity(fieldName);
-            var fcSameDiv = 0, fcSameAct = true;
-            var fcEntries = _fieldTimeIndex.get(fieldNorm) || [];
-            for (var fci = 0; fci < fcEntries.length; fci++) { var fce = fcEntries[fci]; if (fce.bunk === bunk) continue; if (fce.endMin <= blockStart || fce.startMin >= blockEnd) continue; if (fce.divName === blockDivName) { fcSameDiv++; if (fce.activityName && fce.activityName !== actNorm) fcSameAct = false; } }
-            if (fcCap > 1 && fcSameAct) {
-                var spotsLeft = fcCap - 1 - fcSameDiv;
-                if (fcSameDiv > 0 && spotsLeft >= 0) { var fillRatio = fcSameDiv / (fcCap - 1); penalty -= Math.round(1500 + (fillRatio * 2000)); }
-                if (fcSameDiv === 0 && fcCap > 1) penalty += 500;
+            if (fcCap > 1 && occSameDivSameAct) {
+                var spotsLeft = fcCap - 1 - occSameDivCount;
+                if (occSameDivCount > 0 && spotsLeft >= 0) { var fillRatio = occSameDivCount / (fcCap - 1); penalty -= Math.round(1500 + (fillRatio * 2000)); }
+                if (occSameDivCount === 0 && fcCap > 1) penalty += 500;
             }
         }
         // Adjacent bunk distance
