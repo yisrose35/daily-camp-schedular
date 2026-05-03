@@ -54,6 +54,14 @@
     var _normalizedNames = new Map();
     var _rotationScoreCache = new Map();
     var _todayCache = new Map();
+    // Generation counter — bumped whenever _todayCache is cleared. Per-block caches
+    // (e.g. block._cachedOtherActs) compare against this to know when to refresh.
+    var _todayCacheGen = 0;
+    // Override .clear() to bump the generation counter automatically.
+    (function() {
+        var _origClear = _todayCache.clear.bind(_todayCache);
+        _todayCache.clear = function() { _todayCacheGen++; _origClear(); };
+    })();
     var _fieldTimeIndex = new Map();
     var _fieldPropertyMap = new Map();
     var _rotationScoreMap = new Map();
@@ -627,17 +635,26 @@
         if (actNorm && actNorm !== 'free' && actNorm !== 'free play') {
             var todayDone = getActivitiesDoneToday(bunk, slots[0] ?? 999);
             if (todayDone.has(actNorm)) return 999999;
-           // v14.3: Direct live check — also check field name for robustness
-            var liveSlots = window.scheduleAssignments?.[bunk] || [];
-            var mySlotSet = new Set(slots);
-            for (var lsi = 0; lsi < liveSlots.length; lsi++) {
-                if (mySlotSet.has(lsi)) continue;
-                var lsEntry = liveSlots[lsi];
-                if (!lsEntry || lsEntry.continuation || lsEntry._isTransition) continue;
-                var lsAct = normName(lsEntry._activity || lsEntry.sport || '');
-                var lsField = normName(lsEntry.field || '');
-                if ((lsAct && lsAct === actNorm) || (lsField && lsField !== 'free' && lsAct === actNorm)) return 999999;
+            // v14.3 (cached): activities already booked in OTHER slots for this bunk.
+            // Was previously a per-candidate linear scan over liveSlots; with ~50
+            // candidates × 67 blocks × 3 passes, that scan dominated solve time.
+            // Cached on the block itself, invalidated by _todayCacheGen.
+            var otherActs = block._cachedOtherActs;
+            if (!otherActs || block._cachedOtherActsGen !== _todayCacheGen) {
+                otherActs = new Set();
+                var _liveSlots = window.scheduleAssignments?.[bunk] || [];
+                var _mySlotSet = slots.length ? new Set(slots) : null;
+                for (var _lsi = 0; _lsi < _liveSlots.length; _lsi++) {
+                    if (_mySlotSet && _mySlotSet.has(_lsi)) continue;
+                    var _lsE = _liveSlots[_lsi];
+                    if (!_lsE || _lsE.continuation || _lsE._isTransition) continue;
+                    var _lsA = normName(_lsE._activity || _lsE.sport || '');
+                    if (_lsA) otherActs.add(_lsA);
+                }
+                block._cachedOtherActs = otherActs;
+                block._cachedOtherActsGen = _todayCacheGen;
             }
+            if (otherActs.has(actNorm)) return 999999;
         }
         if (fieldName && fieldName !== 'Free' && blockDivName && blockStart !== undefined && blockEnd !== undefined) {
             var fp = _fieldPropertyMap.get(fieldName);
