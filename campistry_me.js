@@ -48,7 +48,18 @@ function init(){
 // ═══ DATA ════════════════════════════════════════════════════════
 function loadData(){
     try{
-        var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        // Prefer the in-memory cache (window.loadGlobalSettings → _localCache)
+        // over a raw localStorage read. After hydrateFromCloud sets _localCache
+        // to the cloud snapshot, localStorage may still hold the stale pre-edit
+        // blob (when the localStorage write hit the quota). Reading localStorage
+        // directly here would silently revert the page to the stale data.
+        var s=null;
+        if(typeof window.loadGlobalSettings==='function'){
+            try{ s=window.loadGlobalSettings(); }catch(_){ s=null; }
+        }
+        if(!s||typeof s!=='object'){
+            s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        }
         structure=s.campStructure||{};
         roster=(s.app1&&s.app1.camperRoster)||{};
         var me=s.campistryMe||{};
