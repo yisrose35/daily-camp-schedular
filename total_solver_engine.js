@@ -1992,6 +1992,100 @@
     }
 
     // ========================================================================
+    // ★★★ v15.5: FIELD-QUALITY RE-OPTIMIZATION ★★★
+    // After all heuristic phases, sweep through every assignment whose field
+    // belongs to a quality group and try to swap it onto the best free
+    // higher-ranked field. We only swap when every hard constraint that
+    // mattered for the original placement still holds for the better field.
+    // ========================================================================
+    function fieldQualityReoptimize(activityBlocks) {
+        if (!_fieldGroupMap || !_fieldGroups) return;
+
+        var improved = 0, considered = 0;
+        for (var bi = 0; bi < activityBlocks.length; bi++) {
+            if (!S._assignedBlocks.has(bi)) continue;
+            var asgn = S._assignments.get(bi);
+            if (!asgn) continue;
+            var pick = asgn.pick;
+            var blk = activityBlocks[bi];
+            var curField = pick.field;
+            if (!curField || curField === 'Free') continue;
+
+            var fgInfo = _fieldGroupMap[curField];
+            if (!fgInfo) continue;
+            var groupArr = _fieldGroups[fgInfo.groupName];
+            if (!groupArr) continue;
+            considered++;
+
+            var curRank = fgInfo.qualityRank;
+            var actName = pick._activity || pick.field;
+            var actNorm = normName(actName);
+            var bunk = blk.bunk;
+            var sM = blk.startTime, eM = blk.endTime;
+            if (sM === undefined || eM === undefined) continue;
+
+            // Walk group members from best rank toward current rank
+            var sorted = groupArr.slice().sort(function(a, b) { return a.qualityRank - b.qualityRank; });
+            var bestSwapField = null;
+            for (var gi = 0; gi < sorted.length; gi++) {
+                var member = sorted[gi];
+                if (member.qualityRank >= curRank) break;
+                var candName = member.name;
+
+                // Activity must be supported by the candidate field
+                var candProps = activityProperties && activityProperties[candName];
+                var candActs = (candProps && candProps.activities) || [];
+                if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(actNorm)) continue;
+
+                // canBlockFit covers timeRules / access / locks / capacity / disabled / sport-disabled
+                var fits = window.SchedulerCoreUtils && window.SchedulerCoreUtils.canBlockFit
+                    ? window.SchedulerCoreUtils.canBlockFit(blk, candName, activityProperties, window.fieldUsageBySlot, actName, false)
+                    : null;
+                if (fits === false) continue;
+
+                // Cross-division & capacity at this exact time window
+                if (checkCrossDivisionTimeConflict(candName, blk.divName, sM, eM, bunk)) continue;
+                if (checkSameFieldActivityMismatch(candName, sM, eM, actName, bunk)) continue;
+                var candFp = _fieldPropertyMap.get(candName);
+                var candCap = candFp ? candFp.capacity : getFieldCapacity(candName);
+                var candSt = candFp ? candFp.sharingType : getSharingType(candName);
+                var candNorm = normName(candName);
+                var inUse = (candSt === 'not_sharable')
+                    ? getFieldUsageFromTimeIndex(candNorm, sM, eM, bunk)
+                    : countSameDivisionUsage(candName, blk.divName, sM, eM, bunk);
+                if (inUse >= candCap) continue;
+
+                if (isFieldLockedByTime(candName, sM, eM, blk.divName)) continue;
+
+                if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && blk.divName) {
+                    if (!(blk.divName in candFp.accessRestrictions.divisions)) continue;
+                }
+
+                bestSwapField = candName;
+                break; // first higher-ranked candidate that passes wins
+            }
+
+            if (!bestSwapField) continue;
+
+            var newPick = { field: bestSwapField, sport: pick.sport, _activity: pick._activity, _type: pick._type, _fullGrade: pick._fullGrade || false };
+            undoPickFromSchedule(blk, pick);
+            removeFromFieldTimeIndex(normName(curField), sM, eM, bunk);
+            applyPickToSchedule(blk, newPick);
+            addToFieldTimeIndex(normName(bestSwapField), sM, eM, bunk, blk.divName, normName(actName));
+
+            var matchedCi = -1;
+            for (var ci = 0; ci < allCandidateOptions.length; ci++) {
+                if (allCandidateOptions[ci].field === bestSwapField && (allCandidateOptions[ci].activityName === actName || allCandidateOptions[ci].sport === pick.sport)) { matchedCi = ci; break; }
+            }
+            S._assignments.set(bi, { candIdx: matchedCi, pick: newPick, cost: asgn.cost });
+            invalidateRotationCacheForBunk(bunk);
+            _todayCache.clear();
+            improved++;
+        }
+        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + '/' + considered + ' swapped to better-ranked free fields');
+    }
+
+    // ========================================================================
     // ★★★ v14.1: CROSS-DIVISION VIOLATION RE-SOLVE ★★★
     // ========================================================================
     function crossDivisionReSolve(activityBlocks) {
@@ -2115,6 +2209,12 @@
 
         // v14.2: Same-day duplicate sweep (with pinned check)
         sameDayDuplicateSweep(activityBlocks);
+
+        // v15.5: Field-quality re-optimization pass — heuristic group solving
+        //        sometimes leaves a block on a lower-ranked field even when a
+        //        better-ranked one in the same group is genuinely free. Sweep
+        //        once at the end and swap upward where every constraint allows.
+        fieldQualityReoptimize(activityBlocks);
 
         // Final stats
         var freeCount = 0;
