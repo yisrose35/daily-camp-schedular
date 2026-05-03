@@ -1346,6 +1346,18 @@
                 if (ledger.disabledSports.includes(activity)) return false;
             }
 
+            // ★ SPORT MAX PLAYER COUNT CHECK
+            if (activity) {
+                const _bm = window.getBunkMetaData?.() || window.bunkMetaData || {};
+                const _pr = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(activity);
+                if (_pr && _pr.maxPlayers) {
+                    const _overlap = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
+                    let _total = _bm[bunk]?.size || 0;
+                    for (const c of _overlap) _total += _bm[c.bunk]?.size || 0;
+                    if (_total > _pr.maxPlayers) return false;
+                }
+            }
+
             // ★ COMBINED FIELD ENFORCEMENT
             // Rule: combined field (A+B) in use → neither A nor B can be used.
             //       sub-field A in use → combined field (A+B) cannot be used.
@@ -2870,8 +2882,9 @@
             }
 
             function claimFieldGlobal(fieldName, startMin, endMin, bunk, grade, activity) {
-                claimField(fieldName, startMin, endMin, bunk, grade, activity);
+                if (!claimField(fieldName, startMin, endMin, bunk, grade, activity)) return false;
                 globalFieldClaims.push({ field: fieldName, startMin: startMin, endMin: endMin, bunk: bunk, grade: grade, activity: activity });
+                return true;
             }
 
             function getUpdatedFreeWindowsForBunk(bunk, sl, result) {
@@ -3190,7 +3203,7 @@
                         var fields = sport.fields || [];
                         for (var fli = 0; fli < fields.length; fli++) {
                             if (!isFieldStillAvailableGP(fields[fli], slotStart, slotEnd, bunk, grade)) continue;
-                            claimFieldGlobal(fields[fli], slotStart, slotEnd, bunk, grade, sport.name);
+                            if (!claimFieldGlobal(fields[fli], slotStart, slotEnd, bunk, grade, sport.name)) continue;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
                                 dMin: sport.dMin, dMax: sport.dMax, dIdeal: sport.dIdeal,
@@ -3228,7 +3241,7 @@
                     for (var j = 0; j < fields.length; j++) {
                         var time = findTimeForFieldGP(fields[j], bunk, grade, sport.dIdeal, fw);
                         if (time) {
-                            claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name);
+                            if (!claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
                                 dMin: sport.dMin, dMax: sport.dMax, dIdeal: sport.dIdeal,
@@ -3405,7 +3418,7 @@
                     for (const field of sport.fields) {
                         const time = findTimeForField(field, bunk, grade, sport.dIdeal, fw);
                         if (time) {
-                            claimField(field, time.startMin, time.endMin, bunk, grade, sport.name);
+                            if (!claimField(field, time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                             result.usedActivities.add(sport.name);
                             claimed = true;
@@ -3505,8 +3518,9 @@
             }
 
             function claimFieldForPlanner(fieldName, startMin, endMin, bunk, activity) {
-                claimField(fieldName, startMin, endMin, bunk, _gpCurrentGrade, activity);
+                if (!claimField(fieldName, startMin, endMin, bunk, _gpCurrentGrade, activity)) return false;
                 plannerFieldClaims.push({ field: fieldName, startMin, endMin, bunk, grade: _gpCurrentGrade, activity });
+                return true;
             }
 
             // ─── PRE-PASS: Assign 1 special to every bunk across all grades ──
@@ -4037,7 +4051,7 @@
                             for (const field of (sport.fields || [])) {
                                 const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw);
                                 if (time) {
-                                    claimFieldForPlanner(field, time.startMin, time.endMin, bunk, sport.name);
+                                    if (!claimFieldForPlanner(field, time.startMin, time.endMin, bunk, sport.name)) continue;
                                     result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                                     result.usedActivities.add(sport.name);
                                     break;
@@ -4108,7 +4122,7 @@
                             if (!fs.activities.includes(sport.name)) continue;
                             if (!isFieldStillAvailable(fs.name, win.start, win.end, bunk)) continue;
 
-                            claimFieldForPlanner(fs.name, win.start, win.end, bunk, sport.name);
+                            if (!claimFieldForPlanner(fs.name, win.start, win.end, bunk, sport.name)) continue;
                             fs.remaining--;
 
                             const claimedTime = { startMin: win.start, endMin: win.end };
@@ -4189,7 +4203,7 @@
                     for (const field of (sport.fields || [])) {
                         const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw);
                         if (time) {
-                            claimField(field, time.startMin, time.endMin, bunk, grade, sport.name);
+                            if (!claimField(field, time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                             result.usedActivities.add(sport.name);
                             break;
@@ -6314,7 +6328,7 @@
                             if (shareable.length >= 2) {
                                 // Assign ALL shareable bunks to this field at the same time
                                 for (var sh = 0; sh < shareable.length; sh++) {
-                                    claimField(fieldName, startMin, endMin, shareable[sh].bunk, gradeKey, sport.name);
+                                    if (!claimField(fieldName, startMin, endMin, shareable[sh].bunk, gradeKey, sport.name)) continue;
                                     usedSports[shareable[sh].bunk].add(sport.name);
                                     var shMeta = bunkMeta[shareable[sh].bunk];
                                     var shBlk = makeBlock({
@@ -6567,8 +6581,8 @@
                         }
 
                         if (result) {
-                            claimField(result.field, cursor, blockEnd, sBunk, sMeta.grade, result.name);
-                            usedSports[sBunk].add(result.name);
+                            if (!claimField(result.field, cursor, blockEnd, sBunk, sMeta.grade, result.name)) result = null;
+                            else usedSports[sBunk].add(result.name);
                         }
                         var blk = makeBlock({
                             startMin: cursor, endMin: blockEnd,
@@ -6617,8 +6631,8 @@
                         });
                         var rResult = findBestSport(fBunk, fMeta.grade, rgap.start, rgap.end, fMeta, usedSports[fBunk], _rAdjSports);
                         if (rResult) {
-                            claimField(rResult.field, rgap.start, rgap.end, fBunk, fMeta.grade, rResult.name);
-                            usedSports[fBunk].add(rResult.name);
+                            if (!claimField(rResult.field, rgap.start, rgap.end, fBunk, fMeta.grade, rResult.name)) rResult = null;
+                            else usedSports[fBunk].add(rResult.name);
                         }
                         addSportBlocks(tmpl, rgap.start, rgap.end, {
                             type: rResult ? 'sport' : 'slot',
