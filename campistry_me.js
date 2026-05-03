@@ -119,6 +119,14 @@ function save(){
             window.saveGlobalSettings('campStructure',structure);
             window.saveGlobalSettings('app1',g.app1);
             window.saveGlobalSettings('campistryMe',g.campistryMe);
+            // ★ saveGlobalSettings only QUEUES a debounced batch sync (~1-2s).
+            //   If the user finishes a CSV import here and navigates straight
+            //   to Campistry Flow, Flow's cloud-hydration on load can pull the
+            //   stale pre-edit state and overwrite the freshly-imported data.
+            //   Force-flush the queue so the writes hit the cloud immediately.
+            if(typeof window.forceSyncToCloud==='function'){
+                window.forceSyncToCloud();
+            }
         }else if(typeof window.forceSyncToCloud==='function'){
             console.log('[Me] ☁️ Syncing to cloud via forceSyncToCloud');
             window.forceSyncToCloud();
