@@ -103,12 +103,14 @@ function save(){
         //   campGlobalSettings_v1 small enough to never hit the quota again.
         function _buildLiteForLocalStorage(full){
             var lite=Object.assign({},full);
-            // Daily schedules: stored per-date in cloud, fetched on demand
-            // by schedule_orchestrator.loadSchedule(). They never need to
-            // be cached as one big blob.
+            // Strip the same heavy keys that integration_hooks.setLocalSettings
+            // strips — keep this list in sync with that one.
             delete lite.daily_schedules;
-            // Campistry Go heavy data — already stripped by integration_hooks
-            // setLocalSettings, but our direct write bypasses that.
+            delete lite.rotationHistory;
+            delete lite.historicalCounts;
+            delete lite.historicalCountedDates;
+            delete lite.smartTileHistory;
+            delete lite.specialtyLeagueHistory;
             if(lite.campistryGo){
                 lite.campistryGo=Object.assign({},lite.campistryGo);
                 delete lite.campistryGo.savedRoutes;

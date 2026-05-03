@@ -387,22 +387,65 @@
     function setLocalSettings(data) {
         try {
             _localCache = data;
-            // Strip large data from Go before writing to shared settings
+            // ★ Build a "lite" copy for the localStorage write. Browser quota is
+            //   ~5MB per origin and large camps (hundreds of campers across many
+            //   weeks of schedules) routinely blow past it, throwing
+            //   QuotaExceededError on every saveGlobalSettings call. The full
+            //   data still goes to the cloud per-key — localStorage is just a
+            //   warm cache that gets re-hydrated from cloud on next load.
             const lite = Object.assign({}, data);
+
+            // Campistry Go heavy data — stored in its own dedicated key.
             if (lite.campistryGo) {
                 lite.campistryGo = Object.assign({}, lite.campistryGo);
                 delete lite.campistryGo.savedRoutes;
-                delete lite.campistryGo.addresses; // stored separately in Go's own key
+                delete lite.campistryGo.addresses;
             }
+
+            // Daily schedules: per-date in cloud (supabase_schedules), loaded
+            // on demand by schedule_orchestrator. Never need the all-dates
+            // blob in localStorage. With many days × bunks × slots this is
+            // typically the single largest contributor to the JSON size.
+            delete lite.daily_schedules;
+
+            // Long-lived history blobs that grow unbounded as the camp runs.
+            // They're written per-key to cloud and read from cloud when the
+            // scheduler needs them. Stripping is safe — first scheduler run
+            // after a reload will repopulate from cloud if needed.
+            delete lite.rotationHistory;
+            delete lite.historicalCounts;
+            delete lite.historicalCountedDates;
+            delete lite.smartTileHistory;
+            delete lite.specialtyLeagueHistory;
+
             const json = JSON.stringify(lite);
-            localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
-            localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+            try {
+                localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
+                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+            } catch (innerE) {
+                if (innerE && innerE.name === 'QuotaExceededError') {
+                    // Even the lite blob is too big — this only happens with
+                    // truly extreme configs. Don't fail the save; cloud has
+                    // the data and the next load will hydrate from there.
+                    log('localStorage quota still exceeded after stripping heavy keys — relying on cloud sync');
+                } else {
+                    throw innerE;
+                }
+            }
 
             if (data.divisions || data.bunks) {
-                localStorage.setItem('campGlobalRegistry_v1', JSON.stringify({
-                    divisions: data.divisions || {},
-                    bunks: data.bunks || []
-                }));
+                try {
+                    localStorage.setItem('campGlobalRegistry_v1', JSON.stringify({
+                        divisions: data.divisions || {},
+                        bunks: data.bunks || []
+                    }));
+                } catch (regE) {
+                    if (regE && regE.name === 'QuotaExceededError') {
+                        log('campGlobalRegistry_v1 write hit quota — skipping');
+                    } else {
+                        throw regE;
+                    }
+                }
             }
         } catch (e) {
             logError('Failed to write local settings:', e);
