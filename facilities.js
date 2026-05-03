@@ -3114,6 +3114,14 @@ function getComboForField(fieldName) {
         return _comboLookup.allComboFields.has(_normCombo(fieldName));
     }
 
+    // Returns the list of fields that are mutually exclusive with fieldName.
+    // For a combined field (Full Gym): returns its sub-fields (Gym 1, Gym 2).
+    // For a sub-field (Gym 1): returns its combined field (Full Gym).
+    // For a non-combo field: returns []. Always returns an array.
+    function getExclusiveFields(fieldName) {
+        return getConflictFields(fieldName).slice();
+    }
+
     function isBlockedByCombo(fieldName, startMin, endMin, excludeBunk) {
         if (startMin == null || endMin == null) return { blocked: false };
         const conflicts = getConflictFields(fieldName);
@@ -3156,7 +3164,7 @@ function getComboForField(fieldName) {
         return isBlockedByCombo(fieldName, startMin, endMin, excludeBunk).blocked;
     }
 
-    window.FieldCombos = { isInCombo, isBlockedByCombo, isBlockedByComboAtSlots };
+    window.FieldCombos = { isInCombo, isBlockedByCombo, isBlockedByComboAtSlots, getExclusiveFields };
 })();
 
 // =========================================================================
