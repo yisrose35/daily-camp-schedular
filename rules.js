@@ -136,7 +136,19 @@ function blockMatchesDescriptor(block, desc) {
     if (desc.kind === 'facility') {
         const v = String(desc.value || '').toLowerCase().trim();
         if (!v) return false;
-        return bField === v;
+        if (bField === v) return true;
+        // ★ Field combos: a rule on "Full Gym" matches blocks on its
+        //   sub-fields too (and vice versa), because using Gym 1 / Gym 2
+        //   occupies Full Gym's space and using Full Gym occupies the subs.
+        //   Without this, a rule like "Full Gym must be 20min from Lunch"
+        //   silently fails to block Gym 1 / Gym 2 in that window.
+        if (window.FieldCombos && typeof window.FieldCombos.getExclusiveFields === 'function') {
+            const partners = window.FieldCombos.getExclusiveFields(desc.value) || [];
+            for (let i = 0; i < partners.length; i++) {
+                if (String(partners[i]).toLowerCase().trim() === bField) return true;
+            }
+        }
+        return false;
     }
     return false;
 }
