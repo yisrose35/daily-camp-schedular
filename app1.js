@@ -982,10 +982,12 @@
             state.skeletonAssignments = data.skeletonAssignments || {};
             
             // Recompute bunk sizes from the live camperRoster every load.
-            // Previously this only set size when undefined, so a fresh CSV
-            // import in Campistry Me wouldn't refresh stale sizes from a
-            // prior session. Sport player-count rules (e.g. min 10 for
-            // basketball) need accurate live counts to fire correctly.
+            // This is the bridge from Campistry Me's roster → Flow's
+            // bunkMetaData[bunk].size, which the sport player-count rules
+            // and shared-field capacity checks consume. It runs on every
+            // app1.loadData (cloud-hydrate, page reload, cross-tab storage
+            // event), so Flow always gets fresh counts even when Me was
+            // never opened in the current session.
             const camperRoster = data.camperRoster || {};
             const bunkCounts = {};
             Object.values(camperRoster).forEach(camper => {
@@ -993,19 +995,25 @@
                     bunkCounts[camper.bunk] = (bunkCounts[camper.bunk] || 0) + 1;
                 }
             });
+            const rosterIsPopulated = Object.keys(camperRoster).length > 0;
             // Set size for bunks that have campers
             Object.entries(bunkCounts).forEach(([bunk, count]) => {
                 if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
                 state.bunkMetaData[bunk].size = count;
             });
-            // Zero out sizes for known bunks with no campers — otherwise an
-            // empty bunk keeps a stale size from a previous roster.
-            (state.bunks || []).forEach(b => {
-                if (!(b in bunkCounts)) {
-                    if (!state.bunkMetaData[b]) state.bunkMetaData[b] = {};
-                    state.bunkMetaData[b].size = 0;
-                }
-            });
+            // Zero out sizes for known bunks with no campers — but ONLY when
+            // the roster is actually populated. If roster is totally empty
+            // (e.g. cloud not yet hydrated, or new camp with no CSV imported
+            // yet), preserve any manually-configured sizes instead of
+            // wiping them.
+            if (rosterIsPopulated) {
+                (state.bunks || []).forEach(b => {
+                    if (!(b in bunkCounts)) {
+                        if (!state.bunkMetaData[b]) state.bunkMetaData[b] = {};
+                        state.bunkMetaData[b].size = 0;
+                    }
+                });
+            }
 
             const orphanedBunks = Object.keys(bunkCounts).filter(b => !state.bunks.includes(b));
             if (orphanedBunks.length > 0) {
