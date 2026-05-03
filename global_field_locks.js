@@ -81,10 +81,17 @@
     fieldName: fieldName,
     timestamp: Date.now()
 };
-            
+
             // console.log(`[GLOBAL_LOCKS] 🔒 LOCKED: "${fieldName}" at slot ${slotIdx} by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
         }
-        
+
+        // ★ Propagate the lock to combo partners (e.g. locking Full Gym also
+        //   locks Gym 1 / Gym 2). Skip when already inside a combo propagation
+        //   to prevent infinite recursion (lockComboPartners → lockField → ...).
+        if (!lockInfo || !lockInfo._fromComboPropagation) {
+            this.lockComboPartners(fieldName, slots, lockInfo || {});
+        }
+
         return true;
     };
 
@@ -390,7 +397,8 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
             this.lockField(partner, slots, {
                 ...lockInfo,
                 lockedBy: 'combined_field',
-                reason: '"' + partner + '" blocked because "' + fieldName + '" is locked (combined field)'
+                reason: '"' + partner + '" blocked because "' + fieldName + '" is locked (combined field)',
+                _fromComboPropagation: true
             });
         }
     };
