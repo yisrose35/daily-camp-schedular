@@ -73,6 +73,7 @@
     let _onlineRetryRegistered = false;
     let _localCache = null;
     let _idbPreloadSucceeded = false;
+    let _cloudHydrationDone = false;
     let _roleCheckRetries = 0;
     let _lastSyncTime = 0;
     let _datePickerHooked = false;
@@ -541,9 +542,21 @@
             scheduleBatchSync();
             return;
         }
-        
+
         if (Object.keys(_pendingChanges).length === 0) {
             log('No pending changes to sync');
+            return;
+        }
+
+        // Hold ALL cloud writes until hydration completes. Before hydration,
+        // local state is built from IDB/localStorage and may be stale (e.g.
+        // empty divisions from a prior quota failure). Writing that stale
+        // state to cloud would overwrite good data restored from the old blob.
+        if (!_cloudHydrationDone) {
+            log('Holding sync until cloud hydration completes');
+            setTimeout(() => {
+                if (Object.keys(_pendingChanges).length > 0) scheduleBatchSync();
+            }, 1000);
             return;
         }
 
@@ -698,6 +711,11 @@
         if (_syncTimeout) {
             clearTimeout(_syncTimeout);
             _syncTimeout = null;
+        }
+
+        if (!_cloudHydrationDone) {
+            log('Force sync deferred — waiting for cloud hydration');
+            return true;
         }
 
         // ★★★ FIX v6.8: Don't even queue if scheduler ★★★
@@ -1182,6 +1200,7 @@
 
         if (!client || !campId) {
             log('No client/camp ID for hydration');
+            _cloudHydrationDone = true;
             return;
         }
 
@@ -1207,6 +1226,7 @@
             if (kvError) {
                 if (kvError.code === '42501') {
                     log('RLS denied camp_state_kv read (expected for scheduler role) — using local settings');
+                    _cloudHydrationDone = true;
                     window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
                     return;
                 }
@@ -1246,6 +1266,7 @@
                     } else {
                         logError('Hydration failed (legacy table):', legacyError);
                     }
+                    _cloudHydrationDone = true;
                     window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
                     return;
                 }
@@ -1351,12 +1372,14 @@
                     bunks: (mergedState.bunks || []).length
                 });
 
+                _cloudHydrationDone = true;
                 window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
             }
         } catch (e) {
             logError('Hydration exception:', e);
-            
+
             // Let the campistry-cloud-hydrated event trigger app1 to rebuild from campStructure
+            _cloudHydrationDone = true;
             window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
         }
     }
