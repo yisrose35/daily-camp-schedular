@@ -23,16 +23,23 @@ function init(){
     nav('campers');
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
 
-    // Block cloud hydration from overwriting recent saves
+    // Sync UI with whatever's in _localCache after hydration. We ALWAYS reload
+    // — the previous save-lock guard skipped loadData when the user had recent
+    // local edits, intending to protect them from cloud overwrites. But:
+    //   1) hydration only updates _localCache, never deletes data — so reading
+    //      back out of _localCache is safe regardless of save lock state.
+    //   2) localStorage writes can silently fail at quota, so a "recent local
+    //      save" can be a fiction; skipping loadData stranded the UI on
+    //      empty placeholder data.
+    // If a save lock is active, ALSO trigger an explicit re-sync to push the
+    // freshly-loaded local state back to cloud.
     window.addEventListener('campistry-cloud-hydrated',function(){
-        if(Date.now()<_saveLockUntil){
-            console.log('[Me] Blocked cloud hydration overwrite (save lock active)');
-            // Re-write our data back
-            setTimeout(function(){save()},200);
-        }else{
-            // Cloud data is newer — reload
-            console.log('[Me] Cloud hydration — reloading data');
-            loadData();render(curPage);
+        var saveLockActive = Date.now() < _saveLockUntil;
+        console.log('[Me] Cloud hydration — reloading data' + (saveLockActive ? ' (save lock active — also resaving)' : ''));
+        loadData();
+        render(curPage);
+        if (saveLockActive) {
+            setTimeout(function(){ save(); }, 200);
         }
     });
 
