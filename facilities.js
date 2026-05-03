@@ -1933,6 +1933,13 @@ function saveSpecialData(saData) {
     }
 
     saveFacilitiesMetadata();
+
+    // ★ Flush to cloud immediately. saveGlobalSettings only queues a debounced
+    //   batch sync (~1-2s); if the user reloads before it fires, cloud
+    //   hydration overwrites localStorage with the stale pre-edit version
+    //   and the just-saved config disappears. The facilities-level saveData()
+    //   already does this — saveSpecialData was the only path that didn't.
+    window.forceSyncToCloud?.();
 }
 
 // -- Access (per-grade with optional per-bunk filter) --
