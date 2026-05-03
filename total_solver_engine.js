@@ -687,6 +687,56 @@
             }
             if (otherActs.has(actNorm)) return 999999;
         }
+
+        // ★ HARD CONSTRAINT: cooldown rules from rules.js (e.g. "Full Gym must
+        //   be ≥20min from Lunch"). The combo-aware facility descriptor in
+        //   blockMatchesDescriptor means a rule on Full Gym also blocks
+        //   Gym 1 / Gym 2 in the gap window. Template is cached per block.
+        if (window.SchedulingRules && window.SchedulingRules.isCandidateAllowed && blockStart !== undefined && blockEnd !== undefined) {
+            var _cdRules = window.SchedulingRules.getCooldownRules?.() || [];
+            if (_cdRules.length > 0) {
+                var _cdTemplate = block._cachedRuleTemplate;
+                if (!_cdTemplate || block._cachedRuleTemplateGen !== _todayCacheGen) {
+                    _cdTemplate = [];
+                    var _cdLive = window.scheduleAssignments?.[bunk] || [];
+                    var _cdMySet = slots.length ? new Set(slots) : null;
+                    var _cdDivSlots = (blockDivName && window.divisionTimes && window.divisionTimes[blockDivName]) || [];
+                    for (var _cdi = 0; _cdi < _cdLive.length; _cdi++) {
+                        if (_cdMySet && _cdMySet.has(_cdi)) continue;
+                        var _cdE = _cdLive[_cdi];
+                        if (!_cdE || _cdE.continuation || _cdE._isTransition) continue;
+                        var _cdSM = _cdE._startMin, _cdEM = _cdE._endMin;
+                        if (_cdSM == null || _cdEM == null) {
+                            var _cdSlot = _cdDivSlots[_cdi];
+                            if (_cdSlot) { _cdSM = _cdSlot.startMin; _cdEM = _cdSlot.endMin; }
+                        }
+                        if (_cdSM == null || _cdEM == null) continue;
+                        _cdTemplate.push({
+                            startMin: _cdSM, endMin: _cdEM,
+                            type: _cdE._type || '',
+                            event: _cdE._activity || _cdE.sport || _cdE.field || '',
+                            field: _cdE.field || '',
+                            _assignedSpecial: _cdE._assignedSpecial || null,
+                            _specialLocation: _cdE._specialLocation || null
+                        });
+                    }
+                    block._cachedRuleTemplate = _cdTemplate;
+                    block._cachedRuleTemplateGen = _todayCacheGen;
+                }
+                var _cdCand = {
+                    startMin: blockStart, endMin: blockEnd,
+                    type: pick._type || '',
+                    event: pick._activity || pick.field || '',
+                    field: pick.field || '',
+                    _assignedSpecial: pick._type === 'special' ? (pick._activity || pick.field) : null,
+                    _specialLocation: pick._type === 'special' ? pick.field : null
+                };
+                if (!window.SchedulingRules.isCandidateAllowed(_cdCand, _cdTemplate, { mode: 'auto' })) {
+                    return 999999;
+                }
+            }
+        }
+
         if (fieldName && fieldName !== 'Free' && blockDivName && blockStart !== undefined && blockEnd !== undefined) {
             var fp = _fieldPropertyMap.get(fieldName);
             var sType = fp ? fp.sharingType : getSharingType(fieldName);
