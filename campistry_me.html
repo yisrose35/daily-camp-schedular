@@ -10,8 +10,37 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_me.css">
+    <!-- Loading overlay — inline styles so it appears instantly with zero
+         FOUC, before any external CSS loads. Hidden by campistry_me.js
+         only after cloud hydration completes and the UI has populated. -->
+    <style>
+        .me-loading-overlay {
+            position: fixed; inset: 0; z-index: 999999;
+            background: #ffffff;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 18px;
+            transition: opacity 0.4s ease;
+        }
+        .me-loading-overlay.hide { opacity: 0; pointer-events: none; }
+        .me-loading-spinner {
+            width: 48px; height: 48px;
+            border: 4px solid #E5E7EB;
+            border-top-color: #147D91;
+            border-radius: 50%;
+            animation: meLoadingSpin 0.9s linear infinite;
+        }
+        .me-loading-text {
+            font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+            font-size: 14px; color: #6B7280; letter-spacing: 0.02em;
+        }
+        @keyframes meLoadingSpin { to { transform: rotate(360deg); } }
+    </style>
 </head>
 <body>
+<div id="meLoadingOverlay" class="me-loading-overlay" role="status" aria-live="polite">
+    <div class="me-loading-spinner" aria-hidden="true"></div>
+    <div class="me-loading-text">Loading your camp data...</div>
+</div>
 
 <!-- HEADER (matches Flow) -->
 <header class="app-header">

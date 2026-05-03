@@ -13,6 +13,25 @@ var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
+// ═══ LOADING OVERLAY ═════════════════════════════════════════════
+// The overlay is shown by default in the HTML so users never see a blank
+// page during the IDB preload + cloud hydration window (~3–4s on a fresh
+// load). We hide it only after the campistry-cloud-hydrated event has
+// fired AND we've re-rendered with real data. A safety timeout hides it
+// even if hydration never completes (e.g. fully offline) so the UI
+// doesn't stay locked behind the spinner forever.
+var _meOverlayHidden = false;
+function hideMeLoadingOverlay(){
+    if (_meOverlayHidden) return;
+    _meOverlayHidden = true;
+    var ov = document.getElementById('meLoadingOverlay');
+    if (!ov) return;
+    ov.classList.add('hide');
+    setTimeout(function(){
+        if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+    }, 500);
+}
+
 // ═══ INIT ════════════════════════════════════════════════════════
 function init(){
     loadData(); setupSidebar(); setupSearch(); setupModals();
@@ -41,7 +60,14 @@ function init(){
         if (saveLockActive) {
             setTimeout(function(){ save(); }, 200);
         }
+        // Data is now real — fade the overlay out.
+        hideMeLoadingOverlay();
     });
+
+    // Safety net: if hydration never fires (offline, no cloud config, etc.)
+    // don't trap the user behind the spinner. After 12s, hide regardless —
+    // the UI will show whatever loadData() managed to read locally.
+    setTimeout(hideMeLoadingOverlay, 12000);
 
     // Watch for localStorage changes from other tabs/scripts
     window.addEventListener('storage',function(e){
