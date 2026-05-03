@@ -269,19 +269,34 @@
         });
         Object.values(groupFields).forEach(arr => arr.sort((a, b) => a.rank - b.rank));
 
+        // Build per-group occupancy intervals across the full timeline (catches rotation events
+        // and any other block whose time window overlaps a slot but isn't aligned to it).
+        const groupOccupancy = {};
+        timeline.forEach(entry => {
+            if (!entry.field || entry._isTransition) return;
+            const fm = fieldMeta[entry.field];
+            if (!fm) return;
+            if (!groupOccupancy[fm.group]) groupOccupancy[fm.group] = [];
+            groupOccupancy[fm.group].push({ field: entry.field, startMin: entry.startMin, endMin: entry.endMin });
+        });
+
         let violations = 0, explained = 0, checked = 0;
 
         Object.entries(slotUsage).forEach(([key, usedList]) => {
             const [groupName, startStr, endStr] = key.split('|');
             const startMin = parseInt(startStr), endMin = parseInt(endStr);
             const allGroupFields = groupFields[groupName] || [];
-            const usedNames = new Set(usedList.map(u => u.field));
+            // Any field in this group whose interval overlaps [startMin, endMin] is occupied
+            const occupiedAtSlot = new Set();
+            (groupOccupancy[groupName] || []).forEach(o => {
+                if (o.endMin > startMin && o.startMin < endMin) occupiedAtSlot.add(o.field);
+            });
 
             usedList.forEach(used => {
-                // Candidate better fields: higher rank (lower number), free, supports activity
+                // Candidate better fields: higher rank (lower number), unoccupied during this window, supports activity
                 const candidates = allGroupFields.filter(f =>
                     f.rank < used.rank &&
-                    !usedNames.has(f.name) &&
+                    !occupiedAtSlot.has(f.name) &&
                     (f.activities.size === 0 || f.activities.has(used.activity))
                 );
                 if (candidates.length === 0) { checked++; return; }
