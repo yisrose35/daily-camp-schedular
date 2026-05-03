@@ -1346,15 +1346,15 @@
                 if (ledger.disabledSports.includes(activity)) return false;
             }
 
-            // ★ SPORT MAX PLAYER COUNT CHECK
+            // ★ SPORT MAX PLAYER COUNT CHECK (uses cached globals — never call getBunkMetaData() here)
             if (activity) {
-                const _bm = window.getBunkMetaData?.() || window.bunkMetaData || {};
-                const _pr = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(activity);
-                if (_pr && _pr.maxPlayers) {
+                const _bm = window.bunkMetaData || {};
+                const _sm = window.sportMetaData?.[activity];
+                if (_sm?.maxPlayers) {
                     const _overlap = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
                     let _total = _bm[bunk]?.size || 0;
                     for (const c of _overlap) _total += _bm[c.bunk]?.size || 0;
-                    if (_total > _pr.maxPlayers) return false;
+                    if (_total > _sm.maxPlayers) return false;
                 }
             }
 

@@ -46,21 +46,37 @@
 
     // ─── Get bunk size (camper count) ─────────────────────────────────
     function getBunkSizes() {
-        const meta = window.bunkMetaData || {};
+        // Primary: app1's live bunkMetaData (has .size from camperRoster)
+        const meta = window.getBunkMetaData?.() || window.bunkMetaData || {};
         const sizes = {};
         for (const [bunk, data] of Object.entries(meta)) {
             sizes[bunk] = data?.size || 0;
         }
-        // Fallback: count from camperRoster if bunkMetaData is empty
-        if (Object.values(sizes).every(s => s === 0)) {
-            const gs = window.loadGlobalSettings?.() || {};
-            const roster = gs.app1?.camperRoster || {};
-            for (const camper of Object.values(roster)) {
-                if (camper.bunk) {
-                    sizes[camper.bunk] = (sizes[camper.bunk] || 0) + 1;
-                }
+        if (Object.values(sizes).some(s => s > 0)) return sizes;
+
+        // Fallback A: count from camperRoster via loadGlobalSettings
+        const gs = window.loadGlobalSettings?.() || {};
+        const roster = gs.app1?.camperRoster || gs.camperRoster || {};
+        for (const camper of Object.values(roster)) {
+            if (camper.bunk) {
+                sizes[camper.bunk] = (sizes[camper.bunk] || 0) + 1;
             }
         }
+        if (Object.values(sizes).some(s => s > 0)) return sizes;
+
+        // Fallback B: read camperRoster directly from localStorage
+        try {
+            const raw = localStorage.getItem('campGlobalSettings_v1');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                const r = parsed?.app1?.camperRoster || {};
+                for (const camper of Object.values(r)) {
+                    if (camper.bunk) {
+                        sizes[camper.bunk] = (sizes[camper.bunk] || 0) + 1;
+                    }
+                }
+            }
+        } catch (e) { /* ignore parse errors */ }
         return sizes;
     }
 
@@ -142,7 +158,10 @@
         c.h2('Bunk sizes (camper counts)');
         const bunksWithSize = Object.entries(bunkSizes).filter(([, s]) => s > 0);
         if (!bunksWithSize.length) {
-            c.warn('All bunk sizes are 0 — camper roster not loaded. Player counts will be inaccurate.');
+            c.warn('All bunk sizes are 0 — camper roster not loaded (import campers in Campistry Me first). Player counts will be inaccurate.');
+            c.warn('  Tried: getBunkMetaData()=' + (typeof window.getBunkMetaData === 'function' ? 'exists' : 'missing') +
+                   ', loadGlobalSettings()=' + (typeof window.loadGlobalSettings === 'function' ? 'exists' : 'missing') +
+                   ', localStorage campGlobalSettings_v1=' + (localStorage.getItem('campGlobalSettings_v1') ? 'found' : 'empty'));
         } else {
             const sorted = bunksWithSize.sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
             const summary = sorted.map(([b, s]) => `${b}(${s})`).join('  ');
