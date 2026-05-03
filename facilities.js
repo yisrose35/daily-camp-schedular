@@ -3068,6 +3068,98 @@ function getComboForField(fieldName) {
 }
 
 // =========================================================================
+// FIELD COMBOS RUNTIME API (window.FieldCombos)
+// Exposes the combo data so the scheduler/validator can enforce mutual
+// exclusion between a combined field and its sub-fields. Rule: using the
+// combined occupies all subs; using any sub blocks the combined; subs do
+// NOT block each other. Many call sites already invoked
+// window.FieldCombos.isBlockedByCombo / .isInCombo, but the namespace was
+// never defined — those checks were silent no-ops. That's why "Full Gym"
+// and "Gym 1" could both be assigned in the same time window.
+// =========================================================================
+(function exposeFieldCombosAPI() {
+    const _normCombo = (s) => (s ? String(s).toLowerCase().trim() : '');
+
+    // Tiny per-call cache for bunk → division (rebuilt every call cheaply).
+    function buildBunkDivisionMap() {
+        const map = new Map();
+        const divs = window.divisions || {};
+        for (const div in divs) {
+            const bunks = (divs[div] && divs[div].bunks) || [];
+            for (const b of bunks) map.set(String(b), div);
+        }
+        return map;
+    }
+
+    function entryTimeRange(bunk, slotIdx, entry, bunkDivMap) {
+        if (entry && entry._startMin != null && entry._endMin != null) {
+            return { startMin: entry._startMin, endMin: entry._endMin };
+        }
+        const div = bunkDivMap.get(String(bunk));
+        if (!div) return null;
+        const divSlots = (window.divisionTimes && window.divisionTimes[div]) || [];
+        const slot = divSlots[slotIdx];
+        if (!slot || slot.startMin == null || slot.endMin == null) return null;
+        return { startMin: slot.startMin, endMin: slot.endMin };
+    }
+
+    function getConflictFields(fieldName) {
+        const norm = _normCombo(fieldName);
+        if (_comboLookup.combinedToSubs[norm]) return _comboLookup.combinedToSubs[norm];
+        if (_comboLookup.subToCombined[norm]) return [_comboLookup.subToCombined[norm]];
+        return [];
+    }
+
+    function isInCombo(fieldName) {
+        return _comboLookup.allComboFields.has(_normCombo(fieldName));
+    }
+
+    function isBlockedByCombo(fieldName, startMin, endMin, excludeBunk) {
+        if (startMin == null || endMin == null) return { blocked: false };
+        const conflicts = getConflictFields(fieldName);
+        if (!conflicts.length) return { blocked: false };
+
+        const conflictSet = new Set(conflicts.map(_normCombo));
+        const sa = window.scheduleAssignments || {};
+        const bunkDivMap = buildBunkDivisionMap();
+
+        for (const bunk in sa) {
+            if (excludeBunk != null && String(bunk) === String(excludeBunk)) continue;
+            const slots = sa[bunk];
+            if (!Array.isArray(slots)) continue;
+            for (let i = 0; i < slots.length; i++) {
+                const entry = slots[i];
+                if (!entry || entry.continuation || entry._isTransition) continue;
+                if (!entry.field) continue;
+                if (!conflictSet.has(_normCombo(entry.field))) continue;
+                const range = entryTimeRange(bunk, i, entry, bunkDivMap);
+                if (!range) continue;
+                if (range.startMin < endMin && range.endMin > startMin) {
+                    return { blocked: true, blocker: entry.field, blockerBunk: bunk };
+                }
+            }
+        }
+        return { blocked: false };
+    }
+
+    function isBlockedByComboAtSlots(fieldName, slotIndices, divCtx, excludeBunk) {
+        if (!Array.isArray(slotIndices) || slotIndices.length === 0 || !divCtx) return false;
+        const divSlots = (window.divisionTimes && window.divisionTimes[divCtx]) || [];
+        let startMin = null, endMin = null;
+        for (const idx of slotIndices) {
+            const slot = divSlots[idx];
+            if (!slot || slot.startMin == null || slot.endMin == null) continue;
+            if (startMin == null || slot.startMin < startMin) startMin = slot.startMin;
+            if (endMin == null || slot.endMin > endMin) endMin = slot.endMin;
+        }
+        if (startMin == null || endMin == null) return false;
+        return isBlockedByCombo(fieldName, startMin, endMin, excludeBunk).blocked;
+    }
+
+    window.FieldCombos = { isInCombo, isBlockedByCombo, isBlockedByComboAtSlots };
+})();
+
+// =========================================================================
 // FIELD CLEANUP HELPERS (delegated to fields.js via window exports)
 // =========================================================================
 function cleanupDeletedField(fieldName) {
