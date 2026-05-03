@@ -267,7 +267,38 @@
                 };
             }
 
-           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, hasProps: true });
+            // ★ Cache timeRules (split by type) so the hard constraint can fire
+            //   regardless of whether canBlockFit's gated path runs.
+            var unavailableRulesCache = null;
+            var availableRulesCache = null;
+            var rawTR = fieldProps.timeRules;
+            if (Array.isArray(rawTR) && rawTR.length > 0) {
+                for (var trI = 0; trI < rawTR.length; trI++) {
+                    var trRule = rawTR[trI];
+                    var trStart = trRule.startMin;
+                    var trEnd = trRule.endMin;
+                    if (trStart == null && (trRule.start || trRule.startTime)) {
+                        trStart = (window.SchedulerCoreUtils?.parseTimeToMinutes)?.(trRule.start || trRule.startTime);
+                    }
+                    if (trEnd == null && (trRule.end || trRule.endTime)) {
+                        trEnd = (window.SchedulerCoreUtils?.parseTimeToMinutes)?.(trRule.end || trRule.endTime);
+                    }
+                    if (trStart == null || trEnd == null) continue;
+                    var trCached = { startMin: trStart, endMin: trEnd, divisions: Array.isArray(trRule.divisions) ? trRule.divisions : null };
+                    var trType = (trRule.type || '').toLowerCase();
+                    var isAvail = trType === 'available' || trRule.available === true;
+                    var isUnavail = trType === 'unavailable' || trRule.available === false;
+                    if (isUnavail) {
+                        if (!unavailableRulesCache) unavailableRulesCache = [];
+                        unavailableRulesCache.push(trCached);
+                    } else if (isAvail) {
+                        if (!availableRulesCache) availableRulesCache = [];
+                        availableRulesCache.push(trCached);
+                    }
+                }
+            }
+
+           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
         }
 
         // ★★★ FIX v15.4: Also index SPECIALS in _fieldPropertyMap ★★★
@@ -679,6 +710,30 @@
                     if (String(br) === bs || parseInt(br) === bn) { ok = true; break; }
                 }
                 if (!ok) return 999999;
+            }
+        }
+        // ★ HARD CONSTRAINT: field timeRules — never assign during an Unavailable
+        //   window, and only inside an Available window when one is configured.
+        if (fieldProp && blockStart !== undefined && blockEnd !== undefined) {
+            var unRules = fieldProp.unavailableRules;
+            if (unRules) {
+                for (var unI = 0; unI < unRules.length; unI++) {
+                    var unR = unRules[unI];
+                    if (unR.divisions && unR.divisions.length > 0 && blockDivName && unR.divisions.indexOf(blockDivName) === -1) continue;
+                    if (unR.startMin < blockEnd && unR.endMin > blockStart) return 999999;
+                }
+            }
+            var avRules = fieldProp.availableRules;
+            if (avRules && avRules.length > 0) {
+                var anyAvail = avRules.some(function(av) {
+                    if (av.divisions && av.divisions.length > 0 && blockDivName && av.divisions.indexOf(blockDivName) === -1) return false;
+                    return blockStart >= av.startMin && blockEnd <= av.endMin;
+                });
+                // Only enforce if at least one Available rule applies to this division
+                var anyApplicable = avRules.some(function(av) {
+                    return !av.divisions || av.divisions.length === 0 || !blockDivName || av.divisions.indexOf(blockDivName) !== -1;
+                });
+                if (anyApplicable && !anyAvail) return 999999;
             }
         }
         if (fieldProp?.prefList) { if (fieldProp.prefList.indexOf(blockDivName) === -1 && fieldProp.prefExclusive) return 999999; }
@@ -1339,6 +1394,29 @@
                             if (String(dbr) === dbs || parseInt(dbr) === dbn) { dluOk = true; break; }
                         }
                         if (!dluOk) continue;
+                    }
+                }
+                // ★ Hard filter: field timeRules (mirrors hard constraint in penalty)
+                if (fp && hasTime) {
+                    var unR2 = fp.unavailableRules, badTime = false;
+                    if (unR2) {
+                        for (var unJ = 0; unJ < unR2.length; unJ++) {
+                            var unX = unR2[unJ];
+                            if (unX.divisions && unX.divisions.length > 0 && blockDiv && unX.divisions.indexOf(blockDiv) === -1) continue;
+                            if (unX.startMin < endMin && unX.endMin > startMin) { badTime = true; break; }
+                        }
+                    }
+                    if (badTime) continue;
+                    var avR2 = fp.availableRules;
+                    if (avR2 && avR2.length > 0) {
+                        var anyAvail2 = avR2.some(function(av) {
+                            if (av.divisions && av.divisions.length > 0 && blockDiv && av.divisions.indexOf(blockDiv) === -1) return false;
+                            return startMin >= av.startMin && endMin <= av.endMin;
+                        });
+                        var anyApplicable2 = avR2.some(function(av) {
+                            return !av.divisions || av.divisions.length === 0 || !blockDiv || av.divisions.indexOf(blockDiv) !== -1;
+                        });
+                        if (anyApplicable2 && !anyAvail2) continue;
                     }
                 }
                 if (fp?.prefExclusive && fp.prefList && fp.prefList.indexOf(blockDiv) === -1) continue;
