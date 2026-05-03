@@ -107,7 +107,7 @@
      * Checks if a specific division is allowed to use this special activity.
      * * Checks:
      * 1. GlobalFieldLocks (elective locks)
-     * 2. limitUsage.enabled + limitUsage.divisions
+     * 2. accessRestrictions.enabled + accessRestrictions.divisions
      * 3. preferences.exclusive + preferences.list
      * * @param {string} divisionName - The division to check
      * @param {object} props - The activity properties
@@ -137,11 +137,11 @@
             }
         }
         
-        // Check limitUsage restrictions
-        if (props.limitUsage?.enabled) {
-            const allowedDivisions = props.limitUsage.divisions || {};
+        // Check accessRestrictions restrictions
+        if (props.accessRestrictions?.enabled) {
+            const allowedDivisions = props.accessRestrictions.divisions || {};
             
-            // If limitUsage is enabled, division must be in the allowed list
+            // If accessRestrictions is enabled, division must be in the allowed list
             if (!(divisionName in allowedDivisions)) {
                 return false;
             }
@@ -171,7 +171,7 @@
      * Checks if a specific BUNK can use this special activity.
      * * Checks:
      * 1. Division-level access (via canDivisionUseSpecial)
-     * 2. Bunk-level restrictions (limitUsage.divisions[div] array)
+     * 2. Bunk-level restrictions (accessRestrictions.divisions[div] array)
      * * @param {string} bunkName - The bunk to check
      * @param {string} divisionName - The division this bunk belongs to
      * @param {object} props - The activity properties
@@ -188,8 +188,8 @@
         }
         
         // Then check bunk-level restrictions
-        if (props.limitUsage?.enabled) {
-            const allowedDivisions = props.limitUsage.divisions || {};
+        if (props.accessRestrictions?.enabled) {
+            const allowedDivisions = props.accessRestrictions.divisions || {};
             const bunkRestrictions = allowedDivisions[divisionName];
             
             // If there's an array of specific bunks, check if this bunk is in it
@@ -392,7 +392,7 @@
     /**
      * Checks if a bunk can use a specific special activity.
      * * Checks:
-     * 1. Bunk-level access (limitUsage.divisions[div] array)
+     * 1. Bunk-level access (accessRestrictions.divisions[div] array)
      * 2. maxUsage limits from historical counts
      * 3. GlobalFieldLocks
      */

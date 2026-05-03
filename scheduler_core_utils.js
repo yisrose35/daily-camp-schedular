@@ -701,10 +701,10 @@
         // =================================================================
         // ★★★ LIMIT USAGE CHECK (Division & Bunk Restrictions) ★★★
         // =================================================================
-        if (effectiveProps.limitUsage?.enabled) {
-            const divisionRules = effectiveProps.limitUsage.divisions || {};
+        if (effectiveProps.accessRestrictions?.enabled) {
+            const divisionRules = effectiveProps.accessRestrictions.divisions || {};
             if (!(block.divName in divisionRules)) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: division ${block.divName} not in allowed list`);
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: division ${block.divName} not in allowed list`);
                 return false;
             }
             const divRule = divisionRules[block.divName];
@@ -713,7 +713,7 @@
                 const bunkNum = parseInt(block.bunk);
                 const inList = divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
                 if (!inList) {
-                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: bunk not in allowed list`);
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: bunk not in allowed list`);
                     return false;
                 }
             }
@@ -1164,7 +1164,7 @@
         console.log('  - capacity:', props?.sharableWith?.capacity);
         console.log('Calculated Capacity:', Utils.getFieldCapacity(fieldName, window.activityProperties));
         console.log('TimeRules:', props?.timeRules);
-        console.log('LimitUsage:', props?.limitUsage);
+        console.log('LimitUsage:', props?.accessRestrictions);
         console.log('RainyDayAvailable:', props?.rainyDayAvailable);
         console.log('Activities:', props?.activities);
 
@@ -2500,13 +2500,13 @@ const validActivities = Utils.getValidActivityNames();
                 if (f.sharableWith.capacity === undefined) fieldIssues.push('sharableWith.capacity missing');
             }
             
-            // Check limitUsage
-            if (!f.limitUsage) {
-                fieldIssues.push('Missing limitUsage');
+            // Check accessRestrictions
+            if (!f.accessRestrictions) {
+                fieldIssues.push('Missing accessRestrictions');
             } else {
-                if (f.limitUsage.enabled === undefined) fieldIssues.push('limitUsage.enabled missing');
-                if (typeof f.limitUsage.divisions !== 'object') fieldIssues.push('limitUsage.divisions not an object');
-                if (!Array.isArray(f.limitUsage.priorityList)) fieldIssues.push('limitUsage.priorityList not an array');
+                if (f.accessRestrictions.enabled === undefined) fieldIssues.push('accessRestrictions.enabled missing');
+                if (typeof f.accessRestrictions.divisions !== 'object') fieldIssues.push('accessRestrictions.divisions not an object');
+                if (!Array.isArray(f.accessRestrictions.priorityList)) fieldIssues.push('accessRestrictions.priorityList not an array');
             }
             
             // Check timeRules

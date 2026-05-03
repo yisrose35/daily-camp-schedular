@@ -249,17 +249,17 @@
             if (!prefProps?.preferences?.enabled) { var actProps = props[cand.activityName]; if (actProps?.preferences?.enabled) prefProps = actProps; }
             if (prefProps?.preferences?.enabled) { prefList = prefProps.preferences.list || []; prefExclusive = !!prefProps.preferences.exclusive; }
 
-            // ★ Cache limitUsage so the hard-constraint check below can run without
+            // ★ Cache accessRestrictions so the hard-constraint check below can run without
             //   re-traversing fieldProps on every candidate evaluation.
-            var limitUsageCache = null;
-            if (fieldProps.limitUsage && fieldProps.limitUsage.enabled === true) {
-                limitUsageCache = {
+            var accessRestrictionsCache = null;
+            if (fieldProps.accessRestrictions && fieldProps.accessRestrictions.enabled === true) {
+                accessRestrictionsCache = {
                     enabled: true,
-                    divisions: fieldProps.limitUsage.divisions || {}
+                    divisions: fieldProps.accessRestrictions.divisions || {}
                 };
             }
 
-           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, limitUsage: limitUsageCache, hasProps: true });
+           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, hasProps: true });
         }
 
         // ★★★ FIX v15.4: Also index SPECIALS in _fieldPropertyMap ★★★
@@ -649,11 +649,11 @@
             else { if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999; }
         }
         var fieldProp = _fieldPropertyMap.get(fieldName);
-        // ★ HARD CONSTRAINT: limitUsage division access — never assign a field
+        // ★ HARD CONSTRAINT: accessRestrictions division access — never assign a field
         //   to a division that isn't in its allowed list.
-        if (fieldProp?.limitUsage?.enabled && blockDivName) {
-            if (!(blockDivName in fieldProp.limitUsage.divisions)) return 999999;
-            var luBunkRule = fieldProp.limitUsage.divisions[blockDivName];
+        if (fieldProp?.accessRestrictions?.enabled && blockDivName) {
+            if (!(blockDivName in fieldProp.accessRestrictions.divisions)) return 999999;
+            var luBunkRule = fieldProp.accessRestrictions.divisions[blockDivName];
             if (Array.isArray(luBunkRule) && luBunkRule.length > 0) {
                 var bs = String(bunk), bn = parseInt(bunk);
                 var ok = false;
@@ -1311,10 +1311,10 @@ else penalty += 200;
                 // ★ v15.0: Rainy time bypass — skip canBlockFit (which enforces time rules)
                 var skipTimeCheck = S._isRainyDay && S._rainyTimeBypasses.has(fn);
                 var fp = S._fieldPropertyMap.get(fn);
-                // ★ Hard filter: limitUsage division access (mirrors hard constraint in penalty)
-                if (fp?.limitUsage?.enabled && blockDiv) {
-                    if (!(blockDiv in fp.limitUsage.divisions)) continue;
-                    var dluRule = fp.limitUsage.divisions[blockDiv];
+                // ★ Hard filter: accessRestrictions division access (mirrors hard constraint in penalty)
+                if (fp?.accessRestrictions?.enabled && blockDiv) {
+                    if (!(blockDiv in fp.accessRestrictions.divisions)) continue;
+                    var dluRule = fp.accessRestrictions.divisions[blockDiv];
                     if (Array.isArray(dluRule) && dluRule.length > 0) {
                         var dbs = String(bunk), dbn = parseInt(bunk), dluOk = false;
                         for (var dlui = 0; dlui < dluRule.length; dlui++) {

@@ -329,7 +329,7 @@
     function isSpecialAvailableForDivision(specialName, divName, gs) {
         const cfg = getSpecialConfig(specialName, gs);
         if (!cfg) return true;
-        const rules = cfg.limitUsage;
+        const rules = cfg.accessRestrictions;
         if (!rules || !rules.enabled) return true;
         const allowed = rules.divisions;
         if (!allowed || typeof allowed !== 'object') return true;
@@ -337,14 +337,14 @@
         return divName in allowed;
     }
     // Per-bunk access check. Honors the per-bunk filter inside
-    // limitUsage.divisions[grade]: an empty array (or missing) means
+    // accessRestrictions.divisions[grade]: an empty array (or missing) means
     // "all bunks in this grade", a non-empty array means only those
     // listed bunks are allowed.
     function isSpecialAvailableForBunk(specialName, divName, bunkName, gs) {
         if (!isSpecialAvailableForDivision(specialName, divName, gs)) return false;
         const cfg = getSpecialConfig(specialName, gs);
         if (!cfg) return true;
-        const rules = cfg.limitUsage;
+        const rules = cfg.accessRestrictions;
         if (!rules || !rules.enabled) return true;
         const allowed = rules.divisions;
         if (!allowed || typeof allowed !== 'object' || Array.isArray(allowed)) return true;
@@ -683,8 +683,8 @@
             const gradeScore = {}; // grade → sum of rank indices (lower = higher priority)
             const gradeCount = {}; // grade → how many priority fields mention it
             (config.fields || fields || []).forEach(f => {
-                if (f.limitUsage?.usePriority && Array.isArray(f.limitUsage.priorityList) && f.limitUsage.priorityList.length > 0) {
-                    f.limitUsage.priorityList.forEach((g, idx) => {
+                if (f.accessRestrictions?.usePriority && Array.isArray(f.accessRestrictions.priorityList) && f.accessRestrictions.priorityList.length > 0) {
+                    f.accessRestrictions.priorityList.forEach((g, idx) => {
                         gradeScore[g] = (gradeScore[g] || 0) + idx;
                         gradeCount[g] = (gradeCount[g] || 0) + 1;
                     });
@@ -693,8 +693,8 @@
             // Also incorporate per-special grade priority votes
             todaysSpecials.forEach(function(_spri) {
                 const _scfg = getSpecialConfig(_spri.name, globalSettings);
-                if (_scfg && _scfg.limitUsage && _scfg.limitUsage.usePriority && Array.isArray(_scfg.limitUsage.priorityList) && _scfg.limitUsage.priorityList.length > 0) {
-                    _scfg.limitUsage.priorityList.forEach(function(g, idx) {
+                if (_scfg && _scfg.accessRestrictions && _scfg.accessRestrictions.usePriority && Array.isArray(_scfg.accessRestrictions.priorityList) && _scfg.accessRestrictions.priorityList.length > 0) {
+                    _scfg.accessRestrictions.priorityList.forEach(function(g, idx) {
                         gradeScore[g] = (gradeScore[g] || 0) + idx;
                         gradeCount[g] = (gradeCount[g] || 0) + 1;
                     });
@@ -1192,9 +1192,9 @@
                     disabledSports: dailyDisabledSports[field.name] || [],
                     activities: field.activities || [],
                     // Access restriction — which grades are allowed + priority order
-                    limitUsage: props.limitUsage || field.limitUsage || { enabled: false },
-                    usePriority: props.limitUsage?.usePriority || field.limitUsage?.usePriority || false,
-                    priorityList: props.limitUsage?.priorityList || field.limitUsage?.priorityList || [],
+                    accessRestrictions: props.accessRestrictions || field.accessRestrictions || { enabled: false },
+                    usePriority: props.accessRestrictions?.usePriority || field.accessRestrictions?.usePriority || false,
+                    priorityList: props.accessRestrictions?.priorityList || field.accessRestrictions?.priorityList || [],
                     // Per-grade sharing overrides
                     gradeShareRules: props.gradeShareRules || field.gradeShareRules || {},
                     claims: []
@@ -1245,9 +1245,9 @@
             });
             if (!timeOk) return false;
 
-            // ★ GRADE ACCESS RESTRICTION (limitUsage)
-            if (ledger.limitUsage?.enabled) {
-                const divRules = ledger.limitUsage.divisions || {};
+            // ★ GRADE ACCESS RESTRICTION (accessRestrictions)
+            if (ledger.accessRestrictions?.enabled) {
+                const divRules = ledger.accessRestrictions.divisions || {};
                 if (!(grade in divRules)) return false;
             }
 

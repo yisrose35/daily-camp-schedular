@@ -14,7 +14,7 @@
  *   3. Field quality         — grouped fields used in rank order (activity-aware)
  *   4. Activity variety      — no activity repeated more than the configured limit
  *   5. Field time rules      — fields not used outside their allowed hours
- *   6. Field access          — fields used only by divisions allowed in limitUsage
+ *   6. Field access          — fields used only by divisions allowed in accessRestrictions
  *   7. Field double-booking  — non-sharable fields not used by multiple bunks at once
  *   8. Division time bounds  — blocks fall within division start/end window
  *   9. Special time windows  — specials scheduled within their configured hours
@@ -216,8 +216,8 @@
             return `time rule: not within any Available window`;
 
         // 2. Division access restriction
-        if (fieldCfg.limitUsage?.enabled && entry.divName) {
-            const allowed = fieldCfg.limitUsage.divisions || {};
+        if (fieldCfg.accessRestrictions?.enabled && entry.divName) {
+            const allowed = fieldCfg.accessRestrictions.divisions || {};
             if (!allowed[entry.divName])
                 return `access restriction: division "${entry.divName}" not permitted`;
         }
@@ -237,7 +237,7 @@
 
         const seniorityMap = _buildSeniorityMap();
 
-        // Store full config so _fieldSkipReason can inspect timeRules + limitUsage + seniority
+        // Store full config so _fieldSkipReason can inspect timeRules + accessRestrictions + seniority
         const fieldMeta = {};
         fields.forEach(f => {
             if (f.fieldGroup) fieldMeta[f.name] = {
@@ -246,7 +246,7 @@
                 qualityRank: f.qualityRank ?? 999,
                 activities: new Set((f.activities || []).map(a => (a || '').toLowerCase().trim())),
                 timeRules: f.timeRules || [],
-                limitUsage: f.limitUsage || {}
+                accessRestrictions: f.accessRestrictions || {}
             };
         });
 
@@ -266,7 +266,7 @@
         const groupFields = {};
         Object.entries(fieldMeta).forEach(([name, m]) => {
             if (!groupFields[m.group]) groupFields[m.group] = [];
-            groupFields[m.group].push({ name, rank: m.rank, activities: m.activities, timeRules: m.timeRules, limitUsage: m.limitUsage });
+            groupFields[m.group].push({ name, rank: m.rank, activities: m.activities, timeRules: m.timeRules, accessRestrictions: m.accessRestrictions });
         });
         Object.values(groupFields).forEach(arr => arr.sort((a, b) => a.rank - b.rank));
 
@@ -395,7 +395,7 @@
     }
 
     // =========================================================================
-    // AUDIT 6 — Field access restrictions (limitUsage)
+    // AUDIT 6 — Field access restrictions (accessRestrictions)
     // =========================================================================
 
     function auditFieldAccess(timeline) {
@@ -404,7 +404,7 @@
         const fields = settings.app1?.fields || settings.fields || [];
         const restricted = {};
         fields.forEach(f => {
-            const lu = f.limitUsage;
+            const lu = f.accessRestrictions;
             if (lu?.enabled) restricted[f.name] = lu.divisions || {};
         });
         if (!Object.keys(restricted).length) { c.skip('No fields have access restrictions configured'); return { pass: 0, fail: 0, skip: 1 }; }

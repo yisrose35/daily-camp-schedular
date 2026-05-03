@@ -340,14 +340,38 @@
     // LOCAL STORAGE HELPERS
     // =========================================================================
 
+    // Migrate the legacy `limitUsage` property name on fields and special activities
+    // to `accessRestrictions` (semantic rename — same shape, clearer name). Old saved
+    // data still loads; future saves use the new name. Safe to run repeatedly.
+    function _migrateAccessRestrictionsKey(settings) {
+        if (!settings || typeof settings !== 'object') return settings;
+        const fields = settings?.app1?.fields;
+        if (Array.isArray(fields)) {
+            for (const f of fields) {
+                if (f && f.limitUsage && !f.accessRestrictions) {
+                    f.accessRestrictions = f.limitUsage;
+                }
+            }
+        }
+        const specials = settings?.specialActivities || settings?.app1?.specialActivities;
+        if (Array.isArray(specials)) {
+            for (const s of specials) {
+                if (s && s.limitUsage && !s.accessRestrictions) {
+                    s.accessRestrictions = s.limitUsage;
+                }
+            }
+        }
+        return settings;
+    }
+
     function getLocalSettings() {
         if (_localCache !== null) {
             return _localCache;
         }
-        
+
         try {
             const raw = localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY);
-            _localCache = raw ? JSON.parse(raw) : {};
+            _localCache = _migrateAccessRestrictionsKey(raw ? JSON.parse(raw) : {});
             return _localCache;
         } catch (e) {
             logError('Failed to read local settings:', e);

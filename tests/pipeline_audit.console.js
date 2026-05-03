@@ -243,7 +243,7 @@
             activities: ['baseball'],
             available: true,
             sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
-            limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
+            accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
             timeRules: [],
             rainyDayAvailable: false,
             fieldGroup: 'Baseball Diamonds',

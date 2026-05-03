@@ -502,8 +502,8 @@ for (const futureDate of Object.keys(allDailyData)) {
             }
 
             // Check division restrictions
-            if (field.limitUsage?.enabled) {
-                const allowedDivs = Object.keys(field.limitUsage.divisions || {});
+            if (field.accessRestrictions?.enabled) {
+                const allowedDivs = Object.keys(field.accessRestrictions.divisions || {});
                 const hasAllowed = divisionNames.some(d => allowedDivs.includes(d));
                 if (!hasAllowed) continue;
             }

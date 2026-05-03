@@ -70,11 +70,11 @@
             },
             
             // ★ Access restrictions - ensure complete structure  
-             limitUsage: {
-                enabled: f.limitUsage?.enabled === true,
-                divisions: typeof f.limitUsage?.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : [],
-                usePriority: f.limitUsage?.usePriority === true
+             accessRestrictions: {
+                enabled: f.accessRestrictions?.enabled === true,
+                divisions: typeof f.accessRestrictions?.divisions === 'object' ? f.accessRestrictions.divisions : {},
+                priorityList: Array.isArray(f.accessRestrictions?.priorityList) ? f.accessRestrictions.priorityList : [],
+                usePriority: f.accessRestrictions?.usePriority === true
             },
             
             // ★ Time rules - ensure array with parsed times

@@ -266,7 +266,7 @@ function syncAllToLegacy() {
                     activities: [],
                     available: true,
                     sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
-                    limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
+                    accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
                     timeRules: [],
                     rainyDayAvailable: false
                 };
@@ -346,7 +346,7 @@ function createDefaultSpecialActivity(name) {
         type: 'Special',
         available: true,
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
-        limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
+        accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
         timeRules: [],
         maxUsage: null,
         maxUsagePeriod: 'half',
@@ -742,7 +742,7 @@ function renderSportsConfig(container, fac) {
             activities: [],
             available: true,
             sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
-            limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
+            accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
             timeRules: [],
             rainyDayAvailable: false
         };
@@ -1180,10 +1180,10 @@ function summarySharing(f) {
     return `Up to ${parseInt(rules.capacity) || 2} bunks (same grade)`;
 }
 function summaryAccess(f) {
-    if (!f.limitUsage?.enabled) return "Open to all grades";
-    const count = Object.keys(f.limitUsage.divisions || {}).length;
+    if (!f.accessRestrictions?.enabled) return "Open to all grades";
+    const count = Object.keys(f.accessRestrictions.divisions || {}).length;
     if (count === 0) return "Restricted (none selected)";
-    const pStr = f.limitUsage.usePriority ? " - prioritized" : "";
+    const pStr = f.accessRestrictions.usePriority ? " - prioritized" : "";
     return `${count} grade${count !== 1 ? 's' : ''} allowed${pStr}`;
 }
 function summaryTime(f) { return f.timeRules?.length ? `${f.timeRules.length} rule(s) active` : "Available all day"; }
@@ -1429,7 +1429,7 @@ function renderAccess(item) {
 
     const renderContent = () => {
         container.innerHTML = "";
-        const rules = item.limitUsage || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
+        const rules = item.accessRestrictions || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
         if (!rules.priorityList) rules.priorityList = Object.keys(rules.divisions || {});
         if (rules.usePriority === undefined) rules.usePriority = false;
 
@@ -1444,8 +1444,8 @@ function renderAccess(item) {
         btnRes.textContent = "Specific Grades Only";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${rules.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rules.enabled ? '#e6f4f7' : '#fff'}; color:${rules.enabled ? '#0F5F6E' : '#333'}; font-weight:${rules.enabled ? '600' : '400'};`;
 
-        btnAll.onclick = () => { rules.enabled = false; item.limitUsage = rules; saveFieldData(); renderContent(); updateSummary(); };
-        btnRes.onclick = () => { rules.enabled = true; item.limitUsage = rules; saveFieldData(); renderContent(); updateSummary(); };
+        btnAll.onclick = () => { rules.enabled = false; item.accessRestrictions = rules; saveFieldData(); renderContent(); updateSummary(); };
+        btnRes.onclick = () => { rules.enabled = true; item.accessRestrictions = rules; saveFieldData(); renderContent(); updateSummary(); };
 
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
@@ -1467,7 +1467,7 @@ function renderAccess(item) {
                 c.onclick = () => {
                     if (isAllowed) { delete rules.divisions[divName]; rules.priorityList = rules.priorityList.filter(d => d !== divName); }
                     else { rules.divisions[divName] = []; if (!rules.priorityList.includes(divName)) rules.priorityList.push(divName); }
-                    item.limitUsage = rules;
+                    item.accessRestrictions = rules;
                     saveFieldData(); renderContent(); updateSummary();
                 };
                 chipWrap.appendChild(c);
@@ -1501,7 +1501,7 @@ function renderAccess(item) {
             priCb.onchange = () => {
                 rules.usePriority = priCb.checked;
                 if (priCb.checked && rules.priorityList.length === 0) rules.priorityList = [...availableGrades];
-                item.limitUsage = rules;
+                item.accessRestrictions = rules;
                 saveFieldData(); renderContent(); updateSummary();
             };
             const priSl = document.createElement("span"); priSl.className = "slider";
@@ -1532,7 +1532,7 @@ function renderAccess(item) {
                     if (idx === 0) btnUp.style.opacity = "0.3";
                     btnUp.onclick = () => {
                         [rules.priorityList[idx - 1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx - 1]];
-                        item.limitUsage = rules; saveFieldData(); renderContent(); updateSummary();
+                        item.accessRestrictions = rules; saveFieldData(); renderContent(); updateSummary();
                     };
 
                     const btnDown = document.createElement("button");
@@ -1542,7 +1542,7 @@ function renderAccess(item) {
                     if (idx === rules.priorityList.length - 1) btnDown.style.opacity = "0.3";
                     btnDown.onclick = () => {
                         [rules.priorityList[idx], rules.priorityList[idx + 1]] = [rules.priorityList[idx + 1], rules.priorityList[idx]];
-                        item.limitUsage = rules; saveFieldData(); renderContent(); updateSummary();
+                        item.accessRestrictions = rules; saveFieldData(); renderContent(); updateSummary();
                     };
 
                     row.appendChild(btnUp); row.appendChild(btnDown);
@@ -1813,8 +1813,8 @@ function renderComboSettings(fieldItem) {
 
 // -- Summaries --
 function summarySpecialAccess(s) {
-    if (!s.limitUsage?.enabled) return "Open to all grades";
-    const divs = s.limitUsage.divisions || {};
+    if (!s.accessRestrictions?.enabled) return "Open to all grades";
+    const divs = s.accessRestrictions.divisions || {};
     const gradeKeys = Object.keys(divs);
     if (gradeKeys.length === 0) return "Restricted (none selected)";
     const parts = [];
@@ -1944,7 +1944,7 @@ function renderSpecialAccess(saData) {
     };
     const renderContent = () => {
         container.innerHTML = "";
-        const rules = saData.limitUsage || { enabled: false, divisions: {}, priorityList: [] };
+        const rules = saData.accessRestrictions || { enabled: false, divisions: {}, priorityList: [] };
         if (!rules.divisions || typeof rules.divisions !== 'object' || Array.isArray(rules.divisions)) {
             rules.divisions = {};
         }
@@ -1960,8 +1960,8 @@ function renderSpecialAccess(saData) {
         btnRes.textContent = "Specific Grades / Bunks";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${rules.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rules.enabled ? '#e6f4f7' : '#fff'}; font-weight:${rules.enabled ? '600' : '400'};`;
 
-        btnAll.onclick = () => { rules.enabled = false; saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
-        btnRes.onclick = () => { rules.enabled = true; saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
+        btnAll.onclick = () => { rules.enabled = false; saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
+        btnRes.onclick = () => { rules.enabled = true; saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
 
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
@@ -1999,7 +1999,7 @@ function renderSpecialAccess(saData) {
             gChip.onclick = () => {
                 if (isAllowed) delete rules.divisions[divName];
                 else rules.divisions[divName] = [];
-                saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
             };
             headRow.appendChild(gChip);
 
@@ -2016,7 +2016,7 @@ function renderSpecialAccess(saData) {
                         // Switch back to "all bunks" mode
                         rules.divisions[divName] = [];
                     }
-                    saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                    saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
                 };
                 headRow.appendChild(modeBtn);
             }
@@ -2037,7 +2037,7 @@ function renderSpecialAccess(saData) {
                     bChip.onclick = () => {
                         if (isOn) rules.divisions[divName] = bunkList.filter(b => b !== bunkName);
                         else rules.divisions[divName] = bunkList.concat([bunkName]);
-                        saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                        saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
                     };
                     bunkWrap.appendChild(bChip);
                 });
@@ -2663,8 +2663,8 @@ function renderSpecialUsage(saData) {
         btnOff.onclick = function() { rc.enabled = false; saveSpecialData(saData); renderContent(); updateSummary(); };
         btnOn.onclick = function() {
             rc.enabled = true;
-            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.limitUsage && saData.limitUsage.enabled) {
-                rc.grades = Object.keys(saData.limitUsage.divisions || {});
+            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.accessRestrictions && saData.accessRestrictions.enabled) {
+                rc.grades = Object.keys(saData.accessRestrictions.divisions || {});
             }
             saveSpecialData(saData); renderContent(); updateSummary();
         };
