@@ -981,6 +981,11 @@
             state.savedSkeletons = data.savedSkeletons || {};
             state.skeletonAssignments = data.skeletonAssignments || {};
             
+            // Recompute bunk sizes from the live camperRoster every load.
+            // Previously this only set size when undefined, so a fresh CSV
+            // import in Campistry Me wouldn't refresh stale sizes from a
+            // prior session. Sport player-count rules (e.g. min 10 for
+            // basketball) need accurate live counts to fire correctly.
             const camperRoster = data.camperRoster || {};
             const bunkCounts = {};
             Object.values(camperRoster).forEach(camper => {
@@ -988,10 +993,17 @@
                     bunkCounts[camper.bunk] = (bunkCounts[camper.bunk] || 0) + 1;
                 }
             });
+            // Set size for bunks that have campers
             Object.entries(bunkCounts).forEach(([bunk, count]) => {
                 if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
-                if (!state.bunkMetaData[bunk].size) {
-                    state.bunkMetaData[bunk].size = count;
+                state.bunkMetaData[bunk].size = count;
+            });
+            // Zero out sizes for known bunks with no campers — otherwise an
+            // empty bunk keeps a stale size from a previous roster.
+            (state.bunks || []).forEach(b => {
+                if (!(b in bunkCounts)) {
+                    if (!state.bunkMetaData[b]) state.bunkMetaData[b] = {};
+                    state.bunkMetaData[b].size = 0;
                 }
             });
 
