@@ -819,6 +819,14 @@ function saveFieldData() {
     if (typeof window.refreshActivityPropertiesFromFields === 'function') {
         setTimeout(() => window.refreshActivityPropertiesFromFields(), 50);
     }
+
+    // ★ Flush to cloud immediately. saveGlobalSettings only queues a debounced
+    //   batch sync (~1-2s); if the user reloads before it fires, cloud
+    //   hydration overwrites localStorage with the stale pre-edit version
+    //   and the just-saved field config (sharing, etc.) appears to vanish.
+    //   Same fix as saveSpecialData / saveData — saveFieldData was the last
+    //   facilities write path that didn't force-sync.
+    window.forceSyncToCloud?.();
 }
 
 // =========================================================================
