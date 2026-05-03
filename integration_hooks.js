@@ -1155,6 +1155,7 @@
                 } catch (_) {}
 
                 let mergedState;
+                let trustLocal = false;
                 if (localWriteFailed) {
                     mergedState = cloudState;
                     log('Using cloud state (last local write failed — quota)');
@@ -1164,14 +1165,20 @@
                 } else if (localTime > cloudTime) {
                     mergedState = { ...cloudState, ...localState };
                     log('Using local state (newer)');
+                    trustLocal = true;
                 } else {
                     mergedState = cloudState;
                     log('Using cloud state (newer)');
                 }
 
-                // ★ Preserve app1 settings (builderMode etc.) through hydration
-                // Deep-merge app1 so local-only keys like builderMode survive cloud sync
-                if (localState.app1 || cloudState.app1) {
+                // ★ Preserve local-only app1 keys (e.g. builderMode UI state)
+                //   through hydration — but ONLY when we trust local. When we
+                //   chose cloud because local was stale (quota failure or
+                //   cloud-has-more-data), spreading local.app1 here would
+                //   undo the cloud choice and silently restore the stale
+                //   camperRoster / bunks / etc. that we deliberately
+                //   discarded above.
+                if (trustLocal && (localState.app1 || cloudState.app1)) {
                     mergedState.app1 = { ...(cloudState.app1 || {}), ...(localState.app1 || {}) };
                 }
                 
