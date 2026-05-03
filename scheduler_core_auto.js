@@ -2868,8 +2868,8 @@
                 globalSpecialUsage[specialName].push({ grade: grade, startMin: startMin, endMin: endMin });
             }
 
-            function isFieldStillAvailableGP(fieldName, startMin, endMin, bunk, grade) {
-                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade)) return false;
+            function isFieldStillAvailableGP(fieldName, startMin, endMin, bunk, grade, activity) {
+                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade, activity)) return false;
                 var ledger = fieldLedger[fieldName];
                 if (!ledger) return false;
                 var plannerOverlap = globalFieldClaims.filter(function(c) {
@@ -2909,7 +2909,7 @@
             }
 
             // Find time within a specific range (for stagger band preference)
-            function findTimeInRange(fieldName, bunk, grade, dur, freeWindows, rangeStart, rangeEnd, specialName) {
+            function findTimeInRange(fieldName, bunk, grade, dur, freeWindows, rangeStart, rangeEnd, specialName, activity) {
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
                     if (!win || win.start == null) continue;
@@ -2917,7 +2917,7 @@
                     var effEnd = Math.min(win.end, rangeEnd);
                     if (effEnd - effStart < dur) continue;
                     for (var t = effStart; t + dur <= effEnd; t += 5) {
-                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade)) continue;
+                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
                         return { startMin: t, endMin: t + dur };
                     }
@@ -2926,13 +2926,13 @@
             }
 
             // Find time anywhere in free windows
-            function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName) {
+            function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName, activity) {
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
                     if (!win || win.start == null) continue;
                     if (win.duration < dur) continue;
                     for (var t = win.start; t + dur <= win.end; t += 5) {
-                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade)) continue;
+                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
                         return { startMin: t, endMin: t + dur };
                     }
@@ -2940,12 +2940,12 @@
                 return null;
             }
 
-            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows) {
+            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows, activity) {
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
                     if (win.duration < duration) continue;
                     for (var t = win.start; t + duration <= win.end; t += 5) {
-                        if (isFieldStillAvailableGP(fieldName, t, t + duration, bunk, grade))
+                        if (isFieldStillAvailableGP(fieldName, t, t + duration, bunk, grade, activity))
                             return { startMin: t, endMin: t + duration };
                     }
                 }
@@ -3202,7 +3202,7 @@
                         var assigned = false;
                         var fields = sport.fields || [];
                         for (var fli = 0; fli < fields.length; fli++) {
-                            if (!isFieldStillAvailableGP(fields[fli], slotStart, slotEnd, bunk, grade)) continue;
+                            if (!isFieldStillAvailableGP(fields[fli], slotStart, slotEnd, bunk, grade, sport.name)) continue;
                             if (!claimFieldGlobal(fields[fli], slotStart, slotEnd, bunk, grade, sport.name)) continue;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
@@ -3239,7 +3239,7 @@
                     var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     var fields = sport.fields || [];
                     for (var j = 0; j < fields.length; j++) {
-                        var time = findTimeForFieldGP(fields[j], bunk, grade, sport.dIdeal, fw);
+                        var time = findTimeForFieldGP(fields[j], bunk, grade, sport.dIdeal, fw, sport.name);
                         if (time) {
                             if (!claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({
@@ -3503,8 +3503,8 @@
             let _gpCurrentGrade = '';
             const plannerFieldClaims = [];
 
-            function isFieldStillAvailable(fieldName, startMin, endMin, bunk) {
-                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, _gpCurrentGrade)) return false;
+            function isFieldStillAvailable(fieldName, startMin, endMin, bunk, activity) {
+                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, _gpCurrentGrade, activity)) return false;
                 const ledger = fieldLedger[fieldName];
                 if (!ledger) return false;
                 const plannerOverlap = plannerFieldClaims.filter(c =>
@@ -4049,7 +4049,7 @@
                             if (result.usedActivities.has(sport.name)) continue;
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             for (const field of (sport.fields || [])) {
-                                const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw);
+                                const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw, sport.name);
                                 if (time) {
                                     if (!claimFieldForPlanner(field, time.startMin, time.endMin, bunk, sport.name)) continue;
                                     result.sports.push({ ...sport, claimedTime: time, claimedField: field });
@@ -4120,7 +4120,7 @@
                         for (const fs of fieldSlots) {
                             if (fs.remaining <= 0) continue;
                             if (!fs.activities.includes(sport.name)) continue;
-                            if (!isFieldStillAvailable(fs.name, win.start, win.end, bunk)) continue;
+                            if (!isFieldStillAvailable(fs.name, win.start, win.end, bunk, sport.name)) continue;
 
                             if (!claimFieldForPlanner(fs.name, win.start, win.end, bunk, sport.name)) continue;
                             fs.remaining--;
@@ -4201,7 +4201,7 @@
                     if (result.usedActivities.has(sport.name)) continue;
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     for (const field of (sport.fields || [])) {
-                        const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw);
+                        const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw, sport.name);
                         if (time) {
                             if (!claimField(field, time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({ ...sport, claimedTime: time, claimedField: field });
@@ -4245,12 +4245,12 @@
             }
 
             // ─── Helper: Find time in a field's free windows ─────────
-            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows) {
+            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows, activity) {
                 for (const win of freeWindows) {
                     if (!win || win.start == null) continue;
                     if (win.duration < duration) continue;
                     for (let t = win.start; t + duration <= win.end; t += 5) {
-                        if (isFieldAvailable(fieldName, t, t + duration, bunk, grade))
+                        if (isFieldAvailable(fieldName, t, t + duration, bunk, grade, activity))
                             return { startMin: t, endMin: t + duration };
                     }
                 }
