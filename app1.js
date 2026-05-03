@@ -801,7 +801,7 @@
     
     function saveData() {
         const app1Data = window.loadGlobalSettings?.()?.app1 || {};
-        
+
         const data = {
             ...app1Data,
             bunks: state.bunks,
@@ -818,9 +818,18 @@
             sportMetaData: app1Data.sportMetaData || state.sportMetaData,
             divisionGroups: state.divisionGroups
         };
-        
+        // ★ camperRoster is owned exclusively by Campistry Me. If Flow ever loads
+        //   before Me's CSV-import sync arrives (or before hydrateFromCloud
+        //   completes), app1Data.camperRoster is empty/missing and the spread
+        //   above silently propagates that. The downstream cloud merge replaces
+        //   app1 wholesale, so Flow's stale-empty camperRoster wipes the
+        //   freshly imported 480-camper roster from cloud. Drop the key here so
+        //   the cloud-side merge in executeBatchSync preserves whatever Me last
+        //   wrote.
+        delete data.camperRoster;
+
         window.saveGlobalSettings?.("app1", data);
-        
+
         updateWindowApp1();
     }
     

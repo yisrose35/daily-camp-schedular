@@ -369,11 +369,57 @@
         return settings;
     }
 
+    // ─── IndexedDB write-through ──────────────────────────────────────────
+    // The in-memory `_localCache` is the synchronous read path. IndexedDB is
+    // the persistent backing store (replaces localStorage for the FULL state,
+    // which routinely exceeded the 5MB localStorage quota). localStorage
+    // still receives a stripped copy so the next page load has SOMETHING to
+    // hand to early sync readers before LocalCacheIDB.read() resolves.
+    let _idbWriteScheduled = false;
+    let _idbPendingSnapshot = null;
+    function _scheduleIdbWrite(data) {
+        _idbPendingSnapshot = data;
+        if (_idbWriteScheduled) return;
+        _idbWriteScheduled = true;
+        // Coalesce bursts (importRows fires many setLocalSettings in a row)
+        // into a single IDB transaction.
+        Promise.resolve().then(() => {
+            const snapshot = _idbPendingSnapshot;
+            _idbPendingSnapshot = null;
+            _idbWriteScheduled = false;
+            if (!window.LocalCacheIDB) return;
+            const registry = (snapshot.divisions || snapshot.bunks)
+                ? { divisions: snapshot.divisions || {}, bunks: snapshot.bunks || [] }
+                : undefined;
+            window.LocalCacheIDB.write({ state: snapshot, registry })
+                .catch(e => log('IDB write-through failed:', e?.message || e));
+        });
+    }
+
+    async function preloadFromIdb() {
+        if (!window.LocalCacheIDB) return;
+        try {
+            await window.LocalCacheIDB.ready;
+            const snap = await window.LocalCacheIDB.read();
+            if (snap && snap.state && typeof snap.state === 'object') {
+                // IDB has the FULL state (heavy keys included). Overwrite
+                // whatever sync-fallback we read from localStorage at boot.
+                _localCache = _migrateAccessRestrictionsKey(snap.state);
+                log('Preloaded full state from IndexedDB');
+            }
+        } catch (e) {
+            log('IDB preload failed:', e?.message || e);
+        }
+    }
+
     function getLocalSettings() {
         if (_localCache !== null) {
             return _localCache;
         }
 
+        // Sync fallback: read the stripped localStorage copy. This gives
+        // early callers SOMETHING before preloadFromIdb() resolves and
+        // overwrites _localCache with the full IDB state.
         try {
             const raw = localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY);
             _localCache = _migrateAccessRestrictionsKey(raw ? JSON.parse(raw) : {});
@@ -387,54 +433,42 @@
     function setLocalSettings(data) {
         try {
             _localCache = data;
-            // ★ Build a "lite" copy for the localStorage write. Browser quota is
-            //   ~5MB per origin and large camps (hundreds of campers across many
-            //   weeks of schedules) routinely blow past it, throwing
-            //   QuotaExceededError on every saveGlobalSettings call. The full
-            //   data still goes to the cloud per-key — localStorage is just a
-            //   warm cache that gets re-hydrated from cloud on next load.
-            const lite = Object.assign({}, data);
 
-            // Campistry Go heavy data — stored in its own dedicated key.
+            // ─── IndexedDB: full state write-through ──────────────────────
+            // This is the new canonical local persistence layer. No quota
+            // gymnastics needed — IDB has plenty of room.
+            _scheduleIdbWrite(data);
+
+            // ─── localStorage: stripped sync-init snapshot ────────────────
+            // Heavy keys are excluded so a full-camp blob doesn't blow the
+            // 5MB quota. localStorage is now ONLY used as the fast sync
+            // fallback for early callers on the next page load — IDB holds
+            // the complete state and overwrites _localCache shortly after.
+            const lite = Object.assign({}, data);
             if (lite.campistryGo) {
                 lite.campistryGo = Object.assign({}, lite.campistryGo);
                 delete lite.campistryGo.savedRoutes;
                 delete lite.campistryGo.addresses;
             }
-
-            // Daily schedules: per-date in cloud (supabase_schedules), loaded
-            // on demand by schedule_orchestrator. Never need the all-dates
-            // blob in localStorage. With many days × bunks × slots this is
-            // typically the single largest contributor to the JSON size.
             delete lite.daily_schedules;
-
-            // Long-lived history blobs that grow unbounded as the camp runs.
-            // They're written per-key to cloud and read from cloud when the
-            // scheduler needs them. Stripping is safe — first scheduler run
-            // after a reload will repopulate from cloud if needed.
             delete lite.rotationHistory;
             delete lite.historicalCounts;
             delete lite.historicalCountedDates;
             delete lite.smartTileHistory;
             delete lite.specialtyLeagueHistory;
 
-            const json = JSON.stringify(lite);
             try {
+                const json = JSON.stringify(lite);
                 localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
                 localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
-                // Successful write — clear any stale "last write failed" marker.
                 try { sessionStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
                 try { localStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
             } catch (innerE) {
                 if (innerE && innerE.name === 'QuotaExceededError') {
-                    // Local cache out-of-sync with in-memory state. Use
-                    // sessionStorage for the marker — it has a SEPARATE
-                    // quota from localStorage, so when localStorage is
-                    // genuinely full, the sentinel still gets written.
-                    // hydrateFromCloud reads this on the next page load
-                    // and forces cloud as the source of truth.
+                    // Quota fail on the stripped copy is no longer dangerous —
+                    // IDB has the full state. Just log and move on.
                     try { sessionStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
-                    log('localStorage quota still exceeded after stripping heavy keys — relying on cloud sync');
+                    log('localStorage quota exceeded for sync-init snapshot — full state is in IDB, safe to ignore');
                 } else {
                     throw innerE;
                 }
@@ -448,7 +482,7 @@
                     }));
                 } catch (regE) {
                     if (regE && regE.name === 'QuotaExceededError') {
-                        log('campGlobalRegistry_v1 write hit quota — skipping');
+                        log('campGlobalRegistry_v1 write hit quota — skipping (IDB has it)');
                     } else {
                         throw regE;
                     }
@@ -549,61 +583,85 @@
         _pendingChanges = {};
 
         try {
-            log('Executing batch sync:', Object.keys(changesToSync));
+            const keys = Object.keys(changesToSync).filter(k => k !== 'updated_at');
+            log('Executing batch sync:', keys);
 
-            const { data: current, error: fetchError } = await client
-                .from('camp_state')
-                .select('state')
-                .eq('camp_id', campId)
-                .single();
+            // ═══════════════════════════════════════════════════════════════
+            // Per-key UPSERT into camp_state_kv. Each (camp_id, key) is its
+            // own row, so multiple writers (Me, Flow, daily_adjustments, etc.)
+            // cannot clobber each other's TOP-LEVEL keys.
+            //
+            // ★ Special case for `app1`: it is the one top-level key with
+            //   genuine multi-writer ownership of its sub-keys (Me owns
+            //   camperRoster, Flow owns bunks/divisions/specialActivities/
+            //   bunkMetaData, daily_adjustments owns dailySkeletons, etc.).
+            //   A wholesale replacement of the app1 row would let one writer's
+            //   partial payload silently drop another writer's sub-keys.
+            //   Fetch the current cloud value and shallow-merge before upsert.
+            //   For every other key, replacement is correct.
+            // ═══════════════════════════════════════════════════════════════
+            const nowIso = new Date().toISOString();
 
-            if (fetchError && fetchError.code !== 'PGRST116') {
-                logError('Failed to fetch current state:', fetchError);
-                throw fetchError;
+            if (keys.includes('app1') &&
+                changesToSync.app1 &&
+                typeof changesToSync.app1 === 'object' &&
+                !Array.isArray(changesToSync.app1)) {
+                try {
+                    const { data: cur, error: curErr } = await client
+                        .from('camp_state_kv')
+                        .select('value')
+                        .eq('camp_id', campId)
+                        .eq('key', 'app1')
+                        .maybeSingle();
+                    if (!curErr && cur && cur.value && typeof cur.value === 'object') {
+                        changesToSync.app1 = { ...cur.value, ...changesToSync.app1 };
+                    }
+                } catch (mergeErr) {
+                    log('app1 fetch-merge failed (will replace wholesale):', mergeErr?.message || mergeErr);
+                }
             }
 
-            const currentState = current?.state || {};
-            const newState = { 
-                ...currentState, 
-                ...changesToSync,
-                updated_at: new Date().toISOString()
-            };
+            const rows = keys.map(k => ({
+                camp_id:    campId,
+                key:        k,
+                value:      changesToSync[k] ?? null,
+                updated_at: nowIso
+            }));
+
+            if (rows.length === 0) {
+                _isSyncing = false;
+                return;
+            }
 
             const { error: upsertError } = await client
-                .from('camp_state')
-                .upsert({
-                    camp_id: campId,
-                    state: newState,
-                    updated_at: new Date().toISOString()
-                }, {
-                    onConflict: 'camp_id'
-                });
+                .from('camp_state_kv')
+                .upsert(rows, { onConflict: 'camp_id,key' });
 
             if (upsertError) {
-                logError('Failed to sync to cloud:', upsertError);
+                logError('Failed to sync to cloud (camp_state_kv):', upsertError);
                 throw upsertError;
             }
 
-            // Mark self-write so our own camp_state realtime subscription
-            // ignores the echo and doesn't trigger a redundant re-hydrate.
+            // Mark self-write so our own realtime subscription ignores the
+            // echoes and doesn't trigger a redundant re-hydrate. We get one
+            // change event per row written, all within ms of each other.
             _lastSelfWriteAt = Date.now();
 
             _lastSyncTime = Date.now();
-            
+
             console.log('☁️ Cloud sync complete:', {
-                keys: Object.keys(changesToSync),
-                divisions: newState.divisions ? Object.keys(newState.divisions).length : 0,
-                bunks: newState.bunks?.length || 0
+                keys,
+                rows: rows.length
             });
 
             window.dispatchEvent(new CustomEvent('campistry-settings-synced', {
-                detail: { keys: Object.keys(changesToSync) }
+                detail: { keys }
             }));
 
         } catch (e) {
             logError('Batch sync failed:', e);
             Object.assign(_pendingChanges, changesToSync);
-            
+
             window.dispatchEvent(new CustomEvent('campistry-sync-error', {
                 detail: { error: e.message, keys: Object.keys(changesToSync) }
             }));
@@ -1032,7 +1090,7 @@
 
     window.resetCloudState = async function() {
         log('resetCloudState called');
-        
+
         const emptyState = {
             divisions: {},
             bunks: [],
@@ -1050,12 +1108,30 @@
             daily_schedules: {},
             updated_at: new Date().toISOString()
         };
-        
+
         setLocalSettings(emptyState);
         _pendingChanges = emptyState;
-        
+
+        // Also wipe the IDB cache and the legacy camp_state row so an
+        // "erase all" really erases everything, not just the keys we
+        // explicitly empty above.
+        if (window.LocalCacheIDB) {
+            try { await window.LocalCacheIDB.clear(); } catch (_) {}
+        }
+        try {
+            const client = window.CampistryDB?.getClient?.();
+            const campId = window.CampistryDB?.getCampId?.();
+            if (client && campId) {
+                // Best-effort: remove all KV rows AND the legacy blob row.
+                await client.from('camp_state_kv').delete().eq('camp_id', campId);
+                await client.from('camp_state').delete().eq('camp_id', campId);
+            }
+        } catch (e) {
+            log('resetCloudState cloud-delete failed (non-fatal):', e?.message || e);
+        }
+
         await forceSyncToCloud();
-        
+
         return true;
     };
 
@@ -1082,7 +1158,7 @@
     async function hydrateFromCloud() {
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
-        
+
         if (!client || !campId) {
             log('No client/camp ID for hydration');
             return;
@@ -1090,34 +1166,78 @@
 
         try {
             log('Hydrating from cloud...');
-            
-            const { data, error } = await client
-                .from('camp_state')
-                .select('state')
-                .eq('camp_id', campId)
-                .single();
 
-            if (error) {
-                if (error.code === 'PGRST116') {
-                    log('No cloud state found, using local');
-                } else if (error.code === '42501') {
-                    // ★★★ FIX v6.8: RLS denial — scheduler can't read camp_state ★★★
-                    // Fall back to localStorage which was populated when owner set things up.
-                    // This is expected for scheduler/viewer roles.
-                    log('RLS denied camp_state read (expected for scheduler role) — using local settings');
-                } else {
-                    logError('Hydration failed:', error);
+            // ═══════════════════════════════════════════════════════════════
+            // Primary: read camp_state_kv (per-key rows). Reconstruct a flat
+            // state object from the rows.
+            // Fallback: if camp_state_kv is empty for this camp (migration
+            // hasn't run yet, or running old code against pre-migration DB),
+            // read the legacy camp_state.state blob.
+            // ═══════════════════════════════════════════════════════════════
+            let cloudState = null;
+            let cloudUpdatedAt = null;
+            let usedFallback = false;
+
+            const { data: kvRows, error: kvError } = await client
+                .from('camp_state_kv')
+                .select('key, value, updated_at')
+                .eq('camp_id', campId);
+
+            if (kvError) {
+                if (kvError.code === '42501') {
+                    log('RLS denied camp_state_kv read (expected for scheduler role) — using local settings');
+                    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+                    return;
                 }
-                
-                // ★★★ FIX v6.8: Even on error, still hydrate from localStorage ★★★
-                // and fire the hydrated event so the rest of the system initializes
-                // Let the campistry-cloud-hydrated event trigger app1 to rebuild from campStructure
-                window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
-                return;
+                if (kvError.code !== 'PGRST116' && kvError.code !== '42P01') {
+                    // 42P01 = relation does not exist (migration not yet run)
+                    logError('camp_state_kv read failed:', kvError);
+                }
+                // Fall through to legacy table fallback
             }
 
-            if (data?.state) {
-                const cloudState = data.state;
+            if (Array.isArray(kvRows) && kvRows.length > 0) {
+                cloudState = {};
+                let maxUpdated = 0;
+                for (const row of kvRows) {
+                    cloudState[row.key] = row.value;
+                    const t = new Date(row.updated_at || 0).getTime();
+                    if (t > maxUpdated) maxUpdated = t;
+                }
+                if (maxUpdated > 0) {
+                    cloudUpdatedAt = new Date(maxUpdated).toISOString();
+                    cloudState.updated_at = cloudUpdatedAt;
+                }
+                log(`Hydrated ${kvRows.length} keys from camp_state_kv`);
+            } else {
+                // Legacy fallback — pre-migration DB or no KV rows yet
+                const { data: legacyData, error: legacyError } = await client
+                    .from('camp_state')
+                    .select('state')
+                    .eq('camp_id', campId)
+                    .single();
+
+                if (legacyError) {
+                    if (legacyError.code === 'PGRST116') {
+                        log('No cloud state found (neither table), using local');
+                    } else if (legacyError.code === '42501') {
+                        log('RLS denied camp_state read (expected for scheduler role) — using local settings');
+                    } else {
+                        logError('Hydration failed (legacy table):', legacyError);
+                    }
+                    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+                    return;
+                }
+
+                if (legacyData?.state) {
+                    cloudState = legacyData.state;
+                    cloudUpdatedAt = cloudState.updated_at || null;
+                    usedFallback = true;
+                    log('Hydrated from legacy camp_state blob (KV table empty for this camp)');
+                }
+            }
+
+            if (cloudState) {
                 const localState = getLocalSettings();
 
                 const cloudTime = new Date(cloudState.updated_at || 0).getTime();
@@ -1231,13 +1351,13 @@
         }
         _campStateSubscribed = true;
         try {
-            const channelName = `camp-state-${campId}-${Date.now()}`;
-            log('camp_state realtime: subscribing on', channelName);
+            const channelName = `camp-state-kv-${campId}-${Date.now()}`;
+            log('camp_state_kv realtime: subscribing on', channelName);
             _campStateChannel = client.channel(channelName)
                 .on('postgres_changes', {
                     event: '*',
                     schema: 'public',
-                    table: 'camp_state',
+                    table: 'camp_state_kv',
                     filter: `camp_id=eq.${campId}`
                 }, function (payload) {
                     // Self-echo guard: our own UPSERT just fired this event.
@@ -1277,6 +1397,12 @@
     // =========================================================================
 
     async function waitForSystems() {
+        // Preload the FULL state from IndexedDB before anything else reads
+        // settings. This catches data that wouldn't fit the localStorage
+        // sync-init snapshot (heavy keys: daily_schedules, history blobs,
+        // full camperRoster on big camps).
+        await preloadFromIdb();
+
         if (window.CampistryDB?.ready) {
             await window.CampistryDB.ready;
         }

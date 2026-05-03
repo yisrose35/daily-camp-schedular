@@ -91,7 +91,16 @@ function loadData(){
 function save(){
     try{
         _saveLockUntil=Date.now()+5000;
-        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        // Read current state from the in-memory cache (IDB-backed via
+        // integration_hooks). Falls back to localStorage if loadGlobalSettings
+        // isn't installed yet.
+        var g;
+        if(typeof window.loadGlobalSettings==='function'){
+            try{ g=Object.assign({},window.loadGlobalSettings()); }catch(_){ g=null; }
+        }
+        if(!g||typeof g!=='object'){
+            try{ g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); }catch(_){ g={}; }
+        }
         g.campStructure=structure;
         if(!g.app1)g.app1={};
         g.app1.camperRoster=roster;
@@ -113,77 +122,25 @@ function save(){
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
         };
         g.updated_at=new Date().toISOString();
-        // ★ localStorage has a ~5MB quota. With many campers + many days of
-        //   daily_schedules in the blob, JSON.stringify(g) blows past it and
-        //   the write throws QuotaExceededError, killing the entire save.
-        //   Strip the largest transient blobs from the LOCAL copy — they
-        //   live in the cloud per-key and get re-hydrated on load. We keep
-        //   campGlobalSettings_v1 small enough to never hit the quota again.
-        function _buildLiteForLocalStorage(full){
-            var lite=Object.assign({},full);
-            // Strip the same heavy keys that integration_hooks.setLocalSettings
-            // strips — keep this list in sync with that one.
-            delete lite.daily_schedules;
-            delete lite.rotationHistory;
-            delete lite.historicalCounts;
-            delete lite.historicalCountedDates;
-            delete lite.smartTileHistory;
-            delete lite.specialtyLeagueHistory;
-            if(lite.campistryGo){
-                lite.campistryGo=Object.assign({},lite.campistryGo);
-                delete lite.campistryGo.savedRoutes;
-                delete lite.campistryGo.addresses;
-            }
-            return lite;
-        }
-        var liteJson;
-        try{
-            liteJson=JSON.stringify(_buildLiteForLocalStorage(g));
-            localStorage.setItem('campGlobalSettings_v1',liteJson);
-            // Write to all known keys that other scripts may read
-            localStorage.setItem('CAMPISTRY_LOCAL_CACHE',liteJson);
-            try{localStorage.setItem('CAMPISTRY_UNIFIED_STATE',liteJson)}catch(ex){}
-            console.log('[Me] Saved locally:',Object.keys(roster).length,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
-        }catch(e){
-            if(e&&e.name==='QuotaExceededError'){
-                console.warn('[Me] ⚠ localStorage quota still exceeded after stripping heavy keys — relying on cloud sync. Local cache will hydrate from cloud on next load.');
-            }else{
-                throw e;
-            }
-        }
-        // ALSO use the lite blob for the verify-and-resave check below.
-        var json=liteJson||JSON.stringify(_buildLiteForLocalStorage(g));
-        // Verify write after a short delay (catch overwrites from cloud hydration)
+
+        // saveGlobalSettings → setLocalSettings handles ALL persistence:
+        //   - IndexedDB write-through with the FULL state (no quota)
+        //   - localStorage write with a stripped sync-init snapshot
+        //   - Per-key UPSERT into camp_state_kv
+        // No direct localStorage writes needed from here anymore.
         var rosterCount=Object.keys(roster).length;
-        setTimeout(function(){
-            try{
-                var check=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-                var checkCount=Object.keys((check.app1&&check.app1.camperRoster)||{}).length;
-                if(checkCount<rosterCount){
-                    console.warn('[Me] ⚠ Save was overwritten — re-saving');
-                    localStorage.setItem('campGlobalSettings_v1',json);
-                    localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
-                }
-            }catch(e){}
-        },800);
         if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
-            console.log('[Me] ☁️ Syncing to cloud: campStructure, app1, campistryMe');
+            console.log('[Me] Saving',rosterCount,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
             window.saveGlobalSettings('campStructure',structure);
             window.saveGlobalSettings('app1',g.app1);
             window.saveGlobalSettings('campistryMe',g.campistryMe);
-            // ★ saveGlobalSettings only QUEUES a debounced batch sync (~1-2s).
-            //   If the user finishes a CSV import here and navigates straight
-            //   to Campistry Flow, Flow's cloud-hydration on load can pull the
-            //   stale pre-edit state and overwrite the freshly-imported data.
-            //   Force-flush the queue so the writes hit the cloud immediately.
+            // Force-flush so a navigation immediately after import doesn't
+            // race the debounced batch sync.
             if(typeof window.forceSyncToCloud==='function'){
                 window.forceSyncToCloud();
             }
-        }else if(typeof window.forceSyncToCloud==='function'){
-            console.log('[Me] ☁️ Syncing to cloud via forceSyncToCloud');
-            window.forceSyncToCloud();
         }else{
-            console.log('[Me] ⚠ No cloud sync available — saved to localStorage only');
+            console.log('[Me] ⚠ saveGlobalSettings unavailable — local cache only');
         }
         // ★ Update starter-plan banner camper count in real time (trial_guard.js integration)
         if(typeof window.refreshStarterBanner==='function'){
