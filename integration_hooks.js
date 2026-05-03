@@ -72,6 +72,8 @@
     let _isSyncing = false;
     let _onlineRetryRegistered = false;
     let _localCache = null;
+    let _idbPreloadSucceeded = false;
+    let _roleCheckRetries = 0;
     let _lastSyncTime = 0;
     let _datePickerHooked = false;
     let _datePickerRetries = 0;
@@ -405,7 +407,12 @@
                 // IDB has the FULL state (heavy keys included). Overwrite
                 // whatever sync-fallback we read from localStorage at boot.
                 _localCache = _migrateAccessRestrictionsKey(snap.state);
+                _idbPreloadSucceeded = true;
                 log('Preloaded full state from IndexedDB');
+                // Clear the stale localStorage-failure marker — IDB has the
+                // complete state so local data is trustworthy for merge.
+                try { sessionStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
+                try { localStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
             }
         } catch (e) {
             log('IDB preload failed:', e?.message || e);
@@ -466,8 +473,11 @@
             } catch (innerE) {
                 if (innerE && innerE.name === 'QuotaExceededError') {
                     // Quota fail on the stripped copy is no longer dangerous —
-                    // IDB has the full state. Just log and move on.
-                    try { sessionStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
+                    // IDB has the full state. Only set the stale-local marker
+                    // when IDB is NOT available (pure localStorage mode).
+                    if (!window.LocalCacheIDB) {
+                        try { sessionStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
+                    }
                     log('localStorage quota exceeded for sync-init snapshot — full state is in IDB, safe to ignore');
                 } else {
                     throw innerE;
@@ -569,14 +579,26 @@
         // ★★★ FIX v6.8: EARLY EXIT for non-admin roles ★★★
         // camp_state table has RLS that only allows owner/admin to read/write.
         // Schedulers/viewers must NOT attempt ANY Supabase calls to camp_state
-        // or the 403 error propagates up through forceSyncToCloud → 
+        // or the 403 error propagates up through forceSyncToCloud →
         // saveDailySkeleton → runOptimizer and kills schedule generation.
         if (!_canWriteCampState()) {
+            // During boot, role defaults to 'viewer' before auth completes.
+            // Don't drop changes yet — retry a few times so owner/admin
+            // syncs succeed once auth resolves.
+            _roleCheckRetries = (_roleCheckRetries || 0) + 1;
+            if (_roleCheckRetries <= 5) {
+                log('Skipping camp_state sync — role not yet confirmed, retry', _roleCheckRetries, '/ 5');
+                setTimeout(() => {
+                    if (Object.keys(_pendingChanges).length > 0) scheduleBatchSync();
+                }, 2000);
+                return;
+            }
             log('Skipping camp_state sync — role cannot access camp_state table (changes saved locally)');
             _pendingChanges = {};
             _lastSyncTime = Date.now();
             return;
         }
+        _roleCheckRetries = 0;
 
         _isSyncing = true;
         const changesToSync = { ..._pendingChanges };
@@ -680,8 +702,7 @@
 
         // ★★★ FIX v6.8: Don't even queue if scheduler ★★★
         if (!_canWriteCampState()) {
-            log('Force sync skipped — role cannot write camp_state');
-            _pendingChanges = {};
+            log('Force sync skipped — role not confirmed yet or cannot write camp_state');
             return true;
         }
 
@@ -1289,6 +1310,24 @@
                 } else {
                     mergedState = cloudState;
                     log('Using cloud state (newer)');
+                }
+
+                // When IDB preload succeeded, local has trustworthy data.
+                // Fill any top-level keys present locally but missing from
+                // cloud — these were saved to IDB but never synced (e.g.
+                // campStructure during prior localStorage quota failures).
+                if (_idbPreloadSucceeded && !trustLocal) {
+                    let backfilled = 0;
+                    for (const k of Object.keys(localState)) {
+                        if (k === 'updated_at') continue;
+                        if (!(k in mergedState) || mergedState[k] === null) {
+                            mergedState[k] = localState[k];
+                            backfilled++;
+                        }
+                    }
+                    if (backfilled > 0) {
+                        log(`Backfilled ${backfilled} local-only key(s) into cloud state (IDB had data cloud was missing)`);
+                    }
                 }
 
                 // ★ Preserve local-only app1 keys (e.g. builderMode UI state)
