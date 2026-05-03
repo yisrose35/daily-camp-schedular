@@ -2009,26 +2009,33 @@
     // an optional `excludeBunk` so a same-time-slot re-pairing doesn't
     // fail itself. All Part 1 internals reached through S.
     function _fqValidSwap(blk, candName, actName, excludeBunk) {
+        var DBG = !!window.DEBUG_FQ_REOPT;
+        var rej = function(why) {
+            if (DBG) console.log('[v15.5-DEBUG]   reject ' + candName + ': ' + why);
+            return false;
+        };
         var actProps = S.activityProperties;
         var actNorm = normName(actName);
         var candProps = actProps && actProps[candName];
         var candActs = (candProps && candProps.activities) || [];
-        if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(actNorm)) return false;
+        if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(actNorm)) {
+            return rej('activity "' + actName + '" not in field.activities [' + candActs.join(',') + ']');
+        }
 
         var fits = window.SchedulerCoreUtils && window.SchedulerCoreUtils.canBlockFit
             ? window.SchedulerCoreUtils.canBlockFit(blk, candName, actProps, window.fieldUsageBySlot, actName, false)
             : null;
-        if (fits === false) return false;
+        if (fits === false) return rej('canBlockFit returned false (set window.DEBUG_FITS=true for the specific reason)');
 
         var sM = blk.startTime, eM = blk.endTime;
-        if (S.checkCrossDivisionTimeConflict(candName, blk.divName, sM, eM, excludeBunk)) return false;
-        if (S.checkSameFieldActivityMismatch(candName, sM, eM, actName, excludeBunk)) return false;
+        if (S.checkCrossDivisionTimeConflict(candName, blk.divName, sM, eM, excludeBunk)) return rej('cross-division time conflict');
+        if (S.checkSameFieldActivityMismatch(candName, sM, eM, actName, excludeBunk)) return rej('same-field activity mismatch');
 
         var candFp = S._fieldPropertyMap.get(candName);
         if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && blk.divName) {
-            if (!(blk.divName in candFp.accessRestrictions.divisions)) return false;
+            if (!(blk.divName in candFp.accessRestrictions.divisions)) return rej('accessRestrictions: division "' + blk.divName + '" not allowed');
         }
-        if (S.isFieldLockedByTime(candName, sM, eM, blk.divName)) return false;
+        if (S.isFieldLockedByTime(candName, sM, eM, blk.divName)) return rej('time-based field lock');
 
         var candCap = candFp ? candFp.capacity : S.getFieldCapacity(candName);
         var candSt = candFp ? candFp.sharingType : S.getSharingType(candName);
@@ -2036,7 +2043,7 @@
         var inUse = (candSt === 'not_sharable')
             ? S.getFieldUsageFromTimeIndex(candNorm, sM, eM, excludeBunk)
             : S.countSameDivisionUsage(candName, blk.divName, sM, eM, excludeBunk);
-        if (inUse >= candCap) return false;
+        if (inUse >= candCap) return rej('capacity full (' + inUse + '/' + candCap + ', sharingType=' + candSt + ')');
         return true;
     }
 
@@ -2059,10 +2066,19 @@
 
     function fieldQualityReoptimize(activityBlocks) {
         var fgMap = S._fieldGroupMap, fgGroups = S._fieldGroups, seniorityMap = S._divisionSeniorityMap;
-        if (!fgMap || !fgGroups) return;
+        if (!fgMap || !fgGroups || Object.keys(fgGroups).length === 0) {
+            console.log('[v15.5] 🏟️ Field quality re-optimize: skipped (no field groups configured)');
+            return;
+        }
+
+        // Diagnostic mode: log every reason a candidate swap was rejected.
+        // Toggle on with `window.DEBUG_FQ_REOPT = true` before running generate.
+        var DEBUG = !!window.DEBUG_FQ_REOPT;
+        var skipReasons = {};
+        var _logSkip = function(why) { skipReasons[why] = (skipReasons[why] || 0) + 1; };
 
         // PHASE A — pull each block to a free higher-ranked field where possible.
-        var improved = 0, considered = 0;
+        var improved = 0, considered = 0, blocksWithBetterCandidate = 0;
         for (var bi = 0; bi < activityBlocks.length; bi++) {
             if (!S._assignedBlocks.has(bi)) continue;
             var asgn = S._assignments.get(bi);
@@ -2088,14 +2104,20 @@
             // Walk group members from best rank toward current rank
             var sorted = groupArr.slice().sort(function(a, b) { return a.qualityRank - b.qualityRank; });
             var bestSwapField = null;
+            var hadBetterCandidate = false;
             for (var gi = 0; gi < sorted.length; gi++) {
                 var member = sorted[gi];
                 if (member.qualityRank >= curRank) break;
+                hadBetterCandidate = true;
                 if (_fqValidSwap(blk, member.name, actName, bunk)) {
                     bestSwapField = member.name;
                     break;
+                } else if (DEBUG) {
+                    console.log('[v15.5-DEBUG] bunk ' + bunk + ' ' + actName + ' @ ' + sM + '-' + eM
+                        + ' wanted ' + member.name + ' (rank ' + member.qualityRank + ') but _fqValidSwap rejected');
                 }
             }
+            if (hadBetterCandidate) blocksWithBetterCandidate++;
             if (!bestSwapField) continue;
             _fqApplySwap(bi, blk, asgn, bestSwapField);
             improved++;
@@ -2193,7 +2215,10 @@
         });
         S._todayCache.clear();
 
-        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s) (' + considered + ' grouped placements considered)');
+        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s) (' + considered + ' grouped placements considered, ' + blocksWithBetterCandidate + ' had a higher-ranked group member to try)');
+        if (blocksWithBetterCandidate > improved) {
+            console.log('[v15.5]    ' + (blocksWithBetterCandidate - improved) + ' block(s) had a higher-ranked candidate but the swap was rejected. Set window.DEBUG_FQ_REOPT = true and regenerate to see why.');
+        }
     }
 
     // ========================================================================

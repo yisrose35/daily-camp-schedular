@@ -87,6 +87,22 @@
                 return `access restriction: division "${entry.divName}" not permitted`;
             }
         }
+        // 3. Global field locks — leagues / pinned events / electives lock fields
+        //    without putting blocks in scheduleAssignments, so the occupancy
+        //    check above can't see them. Ask the lock registry directly.
+        const GFL = window.GlobalFieldLocks;
+        if (GFL) {
+            try {
+                const lock = GFL.isFieldLockedByTime
+                    ? GFL.isFieldLockedByTime(fieldCfg.name, entry.startMin, entry.endMin, entry.divName)
+                    : (GFL.isFieldLocked?.(fieldCfg.name, [], entry.divName) || null);
+                if (lock) {
+                    const who = lock.lockedBy || 'lock';
+                    const what = lock.leagueName || lock.activity || lock.reason || '';
+                    return `locked by ${who}${what ? ': ' + what : ''}`;
+                }
+            } catch (_) {}
+        }
         return null;
     }
 
