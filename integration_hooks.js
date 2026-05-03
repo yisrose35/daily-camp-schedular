@@ -342,8 +342,12 @@
 
     // Migrate the legacy `limitUsage` property name on fields and special activities
     // to `accessRestrictions` (semantic rename — same shape, clearer name). Old saved
-    // data still loads; future saves use the new name. Safe to run repeatedly.
+    // data still loads; future saves use the new name. Runs at most once per page load:
+    // once we've upgraded the in-memory copy and any new saves write the new key,
+    // re-walking thousands of fields/specials on every cache miss is pure overhead.
+    let _accessRestrictionsMigrated = false;
     function _migrateAccessRestrictionsKey(settings) {
+        if (_accessRestrictionsMigrated) return settings;
         if (!settings || typeof settings !== 'object') return settings;
         const fields = settings?.app1?.fields;
         if (Array.isArray(fields)) {
@@ -361,6 +365,7 @@
                 }
             }
         }
+        _accessRestrictionsMigrated = true;
         return settings;
     }
 
