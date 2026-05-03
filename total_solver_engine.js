@@ -1336,6 +1336,11 @@
         get _scarcityMap() { return _scarcityMap; },
         get _fieldPropertyMap() { return _fieldPropertyMap; },
         get _fieldTimeIndex() { return _fieldTimeIndex; },
+        // Exposed for Part 2's fieldQualityReoptimize, which lives in a
+        // separate IIFE and can't reach Part 1's closure directly.
+        get _fieldGroupMap() { return _fieldGroupMap; },
+        get _fieldGroups() { return _fieldGroups; },
+        get _divisionSeniorityMap() { return _divisionSeniorityMap; },
         get _todayCache() { return _todayCache; },
         get _perfCounters() { return _perfCounters; }, set _perfCounters(v) { _perfCounters = v; },
         get _isRainyDay() { return _isRainyDay; },
@@ -1998,38 +2003,39 @@
     // higher-ranked field. We only swap when every hard constraint that
     // mattered for the original placement still holds for the better field.
     // ========================================================================
-    // Helper used by both phases: verify a candidate field passes every hard
-    // constraint that mattered for the original placement (timeRules, access,
-    // locks, capacity, sport-disabled, cross-div, sharing-mismatch). Capacity
-    // checks accept an optional `excludeBunk` so a same-time-slot re-pairing
-    // doesn't fail itself.
+    // Verify a candidate field passes every hard constraint that mattered
+    // for the original placement (timeRules, access, locks, capacity,
+    // sport-disabled, cross-div, sharing-mismatch). Capacity checks accept
+    // an optional `excludeBunk` so a same-time-slot re-pairing doesn't
+    // fail itself. All Part 1 internals reached through S.
     function _fqValidSwap(blk, candName, actName, excludeBunk) {
+        var actProps = S.activityProperties;
         var actNorm = normName(actName);
-        var candProps = activityProperties && activityProperties[candName];
+        var candProps = actProps && actProps[candName];
         var candActs = (candProps && candProps.activities) || [];
         if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(actNorm)) return false;
 
         var fits = window.SchedulerCoreUtils && window.SchedulerCoreUtils.canBlockFit
-            ? window.SchedulerCoreUtils.canBlockFit(blk, candName, activityProperties, window.fieldUsageBySlot, actName, false)
+            ? window.SchedulerCoreUtils.canBlockFit(blk, candName, actProps, window.fieldUsageBySlot, actName, false)
             : null;
         if (fits === false) return false;
 
         var sM = blk.startTime, eM = blk.endTime;
-        if (checkCrossDivisionTimeConflict(candName, blk.divName, sM, eM, excludeBunk)) return false;
-        if (checkSameFieldActivityMismatch(candName, sM, eM, actName, excludeBunk)) return false;
+        if (S.checkCrossDivisionTimeConflict(candName, blk.divName, sM, eM, excludeBunk)) return false;
+        if (S.checkSameFieldActivityMismatch(candName, sM, eM, actName, excludeBunk)) return false;
 
-        var candFp = _fieldPropertyMap.get(candName);
+        var candFp = S._fieldPropertyMap.get(candName);
         if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && blk.divName) {
             if (!(blk.divName in candFp.accessRestrictions.divisions)) return false;
         }
-        if (isFieldLockedByTime(candName, sM, eM, blk.divName)) return false;
+        if (S.isFieldLockedByTime(candName, sM, eM, blk.divName)) return false;
 
-        var candCap = candFp ? candFp.capacity : getFieldCapacity(candName);
-        var candSt = candFp ? candFp.sharingType : getSharingType(candName);
+        var candCap = candFp ? candFp.capacity : S.getFieldCapacity(candName);
+        var candSt = candFp ? candFp.sharingType : S.getSharingType(candName);
         var candNorm = normName(candName);
         var inUse = (candSt === 'not_sharable')
-            ? getFieldUsageFromTimeIndex(candNorm, sM, eM, excludeBunk)
-            : countSameDivisionUsage(candName, blk.divName, sM, eM, excludeBunk);
+            ? S.getFieldUsageFromTimeIndex(candNorm, sM, eM, excludeBunk)
+            : S.countSameDivisionUsage(candName, blk.divName, sM, eM, excludeBunk);
         if (inUse >= candCap) return false;
         return true;
     }
@@ -2038,20 +2044,22 @@
         var pick = asgn.pick;
         var actName = pick._activity || pick.field;
         var newPick = { field: newField, sport: pick.sport, _activity: pick._activity, _type: pick._type, _fullGrade: pick._fullGrade || false };
-        undoPickFromSchedule(blk, pick);
-        removeFromFieldTimeIndex(normName(pick.field), blk.startTime, blk.endTime, blk.bunk);
-        applyPickToSchedule(blk, newPick);
-        addToFieldTimeIndex(normName(newField), blk.startTime, blk.endTime, blk.bunk, blk.divName, normName(actName));
+        S.undoPickFromSchedule(blk, pick);
+        S.removeFromFieldTimeIndex(normName(pick.field), blk.startTime, blk.endTime, blk.bunk);
+        S.applyPickToSchedule(blk, newPick);
+        S.addToFieldTimeIndex(normName(newField), blk.startTime, blk.endTime, blk.bunk, blk.divName, normName(actName));
+        var allCands = S.allCandidateOptions;
         var matchedCi = -1;
-        for (var ci = 0; ci < allCandidateOptions.length; ci++) {
-            if (allCandidateOptions[ci].field === newField && (allCandidateOptions[ci].activityName === actName || allCandidateOptions[ci].sport === pick.sport)) { matchedCi = ci; break; }
+        for (var ci = 0; ci < allCands.length; ci++) {
+            if (allCands[ci].field === newField && (allCands[ci].activityName === actName || allCands[ci].sport === pick.sport)) { matchedCi = ci; break; }
         }
         S._assignments.set(bi, { candIdx: matchedCi, pick: newPick, cost: asgn.cost });
-        invalidateRotationCacheForBunk(blk.bunk);
+        S.invalidateRotationCacheForBunk(blk.bunk);
     }
 
     function fieldQualityReoptimize(activityBlocks) {
-        if (!_fieldGroupMap || !_fieldGroups) return;
+        var fgMap = S._fieldGroupMap, fgGroups = S._fieldGroups, seniorityMap = S._divisionSeniorityMap;
+        if (!fgMap || !fgGroups) return;
 
         // PHASE A — pull each block to a free higher-ranked field where possible.
         var improved = 0, considered = 0;
@@ -2064,9 +2072,9 @@
             var curField = pick.field;
             if (!curField || curField === 'Free') continue;
 
-            var fgInfo = _fieldGroupMap[curField];
+            var fgInfo = fgMap[curField];
             if (!fgInfo) continue;
-            var groupArr = _fieldGroups[fgInfo.groupName];
+            var groupArr = fgGroups[fgInfo.groupName];
             if (!groupArr) continue;
             considered++;
 
@@ -2092,7 +2100,7 @@
             _fqApplySwap(bi, blk, asgn, bestSwapField);
             improved++;
         }
-        _todayCache.clear();
+        S._todayCache.clear();
 
         // PHASE B — for each (group, time slot), re-pair so most senior grade
         // gets the best-ranked field. Sort placements by seniority desc; sort
@@ -2107,7 +2115,7 @@
             if (!asgn2) continue;
             var p2 = asgn2.pick;
             if (!p2.field || p2.field === 'Free') continue;
-            var fg2 = _fieldGroupMap[p2.field];
+            var fg2 = fgMap[p2.field];
             if (!fg2) continue;
             var blk2 = activityBlocks[bi2];
             if (blk2.startTime === undefined || blk2.endTime === undefined) continue;
@@ -2122,7 +2130,7 @@
 
             // Sort placements by seniority asc (0 = most senior). Stable for ties.
             var seniority = function(divName) {
-                var s = _divisionSeniorityMap[divName];
+                var s = seniorityMap && seniorityMap[divName];
                 return (s === undefined) ? Infinity : s;
             };
             list.sort(function(a, b) { return seniority(a.blk.divName) - seniority(b.blk.divName); });
@@ -2131,8 +2139,8 @@
             // should ideally hold the i-th best field, where i = seniority order.
             var heldFields = list.map(function(p) { return p.currentField; });
             heldFields.sort(function(a, b) {
-                var ra = (_fieldGroupMap[a] && _fieldGroupMap[a].qualityRank) || 999;
-                var rb = (_fieldGroupMap[b] && _fieldGroupMap[b].qualityRank) || 999;
+                var ra = (fgMap[a] && fgMap[a].qualityRank) || 999;
+                var rb = (fgMap[b] && fgMap[b].qualityRank) || 999;
                 return ra - rb;
             });
 
@@ -2154,14 +2162,14 @@
                 var sp = swaps[si];
                 if (sp.p.currentField === sp.newField) continue;
                 var actNm = sp.p.asgn.pick._activity || sp.p.asgn.pick.field;
-                var candProps = activityProperties && activityProperties[sp.newField];
+                var actProps = S.activityProperties;
+                var candProps = actProps && actProps[sp.newField];
                 var candActs = (candProps && candProps.activities) || [];
                 if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(normName(actNm))) return;
-                var candFp = _fieldPropertyMap.get(sp.newField);
+                var candFp = S._fieldPropertyMap.get(sp.newField);
                 if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && sp.p.blk.divName) {
                     if (!(sp.p.blk.divName in candFp.accessRestrictions.divisions)) return;
                 }
-                // timeRules check on the new field for this division
                 if (candFp && candFp.unavailableRules) {
                     for (var ri = 0; ri < candFp.unavailableRules.length; ri++) {
                         var ur = candFp.unavailableRules[ri];
@@ -2172,12 +2180,10 @@
             }
 
             // Apply atomically: undo all olds first, then apply all news.
-            // (Field-time index gets rebuilt at the end to avoid intermediate
-            // inconsistencies.)
             swaps.forEach(function(sp) {
                 if (sp.p.currentField === sp.newField) return;
-                undoPickFromSchedule(sp.p.blk, sp.p.asgn.pick);
-                removeFromFieldTimeIndex(normName(sp.p.currentField), sp.p.blk.startTime, sp.p.blk.endTime, sp.p.blk.bunk);
+                S.undoPickFromSchedule(sp.p.blk, sp.p.asgn.pick);
+                S.removeFromFieldTimeIndex(normName(sp.p.currentField), sp.p.blk.startTime, sp.p.blk.endTime, sp.p.blk.bunk);
             });
             swaps.forEach(function(sp) {
                 if (sp.p.currentField === sp.newField) return;
@@ -2185,7 +2191,7 @@
                 seniorityImproved++;
             });
         });
-        _todayCache.clear();
+        S._todayCache.clear();
 
         console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s) (' + considered + ' grouped placements considered)');
     }
