@@ -14,9 +14,10 @@
  *   3. Field quality         — grouped fields used in rank order (activity-aware)
  *   4. Activity variety      — no activity repeated more than the configured limit
  *   5. Field time rules      — fields not used outside their allowed hours
- *   6. Field double-booking  — non-sharable fields not used by multiple bunks at once
- *   7. Division time bounds  — blocks fall within division start/end window
- *   8. Special time windows  — specials scheduled within their configured hours
+ *   6. Field access          — fields used only by divisions allowed in limitUsage
+ *   7. Field double-booking  — non-sharable fields not used by multiple bunks at once
+ *   8. Division time bounds  — blocks fall within division start/end window
+ *   9. Special time windows  — specials scheduled within their configured hours
  * ========================================================================= */
 
 (function () {
@@ -394,11 +395,46 @@
     }
 
     // =========================================================================
-    // AUDIT 6 — Field double-booking
+    // AUDIT 6 — Field access restrictions (limitUsage)
+    // =========================================================================
+
+    function auditFieldAccess(timeline) {
+        c.h2('6. Field Access Restrictions');
+        const settings = window.loadGlobalSettings?.() || {};
+        const fields = settings.app1?.fields || settings.fields || [];
+        const restricted = {};
+        fields.forEach(f => {
+            const lu = f.limitUsage;
+            if (lu?.enabled) restricted[f.name] = lu.divisions || {};
+        });
+        if (!Object.keys(restricted).length) { c.skip('No fields have access restrictions configured'); return { pass: 0, fail: 0, skip: 1 }; }
+
+        let violations = 0, checked = 0;
+        const seen = new Set();
+        timeline.forEach(entry => {
+            if (!entry.field || entry._isTransition || !entry.divName) return;
+            const allowed = restricted[entry.field];
+            if (!allowed) return;
+            checked++;
+            if (!(entry.divName in allowed)) {
+                const sig = `${entry.field}|${entry.divName}|${entry.bunk}|${entry.startMin}`;
+                if (seen.has(sig)) return;
+                seen.add(sig);
+                violations++;
+                c.bad(`Bunk ${entry.bunk} (${entry.divName}): "${entry.field}" at ${_fmt(entry.startMin)}–${_fmt(entry.endMin)} — division not in allowed list [${Object.keys(allowed).join(', ') || '(empty)'}]`);
+            }
+        });
+        if (violations === 0) c.ok(`${checked} restricted-field assignment(s) — all by allowed divisions`);
+        else c.bad(`${violations} access violation(s) — field used by division not in its allowed list`);
+        return { pass: checked - violations, fail: violations };
+    }
+
+    // =========================================================================
+    // AUDIT 7 — Field double-booking
     // =========================================================================
 
     function auditFieldDoubleBooking(timeline) {
-        c.h2('6. Field Double-Booking');
+        c.h2('7. Field Double-Booking');
         const settings = window.loadGlobalSettings?.() || {};
         const fields = settings.app1?.fields || settings.fields || [];
         if (!fields.length) { c.skip('No fields configured'); return { pass: 0, fail: 0, skip: 1 }; }
@@ -438,11 +474,11 @@
     }
 
     // =========================================================================
-    // AUDIT 7 — Division time bounds
+    // AUDIT 8 — Division time bounds
     // =========================================================================
 
     function auditDivisionBounds(timeline) {
-        c.h2('7. Division Time Bounds');
+        c.h2('8. Division Time Bounds');
         const divisions = window.divisions || {};
         if (!Object.keys(divisions).length) { c.skip('No division data available'); return { pass: 0, fail: 0, skip: 1 }; }
 
@@ -473,11 +509,11 @@
     }
 
     // =========================================================================
-    // AUDIT 8 — Special activity time windows
+    // AUDIT 9 — Special activity time windows
     // =========================================================================
 
     function auditSpecialWindows(timeline) {
-        c.h2('8. Special Activity Time Windows');
+        c.h2('9. Special Activity Time Windows');
         const allSpecials = window.getAllSpecialActivities?.() || [];
         if (!allSpecials.length) { c.skip('No special activities configured'); return { pass: 0, fail: 0, skip: 1 }; }
 
@@ -561,6 +597,7 @@
         results.fieldQuality  = auditFieldQuality(timeline);
         results.variety       = auditVariety(timeline);
         results.fieldTimes    = auditFieldTimeRules(timeline);
+        results.fieldAccess   = auditFieldAccess(timeline);
         results.doubleBooking = auditFieldDoubleBooking(timeline);
         results.divBounds     = auditDivisionBounds(timeline);
         results.specialWins   = auditSpecialWindows(timeline);
