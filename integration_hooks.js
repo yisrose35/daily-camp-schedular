@@ -423,16 +423,17 @@
                 localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
                 localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
                 // Successful write — clear any stale "last write failed" marker.
+                try { sessionStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
                 try { localStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
             } catch (innerE) {
                 if (innerE && innerE.name === 'QuotaExceededError') {
-                    // Local cache out-of-sync with in-memory state. The full
-                    // data is in cloud per-key. Mark this so hydrateFromCloud
-                    // on the next page load forces cloud as the source of
-                    // truth — without this flag, local's stale updated_at
-                    // can win the "newer" check and the user sees pre-edit
-                    // state when they navigate back.
-                    try { localStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
+                    // Local cache out-of-sync with in-memory state. Use
+                    // sessionStorage for the marker — it has a SEPARATE
+                    // quota from localStorage, so when localStorage is
+                    // genuinely full, the sentinel still gets written.
+                    // hydrateFromCloud reads this on the next page load
+                    // and forces cloud as the source of truth.
+                    try { sessionStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
                     log('localStorage quota still exceeded after stripping heavy keys — relying on cloud sync');
                 } else {
                     throw innerE;
@@ -1122,18 +1123,44 @@
                 const cloudTime = new Date(cloudState.updated_at || 0).getTime();
                 const localTime = new Date(localState.updated_at || 0).getTime();
 
-                // If the last localStorage write failed (typically a quota
+                // If the last localStorage write failed (typically quota
                 // exceeded after a CSV import or similar bulk update),
-                // local is silently stale. Its updated_at is whatever was
-                // last successfully persisted, NOT what's actually in
-                // memory or in cloud. Force cloud as source of truth.
+                // local is silently stale. Check sessionStorage AND
+                // localStorage for the marker — sessionStorage has its
+                // own quota separate from localStorage and survives the
+                // failure that triggered the marker.
                 let localWriteFailed = false;
-                try { localWriteFailed = localStorage.getItem('_campistry_local_write_failed') === '1'; } catch (_) {}
+                try { localWriteFailed = sessionStorage.getItem('_campistry_local_write_failed') === '1'; } catch (_) {}
+                if (!localWriteFailed) {
+                    try { localWriteFailed = localStorage.getItem('_campistry_local_write_failed') === '1'; } catch (_) {}
+                }
+
+                // Belt-and-suspenders: even if no marker survived (e.g. after
+                // closing all tabs), detect when cloud has notably more data
+                // than local. If cloud has campers/bunks/divisions that local
+                // is missing, local is stale regardless of what its
+                // updated_at says — quota failures don't update those
+                // counts in local but cloud receives them per-key.
+                let cloudHasMoreData = false;
+                try {
+                    const lr = (localState.app1 && localState.app1.camperRoster) || {};
+                    const cr = (cloudState.app1 && cloudState.app1.camperRoster) || {};
+                    if (Object.keys(cr).length > Object.keys(lr).length + 5) cloudHasMoreData = true;
+                    const lb = (localState.bunks || []).length;
+                    const cb = (cloudState.bunks || []).length;
+                    if (cb > lb + 2) cloudHasMoreData = true;
+                    const ld = Object.keys(localState.divisions || {}).length;
+                    const cd = Object.keys(cloudState.divisions || {}).length;
+                    if (cd > ld) cloudHasMoreData = true;
+                } catch (_) {}
 
                 let mergedState;
                 if (localWriteFailed) {
                     mergedState = cloudState;
                     log('Using cloud state (last local write failed — quota)');
+                } else if (cloudHasMoreData) {
+                    mergedState = cloudState;
+                    log('Using cloud state (cloud has more data than local — likely silent local-write loss)');
                 } else if (localTime > cloudTime) {
                     mergedState = { ...cloudState, ...localState };
                     log('Using local state (newer)');
