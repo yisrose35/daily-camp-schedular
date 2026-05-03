@@ -422,11 +422,17 @@
             try {
                 localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
                 localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+                // Successful write — clear any stale "last write failed" marker.
+                try { localStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
             } catch (innerE) {
                 if (innerE && innerE.name === 'QuotaExceededError') {
-                    // Even the lite blob is too big — this only happens with
-                    // truly extreme configs. Don't fail the save; cloud has
-                    // the data and the next load will hydrate from there.
+                    // Local cache out-of-sync with in-memory state. The full
+                    // data is in cloud per-key. Mark this so hydrateFromCloud
+                    // on the next page load forces cloud as the source of
+                    // truth — without this flag, local's stale updated_at
+                    // can win the "newer" check and the user sees pre-edit
+                    // state when they navigate back.
+                    try { localStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
                     log('localStorage quota still exceeded after stripping heavy keys — relying on cloud sync');
                 } else {
                     throw innerE;
@@ -1112,12 +1118,23 @@
             if (data?.state) {
                 const cloudState = data.state;
                 const localState = getLocalSettings();
-                
+
                 const cloudTime = new Date(cloudState.updated_at || 0).getTime();
                 const localTime = new Date(localState.updated_at || 0).getTime();
-                
+
+                // If the last localStorage write failed (typically a quota
+                // exceeded after a CSV import or similar bulk update),
+                // local is silently stale. Its updated_at is whatever was
+                // last successfully persisted, NOT what's actually in
+                // memory or in cloud. Force cloud as source of truth.
+                let localWriteFailed = false;
+                try { localWriteFailed = localStorage.getItem('_campistry_local_write_failed') === '1'; } catch (_) {}
+
                 let mergedState;
-                if (localTime > cloudTime) {
+                if (localWriteFailed) {
+                    mergedState = cloudState;
+                    log('Using cloud state (last local write failed — quota)');
+                } else if (localTime > cloudTime) {
                     mergedState = { ...cloudState, ...localState };
                     log('Using local state (newer)');
                 } else {
