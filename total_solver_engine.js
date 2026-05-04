@@ -1673,7 +1673,7 @@
         var afn = normName(aPick.field), ofn = oCand._fieldNorm || normName(oCand.field);
         if (afn !== ofn) {
             // Combined field: check if these are combo partners via cached map
-            var _wcPartners = _comboExclusiveMap.get(afn);
+            var _wcPartners = S._comboExclusiveMap.get(afn);
             if (_wcPartners) {
                 var aS=aBlock.startTime,aE=aBlock.endTime,oS=oBlock.startTime,oE=oBlock.endTime;
                 if (aS !== undefined && oS !== undefined && !(aS >= oE || aE <= oS)) {
