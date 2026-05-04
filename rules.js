@@ -319,7 +319,7 @@ function descriptorCanMatch(ruleDesc, candidateDesc) {
 function injectRulesStyles() {
     if (document.getElementById('rules-tab-styles')) return;
     const css = `
-        .rules-page { max-width: 1100px; }
+        .rules-page { max-width: 100%; }
         .rules-card {
             background: #fff; border: 1px solid #E5E7EB; border-radius: 14px;
             padding: 18px 20px; margin-bottom: 16px;
