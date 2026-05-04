@@ -1834,9 +1834,17 @@ function renderGrid() {
         const top = (start - earliestMin) * PIXELS_PER_MINUTE;
         const height = (end - start) * PIXELS_PER_MINUTE;
         html += renderEventTile(ev, top, height);
+        // Override indicator: show a subtle badge if any bunk in this division has an override at this time
+        const _ovForSlot = (currentOverrides.bunkActivityOverrides || []).filter(o => {
+          const bunkDiv = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(o.bunk));
+          return bunkDiv === divName && o.startMin === start && o.endMin === end;
+        });
+        if (_ovForSlot.length > 0) {
+          html += `<div title="${_ovForSlot.length} bunk override(s)" style="position:absolute;top:${top + 2}px;right:6px;background:#f59e0b;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;z-index:2;pointer-events:none;">${_ovForSlot.length} ✎</div>`;
+        }
       }
     });
-    
+
     html += `<div class="da-drop-preview"></div>`;
     html += `</div>`;
   });
@@ -3395,6 +3403,11 @@ function renderToolbar() {
 
     <div class="da-toolbar-group">
       ${isAutoMode ? '<button id="da-periods-btn" class="da-btn da-btn-ghost">Bell Schedule</button>' : ''}
+      ${!isAutoMode ? (() => {
+        const ovCount = (currentOverrides.bunkActivityOverrides || []).length;
+        const badge = ovCount > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + ovCount + '</span>' : '';
+        return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">👤 Bunk View' + badge + '</button>';
+      })() : ''}
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
     </div>
   `;
@@ -3480,6 +3493,40 @@ function renderToolbar() {
         }
       }
     };
+  }
+
+  // Bunk View toggle
+  const bunkViewBtn = document.getElementById('da-bunk-view-btn');
+  if (bunkViewBtn) {
+    bunkViewBtn.onclick = () => {
+      _boBunkViewActive = !_boBunkViewActive;
+      _boToggleView();
+      renderToolbar();
+    };
+  }
+}
+
+function _boToggleView() {
+  const skeletonView = document.getElementById('da-view-skeleton');
+  const gridWrapper = document.querySelector('.da-grid-wrapper');
+  const boContainer = document.getElementById('da-bunk-overrides-container');
+  // MS layout uses different wrapper
+  const msGridWrapper = document.querySelector('.ms-grid-wrapper');
+  const autoView = document.getElementById('da-view-auto-layers');
+
+  if (_boBunkViewActive) {
+    if (skeletonView) skeletonView.style.display = 'none';
+    if (gridWrapper && !skeletonView) gridWrapper.style.display = 'none';
+    if (msGridWrapper) msGridWrapper.style.display = 'none';
+    if (autoView) autoView.style.display = 'none';
+    if (boContainer) { boContainer.style.display = ''; renderBunkOverridesUI(); }
+  } else {
+    if (skeletonView) skeletonView.style.display = '';
+    if (gridWrapper && !skeletonView) gridWrapper.style.display = '';
+    if (msGridWrapper) msGridWrapper.style.display = '';
+    if (autoView) autoView.style.display = '';
+    if (boContainer) boContainer.style.display = 'none';
+    renderGrid();
   }
 }
 
@@ -3884,6 +3931,7 @@ function renderTripsForm() {
 // BUNK OVERRIDES UI — Visual per-bunk skeleton editor
 // =================================================================
 let _boSelectedDiv = null;
+let _boBunkViewActive = false;
 
 function _boGetActivityGroups() {
   const pinnedDefaults = masterSettings.global?.pinnedTileDefaults || {};
@@ -4989,11 +5037,10 @@ function getMainHTML(useMS) {
           <div class="da-subtabs">
             <button class="da-subtab active" data-tab="skeleton">Schedule</button>
             <button class="da-subtab" data-tab="trips">Trips</button>
-            <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
             <button class="da-subtab" data-tab="resources">Resources</button>
-           
+
           </div>
-          
+
           <div id="da-pane-skeleton" class="da-pane active">
             <div id="da-rainy-panel"></div>
             <div id="da-displaced-tiles-panel" style="display:none;"></div>
@@ -5011,14 +5058,12 @@ function getMainHTML(useMS) {
       <div id="da-skeleton-grid"></div>
     </div>
   </div>
-`}          </div>
-          
+`}
+            <div id="da-bunk-overrides-container" style="display:none;"></div>
+          </div>
+
           <div id="da-pane-trips" class="da-pane">
             <div id="da-trips-container"></div>
-          </div>
-          
-          <div id="da-pane-bunk-overrides" class="da-pane">
-            <div id="da-bunk-overrides-container"></div>
           </div>
           
           <div id="da-pane-resources" class="da-pane">
@@ -5042,10 +5087,9 @@ function getMainHTML(useMS) {
         <div class="da-subtabs">
           <button class="da-subtab active" data-tab="skeleton">Schedule</button>
           <button class="da-subtab" data-tab="trips">Trips</button>
-          <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
         </div>
-        
+
         <div id="da-pane-skeleton" class="da-pane active">
           <div id="da-rainy-panel"></div>
           <div id="da-displaced-tiles-panel" style="display:none;"></div>
@@ -5054,14 +5098,11 @@ function getMainHTML(useMS) {
           <div class="da-grid-wrapper">
             <div id="da-skeleton-grid"></div>
           </div>
+          <div id="da-bunk-overrides-container" style="display:none;"></div>
         </div>
-        
+
         <div id="da-pane-trips" class="da-pane">
           <div id="da-trips-container"></div>
-        </div>
-        
-        <div id="da-pane-bunk-overrides" class="da-pane">
-          <div id="da-bunk-overrides-container"></div>
         </div>
         
        <div id="da-pane-resources" class="da-pane">
