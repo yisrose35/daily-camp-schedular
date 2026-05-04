@@ -3969,14 +3969,15 @@ function _renderTripsPopoverContent(pop) {
       }
       _tripEditId = null;
     } else {
-      // Add new trip(s) — one per division
-      if (window._daBuilderMode === 'auto') {
-        const trips = loadDailyTrips(dateKey);
-        selDivs.forEach(div => {
-          trips.push({ id: 'trip_' + Date.now() + '_' + div, event: tripName, division: div, startTime, endTime, startMin, endMin });
-        });
-        saveDailyTrips(dateKey, trips);
-      } else {
+      // Add new trip(s) — one per division, always save to trips store
+      const trips = loadDailyTrips(dateKey);
+      selDivs.forEach(div => {
+        const tripId = 'trip_' + Date.now() + '_' + div;
+        trips.push({ id: tripId, event: tripName, division: div, startTime, endTime, startMin, endMin });
+      });
+      saveDailyTrips(dateKey, trips);
+
+      if (window._daBuilderMode !== 'auto') {
         loadDailySkeleton();
         selDivs.forEach(div => {
           const newEvent = { id: 'trip_' + Date.now() + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
