@@ -1490,6 +1490,7 @@
         get _isRainyDay() { return _isRainyDay; },
         get _rainyCapOverrides() { return _rainyCapOverrides; },
         get _rainyTimeBypasses() { return _rainyTimeBypasses; },
+        get _comboExclusiveMap() { return _comboExclusiveMap; },
         get _passNumber() { return _passNumber; }, set _passNumber(v) { _passNumber = v; },
         ROTATION_CONFIG: ROTATION_CONFIG,
         precomputeFieldProperties: precomputeFieldProperties,
@@ -1954,7 +1955,7 @@
         var fp=S._fieldPropertyMap.get(fn); var cap=fp?fp.capacity:S.getFieldCapacity(fn); var st=fp?fp.sharingType:S.getSharingType(fn);
         if (S.checkCrossDivisionTimeConflict(fn,bDiv,sM,eM,bunk)) return false;
         // Combined field: block if any combo partner is in use
-        var _vpPartners = _comboExclusiveMap.get(fnorm);
+        var _vpPartners = S._comboExclusiveMap.get(fnorm);
         if (_vpPartners) { for (var _vpi = 0; _vpi < _vpPartners.length; _vpi++) { if (S.getFieldUsageFromTimeIndex(_vpPartners[_vpi],sM,eM,bunk) > 0) return false; } }
         if (st==='not_sharable') return S.getFieldUsageFromTimeIndex(fnorm,sM,eM,bunk)<cap;
         return S.countSameDivisionUsage(fn,bDiv,sM,eM,bunk)<cap;
@@ -2028,7 +2029,7 @@
                 if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue;
                 if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue;
                 if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
-                var _dfCombo = _comboExclusiveMap.get(c._fieldNorm); if (_dfCombo) { var _dfBlocked = false; for (var _dfi2 = 0; _dfi2 < _dfCombo.length; _dfi2++) { if (S.getFieldUsageFromTimeIndex(_dfCombo[_dfi2],sM,eM,bunk) > 0) { _dfBlocked = true; break; } } if (_dfBlocked) continue; }
+                var _dfCombo = S._comboExclusiveMap.get(c._fieldNorm); if (_dfCombo) { var _dfBlocked = false; for (var _dfi2 = 0; _dfi2 < _dfCombo.length; _dfi2++) { if (S.getFieldUsageFromTimeIndex(_dfCombo[_dfi2],sM,eM,bunk) > 0) { _dfBlocked = true; break; } } if (_dfBlocked) continue; }
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; if(S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
