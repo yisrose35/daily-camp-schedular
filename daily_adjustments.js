@@ -1840,7 +1840,7 @@ function renderGrid() {
           return bunkDiv === divName && o.startMin === start && o.endMin === end;
         });
         if (_ovForSlot.length > 0) {
-          html += `<div title="${_ovForSlot.length} bunk override(s)" style="position:absolute;top:${top + 2}px;right:6px;background:#f59e0b;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;z-index:2;pointer-events:none;">${_ovForSlot.length} ✎</div>`;
+          html += `<div title="${_ovForSlot.length} bunk override(s)" style="position:absolute;top:${top + 2}px;right:6px;background:#f59e0b;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;z-index:2;pointer-events:none;">${_ovForSlot.length}</div>`;
         }
       }
     });
@@ -3406,7 +3406,7 @@ function renderToolbar() {
       ${!isAutoMode ? (() => {
         const ovCount = (currentOverrides.bunkActivityOverrides || []).length;
         const badge = ovCount > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + ovCount + '</span>' : '';
-        return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">👤 Bunk View' + badge + '</button>';
+        return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">Bunk Overrides' + badge + '</button>';
       })() : ''}
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
     </div>
