@@ -16,7 +16,6 @@ console.log("[ZONES] Zones module v1.0 loading...");
 // STATE
 // =========================================================================
 let locationZones = {};
-let pinnedTileDefaults = {};
 let selectedZoneId = null;
 let zonesListEl = null;
 let detailPaneEl = null;
@@ -91,7 +90,6 @@ function initZonesTab() {
 function loadData() {
     const settings = window.loadGlobalSettings?.() || {};
     locationZones = settings.locationZones || {};
-    pinnedTileDefaults = settings.pinnedTileDefaults || {};
 
     // Validate zones
     Object.keys(locationZones).forEach(name => {
@@ -101,7 +99,6 @@ function loadData() {
 
 function saveData() {
     window.saveLocationZones?.(locationZones);
-    window.savePinnedTileDefaults?.(pinnedTileDefaults);
 
     if (typeof window.requestCloudSync === 'function') {
         window.requestCloudSync();
@@ -434,6 +431,19 @@ function countFacilitiesInZone(zone) {
 // =========================================================================
 // FACILITY ASSIGNMENT
 // =========================================================================
+
+// Returns true if `fac` is represented in zone `z` under any of its types.
+// zone.fields holds field/facility names directly (sports-type).
+// zone.specialActivities holds SA names — not facility names — so we match
+// against fac.specialActivityNames to detect special-type assignment.
+// zone.locations is keyed by facility name (general-type).
+function isFacilityInZone(z, fac) {
+    if ((z.fields || []).includes(fac.name)) return true;
+    if ((fac.specialActivityNames || []).some(sa => (z.specialActivities || []).includes(sa))) return true;
+    if (z.locations?.[fac.name] !== undefined) return true;
+    return false;
+}
+
 function renderFacilityAssignment(zone) {
     const container = document.createElement("div");
 
@@ -451,28 +461,14 @@ function renderFacilityAssignment(zone) {
         Click facilities to assign or unassign them from this zone.
     </p>`;
 
-    // Build a set of all facilities already in OTHER zones
-    const inOtherZones = new Set();
-    Object.entries(locationZones).forEach(([zName, z]) => {
-        if (zName === selectedZoneId) return;
-        (z.fields || []).forEach(f => inOtherZones.add(f));
-        (z.specialActivities || []).forEach(s => inOtherZones.add(s));
-        Object.keys(z.locations || {}).forEach(l => inOtherZones.add(l));
-    });
-
-    // Current zone's assigned facility names
-    const assignedNames = new Set([
-        ...(zone.fields || []),
-        ...(zone.specialActivities || []),
-        ...Object.keys(zone.locations || {})
-    ]);
-
     const chipWrap = document.createElement("div");
     chipWrap.style.cssText = "display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;";
 
     allFacilities.forEach(fac => {
-        const isAssigned = assignedNames.has(fac.name);
-        const inOther = inOtherZones.has(fac.name);
+        const isAssigned = isFacilityInZone(zone, fac);
+        const inOther = Object.entries(locationZones).some(
+            ([zName, z]) => zName !== selectedZoneId && isFacilityInZone(z, fac)
+        );
 
         const chip = document.createElement("button");
         const colors = { sports: '#147D91', special: '#7C3AED', general: '#D97706' };

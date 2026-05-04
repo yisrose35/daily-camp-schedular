@@ -550,6 +550,20 @@ for (const futureDate of Object.keys(allDailyData)) {
         const fieldGamesCount = {};
         availableFields.forEach(f => fieldGamesCount[f] = 0);
 
+        // Combo-aware "effective games count": at slotOrder N, all of
+        // {Full Gym, Gym 1, Gym 2} share capacity — a game on any one of them
+        // consumes that slot for the others. Compute the effective count as
+        // the max of the field's own count and its combo partners' counts.
+        const _effectiveGames = (field) => {
+            let v = fieldGamesCount[field] || 0;
+            const partners = window.FieldCombos?.getExclusiveFields?.(field) || [];
+            for (const p of partners) {
+                const pv = fieldGamesCount[p];
+                if (pv != null && pv > v) v = pv;
+            }
+            return v;
+        };
+
         workingMatchups = workingMatchups.map(m => ({
             ...m,
             waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, id)
@@ -564,7 +578,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             let minGames = Infinity;
 
             for (const field of availableFields) {
-                const currentGames = fieldGamesCount[field];
+                const currentGames = _effectiveGames(field);
                 const maxGames = gamesPerFieldSlot || 3;
 
                 if (currentGames < maxGames && currentGames < minGames) {
@@ -578,7 +592,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             }
 
             if (bestField) {
-                const slotOrder = fieldGamesCount[bestField] + 1;
+                const slotOrder = _effectiveGames(bestField) + 1;
                 assignments.push({
                     teamA: matchup.teamA,
                     teamB: matchup.teamB,
@@ -588,7 +602,15 @@ for (const futureDate of Object.keys(allDailyData)) {
                     isInterConference: matchup.isInterConference
                 });
 
-                fieldGamesCount[bestField]++;
+                fieldGamesCount[bestField] = slotOrder;
+                // Bump combo partners to the same slotOrder so a future game
+                // can't be assigned to a partner at the slot we just consumed.
+                const partners = window.FieldCombos?.getExclusiveFields?.(bestField) || [];
+                for (const p of partners) {
+                    if (fieldGamesCount[p] != null && fieldGamesCount[p] < slotOrder) {
+                        fieldGamesCount[p] = slotOrder;
+                    }
+                }
                 assignedMatchups.add(matchupKey);
                 console.log(`[SpecialtyLeagues] ✅ Assigned ${matchup.teamA} vs ${matchup.teamB} to ${bestField} (slot ${slotOrder})`);
             }

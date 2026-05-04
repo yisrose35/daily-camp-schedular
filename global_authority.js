@@ -46,8 +46,14 @@
     // Synchronous call to loadGlobalSettings
     const settings = window.loadGlobalSettings?.() || {};
     
-    _divisionCache = structuredClone(settings.divisions || {});
-    _bunkCache = structuredClone(settings.bunks || []);
+    // Prefer app1.divisions (grade-based, built from campStructure by app1.loadData)
+    // over the flat root 'divisions' key which may be stale or empty.
+    _divisionCache = structuredClone(
+        settings.app1?.divisions || settings.divisions || {}
+    );
+    _bunkCache = structuredClone(
+        settings.app1?.bunks || settings.bunks || []
+    );
 
     // Also sync to window for legacy compatibility
     window.divisions = _divisionCache;
@@ -88,7 +94,7 @@
       if (window._globalRegistryRefreshTimer) clearTimeout(window._globalRegistryRefreshTimer);
       window._globalRegistryRefreshTimer = setTimeout(() => {
         window._globalRegistryRefreshTimer = null;
-        window.initApp1?.();
+        // app1 refreshes itself via its own campistry-cloud-hydrated listener — no need to call initApp1 here
         window.initLeagues?.();
         window.initScheduleSystem?.();
         window.updateTable?.();

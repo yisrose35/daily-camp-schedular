@@ -701,10 +701,10 @@
         // =================================================================
         // ★★★ LIMIT USAGE CHECK (Division & Bunk Restrictions) ★★★
         // =================================================================
-        if (effectiveProps.limitUsage?.enabled) {
-            const divisionRules = effectiveProps.limitUsage.divisions || {};
+        if (effectiveProps.accessRestrictions?.enabled) {
+            const divisionRules = effectiveProps.accessRestrictions.divisions || {};
             if (!(block.divName in divisionRules)) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: division ${block.divName} not in allowed list`);
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: division ${block.divName} not in allowed list`);
                 return false;
             }
             const divRule = divisionRules[block.divName];
@@ -713,7 +713,7 @@
                 const bunkNum = parseInt(block.bunk);
                 const inList = divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
                 if (!inList) {
-                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: bunk not in allowed list`);
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: bunk not in allowed list`);
                     return false;
                 }
             }
@@ -783,6 +783,47 @@
         }
         
         // =================================================================
+        // ★ COMBINED FIELD ENFORCEMENT
+        // combined (A+B) requested → block if any sub-field is in use at any slot
+        // sub-field (A) requested  → block if combined (A+B) is in use at any slot
+        // =================================================================
+        {
+            const comboLookup = window.getFieldComboLookup?.();
+            if (comboLookup) {
+                const normFn = (n) => (n || '').toLowerCase().trim();
+                const normField = normFn(fieldName);
+
+                // Case 1: this IS the combined field — reject if any sub-field is occupied
+                const subs = comboLookup.combinedToSubs[normField];
+                if (subs) {
+                    for (const subField of subs) {
+                        for (const idx of uniqueSlots) {
+                            const subUsage = getFieldUsageAtSlot(idx, subField, fieldUsageBySlot);
+                            const subSched  = getScheduleUsageAtSlot(idx, subField);
+                            if ((subUsage.bunkList?.length || 0) > 0 || (subSched.bunkList?.length || 0) > 0) {
+                                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - combined field blocked by sub-field ${subField} at slot ${idx}`);
+                                return false;
+                            }
+                        }
+                    }
+                }
+
+                // Case 2: this IS a sub-field — reject if its combined field is occupied
+                const combinedField = comboLookup.subToCombined[normField];
+                if (combinedField) {
+                    for (const idx of uniqueSlots) {
+                        const comboUsage = getFieldUsageAtSlot(idx, combinedField, fieldUsageBySlot);
+                        const comboSched  = getScheduleUsageAtSlot(idx, combinedField);
+                        if ((comboUsage.bunkList?.length || 0) > 0 || (comboSched.bunkList?.length || 0) > 0) {
+                            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sub-field blocked by combined field ${combinedField} at slot ${idx}`);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // =================================================================
         // CHECK EACH SLOT FOR CAPACITY AND ACTIVITY MATCHING
         // =================================================================
         const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || Utils._bunkMetaData || {};
@@ -811,8 +852,22 @@
             const currentCount = allBunks.size;
 
             // STRICT CAPACITY CHECK
-            if (currentCount >= maxCapacity) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - at capacity (${currentCount}/${maxCapacity})`);
+            // ★ PER-GRADE SHARING OVERRIDE: effective capacity/type for this grade
+            const gradeShareOverride = effectiveProps.gradeShareRules?.[myDivision];
+            const effectiveShareType = gradeShareOverride
+                ? (gradeShareOverride.type || 'not_sharable')
+                : (effectiveProps.sharableWith?.type || 'not_sharable');
+            const effectiveCap = gradeShareOverride
+                ? (parseInt(gradeShareOverride.capacity) || (gradeShareOverride.type === 'not_sharable' ? 1 : 2))
+                : maxCapacity;
+
+            if (currentCount >= effectiveCap) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - at effective capacity (${currentCount}/${effectiveCap}) [gradeOverride=${!!gradeShareOverride}]`);
+                return false;
+            }
+
+            if (effectiveShareType === 'not_sharable' && currentCount > 0) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - gradeShareRule: not_sharable for ${myDivision}`);
                 return false;
             }
 
@@ -820,7 +875,7 @@
             // ★★★ v7.6: same_division ENFORCEMENT ★★★
             // When type="same_division", ONLY bunks from the same division can share
             // =================================================================
-            if (effectiveProps.sharableWith?.type === 'same_division' && currentCount > 0) {
+            if (effectiveShareType === 'same_division' && currentCount > 0) {
                 for (const existingDiv of allDivisions) {
                     if (existingDiv !== myDivision) {
                         if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - same_division: existing division ${existingDiv} != my division ${myDivision}`);
@@ -833,7 +888,7 @@
             // ★★★ v7.5: sharableWith.divisions CHECK FOR CUSTOM SHARING ★★★
             // When type="custom", only allow sharing with specified divisions
             // =================================================================
-            if (effectiveProps.sharableWith?.type === 'custom' && currentCount > 0) {
+            if (effectiveProps.sharableWith?.type === 'custom' && !gradeShareOverride && currentCount > 0) {
                 const allowedDivisions = effectiveProps.sharableWith.divisions || [];
                 
                 // Check if MY division is in the allowed list
@@ -1109,7 +1164,7 @@
         console.log('  - capacity:', props?.sharableWith?.capacity);
         console.log('Calculated Capacity:', Utils.getFieldCapacity(fieldName, window.activityProperties));
         console.log('TimeRules:', props?.timeRules);
-        console.log('LimitUsage:', props?.limitUsage);
+        console.log('LimitUsage:', props?.accessRestrictions);
         console.log('RainyDayAvailable:', props?.rainyDayAvailable);
         console.log('Activities:', props?.activities);
 
@@ -2445,13 +2500,13 @@ const validActivities = Utils.getValidActivityNames();
                 if (f.sharableWith.capacity === undefined) fieldIssues.push('sharableWith.capacity missing');
             }
             
-            // Check limitUsage
-            if (!f.limitUsage) {
-                fieldIssues.push('Missing limitUsage');
+            // Check accessRestrictions
+            if (!f.accessRestrictions) {
+                fieldIssues.push('Missing accessRestrictions');
             } else {
-                if (f.limitUsage.enabled === undefined) fieldIssues.push('limitUsage.enabled missing');
-                if (typeof f.limitUsage.divisions !== 'object') fieldIssues.push('limitUsage.divisions not an object');
-                if (!Array.isArray(f.limitUsage.priorityList)) fieldIssues.push('limitUsage.priorityList not an array');
+                if (f.accessRestrictions.enabled === undefined) fieldIssues.push('accessRestrictions.enabled missing');
+                if (typeof f.accessRestrictions.divisions !== 'object') fieldIssues.push('accessRestrictions.divisions not an object');
+                if (!Array.isArray(f.accessRestrictions.priorityList)) fieldIssues.push('accessRestrictions.priorityList not an array');
             }
             
             // Check timeRules

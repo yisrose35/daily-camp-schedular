@@ -208,8 +208,7 @@
      */
     function getValidDivisionNames() {
         try {
-            const settings = window.loadGlobalSettings?.() || {};
-            const divisions = settings.divisions || {};
+            const divisions = window.divisions || window.getGlobalDivisions?.() || {};
             return new Set(Object.keys(divisions));
         } catch (e) {
             return null;
@@ -287,8 +286,7 @@
         // ★ v2.6: Validate teams against actual bunks in assigned divisions
         if (validDivisions && validDivisions.size > 0 && validated.divisions.length > 0) {
             try {
-                const settings = window.loadGlobalSettings?.() || {};
-                const allDivisions = settings.divisions || settings.app1?.divisions || {};
+                const allDivisions = window.divisions || window.getGlobalDivisions?.() || {};
                 const validBunks = new Set();
                 
                 validated.divisions.forEach(divName => {

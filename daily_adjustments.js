@@ -516,8 +516,8 @@ function getAvailableSkeletons() {
 function getRainyDayStats() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
-  const specials = g.app1?.specialActivities || [];
-  
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
+
   // Indoor fields = marked as rainyDayAvailable
   const indoorFields = fields.filter(f => f.rainyDayAvailable === true);
   // Outdoor fields = NOT marked as rainyDayAvailable
@@ -896,7 +896,7 @@ function activateFullDayRainyMode() {
 function buildRainyDayResourceOverrides() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
-  const specials = g.app1?.specialActivities || [];
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
   const overrides = {};
   
   // Fields
@@ -1441,7 +1441,7 @@ function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false
 // =================================================================
 async function promptForReservedFields(eventName) {
   const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-  const specialActivities = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+  const specialActivities = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
   if (allLocations.length === 0) return [];
 
@@ -2512,7 +2512,7 @@ function addDropListeners(gridEl) {
       // ===== ELECTIVE =====
       else if (tileData.type === 'elective') {
         const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-        const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const allSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
         const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
         const daTaken = daGetConflictingFacilities(startStr, endStr, null);
         const daSportMap = daGetSportFacilitiesMap();
@@ -2557,7 +2557,7 @@ function addDropListeners(gridEl) {
       // ===== CUSTOM PINNED =====
       else if (tileData.type === 'custom') {
         const _cAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
-        const _cAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const _cAllSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
         const _cAllLocations = [...new Set([..._cAllFields, ..._cAllSpecials])].sort();
         const customModalFields = [
           { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
@@ -2792,12 +2792,78 @@ function addDropListeners(gridEl) {
           const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
           return !overlaps;
         });
+
+        // Stamp travel info for off-campus facilities
+        const _travelLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || '';
+        if (_travelLoc) {
+          const _ti = window.getTravelForField?.(_travelLoc, true) || window.getTravelForSpecialActivity?.(_travelLoc, true);
+          if (_ti) {
+            newEvent._travelPre = _ti.preMin;
+            newEvent._travelPost = _ti.postMin;
+            newEvent._travelZone = _ti.zoneName;
+            newEvent._travelMode = _ti.mode;
+          }
+        }
+
+        // Soft cooldown check for manual-mode rules
+        if (window.SchedulingRules) {
+          const _cdLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || null;
+          const _cdCandidate = {
+            startMin: newStartVal, endMin: newEndVal,
+            type: window.SchedulingRules.inferTypeFromActivity(newEvent.event || ''),
+            event: newEvent.event || '', field: _cdLoc
+          };
+          const _cdTemplate = dailyOverrideSkeleton
+            .filter(ev => ev.division === divName)
+            .map(ev => {
+              const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+              if (s == null || e == null) return null;
+              const loc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || null;
+              return { startMin: s, endMin: e, type: window.SchedulingRules.inferTypeFromActivity(ev.event || ''), event: ev.event || '', field: loc };
+            })
+            .filter(Boolean);
+          const _cdResult = window.SchedulingRules.checkCandidateDetailed(_cdCandidate, _cdTemplate, { mode: 'manual' });
+          if (!_cdResult.allowed) {
+            const _cdMsg = _cdResult.violated.map(r => '• ' + window.SchedulingRules.describeRule(r)).join('\n');
+            const _cdOk = await daShowConfirm('This placement may violate the following cooldown rule(s):<br><br>' + _cdMsg.replace(/\n/g, '<br>') + '<br><br>Place anyway?');
+            if (!_cdOk) return;
+          }
+        }
+
+        // Sport player count check
+        if (newEvent.type === 'sport' && newEvent.event && window.SchedulerCoreUtils?.checkPlayerCountForSport) {
+          const _pcBunkMeta = window.getBunkMetaData?.() || {};
+          const _pcDivObj   = (window.divisions || {})[divName] || {};
+          const _pcDivBunks = _pcDivObj.bunks || [];
+          const _pcDivPlayers = _pcDivBunks.reduce((s, b) => s + (_pcBunkMeta[b]?.size || 0), 0);
+          const _pcSportName  = (newEvent.event || '').toLowerCase();
+          const _pcConcurrent = dailyOverrideSkeleton
+            .filter(ev => ev.division !== divName && ev.type === 'sport' &&
+              (ev.event || '').toLowerCase() === _pcSportName &&
+              parseTimeToMinutes(ev.startTime) < newEndVal &&
+              parseTimeToMinutes(ev.endTime)   > newStartVal)
+            .reduce((s, ev) => {
+              const d = (window.divisions || {})[ev.division] || {};
+              return s + (d.bunks || []).reduce((ss, b) => ss + (_pcBunkMeta[b]?.size || 0), 0);
+            }, 0);
+          const _pcTotal = _pcDivPlayers + _pcConcurrent;
+          if (_pcTotal > 0) {
+            const _pcResult = window.SchedulerCoreUtils.checkPlayerCountForSport(newEvent.event, _pcTotal);
+            if (!_pcResult.valid && _pcResult.reason) {
+              const _pcNote = _pcConcurrent > 0
+                ? '<br>(Includes ' + _pcConcurrent + ' players from other divisions at the same time)' : '';
+              const _pcOk = await daShowConfirm('Player count warning for "' + newEvent.event + '":<br>' + _pcResult.reason + _pcNote + '<br><br>Place anyway?');
+              if (!_pcOk) return;
+            }
+          }
+        }
+
         dailyOverrideSkeleton.push(newEvent);
         saveDailySkeleton();
         renderGrid();
       }
     };
-    
+
     // Mobile touch support — defers to mobile_touch_drag.js when available
     cell.addEventListener('touchend', (e) => {
       if (window.MobileTouchDrag) return;
@@ -2990,6 +3056,22 @@ async function editTile(id) {
       ev.location = result.reservedFields.length === 1 ? result.reservedFields[0] : (result.reservedFields.length > 1 ? null : ev.location);
     }
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  // Re-stamp travel info since location may have changed
+  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+  if (_editTravelLoc) {
+    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+    if (_eti) {
+      ev._travelPre = _eti.preMin;
+      ev._travelPost = _eti.postMin;
+      ev._travelZone = _eti.zoneName;
+      ev._travelMode = _eti.mode;
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
+  } else {
+    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
   }
 
   saveDailySkeleton();
@@ -3461,6 +3543,7 @@ async function runOptimizer() {
         if (allLayers.length === 0) { await daShowAlert("No layers defined. Add layers before generating."); return; }
 
         try {
+            window.invalidateSmartLogicSpecialsCache?.();
             const success = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
             if (!success) await daShowAlert("Auto scheduler did not complete successfully.");
         } catch (e) {
@@ -3547,6 +3630,7 @@ async function runOptimizer() {
   
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
+  window.invalidateSmartLogicSpecialsCache?.();
   const success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
 
   // ★★★ POST-GENERATION CLEANUP ★★★

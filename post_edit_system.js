@@ -135,7 +135,7 @@
             }
         });
         
-        (app1.specialActivities || []).forEach(s => {
+        (window.getGlobalSpecialActivities?.() || app1.specialActivities || []).forEach(s => {
             if (s.name) {
                 locations.push({
                     name: s.name,
@@ -1473,7 +1473,7 @@
             });
         });
 
-        (app1.specialActivities || []).forEach(s => {
+        (window.getGlobalSpecialActivities?.() || app1.specialActivities || []).forEach(s => {
             if (!s.name || todayActivities.has(s.name.toLowerCase())) return;
             if (s.rainyDayOnly && !isRainyDay) return;
             if (s.outdoors && isRainyDay && !s.rainyDayOnly) return;

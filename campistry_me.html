@@ -10,8 +10,60 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_me.css">
+    <!-- Loading overlay — inline styles so it appears instantly with zero
+         FOUC, before any external CSS loads. Hidden by campistry_me.js
+         only after cloud hydration completes and the UI has populated. -->
+    <style>
+        .me-loading-overlay {
+            position: fixed; inset: 0; z-index: 999999;
+            background: #ffffff;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 24px;
+            transition: opacity 0.4s ease;
+        }
+        .me-loading-overlay.hide { opacity: 0; pointer-events: none; }
+        .me-loading-logo {
+            width: 88px; height: 88px;
+            object-fit: contain;
+            animation: meLoadingPulse 1.8s ease-in-out infinite;
+        }
+        .me-loading-brand {
+            font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+            font-size: 22px; font-weight: 700;
+            color: #147D91;
+            letter-spacing: -0.01em;
+            margin: 0;
+        }
+        .me-loading-row {
+            display: flex; align-items: center; gap: 10px;
+        }
+        .me-loading-spinner {
+            width: 18px; height: 18px;
+            border: 2px solid #E5E7EB;
+            border-top-color: #147D91;
+            border-radius: 50%;
+            animation: meLoadingSpin 0.9s linear infinite;
+        }
+        .me-loading-text {
+            font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+            font-size: 13px; color: #6B7280; letter-spacing: 0.02em;
+        }
+        @keyframes meLoadingSpin { to { transform: rotate(360deg); } }
+        @keyframes meLoadingPulse {
+            0%, 100% { transform: scale(1);    opacity: 1;   }
+            50%      { transform: scale(1.05); opacity: 0.85; }
+        }
+    </style>
 </head>
 <body>
+<div id="meLoadingOverlay" class="me-loading-overlay" role="status" aria-live="polite">
+    <img src="Me_clean.png" alt="" class="me-loading-logo">
+    <h1 class="me-loading-brand">Campistry Me</h1>
+    <div class="me-loading-row">
+        <div class="me-loading-spinner" aria-hidden="true"></div>
+        <div class="me-loading-text">Loading your camp data...</div>
+    </div>
+</div>
 
 <!-- HEADER (matches Flow) -->
 <header class="app-header">
@@ -130,13 +182,14 @@
 
 <div id="meToast" class="me-toast"><span id="tI">✓</span> <span id="tM">Done</span></div>
 
-<script src="offline_data.js" onerror=""></script>
+
 <script src="demo_mode.js"></script>
 <script src="config.js"></script>
 <script>if(window.location.protocol==='file:')document.write('<script src="supabase-js-local.js"><\/script>');else document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');</script>
 <script src="supabase_client.js"></script>
 <script src="campistry_security.js"></script>
 <script src="access_control.js"></script>
+<script src="local_cache_idb.js"></script>
 <script src="integration_hooks.js"></script>
 <script src="cloud_sync_helpers.js"></script>
 <script src="campistry_me.js"></script>

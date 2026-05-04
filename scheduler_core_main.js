@@ -229,7 +229,8 @@
     function getLocationForActivity(activityName) {
         if (!activityName) return null;
         const globalSettings = window.loadGlobalSettings?.() || {};
-        const specials = globalSettings.app1?.specialActivities || [];
+        // Prefer live in-memory cache from special_activities.js over stale storage snapshot
+        const specials = window.getGlobalSpecialActivities?.() || globalSettings.app1?.specialActivities || [];
 
         const special = specials.find(s =>
             s.name.toLowerCase() === activityName.toLowerCase()

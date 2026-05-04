@@ -157,10 +157,28 @@
     // 3. DAILY DATA API
     // ==========================================================
     
+    // In-memory cache for loadAllDailyData. Reading + JSON.parsing this blob is
+    // ~10ms when localStorage is near quota; the solver calls this from inside
+    // canBlockFit on every candidate evaluation (~10k+ times per generate),
+    // which used to be 130+ seconds of pure parse cost. Cache by raw-string
+    // identity so any external setItem (which produces a different raw string)
+    // automatically invalidates on the next read.
+    let _dailyDataCacheRaw = null;
+    let _dailyDataCacheParsed = null;
+    window.invalidateDailyDataCache = function() {
+        _dailyDataCacheRaw = null;
+        _dailyDataCacheParsed = null;
+    };
     window.loadAllDailyData = function() {
         try {
             const raw = localStorage.getItem(DAILY_DATA_KEY);
-            return raw ? JSON.parse(raw) : {};
+            if (raw === _dailyDataCacheRaw && _dailyDataCacheParsed !== null) {
+                return _dailyDataCacheParsed;
+            }
+            const parsed = raw ? JSON.parse(raw) : {};
+            _dailyDataCacheRaw = raw;
+            _dailyDataCacheParsed = parsed;
+            return parsed;
         } catch {
             return {};
         }

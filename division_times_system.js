@@ -117,16 +117,16 @@
      */
     function expandSplitTiles(blocks) {
         const expanded = [];
-        
+
         blocks.forEach(block => {
             if (block.type === 'split') {
-                // Calculate midpoint
+                // Calculate midpoint — split always swaps groups at the midpoint.
                 const midMin = Math.floor((block.startMin + block.endMin) / 2);
-                
+
                 // Parse activity names from event or subEvents
                 let act1Name = 'Activity 1';
                 let act2Name = 'Activity 2';
-                
+
                 if (block.subEvents && block.subEvents.length >= 2) {
                     act1Name = block.subEvents[0]?.event || block.subEvents[0] || 'Activity 1';
                     act2Name = block.subEvents[1]?.event || block.subEvents[1] || 'Activity 2';
@@ -135,13 +135,45 @@
                     act1Name = parts[0] || 'Activity 1';
                     act2Name = parts[1] || 'Activity 2';
                 }
-                
-                // Create first half slot
+
+                // Per-side swim change buffers — same model as the swim tile, but
+                // the buffers are carved from inside each half so the midpoint
+                // (the swap point) stays put.
+                const clamp = (v, max) => {
+                    const n = Math.max(0, parseInt(v) || 0);
+                    return Math.min(n, Math.max(0, max));
+                };
+                const half1Dur = midMin - block.startMin;
+                const half2Dur = block.endMin - midMin;
+                const s1Pre  = clamp(block._side1PreChange,  half1Dur);
+                const s1Post = clamp(block._side1PostChange, half1Dur - s1Pre);
+                const s2Pre  = clamp(block._side2PreChange,  half2Dur);
+                const s2Post = clamp(block._side2PostChange, half2Dur - s2Pre);
+
+                const baseId = block.id || block._originalId || Date.now();
+
+                // ── First half (block.startMin → midMin) ──
+                if (s1Pre > 0) {
+                    expanded.push({
+                        ...block,
+                        id: baseId + '_h1_prechange',
+                        type: 'pinned',
+                        event: 'Change',
+                        startMin: block.startMin,
+                        endMin: block.startMin + s1Pre,
+                        reservedFields: [],
+                        location: null,
+                        subEvents: undefined,
+                        _swimChange: 'pre',
+                        _splitSide: 1,
+                        _splitParentEvent: block.event
+                    });
+                }
                 expanded.push({
                     ...block,
-                    id: (block.id || block._originalId || Date.now()) + '_half1',
-                    startMin: block.startMin,
-                    endMin: midMin,
+                    id: baseId + '_half1',
+                    startMin: block.startMin + s1Pre,
+                    endMin: midMin - s1Post,
                     event: act1Name,
                     type: 'split_half',
                     _splitHalf: 1,
@@ -149,15 +181,49 @@
                     _splitAct1: act1Name,
                     _splitAct2: act2Name,
                     _originalStartMin: block.startMin,
-                    _originalEndMin: block.endMin
+                    _originalEndMin: block.endMin,
+                    _side1PreChange: s1Pre || undefined,
+                    _side1PostChange: s1Post || undefined
                 });
-                
-                // Create second half slot
+                if (s1Post > 0) {
+                    expanded.push({
+                        ...block,
+                        id: baseId + '_h1_postchange',
+                        type: 'pinned',
+                        event: 'Change',
+                        startMin: midMin - s1Post,
+                        endMin: midMin,
+                        reservedFields: [],
+                        location: null,
+                        subEvents: undefined,
+                        _swimChange: 'post',
+                        _splitSide: 1,
+                        _splitParentEvent: block.event
+                    });
+                }
+
+                // ── Second half (midMin → block.endMin) ──
+                if (s2Pre > 0) {
+                    expanded.push({
+                        ...block,
+                        id: baseId + '_h2_prechange',
+                        type: 'pinned',
+                        event: 'Change',
+                        startMin: midMin,
+                        endMin: midMin + s2Pre,
+                        reservedFields: [],
+                        location: null,
+                        subEvents: undefined,
+                        _swimChange: 'pre',
+                        _splitSide: 2,
+                        _splitParentEvent: block.event
+                    });
+                }
                 expanded.push({
                     ...block,
-                    id: (block.id || block._originalId || Date.now()) + '_half2',
-                    startMin: midMin,
-                    endMin: block.endMin,
+                    id: baseId + '_half2',
+                    startMin: midMin + s2Pre,
+                    endMin: block.endMin - s2Post,
                     event: act2Name,
                     type: 'split_half',
                     _splitHalf: 2,
@@ -165,17 +231,33 @@
                     _splitAct1: act1Name,
                     _splitAct2: act2Name,
                     _originalStartMin: block.startMin,
-                    _originalEndMin: block.endMin
+                    _originalEndMin: block.endMin,
+                    _side2PreChange: s2Pre || undefined,
+                    _side2PostChange: s2Post || undefined
                 });
-                
-                log(`  ★ Expanded split tile "${block.event}" into two slots:`);
-                log(`    [Half 1] ${block.startMin}-${midMin}: ${act1Name}`);
-                log(`    [Half 2] ${midMin}-${block.endMin}: ${act2Name}`);
+                if (s2Post > 0) {
+                    expanded.push({
+                        ...block,
+                        id: baseId + '_h2_postchange',
+                        type: 'pinned',
+                        event: 'Change',
+                        startMin: block.endMin - s2Post,
+                        endMin: block.endMin,
+                        reservedFields: [],
+                        location: null,
+                        subEvents: undefined,
+                        _swimChange: 'post',
+                        _splitSide: 2,
+                        _splitParentEvent: block.event
+                    });
+                }
+
+                log(`  ★ Expanded split tile "${block.event}" (s1 ${s1Pre}+${half1Dur - s1Pre - s1Post}+${s1Post} | s2 ${s2Pre}+${half2Dur - s2Pre - s2Post}+${s2Post})`);
             } else {
                 expanded.push(block);
             }
         });
-        
+
         return expanded;
     }
 

@@ -502,8 +502,8 @@ for (const futureDate of Object.keys(allDailyData)) {
             }
 
             // Check division restrictions
-            if (field.limitUsage?.enabled) {
-                const allowedDivs = Object.keys(field.limitUsage.divisions || {});
+            if (field.accessRestrictions?.enabled) {
+                const allowedDivs = Object.keys(field.accessRestrictions.divisions || {});
                 const hasAllowed = divisionNames.some(d => allowedDivs.includes(d));
                 if (!hasAllowed) continue;
             }
@@ -522,6 +522,27 @@ for (const futureDate of Object.keys(allDailyData)) {
         }
 
         return pool;
+    }
+
+    // Mark a field as used within this round AND mark its combo partners as used,
+    // so a single round can't hand out e.g. Full Gym to one matchup and Gym 1
+    // to another. Always lower-cases entries so .has() matches regardless of
+    // candidate-pool casing.
+    function _markFieldUsedWithCombos(usedFieldsSet, fieldName) {
+        if (!fieldName) return;
+        usedFieldsSet.add(fieldName);
+        usedFieldsSet.add(String(fieldName).toLowerCase().trim());
+        const partners = window.FieldCombos?.getExclusiveFields?.(fieldName) || [];
+        for (const p of partners) {
+            usedFieldsSet.add(p);
+            usedFieldsSet.add(String(p).toLowerCase().trim());
+        }
+    }
+    function _isFieldUsedConsideringCombos(usedFieldsSet, fieldName) {
+        if (!fieldName) return false;
+        if (usedFieldsSet.has(fieldName)) return true;
+        const norm = String(fieldName).toLowerCase().trim();
+        return usedFieldsSet.has(norm);
     }
 
     // =========================================================================
@@ -557,7 +578,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             let bestScore = -Infinity;
 
             for (const option of availablePool) {
-                if (usedFields.has(option.field)) continue;
+                if (_isFieldUsedConsideringCombos(usedFields, option.field)) continue;
 
                 let score = 0;
 
@@ -591,7 +612,7 @@ for (const futureDate of Object.keys(allDailyData)) {
                     sport: bestOption.sport
                 });
 
-                usedFields.add(bestOption.field);
+                _markFieldUsedWithCombos(usedFields, bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
                 console.log(`   ✅ [SportVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
@@ -630,7 +651,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             let bestScore = -Infinity;
 
             for (const option of availablePool) {
-                if (usedFields.has(option.field)) continue;
+                if (_isFieldUsedConsideringCombos(usedFields, option.field)) continue;
 
                 let score = 0;
 
@@ -662,7 +683,7 @@ for (const futureDate of Object.keys(allDailyData)) {
                     sport: bestOption.sport
                 });
 
-                usedFields.add(bestOption.field);
+                _markFieldUsedWithCombos(usedFields, bestOption.field);
 
                 console.log(`   ✅ [MatchupVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {

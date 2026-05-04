@@ -213,7 +213,7 @@
                 allowedFields: null,
                 transition: null,
                 preferences: null,
-                limitUsage: null,
+                accessRestrictions: null,
                 timeRules: [],
                 minDurationMin: 0,
                 maxUsage: 0,
@@ -246,7 +246,7 @@
                 allowedFields: a.allowedFields || null,
                 transition: a.transition || null,
                 preferences: a.preferences || null,
-                limitUsage: a.limitUsage || null,
+                accessRestrictions: a.accessRestrictions || null,
                 timeRules: a.timeRules || [],
                 minDurationMin: a.minDurationMin || 0,
                 maxUsage: a.maxUsage || 0,
@@ -268,11 +268,12 @@
                 capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'all' ? 999 : 1)
             };
             
-            // ★ Normalize limitUsage with complete structure
-            const normalizedLimitUsage = f.limitUsage ? {
-                enabled: f.limitUsage.enabled === true,
-                divisions: typeof f.limitUsage.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage.priorityList) ? f.limitUsage.priorityList : []
+            // ★ Normalize accessRestrictions with complete structure
+            const normalizedLimitUsage = f.accessRestrictions ? {
+                enabled: f.accessRestrictions.enabled === true,
+                divisions: typeof f.accessRestrictions.divisions === 'object' ? f.accessRestrictions.divisions : {},
+                priorityList: Array.isArray(f.accessRestrictions.priorityList) ? f.accessRestrictions.priorityList : [],
+                usePriority: f.accessRestrictions.usePriority === true
             } : null;
             
             // ★ Parse timeRules to include startMin/endMin
@@ -292,12 +293,14 @@
                 allowedDivisions: normalizedSharable.type === 'custom' ? normalizedSharable.divisions : [],
                 transition: f.transition || null,
                 preferences: f.preferences || null,
-                limitUsage: normalizedLimitUsage,
+                accessRestrictions: normalizedLimitUsage,
                 timeRules: parsedTimeRules,
                 // ★★★ v2.2: Include rainyDayAvailable for fields ★★★
                 rainyDayAvailable: f.rainyDayAvailable === true,
                 // ★★★ Include activities array (sports this field supports) ★★★
-                activities: Array.isArray(f.activities) ? f.activities : []
+                activities: Array.isArray(f.activities) ? f.activities : [],
+                // Per-grade sharing overrides (keyed by grade name)
+                gradeShareRules: (f.gradeShareRules && typeof f.gradeShareRules === 'object') ? f.gradeShareRules : {}
             });
         });
 
@@ -521,8 +524,8 @@
             specialActivityNames: effectiveSpecialActivityNames,
             dailyFieldAvailability: dailyOverrides.dailyFieldAvailability || {},
             masterZones: window.loadZones?.() || {},
-            bunkMetaData: window.bunkMetaData || {},
-            sportMetaData: window.sportMetaData || {},
+            bunkMetaData: window.getBunkMetaData?.() || window.bunkMetaData || {},
+            sportMetaData: window.getSportMetaData?.() || window.sportMetaData || {},
             isRainyDayMode: isRainyMode
         };
     }

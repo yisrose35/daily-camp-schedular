@@ -1,6 +1,6 @@
 
 // =================================================================
-// camper_locator.js — v2.0: Streamlined Real-Time Locator
+// camper_locator.js — v2.1: Streamlined Real-Time Locator
 //
 // Features:
 // - "Where are they?" Search Bar (Activity + Location + League Details)
@@ -8,6 +8,10 @@
 // - ★ No more slot-index mismatches between divisions
 // - ★ v2.0: Roster table removed — team assignments managed in Campistry Me
 // - ★ v2.0: getAllTeams reads from leaguesByName + specialtyLeagues
+// - ★ v2.1: Manual-builder hardening — robust division/bunk resolution
+//           (uses camper.grade + qualified bunk keys), per-bunk slot support,
+//           div-wide league index lookup, and assignment-metadata fallback
+//           for typed times when divisionTimes hasn't loaded.
 // =================================================================
 
 (function() {
@@ -118,6 +122,101 @@
         if (timeMinutes >= divSlots[divSlots.length - 1].endMin) return divSlots.length - 1;
 
         return -1;
+    }
+
+    /**
+     * Resolve the actual division key (used by divisionTimes/leagueAssignments) for
+     * a roster camper. The roster may store the parent division name (e.g. "Juniors")
+     * while divisionTimes is keyed by grade name (e.g. "3rd Grade") — possibly
+     * qualified as "Juniors > 3rd Grade" when a grade name appears in multiple
+     * parent divisions.
+     */
+    function resolveDivisionForCamper(bunk, camper) {
+        const divisions = window.divisions || {};
+        const divisionTimes = window.divisionTimes || {};
+
+        // 1. Most reliable: ask SchedulerCoreUtils which grade owns this bunk.
+        if (window.SchedulerCoreUtils?.getDivisionForBunk) {
+            const fromUtils = window.SchedulerCoreUtils.getDivisionForBunk(bunk);
+            if (fromUtils) return fromUtils;
+        }
+
+        // 2. Scan window.divisions directly for the bunk.
+        for (const [divKey, divData] of Object.entries(divisions)) {
+            if (divData?.bunks && divData.bunks.some(b => String(b) === String(bunk))) {
+                return divKey;
+            }
+        }
+
+        // 3. The roster's grade is the grade-level name — matches divisionTimes keys.
+        if (camper?.grade) {
+            if (divisionTimes[camper.grade] || divisions[camper.grade]) {
+                return camper.grade;
+            }
+            // Try qualified form ("Juniors > 3rd Grade") used when grade names collide.
+            if (camper.division) {
+                const qualified = `${camper.division} > ${camper.grade}`;
+                if (divisionTimes[qualified] || divisions[qualified]) {
+                    return qualified;
+                }
+            }
+        }
+
+        // 4. Last resort: roster's stored division name (often the parent division).
+        return camper?.division || null;
+    }
+
+    /**
+     * Find the bunk key actually used in scheduleAssignments / window.divisions.
+     * When bunk names collide across grades, app1.js qualifies them as
+     * "${grade}:${bunk}" — but the roster stores the unqualified name.
+     */
+    function resolveBunkKey(bunk, division) {
+        if (bunk == null) return null;
+        const bunkStr = String(bunk);
+        const assignments = window.scheduleAssignments || {};
+        const divisions = window.divisions || {};
+
+        // 1. As-is: most common case in manual builder mode.
+        if (assignments[bunkStr]) return bunkStr;
+        const divData = divisions[division];
+        if (divData?.bunks?.some(b => String(b) === bunkStr)) return bunkStr;
+
+        // 2. Qualified form for collision-prone bunk names.
+        if (division) {
+            const qualified = `${division}:${bunkStr}`;
+            if (assignments[qualified] || divData?.bunks?.includes(qualified)) {
+                return qualified;
+            }
+        }
+
+        // 3. Search any division whose bunks list contains a matching name —
+        //    handles both unqualified matches and qualified collision keys.
+        for (const dd of Object.values(divisions)) {
+            if (!dd?.bunks) continue;
+            for (const b of dd.bunks) {
+                const bStr = String(b);
+                if (bStr === bunkStr) return bStr;
+                if (bStr.endsWith(`:${bunkStr}`)) return bStr;
+            }
+        }
+
+        return bunkStr;
+    }
+
+    /**
+     * Get the slot array for a bunk in a given division — returns per-bunk slots
+     * when divisionTimes[division]._isPerBunk is set (auto mode + split-tile manual),
+     * otherwise the flat division-wide slot array.
+     */
+    function getSlotsForBunkInDivision(division, bunk) {
+        const divEntry = window.divisionTimes?.[division];
+        if (!divEntry) return [];
+        if (divEntry._isPerBunk && divEntry._perBunkSlots) {
+            const perBunk = divEntry._perBunkSlots[String(bunk)];
+            if (Array.isArray(perBunk) && perBunk.length > 0) return perBunk;
+        }
+        return Array.isArray(divEntry) ? divEntry : [];
     }
 
     /**
@@ -403,35 +502,16 @@
         }
 
         const camper = camperRoster[camperName];
-        const bunk = camper.bunk;
+        const rosterBunk = camper.bunk;
 
-        // ★ Resolve the ACTUAL division key for divisionTimes
-        // The roster stores the parent division name (e.g. "Juniors") but
-        // divisionTimes is keyed by grade-level division (e.g. "3rd Grade").
-        let division = null;
+        // ★ Resolve the ACTUAL division key for divisionTimes/leagueAssignments.
+        // The roster may store the parent division (e.g. "Juniors") while these
+        // structures are keyed by grade name (e.g. "3rd Grade"). Bunks may also be
+        // qualified as "${grade}:${bunk}" when names collide across grades.
+        const division = resolveDivisionForCamper(rosterBunk, camper);
+        const bunk = resolveBunkKey(rosterBunk, division);
 
-        // Method 1: Use SchedulerCoreUtils.getDivisionForBunk (most reliable)
-        if (window.SchedulerCoreUtils?.getDivisionForBunk) {
-            division = window.SchedulerCoreUtils.getDivisionForBunk(bunk);
-        }
-
-        // Method 2: Scan window.divisions directly
-        if (!division || !window.divisionTimes?.[division]) {
-            const divisions = window.divisions || {};
-            for (const [divKey, divData] of Object.entries(divisions)) {
-                if (divData.bunks && divData.bunks.some(b => String(b) === String(bunk))) {
-                    division = divKey;
-                    break;
-                }
-            }
-        }
-
-        // Method 3: Fall back to roster's stored division name
-        if (!division) {
-            division = camper.division;
-        }
-
-        console.log(`[CamperLocator] Resolved ${bunk} → division "${division}" (roster had "${camper.division}")`);
+        console.log(`[CamperLocator] Resolved ${rosterBunk} → bunk "${bunk}", division "${division}" (roster: division="${camper.division}", grade="${camper.grade || ''}")`);
 
         // ★ STEP 1: Determine target time in minutes
         let targetTimeMin = 0;
@@ -456,7 +536,9 @@
         let assignment = null;
 
         const bunkAssignments = window.scheduleAssignments?.[bunk];
-        const divSlots = window.divisionTimes?.[division] || [];
+        // Prefer per-bunk slots when divisionTimes is in _isPerBunk mode
+        // (auto mode + manual schedules with subdivision/split tiles).
+        const divSlots = getSlotsForBunkInDivision(division, bunk);
 
         if (bunkAssignments && divSlots.length > 0) {
             // PRIMARY: Scan divisionTimes for the slot whose time range contains targetTimeMin
@@ -465,7 +547,7 @@
                 if (ds.startMin <= targetTimeMin && targetTimeMin < ds.endMin) {
                     slotIdx = i;
                     assignment = bunkAssignments[i] || null;
-                    slotTimeLabel = getDivisionSlotLabel(division, i);
+                    slotTimeLabel = ds.label || `${minutesToTimeLabel(ds.startMin)} - ${minutesToTimeLabel(ds.endMin)}`;
                     break;
                 }
             }
@@ -499,15 +581,31 @@
             }
         }
 
-        // FALLBACK: No divisionTimes available — use legacy unified approach
+        // FALLBACK: No divisionTimes for this division — match by assignment metadata.
+        // Manual builder schedules generated through runSkeletonOptimizer always
+        // stamp _startMin/_endMin on each assignment, so this works for both
+        // "now" and typed times even if divisionTimes never loaded.
         if (slotIdx < 0 && bunkAssignments) {
-            if (timeValue === "now" || timeValue === "") {
+            for (let i = 0; i < bunkAssignments.length; i++) {
+                const a = bunkAssignments[i];
+                if (!a || a.continuation) continue;
+                const aStart = a._startMin ?? a._blockStart;
+                const aEnd = a._endMin;
+                if (aStart != null && aEnd != null && aStart <= targetTimeMin && targetTimeMin < aEnd) {
+                    assignment = a;
+                    slotIdx = i;
+                    slotTimeLabel = `${minutesToTimeLabel(aStart)} - ${minutesToTimeLabel(aEnd)}`;
+                    break;
+                }
+            }
+            // Last-resort legacy path: only "now" + unifiedTimes if metadata is missing.
+            if (slotIdx < 0 && (timeValue === "now" || timeValue === "")) {
                 slotIdx = getCurrentSlotIndex();
+                if (slotIdx >= 0) assignment = bunkAssignments[slotIdx] || null;
             }
-            if (slotIdx >= 0) {
-                assignment = bunkAssignments[slotIdx] || null;
+            if (divSlots.length === 0) {
+                console.warn(`[CamperLocator] No divisionTimes for "${division}", matched by assignment metadata → slot ${slotIdx}`);
             }
-            console.warn(`[CamperLocator] No divisionTimes for "${division}", fell back to unified slot ${slotIdx}`);
         }
 
         console.log(`[CamperLocator] ${camperName} (${bunk}, ${division}) @ ${minutesToTimeLabel(targetTimeMin)} → slot ${slotIdx}, found:`, assignment?.field || assignment?._activity || 'none');
@@ -549,9 +647,14 @@
                                      slotType === 'h2h' ||
                                      slotType === 'specialty_league';
 
-                // Check leagueAssignments directly for this division + slot
+                // Check leagueAssignments directly for this division + slot.
+                // leagueAssignments is keyed by the DIV-WIDE slot index, so use the
+                // raw divisionTimes[division] array for this lookup (not per-bunk).
                 let leagueData = null;
                 const la = window.leagueAssignments?.[division] || {};
+                const divWideSlots = (Array.isArray(window.divisionTimes?.[division])
+                    ? window.divisionTimes[division]
+                    : []) || [];
 
                 // First: exact slot index match
                 if (la[slotIdx]) {
@@ -564,7 +667,7 @@
                         const keyNum = parseInt(key);
                         if (isNaN(keyNum)) continue;
 
-                        const keySlot = divSlots[keyNum];
+                        const keySlot = divWideSlots[keyNum];
                         if (!keySlot) continue;
 
                         if (keySlot.startMin <= targetTimeMin && targetTimeMin < keySlot.endMin) {
@@ -574,11 +677,11 @@
 
                         // For multi-slot league blocks: check if the block SPANS our target time
                         let blockEndMin = keySlot.endMin;
-                        for (let j = keyNum + 1; j < divSlots.length; j++) {
+                        for (let j = keyNum + 1; j < divWideSlots.length; j++) {
                             const nextEntry = bunkAssignments?.[j];
                             if (nextEntry && (nextEntry.continuation || nextEntry._h2h ||
                                 String(nextEntry.field || '').toLowerCase().includes('league'))) {
-                                blockEndMin = divSlots[j]?.endMin || blockEndMin;
+                                blockEndMin = divWideSlots[j]?.endMin || blockEndMin;
                             } else {
                                 break;
                             }
@@ -613,10 +716,10 @@
 
                     if (!team) {
                         locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
-                        detailsHtml = `<strong>${bunk}</strong> is playing leagues at this time.<br>
+                        detailsHtml = `<strong>${rosterBunk}</strong> is playing leagues at this time.<br>
                                        <strong>${camperName}</strong> has no team assigned yet — assign a team in <strong>Campistry Me</strong> to see their exact field and matchup.`;
                         if (leagueData?.gameLabel) {
-                            detailsHtml = `<strong>${leagueData.gameLabel}</strong> — ${bunk} is playing leagues at this time.<br>
+                            detailsHtml = `<strong>${leagueData.gameLabel}</strong> — ${rosterBunk} is playing leagues at this time.<br>
                                            <strong>${camperName}</strong> has no team assigned yet — assign a team in <strong>Campistry Me</strong> to see their exact field and matchup.`;
                         }
                     } else {
@@ -639,7 +742,7 @@
                     detailsHtml = `The selected time (${minutesToTimeLabel(targetTimeMin)}) is outside ${division}'s scheduled hours.`;
                 } else {
                     locationHtml = `<span style="color:#999;">No Activity Assigned</span>`;
-                    detailsHtml = `${bunk} does not have an activity assigned at this time slot. This may be a gap in the schedule.`;
+                    detailsHtml = `${rosterBunk} does not have an activity assigned at this time slot. This may be a gap in the schedule.`;
                 }
             }
         } else {
@@ -651,7 +754,7 @@
 
                 if (!team) {
                     locationHtml = `<span style="color:#d97706;">Playing Leagues (Team Unknown)</span>`;
-                    detailsHtml = `We know ${bunk} is playing leagues, but <strong>${camperName}</strong> has no team assigned.<br>
+                    detailsHtml = `We know ${rosterBunk} is playing leagues, but <strong>${camperName}</strong> has no team assigned.<br>
                                    Assign a team in <strong>Campistry Me</strong> to see the exact field.`;
                 } else {
                     const leagueData = division

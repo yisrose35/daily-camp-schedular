@@ -13,6 +13,25 @@ var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
+// ═══ LOADING OVERLAY ═════════════════════════════════════════════
+// The overlay is shown by default in the HTML so users never see a blank
+// page during the IDB preload + cloud hydration window (~3–4s on a fresh
+// load). We hide it only after the campistry-cloud-hydrated event has
+// fired AND we've re-rendered with real data. A safety timeout hides it
+// even if hydration never completes (e.g. fully offline) so the UI
+// doesn't stay locked behind the spinner forever.
+var _meOverlayHidden = false;
+function hideMeLoadingOverlay(){
+    if (_meOverlayHidden) return;
+    _meOverlayHidden = true;
+    var ov = document.getElementById('meLoadingOverlay');
+    if (!ov) return;
+    ov.classList.add('hide');
+    setTimeout(function(){
+        if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+    }, 500);
+}
+
 // ═══ INIT ════════════════════════════════════════════════════════
 function init(){
     loadData(); setupSidebar(); setupSearch(); setupModals();
@@ -23,18 +42,32 @@ function init(){
     nav('campers');
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
 
-    // Block cloud hydration from overwriting recent saves
+    // Sync UI with whatever's in _localCache after hydration. We ALWAYS reload
+    // — the previous save-lock guard skipped loadData when the user had recent
+    // local edits, intending to protect them from cloud overwrites. But:
+    //   1) hydration only updates _localCache, never deletes data — so reading
+    //      back out of _localCache is safe regardless of save lock state.
+    //   2) localStorage writes can silently fail at quota, so a "recent local
+    //      save" can be a fiction; skipping loadData stranded the UI on
+    //      empty placeholder data.
+    // If a save lock is active, ALSO trigger an explicit re-sync to push the
+    // freshly-loaded local state back to cloud.
     window.addEventListener('campistry-cloud-hydrated',function(){
-        if(Date.now()<_saveLockUntil){
-            console.log('[Me] Blocked cloud hydration overwrite (save lock active)');
-            // Re-write our data back
-            setTimeout(function(){save()},200);
-        }else{
-            // Cloud data is newer — reload
-            console.log('[Me] Cloud hydration — reloading data');
-            loadData();render(curPage);
+        var saveLockActive = Date.now() < _saveLockUntil;
+        console.log('[Me] Cloud hydration — reloading data' + (saveLockActive ? ' (save lock active — also resaving)' : ''));
+        loadData();
+        render(curPage);
+        if (saveLockActive) {
+            setTimeout(function(){ save(); }, 200);
         }
+        // Data is now real — fade the overlay out.
+        hideMeLoadingOverlay();
     });
+
+    // Safety net: if hydration never fires (offline, no cloud config, etc.)
+    // don't trap the user behind the spinner. After 12s, hide regardless —
+    // the UI will show whatever loadData() managed to read locally.
+    setTimeout(hideMeLoadingOverlay, 12000);
 
     // Watch for localStorage changes from other tabs/scripts
     window.addEventListener('storage',function(e){
@@ -48,7 +81,18 @@ function init(){
 // ═══ DATA ════════════════════════════════════════════════════════
 function loadData(){
     try{
-        var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        // Prefer the in-memory cache (window.loadGlobalSettings → _localCache)
+        // over a raw localStorage read. After hydrateFromCloud sets _localCache
+        // to the cloud snapshot, localStorage may still hold the stale pre-edit
+        // blob (when the localStorage write hit the quota). Reading localStorage
+        // directly here would silently revert the page to the stale data.
+        var s=null;
+        if(typeof window.loadGlobalSettings==='function'){
+            try{ s=window.loadGlobalSettings(); }catch(_){ s=null; }
+        }
+        if(!s||typeof s!=='object'){
+            s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        }
         structure=s.campStructure||{};
         roster=(s.app1&&s.app1.camperRoster)||{};
         var me=s.campistryMe||{};
@@ -73,19 +117,23 @@ function loadData(){
 function save(){
     try{
         _saveLockUntil=Date.now()+5000;
-        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        // Read current state from the in-memory cache (IDB-backed via
+        // integration_hooks). Falls back to localStorage if loadGlobalSettings
+        // isn't installed yet.
+        var g;
+        if(typeof window.loadGlobalSettings==='function'){
+            try{ g=Object.assign({},window.loadGlobalSettings()); }catch(_){ g=null; }
+        }
+        if(!g||typeof g!=='object'){
+            try{ g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); }catch(_){ g={}; }
+        }
         g.campStructure=structure;
         if(!g.app1)g.app1={};
         g.app1.camperRoster=roster;
-        // Build divisions from structure. NON-DESTRUCTIVE MERGE: app1.divisions
-        // is co-owned — Flow writes grade-keyed entries ("A1 Boys") carrying
-        // startTime/endTime/parentDivision, while Me writes division-keyed
-        // entries ("Boys") carrying color/bunks. Starting from existing
-        // g.app1.divisions preserves Flow's entries; we only update/add keys
-        // that match current division names in structure.
-        var m=Object.assign({},g.app1.divisions||{});
-        Object.entries(structure).forEach(function([d,dd]){var b=[];Object.values(dd.grades||{}).forEach(function(gr){(gr.bunks||[]).forEach(function(bk){b.push(bk)})});var ex=m[d]||{};m[d]=Object.assign({},ex,{color:dd.color,bunks:b})});
-        g.app1.divisions=m;
+        // app1.divisions is owned exclusively by app1/Flow — it holds grade-keyed
+        // entries built from campStructure (startTime, endTime, parentDivision, etc.).
+        // campStructure is the authoritative source for division/grade/bunk structure;
+        // app1.loadData() derives everything from it, so we must not overwrite it here.
         g.campistryMe={
             families:families,
             payments:payments,
@@ -100,35 +148,25 @@ function save(){
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
         };
         g.updated_at=new Date().toISOString();
-        var json=JSON.stringify(g);
-        localStorage.setItem('campGlobalSettings_v1',json);
-        // Write to all known keys that other scripts may read
-        localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
-        try{localStorage.setItem('CAMPISTRY_UNIFIED_STATE',json)}catch(ex){}
-        console.log('[Me] Saved locally:',Object.keys(roster).length,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
-        // Verify write after a short delay (catch overwrites from cloud hydration)
+
+        // saveGlobalSettings → setLocalSettings handles ALL persistence:
+        //   - IndexedDB write-through with the FULL state (no quota)
+        //   - localStorage write with a stripped sync-init snapshot
+        //   - Per-key UPSERT into camp_state_kv
+        // No direct localStorage writes needed from here anymore.
         var rosterCount=Object.keys(roster).length;
-        setTimeout(function(){
-            try{
-                var check=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-                var checkCount=Object.keys((check.app1&&check.app1.camperRoster)||{}).length;
-                if(checkCount<rosterCount){
-                    console.warn('[Me] ⚠ Save was overwritten — re-saving');
-                    localStorage.setItem('campGlobalSettings_v1',json);
-                    localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
-                }
-            }catch(e){}
-        },800);
         if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
-            console.log('[Me] ☁️ Syncing to cloud: campStructure, app1, campistryMe');
+            console.log('[Me] Saving',rosterCount,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
             window.saveGlobalSettings('campStructure',structure);
             window.saveGlobalSettings('app1',g.app1);
             window.saveGlobalSettings('campistryMe',g.campistryMe);
-        }else if(typeof window.forceSyncToCloud==='function'){
-            console.log('[Me] ☁️ Syncing to cloud via forceSyncToCloud');
-            window.forceSyncToCloud();
+            // Force-flush so a navigation immediately after import doesn't
+            // race the debounced batch sync.
+            if(typeof window.forceSyncToCloud==='function'){
+                window.forceSyncToCloud();
+            }
         }else{
-            console.log('[Me] ⚠ No cloud sync available — saved to localStorage only');
+            console.log('[Me] ⚠ saveGlobalSettings unavailable — local cache only');
         }
         // ★ Update starter-plan banner camper count in real time (trial_guard.js integration)
         if(typeof window.refreshStarterBanner==='function'){

@@ -27,6 +27,9 @@
 
 console.log('[RULES] rules.js v1.1 loading...');
 
+// Pending group names created in UI but not yet backed by any field data
+var _pendingFQGroups = [];
+
 // ──────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ──────────────────────────────────────────────────────────────────────────
@@ -53,7 +56,18 @@ function getSpecialActivityNames() {
     const specials = (window.getAllSpecialActivities && window.getAllSpecialActivities()) || [];
     const names = new Set();
     specials.forEach(sp => { if (sp && sp.name) names.add(sp.name); });
+    return [...names].sort();
+}
+function getGeneralActivityNames() {
     const s = loadSettings();
+    const facs = s.facilities || [];
+    const names = new Set();
+    facs.forEach(fac => {
+        if (Array.isArray(fac.generalActivities)) {
+            fac.generalActivities.forEach(ga => { if (ga && ga.name) names.add(ga.name); });
+        }
+    });
+    // Also include pinnedTileDefaults keys (Lunch, Snacks, Dismissal, etc.)
     const pinned = s.pinnedTileDefaults || {};
     Object.keys(pinned).forEach(n => names.add(n));
     return [...names].sort();
@@ -122,7 +136,19 @@ function blockMatchesDescriptor(block, desc) {
     if (desc.kind === 'facility') {
         const v = String(desc.value || '').toLowerCase().trim();
         if (!v) return false;
-        return bField === v;
+        if (bField === v) return true;
+        // ★ Field combos: a rule on "Full Gym" matches blocks on its
+        //   sub-fields too (and vice versa), because using Gym 1 / Gym 2
+        //   occupies Full Gym's space and using Full Gym occupies the subs.
+        //   Without this, a rule like "Full Gym must be 20min from Lunch"
+        //   silently fails to block Gym 1 / Gym 2 in that window.
+        if (window.FieldCombos && typeof window.FieldCombos.getExclusiveFields === 'function') {
+            const partners = window.FieldCombos.getExclusiveFields(desc.value) || [];
+            for (let i = 0; i < partners.length; i++) {
+                if (String(partners[i]).toLowerCase().trim() === bField) return true;
+            }
+        }
+        return false;
     }
     return false;
 }
@@ -161,7 +187,8 @@ function isCandidateAllowed(candidate, template, opts) {
     return true;
 }
 
-function findForbiddenRanges(targetDescriptor, template, _opts) {
+function findForbiddenRanges(targetDescriptor, template, opts) {
+    const mode = (opts && opts.mode) || 'auto';
     const out = [];
     const rules = getCooldownRules();
     if (!rules.length) return out;
@@ -169,6 +196,8 @@ function findForbiddenRanges(targetDescriptor, template, _opts) {
     for (let i = 0; i < rules.length; i++) {
         const r = rules[i];
         if (!r.target || !r.reference) continue;
+        const rMode = r.mode || 'both';
+        if (rMode !== 'both' && rMode !== mode) continue;
         if (!descriptorCanMatch(r.target, targetDescriptor)) continue;
         const minutes = Math.max(0, parseInt(r.minutes) || 0);
         if (minutes === 0) continue;
@@ -219,7 +248,7 @@ function buildTemplateFromBunkSlots(bunk, excludeIdx) {
         const t = times[i];
         if (excl.has(i) || !s || !s._activity || !t) { current = null; continue; }
         const act = s._activity;
-        const loc = s.location || s.field || null;
+        const loc = s._location || s.location || s.field || null;
         const startMin = (typeof t.startMin === 'number') ? t.startMin
                        : (typeof t.start === 'number') ? t.start : null;
         const endMin = (typeof t.endMin === 'number') ? t.endMin
@@ -419,18 +448,35 @@ function injectRulesStyles() {
             padding: 2px 10px; border-radius: 99px;
         }
         .fq-member {
-            display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+            display: flex; align-items: center; gap: 8px; padding: 6px 10px;
             background: #F8FAFC; border-radius: 8px; border: 1px solid #F1F5F9;
-            margin-bottom: 4px;
+            margin-bottom: 4px; cursor: grab; user-select: none;
         }
-        .fq-member-rank {
-            width: 26px; height: 26px; line-height: 26px; text-align: center;
-            border-radius: 50%; font-weight: 700; font-size: 0.78rem;
-            background: #F1F5F9; color: #64748B;
+        .fq-member.fq-dragging { opacity: 0.4; }
+        .fq-member.fq-drag-over { border: 2px solid #0F6A7A; background: #E6F4F7; }
+        .fq-drag-handle {
+            font-size: 1.1rem; color: #94A3B8; cursor: grab; padding: 0 2px; line-height: 1;
         }
-        .fq-member-rank.best { background: #DCFCE7; color: #166534; }
+        .fq-rank-badge {
+            min-width: 22px; height: 22px; border-radius: 50%; background: #0F6A7A;
+            color: #fff; font-size: 0.72rem; font-weight: 700;
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+        }
         .fq-member-name { flex: 1; font-size: 0.88rem; font-weight: 500; color: #0F172A; }
-        .fq-member-label { font-size: 0.72rem; color: #94A3B8; }
+        .fq-name-input { font-weight: 700; font-size: 0.93rem; }
+        .fq-add-section { margin-top: 10px; border-top: 1px solid #F1F5F9; padding-top: 10px; }
+        .fq-add-section-label { font-size: 0.75rem; font-weight: 600; color: #64748B; margin-bottom: 6px; }
+        .fq-fields-grid {
+            display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px;
+            overflow-y: auto; margin-bottom: 8px; padding: 4px;
+        }
+        .fq-check-label {
+            display: flex; align-items: center; gap: 5px; font-size: 0.82rem;
+            background: #F1F5F9; border-radius: 6px; padding: 4px 10px;
+            cursor: pointer; border: 1px solid #E2E8F0; white-space: nowrap;
+        }
+        .fq-check-label:has(input:checked) { background: #DBEAFE; border-color: #93C5FD; }
+        .fq-check-label input { cursor: pointer; accent-color: #0F6A7A; }
     `;
     const style = document.createElement('style');
     style.id = 'rules-tab-styles';
@@ -537,6 +583,32 @@ function renderSportsRulesCard(container) {
 // ──────────────────────────────────────────────────────────────────────────
 // FIELD QUALITY GROUPS CARD
 // ──────────────────────────────────────────────────────────────────────────
+function getAllFieldNamesForGroups() {
+    const s = loadSettings();
+    return ((s.app1 && s.app1.fields) || []).map(f => f.name).filter(Boolean).sort();
+}
+
+function applyFieldGroupUpdates(updates) {
+    // updates: [{ fieldName, fieldGroup: string|null, qualityRank: number|null }]
+    // Mutate in-place to preserve the reference held by facilities.js UI closures.
+    const s = loadSettings();
+    const app1 = s.app1 || {};
+    const fields = app1.fields || [];
+    updates.forEach(u => {
+        const f = fields.find(f => f.name === u.fieldName);
+        if (!f) return;
+        if (u.fieldGroup == null) {
+            delete f.fieldGroup;
+            delete f.qualityRank;
+        } else {
+            f.fieldGroup = u.fieldGroup;
+            f.qualityRank = u.qualityRank;
+        }
+    });
+    saveKey('app1', app1);
+    saveKey('fields', fields); // keep root fields key in sync so getGlobalFields() sees the change
+}
+
 function getExistingFieldGroups() {
     const s = loadSettings();
     const fields = (s.app1 && s.app1.fields) || [];
@@ -556,8 +628,9 @@ function getExistingFieldGroups() {
 function renderFieldQualityCard(container) {
     if (!container) return;
     const groups = getExistingFieldGroups();
-    const groupNames = [...groups.keys()];
-    const groupCount = groupNames.length;
+    const savedCount = groups.size;
+    const pendingExtra = _pendingFQGroups.filter(n => !groups.has(n)).length;
+    const groupCount = savedCount + pendingExtra;
 
     container.innerHTML = `
         <div class="rules-card">
@@ -567,7 +640,7 @@ function renderFieldQualityCard(container) {
                         Field Quality Groups
                         ${groupCount ? `<span class="rules-badge">${groupCount} group${groupCount !== 1 ? 's' : ''}</span>` : ''}
                     </div>
-                    <div class="rules-card-subtitle">Rank related fields. The best field goes to the most senior grade.</div>
+                    <div class="rules-card-subtitle">Group related fields and rank them. Rank 1 = best. Senior grades are matched to higher-ranked fields automatically.</div>
                 </div>
                 <span class="rules-caret" id="rules-fq-caret">
                     <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
@@ -575,6 +648,9 @@ function renderFieldQualityCard(container) {
             </div>
             <div class="rules-card-body" id="rules-fq-body" style="display:none;">
                 <div id="rules-fq-list"></div>
+                <div style="margin-top:12px; display:flex; justify-content:flex-end;">
+                    <button class="rules-btn-dark" id="rules-fq-add">+ Add Group</button>
+                </div>
             </div>
         </div>`;
 
@@ -586,6 +662,15 @@ function renderFieldQualityCard(container) {
         caret.classList.toggle('open', hidden);
     };
 
+    document.getElementById('rules-fq-add').onclick = () => {
+        const existing = getExistingFieldGroups();
+        let name = 'New Group';
+        let n = 1;
+        while (existing.has(name) || _pendingFQGroups.includes(name)) { name = `New Group ${++n}`; }
+        _pendingFQGroups.push(name);
+        renderFieldGroupsList(document.getElementById('rules-fq-list'));
+    };
+
     renderFieldGroupsList(document.getElementById('rules-fq-list'));
 }
 
@@ -593,29 +678,152 @@ function renderFieldGroupsList(listEl) {
     if (!listEl) return;
     listEl.innerHTML = '';
     const groups = getExistingFieldGroups();
-    const groupNames = [...groups.keys()];
-    if (groupNames.length === 0) {
-        listEl.innerHTML = '<div class="rules-empty">No field groups yet. Assign a Field Group to a facility in the Facilities tab.</div>';
+    const allGroupNames = [...groups.keys()];
+    _pendingFQGroups.forEach(n => { if (!groups.has(n)) allGroupNames.push(n); });
+
+    if (allGroupNames.length === 0) {
+        listEl.innerHTML = '<div class="rules-empty">No field quality groups yet. Click <strong>+ Add Group</strong> to create one.</div>';
         return;
     }
-    groupNames.forEach(groupName => {
-        const members = groups.get(groupName);
+
+    const allFieldNames = getAllFieldNamesForGroups();
+
+    allGroupNames.forEach(groupName => {
+        const members = groups.get(groupName) || [];
+        const memberNames = new Set(members.map(m => m.name));
+        const availFields = allFieldNames.filter(f => !memberNames.has(f));
+
         const card = document.createElement('div');
         card.className = 'fq-group';
+
         card.innerHTML = `
             <div class="fq-group-head">
-                <span class="fq-group-name">${escapeHtml(groupName)}</span>
-                <span class="fq-group-count">${members.length} field${members.length !== 1 ? 's' : ''}</span>
-            </div>`;
-        members.forEach((m, idx) => {
+                <input type="text" class="rules-input fq-name-input" value="${escapeHtml(groupName)}" placeholder="Group name" style="flex:1;">
+                <button class="rules-btn-ghost-danger fq-del-group">Delete Group</button>
+            </div>
+            <div class="fq-members-list">
+                ${members.length === 0 ? '<div class="fq-empty-hint rules-empty" style="padding:6px 0 4px; font-size:0.8rem;">No fields yet — add fields below.</div>' : ''}
+            </div>
+            ${availFields.length > 0 ? `
+            <div class="fq-add-section">
+                <div class="fq-add-section-label">Add fields to this group:</div>
+                <div class="fq-fields-grid">
+                    ${availFields.map(f => `
+                        <label class="fq-check-label">
+                            <input type="checkbox" class="fq-field-check" value="${escapeHtml(f)}">
+                            <span>${escapeHtml(f)}</span>
+                        </label>`).join('')}
+                </div>
+                <button class="rules-btn-dark fq-add-field" style="font-size:0.82rem; padding:5px 14px;">+ Add Selected</button>
+            </div>` : `<div style="font-size:0.8rem; color:#64748B; margin-top:6px;">All available fields are in this group.</div>`}`;
+
+        const membersList = card.querySelector('.fq-members-list');
+
+        // Drag state scoped to this group
+        let _dragSrc = null;
+
+        members.forEach((m, mi) => {
             const row = document.createElement('div');
             row.className = 'fq-member';
+            row.draggable = true;
+            row.dataset.fieldName = m.name;
             row.innerHTML = `
-                <div class="fq-member-rank ${idx === 0 ? 'best' : ''}">${m.qualityRank || (idx + 1)}</div>
+                <span class="fq-drag-handle" title="Drag to reorder">⠿</span>
+                <span class="fq-rank-badge">${mi + 1}</span>
                 <span class="fq-member-name">${escapeHtml(m.name)}</span>
-                <span class="fq-member-label">${idx === 0 ? 'Best' : idx === members.length - 1 ? 'Lowest' : ''}</span>`;
-            card.appendChild(row);
+                <button class="rules-btn-ghost-danger fq-rem-member" style="font-size:0.75rem; padding:3px 8px;">✕</button>`;
+
+            // Drag-and-drop handlers
+            row.addEventListener('dragstart', e => {
+                _dragSrc = row;
+                e.dataTransfer.effectAllowed = 'move';
+                setTimeout(() => row.classList.add('fq-dragging'), 0);
+            });
+            row.addEventListener('dragend', () => {
+                row.classList.remove('fq-dragging');
+                membersList.querySelectorAll('.fq-member').forEach(r => r.classList.remove('fq-drag-over'));
+                _dragSrc = null;
+            });
+            row.addEventListener('dragover', e => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (_dragSrc && _dragSrc !== row) {
+                    membersList.querySelectorAll('.fq-member').forEach(r => r.classList.remove('fq-drag-over'));
+                    row.classList.add('fq-drag-over');
+                }
+            });
+            row.addEventListener('drop', e => {
+                e.preventDefault();
+                if (!_dragSrc || _dragSrc === row) return;
+                row.classList.remove('fq-drag-over');
+
+                // Re-insert before or after based on vertical position
+                const rect = row.getBoundingClientRect();
+                const midY = rect.top + rect.height / 2;
+                if (e.clientY < midY) {
+                    membersList.insertBefore(_dragSrc, row);
+                } else {
+                    membersList.insertBefore(_dragSrc, row.nextSibling);
+                }
+
+                // Reassign ranks from new DOM order and save
+                const newOrder = [...membersList.querySelectorAll('.fq-member')];
+                const updates = newOrder.map((r, i) => ({
+                    fieldName: r.dataset.fieldName,
+                    fieldGroup: groupName,
+                    qualityRank: i + 1
+                }));
+                applyFieldGroupUpdates(updates);
+
+                // Update rank badges in-place (no full re-render needed)
+                newOrder.forEach((r, i) => {
+                    const badge = r.querySelector('.fq-rank-badge');
+                    if (badge) badge.textContent = i + 1;
+                });
+            });
+
+            row.querySelector('.fq-rem-member').addEventListener('click', () => {
+                applyFieldGroupUpdates([{ fieldName: m.name, fieldGroup: null, qualityRank: null }]);
+                renderFieldGroupsList(listEl);
+            });
+
+            membersList.appendChild(row);
         });
+
+        // Rename group
+        card.querySelector('.fq-name-input').addEventListener('change', e => {
+            const newName = e.target.value.trim();
+            if (!newName || newName === groupName) return;
+            const updates = members.map(m => ({ fieldName: m.name, fieldGroup: newName, qualityRank: m.qualityRank }));
+            if (updates.length > 0) applyFieldGroupUpdates(updates);
+            const pi = _pendingFQGroups.indexOf(groupName);
+            if (pi !== -1) _pendingFQGroups[pi] = newName;
+            renderFieldGroupsList(listEl);
+        });
+
+        // Delete group
+        card.querySelector('.fq-del-group').addEventListener('click', () => {
+            applyFieldGroupUpdates(members.map(m => ({ fieldName: m.name, fieldGroup: null, qualityRank: null })));
+            const pi = _pendingFQGroups.indexOf(groupName);
+            if (pi !== -1) _pendingFQGroups.splice(pi, 1);
+            renderFieldGroupsList(listEl);
+        });
+
+        // Add selected fields — multi-select, panel stays open
+        const addBtn = card.querySelector('.fq-add-field');
+        if (addBtn) {
+            addBtn.addEventListener('click', () => {
+                const checked = [...card.querySelectorAll('.fq-field-check:checked')].map(c => c.value);
+                if (!checked.length) return;
+                let nextRank = members.length + 1;
+                const updates = checked.map(fname => ({ fieldName: fname, fieldGroup: groupName, qualityRank: nextRank++ }));
+                applyFieldGroupUpdates(updates);
+                const pi = _pendingFQGroups.indexOf(groupName);
+                if (pi !== -1) _pendingFQGroups.splice(pi, 1);
+                renderFieldGroupsList(listEl);
+            });
+        }
+
         listEl.appendChild(card);
     });
 }
@@ -626,6 +834,7 @@ function renderFieldGroupsList(listEl) {
 function descriptorPickerHTML(id, currentDesc, allowTypes) {
     const sports = getSportNames();
     const specials = getSpecialActivityNames();
+    const generals = getGeneralActivityNames();
     const facilities = getFacilityNames();
     const cur = currentDesc || (allowTypes ? { kind: 'type', value: 'sport' } : { kind: 'activity', value: '' });
 
@@ -635,13 +844,16 @@ function descriptorPickerHTML(id, currentDesc, allowTypes) {
         `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
     const specialSel = specials.map(n =>
         `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+    const generalSel = generals.map(n =>
+        `<option value="activity:${escapeHtml(n)}"${cur.kind === 'activity' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
     const facSel = facilities.map(n =>
         `<option value="facility:${escapeHtml(n)}"${cur.kind === 'facility' && cur.value === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
 
     return `<select class="rules-select" id="${id}">
             ${allowTypes ? `<optgroup label="Category">${typeSel}</optgroup>` : ''}
             ${sportSel ? `<optgroup label="Sport">${sportSel}</optgroup>` : ''}
-            ${specialSel ? `<optgroup label="Special / Pinned Activity">${specialSel}</optgroup>` : ''}
+            ${specialSel ? `<optgroup label="Special Activity">${specialSel}</optgroup>` : ''}
+            ${generalSel ? `<optgroup label="General Activity">${generalSel}</optgroup>` : ''}
             ${facSel ? `<optgroup label="Facility">${facSel}</optgroup>` : ''}
         </select>`;
 }
@@ -657,6 +869,8 @@ function renderCooldownCard(container) {
     if (!container) return;
     const rules = getCooldownRules();
     const count = rules.length;
+    // Auto-expand when rules exist so returning to the tab doesn't hide saved rules
+    const startOpen = count > 0;
     container.innerHTML = `
         <div class="rules-card">
             <div class="rules-card-header" id="rules-cd-toggle">
@@ -667,15 +881,16 @@ function renderCooldownCard(container) {
                     </div>
                     <div class="rules-card-subtitle">Tell the auto-builder to keep certain activities or facilities apart in time.</div>
                 </div>
-                <span class="rules-caret" id="rules-cd-caret">
+                <span class="rules-caret${startOpen ? ' open' : ''}" id="rules-cd-caret">
                     <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </span>
             </div>
-            <div class="rules-card-body" id="rules-cd-body" style="display:none;">
+            <div class="rules-card-body" id="rules-cd-body" style="display:${startOpen ? 'block' : 'none'};">
                 <div class="rules-helper">
-                    <strong>Applies to the auto-builder only.</strong>
-                    Example: "Don't place <em>Any Sport</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
-                    "Don't place <em>Basketball</em> within <em>0 min</em> <em>after</em> <em>Painting</em>" to forbid back-to-back.
+                    Keep certain activities or facilities apart in time. Rules apply in <strong>both auto and manual mode</strong> automatically.
+                    Example: "Don't place <em>Basketball</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
+                    "Don't place <em>Gym</em> within <em>0 min</em> <em>after</em> <em>Archery</em>" to forbid back-to-back.
+                    In auto mode rules are hard constraints; in manual mode they show a warning you can override.
                 </div>
                 <div id="rules-cd-list" style="margin-top:14px;"></div>
                 <div style="margin-top:12px; display:flex; justify-content:flex-end;">
@@ -694,6 +909,8 @@ function renderCooldownCard(container) {
 
     document.getElementById('rules-cd-add').onclick = () => {
         const current = getCooldownRules();
+        // Default mode:auto so that the type-based target/reference dropdowns
+        // (Any Sport, Lunch, etc.) are visible immediately after adding the rule.
         current.push({
             id: uid('cd_'),
             mode: 'auto',
@@ -731,7 +948,7 @@ function renderCooldownList() {
 
     rules.forEach((rule, idx) => {
         const mode = rule.mode || 'both';
-        const allowTypesInTarget = (mode === 'auto'); // manual/both → no Category options
+        const allowTypes = (mode === 'auto');
         const card = document.createElement('div');
         card.className = 'cd-row';
         card.innerHTML = `
@@ -746,7 +963,7 @@ function renderCooldownList() {
                 </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Don't place</span>
-                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypesInTarget)}
+                    ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypes)}
                 </div>
                 <div class="cd-col cd-middle-wrap">
                     <span class="rules-sub-title">Within</span>
@@ -763,7 +980,7 @@ function renderCooldownList() {
                 </div>
                 <div class="cd-col">
                     <span class="rules-sub-title">Of</span>
-                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, true)}
+                    ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, allowTypes)}
                 </div>
             </div>
             <div class="cd-delete-wrap">
@@ -772,10 +989,10 @@ function renderCooldownList() {
         listEl.appendChild(card);
 
         const modeEl = document.getElementById('cd-mode-' + idx);
-        const tgtEl = document.getElementById('cd-target-' + idx);
-        const refEl = document.getElementById('cd-ref-' + idx);
-        const minEl = document.getElementById('cd-min-' + idx);
-        const timEl = document.getElementById('cd-timing-' + idx);
+        const tgtEl  = document.getElementById('cd-target-' + idx);
+        const refEl  = document.getElementById('cd-ref-' + idx);
+        const minEl  = document.getElementById('cd-min-' + idx);
+        const timEl  = document.getElementById('cd-timing-' + idx);
         const delBtn = document.getElementById('cd-del-' + idx);
 
         function persist() {
@@ -787,17 +1004,23 @@ function renderCooldownList() {
             r.reference = parseDescValue(refEl.value);
             r.minutes   = Math.max(0, parseInt(minEl.value) || 0);
             r.timing    = timEl.value;
-            // If mode no longer allows types but target is a type, reset target
+            // If switching away from auto, reset any category-type descriptors to empty named item
             if (r.mode !== 'auto' && r.target && r.target.kind === 'type') {
                 r.target = { kind: 'activity', value: '' };
+            }
+            if (r.mode !== 'auto' && r.reference && r.reference.kind === 'type') {
+                r.reference = { kind: 'activity', value: '' };
             }
             saveCooldownRules(all);
         }
         if (modeEl) modeEl.addEventListener('change', () => {
             persist();
-            renderCooldownList(); // re-render so target options refresh for new mode
+            renderCooldownList();
         });
-        [tgtEl, refEl, minEl, timEl].forEach(el => el && el.addEventListener('change', persist));
+        [tgtEl, refEl, timEl].forEach(el => el && el.addEventListener('change', persist));
+        // 'input' fires on every keystroke so the value is captured even if the user
+        // navigates away before the number field fires its 'change' (blur) event.
+        if (minEl) { minEl.addEventListener('change', persist); minEl.addEventListener('input', persist); }
         if (delBtn) delBtn.onclick = () => {
             const all = getCooldownRules();
             all.splice(idx, 1);
@@ -850,6 +1073,7 @@ window.SchedulingRules = {
     findForbiddenRanges: findForbiddenRanges,
     blockMatchesDescriptor: blockMatchesDescriptor,
     getExistingFieldGroups: getExistingFieldGroups,
+    applyFieldGroupUpdates: applyFieldGroupUpdates,
     inferTypeFromActivity: inferTypeFromActivity,
     buildTemplateFromBunkSlots: buildTemplateFromBunkSlots,
     describeRule: describeRule

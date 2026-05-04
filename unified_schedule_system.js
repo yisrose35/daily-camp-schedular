@@ -1240,7 +1240,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             if (avoidSet.has(cand.field.toLowerCase()) || avoidSet.has(cand.activityName?.toLowerCase())) continue;
             if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProps)) continue;
             
-            // ★★★ v4.1.2 FIX: Enforce limitUsage, timeRules & preferences ★★★
+            // ★★★ v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ★★★
             if (window.SchedulerCoreUtils?.canBlockFit) {
                 const divSlots_fb = window.divisionTimes?.[divName] || [];
                 const pseudoBlock = {
@@ -1662,7 +1662,7 @@ actualSlots.forEach((slotIdx, i) => {
         // Also check slot-based for backwards compat
         if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
         
-        // ★★★ v4.1.2 FIX: Enforce limitUsage, timeRules & preferences ★★★
+        // ★★★ v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ★★★
         // Without this, bumped bunks get assigned fields/specials their division can't access
         if (window.SchedulerCoreUtils?.canBlockFit) {
             const pseudoBlock = {
@@ -3639,9 +3639,9 @@ if (bypassStatus.highlight) {
                 if (!isRainyMode && (fp.rainyDayOnly === true || fp.rainyDayExclusive === true)) continue;
                 if (isRainyMode && (fp.rainyDayAvailable === false && field.rainyDayAvailable !== true)) continue;
 
-                // ★★★ FIX: Enforce limitUsage for division access ★★★
-                if (fp.limitUsage?.enabled) {
-                    const allowedDivs = fp.limitUsage.divisions || {};
+                // ★★★ FIX: Enforce accessRestrictions for division access ★★★
+                if (fp.accessRestrictions?.enabled) {
+                    const allowedDivs = fp.accessRestrictions.divisions || {};
                     if (!(divName in allowedDivs)) continue;
                 }
                 if (fp.preferences?.enabled && fp.preferences?.exclusive) {
@@ -3677,10 +3677,10 @@ if (bypassStatus.highlight) {
                 if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
                 if (isRainyMode && special.rainyDayAvailable === false) continue;
 
-                // ★★★ FIX: Enforce limitUsage for division access ★★★
+                // ★★★ FIX: Enforce accessRestrictions for division access ★★★
                 const sp_props = activityProps[special.name] || {};
-                if (sp_props.limitUsage?.enabled) {
-                    const allowedDivs = sp_props.limitUsage.divisions || {};
+                if (sp_props.accessRestrictions?.enabled) {
+                    const allowedDivs = sp_props.accessRestrictions.divisions || {};
                     if (!(divName in allowedDivs)) continue;
                 }
                 if (sp_props.preferences?.enabled && sp_props.preferences?.exclusive) {
@@ -3719,10 +3719,10 @@ if (bypassStatus.highlight) {
 if (disabledFields.includes(fName)) return;
 if (window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
 
-// ★★★ FIX: Enforce limitUsage & preferences for division access during drip-down ★★★
+// ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
 const _altProps = activityProps[fName] || {};
-if (_altProps.limitUsage?.enabled) {
-    const _allowedDivs = _altProps.limitUsage.divisions || {};
+if (_altProps.accessRestrictions?.enabled) {
+    const _allowedDivs = _altProps.accessRestrictions.divisions || {};
     if (!(divName in _allowedDivs)) return;
 }
 if (_altProps.preferences?.enabled && _altProps.preferences?.exclusive) {
@@ -3765,10 +3765,10 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) return;
             if (isRainyMode && (special.rainyDayAvailable === false || special.availableOnRainyDay === false || special.isIndoor === false)) return;
 
-            // ★★★ FIX: Enforce limitUsage & preferences for division access during drip-down ★★★
+            // ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
             const _spProps = activityProps[special.name] || {};
-            if (_spProps.limitUsage?.enabled) {
-                const _allowedDivs = _spProps.limitUsage.divisions || {};
+            if (_spProps.accessRestrictions?.enabled) {
+                const _allowedDivs = _spProps.accessRestrictions.divisions || {};
                 if (!(divName in _allowedDivs)) return;
             }
             if (_spProps.preferences?.enabled && _spProps.preferences?.exclusive) {
@@ -3798,10 +3798,10 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (disabledFields.includes(field.name)) return;
             if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) return;
 
-            // ★★★ FIX: Enforce limitUsage & preferences for division access during drip-down ★★★
+            // ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
             const _fProps = activityProps[field.name] || {};
-            if (_fProps.limitUsage?.enabled) {
-                const _allowedDivs = _fProps.limitUsage.divisions || {};
+            if (_fProps.accessRestrictions?.enabled) {
+                const _allowedDivs = _fProps.accessRestrictions.divisions || {};
                 if (!(divName in _allowedDivs)) return;
             }
             if (_fProps.preferences?.enabled && _fProps.preferences?.exclusive) {

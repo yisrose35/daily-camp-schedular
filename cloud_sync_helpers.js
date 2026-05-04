@@ -70,11 +70,11 @@
             },
             
             // ★ Access restrictions - ensure complete structure  
-             limitUsage: {
-                enabled: f.limitUsage?.enabled === true,
-                divisions: typeof f.limitUsage?.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : [],
-                usePriority: f.limitUsage?.usePriority === true
+             accessRestrictions: {
+                enabled: f.accessRestrictions?.enabled === true,
+                divisions: typeof f.accessRestrictions?.divisions === 'object' ? f.accessRestrictions.divisions : {},
+                priorityList: Array.isArray(f.accessRestrictions?.priorityList) ? f.accessRestrictions.priorityList : [],
+                usePriority: f.accessRestrictions?.usePriority === true
             },
             
             // ★ Time rules - ensure array with parsed times
@@ -89,6 +89,11 @@
             // ★ Indoor/Outdoor for rainy day
             rainyDayAvailable: f.rainyDayAvailable === true,
             
+            // Preserve per-grade sharing overrides
+            ...(f.gradeShareRules ? { gradeShareRules: f.gradeShareRules } : {}),
+            // Preserve field quality group membership
+            ...(f.fieldGroup != null ? { fieldGroup: f.fieldGroup } : {}),
+            ...(f.qualityRank != null ? { qualityRank: f.qualityRank } : {}),
             // Preserve any additional properties
             ...(f.transition ? { transition: f.transition } : {}),
             ...(f.preferences ? { preferences: f.preferences } : {}),

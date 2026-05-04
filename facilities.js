@@ -243,9 +243,7 @@ function saveData() {
     // Sync each facility to legacy structures
     syncAllToLegacy();
 
-    if (typeof window.requestCloudSync === 'function') {
-        window.requestCloudSync();
-    }
+    window.forceSyncToCloud?.();
 
     console.log('☁️ [FACILITIES] Saved', facilities.length, 'facilities');
 }
@@ -268,7 +266,7 @@ function syncAllToLegacy() {
                     activities: [],
                     available: true,
                     sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
-                    limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
+                    accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
                     timeRules: [],
                     rainyDayAvailable: false
                 };
@@ -279,7 +277,12 @@ function syncAllToLegacy() {
 
     // Save fields
     app1.fields = newFields;
-    app1.sportMetaData = sportMetaData;
+    const storedMetaSync = app1.sportMetaData || {};
+    const mergedMetaSync = {};
+    Object.keys(sportMetaData).forEach(k => {
+        mergedMetaSync[k] = { ...sportMetaData[k], ...(storedMetaSync[k] || {}) };
+    });
+    app1.sportMetaData = mergedMetaSync;
     app1.fieldCombos = fieldCombos;
     window.saveGlobalSettings?.("app1", app1);
     window.saveGlobalSettings?.("fields", newFields);
@@ -314,8 +317,14 @@ function syncAllToLegacy() {
 
     window.saveGlobalSpecialActivities?.(newSpecials);
 
-    // Update pinned tile defaults for general activities
+    // Rebuild pinned tile defaults for general activities.
+    // Clear all existing pins that point to a known facility first so that
+    // removing an activity from a facility's list doesn't leave a stale pin.
     const pinned = window.getPinnedTileDefaults?.() || {};
+    const facilityNameSet = new Set(facilities.map(f => f.name));
+    Object.keys(pinned).forEach(actName => {
+        if (facilityNameSet.has(pinned[actName])) delete pinned[actName];
+    });
     facilities.forEach(fac => {
         if (fac.usedFor.includes('general')) {
             (fac.generalActivities || []).forEach(ga => {
@@ -337,7 +346,7 @@ function createDefaultSpecialActivity(name) {
         type: 'Special',
         available: true,
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
-        limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
+        accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
         timeRules: [],
         maxUsage: null,
         maxUsagePeriod: 'half',
@@ -377,8 +386,11 @@ function addFacility() {
     });
 
     addFacilityInput.value = "";
+    const newFac = facilities[facilities.length - 1];
     saveData();
-    selectedFacilityId = `fac-${n}`;
+    // renderDetailPane looks up facilities by name after stripping the 'fac-' prefix,
+    // so selectedFacilityId must use the 'fac-<name>' format, not the numeric id.
+    selectedFacilityId = `fac-${newFac.name}`;
     renderMasterList();
     renderDetailPane();
 }
@@ -397,6 +409,7 @@ function deleteFacility(fac) {
         const app1 = settings.app1 || {};
         app1.fields = (app1.fields || []).filter(f => f.name !== fac.name);
         window.saveGlobalSettings?.("app1", app1);
+        window.saveGlobalSettings?.("fields", app1.fields);
 
         // Cleanup schedule references
         cleanupDeletedField(fac.name);
@@ -566,11 +579,14 @@ function renderDetailPane() {
         if (fac.usedFor.includes('sports')) {
             propagateFieldRename(oldName, newName);
             handleComboFieldRenamed(oldName, newName);
-            // Rename in app1.fields
+            // Rename in app1.fields and keep root fields key in sync
             const settings = window.loadGlobalSettings?.() || {};
             const field = (settings.app1?.fields || []).find(f => f.name === oldName);
             if (field) field.name = newName;
-            if (settings.app1) window.saveGlobalSettings?.("app1", settings.app1);
+            if (settings.app1) {
+                window.saveGlobalSettings?.("app1", settings.app1);
+                window.saveGlobalSettings?.("fields", settings.app1.fields || []);
+            }
         }
 
         saveData();
@@ -726,13 +742,14 @@ function renderSportsConfig(container, fac) {
             activities: [],
             available: true,
             sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
-            limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
+            accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
             timeRules: [],
             rainyDayAvailable: false
         };
         if (!app1.fields) app1.fields = [];
         app1.fields.push(fieldData);
         window.saveGlobalSettings?.("app1", app1);
+        window.saveGlobalSettings?.("fields", app1.fields);
     }
 
     const allSports = window.getAllGlobalSports?.() || [];
@@ -780,15 +797,36 @@ function renderSportsConfig(container, fac) {
 function saveFieldData() {
     const settings = window.loadGlobalSettings?.() || {};
     const app1 = settings.app1 || {};
-    app1.sportMetaData = sportMetaData;
+    // Merge: preserve min/max set by the Rules tab (stored in app1.sportMetaData).
+    // sportMetaData module var knows which sports are alive (deletions applied);
+    // storedMeta (from _localCache) has any Rules-tab changes (min/max).
+    const storedMeta = app1.sportMetaData || {};
+    const mergedMeta = {};
+    Object.keys(sportMetaData).forEach(k => {
+        mergedMeta[k] = { ...sportMetaData[k], ...(storedMeta[k] || {}) };
+    });
+    app1.sportMetaData = mergedMeta;
     app1.fieldCombos = fieldCombos;
+    // Do NOT remap app1.fields through normalizeField here — that creates new objects
+    // and breaks the reference held by all the renderSportsConfig UI closures, causing
+    // every save after the first to silently discard mutations made to fieldData.
+    // The mutations are already on the in-memory objects inside app1.fields.
+    if (!app1.fields) app1.fields = [];
     window.saveGlobalSettings?.("app1", app1);
-    window.saveGlobalSettings?.("fields", app1.fields || []);
+    window.saveGlobalSettings?.("fields", app1.fields);
     saveFacilitiesMetadata();
 
     if (typeof window.refreshActivityPropertiesFromFields === 'function') {
         setTimeout(() => window.refreshActivityPropertiesFromFields(), 50);
     }
+
+    // ★ Flush to cloud immediately. saveGlobalSettings only queues a debounced
+    //   batch sync (~1-2s); if the user reloads before it fires, cloud
+    //   hydration overwrites localStorage with the stale pre-edit version
+    //   and the just-saved field config (sharing, etc.) appears to vanish.
+    //   Same fix as saveSpecialData / saveData — saveFieldData was the last
+    //   facilities write path that didn't force-sync.
+    window.forceSyncToCloud?.();
 }
 
 // =========================================================================
@@ -845,6 +883,9 @@ function renderSpecialConfig(container, fac) {
         if (!saData) {
             saData = createDefaultSpecialActivity(saName);
             saData.location = fac.name;
+            // Persist defaults immediately so the activity exists in storage
+            // even before the user opens any config section.
+            saveSpecialData(saData);
         }
 
         const saCard = document.createElement("div");
@@ -1147,10 +1188,10 @@ function summarySharing(f) {
     return `Up to ${parseInt(rules.capacity) || 2} bunks (same grade)`;
 }
 function summaryAccess(f) {
-    if (!f.limitUsage?.enabled) return "Open to all grades";
-    const count = Object.keys(f.limitUsage.divisions || {}).length;
+    if (!f.accessRestrictions?.enabled) return "Open to all grades";
+    const count = Object.keys(f.accessRestrictions.divisions || {}).length;
     if (count === 0) return "Restricted (none selected)";
-    const pStr = f.limitUsage.usePriority ? " - prioritized" : "";
+    const pStr = f.accessRestrictions.usePriority ? " - prioritized" : "";
     return `${count} grade${count !== 1 ? 's' : ''} allowed${pStr}`;
 }
 function summaryTime(f) { return f.timeRules?.length ? `${f.timeRules.length} rule(s) active` : "Available all day"; }
@@ -1223,11 +1264,18 @@ function renderSharing(item) {
 
     const renderContent = () => {
         container.innerHTML = "";
+        if (!item.gradeShareRules) item.gradeShareRules = {};
         const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 1 };
         const isSharable = rules.type !== 'not_sharable';
 
+        // -- Global sharing toggle --
+        const globalHeader = document.createElement("div");
+        globalHeader.style.cssText = "font-weight:600; font-size:0.88rem; color:#374151; margin-bottom:8px;";
+        globalHeader.textContent = "Global Default (applies to all grades without an override)";
+        container.appendChild(globalHeader);
+
         const toggleRow = document.createElement("div");
-        toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
+        toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:12px;";
 
         const tog = document.createElement("label"); tog.className = "switch";
         const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isSharable;
@@ -1250,15 +1298,15 @@ function renderSharing(item) {
 
         if (!isSharable) {
             const note = document.createElement("div");
-            note.style.cssText = "color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px;";
-            note.textContent = "Only 1 bunk can use this field at a time.";
+            note.style.cssText = "color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px; margin-bottom:16px;";
+            note.textContent = "Only 1 bunk can use this field at a time (default for all grades).";
             container.appendChild(note);
         } else {
             const det = document.createElement("div");
-            det.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #147D91;";
+            det.style.cssText = "margin-bottom:16px; padding-left:12px; border-left:2px solid #147D91;";
 
             const capRow = document.createElement("div");
-            capRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
+            capRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:8px;";
             capRow.innerHTML = `<span style="font-size:0.85rem;">Max bunks at once:</span>`;
             const capIn = document.createElement("input");
             capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = rules.capacity || 2;
@@ -1273,10 +1321,106 @@ function renderSharing(item) {
             det.appendChild(capRow);
 
             const note = document.createElement("div");
-            note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
-            note.innerHTML = `Up to <strong>${rules.capacity || 2}</strong> bunks <strong>within the same grade</strong> can use this simultaneously.`;
+            note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:8px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
+            note.innerHTML = `Up to <strong>${rules.capacity || 2}</strong> bunks <strong>within the same grade</strong> can share this field simultaneously.`;
             det.appendChild(note);
             container.appendChild(det);
+        }
+
+        // -- Per-Grade Overrides --
+        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+        if (allDivs.length > 0) {
+            const divider = document.createElement("div");
+            divider.style.cssText = "border-top:1px dashed #E5E7EB; margin-bottom:12px;";
+            container.appendChild(divider);
+
+            const pgHeader = document.createElement("div");
+            pgHeader.style.cssText = "font-weight:600; font-size:0.88rem; color:#374151; margin-bottom:4px;";
+            pgHeader.textContent = "Per-Grade Overrides";
+            const pgSub = document.createElement("div");
+            pgSub.style.cssText = "font-size:0.78rem; color:#6B7280; margin-bottom:10px;";
+            pgSub.textContent = "Override the global default for specific grades.";
+            container.appendChild(pgHeader);
+            container.appendChild(pgSub);
+
+            allDivs.forEach(divName => {
+                const override = item.gradeShareRules[divName];
+                const row = document.createElement("div");
+                row.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 10px; background:#FAFAFA; border:1px solid #E5E7EB; border-radius:8px; margin-bottom:6px; flex-wrap:wrap;";
+
+                const nameSpan = document.createElement("span");
+                nameSpan.style.cssText = "font-size:0.85rem; font-weight:500; min-width:90px;";
+                nameSpan.textContent = divName;
+                row.appendChild(nameSpan);
+
+                if (!override) {
+                    const defaultBadge = document.createElement("span");
+                    defaultBadge.style.cssText = "font-size:0.78rem; color:#6B7280; background:#F3F4F6; border-radius:4px; padding:2px 8px;";
+                    defaultBadge.textContent = "Uses global default";
+                    row.appendChild(defaultBadge);
+
+                    const addBtn = document.createElement("button");
+                    addBtn.textContent = "+ Override";
+                    addBtn.style.cssText = "margin-left:auto; font-size:0.78rem; padding:3px 10px; border-radius:6px; border:1px solid #D97706; background:#FEF3C7; color:#92400E; cursor:pointer;";
+                    addBtn.onclick = () => {
+                        item.gradeShareRules[divName] = { type: isSharable ? 'same_division' : 'not_sharable', capacity: rules.capacity || 2 };
+                        saveFieldData(); renderContent(); updateSummary();
+                    };
+                    row.appendChild(addBtn);
+                } else {
+                    const isOverrideSharable = override.type !== 'not_sharable';
+
+                    const overrideTog = document.createElement("label"); overrideTog.className = "switch";
+                    overrideTog.style.cssText = "transform:scale(0.85); margin-right:4px;";
+                    const overrideCb = document.createElement("input"); overrideCb.type = "checkbox"; overrideCb.checked = isOverrideSharable;
+                    overrideCb.onchange = () => {
+                        override.type = overrideCb.checked ? 'same_division' : 'not_sharable';
+                        override.capacity = overrideCb.checked ? (override.capacity > 1 ? override.capacity : 2) : 1;
+                        saveFieldData(); renderContent(); updateSummary();
+                    };
+                    const overrideSl = document.createElement("span"); overrideSl.className = "slider";
+                    overrideTog.appendChild(overrideCb); overrideTog.appendChild(overrideSl);
+                    row.appendChild(overrideTog);
+
+                    if (isOverrideSharable) {
+                        const capLabel = document.createElement("span");
+                        capLabel.style.cssText = "font-size:0.78rem; color:#374151;";
+                        capLabel.textContent = "Max:";
+                        row.appendChild(capLabel);
+
+                        const capIn = document.createElement("input");
+                        capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = override.capacity || 2;
+                        capIn.style.cssText = "width:48px; padding:3px; border-radius:5px; border:1px solid #D1D5DB; text-align:center; font-size:0.8rem;";
+                        capIn.onchange = () => {
+                            override.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
+                            capIn.value = override.capacity;
+                            saveFieldData(); updateSummary();
+                        };
+                        row.appendChild(capIn);
+
+                        const bunksNote = document.createElement("span");
+                        bunksNote.style.cssText = "font-size:0.75rem; color:#6B7280;";
+                        bunksNote.textContent = "bunks (same grade only)";
+                        row.appendChild(bunksNote);
+                    } else {
+                        const noShareNote = document.createElement("span");
+                        noShareNote.style.cssText = "font-size:0.78rem; color:#DC2626;";
+                        noShareNote.textContent = "No sharing";
+                        row.appendChild(noShareNote);
+                    }
+
+                    const removeBtn = document.createElement("button");
+                    removeBtn.textContent = "✕ Remove";
+                    removeBtn.style.cssText = "margin-left:auto; font-size:0.75rem; padding:2px 8px; border-radius:5px; border:1px solid #FECACA; background:#FEF2F2; color:#DC2626; cursor:pointer;";
+                    removeBtn.onclick = () => {
+                        delete item.gradeShareRules[divName];
+                        saveFieldData(); renderContent(); updateSummary();
+                    };
+                    row.appendChild(removeBtn);
+                }
+
+                container.appendChild(row);
+            });
         }
     };
     renderContent();
@@ -1293,7 +1437,7 @@ function renderAccess(item) {
 
     const renderContent = () => {
         container.innerHTML = "";
-        const rules = item.limitUsage || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
+        const rules = item.accessRestrictions || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
         if (!rules.priorityList) rules.priorityList = Object.keys(rules.divisions || {});
         if (rules.usePriority === undefined) rules.usePriority = false;
 
@@ -1308,13 +1452,13 @@ function renderAccess(item) {
         btnRes.textContent = "Specific Grades Only";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${rules.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rules.enabled ? '#e6f4f7' : '#fff'}; color:${rules.enabled ? '#0F5F6E' : '#333'}; font-weight:${rules.enabled ? '600' : '400'};`;
 
-        btnAll.onclick = () => { rules.enabled = false; item.limitUsage = rules; saveFieldData(); renderContent(); updateSummary(); };
-        btnRes.onclick = () => { rules.enabled = true; item.limitUsage = rules; saveFieldData(); renderContent(); updateSummary(); };
+        btnAll.onclick = () => { rules.enabled = false; item.accessRestrictions = rules; saveFieldData(); renderContent(); updateSummary(); };
+        btnRes.onclick = () => { rules.enabled = true; item.accessRestrictions = rules; saveFieldData(); renderContent(); updateSummary(); };
 
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
-        const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
 
         if (rules.enabled) {
             const body = document.createElement("div");
@@ -1331,7 +1475,7 @@ function renderAccess(item) {
                 c.onclick = () => {
                     if (isAllowed) { delete rules.divisions[divName]; rules.priorityList = rules.priorityList.filter(d => d !== divName); }
                     else { rules.divisions[divName] = []; if (!rules.priorityList.includes(divName)) rules.priorityList.push(divName); }
-                    item.limitUsage = rules;
+                    item.accessRestrictions = rules;
                     saveFieldData(); renderContent(); updateSummary();
                 };
                 chipWrap.appendChild(c);
@@ -1365,7 +1509,7 @@ function renderAccess(item) {
             priCb.onchange = () => {
                 rules.usePriority = priCb.checked;
                 if (priCb.checked && rules.priorityList.length === 0) rules.priorityList = [...availableGrades];
-                item.limitUsage = rules;
+                item.accessRestrictions = rules;
                 saveFieldData(); renderContent(); updateSummary();
             };
             const priSl = document.createElement("span"); priSl.className = "slider";
@@ -1396,7 +1540,7 @@ function renderAccess(item) {
                     if (idx === 0) btnUp.style.opacity = "0.3";
                     btnUp.onclick = () => {
                         [rules.priorityList[idx - 1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx - 1]];
-                        item.limitUsage = rules; saveFieldData(); renderContent(); updateSummary();
+                        item.accessRestrictions = rules; saveFieldData(); renderContent(); updateSummary();
                     };
 
                     const btnDown = document.createElement("button");
@@ -1406,7 +1550,7 @@ function renderAccess(item) {
                     if (idx === rules.priorityList.length - 1) btnDown.style.opacity = "0.3";
                     btnDown.onclick = () => {
                         [rules.priorityList[idx], rules.priorityList[idx + 1]] = [rules.priorityList[idx + 1], rules.priorityList[idx]];
-                        item.limitUsage = rules; saveFieldData(); renderContent(); updateSummary();
+                        item.accessRestrictions = rules; saveFieldData(); renderContent(); updateSummary();
                     };
 
                     row.appendChild(btnUp); row.appendChild(btnDown);
@@ -1424,14 +1568,18 @@ function renderAccess(item) {
 // -- Time Rules --
 function renderTimeRules(item) {
     const container = document.createElement("div");
+    const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
 
     if (item.timeRules?.length > 0) {
         item.timeRules.forEach((r, i) => {
             const row = document.createElement("div");
             row.style.cssText = "display:flex; justify-content:space-between; align-items:center; background:#F9FAFB; padding:8px; margin-bottom:6px; border-radius:6px; border:1px solid #E5E7EB;";
 
+            const gradeTag = (r.divisions && r.divisions.length > 0)
+                ? ` <span style="font-size:0.75rem; background:#e6f4f7; color:#0A4A56; border-radius:4px; padding:1px 5px; margin-left:4px;">${r.divisions.map(d => escapeHtml(d)).join(', ')}</span>`
+                : '';
             const txt = document.createElement("span");
-            txt.innerHTML = `<strong style="color:${r.type === 'Available' ? '#0F6A7A' : '#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}`;
+            txt.innerHTML = `<strong style="color:${r.type === 'Available' ? '#0F6A7A' : '#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}${gradeTag}`;
 
             const del = document.createElement("button");
             del.textContent = "\u2715";
@@ -1445,7 +1593,7 @@ function renderTimeRules(item) {
         container.innerHTML = `<div class="muted" style="font-size:0.8rem; margin-bottom:10px;">No time rules. Available all day.</div>`;
     }
 
-    // Add new
+    // Add new rule form
     const addSection = document.createElement("div");
     addSection.style.cssText = "margin-top:12px; padding-top:12px; border-top:1px dashed #E5E7EB;";
 
@@ -1467,14 +1615,6 @@ function renderTimeRules(item) {
     const btn = document.createElement("button");
     btn.textContent = "Add";
     btn.style.cssText = "background:#111; color:white; border:none; border-radius:6px; padding:4px 12px; cursor:pointer;";
-    btn.onclick = () => {
-        if (!startIn.value || !endIn.value) { alert("Enter both start and end times."); return; }
-        const startMinP = parseTimeToMinutes(startIn.value);
-        const endMinP = parseTimeToMinutes(endIn.value);
-        if (startMinP === null || endMinP === null) { alert("Invalid time format. Use e.g. 9:00am"); return; }
-        item.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value, startMin: startMinP, endMin: endMinP });
-        saveFieldData(); renderDetailPane();
-    };
 
     addRow.appendChild(typeSel);
     addRow.appendChild(startIn);
@@ -1482,6 +1622,61 @@ function renderTimeRules(item) {
     addRow.appendChild(endIn);
     addRow.appendChild(btn);
     addSection.appendChild(addRow);
+
+    // Per-grade selector (empty = applies to all grades)
+    if (allDivs.length > 0) {
+        const gradeSection = document.createElement("div");
+        gradeSection.style.cssText = "margin-top:8px;";
+
+        const gradeLabel = document.createElement("div");
+        gradeLabel.style.cssText = "font-size:0.78rem; color:#6B7280; margin-bottom:4px;";
+        gradeLabel.textContent = "Applies to specific grades only (leave all unselected = all grades):";
+        gradeSection.appendChild(gradeLabel);
+
+        const gradeChips = document.createElement("div");
+        gradeChips.style.cssText = "display:flex; flex-wrap:wrap; gap:4px;";
+        const selectedGrades = new Set();
+
+        allDivs.forEach(div => {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.textContent = div;
+            chip.style.cssText = "padding:3px 10px; border-radius:12px; border:1px solid #D1D5DB; background:#fff; font-size:0.78rem; cursor:pointer;";
+            chip.onclick = () => {
+                if (selectedGrades.has(div)) {
+                    selectedGrades.delete(div);
+                    chip.style.background = '#fff'; chip.style.borderColor = '#D1D5DB'; chip.style.color = '';
+                } else {
+                    selectedGrades.add(div);
+                    chip.style.background = '#e6f4f7'; chip.style.borderColor = '#147D91'; chip.style.color = '#0A4A56';
+                }
+            };
+            gradeChips.appendChild(chip);
+        });
+
+        gradeSection.appendChild(gradeChips);
+        addSection.appendChild(gradeSection);
+
+        btn.onclick = () => {
+            if (!startIn.value || !endIn.value) { alert("Enter both start and end times."); return; }
+            const startMinP = parseTimeToMinutes(startIn.value);
+            const endMinP = parseTimeToMinutes(endIn.value);
+            if (startMinP === null || endMinP === null) { alert("Invalid time format. Use e.g. 9:00am"); return; }
+            const divisions = selectedGrades.size > 0 ? [...selectedGrades] : [];
+            item.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value, startMin: startMinP, endMin: endMinP, divisions });
+            saveFieldData(); renderDetailPane();
+        };
+    } else {
+        btn.onclick = () => {
+            if (!startIn.value || !endIn.value) { alert("Enter both start and end times."); return; }
+            const startMinP = parseTimeToMinutes(startIn.value);
+            const endMinP = parseTimeToMinutes(endIn.value);
+            if (startMinP === null || endMinP === null) { alert("Invalid time format. Use e.g. 9:00am"); return; }
+            item.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value, startMin: startMinP, endMin: endMinP, divisions: [] });
+            saveFieldData(); renderDetailPane();
+        };
+    }
+
     container.appendChild(addSection);
     return container;
 }
@@ -1626,8 +1821,8 @@ function renderComboSettings(fieldItem) {
 
 // -- Summaries --
 function summarySpecialAccess(s) {
-    if (!s.limitUsage?.enabled) return "Open to all grades";
-    const divs = s.limitUsage.divisions || {};
+    if (!s.accessRestrictions?.enabled) return "Open to all grades";
+    const divs = s.accessRestrictions.divisions || {};
     const gradeKeys = Object.keys(divs);
     if (gradeKeys.length === 0) return "Restricted (none selected)";
     const parts = [];
@@ -1746,6 +1941,13 @@ function saveSpecialData(saData) {
     }
 
     saveFacilitiesMetadata();
+
+    // ★ Flush to cloud immediately. saveGlobalSettings only queues a debounced
+    //   batch sync (~1-2s); if the user reloads before it fires, cloud
+    //   hydration overwrites localStorage with the stale pre-edit version
+    //   and the just-saved config disappears. The facilities-level saveData()
+    //   already does this — saveSpecialData was the only path that didn't.
+    window.forceSyncToCloud?.();
 }
 
 // -- Access (per-grade with optional per-bunk filter) --
@@ -1757,7 +1959,7 @@ function renderSpecialAccess(saData) {
     };
     const renderContent = () => {
         container.innerHTML = "";
-        const rules = saData.limitUsage || { enabled: false, divisions: {}, priorityList: [] };
+        const rules = saData.accessRestrictions || { enabled: false, divisions: {}, priorityList: [] };
         if (!rules.divisions || typeof rules.divisions !== 'object' || Array.isArray(rules.divisions)) {
             rules.divisions = {};
         }
@@ -1773,8 +1975,8 @@ function renderSpecialAccess(saData) {
         btnRes.textContent = "Specific Grades / Bunks";
         btnRes.style.cssText = `flex:1; padding:8px; border-radius:6px; border:1px solid ${rules.enabled ? '#147D91' : '#E5E7EB'}; cursor:pointer; background:${rules.enabled ? '#e6f4f7' : '#fff'}; font-weight:${rules.enabled ? '600' : '400'};`;
 
-        btnAll.onclick = () => { rules.enabled = false; saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
-        btnRes.onclick = () => { rules.enabled = true; saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
+        btnAll.onclick = () => { rules.enabled = false; saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
+        btnRes.onclick = () => { rules.enabled = true; saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary(); };
 
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
@@ -1784,7 +1986,7 @@ function renderSpecialAccess(saData) {
             return;
         }
 
-        const divisions = window.loadGlobalSettings?.()?.divisions || {};
+        const divisions = window.divisions || window.getGlobalDivisions?.() || {};
         const allDivs = Object.keys(divisions);
 
         const help = document.createElement("div");
@@ -1812,7 +2014,7 @@ function renderSpecialAccess(saData) {
             gChip.onclick = () => {
                 if (isAllowed) delete rules.divisions[divName];
                 else rules.divisions[divName] = [];
-                saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
             };
             headRow.appendChild(gChip);
 
@@ -1829,7 +2031,7 @@ function renderSpecialAccess(saData) {
                         // Switch back to "all bunks" mode
                         rules.divisions[divName] = [];
                     }
-                    saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                    saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
                 };
                 headRow.appendChild(modeBtn);
             }
@@ -1850,7 +2052,7 @@ function renderSpecialAccess(saData) {
                     bChip.onclick = () => {
                         if (isOn) rules.divisions[divName] = bunkList.filter(b => b !== bunkName);
                         else rules.divisions[divName] = bunkList.concat([bunkName]);
-                        saData.limitUsage = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                        saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
                     };
                     bunkWrap.appendChild(bChip);
                 });
@@ -2039,7 +2241,7 @@ function renderSpecialSchedulingMode(saData) {
         // Silently migrate same_division → cross_division with self-pairs populated
         if (rules.type === 'same_division') {
             rules.type = 'cross_division';
-            const migDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            const migDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             migDivs.forEach(g => { rules.allowedPairs[pk(g, g)] = true; });
             saData.sharableWith = rules;
             saveSpecialData(saData);
@@ -2047,7 +2249,7 @@ function renderSpecialSchedulingMode(saData) {
 
         // Default same-grade sharing on for existing cross_division data with no pairs set
         if (rules.type === 'cross_division' && Object.keys(rules.allowedPairs).length === 0) {
-            const defDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            const defDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             defDivs.forEach(g => { rules.allowedPairs[pk(g, g)] = true; });
             saveSpecialData(saData);
         }
@@ -2081,7 +2283,7 @@ function renderSpecialSchedulingMode(saData) {
             rules.type = 'cross_division';
             if (!rules.capacity || rules.capacity < 2) rules.capacity = 2;
             // Default: every grade can share with itself
-            const defDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+            const defDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             defDivs.forEach(g => { if (rules.allowedPairs[pk(g, g)] === undefined) rules.allowedPairs[pk(g, g)] = true; });
             saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
@@ -2117,7 +2319,7 @@ function renderSpecialSchedulingMode(saData) {
         container.appendChild(capWrap);
 
         // ── Step 4: Grade pairing ─────────────────────────────────
-        const allDivs = Object.keys((window.loadGlobalSettings?.() || {}).divisions || {});
+        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
 
         if (allDivs.length < 2) {
             const noGr = document.createElement('div');
@@ -2267,7 +2469,7 @@ function renderSpecialUsage(saData) {
             var ceilGradeGrid = document.createElement('div');
             ceilGradeGrid.style.display = hasMaxGradeOverrides ? 'flex' : 'none';
             ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            var allDivs = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            var allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             allDivs.forEach(function(div) {
                 var row = document.createElement('div');
                 row.style.cssText = 'display:flex; align-items:center; gap:8px;';
@@ -2382,7 +2584,7 @@ function renderSpecialUsage(saData) {
             var minGradeGrid = document.createElement('div');
             minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
             minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            var allDivs2 = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            var allDivs2 = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!saData.minFrequencyPerGrade) saData.minFrequencyPerGrade = {};
             allDivs2.forEach(function(div) {
                 var row = document.createElement('div');
@@ -2476,8 +2678,8 @@ function renderSpecialUsage(saData) {
         btnOff.onclick = function() { rc.enabled = false; saveSpecialData(saData); renderContent(); updateSummary(); };
         btnOn.onclick = function() {
             rc.enabled = true;
-            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.limitUsage && saData.limitUsage.enabled) {
-                rc.grades = Object.keys(saData.limitUsage.divisions || {});
+            if ((!Array.isArray(rc.grades) || rc.grades.length === 0) && saData.accessRestrictions && saData.accessRestrictions.enabled) {
+                rc.grades = Object.keys(saData.accessRestrictions.divisions || {});
             }
             saveSpecialData(saData); renderContent(); updateSummary();
         };
@@ -2486,7 +2688,7 @@ function renderSpecialUsage(saData) {
         cohortDiv.appendChild(modeWrap);
 
         if (rc.enabled) {
-            var allDivs3 = Object.keys((window.loadGlobalSettings && window.loadGlobalSettings() && window.loadGlobalSettings().divisions) || {});
+            var allDivs3 = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!Array.isArray(rc.grades)) rc.grades = [];
 
             var chipLabel = document.createElement('div');
@@ -2881,6 +3083,106 @@ function getComboForField(fieldName) {
 }
 
 // =========================================================================
+// FIELD COMBOS RUNTIME API (window.FieldCombos)
+// Exposes the combo data so the scheduler/validator can enforce mutual
+// exclusion between a combined field and its sub-fields. Rule: using the
+// combined occupies all subs; using any sub blocks the combined; subs do
+// NOT block each other. Many call sites already invoked
+// window.FieldCombos.isBlockedByCombo / .isInCombo, but the namespace was
+// never defined — those checks were silent no-ops. That's why "Full Gym"
+// and "Gym 1" could both be assigned in the same time window.
+// =========================================================================
+(function exposeFieldCombosAPI() {
+    const _normCombo = (s) => (s ? String(s).toLowerCase().trim() : '');
+
+    // Tiny per-call cache for bunk → division (rebuilt every call cheaply).
+    function buildBunkDivisionMap() {
+        const map = new Map();
+        const divs = window.divisions || {};
+        for (const div in divs) {
+            const bunks = (divs[div] && divs[div].bunks) || [];
+            for (const b of bunks) map.set(String(b), div);
+        }
+        return map;
+    }
+
+    function entryTimeRange(bunk, slotIdx, entry, bunkDivMap) {
+        if (entry && entry._startMin != null && entry._endMin != null) {
+            return { startMin: entry._startMin, endMin: entry._endMin };
+        }
+        const div = bunkDivMap.get(String(bunk));
+        if (!div) return null;
+        const divSlots = (window.divisionTimes && window.divisionTimes[div]) || [];
+        const slot = divSlots[slotIdx];
+        if (!slot || slot.startMin == null || slot.endMin == null) return null;
+        return { startMin: slot.startMin, endMin: slot.endMin };
+    }
+
+    function getConflictFields(fieldName) {
+        const norm = _normCombo(fieldName);
+        if (_comboLookup.combinedToSubs[norm]) return _comboLookup.combinedToSubs[norm];
+        if (_comboLookup.subToCombined[norm]) return [_comboLookup.subToCombined[norm]];
+        return [];
+    }
+
+    function isInCombo(fieldName) {
+        return _comboLookup.allComboFields.has(_normCombo(fieldName));
+    }
+
+    // Returns the list of fields that are mutually exclusive with fieldName.
+    // For a combined field (Full Gym): returns its sub-fields (Gym 1, Gym 2).
+    // For a sub-field (Gym 1): returns its combined field (Full Gym).
+    // For a non-combo field: returns []. Always returns an array.
+    function getExclusiveFields(fieldName) {
+        return getConflictFields(fieldName).slice();
+    }
+
+    function isBlockedByCombo(fieldName, startMin, endMin, excludeBunk) {
+        if (startMin == null || endMin == null) return { blocked: false };
+        const conflicts = getConflictFields(fieldName);
+        if (!conflicts.length) return { blocked: false };
+
+        const conflictSet = new Set(conflicts.map(_normCombo));
+        const sa = window.scheduleAssignments || {};
+        const bunkDivMap = buildBunkDivisionMap();
+
+        for (const bunk in sa) {
+            if (excludeBunk != null && String(bunk) === String(excludeBunk)) continue;
+            const slots = sa[bunk];
+            if (!Array.isArray(slots)) continue;
+            for (let i = 0; i < slots.length; i++) {
+                const entry = slots[i];
+                if (!entry || entry.continuation || entry._isTransition) continue;
+                if (!entry.field) continue;
+                if (!conflictSet.has(_normCombo(entry.field))) continue;
+                const range = entryTimeRange(bunk, i, entry, bunkDivMap);
+                if (!range) continue;
+                if (range.startMin < endMin && range.endMin > startMin) {
+                    return { blocked: true, blocker: entry.field, blockerBunk: bunk };
+                }
+            }
+        }
+        return { blocked: false };
+    }
+
+    function isBlockedByComboAtSlots(fieldName, slotIndices, divCtx, excludeBunk) {
+        if (!Array.isArray(slotIndices) || slotIndices.length === 0 || !divCtx) return false;
+        const divSlots = (window.divisionTimes && window.divisionTimes[divCtx]) || [];
+        let startMin = null, endMin = null;
+        for (const idx of slotIndices) {
+            const slot = divSlots[idx];
+            if (!slot || slot.startMin == null || slot.endMin == null) continue;
+            if (startMin == null || slot.startMin < startMin) startMin = slot.startMin;
+            if (endMin == null || slot.endMin > endMin) endMin = slot.endMin;
+        }
+        if (startMin == null || endMin == null) return false;
+        return isBlockedByCombo(fieldName, startMin, endMin, excludeBunk).blocked;
+    }
+
+    window.FieldCombos = { isInCombo, isBlockedByCombo, isBlockedByComboAtSlots, getExclusiveFields };
+})();
+
+// =========================================================================
 // FIELD CLEANUP HELPERS (delegated to fields.js via window exports)
 // =========================================================================
 function cleanupDeletedField(fieldName) {
@@ -3142,17 +3444,33 @@ function propagateFieldRename(oldName, newName) {
 
         Object.keys(dailySchedules).forEach(dateKey => {
             const dayData = dailySchedules[dateKey];
-            if (!dayData?.scheduleAssignments) return;
-            Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
-                const slots = dayData.scheduleAssignments[bunkKey];
-                if (!Array.isArray(slots)) return;
-                slots.forEach((slot) => {
-                    if (slot?.location === oldName) slot.location = newName;
-                    if (slot?.field === oldName) slot.field = newName;
+            if (!dayData) return;
+            // Rename in schedule slot references
+            if (dayData.scheduleAssignments) {
+                Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                    const slots = dayData.scheduleAssignments[bunkKey];
+                    if (!Array.isArray(slots)) return;
+                    slots.forEach((slot) => {
+                        if (slot?.location === oldName) slot.location = newName;
+                        if (slot?.field === oldName) slot.field = newName;
+                    });
                 });
-            });
+            }
+            // Rename in per-date disabled field overrides
+            if (Array.isArray(dayData.overrides?.disabledFields)) {
+                dayData.overrides.disabledFields = dayData.overrides.disabledFields.map(
+                    n => n === oldName ? newName : n
+                );
+            }
         });
         window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+
+        // Rename in app1.disabledFields global list
+        const app1 = settings.app1 || {};
+        if (Array.isArray(app1.disabledFields)) {
+            app1.disabledFields = app1.disabledFields.map(n => n === oldName ? newName : n);
+            window.saveGlobalSettings?.('app1', app1);
+        }
 
         const locationZones = settings.locationZones || {};
         Object.values(locationZones).forEach(zone => {
@@ -3263,6 +3581,16 @@ window.getFacilities = function () {
 window.getFacilityByName = function (name) {
     const facs = window.getFacilities();
     return facs.find(f => f.name === name) || null;
+};
+
+// Expose combo data so schedulers can enforce combined-field constraints.
+// getFieldComboLookup() returns the in-memory lookup (rebuilt on every save).
+// getFieldCombos() falls back to fresh storage if the in-memory map is empty.
+window.getFieldComboLookup = function () { return _comboLookup; };
+window.getFieldCombos = function () {
+    if (Object.keys(fieldCombos).length > 0) return fieldCombos;
+    const settings = window.loadGlobalSettings?.() || {};
+    return settings.app1?.fieldCombos || {};
 };
 
 })();
