@@ -304,6 +304,9 @@
             }
 
            _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
+            if (unavailableRulesCache || availableRulesCache) {
+                v12Log('[TIME-RULES] Cached ' + (unavailableRulesCache ? unavailableRulesCache.length : 0) + ' unavailable + ' + (availableRulesCache ? availableRulesCache.length : 0) + ' available rules for "' + fieldName + '"');
+            }
         }
 
         // ★★★ FIX v15.4: Also index SPECIALS in _fieldPropertyMap ★★★

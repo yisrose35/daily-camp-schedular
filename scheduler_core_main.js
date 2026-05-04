@@ -1472,9 +1472,11 @@
                         window.activityProperties[fieldName] = {};
                     }
                     window.activityProperties[fieldName].timeRules = rules;
-                    console.log(`   -> Applied ${rules.length} rule(s) to ${fieldName}`);
+                    rules.forEach(r => console.log(`   -> ${fieldName}: ${r.type} ${r.start}-${r.end} (${r.startMin ?? '?'}-${r.endMin ?? '?'} min)`));
                 }
             });
+        } else {
+            console.log("[OPTIMIZER] No Daily Field Availability Rules to merge.");
         }
 
         let {
