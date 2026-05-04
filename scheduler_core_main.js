@@ -2658,9 +2658,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         
         let activeSpecialtyLeagues = [];
         if (Array.isArray(masterSpecialtyLeagues)) {
-            activeSpecialtyLeagues = masterSpecialtyLeagues.filter(l => !disabledSpecialtyLeagues?.includes(l.id));
+            activeSpecialtyLeagues = masterSpecialtyLeagues.filter(l => !disabledSpecialtyLeagues?.includes(l.name) && !disabledSpecialtyLeagues?.includes(l.id));
         } else if (masterSpecialtyLeagues && typeof masterSpecialtyLeagues === 'object') {
-            activeSpecialtyLeagues = Object.values(masterSpecialtyLeagues).filter(l => l && !disabledSpecialtyLeagues?.includes(l.id));
+            activeSpecialtyLeagues = Object.values(masterSpecialtyLeagues).filter(l => l && !disabledSpecialtyLeagues?.includes(l.name) && !disabledSpecialtyLeagues?.includes(l.id));
         }
         
         console.log(`[STEP 5.5] Active leagues: ${activeLeagues.length}, Specialty: ${activeSpecialtyLeagues.length}`);
