@@ -3680,8 +3680,18 @@ async function runOptimizer() {
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
 
-  // Preserve bunk overrides across the wipe — they're user-defined inputs, not generated data
+  // Preserve user-defined inputs across the wipe — these are not generated data
   const savedBunkOverrides = currentOverrides.bunkActivityOverrides || [];
+  const savedResourceOverrides = {
+    overrides: {
+      leagues: currentOverrides.leagues || [],
+      disabledFields: currentOverrides.disabledFields || [],
+      disabledSpecials: currentOverrides.disabledSpecials || []
+    },
+    dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
+    dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
+    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+  };
 
   // 1. Clear window globals
   window.scheduleAssignments = {};
@@ -3741,12 +3751,17 @@ async function runOptimizer() {
 
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
-  // Restore bunk overrides so the scheduler can read them from loadCurrentDailyData
+  // Restore user-defined inputs so the scheduler can read them from loadCurrentDailyData
   if (savedBunkOverrides.length > 0) {
     window.saveCurrentDailyData("bunkActivityOverrides", savedBunkOverrides);
     currentOverrides.bunkActivityOverrides = savedBunkOverrides;
     console.log(`[Optimizer] Restored ${savedBunkOverrides.length} bunk override(s) after wipe`);
   }
+  window.saveCurrentDailyData("overrides", savedResourceOverrides.overrides);
+  window.saveCurrentDailyData("dailyDisabledSportsByField", savedResourceOverrides.dailyDisabledSportsByField);
+  window.saveCurrentDailyData("dailyFieldAvailability", savedResourceOverrides.dailyFieldAvailability);
+  window.saveCurrentDailyData("disabledSpecialtyLeagues", savedResourceOverrides.disabledSpecialtyLeagues);
+  console.log(`[Optimizer] Restored resource overrides after wipe (${savedResourceOverrides.overrides.disabledFields.length} disabled fields, ${savedResourceOverrides.overrides.leagues.length} disabled leagues)`);
 
   window.invalidateSmartLogicSpecialsCache?.();
   const success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
