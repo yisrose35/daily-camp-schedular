@@ -1906,8 +1906,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         bunkOverrides.forEach(override => {
             const activityName = override.activity;
             const overrideType = override.type;
-            const startMin = Utils.parseTimeToMinutes(override.startTime);
-            const endMin = Utils.parseTimeToMinutes(override.endTime);
+            const startMin = override.startMin ?? Utils.parseTimeToMinutes(override.startTime);
+            const endMin = override.endMin ?? Utils.parseTimeToMinutes(override.endTime);
             const bunk = override.bunk;
             const divName = Object.keys(divisions).find(d => divisions[d].bunks?.includes(bunk));
             const slots = Utils.findSlotsForRange(startMin, endMin, divName);
@@ -1918,7 +1918,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
 
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
-                return; 
+                return;
             }
 
             console.log(`[BunkOverride] ${bunk}: ${activityName} (${overrideType}) @ ${override.startTime}-${override.endTime}`);
@@ -1938,6 +1938,38 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 });
                 console.log(`   → Trip pinned for ${bunk}, no field usage registered`);
 
+            } else if (overrideType === 'pinned') {
+                // Resolve location: prefer override's stored location, then pinned defaults, then special lookup
+                const locName = override.location
+                    || window.getPinnedTileDefaultLocation?.(activityName)
+                    || getLocationForActivity(activityName);
+
+                if (locName) {
+                    if (window.GlobalFieldLocks?.isFieldLocked(locName, slots, divName)) {
+                        console.warn(`   → Pinned ${activityName} location "${locName}" is LOCKED for ${divName}, cannot assign to ${bunk}`);
+                        return;
+                    }
+                    if (!canScheduleAtLocation(activityName, locName, slots)) {
+                        console.warn(`[BunkOverride] ${activityName} blocked for ${bunk} - location ${locName} at capacity`);
+                        return;
+                    }
+                }
+
+                fillBlock({
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
+                }, {
+                    field: locName || activityName,
+                    sport: null,
+                    _fixed: true,
+                    _activity: activityName,
+                    _bunkOverride: true
+                }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+
+                if (locName) {
+                    registerActivityAtLocation(activityName, locName, slots, divName);
+                }
+                console.log(`   → Pinned ${activityName} assigned to ${bunk}` + (locName ? ` @ ${locName}` : ''));
+
             } else if (overrideType === 'sport') {
                 let fieldName = activityName;
                 const fieldsBySportData = fieldsBySport || {};
@@ -1950,7 +1982,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             continue;
                         }
 
-                        // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
                         const maxCapacity = getFieldCapacityLocal(candidateField, activityProperties);
 
                         let canUse = true;
@@ -1970,11 +2001,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
 
                 fillBlock({
-                    divName,
-                    bunk,
-                    startTime: startMin,
-                    endTime: endMin,
-                    slots
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
                 }, {
                     field: fieldName,
                     sport: activityName,
@@ -1984,19 +2011,53 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                 console.log(`   → Sport ${activityName} assigned to ${bunk} on field ${fieldName}`);
 
+            } else if (overrideType === 'field') {
+                // User pinned a specific field — use the field name directly
+                const fieldName = activityName;
+                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, divName)) {
+                    console.warn(`   → Field ${fieldName} is LOCKED for ${divName}, cannot assign to ${bunk}`);
+                    return;
+                }
+
+                const maxCapacity = getFieldCapacityLocal(fieldName, activityProperties);
+                let hasRoom = true;
+                for (const slotIdx of slots) {
+                    const usage = fieldUsageBySlot[slotIdx]?.[fieldName];
+                    if (usage && usage.count >= maxCapacity) {
+                        hasRoom = false;
+                        break;
+                    }
+                }
+                if (!hasRoom) {
+                    console.warn(`   → Field ${fieldName} at capacity, cannot assign to ${bunk}`);
+                    return;
+                }
+
+                fillBlock({
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
+                }, {
+                    field: fieldName,
+                    sport: null,
+                    _fixed: true,
+                    _activity: fieldName,
+                    _bunkOverride: true
+                }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                console.log(`   → Field ${fieldName} assigned to ${bunk}`);
+
             } else if (overrideType === 'special') {
+                // Use stored location from override, fall back to global lookup
+                const locName = override.location || getLocationForActivity(activityName);
+
                 if (window.GlobalFieldLocks?.isFieldLocked(activityName, slots, divName)) {
                     console.warn(`   → Special ${activityName} is LOCKED for ${divName}, cannot assign to ${bunk}`);
                     return;
                 }
 
-                const locName = getLocationForActivity(activityName);
                 if (locName && !canScheduleAtLocation(activityName, locName, slots)) {
                     console.warn(`[BunkOverride] ${activityName} blocked for ${bunk} - location ${locName} in use`);
                     return;
                 }
 
-                // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
                 const maxCapacity = getFieldCapacityLocal(activityName, activityProperties);
 
                 let hasRoom = true;
@@ -2014,11 +2075,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
 
                 fillBlock({
-                    divName,
-                    bunk,
-                    startTime: startMin,
-                    endTime: endMin,
-                    slots
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
                 }, {
                     field: activityName,
                     sport: null,
@@ -2027,9 +2084,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     _bunkOverride: true
                 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
 
-               registerActivityAtLocation(activityName, locName, slots, divName);
+                registerActivityAtLocation(activityName, locName, slots, divName);
 
-                // ★ v17.11: Lock field if special has a location assigned
                 if (locName && window.GlobalFieldLocks) {
                     window.GlobalFieldLocks.lockField(locName, slots, {
                         lockedBy: 'special_activity_location',
@@ -2042,13 +2098,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 console.log(`   → Special ${activityName} assigned to ${bunk}`);
 
             } else {
-                console.warn(`   → Unknown override type "${overrideType}", treating as pinned`);
+                console.warn(`   → Unknown override type "${overrideType}", treating as generic pin`);
                 fillBlock({
-                    divName,
-                    bunk,
-                    startTime: startMin,
-                    endTime: endMin,
-                    slots
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
                 }, {
                     field: activityName,
                     sport: null,
