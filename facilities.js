@@ -3118,7 +3118,21 @@ function getComboForField(fieldName) {
         return { startMin: slot.startMin, endMin: slot.endMin };
     }
 
+    function _ensureComboLookup() {
+        if (_comboLookup.allComboFields.size > 0) return;
+        // Lazy init: load from global settings if Facilities tab hasn't opened yet
+        if (Object.keys(fieldCombos).length === 0) {
+            var _gs = window.loadGlobalSettings?.() || {};
+            var _fc = _gs.app1?.fieldCombos || _gs.fieldCombos || {};
+            if (Object.keys(_fc).length > 0) {
+                fieldCombos = _fc;
+                rebuildComboLookups();
+            }
+        }
+    }
+
     function getConflictFields(fieldName) {
+        _ensureComboLookup();
         const norm = _normCombo(fieldName);
         if (_comboLookup.combinedToSubs[norm]) return _comboLookup.combinedToSubs[norm];
         if (_comboLookup.subToCombined[norm]) return [_comboLookup.subToCombined[norm]];
@@ -3126,6 +3140,7 @@ function getComboForField(fieldName) {
     }
 
     function isInCombo(fieldName) {
+        _ensureComboLookup();
         return _comboLookup.allComboFields.has(_normCombo(fieldName));
     }
 
@@ -3586,7 +3601,18 @@ window.getFacilityByName = function (name) {
 // Expose combo data so schedulers can enforce combined-field constraints.
 // getFieldComboLookup() returns the in-memory lookup (rebuilt on every save).
 // getFieldCombos() falls back to fresh storage if the in-memory map is empty.
-window.getFieldComboLookup = function () { return _comboLookup; };
+window.getFieldComboLookup = function () {
+    // Auto-initialize from global settings if lookup is empty (Facilities tab not yet opened)
+    if (Object.keys(_comboLookup.combinedToSubs).length === 0 && Object.keys(fieldCombos).length === 0) {
+        var _gs = window.loadGlobalSettings?.() || {};
+        var _fc = _gs.app1?.fieldCombos || _gs.fieldCombos || {};
+        if (Object.keys(_fc).length > 0) {
+            fieldCombos = _fc;
+            rebuildComboLookups();
+        }
+    }
+    return _comboLookup;
+};
 window.getFieldCombos = function () {
     if (Object.keys(fieldCombos).length > 0) return fieldCombos;
     const settings = window.loadGlobalSettings?.() || {};

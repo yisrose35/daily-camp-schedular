@@ -1362,7 +1362,24 @@
             // Rule: combined field (A+B) in use → neither A nor B can be used.
             //       sub-field A in use → combined field (A+B) cannot be used.
             //       sub-field A in use → sub-field B can still be used independently.
-            const comboLookup = window.getFieldComboLookup?.();
+            let comboLookup = window.getFieldComboLookup?.();
+            // Fallback: build lookup from global settings if API unavailable
+            if (!comboLookup || Object.keys(comboLookup.combinedToSubs || {}).length === 0) {
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _fc = _gs.app1?.fieldCombos || _gs.fieldCombos || {};
+                const _entries = Object.values(_fc);
+                if (_entries.length > 0) {
+                    comboLookup = { combinedToSubs: {}, subToCombined: {} };
+                    for (const combo of _entries) {
+                        if (!combo.combinedField || !Array.isArray(combo.subFields)) continue;
+                        const cN = combo.combinedField.toLowerCase().trim();
+                        comboLookup.combinedToSubs[cN] = combo.subFields.slice();
+                        for (const sub of combo.subFields) {
+                            comboLookup.subToCombined[sub.toLowerCase().trim()] = combo.combinedField;
+                        }
+                    }
+                }
+            }
             if (comboLookup) {
                 const normFn = (n) => (n || '').toLowerCase().trim();
                 const normField = normFn(fieldName);

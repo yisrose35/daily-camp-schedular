@@ -788,7 +788,23 @@
         // sub-field (A) requested  → block if combined (A+B) is in use at any slot
         // =================================================================
         {
-            const comboLookup = window.getFieldComboLookup?.();
+            let comboLookup = window.getFieldComboLookup?.();
+            if (!comboLookup || Object.keys(comboLookup.combinedToSubs || {}).length === 0) {
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _fc = _gs.app1?.fieldCombos || _gs.fieldCombos || {};
+                const _entries = Object.values(_fc);
+                if (_entries.length > 0) {
+                    comboLookup = { combinedToSubs: {}, subToCombined: {} };
+                    for (const combo of _entries) {
+                        if (!combo.combinedField || !Array.isArray(combo.subFields)) continue;
+                        const cN = combo.combinedField.toLowerCase().trim();
+                        comboLookup.combinedToSubs[cN] = combo.subFields.slice();
+                        for (const sub of combo.subFields) {
+                            comboLookup.subToCombined[sub.toLowerCase().trim()] = combo.combinedField;
+                        }
+                    }
+                }
+            }
             if (comboLookup) {
                 const normFn = (n) => (n || '').toLowerCase().trim();
                 const normField = normFn(fieldName);
