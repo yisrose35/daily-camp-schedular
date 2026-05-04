@@ -395,12 +395,11 @@ function injectRulesStyles() {
             display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
         }
         .cd-fields {
-            display: grid; grid-template-columns: auto 1.2fr auto 1.2fr; gap: 14px;
+            display: grid; grid-template-columns: 1.2fr auto 1.2fr; gap: 14px;
             align-items: end;
         }
         .cd-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
         .cd-col .rules-select { width: 100%; }
-        .cd-col-mode .rules-select { min-width: 130px; }
         .cd-middle {
             display: flex; align-items: center; gap: 8px; padding-bottom: 2px;
             flex-wrap: wrap;
@@ -865,12 +864,20 @@ function parseDescValue(raw) {
     return { kind: raw.slice(0, idx), value: raw.slice(idx + 1) };
 }
 
+function getBuilderMode() {
+    try {
+        var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        return (gs.app1 && gs.app1.builderMode) || 'manual';
+    } catch (_) { return 'manual'; }
+}
+
 function renderCooldownCard(container) {
     if (!container) return;
     const rules = getCooldownRules();
     const count = rules.length;
-    // Auto-expand when rules exist so returning to the tab doesn't hide saved rules
     const startOpen = count > 0;
+    const mode = getBuilderMode();
+    const modeLabel = mode === 'auto' ? 'Auto Builder' : 'Manual Mode';
     container.innerHTML = `
         <div class="rules-card">
             <div class="rules-card-header" id="rules-cd-toggle">
@@ -879,7 +886,7 @@ function renderCooldownCard(container) {
                         Cooldowns &amp; Spacing
                         <span id="rules-cd-badge">${count ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>` : ''}</span>
                     </div>
-                    <div class="rules-card-subtitle">Tell the auto-builder to keep certain activities or facilities apart in time.</div>
+                    <div class="rules-card-subtitle">Keep certain activities or facilities apart in time.</div>
                 </div>
                 <span class="rules-caret${startOpen ? ' open' : ''}" id="rules-cd-caret">
                     <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
@@ -887,10 +894,11 @@ function renderCooldownCard(container) {
             </div>
             <div class="rules-card-body" id="rules-cd-body" style="display:${startOpen ? 'block' : 'none'};">
                 <div class="rules-helper">
-                    Keep certain activities or facilities apart in time. Rules apply in <strong>both auto and manual mode</strong> automatically.
-                    Example: "Don't place <em>Basketball</em> within <em>20 min</em> <em>after</em> <em>Lunch</em>", or
-                    "Don't place <em>Gym</em> within <em>0 min</em> <em>after</em> <em>Archery</em>" to forbid back-to-back.
-                    In auto mode rules are hard constraints; in manual mode they show a warning you can override.
+                    Set spacing rules between activities. Currently in <strong>${escapeHtml(modeLabel)}</strong>.
+                    ${mode === 'auto'
+                        ? 'In auto mode, rules are hard constraints. You can target categories (e.g. <em>Any Sport</em>), specific activities, or facilities.'
+                        : 'In manual mode, rules show a warning you can override. You can target specific activities, facilities, or general activities.'}
+                    <br>Example: "<em>Basketball</em> is unavailable <em>20 min</em> <em>after</em> <em>Lunch</em>"
                 </div>
                 <div id="rules-cd-list" style="margin-top:14px;"></div>
                 <div style="margin-top:12px; display:flex; justify-content:flex-end;">
@@ -909,13 +917,12 @@ function renderCooldownCard(container) {
 
     document.getElementById('rules-cd-add').onclick = () => {
         const current = getCooldownRules();
-        // Default mode:auto so that the type-based target/reference dropdowns
-        // (Any Sport, Lunch, etc.) are visible immediately after adding the rule.
+        const isAuto = getBuilderMode() === 'auto';
         current.push({
             id: uid('cd_'),
-            mode: 'auto',
-            target:    { kind: 'type', value: 'sport' },
-            reference: { kind: 'type', value: 'lunch' },
+            mode: isAuto ? 'auto' : 'manual',
+            target:    isAuto ? { kind: 'type', value: 'sport' } : { kind: 'activity', value: '' },
+            reference: isAuto ? { kind: 'type', value: 'lunch' } : { kind: 'activity', value: '' },
             timing: 'after',
             minutes: 20
         });
@@ -946,27 +953,19 @@ function renderCooldownList() {
         return;
     }
 
+    const isAuto = getBuilderMode() === 'auto';
+
     rules.forEach((rule, idx) => {
-        const mode = rule.mode || 'both';
-        const allowTypes = (mode === 'auto');
+        const allowTypes = isAuto;
         const card = document.createElement('div');
         card.className = 'cd-row';
         card.innerHTML = `
             <div class="cd-fields">
-                <div class="cd-col cd-col-mode">
-                    <span class="rules-sub-title">Applies in</span>
-                    <select class="rules-select" id="cd-mode-${idx}">
-                        <option value="auto"   ${mode === 'auto'   ? 'selected' : ''}>Auto Builder</option>
-                        <option value="manual" ${mode === 'manual' ? 'selected' : ''}>Manual Mode</option>
-                        <option value="both"   ${mode === 'both'   ? 'selected' : ''}>Both</option>
-                    </select>
-                </div>
                 <div class="cd-col">
-                    <span class="rules-sub-title">Don't place</span>
                     ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypes)}
                 </div>
                 <div class="cd-col cd-middle-wrap">
-                    <span class="rules-sub-title">Within</span>
+                    <span class="rules-sub-title">is unavailable</span>
                     <div class="cd-middle">
                         <input type="number" class="rules-input rules-input-num" id="cd-min-${idx}"
                                value="${parseInt(rule.minutes) || 0}" min="0" max="480" step="5">
@@ -979,7 +978,6 @@ function renderCooldownList() {
                     </div>
                 </div>
                 <div class="cd-col">
-                    <span class="rules-sub-title">Of</span>
                     ${descriptorPickerHTML('cd-ref-' + idx, rule.reference, allowTypes)}
                 </div>
             </div>
@@ -988,7 +986,6 @@ function renderCooldownList() {
             </div>`;
         listEl.appendChild(card);
 
-        const modeEl = document.getElementById('cd-mode-' + idx);
         const tgtEl  = document.getElementById('cd-target-' + idx);
         const refEl  = document.getElementById('cd-ref-' + idx);
         const minEl  = document.getElementById('cd-min-' + idx);
@@ -999,27 +996,14 @@ function renderCooldownList() {
             const all = getCooldownRules();
             const r = all[idx];
             if (!r) return;
-            r.mode      = modeEl.value;
+            r.mode      = isAuto ? 'auto' : 'manual';
             r.target    = parseDescValue(tgtEl.value);
             r.reference = parseDescValue(refEl.value);
             r.minutes   = Math.max(0, parseInt(minEl.value) || 0);
             r.timing    = timEl.value;
-            // If switching away from auto, reset any category-type descriptors to empty named item
-            if (r.mode !== 'auto' && r.target && r.target.kind === 'type') {
-                r.target = { kind: 'activity', value: '' };
-            }
-            if (r.mode !== 'auto' && r.reference && r.reference.kind === 'type') {
-                r.reference = { kind: 'activity', value: '' };
-            }
             saveCooldownRules(all);
         }
-        if (modeEl) modeEl.addEventListener('change', () => {
-            persist();
-            renderCooldownList();
-        });
         [tgtEl, refEl, timEl].forEach(el => el && el.addEventListener('change', persist));
-        // 'input' fires on every keystroke so the value is captured even if the user
-        // navigates away before the number field fires its 'change' (blur) event.
         if (minEl) { minEl.addEventListener('change', persist); minEl.addEventListener('input', persist); }
         if (delBtn) delBtn.onclick = () => {
             const all = getCooldownRules();
@@ -1057,6 +1041,12 @@ function initRulesTab() {
     renderCooldownCard(document.getElementById('rules-cd-section'));
     renderSportsRulesCard(document.getElementById('rules-sport-section'));
     renderFieldQualityCard(document.getElementById('rules-fq-section'));
+
+    // Re-render cooldown rules when builder mode changes so options update
+    window.addEventListener('campistry-builder-mode-changed', () => {
+        const cdSection = document.getElementById('rules-cd-section');
+        if (cdSection) renderCooldownCard(cdSection);
+    });
 }
 
 // ──────────────────────────────────────────────────────────────────────────
