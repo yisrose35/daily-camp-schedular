@@ -543,10 +543,12 @@
             if (lockStartMin < endMin && lockEndMin > startMin) return true;
         }
         
-        // ★★★ COMBINED FIELD CHECK ★★★
-        if (window.FieldCombos?.isBlockedByCombo) {
-            var comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, null);
-            if (comboCheck.blocked) return true;
+        // ★★★ COMBINED FIELD CHECK (uses solver's cached map, no dependency on FieldCombos API) ★★★
+        var _cflPartners = _comboExclusiveMap.get(normName(fieldName));
+        if (_cflPartners) {
+            for (var _cfli = 0; _cfli < _cflPartners.length; _cfli++) {
+                if (getFieldUsageFromTimeIndex(_cflPartners[_cfli], startMin, endMin, null) > 0) return true;
+            }
         }
         return false;
     }
@@ -1155,7 +1157,6 @@
         // Cache combined-field exclusive partners for fast lookup in penalty/conflict checks
         _comboExclusiveMap.clear();
         if (window.FieldCombos?.getExclusiveFields) {
-            // Collect all field names from activityProperties, candidate options, and combo definitions
             var _cfAllNames = new Set(Object.keys(activityProperties));
             for (var _cfi2 = 0; _cfi2 < allCandidateOptions.length; _cfi2++) {
                 if (allCandidateOptions[_cfi2].field) _cfAllNames.add(allCandidateOptions[_cfi2].field);
@@ -1171,8 +1172,26 @@
                     _comboExclusiveMap.set(normName(_cfn), _cfPartners.map(normName));
                 }
             });
-            if (_comboExclusiveMap.size > 0) v12Log('Combined field exclusions cached: ' + _comboExclusiveMap.size + ' fields');
         }
+        // Fallback: read fieldCombos from global settings if FieldCombos API unavailable or empty
+        if (_comboExclusiveMap.size === 0) {
+            var _fcGs = window.loadGlobalSettings?.() || {};
+            var _fcRaw = _fcGs.app1?.fieldCombos || _fcGs.fieldCombos || {};
+            var _fcEntries = Object.values(_fcRaw);
+            for (var _fci = 0; _fci < _fcEntries.length; _fci++) {
+                var _fcCombo = _fcEntries[_fci];
+                if (!_fcCombo.combinedField || !Array.isArray(_fcCombo.subFields)) continue;
+                var _fcCombNorm = normName(_fcCombo.combinedField);
+                var _fcSubNorms = _fcCombo.subFields.map(normName);
+                // Combined → subs
+                _comboExclusiveMap.set(_fcCombNorm, _fcSubNorms);
+                // Each sub → combined
+                for (var _fsi = 0; _fsi < _fcSubNorms.length; _fsi++) {
+                    _comboExclusiveMap.set(_fcSubNorms[_fsi], [_fcCombNorm]);
+                }
+            }
+        }
+        if (_comboExclusiveMap.size > 0) v12Log('Combined field exclusions cached: ' + _comboExclusiveMap.size + ' fields');
         // Skeleton context
         var bunkBlocks = {};
         for (var bi = 0; bi < activityBlocks.length; bi++) { var blk = activityBlocks[bi]; var bk = blk.bunk; if (!bunkBlocks[bk]) bunkBlocks[bk] = []; bunkBlocks[bk].push({ idx: bi, startTime: blk.startTime || 0, event: blk.event || '' }); }
