@@ -80,6 +80,8 @@
     var _timeConstrainedBoost = new Map();
     var _skeletonContext = new Map();
     var _smallBunkFlags = new Set();
+    var _sportPlayerReqs = new Map();   // actNorm → { min, max } cached sport player rules
+    var _bunkSizeCache = new Map();     // bunk → size (camper count) cached once per solve
     var _passNumber = 0;
     var _passAnalysis = null;
 
@@ -103,6 +105,8 @@
         _isRainyDay = false; _rainyCapOverrides.clear(); _rainyTimeBypasses.clear();
         _perfCounters = { rotationCacheHits: 0, rotationCacheMisses: 0, timeIndexQueries: 0, domainPruned: 0, augmentingPathAttempts: 0, augmentingPathSuccesses: 0 };
         _fieldGroupMap = {}; _fieldGroups = {}; _divisionSeniorityMap = {};
+        _sportPlayerReqs.clear(); _bunkSizeCache.clear();
+        if (window.RotationEngine?.invalidateMetaCaches) window.RotationEngine.invalidateMetaCaches();
     }
     // ========================================================================
     // LOGGING
@@ -960,6 +964,35 @@
             if (slots.length > 0 && slots[0] > 0) { var prevEntry = bunkAssigns[slots[0] - 1]; if (prevEntry && prevEntry.field && prevEntry.field !== 'Free') prevZone = window.getZoneForField?.(prevEntry.field); }
             if (myZone && prevZone) { var mzn = (typeof myZone === 'object') ? (myZone.name || '') : myZone; var pzn = (typeof prevZone === 'object') ? (prevZone.name || '') : prevZone; if (mzn && pzn) { if (mzn === pzn) penalty -= 300; else penalty += 500; } }
         }
+        // ★ Player count enforcement — penalise picks that would violate min/max rules
+        if (_sportPlayerReqs.size > 0 && actNorm && _hasTime) {
+            var _pcReq = _sportPlayerReqs.get(actNorm);
+            if (_pcReq) {
+                var _pcMySize = _bunkSizeCache.get(bunk) || 0;
+                if (_pcMySize > 0) {
+                    var _pcProjected = _pcMySize;
+                    var _pcActEntries = _fieldTimeIndex.get(actNorm) || [];
+                    for (var _pci = 0; _pci < _pcActEntries.length; _pci++) {
+                        var _pcE = _pcActEntries[_pci];
+                        if (_pcE.bunk === bunk) continue;
+                        if (_pcE.endMin <= blockStart || _pcE.startMin >= blockEnd) continue;
+                        _pcProjected += (_bunkSizeCache.get(_pcE.bunk) || 0);
+                    }
+                    if (_pcReq.max > 0 && _pcProjected > _pcReq.max) {
+                        var _pcOverPct = (_pcProjected - _pcReq.max) / _pcReq.max;
+                        if (_pcOverPct > 0.3) penalty += 999999;
+                        else if (_pcOverPct > 0.1) penalty += 12000 + Math.round(_pcOverPct * 30000);
+                        else penalty += 4000;
+                    }
+                    if (_pcReq.min > 0 && _pcProjected < _pcReq.min) {
+                        var _pcUnderPct = (_pcReq.min - _pcProjected) / _pcReq.min;
+                        if (_pcUnderPct > 0.4) penalty += 8000;
+                        else if (_pcUnderPct > 0.2) penalty += 4000;
+                        else penalty += 1500;
+                    }
+                }
+            }
+        }
         // Time-constrained boost
         if (act) { var tcBoost = _timeConstrainedBoost.get(act); if (tcBoost) penalty -= tcBoost.boost; }
         // Debt
@@ -1079,8 +1112,15 @@
         var bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
         var sportMeta = window.getSportMetaData?.() || window.sportMetaData || {};
         var minThresholds = [];
-        for (var sport in sportMeta) { if (sportMeta[sport].minPlayers) minThresholds.push(sportMeta[sport].minPlayers); }
+        for (var sport in sportMeta) {
+            if (sportMeta[sport].minPlayers || sportMeta[sport].maxPlayers) {
+                _sportPlayerReqs.set(normName(sport), { min: sportMeta[sport].minPlayers || 0, max: sportMeta[sport].maxPlayers || 0 });
+            }
+            if (sportMeta[sport].minPlayers) minThresholds.push(sportMeta[sport].minPlayers);
+        }
+        for (var bkName in bunkMeta) { var bkSize = bunkMeta[bkName]?.size || 0; if (bkSize > 0) _bunkSizeCache.set(bkName, bkSize); }
         if (minThresholds.length > 0) { minThresholds.sort(function(a, b) { return a - b; }); var medianMin = minThresholds[Math.floor(minThresholds.length / 2)]; for (var bunkName in bunkMeta) { var size = bunkMeta[bunkName]?.size || 0; if (size > 0 && size < medianMin) _smallBunkFlags.add(bunkName); } }
+        if (_sportPlayerReqs.size > 0) v12Log('Player count rules cached: ' + _sportPlayerReqs.size + ' sports, ' + _bunkSizeCache.size + ' bunks with sizes');
         // Skeleton context
         var bunkBlocks = {};
         for (var bi = 0; bi < activityBlocks.length; bi++) { var blk = activityBlocks[bi]; var bk = blk.bunk; if (!bunkBlocks[bk]) bunkBlocks[bk] = []; bunkBlocks[bk].push({ idx: bi, startTime: blk.startTime || 0, event: blk.event || '' }); }
@@ -1171,11 +1211,11 @@
                     var projectedPlayers = bunkSizes[aBunk] || 0;
                     for (var existBunk in allocated) { if (allocated[existBunk] === wish.activity) projectedPlayers += (bunkSizes[existBunk] || 0); }
                     var maxReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(wish.activity);
-                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers * 1.3) continue;
-                    // ★ Min player check: hard-skip if combined count is still deeply under minimum
+                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers * 1.1) continue;
+                    // ★ Min player check: hard-skip if combined count is still significantly under minimum
                     // Guard: skip enforcement when bunk size data is unconfigured (projectedPlayers === 0)
                     if (projectedPlayers > 0 && maxReqs?.minPlayers && projectedPlayers < maxReqs.minPlayers) {
-                        if ((maxReqs.minPlayers - projectedPlayers) / maxReqs.minPlayers > 0.4) continue;
+                        if ((maxReqs.minPlayers - projectedPlayers) / maxReqs.minPlayers > 0.25) continue;
                     }
                     // ★ Unpaired small-bunk guard: bunk can't reach min alone and no pair is available —
                     // only allow if already-allocated bunks bring the combined total to minimum
@@ -1232,7 +1272,7 @@
             if (actNorm === 'free' || actNorm === 'free (timeout)') { analysis.freeBlocks.push({ blockIdx: i, bunk: block.bunk, divName: block.divName, startTime: block.startTime, endTime: block.endTime }); analysis.freeBlockBunks.add(block.bunk); analysis.totalFree++; analysis.score += 10000; }
             if (actNorm && actNorm !== 'free') { var daysSince = getDaysSinceActivity(block.bunk, asgn.pick._activity); if (daysSince === 1) { analysis.yesterdayRepeats.push({ blockIdx: i, bunk: block.bunk, activity: asgn.pick._activity }); analysis.score += 5000; } }
             if (actNorm && actNorm !== 'free' && asgn.pick.field && asgn.pick.field !== 'Free') {
-                var fieldNorm2 = normName(asgn.pick.field); var entries = _fieldTimeIndex.get(fieldNorm2) || [];
+                var entries = _fieldTimeIndex.get(actNorm) || [];
                 var totalPlayers = bunkMeta[block.bunk]?.size || 0;
                 for (var ei = 0; ei < entries.length; ei++) { var e = entries[ei]; if (e.bunk === block.bunk) continue; if (e.endMin <= block.startTime || e.startMin >= block.endTime) continue; totalPlayers += (bunkMeta[e.bunk]?.size || 0); }
                 var pCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(asgn.pick._activity, totalPlayers, false);
@@ -1698,19 +1738,31 @@
                     if (_pcSReqs && (_pcSReqs.minPlayers || _pcSReqs.maxPlayers)) {
                         var _pcBMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
                         var _pcTotal = _pcBMeta[b2.bunk]?.size || 0;
+                        var _pcSeenBunks = new Set(); _pcSeenBunks.add(b2.bunk);
+                        // Check time index (prior-pass assignments)
+                        var _pcIdxEntries = S._fieldTimeIndex.get(cAn) || [];
+                        for (var _pcTi = 0; _pcTi < _pcIdxEntries.length; _pcTi++) {
+                            var _pcTE = _pcIdxEntries[_pcTi];
+                            if (_pcSeenBunks.has(_pcTE.bunk)) continue;
+                            if (_pcTE.endMin <= b2.startTime || _pcTE.startMin >= b2.endTime) continue;
+                            _pcTotal += (_pcBMeta[_pcTE.bunk]?.size || 0);
+                            _pcSeenBunks.add(_pcTE.bunk);
+                        }
+                        // Check same-pass results
                         for (var _pcRi = 0; _pcRi < results.length; _pcRi++) {
                             var _pcR = results[_pcRi]; if (_pcR.candIdx === -1) continue;
                             var _pcRan = normName(_pcR.pick._activity || _pcR.pick.field);
                             if (_pcRan !== cAn) continue;
                             var _pcRb = activityBlocks[_pcR.blockIdx];
-                            if (!_pcRb || _pcRb.bunk === b2.bunk) continue;
+                            if (!_pcRb || _pcSeenBunks.has(_pcRb.bunk)) continue;
                             if (_pcRb.startTime < b2.endTime && _pcRb.endTime > b2.startTime) _pcTotal += (_pcBMeta[_pcRb.bunk]?.size || 0);
+                            _pcSeenBunks.add(_pcRb.bunk);
                         }
                         // Guard: skip enforcement when bunk size data is unconfigured (_pcTotal === 0)
                         if (_pcTotal > 0) {
-                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers * 1.3) canFit = false;
+                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers * 1.1) canFit = false;
                             if (canFit && _pcSReqs.minPlayers && _pcTotal < _pcSReqs.minPlayers) {
-                                if ((_pcSReqs.minPlayers - _pcTotal) / _pcSReqs.minPlayers > 0.4) canFit = false;
+                                if ((_pcSReqs.minPlayers - _pcTotal) / _pcSReqs.minPlayers > 0.25) canFit = false;
                             }
                         }
                     }

@@ -47,6 +47,24 @@
     const RotationEngine = {};
 
     // =========================================================================
+    // PERF: Cached lookups for special-activity names and all-activity names.
+    // Rebuilt once per solver run via RotationEngine.invalidateMetaCaches().
+    // =========================================================================
+    let _specialNamesCache = null;   // Set of lowercase-trimmed special names
+    let _allActivityNamesCache = null; // Array of all activity names
+
+    function _ensureSpecialNamesCache() {
+        if (_specialNamesCache) return _specialNamesCache;
+        var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
+        _specialNamesCache = new Set();
+        specials.forEach(function(s) {
+            if (s.name) _specialNamesCache.add(s.name.toLowerCase().trim());
+        });
+        return _specialNamesCache;
+    }
+
+    // =========================================================================
     // ★★★ SUPERCHARGED CONFIGURATION ★★★
     // =========================================================================
 
@@ -551,6 +569,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      * Get all unique activity names from config
      */
     RotationEngine.getAllActivityNames = function() {
+        if (_allActivityNamesCache) return _allActivityNamesCache;
         var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
         var fields = (globalSettings.app1 && globalSettings.app1.fields) || [];
         var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
@@ -567,20 +586,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             if (s.name) names.add(s.name);
         });
 
-        return Array.from(names);
+        _allActivityNamesCache = Array.from(names);
+        return _allActivityNamesCache;
     };
 
     /**
      * Check if activity is a "special" type
      */
     RotationEngine.isSpecialActivity = function(activityName) {
-        var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-        var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
-        var specialNames = new Set();
-        specials.forEach(function(s) {
-            if (s.name) specialNames.add(s.name.toLowerCase().trim());
-        });
-        return specialNames.has((activityName || '').toLowerCase().trim());
+        return _ensureSpecialNamesCache().has((activityName || '').toLowerCase().trim());
     };
 
     // =========================================================================
@@ -1203,6 +1217,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         });
 
         console.log('\n' + '='.repeat(70));
+    };
+
+    RotationEngine.invalidateMetaCaches = function() {
+        _specialNamesCache = null;
+        _allActivityNamesCache = null;
     };
 
     // =========================================================================
