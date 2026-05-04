@@ -3515,15 +3515,13 @@ function _boToggleView() {
   const autoView = document.getElementById('da-view-auto-layers');
 
   if (_boBunkViewActive) {
-    if (skeletonView) skeletonView.style.display = 'none';
-    if (gridWrapper && !skeletonView) gridWrapper.style.display = 'none';
     if (msGridWrapper) msGridWrapper.style.display = 'none';
+    if (gridWrapper) gridWrapper.style.display = 'none';
     if (autoView) autoView.style.display = 'none';
     if (boContainer) { boContainer.style.display = ''; renderBunkOverridesUI(); }
   } else {
-    if (skeletonView) skeletonView.style.display = '';
-    if (gridWrapper && !skeletonView) gridWrapper.style.display = '';
     if (msGridWrapper) msGridWrapper.style.display = '';
+    if (gridWrapper) gridWrapper.style.display = '';
     if (autoView) autoView.style.display = '';
     if (boContainer) boContainer.style.display = 'none';
     renderGrid();
@@ -3625,6 +3623,9 @@ async function runOptimizer() {
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
 
+  // Preserve bunk overrides across the wipe — they're user-defined inputs, not generated data
+  const savedBunkOverrides = currentOverrides.bunkActivityOverrides || [];
+
   // 1. Clear window globals
   window.scheduleAssignments = {};
   window.leagueAssignments = {};
@@ -3680,8 +3681,15 @@ async function runOptimizer() {
   window._generationInProgress = true;
 
   console.log('[Optimizer] ★ FULL WIPE COMPLETE. Running optimizer...');
-  
+
   // ★★★ END PRE-GENERATION CLEAR ★★★
+
+  // Restore bunk overrides so the scheduler can read them from loadCurrentDailyData
+  if (savedBunkOverrides.length > 0) {
+    window.saveCurrentDailyData("bunkActivityOverrides", savedBunkOverrides);
+    currentOverrides.bunkActivityOverrides = savedBunkOverrides;
+    console.log(`[Optimizer] Restored ${savedBunkOverrides.length} bunk override(s) after wipe`);
+  }
 
   window.invalidateSmartLogicSpecialsCache?.();
   const success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
