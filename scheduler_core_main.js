@@ -2600,6 +2600,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             disabledSpecialtyLeagues,
             masterLeagues,
             disabledLeagues,
+            disabledFields,
             rotationHistory,
             yesterdayHistory,
             divisions,

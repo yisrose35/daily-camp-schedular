@@ -512,8 +512,9 @@ for (const futureDate of Object.keys(allDailyData)) {
             return [];
         }
 
-        // ★★★ FILTER OUT ALREADY-LOCKED FIELDS ★★★
-        let availableFields = [...fields];
+        // ★★★ FILTER OUT DISABLED AND ALREADY-LOCKED FIELDS ★★★
+        const _disabledSet = new Set(window.currentDisabledFields || []);
+        let availableFields = fields.filter(f => !_disabledSet.has(f));
         if (window.GlobalFieldLocks && slots && slots.length > 0) {
             availableFields = window.GlobalFieldLocks.filterAvailableFields(fields, slots);
 
