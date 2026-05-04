@@ -3864,74 +3864,153 @@ function _showTripsPopover(anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
 
+let _tripEditId = null;
+
 function _renderTripsPopoverContent(pop) {
-  const divisions = window.availableDivisions || [];
+  const allDivisions = window.availableDivisions || [];
+  const divColors = masterSettings.app1?.divisions || {};
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const existingTrips = loadDailyTrips(dateKey);
+  const editing = _tripEditId ? existingTrips.find(t => t.id === _tripEditId) : null;
 
   let html = '<div style="font-weight:700;font-size:14px;margin-bottom:10px;">Trips</div>';
 
   if (existingTrips.length > 0) {
     existingTrips.forEach(t => {
-      html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+      const isEditing = editing && editing.id === t.id;
+      const divList = Array.isArray(t.division) ? t.division.join(', ') : t.division;
+      html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;${isEditing ? 'background:#fffbeb;margin:0 -16px;padding:6px 16px;' : ''}">
         <div>
           <div style="font-weight:600;font-size:13px;">${_escHtml(t.event || 'Trip')}</div>
-          <div style="font-size:11px;color:#64748b;">${_escHtml(t.division)} · ${t.startTime} – ${t.endTime}</div>
+          <div style="font-size:11px;color:#64748b;">${_escHtml(divList)} · ${t.startTime} – ${t.endTime}</div>
         </div>
-        <button class="da-trip-pop-remove" data-trip-id="${t.id}" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;font-weight:600;padding:4px 8px;">Remove</button>
+        <div style="display:flex;gap:4px;">
+          <button class="da-trip-pop-edit" data-trip-id="${t.id}" style="background:none;border:none;color:#3b82f6;cursor:pointer;font-size:11px;font-weight:600;padding:4px 8px;">${isEditing ? 'Cancel' : 'Edit'}</button>
+          <button class="da-trip-pop-remove" data-trip-id="${t.id}" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;font-weight:600;padding:4px 8px;">Remove</button>
+        </div>
       </div>`;
     });
     html += '<div style="height:10px;"></div>';
   }
 
-  html += `
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      <select id="da-trip-division" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;">
-        <option value="">Division...</option>
-        ${divisions.map(d => `<option value="${_escHtml(d)}">${_escHtml(d)}</option>`).join('')}
-      </select>
-      <input id="da-trip-name" type="text" placeholder="Trip name" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;" />
-      <div style="display:flex;gap:6px;">
-        <input id="da-trip-start" type="text" placeholder="Start (10:00am)" style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;" />
-        <input id="da-trip-end" type="text" placeholder="End (3:30pm)" style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;" />
-      </div>
-      <button id="da-apply-trip-btn" style="padding:7px 0;background:#3b82f6;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">Add Trip</button>
+  const prefill = editing || {};
+  const selectedDivs = editing ? (Array.isArray(editing.division) ? editing.division : [editing.division]) : [];
+  const btnLabel = editing ? 'Save Changes' : 'Add Trip';
+  const inputStyle = 'padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;';
+
+  html += `<div style="display:flex;flex-direction:column;gap:8px;">
+    <div style="font-size:11px;color:#64748b;font-weight:600;">Divisions</div>
+    <div id="da-trip-div-chips" style="display:flex;gap:4px;flex-wrap:wrap;">
+      ${allDivisions.map(d => {
+        const color = divColors[d]?.color || '#64748b';
+        const sel = selectedDivs.includes(d);
+        return `<button type="button" class="da-trip-div-chip" data-div="${_escHtml(d)}"
+          style="padding:4px 10px;border-radius:99px;border:1.5px solid ${color};cursor:pointer;font-size:11px;font-weight:600;font-family:inherit;
+          background:${sel ? color : '#fff'};color:${sel ? '#fff' : color};">${_escHtml(d)}</button>`;
+      }).join('')}
     </div>
-  `;
+    <input id="da-trip-name" type="text" placeholder="Trip name" value="${_escHtml(prefill.event || '')}" style="${inputStyle}" />
+    <div style="display:flex;gap:6px;">
+      <input id="da-trip-start" type="text" placeholder="Start (10:00am)" value="${_escHtml(prefill.startTime || '')}" style="flex:1;${inputStyle}" />
+      <input id="da-trip-end" type="text" placeholder="End (3:30pm)" value="${_escHtml(prefill.endTime || '')}" style="flex:1;${inputStyle}" />
+    </div>
+    <button id="da-apply-trip-btn" style="padding:7px 0;background:#3b82f6;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">${btnLabel}</button>
+  </div>`;
 
   pop.innerHTML = html;
 
+  // Division chip toggle
+  const chipSelectedDivs = new Set(selectedDivs);
+  pop.querySelectorAll('.da-trip-div-chip').forEach(chip => {
+    chip.onclick = () => {
+      const d = chip.dataset.div;
+      const color = divColors[d]?.color || '#64748b';
+      if (chipSelectedDivs.has(d)) {
+        chipSelectedDivs.delete(d);
+        chip.style.background = '#fff';
+        chip.style.color = color;
+      } else {
+        chipSelectedDivs.add(d);
+        chip.style.background = color;
+        chip.style.color = '#fff';
+      }
+    };
+  });
+
+  // Add / Save
   pop.querySelector('#da-apply-trip-btn').onclick = () => {
-    const division = pop.querySelector('#da-trip-division').value;
+    const selDivs = [...chipSelectedDivs];
     const tripName = pop.querySelector('#da-trip-name').value.trim();
     const startTime = pop.querySelector('#da-trip-start').value.trim();
     const endTime = pop.querySelector('#da-trip-end').value.trim();
-    if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
+    if (selDivs.length === 0 || !tripName || !startTime || !endTime) { daShowAlert("Select at least one division and fill all fields."); return; }
     const startMin = parseTimeToMinutes(startTime);
     const endMin = parseTimeToMinutes(endTime);
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
 
-    if (window._daBuilderMode === 'auto') {
+    if (editing) {
+      // Update existing trip
       const trips = loadDailyTrips(dateKey);
-      trips.push({ id: 'trip_' + Date.now(), event: tripName, division, startTime, endTime, startMin, endMin });
-      saveDailyTrips(dateKey, trips);
+      const idx = trips.findIndex(t => t.id === editing.id);
+      if (idx !== -1) {
+        trips[idx] = { ...trips[idx], event: tripName, division: selDivs.length === 1 ? selDivs[0] : selDivs, startTime, endTime, startMin, endMin };
+        saveDailyTrips(dateKey, trips);
+      }
+      if (window._daBuilderMode !== 'auto') {
+        loadDailySkeleton();
+        const oldIdx = dailyOverrideSkeleton.findIndex(e => e.id === editing.id);
+        if (oldIdx !== -1) dailyOverrideSkeleton.splice(oldIdx, 1);
+        selDivs.forEach(div => {
+          eraseOverlappingTiles({ startTime, endTime, division: div }, div);
+          dailyOverrideSkeleton.push({ id: editing.id + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] });
+        });
+        saveDailySkeleton();
+      }
+      _tripEditId = null;
     } else {
-      loadDailySkeleton();
-      const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
-      eraseOverlappingTiles(newEvent, division);
-      dailyOverrideSkeleton.push(newEvent);
-      saveDailySkeleton();
+      // Add new trip(s) — one per division
+      if (window._daBuilderMode === 'auto') {
+        const trips = loadDailyTrips(dateKey);
+        selDivs.forEach(div => {
+          trips.push({ id: 'trip_' + Date.now() + '_' + div, event: tripName, division: div, startTime, endTime, startMin, endMin });
+        });
+        saveDailyTrips(dateKey, trips);
+      } else {
+        loadDailySkeleton();
+        selDivs.forEach(div => {
+          const newEvent = { id: 'trip_' + Date.now() + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
+          eraseOverlappingTiles(newEvent, div);
+          dailyOverrideSkeleton.push(newEvent);
+        });
+        saveDailySkeleton();
+      }
     }
     _renderTripsPopoverContent(pop);
     renderToolbar();
     renderGrid();
   };
 
+  // Edit buttons
+  pop.querySelectorAll('.da-trip-pop-edit').forEach(btn => {
+    btn.onclick = () => {
+      _tripEditId = (_tripEditId === btn.dataset.tripId) ? null : btn.dataset.tripId;
+      _renderTripsPopoverContent(pop);
+    };
+  });
+
+  // Remove buttons
   pop.querySelectorAll('.da-trip-pop-remove').forEach(btn => {
     btn.onclick = () => {
-      const trips = loadDailyTrips(dateKey).filter(t => t.id !== btn.dataset.tripId);
+      const tripId = btn.dataset.tripId;
+      const trips = loadDailyTrips(dateKey).filter(t => t.id !== tripId);
       saveDailyTrips(dateKey, trips);
+      if (window._daBuilderMode !== 'auto') {
+        loadDailySkeleton();
+        const idx = dailyOverrideSkeleton.findIndex(e => e.id === tripId);
+        if (idx !== -1) { dailyOverrideSkeleton.splice(idx, 1); saveDailySkeleton(); }
+      }
+      if (_tripEditId === tripId) _tripEditId = null;
       _renderTripsPopoverContent(pop);
       renderToolbar();
       renderGrid();
