@@ -1871,6 +1871,23 @@
                     }
                 }
 
+                // Combined field: check if any combo partner was assigned in this batch
+                if (canFit && b2.startTime !== undefined && b2.endTime !== undefined) {
+                    var _cbBatch = S._comboExclusiveMap.get(fn2);
+                    if (_cbBatch) {
+                        for (var _cbr = 0; _cbr < results.length && canFit; _cbr++) {
+                            var _cbrPick = results[_cbr];
+                            if (_cbrPick.candIdx === -1) continue;
+                            var _cbrFn = normName(_cbrPick.pick.field);
+                            var _cbrBlk = activityBlocks[_cbrPick.blockIdx];
+                            if (_cbrBlk.startTime >= b2.endTime || _cbrBlk.endTime <= b2.startTime) continue;
+                            for (var _cbp = 0; _cbp < _cbBatch.length; _cbp++) {
+                                if (_cbBatch[_cbp] === _cbrFn) { canFit = false; break; }
+                            }
+                        }
+                    }
+                }
+
                 if (canFit) {
                     var newPk = S.clonePick(c2);
                     results.push({blockIdx:bo.bi,candIdx:opt.ci,pick:newPk,cost:opt.cost});
@@ -1901,6 +1918,10 @@
                             var aeu=hBlk.startTime!==undefined?S.getFieldUsageFromTimeIndex(afn,hBlk.startTime,hBlk.endTime,hBlk.bunk):0;
                             if (aeu+agu<acap) {
                                 if (S.checkCrossDivisionTimeConflict(ac.field,hBlk.divName,hBlk.startTime,hBlk.endTime,hBlk.bunk)) continue;
+                                // Combo check for augmenting path alternative
+                                var _augCombo = S._comboExclusiveMap.get(afn), _augBlocked = false;
+                                if (_augCombo && hBlk.startTime !== undefined) { for (var _aci = 0; _aci < _augCombo.length && !_augBlocked; _aci++) { if (S.getFieldUsageFromTimeIndex(_augCombo[_aci],hBlk.startTime,hBlk.endTime,hBlk.bunk) > 0) _augBlocked = true; for (var _acr = 0; _acr < results.length && !_augBlocked; _acr++) { var _acrPick = results[_acr]; if (_acrPick.candIdx===-1) continue; if (normName(_acrPick.pick.field)===_augCombo[_aci]) { var _acrB = activityBlocks[_acrPick.blockIdx]; if (_acrB.startTime<hBlk.endTime&&_acrB.endTime>hBlk.startTime) _augBlocked=true; } } } }
+                                if (_augBlocked) continue;
                                 var agd=fieldDivsGrp.get(afn); if (agd&&hBlk.divName) { var bad=false; for (var d of agd) { if (d&&d!==hBlk.divName) { bad=true; break; } } if (bad) continue; }
                                 fieldUsageGrp.set(fn2,(fieldUsageGrp.get(fn2)||1)-1);
                                 results[holder]={blockIdx:hBi,candIdx:ao.ci,pick:S.clonePick(ac),cost:ao.cost};
