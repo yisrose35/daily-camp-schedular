@@ -3892,7 +3892,7 @@ function _boGetActivityGroups() {
   }));
   const allSportsSet = new Set();
   allFields.forEach(f => (f.activities || []).forEach(act => allSportsSet.add(act)));
-  const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name).sort();
+  const allSpecials = [...new Set((masterSettings.app1?.specialActivities || []).map(s => s.name))].sort();
   const locationZones = masterSettings.global?.locationZones || {};
   const facilities = [];
   Object.entries(locationZones).forEach(([zn, zone]) => {
