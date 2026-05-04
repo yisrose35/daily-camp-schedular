@@ -104,6 +104,29 @@ function mapEventNameForOptimizer(name){
   return {type:'pinned',event:name};
 }
 
+// Split-tile helper: only show the Pre/Post Change minute fields when the
+// corresponding "Main" input contains the word "swim".
+function bindSplitChangeFieldVisibility(overlay) {
+  const main1 = overlay.querySelector('input[data-field="main1"]');
+  const main2 = overlay.querySelector('input[data-field="main2"]');
+  const wrap = (name) => overlay.querySelector(`input[data-field="${name}"]`)?.closest('.ms-modal-field');
+  const sync = (mainEl, preName, postName) => {
+    const isSwim = /\bswim\b/i.test((mainEl && mainEl.value) || '');
+    [preName, postName].forEach(n => {
+      const el = wrap(n);
+      if (el) el.style.display = isSwim ? '' : 'none';
+    });
+  };
+  if (main1) {
+    main1.addEventListener('input', () => sync(main1, 'preChange1Min', 'postChange1Min'));
+    sync(main1, 'preChange1Min', 'postChange1Min');
+  }
+  if (main2) {
+    main2.addEventListener('input', () => sync(main2, 'preChange2Min', 'postChange2Min'));
+    sync(main2, 'preChange2Min', 'postChange2Min');
+  }
+}
+
 // =================================================================
 // MODAL SYSTEM - Replace browser prompts with in-page modals
 // =================================================================
@@ -793,19 +816,51 @@ async function editTile(id) {
     const [m1 = '', m2 = ''] = ev.event.split(' / ');
     const result = await showModal({
       title: 'Edit Split Tile',
+      description: 'If either side is "Swim", you can carve a Pre/Post Change buffer from inside that half (the swap stays at the midpoint).',
       fields: [
         { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
         { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
-        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
-      ]
+        { name: 'preChange1Min',  label: 'Main 1 Pre-Change (minutes, swim only)',  type: 'text', default: ev._side1PreChange  != null ? String(ev._side1PreChange)  : '' },
+        { name: 'postChange1Min', label: 'Main 1 Post-Change (minutes, swim only)', type: 'text', default: ev._side1PostChange != null ? String(ev._side1PostChange) : '' },
+        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() },
+        { name: 'preChange2Min',  label: 'Main 2 Pre-Change (minutes, swim only)',  type: 'text', default: ev._side2PreChange  != null ? String(ev._side2PreChange)  : '' },
+        { name: 'postChange2Min', label: 'Main 2 Post-Change (minutes, swim only)', type: 'text', default: ev._side2PostChange != null ? String(ev._side2PostChange) : '' }
+      ],
+      postRender: bindSplitChangeFieldVisibility
     });
     if (!result || !result.main1 || !result.main2) return;
     const event1 = mapEventNameForOptimizer(result.main1);
     const event2 = mapEventNameForOptimizer(result.main2);
+
+    const isSwim = (s) => /\bswim\b/i.test(String(s || ''));
+    const parseChange = (v) => Math.max(0, parseInt(v) || 0);
+    const s1Pre  = isSwim(result.main1) ? parseChange(result.preChange1Min)  : 0;
+    const s1Post = isSwim(result.main1) ? parseChange(result.postChange1Min) : 0;
+    const s2Pre  = isSwim(result.main2) ? parseChange(result.preChange2Min)  : 0;
+    const s2Post = isSwim(result.main2) ? parseChange(result.postChange2Min) : 0;
+
+    const totalStart = parseTimeToMinutes(result.startTime);
+    const totalEnd   = parseTimeToMinutes(result.endTime);
+    if (totalStart != null && totalEnd != null && totalEnd > totalStart) {
+      const halfDur = Math.floor((totalEnd - totalStart) / 2);
+      if (s1Pre + s1Post >= halfDur) {
+        await showAlert(`Main 1 change time (${s1Pre + s1Post} min) must be less than its half (${halfDur} min).`);
+        return;
+      }
+      if (s2Pre + s2Post >= halfDur) {
+        await showAlert(`Main 2 change time (${s2Pre + s2Post} min) must be less than its half (${halfDur} min).`);
+        return;
+      }
+    }
+
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
     ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+    ev._side1PreChange  = s1Pre  || undefined;
+    ev._side1PostChange = s1Post || undefined;
+    ev._side2PreChange  = s2Pre  || undefined;
+    ev._side2PostChange = s2Post || undefined;
 
   } else if (ev.type === 'elective') {
     const locations = getAllLocations();
@@ -2705,7 +2760,11 @@ function renderEventTile(ev, top, height) {
   
   // ★ v2.5: Show split tile sub-events
   if (ev.type === 'split' && ev.subEvents?.length === 2) {
-    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
+    const _s1Buf = (ev._side1PreChange || 0) + (ev._side1PostChange || 0);
+    const _s2Buf = (ev._side2PreChange || 0) + (ev._side2PostChange || 0);
+    const _label1 = ev.subEvents[0].event + (_s1Buf > 0 ? ` (+${_s1Buf}m chg)` : '');
+    const _label2 = ev.subEvents[1].event + (_s2Buf > 0 ? ` (+${_s2Buf}m chg)` : '');
+    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${_label1} / ${_label2}</div>`;
   }
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
 
@@ -2821,20 +2880,48 @@ function addDropListeners(selector) {
       else if (tileData.type === 'split') {
         const result = await showModal({
           title: 'Split Activity Setup',
-          description: 'Splits division into two groups. Midway through the time block, groups SWAP.\n\nExamples: Swim, Sports, Art, Special, Activity',
+          description: 'Splits division into two groups. Midway through the time block, groups SWAP.\n\nExamples: Swim, Sports, Art, Special, Activity\n\nIf either side is "Swim", you can carve a Pre/Post Change buffer from inside that half (the swap stays at the midpoint).',
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
             { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
-            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
-          ]
+            { name: 'preChange1Min',  label: 'Main 1 Pre-Change (minutes, swim only)',  type: 'text', placeholder: 'e.g., 10' },
+            { name: 'postChange1Min', label: 'Main 1 Post-Change (minutes, swim only)', type: 'text', placeholder: 'e.g., 10' },
+            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' },
+            { name: 'preChange2Min',  label: 'Main 2 Pre-Change (minutes, swim only)',  type: 'text', placeholder: 'e.g., 10' },
+            { name: 'postChange2Min', label: 'Main 2 Post-Change (minutes, swim only)', type: 'text', placeholder: 'e.g., 10' }
+          ],
+          postRender: bindSplitChangeFieldVisibility
         });
         if (!result || !result.main1 || !result.main2) return;
-        
+
         // Map through optimizer (same as daily adjustments) to get proper type+event structure
         const event1 = mapEventNameForOptimizer(result.main1);
         const event2 = mapEventNameForOptimizer(result.main2);
-        
+
+        // Per-side swim change buffers — only honored when that side is "swim".
+        const isSwim = (s) => /\bswim\b/i.test(String(s || ''));
+        const parseChange = (v) => Math.max(0, parseInt(v) || 0);
+        const s1Pre  = isSwim(result.main1) ? parseChange(result.preChange1Min)  : 0;
+        const s1Post = isSwim(result.main1) ? parseChange(result.postChange1Min) : 0;
+        const s2Pre  = isSwim(result.main2) ? parseChange(result.preChange2Min)  : 0;
+        const s2Post = isSwim(result.main2) ? parseChange(result.postChange2Min) : 0;
+
+        // Validate buffers fit within their half (split swaps at the midpoint).
+        const totalStart = parseTimeToMinutes(result.startTime);
+        const totalEnd   = parseTimeToMinutes(result.endTime);
+        if (totalStart != null && totalEnd != null && totalEnd > totalStart) {
+          const halfDur = Math.floor((totalEnd - totalStart) / 2);
+          if (s1Pre + s1Post >= halfDur) {
+            await showAlert(`Main 1 change time (${s1Pre + s1Post} min) must be less than its half (${halfDur} min).`);
+            return;
+          }
+          if (s2Pre + s2Post >= halfDur) {
+            await showAlert(`Main 2 change time (${s2Pre + s2Post} min) must be less than its half (${halfDur} min).`);
+            return;
+          }
+        }
+
         newEvent = {
           id: Date.now().toString(),
           type: 'split',
@@ -2846,10 +2933,14 @@ function addDropListeners(selector) {
           subEvents: [
             { ...event1, event: event1.event || result.main1 },
             { ...event2, event: event2.event || result.main2 }
-          ]
+          ],
+          _side1PreChange:  s1Pre  || undefined,
+          _side1PostChange: s1Post || undefined,
+          _side2PreChange:  s2Pre  || undefined,
+          _side2PostChange: s2Post || undefined
         };
-        
-        console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents);
+
+        console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents, 'changes:', { s1Pre, s1Post, s2Pre, s2Post });
       }
       // ELECTIVE
       else if (tileData.type === 'elective') {
