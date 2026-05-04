@@ -3408,6 +3408,7 @@ function renderToolbar() {
         const badge = ovCount > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + ovCount + '</span>' : '';
         return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">Bunk Overrides' + badge + '</button>';
       })() : ''}
+      <button id="da-trips-btn" class="da-btn da-btn-ghost">Trips${(() => { const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0]; const tc = loadDailyTrips(dateKey).length; return tc > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + tc + '</span>' : ''; })()}</button>
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
     </div>
   `;
@@ -3502,6 +3503,16 @@ function renderToolbar() {
       _boBunkViewActive = !_boBunkViewActive;
       _boToggleView();
       renderToolbar();
+    };
+  }
+
+  // Trips popover toggle
+  const tripsBtn = document.getElementById('da-trips-btn');
+  if (tripsBtn) {
+    tripsBtn.onclick = () => {
+      const existing = document.getElementById('da-trips-popover');
+      if (existing) { existing.remove(); return; }
+      _showTripsPopover(tripsBtn);
     };
   }
 }
@@ -3827,111 +3838,105 @@ function saveDailyTrips(dateKey, trips) {
 window.loadDailyTrips = loadDailyTrips;
 window.saveDailyTrips = saveDailyTrips;
   // =================================================================
-// TRIPS FORM
+// TRIPS POPOVER
 // =================================================================
 function renderTripsForm() {
-  const container = document.getElementById('da-trips-container');
-  if (!container) return;
-  
-  const divisions = window.availableDivisions || [];
-  
- // ★ Auto mode: show existing trips list
- const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-  const existingTrips = (window._daBuilderMode === 'auto') ? loadDailyTrips(dateKey) : [];
-  const tripsListHTML = existingTrips.length > 0 ? `
-    <div class="da-section" style="margin-bottom:12px;">
-      <h3 class="da-section-title">Today's Trips (${existingTrips.length})</h3>
-      ${existingTrips.map(t => `
-        <div class="da-override-item" style="margin-bottom:6px;">
-          <div>
-            <strong>${t.event || 'Trip'}</strong> — <span style="color:#3b82f6;">${t.division}</span>
-            <div style="font-size:12px;color:#64748b;">${t.startTime} – ${t.endTime}</div>
-          </div>
-          <button class="da-btn da-btn-danger da-btn-sm da-trip-remove-btn" data-trip-id="${t.id}">Remove</button>
-        </div>
-      `).join('')}
-    </div>
-  ` : '';
+  const pop = document.getElementById('da-trips-popover');
+  if (pop) _renderTripsPopoverContent(pop);
+}
 
-  container.innerHTML = tripsListHTML + `
-    <div class="da-section">
-      <h3 class="da-section-title">Add Trip</h3>
-      <p class="da-section-desc">Add an off-campus trip.${window._daBuilderMode === 'auto' ? ' All bunks in the division will be blocked for this time.' : ' Overlapping events will be bumped.'}</p>
-      
-      <div class="da-form-grid">
-        <div class="da-form-field">
-          <label>Division</label>
-          <select id="da-trip-division" class="da-select">
-            <option value="">-- Select --</option>
-            ${divisions.map(d => `<option value="${d}">${d}</option>`).join("")}
-          </select>
+function _showTripsPopover(anchorEl) {
+  const pop = document.createElement('div');
+  pop.id = 'da-trips-popover';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.18);width:340px;max-height:480px;overflow:auto;padding:16px;';
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.top = Math.min(rect.bottom + 6, window.innerHeight - 490) + 'px';
+  pop.style.right = Math.max(window.innerWidth - rect.right, 8) + 'px';
+  document.body.appendChild(pop);
+  _renderTripsPopoverContent(pop);
+
+  const closeHandler = (e) => {
+    if (!pop.contains(e.target) && e.target !== anchorEl && !anchorEl.contains(e.target)) {
+      pop.remove();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
+function _renderTripsPopoverContent(pop) {
+  const divisions = window.availableDivisions || [];
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const existingTrips = loadDailyTrips(dateKey);
+
+  let html = '<div style="font-weight:700;font-size:14px;margin-bottom:10px;">Trips</div>';
+
+  if (existingTrips.length > 0) {
+    existingTrips.forEach(t => {
+      html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+        <div>
+          <div style="font-weight:600;font-size:13px;">${_escHtml(t.event || 'Trip')}</div>
+          <div style="font-size:11px;color:#64748b;">${_escHtml(t.division)} · ${t.startTime} – ${t.endTime}</div>
         </div>
-        <div class="da-form-field">
-          <label>Trip Name</label>
-          <input id="da-trip-name" type="text" placeholder="e.g. Six Flags" class="da-input" />
-        </div>
-        <div class="da-form-field">
-          <label>Start</label>
-          <input id="da-trip-start" type="text" placeholder="10:00am" class="da-input" />
-        </div>
-        <div class="da-form-field">
-          <label>End</label>
-          <input id="da-trip-end" type="text" placeholder="3:30pm" class="da-input" />
-        </div>
+        <button class="da-trip-pop-remove" data-trip-id="${t.id}" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;font-weight:600;padding:4px 8px;">Remove</button>
+      </div>`;
+    });
+    html += '<div style="height:10px;"></div>';
+  }
+
+  html += `
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <select id="da-trip-division" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;">
+        <option value="">Division...</option>
+        ${divisions.map(d => `<option value="${_escHtml(d)}">${_escHtml(d)}</option>`).join('')}
+      </select>
+      <input id="da-trip-name" type="text" placeholder="Trip name" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;" />
+      <div style="display:flex;gap:6px;">
+        <input id="da-trip-start" type="text" placeholder="Start (10:00am)" style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;" />
+        <input id="da-trip-end" type="text" placeholder="End (3:30pm)" style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;" />
       </div>
-      
-      <button id="da-apply-trip-btn" class="da-btn da-btn-primary" style="margin-top:16px;">Add Trip</button>
+      <button id="da-apply-trip-btn" style="padding:7px 0;background:#3b82f6;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">Add Trip</button>
     </div>
   `;
-  
-  document.getElementById("da-apply-trip-btn").onclick = () => {
-    const division = document.getElementById("da-trip-division").value;
-    const tripName = document.getElementById("da-trip-name").value.trim();
-    const startTime = document.getElementById("da-trip-start").value.trim();
-    const endTime = document.getElementById("da-trip-end").value.trim();
-    
-  if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
+
+  pop.innerHTML = html;
+
+  pop.querySelector('#da-apply-trip-btn').onclick = () => {
+    const division = pop.querySelector('#da-trip-division').value;
+    const tripName = pop.querySelector('#da-trip-name').value.trim();
+    const startTime = pop.querySelector('#da-trip-start').value.trim();
+    const endTime = pop.querySelector('#da-trip-end').value.trim();
+    if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
     const startMin = parseTimeToMinutes(startTime);
     const endMin = parseTimeToMinutes(endTime);
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
-    
-  if (window._daBuilderMode === 'auto') {
-      // ★ Auto mode: save trips to dedicated localStorage key + dailyData
-      const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+
+    if (window._daBuilderMode === 'auto') {
       const trips = loadDailyTrips(dateKey);
       trips.push({ id: 'trip_' + Date.now(), event: tripName, division, startTime, endTime, startMin, endMin });
       saveDailyTrips(dateKey, trips);
-      renderTripsForm();
-      renderGrid(); // ★ refresh DAW grid to show trip overlay
-      daShowAlert("✅ Trip added!");
     } else {
       loadDailySkeleton();
       const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
       eraseOverlappingTiles(newEvent, division);
       dailyOverrideSkeleton.push(newEvent);
       saveDailySkeleton();
-      renderGrid();
-      document.querySelector('.da-subtab[data-tab="skeleton"]')?.click();
-      daShowAlert("✅ Trip added!");
     }
-    document.getElementById("da-trip-name").value = "";
-    document.getElementById("da-trip-start").value = "";
-    document.getElementById("da-trip-end").value = "";  };
+    _renderTripsPopoverContent(pop);
+    renderToolbar();
+    renderGrid();
+  };
 
-  // ★ Auto mode: bind remove buttons for existing trips
-  if (window._daBuilderMode === 'auto') {
-    container.querySelectorAll('.da-trip-remove-btn').forEach(btn => {
-      btn.onclick = async () => {
-        const tripId = btn.dataset.tripId;
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        const trips = loadDailyTrips(dateKey).filter(t => t.id !== tripId);
-        saveDailyTrips(dateKey, trips);
-        renderTripsForm();
-        renderGrid(); // ★ refresh DAW grid to remove trip overlay
-      };
-    });
-  }
+  pop.querySelectorAll('.da-trip-pop-remove').forEach(btn => {
+    btn.onclick = () => {
+      const trips = loadDailyTrips(dateKey).filter(t => t.id !== btn.dataset.tripId);
+      saveDailyTrips(dateKey, trips);
+      _renderTripsPopoverContent(pop);
+      renderToolbar();
+      renderGrid();
+    };
+  });
 }
 
 
@@ -5020,7 +5025,6 @@ function getStyles() {
     .ms-container #da-skeleton-grid { padding:0; }
     .ms-container .da-section { margin:16px; }
     .ms-container .da-resource-layout { padding:16px; }
-    .ms-container #da-trips-container { padding:16px; }
     .ms-container #da-bunk-overrides-container { padding:16px; }
     .ms-container #da-resources-container { padding:16px; }
    
@@ -5044,7 +5048,6 @@ function getMainHTML(useMS) {
         <div class="ms-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
           <div class="da-subtabs">
             <button class="da-subtab active" data-tab="skeleton">Schedule</button>
-            <button class="da-subtab" data-tab="trips">Trips</button>
             <button class="da-subtab" data-tab="resources">Resources</button>
 
           </div>
@@ -5069,10 +5072,6 @@ function getMainHTML(useMS) {
 `}
             <div id="da-bunk-overrides-container" style="display:none;"></div>
           </div>
-
-          <div id="da-pane-trips" class="da-pane">
-            <div id="da-trips-container"></div>
-          </div>
           
           <div id="da-pane-resources" class="da-pane">
             <div id="da-resources-container"></div>
@@ -5094,7 +5093,6 @@ function getMainHTML(useMS) {
       <div class="da-main">
         <div class="da-subtabs">
           <button class="da-subtab active" data-tab="skeleton">Schedule</button>
-          <button class="da-subtab" data-tab="trips">Trips</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
         </div>
 
@@ -5107,10 +5105,6 @@ function getMainHTML(useMS) {
             <div id="da-skeleton-grid"></div>
           </div>
           <div id="da-bunk-overrides-container" style="display:none;"></div>
-        </div>
-
-        <div id="da-pane-trips" class="da-pane">
-          <div id="da-trips-container"></div>
         </div>
         
        <div id="da-pane-resources" class="da-pane">
@@ -5319,7 +5313,6 @@ function init() {
   renderDisplacedTilesPanel();
   renderToolbar();
   renderGrid();
-  renderTripsForm();
   renderBunkOverridesUI();
   renderResourceOverridesUI();
   if (window.RotationEvents?.injectSubtab) window.RotationEvents.injectSubtab();
@@ -5347,13 +5340,13 @@ function init() {
   // ★ v7.0: Re-render trips when cloud data syncs (trips may arrive after init)
   window.addEventListener('campistry-cloud-sync', function() {
     const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-    // Merge: if cloud has trips that localStorage doesn't, sync them in
-    loadDailyTrips(dateKey); // triggers cross-sync
+    loadDailyTrips(dateKey);
     renderTripsForm();
+    renderToolbar();
   });
-  // Also listen for schedule-saved events (trips are part of daily_schedules)
   window.addEventListener('campistry-schedule-saved', function() {
     renderTripsForm();
+    renderToolbar();
   });
 }
     
