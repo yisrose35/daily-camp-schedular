@@ -388,30 +388,28 @@ function injectRulesStyles() {
             background: #FAFAFA;
         }
 
-        /* Cooldown row — sentence-style */
+        /* Spacing rule row */
         .cd-row {
             border: 1px solid #E5E7EB; border-radius: 12px;
-            background: #FAFBFC; padding: 14px 16px; margin-bottom: 10px;
-            display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
+            background: #FAFBFC; padding: 18px 20px; margin-bottom: 12px;
+            display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center;
         }
         .cd-fields {
-            display: grid; grid-template-columns: 1.2fr auto 1.2fr; gap: 14px;
-            align-items: end;
+            display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
         }
-        .cd-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .cd-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; min-width: 160px; }
         .cd-col .rules-select { width: 100%; }
+        .cd-middle-wrap { flex: 1.5; min-width: 220px; }
         .cd-middle {
-            display: flex; align-items: center; gap: 8px; padding-bottom: 2px;
+            display: flex; align-items: center; gap: 10px; padding-bottom: 2px;
             flex-wrap: wrap;
         }
         .cd-middle .rules-select { padding: 7px 10px; font-size: 0.86rem; }
-        .cd-delete-wrap { padding-top: 22px; }
-        @media (max-width: 900px) {
-            .cd-fields { grid-template-columns: 1fr 1fr; }
+        .cd-label {
+            font-size: 0.88rem; font-weight: 600; color: #475569;
+            white-space: nowrap; line-height: 1;
         }
-        @media (max-width: 560px) {
-            .cd-fields { grid-template-columns: 1fr; }
-        }
+        .cd-delete-wrap { padding-top: 0; display: flex; align-items: center; }
 
         /* Sports rules rows */
         .sr-grid {
@@ -875,7 +873,6 @@ function renderCooldownCard(container) {
     if (!container) return;
     const rules = getCooldownRules();
     const count = rules.length;
-    const startOpen = count > 0;
     const mode = getBuilderMode();
     const modeLabel = mode === 'auto' ? 'Auto Builder' : 'Manual Mode';
     container.innerHTML = `
@@ -883,16 +880,16 @@ function renderCooldownCard(container) {
             <div class="rules-card-header" id="rules-cd-toggle">
                 <div>
                     <div class="rules-card-title">
-                        Cooldowns &amp; Spacing
+                        Spacing
                         <span id="rules-cd-badge">${count ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>` : ''}</span>
                     </div>
                     <div class="rules-card-subtitle">Keep certain activities or facilities apart in time.</div>
                 </div>
-                <span class="rules-caret${startOpen ? ' open' : ''}" id="rules-cd-caret">
+                <span class="rules-caret" id="rules-cd-caret">
                     <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </span>
             </div>
-            <div class="rules-card-body" id="rules-cd-body" style="display:${startOpen ? 'block' : 'none'};">
+            <div class="rules-card-body" id="rules-cd-body" style="display:none;">
                 <div class="rules-helper">
                     Set spacing rules between activities. Currently in <strong>${escapeHtml(modeLabel)}</strong>.
                     ${mode === 'auto'
@@ -965,11 +962,11 @@ function renderCooldownList() {
                     ${descriptorPickerHTML('cd-target-' + idx, rule.target, allowTypes)}
                 </div>
                 <div class="cd-col cd-middle-wrap">
-                    <span class="rules-sub-title">is unavailable</span>
+                    <span class="cd-label">is unavailable</span>
                     <div class="cd-middle">
                         <input type="number" class="rules-input rules-input-num" id="cd-min-${idx}"
                                value="${parseInt(rule.minutes) || 0}" min="0" max="480" step="5">
-                        <span style="font-size:0.85rem; color:#475569;">min</span>
+                        <span class="cd-label">min</span>
                         <select class="rules-select" id="cd-timing-${idx}">
                             <option value="before" ${rule.timing === 'before' ? 'selected' : ''}>before</option>
                             <option value="after"  ${rule.timing === 'after'  ? 'selected' : ''}>after</option>
