@@ -1262,17 +1262,6 @@ for (const futureDate of Object.keys(allDailyData)) {
                 console.log(`\n   🔒 LOCKING FIELDS: ${usedFields.join(', ')}`);
 
                if (window.GlobalFieldLocks && slots.length > 0) {
-    // ★★★ FIX: Include time range for cross-division lock detection ★★★
-    const sampleBlock = timeData.allBlocks[0];
-    const leagueDivName = leagueDivisions[0];
-    const leagueDivSlots = window.divisionTimes?.[leagueDivName] || [];
-    let lockStartMin = null, lockEndMin = null;
-    if (slots.length > 0 && leagueDivSlots[slots[0]]) {
-        lockStartMin = leagueDivSlots[slots[0]].startMin;
-        lockEndMin = leagueDivSlots[slots[slots.length - 1]]?.endMin || lockStartMin + 40;
-    }
-    
-    // ★★★ FIX v13.1: Include time range for cross-division lock detection ★★★
 var _leagueDivSlots = window.divisionTimes?.[leagueDivisions[0]] || [];
 var _lockStartMin = null, _lockEndMin = null;
 if (slots.length > 0 && _leagueDivSlots[slots[0]]) {

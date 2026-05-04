@@ -233,7 +233,8 @@
         if (!r || !r.matchups) return [];
         return r.matchups.filter(function (m) {
             return m && m.teamA && m.teamB
-                && m.teamA !== 'BYE' && m.teamB !== 'BYE';
+                && m.teamA !== 'BYE' && m.teamB !== 'BYE'
+                && !m.winner;
         });
     }
 
@@ -509,6 +510,11 @@
 
         // Drop seeds that no longer correspond to a team
         seedOrder = seedOrder.filter(function (t) { return teams.indexOf(t) >= 0; });
+        // Persist cleanup so generateRound1 won't include removed teams
+        if (seedOrder.length !== p.seedOrder.length) {
+            p.seedOrder = seedOrder.slice();
+            save();
+        }
 
         // Build list container
         var list = document.createElement('div');
@@ -658,10 +664,11 @@
         var head = document.createElement('div');
         head.className = 'playoff-round-head';
         head.textContent = 'Round ' + round.number;
+        var isSettled = roundIdx < (league.playoff.rounds || []).length - 1;
         if (isRoundComplete(round)) {
             var done = document.createElement('span');
             done.className = 'playoff-round-status';
-            done.textContent = 'complete';
+            done.textContent = isSettled ? 'locked' : 'complete';
             head.appendChild(done);
         }
         card.appendChild(head);
@@ -675,11 +682,16 @@
             return;
         }
 
+        // Lock winner buttons on rounds that already have a successor
+        var roundOpts = isSettled
+            ? Object.assign({}, opts, { readOnly: true })
+            : opts;
+
         var grid = document.createElement('div');
         grid.className = 'playoff-matchup-grid';
 
         round.matchups.forEach(function (m, mi) {
-            grid.appendChild(renderMatchup(m, round, mi, sportsList, save, opts));
+            grid.appendChild(renderMatchup(m, round, mi, sportsList, save, roundOpts));
         });
 
         card.appendChild(grid);

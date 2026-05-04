@@ -785,6 +785,18 @@ for (const futureDate of Object.keys(allDailyData)) {
             // ★★★ ASSIGN MATCHUPS - RESPECTING GLOBAL LOCKS ★★★
             const assignments = assignMatchupsToFieldsAndSlots(matchups, league, history, uniqueSlots);
 
+            // Carry playoff sport through to assignments for display/downstream
+            if (_playoffRoundNum && assignments.length > 0) {
+                const _muSportMap = {};
+                matchups.forEach(function (m) {
+                    if (m._playoffSport) _muSportMap[m.teamA + '|' + m.teamB] = m._playoffSport;
+                });
+                assignments.forEach(function (a) {
+                    var _ps = _muSportMap[a.teamA + '|' + a.teamB];
+                    if (_ps) a._playoffSport = _ps;
+                });
+            }
+
             if (assignments.length === 0) {
                 console.log(`[SpecialtyLeagues] ❌ No assignments made`);
                 continue;
@@ -798,16 +810,6 @@ for (const futureDate of Object.keys(allDailyData)) {
             console.log(`\n[SpecialtyLeagues] 🔒 LOCKING FIELDS: ${usedFields.join(', ')}`);
 
             if (window.GlobalFieldLocks) {
-    // ★★★ FIX: Include time range for cross-division lock detection ★★★
-    const divSlots = window.divisionTimes?.[divName] || [];
-    let lockStartMin = null, lockEndMin = null;
-    if (uniqueSlots.length > 0 && divSlots[uniqueSlots[0]]) {
-        lockStartMin = divSlots[uniqueSlots[0]].startMin;
-        const lastSlot = divSlots[uniqueSlots[uniqueSlots.length - 1]];
-        lockEndMin = lastSlot?.endMin || (lockStartMin + 40);
-    }
-    
-   // ★★★ FIX v13.1: Include time range for cross-division lock detection ★★★
 var _specDivSlots = window.divisionTimes?.[divName] || [];
 var _specLockStart = null, _specLockEnd = null;
 if (uniqueSlots.length > 0 && _specDivSlots[uniqueSlots[0]]) {
@@ -880,7 +882,8 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                     _gameLabel: gameLabel,
                     _leagueName: league.name,
                     _isSpecialtyLeague: true,
-                    _assignments: assignments
+                    _assignments: assignments,
+                    _playoffRound: _playoffRoundNum || null
                 };
 
                 fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
