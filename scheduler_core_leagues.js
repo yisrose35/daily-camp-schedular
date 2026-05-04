@@ -482,6 +482,10 @@ for (const futureDate of Object.keys(allDailyData)) {
 
         const allFields = fields || [];
 
+        const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
+        const _poolStartMin = (slots && slots.length > 0) ? _poolDivSlots[slots[0]]?.startMin : undefined;
+        const _poolEndMin = (slots && slots.length > 0) ? _poolDivSlots[slots[slots.length - 1]]?.endMin : undefined;
+
         for (const field of allFields) {
             if (!field || !field.name) continue;
             if (field.available === false) continue;
@@ -489,14 +493,37 @@ for (const futureDate of Object.keys(allDailyData)) {
 
            // ★★★ CHECK GLOBAL LOCKS FIRST (TIME-BASED to avoid cross-division false positives) ★★★
             if (window.GlobalFieldLocks && slots && slots.length > 0) {
-                const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
-                const _poolStartMin = _poolDivSlots[slots[0]]?.startMin;
-                const _poolEndMin = _poolDivSlots[slots[slots.length - 1]]?.endMin;
                 const lockInfo = (_poolStartMin != null && _poolEndMin != null)
                     ? window.GlobalFieldLocks.isFieldLockedByTime(field.name, _poolStartMin, _poolEndMin, divisionNames[0])
                     : window.GlobalFieldLocks.isFieldLocked(field.name, slots);
                 if (lockInfo) {
                     console.log(`[RegularLeagues] ⚠️ Field "${field.name}" time-locked by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
+                    continue;
+                }
+            }
+
+            // ★★★ CHECK FIELD TIME RULES (available/unavailable windows) ★★★
+            const _fieldTimeRules = activityProperties?.[field.name]?.timeRules;
+            if (_fieldTimeRules && _fieldTimeRules.length > 0 && _poolStartMin != null && _poolEndMin != null) {
+                const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                let _blocked = false;
+                let _hasAvailRules = false;
+                let _inAvailWindow = false;
+                for (const _tr of _fieldTimeRules) {
+                    const _trStart = _tr.startMin ?? (_parseMin ? _parseMin(_tr.start || _tr.startTime) : null);
+                    const _trEnd = _tr.endMin ?? (_parseMin ? _parseMin(_tr.end || _tr.endTime) : null);
+                    if (_trStart == null || _trEnd == null) continue;
+                    const _trType = (_tr.type || '').toLowerCase();
+                    const _isUnavail = _trType === 'unavailable' || _tr.available === false;
+                    const _isAvail = _trType === 'available' || _tr.available === true;
+                    if (_isUnavail && _trStart < _poolEndMin && _trEnd > _poolStartMin) { _blocked = true; break; }
+                    if (_isAvail) {
+                        _hasAvailRules = true;
+                        if (_poolStartMin >= _trStart && _poolEndMin <= _trEnd) _inAvailWindow = true;
+                    }
+                }
+                if (_blocked || (_hasAvailRules && !_inAvailWindow)) {
+                    console.log(`[RegularLeagues] ⚠️ Field "${field.name}" blocked by time rules (${_poolStartMin}-${_poolEndMin})`);
                     continue;
                 }
             }

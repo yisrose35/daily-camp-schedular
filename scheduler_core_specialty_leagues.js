@@ -516,11 +516,38 @@ for (const futureDate of Object.keys(allDailyData)) {
         const _disabledSet = new Set(window.currentDisabledFields || []);
         let availableFields = fields.filter(f => !_disabledSet.has(f));
         if (window.GlobalFieldLocks && slots && slots.length > 0) {
-            availableFields = window.GlobalFieldLocks.filterAvailableFields(fields, slots);
+            availableFields = window.GlobalFieldLocks.filterAvailableFields(availableFields, slots);
 
             const lockedFields = fields.filter(f => !availableFields.includes(f));
             if (lockedFields.length > 0) {
                 console.log(`[SpecialtyLeagues] ⚠️ Fields already locked: ${lockedFields.join(', ')}`);
+            }
+        }
+
+        // ★★★ FILTER OUT FIELDS BLOCKED BY TIME RULES ★★★
+        if (slots && slots.length > 0) {
+            const _divSlots = window.divisionTimes?.[Object.keys(window.divisionTimes || {})[0]] || [];
+            const _slotStart = _divSlots[slots[0]]?.startMin;
+            const _slotEnd = _divSlots[slots[slots.length - 1]]?.endMin;
+            if (_slotStart != null && _slotEnd != null) {
+                const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                availableFields = availableFields.filter(fName => {
+                    const rules = window.activityProperties?.[fName]?.timeRules;
+                    if (!rules || rules.length === 0) return true;
+                    let hasAvail = false, inAvail = false;
+                    for (const r of rules) {
+                        const rS = r.startMin ?? (_parseMin ? _parseMin(r.start || r.startTime) : null);
+                        const rE = r.endMin ?? (_parseMin ? _parseMin(r.end || r.endTime) : null);
+                        if (rS == null || rE == null) continue;
+                        const rType = (r.type || '').toLowerCase();
+                        if ((rType === 'unavailable' || r.available === false) && rS < _slotEnd && rE > _slotStart) return false;
+                        if (rType === 'available' || r.available === true) {
+                            hasAvail = true;
+                            if (_slotStart >= rS && _slotEnd <= rE) inAvail = true;
+                        }
+                    }
+                    return !hasAvail || inAvail;
+                });
             }
         }
 

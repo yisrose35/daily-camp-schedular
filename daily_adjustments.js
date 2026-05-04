@@ -4777,7 +4777,7 @@ function renderOverrideDetailPane() {
       if (startMin === null || endMin === null) { daShowAlert('Invalid time format. Use format like 9:00am or 2:30pm.'); return; }
       if (startMin >= endMin) { daShowAlert('End time must be after start time.'); return; }
       
-      dailyRules.push({ type: ruleType, start, end });
+      dailyRules.push({ type: ruleType, start, end, startMin, endMin });
       currentOverrides.dailyFieldAvailability[name] = dailyRules;
       window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
       renderOverrideDetailPane();
