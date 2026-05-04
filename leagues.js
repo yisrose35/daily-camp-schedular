@@ -34,7 +34,7 @@
     let detailPaneEl = null;
     let _isInitialized = false;
     let _refreshTimeout = null;
-    let _saveInProgress = false;  // ★ Prevent refresh during save
+    let _saveInProgress = 0;  // ★ Counter: >0 means save in flight (prevents refresh)
     let _lastSaveTime = 0;        // ★ Track when last save happened
 
     // ★ FIX: Track active event listeners for cleanup (with target info)
@@ -195,12 +195,6 @@
         const div = document.createElement("div");
         div.textContent = String(str);
         return div.innerHTML;
-    }
-
-    function getPlaceSuffix(n) {
-        const s = ['th', 'st', 'nd', 'rd'];
-        const v = n % 100;
-        return s[(v - 20) % 10] || s[v] || s[0];
     }
 
     /**
@@ -365,36 +359,42 @@
 
         try {
             // ★ Set flag to prevent race condition with refresh
-            _saveInProgress = true;
+            _saveInProgress++;
             _lastSaveTime = Date.now();
             
             // ★ FIX: Also update localStorage immediately (not just queue for cloud)
             // This prevents the race condition where load reads stale localStorage
+            // Strip transient computed fields before persisting
+            var cleanData = JSON.parse(JSON.stringify(leaguesByName));
+            for (var _lk in cleanData) {
+                if (cleanData[_lk] && cleanData[_lk]._h2h) delete cleanData[_lk]._h2h;
+            }
+
             try {
                 const lsKey = 'campistryGlobalSettings';
                 const lsRaw = localStorage.getItem(lsKey);
                 const lsData = lsRaw ? JSON.parse(lsRaw) : {};
-                lsData.leaguesByName = leaguesByName;
+                lsData.leaguesByName = cleanData;
                 lsData.updated_at = new Date().toISOString();
                 localStorage.setItem(lsKey, JSON.stringify(lsData));
                 console.log("[LEAGUES] Data written to localStorage immediately");
             } catch (lsErr) {
                 console.warn("[LEAGUES] localStorage write failed:", lsErr);
             }
-            
+
             // ★ Save via saveGlobalSettings (handles batching + cloud sync)
-            window.saveGlobalSettings?.('leaguesByName', leaguesByName);
+            window.saveGlobalSettings?.('leaguesByName', cleanData);
             
             console.log("[LEAGUES] Data saved to cloud");
             
             // ★ Clear flag after protection window to prevent stale refresh
             // Must match the 5-second window in refreshFromStorage
             setTimeout(() => {
-                _saveInProgress = false;
+                _saveInProgress = Math.max(0, _saveInProgress - 1);
             }, 5500);
         } catch (e) {
             console.error("[LEAGUES] Save failed:", e);
-            _saveInProgress = false;
+            _saveInProgress = Math.max(0, _saveInProgress - 1);
         }
     }
 
@@ -612,39 +612,6 @@
     }
 
     // =========================================================================
-    // TIME HELPERS
-    // =========================================================================
-    function parseTimeToMinutes(str) {
-        if (!str || typeof str !== "string") return null;
-        let s = str.trim().toLowerCase();
-        let mer = null;
-        if (s.endsWith("am") || s.endsWith("pm")) {
-            mer = s.endsWith("am") ? "am" : "pm";
-            s = s.replace(/am|pm/g, "").trim();
-        }
-        const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-        if (!m) return null;
-        let hh = parseInt(m[1], 10);
-        const mm = parseInt(m[2], 10);
-        if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-        if (mer) {
-            if (hh === 12) hh = (mer === "am") ? 0 : 12;
-            else if (mer === "pm") hh += 12;
-        }
-        return hh * 60 + mm;
-    }
-
-    function minutesToTimeStr(m) {
-        if (m == null || isNaN(m)) return "";
-        let hh = Math.floor(m / 60) % 24;
-        const mm = m % 60;
-        const mer = hh >= 12 ? "pm" : "am";
-        if (hh === 0) hh = 12;
-        else if (hh > 12) hh -= 12;
-        return hh + ":" + String(mm).padStart(2, '0') + mer;
-    }
-
-    // =========================================================================
     // INIT - ★ WITH CLOUD SUBSCRIPTION AND TAB VISIBILITY HANDLING
     // =========================================================================
     window.initLeagues = function () {
@@ -723,7 +690,7 @@
             const name = addInput?.value?.trim();
             if (!name) return;
             if (leaguesByName[name]) {
-                alert('League "' + escapeHtml(name) + '" already exists.');
+                alert('League "' + name + '" already exists.');
                 return;
             }
             leaguesByName[name] = {
@@ -846,7 +813,7 @@
                 renderMasterList();
                 renderDetailPane();
             } else if (leaguesByName[newName]) {
-                alert('League "' + escapeHtml(newName) + '" already exists.');
+                alert('League "' + newName + '" already exists.');
             }
         });
 
@@ -875,7 +842,7 @@
                 return;
             }
 
-            if (confirm("Delete league \"" + escapeHtml(selectedLeagueName) + "\"?")) {
+            if (confirm("Delete league \"" + selectedLeagueName + "\"?")) {
                 delete leaguesByName[selectedLeagueName];
                 selectedLeagueName = null;
                 saveLeaguesData();
@@ -1226,7 +1193,7 @@
                 var globalFields = settings.fields || settings.app1?.fields || [];
                 var zoneSports = new Set();
                 zoneFieldNames.forEach(function(fn) { var fc = globalFields.find(function(f){return f.name===fn;}); if (fc && fc.activities) fc.activities.forEach(function(s){zoneSports.add(s);}); });
-                if (zoneSports.size > 0) infoDiv.innerHTML += '<br><span style="color:#6B7280; font-style:italic;">Sports at ' + escapeHtml(league.offCampus.zone) + ': ' + Array.from(zoneSports).join(', ') + '</span>';
+                if (zoneSports.size > 0) infoDiv.innerHTML += '<br><span style="color:#6B7280; font-style:italic;">Sports at ' + escapeHtml(league.offCampus.zone) + ': ' + Array.from(zoneSports).map(escapeHtml).join(', ') + '</span>';
                 offCampusCard.appendChild(infoDiv);
                 if (numTeamsAway >= totalTeams) {
                     var warnDiv = document.createElement('div');
@@ -1562,12 +1529,11 @@
         const todaysGames = [];
         const pastGames = [];
         
-        games.forEach((g, idx) => {
-            const gameWithIdx = { ...g, _idx: idx };
+        games.forEach((g) => {
             if (g.date === currentDate) {
-                todaysGames.push(gameWithIdx);
+                todaysGames.push(g);
             } else {
-                pastGames.push(gameWithIdx);
+                pastGames.push(g);
             }
         });
         
@@ -1674,7 +1640,7 @@
         
         const gameTitle = document.createElement('div');
         gameTitle.className = 'league-card-title';
-        gameTitle.textContent = game.gameLabel || ('Game ' + (game._idx + 1));
+        gameTitle.textContent = game.gameLabel || ('Game ' + (league.games.indexOf(game) + 1));
         
         const headerRight = document.createElement('div');
         headerRight.style.cssText = 'display:flex; align-items:center; gap:12px;';
@@ -1691,10 +1657,12 @@
         deleteBtn.onclick = (e) => {
             e.stopPropagation();
             if (confirm('Delete this game? This action cannot be undone.')) {
-                league.games.splice(game._idx, 1);
+                const idx = league.games.indexOf(game);
+                if (idx >= 0) league.games.splice(idx, 1);
                 recalcStandings(league);
                 saveLeaguesData();
-                renderGameEntryUI(league, card.parentElement);
+                const gamesContainer = card.closest('[data-section="games"]') || card.parentElement;
+                renderGameEntryUI(league, gamesContainer);
             }
         };
         
@@ -1733,13 +1701,13 @@
             addMatchBtn.onclick = () => {
                 if (!game.matches) game.matches = [];
                 game.matches.push({ teamA: '', teamB: '', scoreA: null, scoreB: null });
-                league.games[game._idx] = game;
                 saveLeaguesData();
-                renderGameEntryUI(league, card.parentElement);
+                const gamesContainer = card.closest('[data-section="games"]') || card.parentElement;
+                renderGameEntryUI(league, gamesContainer);
             };
             
             const saveStatus = document.createElement('span');
-            saveStatus.id = 'save-status-' + game._idx;
+            saveStatus.id = 'save-status-' + league.games.indexOf(game);
             saveStatus.className = 'league-save-status';
             saveStatus.textContent = 'Saved';
             
@@ -1820,10 +1788,10 @@
             deleteBtn.className = 'league-match-delete';
             deleteBtn.onclick = () => {
                 game.matches.splice(matchIdx, 1);
-                league.games[game._idx] = game;
                 recalcStandings(league);
                 saveLeaguesData();
-                renderGameEntryUI(league, row.closest('[data-section="games"]'));
+                const gamesContainer = row.closest('[data-section="games"]');
+                if (gamesContainer) renderGameEntryUI(league, gamesContainer);
             };
             actionsDiv.appendChild(deleteBtn);
         }
@@ -1832,25 +1800,24 @@
         const handleScoreChange = () => {
             match.scoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
             match.scoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
-            league.games[game._idx].matches[matchIdx] = match;
-            
+
             recalcStandings(league);
             saveLeaguesData();
-            
+
             // Update styling
             const newHasScores = match.scoreA != null && match.scoreB != null;
             const newAWins = newHasScores && match.scoreA > match.scoreB;
             const newBWins = newHasScores && match.scoreB > match.scoreA;
             const newIsTie = newHasScores && match.scoreA === match.scoreB;
-            
+
             teamAName.className = 'league-match-team' + (newAWins ? ' winner' : '');
             teamBName.className = 'league-match-team' + (newBWins ? ' winner' : '');
-            
+
             scoreAInput.className = 'league-score-input' + (newAWins ? ' winner-bg' : (newIsTie ? ' tie-bg' : ''));
             scoreBInput.className = 'league-score-input' + (newBWins ? ' winner-bg' : (newIsTie ? ' tie-bg' : ''));
-            
+
             // Show save indicator
-            const saveStatus = document.getElementById('save-status-' + game._idx);
+            const saveStatus = document.getElementById('save-status-' + league.games.indexOf(game));
             if (saveStatus) {
                 saveStatus.classList.add('visible');
                 setTimeout(() => saveStatus.classList.remove('visible'), 1500);
@@ -1945,17 +1912,6 @@
         if (num1 && num2) {
             // Numbers must match exactly (prevents "1" matching "11")
             return num1.number === num2.number;
-        }
-        
-        // Check if one contains the other as a word boundary match
-        // e.g., "Junior Boys" contains "Junior Boys 1" - but we want exact for numbers
-        const s1 = String(div1).toLowerCase().trim();
-        const s2 = String(div2).toLowerCase().trim();
-        
-        // If neither has a number, check for substring with word boundaries
-        if (!num1 && !num2) {
-            // One must fully contain the other
-            return s1.includes(s2) || s2.includes(s1);
         }
         
         return false;
@@ -2163,8 +2119,17 @@
                 );
 
                 if (existingIdx >= 0) {
-                    // Update existing
-                    league.games[existingIdx] = newGame;
+                    // Merge: add new matchups but preserve existing scores
+                    const existing = league.games[existingIdx];
+                    newGame.matches.forEach(nm => {
+                        const found = (existing.matches || []).find(em =>
+                            em.teamA === nm.teamA && em.teamB === nm.teamB
+                        );
+                        if (!found) {
+                            if (!existing.matches) existing.matches = [];
+                            existing.matches.push(nm);
+                        }
+                    });
                 } else {
                     // Add new
                     league.games.push(newGame);
@@ -2223,6 +2188,7 @@
      */
     function recalcStandings(league) {
         if (!league || !league.teams) return;
+        if (!league.standings) league.standings = {};
 
         // Initialize standings for all teams
         league.teams.forEach(function (t) {

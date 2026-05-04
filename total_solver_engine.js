@@ -82,6 +82,7 @@
     var _smallBunkFlags = new Set();
     var _sportPlayerReqs = new Map();   // actNorm → { min, max } cached sport player rules
     var _bunkSizeCache = new Map();     // bunk → size (camper count) cached once per solve
+    var _comboExclusiveMap = new Map(); // fieldNorm → [partnerFieldNorm, …] cached combo partners
     var _passNumber = 0;
     var _passAnalysis = null;
 
@@ -105,7 +106,7 @@
         _isRainyDay = false; _rainyCapOverrides.clear(); _rainyTimeBypasses.clear();
         _perfCounters = { rotationCacheHits: 0, rotationCacheMisses: 0, timeIndexQueries: 0, domainPruned: 0, augmentingPathAttempts: 0, augmentingPathSuccesses: 0 };
         _fieldGroupMap = {}; _fieldGroups = {}; _divisionSeniorityMap = {};
-        _sportPlayerReqs.clear(); _bunkSizeCache.clear();
+        _sportPlayerReqs.clear(); _bunkSizeCache.clear(); _comboExclusiveMap.clear();
         if (window.RotationEngine?.invalidateMetaCaches) window.RotationEngine.invalidateMetaCaches();
     }
     // ========================================================================
@@ -478,13 +479,30 @@
     function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
         if (startMin === undefined || endMin === undefined) return null;
         var fieldNorm = normName(fieldName);
-        var entries = _fieldTimeIndex.get(fieldNorm); if (!entries) return null;
-        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
-        for (var i = 0; i < upperBound; i++) {
-            var e = entries[i];
-            if (e.divName === blockDivName) continue;
-            if (e.bunk === excludeBunk) continue;
-            if (e.endMin > startMin) return { conflictingDiv: e.divName, conflictingBunk: e.bunk, theirTime: e.startMin + '-' + e.endMin, ourTime: startMin + '-' + endMin, overlapTime: Math.max(startMin, e.startMin) + '-' + Math.min(endMin, e.endMin) };
+        // Check the field itself
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (entries) {
+            var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
+            for (var i = 0; i < upperBound; i++) {
+                var e = entries[i];
+                if (e.divName === blockDivName) continue;
+                if (e.bunk === excludeBunk) continue;
+                if (e.endMin > startMin) return { conflictingDiv: e.divName, conflictingBunk: e.bunk, theirTime: e.startMin + '-' + e.endMin, ourTime: startMin + '-' + endMin, overlapTime: Math.max(startMin, e.startMin) + '-' + Math.min(endMin, e.endMin) };
+            }
+        }
+        // Check combo-exclusive partners (e.g. "Full Gym" blocks "Gym 1"/"Gym 2" and vice versa)
+        var comboPartners = _comboExclusiveMap.get(fieldNorm);
+        if (comboPartners) {
+            for (var cpi = 0; cpi < comboPartners.length; cpi++) {
+                var cpEntries = _fieldTimeIndex.get(comboPartners[cpi]);
+                if (!cpEntries) continue;
+                var cpUpper = findFirstOverlapIndex(cpEntries, startMin, endMin);
+                for (var cpj = 0; cpj < cpUpper; cpj++) {
+                    var cpe = cpEntries[cpj];
+                    if (cpe.bunk === excludeBunk) continue;
+                    if (cpe.endMin > startMin) return { conflictingDiv: cpe.divName, conflictingBunk: cpe.bunk, theirTime: cpe.startMin + '-' + cpe.endMin, ourTime: startMin + '-' + endMin, overlapTime: Math.max(startMin, cpe.startMin) + '-' + Math.min(endMin, cpe.endMin), comboConflict: comboPartners[cpi] };
+                }
+            }
         }
         return null;
     }
@@ -746,6 +764,13 @@
             var sType = fp ? fp.sharingType : getSharingType(fieldName);
             var cap = fp ? fp.capacity : getFieldCapacity(fieldName);
             if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
+            // Combined field: block if ANY combo partner is in use (same or different division)
+            var _cbPartners = _comboExclusiveMap.get(fieldNorm);
+            if (_cbPartners) {
+                for (var _cbi = 0; _cbi < _cbPartners.length; _cbi++) {
+                    if (getFieldUsageFromTimeIndex(_cbPartners[_cbi], blockStart, blockEnd, bunk) > 0) return 999999;
+                }
+            }
             if (checkSameFieldActivityMismatch(fieldName, blockStart, blockEnd, act, bunk)) return 999999;
             if (sType === 'not_sharable') { if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999; }
             else { if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999; }
@@ -1127,6 +1152,27 @@
         for (var bkName in bunkMeta) { var bkSize = bunkMeta[bkName]?.size || 0; if (bkSize > 0) _bunkSizeCache.set(bkName, bkSize); }
         if (minThresholds.length > 0) { minThresholds.sort(function(a, b) { return a - b; }); var medianMin = minThresholds[Math.floor(minThresholds.length / 2)]; for (var bunkName in bunkMeta) { var size = bunkMeta[bunkName]?.size || 0; if (size > 0 && size < medianMin) _smallBunkFlags.add(bunkName); } }
         if (_sportPlayerReqs.size > 0) v12Log('Player count rules cached: ' + _sportPlayerReqs.size + ' sports, ' + _bunkSizeCache.size + ' bunks with sizes');
+        // Cache combined-field exclusive partners for fast lookup in penalty/conflict checks
+        _comboExclusiveMap.clear();
+        if (window.FieldCombos?.getExclusiveFields) {
+            // Collect all field names from activityProperties, candidate options, and combo definitions
+            var _cfAllNames = new Set(Object.keys(activityProperties));
+            for (var _cfi2 = 0; _cfi2 < allCandidateOptions.length; _cfi2++) {
+                if (allCandidateOptions[_cfi2].field) _cfAllNames.add(allCandidateOptions[_cfi2].field);
+            }
+            var _comboLookupData = window.getFieldComboLookup?.();
+            if (_comboLookupData) {
+                for (var _ck in _comboLookupData.combinedToSubs) _cfAllNames.add(_ck);
+                for (var _sk in _comboLookupData.subToCombined) _cfAllNames.add(_sk);
+            }
+            _cfAllNames.forEach(function(_cfn) {
+                var _cfPartners = window.FieldCombos.getExclusiveFields(_cfn);
+                if (_cfPartners && _cfPartners.length > 0) {
+                    _comboExclusiveMap.set(normName(_cfn), _cfPartners.map(normName));
+                }
+            });
+            if (_comboExclusiveMap.size > 0) v12Log('Combined field exclusions cached: ' + _comboExclusiveMap.size + ' fields');
+        }
         // Skeleton context
         var bunkBlocks = {};
         for (var bi = 0; bi < activityBlocks.length; bi++) { var blk = activityBlocks[bi]; var bk = blk.bunk; if (!bunkBlocks[bk]) bunkBlocks[bk] = []; bunkBlocks[bk].push({ idx: bi, startTime: blk.startTime || 0, event: blk.event || '' }); }
@@ -1625,16 +1671,14 @@
     function wouldConflict(aBlock,aPick,oBlock,oCand) {
         var afn = normName(aPick.field), ofn = oCand._fieldNorm || normName(oCand.field);
         if (afn !== ofn) {
-            // ★★★ COMBINED FIELD: check if these are combo partners ★★★
-            if (window.FieldCombos?.isInCombo) {
-                var exclusive = window.FieldCombos.getExclusiveFields(aPick.field || '');
-                var isPartner = false;
-                for (var _ei = 0; _ei < exclusive.length; _ei++) {
-                    if (exclusive[_ei].toLowerCase().trim() === ofn) { isPartner = true; break; }
-                }
+            // Combined field: check if these are combo partners via cached map
+            var _wcPartners = _comboExclusiveMap.get(afn);
+            if (_wcPartners) {
                 var aS=aBlock.startTime,aE=aBlock.endTime,oS=oBlock.startTime,oE=oBlock.endTime;
-                if (isPartner && aS !== undefined && oS !== undefined && !(aS >= oE || aE <= oS)) {
-                    return true; // Mutually exclusive combo partners at overlapping times
+                if (aS !== undefined && oS !== undefined && !(aS >= oE || aE <= oS)) {
+                    for (var _ei = 0; _ei < _wcPartners.length; _ei++) {
+                        if (_wcPartners[_ei] === ofn) return true;
+                    }
                 }
             }
             return false;
@@ -1909,6 +1953,9 @@
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
         var fp=S._fieldPropertyMap.get(fn); var cap=fp?fp.capacity:S.getFieldCapacity(fn); var st=fp?fp.sharingType:S.getSharingType(fn);
         if (S.checkCrossDivisionTimeConflict(fn,bDiv,sM,eM,bunk)) return false;
+        // Combined field: block if any combo partner is in use
+        var _vpPartners = _comboExclusiveMap.get(fnorm);
+        if (_vpPartners) { for (var _vpi = 0; _vpi < _vpPartners.length; _vpi++) { if (S.getFieldUsageFromTimeIndex(_vpPartners[_vpi],sM,eM,bunk) > 0) return false; } }
         if (st==='not_sharable') return S.getFieldUsageFromTimeIndex(fnorm,sM,eM,bunk)<cap;
         return S.countSameDivisionUsage(fn,bDiv,sM,eM,bunk)<cap;
     }
@@ -1981,6 +2028,7 @@
                 if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue;
                 if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue;
                 if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
+                var _dfCombo = _comboExclusiveMap.get(c._fieldNorm); if (_dfCombo) { var _dfBlocked = false; for (var _dfi2 = 0; _dfi2 < _dfCombo.length; _dfi2++) { if (S.getFieldUsageFromTimeIndex(_dfCombo[_dfi2],sM,eM,bunk) > 0) { _dfBlocked = true; break; } } if (_dfBlocked) continue; }
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; if(S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
