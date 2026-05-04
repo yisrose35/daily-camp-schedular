@@ -971,24 +971,30 @@
                 var _pcMySize = _bunkSizeCache.get(bunk) || 0;
                 if (_pcMySize > 0) {
                     var _pcProjected = _pcMySize;
+                    var _pcOtherCount = 0;
                     var _pcActEntries = _fieldTimeIndex.get(actNorm) || [];
                     for (var _pci = 0; _pci < _pcActEntries.length; _pci++) {
                         var _pcE = _pcActEntries[_pci];
                         if (_pcE.bunk === bunk) continue;
                         if (_pcE.endMin <= blockStart || _pcE.startMin >= blockEnd) continue;
                         _pcProjected += (_bunkSizeCache.get(_pcE.bunk) || 0);
+                        _pcOtherCount++;
                     }
                     if (_pcReq.max > 0 && _pcProjected > _pcReq.max) {
                         var _pcOverPct = (_pcProjected - _pcReq.max) / _pcReq.max;
                         if (_pcOverPct > 0.2) return 999999;
                         else if (_pcOverPct > 0.05) penalty += 20000 + Math.round(_pcOverPct * 50000);
                         else penalty += 8000;
-                    }
-                    if (_pcReq.min > 0 && _pcProjected < _pcReq.min) {
+                    } else if (_pcReq.min > 0 && _pcProjected < _pcReq.min) {
                         var _pcUnderPct = (_pcReq.min - _pcProjected) / _pcReq.min;
                         if (_pcUnderPct > 0.35) return 999999;
                         else if (_pcUnderPct > 0.2) penalty += 25000;
                         else penalty += 8000;
+                    } else if (_pcReq.min > 0 && _pcProjected >= _pcReq.min) {
+                        // ★ Valid range bonus: projected is between min and max
+                        penalty -= 15000;
+                        // Extra pull when completing a partial group (another bunk already there)
+                        if (_pcOtherCount > 0) penalty -= 8000;
                     }
                 }
             }
@@ -1198,7 +1204,22 @@
             var activitySupply = {}; for (var afs in actFieldSlots) activitySupply[afs] = actFieldSlots[afs].size;
             var bunkList = blockIndices.map(function(bi2) { return activityBlocks[bi2].bunk; });
             var pairedBunks = new Map();
-            for (var sbi = 0; sbi < bunkList.length; sbi++) { var sBunk = bunkList[sbi]; if (!_smallBunkFlags.has(sBunk) || pairedBunks.has(sBunk)) continue; var myNum = getBunkNumber(sBunk) || 0, bestPartner = null, bestDist = Infinity; for (var pbi = 0; pbi < bunkList.length; pbi++) { var pBunk = bunkList[pbi]; if (pBunk === sBunk) continue; if (pairedBunks.has(pBunk) && pairedBunks.get(pBunk) !== sBunk) continue; var dist = Math.abs((getBunkNumber(pBunk) || 0) - myNum); if (dist < bestDist) { bestDist = dist; bestPartner = pBunk; } } if (bestPartner) pairedBunks.set(sBunk, bestPartner); }
+            // Pair any bunk that can't meet any sport's minimum alone (not just globally small bunks)
+            var _maxMinReq = 0;
+            for (var [, _mmr] of _sportPlayerReqs) { if (_mmr.min > _maxMinReq) _maxMinReq = _mmr.min; }
+            for (var sbi = 0; sbi < bunkList.length; sbi++) {
+                var sBunk = bunkList[sbi]; if (pairedBunks.has(sBunk)) continue;
+                var sBunkSize = bunkSizes[sBunk] || 0;
+                if (sBunkSize >= _maxMinReq && !_smallBunkFlags.has(sBunk)) continue;
+                var myNum = getBunkNumber(sBunk) || 0, bestPartner = null, bestDist = Infinity;
+                for (var pbi = 0; pbi < bunkList.length; pbi++) {
+                    var pBunk = bunkList[pbi]; if (pBunk === sBunk) continue;
+                    if (pairedBunks.has(pBunk) && pairedBunks.get(pBunk) !== sBunk) continue;
+                    var dist = Math.abs((getBunkNumber(pBunk) || 0) - myNum);
+                    if (dist < bestDist) { bestDist = dist; bestPartner = pBunk; }
+                }
+                if (bestPartner) pairedBunks.set(sBunk, bestPartner);
+            }
             var allocated = {}, activityUsed = {};
             var sortedBunks = bunkList.slice().sort(function(a, b) { return (wishLists[a]?.length || 0) - (wishLists[b]?.length || 0); });
             for (var abi = 0; abi < sortedBunks.length; abi++) {
@@ -1212,21 +1233,58 @@
                     for (var existBunk in allocated) { if (allocated[existBunk] === wish.activity) projectedPlayers += (bunkSizes[existBunk] || 0); }
                     var maxReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(wish.activity);
                     if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers) continue;
-                    // ★ Min player check: hard-skip if combined count is still significantly under minimum
+                    // ★ Min player check: allow if a partner could be pulled in by the repair pass
                     // Guard: skip enforcement when bunk size data is unconfigured (projectedPlayers === 0)
                     if (projectedPlayers > 0 && maxReqs?.minPlayers && projectedPlayers < maxReqs.minPlayers) {
-                        if ((maxReqs.minPlayers - projectedPlayers) / maxReqs.minPlayers > 0.2) continue;
-                    }
-                    // ★ Unpaired small-bunk guard: bunk can't reach min alone and no pair is available —
-                    // only allow if already-allocated bunks bring the combined total to minimum
-                    if (projectedPlayers > 0 && wish.needsSharing && !pairedBunks.has(aBunk)) {
-                        if (!maxReqs?.minPlayers || projectedPlayers < maxReqs.minPlayers) continue;
+                        // Check if any unallocated bunk could bring us to min
+                        var _canReachMin = false;
+                        for (var _mci = 0; _mci < sortedBunks.length; _mci++) {
+                            var _mcB = sortedBunks[_mci];
+                            if (_mcB === aBunk || allocated[_mcB]) continue;
+                            var _mcTotal = projectedPlayers + (bunkSizes[_mcB] || 0);
+                            if (_mcTotal >= maxReqs.minPlayers && (!maxReqs.maxPlayers || _mcTotal <= maxReqs.maxPlayers)) { _canReachMin = true; break; }
+                        }
+                        if (!_canReachMin) continue;
                     }
                     allocated[aBunk] = wish.activity; activityUsed[wish.activity] = (activityUsed[wish.activity] || 0) + 1;
                     if (pairedBunks.has(aBunk) && !allocated[pairedBunks.get(aBunk)]) { var prt = pairedBunks.get(aBunk); if ((wishLists[prt] || []).some(function(w) { return w.activity === wish.activity; }) && (activityUsed[wish.activity] || 0) < (activitySupply[wish.activity] || 0)) { allocated[prt] = wish.activity; activityUsed[wish.activity]++; } }
                     break;
                 }
                 if (allocated[aBunk] && wishes2.length > 0 && allocated[aBunk] !== wishes2[0].activity) { var dk2 = aBunk + '|' + wishes2[0].activity; _activityDebt.set(dk2, (_activityDebt.get(dk2) || 0) - 2000); }
+            }
+            // ★ Min-violation repair: find activities under-min and pull in unallocated bunks
+            if (_sportPlayerReqs.size > 0) {
+                var actBunks = {};
+                for (var rpBunk in allocated) { var rpAct = allocated[rpBunk]; if (!actBunks[rpAct]) actBunks[rpAct] = []; actBunks[rpAct].push(rpBunk); }
+                for (var rpAct2 in actBunks) {
+                    var rpReq = _sportPlayerReqs.get(normName(rpAct2));
+                    if (!rpReq || !rpReq.min) continue;
+                    var rpTotal = 0;
+                    actBunks[rpAct2].forEach(function(b) { rpTotal += (bunkSizes[b] || 0); });
+                    if (rpTotal >= rpReq.min) continue;
+                    // Under minimum — try to pull in unallocated or over-served bunks
+                    var rpUnalloc = sortedBunks.filter(function(b) { return !allocated[b]; });
+                    // Sort candidates: prefer bunks whose size would bring total closest to min without exceeding max
+                    rpUnalloc.sort(function(a, b) {
+                        var aTotal = rpTotal + (bunkSizes[a] || 0);
+                        var bTotal = rpTotal + (bunkSizes[b] || 0);
+                        var aInRange = aTotal >= rpReq.min && (!rpReq.max || aTotal <= rpReq.max);
+                        var bInRange = bTotal >= rpReq.min && (!rpReq.max || bTotal <= rpReq.max);
+                        if (aInRange !== bInRange) return aInRange ? -1 : 1;
+                        return Math.abs(aTotal - rpReq.min) - Math.abs(bTotal - rpReq.min);
+                    });
+                    for (var rpUi = 0; rpUi < rpUnalloc.length; rpUi++) {
+                        var rpCand = rpUnalloc[rpUi];
+                        var rpNew = rpTotal + (bunkSizes[rpCand] || 0);
+                        if (rpReq.max && rpNew > rpReq.max) continue;
+                        // Check this bunk has the activity in its wish list
+                        if (!(wishLists[rpCand] || []).some(function(w) { return w.activity === rpAct2; })) continue;
+                        if ((activityUsed[rpAct2] || 0) >= (activitySupply[rpAct2] || 0)) break;
+                        allocated[rpCand] = rpAct2; activityUsed[rpAct2] = (activityUsed[rpAct2] || 0) + 1;
+                        rpTotal = rpNew;
+                        if (rpTotal >= rpReq.min) break;
+                    }
+                }
             }
           // ★★★ v15.3: fullGrade coordination — if any bunk got a fullGrade activity,
             // force ALL bunks in this group to be planned for it ★★★
