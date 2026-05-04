@@ -980,15 +980,15 @@
                     }
                     if (_pcReq.max > 0 && _pcProjected > _pcReq.max) {
                         var _pcOverPct = (_pcProjected - _pcReq.max) / _pcReq.max;
-                        if (_pcOverPct > 0.3) penalty += 999999;
-                        else if (_pcOverPct > 0.1) penalty += 12000 + Math.round(_pcOverPct * 30000);
-                        else penalty += 4000;
+                        if (_pcOverPct > 0.2) return 999999;
+                        else if (_pcOverPct > 0.05) penalty += 20000 + Math.round(_pcOverPct * 50000);
+                        else penalty += 8000;
                     }
                     if (_pcReq.min > 0 && _pcProjected < _pcReq.min) {
                         var _pcUnderPct = (_pcReq.min - _pcProjected) / _pcReq.min;
-                        if (_pcUnderPct > 0.4) penalty += 8000;
-                        else if (_pcUnderPct > 0.2) penalty += 4000;
-                        else penalty += 1500;
+                        if (_pcUnderPct > 0.35) return 999999;
+                        else if (_pcUnderPct > 0.2) penalty += 25000;
+                        else penalty += 8000;
                     }
                 }
             }
@@ -1211,11 +1211,11 @@
                     var projectedPlayers = bunkSizes[aBunk] || 0;
                     for (var existBunk in allocated) { if (allocated[existBunk] === wish.activity) projectedPlayers += (bunkSizes[existBunk] || 0); }
                     var maxReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(wish.activity);
-                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers * 1.1) continue;
+                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers) continue;
                     // ★ Min player check: hard-skip if combined count is still significantly under minimum
                     // Guard: skip enforcement when bunk size data is unconfigured (projectedPlayers === 0)
                     if (projectedPlayers > 0 && maxReqs?.minPlayers && projectedPlayers < maxReqs.minPlayers) {
-                        if ((maxReqs.minPlayers - projectedPlayers) / maxReqs.minPlayers > 0.25) continue;
+                        if ((maxReqs.minPlayers - projectedPlayers) / maxReqs.minPlayers > 0.2) continue;
                     }
                     // ★ Unpaired small-bunk guard: bunk can't reach min alone and no pair is available —
                     // only allow if already-allocated bunks bring the combined total to minimum
@@ -1760,9 +1760,9 @@
                         }
                         // Guard: skip enforcement when bunk size data is unconfigured (_pcTotal === 0)
                         if (_pcTotal > 0) {
-                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers * 1.1) canFit = false;
+                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers) canFit = false;
                             if (canFit && _pcSReqs.minPlayers && _pcTotal < _pcSReqs.minPlayers) {
-                                if ((_pcSReqs.minPlayers - _pcTotal) / _pcSReqs.minPlayers > 0.25) canFit = false;
+                                if ((_pcSReqs.minPlayers - _pcTotal) / _pcSReqs.minPlayers > 0.2) canFit = false;
                             }
                         }
                     }
