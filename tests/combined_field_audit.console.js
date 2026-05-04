@@ -35,9 +35,39 @@
     const norm = s => (s || '').toLowerCase().trim();
 
     function getComboDefinitions() {
+        // Try live lookup first
         const lookup = window.getFieldComboLookup?.();
-        if (!lookup) return null;
-        return lookup;
+        if (lookup && Object.keys(lookup.combinedToSubs || {}).length > 0) return lookup;
+
+        // Fallback: read fieldCombos from global settings
+        const gs = window.loadGlobalSettings?.() || {};
+        const combos = gs.app1?.fieldCombos || gs.fieldCombos || {};
+        const entries = Object.values(combos);
+        if (entries.length === 0) {
+            // Last resort: try localStorage
+            try {
+                const raw = localStorage.getItem('campGlobalSettings_v1') || localStorage.getItem('campistryGlobalSettings');
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    const fc = parsed?.app1?.fieldCombos || parsed?.fieldCombos || {};
+                    entries.push(...Object.values(fc));
+                }
+            } catch (e) { /* ignore */ }
+        }
+        if (entries.length === 0) return null;
+
+        // Build lookup from raw combo definitions
+        const combinedToSubs = {};
+        const subToCombined = {};
+        for (const combo of entries) {
+            if (!combo.combinedField || !Array.isArray(combo.subFields)) continue;
+            const cNorm = norm(combo.combinedField);
+            combinedToSubs[cNorm] = combo.subFields.slice();
+            for (const sub of combo.subFields) {
+                subToCombined[norm(sub)] = combo.combinedField;
+            }
+        }
+        return { combinedToSubs, subToCombined };
     }
 
     function buildBunkDivMap() {
