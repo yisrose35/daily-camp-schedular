@@ -3751,6 +3751,9 @@ if (bypassStatus.highlight) {
 
        const candidates = [];
 
+        // Same-day repetition guard: never suggest an activity this bunk already has today
+        const _doneToday = getActivitiesDoneToday(bunk, slots[0]);
+
         // ★ DEMO FIX: Use proper field iteration in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__) {
             const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
@@ -3849,6 +3852,7 @@ if (bypassStatus.highlight) {
         }
 
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
+            if (_doneToday.has(sport.toLowerCase().trim())) continue;
 
             (sportFields || []).forEach(fName => {
                 if (excludeSet.has(fName)) return;
@@ -3890,6 +3894,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
 
        (app1.specialActivities || []).forEach(special => {
             if (!special.name) return;
+            if (_doneToday.has(special.name.toLowerCase().trim())) return;
             if (excludeSet.has(special.name)) return;
             if (disabledFields.includes(special.name)) return;
             if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(special.name, slots, divName)) return;
@@ -3949,6 +3954,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
 
             if (available) {
                 (field.activities || []).forEach(activity => {
+                    if (_doneToday.has(activity.toLowerCase().trim())) return;
                     const penalty = calculateRotationPenalty(bunk, activity, slots);
                     if (penalty !== Infinity) {
                         candidates.push({ field: field.name, activityName: activity, type: 'sport', penalty });
