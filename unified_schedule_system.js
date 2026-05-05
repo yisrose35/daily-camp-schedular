@@ -3304,7 +3304,7 @@ if (bypassStatus.highlight) {
                 </div>
                 <div id="post-edit-field-result" style="display:none;"></div>
                 <details id="post-edit-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                    <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">📍 Override field manually</summary>
+                    <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">Override field manually</summary>
                     <select id="post-edit-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:0.95rem;box-sizing:border-box;background:white;margin-top:8px;">
                         <option value="">-- No specific field --</option>
                         <optgroup label="Fields">${locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (cap:${l.capacity})` : ''}</option>`).join('')}</optgroup>
@@ -4307,7 +4307,7 @@ function minutesToTimeString(mins) {
                 </div>
                 <div id="multi-field-result" style="display:none;"></div>
                 <details id="multi-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
-                    <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">📍 Override field manually</summary>
+                    <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">Override field manually</summary>
                     <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; margin-top:8px; box-sizing:border-box;">
                         <option value="">-- No specific field --</option>
                         ${allLocations.map(loc => `<option value="${loc.name}">${escapeHtml(loc.name)}</option>`).join('')}
