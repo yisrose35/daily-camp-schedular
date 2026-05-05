@@ -3730,8 +3730,8 @@ if (bypassStatus.highlight) {
         function _isBunkBlockedByAccess(fName, bunkName) {
             let props = activityProps[fName] || activityProps[fName.toLowerCase()] || {};
             if (!props.accessRestrictions?.enabled) {
-                const specialData = window.getSpecialActivityByName?.(fName);
-                if (fName === 'Woodworking') console.log('[DEBUG Woodworking]', { propsAR: props.accessRestrictions, specialData, specialAR: specialData?.accessRestrictions });
+                const specialData = window.getSpecialActivityByName?.(fName)
+                    || (app1.specialActivities || []).find(s => s.name === fName);
                 if (specialData?.accessRestrictions?.enabled) {
                     props = specialData;
                 } else {
