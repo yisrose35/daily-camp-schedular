@@ -237,7 +237,8 @@
                 }
                 : null; // null lets base() default take over
 
-            props[a.name] = base({
+            // Store under BOTH original case and lowercase so solver's normName() lookups work
+            const propEntry = base({
                 available: a.available !== false,
                 sharable: a.sharable || false,
                 sharableWith: normalizedActivitySW,
@@ -257,6 +258,9 @@
                 rainyDayExclusive: a.rainyDayExclusive === true,
                 fullGrade: a.fullGrade === true
             });
+            props[a.name] = propEntry;
+            const lowerKey = a.name.toLowerCase().trim();
+            if (lowerKey !== a.name) props[lowerKey] = propEntry;
         });
 
         // ★★★ ENHANCED: Include ALL field properties ★★★
@@ -285,7 +289,7 @@
                 endMin: r.endMin ?? parseTimeString(r.end)
             })) : [];
 
-            props[f.name] = base({
+            const fieldEntry = base({
                 type: 'field',
                 available: f.available !== false,
                 sharable: normalizedSharable.type !== 'not_sharable',
@@ -295,13 +299,13 @@
                 preferences: f.preferences || null,
                 accessRestrictions: normalizedLimitUsage,
                 timeRules: parsedTimeRules,
-                // ★★★ v2.2: Include rainyDayAvailable for fields ★★★
                 rainyDayAvailable: f.rainyDayAvailable === true,
-                // ★★★ Include activities array (sports this field supports) ★★★
                 activities: Array.isArray(f.activities) ? f.activities : [],
-                // Per-grade sharing overrides (keyed by grade name)
                 gradeShareRules: (f.gradeShareRules && typeof f.gradeShareRules === 'object') ? f.gradeShareRules : {}
             });
+            props[f.name] = fieldEntry;
+            const fLower = f.name.toLowerCase().trim();
+            if (fLower !== f.name) props[fLower] = fieldEntry;
         });
 
         return props;

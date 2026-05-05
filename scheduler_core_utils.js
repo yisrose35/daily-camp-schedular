@@ -2078,8 +2078,22 @@
         const historicalCounts = globalSettings.historicalCounts || {};
         const manualOffsets = globalSettings.manualUsageOffsets || {};
 
-        const baseCount = historicalCounts[bunkName]?.[activityName] || 0;
-        const offset = manualOffsets[bunkName]?.[activityName] || 0;
+        const bunkCounts = historicalCounts[bunkName];
+        let baseCount = bunkCounts?.[activityName] || 0;
+        if (baseCount === 0 && bunkCounts) {
+            const lower = activityName.toLowerCase();
+            for (const key in bunkCounts) {
+                if (key.toLowerCase() === lower) { baseCount = bunkCounts[key]; break; }
+            }
+        }
+        const bunkOffsets = manualOffsets[bunkName];
+        let offset = bunkOffsets?.[activityName] || 0;
+        if (offset === 0 && bunkOffsets) {
+            const lower = activityName.toLowerCase();
+            for (const key in bunkOffsets) {
+                if (key.toLowerCase() === lower) { offset = bunkOffsets[key]; break; }
+            }
+        }
 
         return Math.max(0, baseCount + offset);
     };

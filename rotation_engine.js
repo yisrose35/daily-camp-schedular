@@ -535,12 +535,26 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getActivityCount) {
             return window.SchedulerCoreUtils.getActivityCount(bunkName, activityName);
         }
-        // Fallback
+        // Fallback — case-insensitive lookup
         var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
         var historicalCounts = globalSettings.historicalCounts || {};
         var manualOffsets = globalSettings.manualUsageOffsets || {};
-        var baseCount = (historicalCounts[bunkName] && historicalCounts[bunkName][activityName]) || 0;
-        var offset = (manualOffsets[bunkName] && manualOffsets[bunkName][activityName]) || 0;
+        var bunkCounts = historicalCounts[bunkName] || {};
+        var baseCount = bunkCounts[activityName] || 0;
+        if (baseCount === 0) {
+            var lower = activityName.toLowerCase();
+            for (var key in bunkCounts) {
+                if (key.toLowerCase() === lower) { baseCount = bunkCounts[key]; break; }
+            }
+        }
+        var bunkOffsets = manualOffsets[bunkName] || {};
+        var offset = bunkOffsets[activityName] || 0;
+        if (offset === 0) {
+            var lower2 = activityName.toLowerCase();
+            for (var key2 in bunkOffsets) {
+                if (key2.toLowerCase() === lower2) { offset = bunkOffsets[key2]; break; }
+            }
+        }
         return Math.max(0, baseCount + offset);
     };
 
