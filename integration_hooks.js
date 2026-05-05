@@ -1000,6 +1000,12 @@
             // (Previously missing! The handler returned true without saving.)
             // ═══════════════════════════════════════════════════════════════
             try {
+                const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+                const dateKeys = Object.keys(data).filter(k => DATE_RE.test(k));
+                if (dateKeys.length > 5) {
+                    dateKeys.sort();
+                    dateKeys.slice(0, dateKeys.length - 5).forEach(k => delete data[k]);
+                }
                 localStorage.setItem('campDailyData_v1', JSON.stringify(data));
             } catch (e) {
                 if (e.name !== 'QuotaExceededError') logError('[saveGlobalSettings] localStorage write failed:', e);

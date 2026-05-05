@@ -152,15 +152,27 @@
             return {};
         }
     }
-    let _localQuotaWarned = false;
+    function pruneOldDates(data, keepCount) {
+        const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+        const dateKeys = Object.keys(data).filter(k => DATE_RE.test(k));
+        if (dateKeys.length <= keepCount) return data;
+        dateKeys.sort();
+        const toRemove = dateKeys.slice(0, dateKeys.length - keepCount);
+        toRemove.forEach(k => delete data[k]);
+        return data;
+    }
+
     function setLocalData(data) {
         try {
+            pruneOldDates(data, 5);
             localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
         } catch (e) {
-            if (!_localQuotaWarned && e.name === 'QuotaExceededError') {
-                _localQuotaWarned = true;
-                logWarn('localStorage quota exceeded — using cloud only (this message shown once)');
-            } else if (e.name !== 'QuotaExceededError') {
+            if (e.name === 'QuotaExceededError') {
+                pruneOldDates(data, 2);
+                try {
+                    localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
+                } catch (_) { /* cloud has it */ }
+            } else {
                 logError('Failed to write local storage:', e);
             }
         }

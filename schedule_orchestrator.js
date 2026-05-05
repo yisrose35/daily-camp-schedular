@@ -266,6 +266,13 @@
 
             allData[dateKey] = merged;
 
+            const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+            const dateKeys = Object.keys(allData).filter(k => DATE_RE.test(k));
+            if (dateKeys.length > 5) {
+                dateKeys.sort();
+                dateKeys.slice(0, dateKeys.length - 5).forEach(k => delete allData[k]);
+            }
+
             localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(allData));
             log('Saved to localStorage:', dateKey);
             return true;
