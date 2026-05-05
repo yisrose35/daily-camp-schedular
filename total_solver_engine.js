@@ -871,6 +871,10 @@
 
         // === SOFT PENALTIES ===
         penalty += rotationPenalty;
+        // Yesterday-repeat floor: solver bonuses must never fully negate a strong rotation penalty
+        if (rotationPenalty >= 50000) {
+            penalty = Math.max(penalty, 25000);
+        }
         if (actNorm === 'free' || fieldName === 'Free') penalty += 100000;
 
         // Type balance for GA Slots
