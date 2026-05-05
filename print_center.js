@@ -1220,11 +1220,26 @@ function renderManualBunksTop(divName, bunks, blocks) {
         html += '<tr data-block-start="' + eb.startMin + '" data-block-end="' + eb.endMin + '">';
         html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(eb.label) + '">' + eb.label + '</th>';
-        if (eb.isLeague && !_currentTemplate.hideLeagueMatchups) {
+        if (eb.isLeague && _currentTemplate.hideLeagueMatchups) {
+            // Hide matchups: show league label across all bunks
+            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;"><strong>' + escHtml(eb.event) + '</strong></td>';
+        } else if (eb.isLeague) {
+            // Show matchups: per-bunk cells with matchup details
             var matchups = buildLeagueMatchups(eb, divName);
-            var mHtml = '<strong>' + escHtml(eb.event) + '</strong>';
-            if (matchups.length) { mHtml += '<div>'; matchups.forEach(function (mu) { mHtml += '<span class="pc3-matchup">' + escHtml(mu) + '</span>'; }); mHtml += '</div>'; }
-            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;">' + mHtml + '</td>';
+            bunks.forEach(function (b, bi) {
+                var bunkMatchup = '';
+                if (matchups.length) {
+                    matchups.forEach(function (mu) {
+                        var muLower = mu.toLowerCase();
+                        var bLower = b.toLowerCase();
+                        if (muLower.indexOf(bLower) >= 0) bunkMatchup = mu;
+                    });
+                    if (!bunkMatchup) bunkMatchup = eb.event;
+                } else {
+                    bunkMatchup = eb.event;
+                }
+                html += '<td class="cell-league" data-r="' + rowR + '" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(bunkMatchup) + '" data-bunk="' + escHtml(b) + '" data-div="' + escHtml(divName) + '">' + escHtml(bunkMatchup) + '</td>';
+            });
         } else {
             bunks.forEach(function (b, bi) {
                 var si = findFirstSlotForTime(eb.startMin, divName);
@@ -1232,7 +1247,6 @@ function renderManualBunksTop(divName, bunks, blocks) {
                 var type = getEntryType(entry);
                 var text = entry ? formatEntry(entry) : '';
                 if (!text && type === 'free') text = '\u2014';
-                if (eb.isLeague && _currentTemplate.hideLeagueMatchups) { text = eb.event; type = 'league'; }
                 html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
             });
         }
@@ -1273,7 +1287,19 @@ function renderManualTimeTop(divName, bunks, blocks) {
             var type = getEntryType(entry);
             var text = entry ? formatEntry(entry) : '';
             if (!text && type === 'free') text = '\u2014';
-            if (eb.isLeague) { text = eb.event; type = 'league'; }
+            if (eb.isLeague) {
+                type = 'league';
+                if (_currentTemplate.hideLeagueMatchups) {
+                    text = eb.event;
+                } else {
+                    var matchups = buildLeagueMatchups(eb, divName);
+                    var bunkMatch = '';
+                    if (matchups.length) {
+                        matchups.forEach(function (mu) { if (mu.toLowerCase().indexOf(b.toLowerCase()) >= 0) bunkMatch = mu; });
+                    }
+                    text = bunkMatch || eb.event;
+                }
+            }
             html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
         });
         html += '</tr>';
