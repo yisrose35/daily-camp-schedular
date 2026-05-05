@@ -1324,6 +1324,21 @@
         // If the user opened a fresh browser or cleared cache, past dates are missing.
         // Load the last 14 days from the cloud so rotation scoring has history.
         try {
+            // Pre-trim localStorage to prevent quota issues
+            try {
+                const rawDaily = localStorage.getItem('campDailyData_v1');
+                if (rawDaily && rawDaily.length > 500000) {
+                    const trimData = JSON.parse(rawDaily);
+                    const trimKeys = Object.keys(trimData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+                    if (trimKeys.length > 14) {
+                        while (trimKeys.length > 14) delete trimData[trimKeys.shift()];
+                        localStorage.setItem('campDailyData_v1', JSON.stringify(trimData));
+                        window.invalidateDailyDataCache?.();
+                        console.log(`[STEP 0f] Pre-trimmed localStorage to ${Object.keys(trimData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).length} dates`);
+                    }
+                }
+            } catch (trimErr) { /* ignore trim failures */ }
+
             if (window.ScheduleDB?.loadDateRange && navigator.onLine) {
                 const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
                 const d = new Date(today + 'T12:00:00');
@@ -1358,9 +1373,22 @@
                         }
                     }
                     if (hydrated > 0) {
-                        localStorage.setItem('campDailyData_v1', JSON.stringify(allDaily));
-                        window.invalidateDailyDataCache?.();
-                        console.log(`[STEP 0f] ✅ Hydrated ${hydrated} past date(s) from cloud (${records.length} records)`);
+                        // Trim to last 14 days to reduce localStorage size
+                        const allDateKeys = Object.keys(allDaily).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+                        while (allDateKeys.length > 14) {
+                            delete allDaily[allDateKeys.shift()];
+                        }
+                        try {
+                            localStorage.setItem('campDailyData_v1', JSON.stringify(allDaily));
+                            window.invalidateDailyDataCache?.();
+                            console.log(`[STEP 0f] ✅ Hydrated ${hydrated} past date(s) from cloud (${records.length} records)`);
+                        } catch (quotaErr) {
+                            console.warn('[STEP 0f] localStorage quota exceeded, using in-memory fallback');
+                            if (window.setDailyDataMemoryOverride) {
+                                window.setDailyDataMemoryOverride(allDaily);
+                                console.log(`[STEP 0f] ✅ Hydrated ${hydrated} past date(s) into memory fallback`);
+                            }
+                        }
                     } else {
                         console.log(`[STEP 0f] All past dates already in localStorage`);
                     }

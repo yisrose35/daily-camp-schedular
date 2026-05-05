@@ -165,11 +165,18 @@
     // automatically invalidates on the next read.
     let _dailyDataCacheRaw = null;
     let _dailyDataCacheParsed = null;
+    let _dailyDataMemoryOverride = null;
     window.invalidateDailyDataCache = function() {
         _dailyDataCacheRaw = null;
         _dailyDataCacheParsed = null;
     };
+    window.setDailyDataMemoryOverride = function(data) {
+        _dailyDataMemoryOverride = data;
+        _dailyDataCacheRaw = null;
+        _dailyDataCacheParsed = null;
+    };
     window.loadAllDailyData = function() {
+        if (_dailyDataMemoryOverride) return _dailyDataMemoryOverride;
         try {
             const raw = localStorage.getItem(DAILY_DATA_KEY);
             if (raw === _dailyDataCacheRaw && _dailyDataCacheParsed !== null) {

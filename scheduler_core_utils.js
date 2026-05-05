@@ -2250,12 +2250,12 @@
                 console.log(`📊 [Hydrate] ✅ Merged ${datesSeen.size} dates into localStorage. ` +
                     `Total dates: ${Object.keys(allLocal).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).length}`);
             } catch (e) {
-                console.warn('📊 [Hydrate] localStorage full, trimming old dates...', e);
+                console.warn('📊 [Hydrate] localStorage full, trimming old dates...');
                 const dateKeys = Object.keys(allLocal)
                     .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
                     .sort();
 
-                while (dateKeys.length > 30) {
+                while (dateKeys.length > 14) {
                     delete allLocal[dateKeys.shift()];
                 }
 
@@ -2263,7 +2263,11 @@
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allLocal));
                     console.log('📊 [Hydrate] ✅ Saved trimmed data (last 30 dates)');
                 } catch (e2) {
-                    console.error('📊 [Hydrate] ❌ Still cannot save:', e2);
+                    console.warn('📊 [Hydrate] localStorage still full, using in-memory fallback');
+                    if (window.setDailyDataMemoryOverride) {
+                        window.setDailyDataMemoryOverride(allLocal);
+                        console.log('📊 [Hydrate] ✅ Data available via in-memory fallback');
+                    }
                 }
             }
 
