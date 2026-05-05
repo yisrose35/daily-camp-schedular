@@ -3032,6 +3032,34 @@ if (bypassStatus.highlight) {
     // MODAL UI (LEGACY / DIRECT EDIT)
     // =========================================================================
 
+    // ── Helper: get all fields used by leagues in a time range ──────────────
+    function _getLeagueFieldsInTimeRange(startMin, endMin) {
+        const result = new Set();
+        const leagues = window.leagueAssignments || {};
+        const divisions = window.divisions || {};
+        for (const [dName, divSlots] of Object.entries(leagues)) {
+            const dTimes = window.divisionTimes?.[dName] || [];
+            for (const [slotIdx, entry] of Object.entries(divSlots)) {
+                if (!entry?.matchups?.length) continue;
+                const idx = parseInt(slotIdx, 10);
+                const slotInfo = dTimes[idx];
+                if (!slotInfo) continue;
+                // Check time overlap
+                if (slotInfo.startMin >= endMin || slotInfo.endMin <= startMin) continue;
+                // Parse field names from matchup strings: "Team vs Team @ FieldName (Sport)"
+                for (const m of entry.matchups) {
+                    const raw = typeof m === 'string' ? m : m?.display || '';
+                    const atMatch = raw.match(/@\s*(.+?)\s*\(/);
+                    if (atMatch) {
+                        const fieldName = atMatch[1].trim();
+                        if (fieldName && fieldName !== 'Free') result.add(fieldName.toLowerCase());
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
     // ── Activity-first field search ─────────────────────────────────────────
     // Returns { open: [{name,capacity,...}], busy: [{name,capacity,conflict,...}] }
     // for fields that support the given activity at the given time range.
@@ -3057,22 +3085,28 @@ if (bypassStatus.highlight) {
             }
 
             // League lock check: field occupied by a league game at this time
-            if (window.GlobalFieldLocks && targetSlots.length > 0) {
+            // GlobalFieldLocks may not be initialized during post-edit, so also
+            // scan leagueAssignments directly for field usage at this time range.
+            if (window.GlobalFieldLocks?._initialized && targetSlots.length > 0) {
                 const lockInfo = window.GlobalFieldLocks.isFieldLocked(loc.name, targetSlots, divName);
                 if (lockInfo) {
                     busy.push({ ...loc, reason: 'league_locked', lockInfo });
                     continue;
                 }
-                // Also check if a combo-related field is league-locked
-                // (e.g. "Full Gym" locked → "Gym 2" should be blocked)
+            }
+            // Direct league field usage scan (works even without GlobalFieldLocks init)
+            if (startMin != null && endMin != null) {
+                const leagueFields = _getLeagueFieldsInTimeRange(startMin, endMin);
+                const locLower = loc.name.toLowerCase();
+                if (leagueFields.has(locLower)) {
+                    busy.push({ ...loc, reason: 'league_locked' });
+                    continue;
+                }
+                // Combo check: if a combo-related field is used by a league
                 if (window.FieldCombos?.isInCombo?.(loc.name)) {
                     const exclusiveFields = window.FieldCombos.getExclusiveFields(loc.name);
-                    let comboLocked = false;
-                    for (const exField of exclusiveFields) {
-                        const exLock = window.GlobalFieldLocks.isFieldLocked(exField, targetSlots, divName);
-                        if (exLock) { comboLocked = true; break; }
-                    }
-                    if (comboLocked) {
+                    const comboBlocked = exclusiveFields.some(f => leagueFields.has(f.toLowerCase()));
+                    if (comboBlocked) {
                         busy.push({ ...loc, reason: 'league_locked' });
                         continue;
                     }
