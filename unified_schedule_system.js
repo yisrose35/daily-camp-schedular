@@ -3123,8 +3123,16 @@ if (bypassStatus.highlight) {
                 continue;
             }
             const check = checkLocationConflict(loc.name, targetSlots, excludeBunk);
-            if (check.hasConflict) busy.push({ ...loc, conflict: check });
-            else open.push(loc);
+            if (check.hasConflict) {
+                busy.push({ ...loc, conflict: check });
+            } else {
+                // Check if another bunk is sharing this field (under capacity)
+                if (check.currentUsage > 0) {
+                    open.push({ ...loc, shared: true, currentUsage: check.currentUsage, maxCapacity: check.maxCapacity });
+                } else {
+                    open.push(loc);
+                }
+            }
         }
         return { open, busy, none: false };
     }
@@ -3341,9 +3349,13 @@ if (bypassStatus.highlight) {
             locationSelect.value = '';
 
             if (open.length > 0) {
-                const fieldButtons = open.map(l =>
-                    `<button class="pe-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#065f46;transition:all 0.15s;">${escapeHtml(l.name)}${l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : ''}</button>`
-                ).join('');
+                const fieldButtons = open.map(l => {
+                    const bg = l.shared ? '#fffbeb' : '#f0fdf4';
+                    const border = l.shared ? '#fcd34d' : '#86efac';
+                    const color = l.shared ? '#92400e' : '#065f46';
+                    const label = escapeHtml(l.name) + (l.shared ? ' <span style="font-size:0.72rem;opacity:0.8;">⚠ shared</span>' : '') + (l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : '');
+                    return `<button class="pe-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:${bg};border:1.5px solid ${border};border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:${color};transition:all 0.15s;">${label}</button>`;
+                }).join('');
                 const busyNote = busy.length > 0
                     ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => {
                         const reason = b.reason === 'access_restricted' ? 'no access' : b.reason === 'league_locked' ? 'league' : 'in use';
