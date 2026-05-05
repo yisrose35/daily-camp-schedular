@@ -1657,6 +1657,19 @@
                 if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
                 domain.add(ci2);
             }
+            // Hard-filter yesterday-repeats if fresher alternatives exist
+            if (domain.size > 1) {
+                var freshOpts = new Set();
+                var staleOpts = new Set();
+                for (var dci of domain) {
+                    var dScore = S.getPrecomputedRotationScore(bunk, allCands[dci].activityName);
+                    if (dScore >= 50000) staleOpts.add(dci);
+                    else freshOpts.add(dci);
+                }
+                if (freshOpts.size > 0 && staleOpts.size > 0) {
+                    domain = freshOpts;
+                }
+            }
             domains.set(bi, domain);
         }
         return { domains: domains, slotGroups: slotGroups };
