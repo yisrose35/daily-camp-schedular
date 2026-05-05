@@ -30,7 +30,7 @@
 (function() {
     'use strict';
 
-    console.log('📅 Unified Schedule System v4.1.0 loading...');
+    console.log('[Schedule] Unified Schedule System v4.1.0 loading...');
 
     // =========================================================================
     // CONFIGURATION
@@ -1896,7 +1896,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 }
             }
         }
-        console.log(`[PinnedPreserve] 📌 Captured ${capturedCount} pinned activities`);
+        console.log(`[PinnedPreserve] [PIN] Captured ${capturedCount} pinned activities`);
         return _pinnedSnapshot;
     }
 
@@ -2395,7 +2395,7 @@ divBlocks.forEach((block, blockIdx) => {
             const acts = block.electiveActivities || block.reservedFields || [];
             const label = acts.join(', ') || block.event || 'Elective';
             td.style.cssText = 'padding: 10px 16px; background: linear-gradient(135deg, #ede9fe, #ddd6fe); border-left: 4px solid #7c3aed; vertical-align: middle; text-align: center;';
-            td.innerHTML = `<span style="font-weight:600;color:#5b21b6;font-size:0.95rem;">🎯 ${escapeHtml(label)}</span>`;
+            td.innerHTML = `<span style="font-weight:600;color:#5b21b6;font-size:0.95rem;">[TARGET] ${escapeHtml(label)}</span>`;
         } else {
             const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
             const label = loc ? `${block.event} - ${loc}` : block.event;
@@ -2435,7 +2435,7 @@ divBlocks.forEach((block, blockIdx) => {
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
             bgColor = getEntryBackground(entry, block.event);
-            if (entry._pinned) displayText = '📌 ' + displayText;
+            if (entry._pinned) displayText = '[PIN] ' + displayText;
         }
         else if (!entry) {
             if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; }
@@ -2503,7 +2503,7 @@ if (bypassStatus.highlight) {
                 if (typeof openIntegratedEditModal === 'function') {
                     openIntegratedEditModal(bunk, slotIdx, existingEntry);
                 } else {
-                    enhancedEditCell(bunk, block.startMin, block.endMin, displayText.replace('📌 ', ''));
+                    enhancedEditCell(bunk, block.startMin, block.endMin, displayText.replace('[PIN] ', ''));
                 }
             };
         }
@@ -3336,12 +3336,12 @@ if (bypassStatus.highlight) {
                 const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
                 conflictArea.style.display = 'block';
                 let html = allAutoResolvable && !conflictCheck.globalLock
-                    ? `<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:8px;padding:12px;"><strong style="color:#1e40af;">🔄 Will Auto-Reassign</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#1e3a5f;">${escapeHtml(location)} is in use — affected bunks will be auto-moved:</p>`
+                    ? `<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:8px;padding:12px;"><strong style="color:#1e40af;">[AUTO] Will Auto-Reassign</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#1e3a5f;">${escapeHtml(location)} is in use — affected bunks will be auto-moved:</p>`
                     : `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;"><strong style="color:#92400e;">[!] Field Conflict</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#78350f;">${escapeHtml(location)} is already in use:</p>`;
                 if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">OK - Can auto-reassign: ${editableBunks.join(', ')}</div>`;
                 if (nonEditableBunks.length) html += `<div style="margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:6px;font-size:0.8rem;color:#991b1b;">✗ Other scheduler's bunks: ${nonEditableBunks.join(', ')}</div>
                     <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
-                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">📧 Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & warn them</div></div></label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">[NOTIFY] Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & warn them</div></div></label>
                         <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">[BYPASS] Bypass & reassign</div><div style="font-size:0.75rem;color:#6b7280;">Override and use smart regeneration</div></div></label>
                     </div>`;
                 html += '</div>';
@@ -4288,7 +4288,7 @@ function minutesToTimeString(mins) {
 
         modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">🎯 Multi-Bunk Edit</h2>
+                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">[TARGET] Multi-Bunk Edit</h2>
                 <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
             </div>
             <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
@@ -4320,7 +4320,7 @@ function minutesToTimeString(mins) {
                         <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">
                             <input type="radio" name="multi-mode" value="notify" checked style="margin-top: 3px;">
                             <div>
-                                <div style="font-weight: 500; color: #374151;">📧 Notify & Request Approval</div>
+                                <div style="font-weight: 500; color: #374151;">[NOTIFY] Notify & Request Approval</div>
                                 <div style="font-size: 0.85rem; color: #6b7280;">Changes require approval first</div>
                             </div>
                         </label>
@@ -4335,8 +4335,7 @@ function minutesToTimeString(mins) {
                 </div>
             </div>
             <div style="display: flex; gap: 12px; margin-top: 20px;">
-                <button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Preview: Preview</button>
-                <button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>🎯 Apply</button>
+                <button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>Apply</button>
             </div>
         `;
 
@@ -4392,6 +4391,8 @@ function minutesToTimeString(mins) {
                             multiFieldResult.querySelectorAll('.multi-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
                             btn.style.background = '#dcfce7'; btn.style.borderColor = '#16a34a'; btn.style.color = '#14532d';
                             if (multiLocSel) multiLocSel.value = btn.dataset.field;
+                            // Auto-preview immediately after field selection
+                            previewMultiBunkEdit();
                         });
                     });
                 } else if (busy.length > 0) {
@@ -4405,6 +4406,7 @@ function minutesToTimeString(mins) {
                     multiFieldResult.querySelector('#multi-ignore-field')?.addEventListener('click', () => {
                         if (multiLocSel) multiLocSel.value = '';
                         multiFieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
+                        previewMultiBunkEdit();
                     });
                     multiFieldResult.querySelector('#multi-make-room')?.addEventListener('click', () => {
                         showMakeRoomModal(actVal, busy, repSlots, ctxDiv, bunks[0], ctxStart ?? repSlots[0], ctxEnd ?? repSlots[repSlots.length-1], (freedField, reassignSummary) => {
@@ -4426,9 +4428,12 @@ function minutesToTimeString(mins) {
                 multiSearchTimer = setTimeout(runMultiActivitySearch, 380);
             });
             if (multiLocSel) multiLocSel.addEventListener('change', () => {
-                if (multiFieldResult) multiFieldResult.style.display = 'none';
-                document.getElementById('multi-edit-submit').disabled = true;
-                document.getElementById('multi-conflict-preview').style.display = 'none';
+                if (multiLocSel.value) {
+                    previewMultiBunkEdit();
+                } else {
+                    document.getElementById('multi-edit-submit').disabled = true;
+                    document.getElementById('multi-conflict-preview').style.display = 'none';
+                }
             });
         }
     }
@@ -4461,7 +4466,7 @@ if (leagueBlocks.length > 0) {
     previewArea.style.display = 'block';
     previewArea.style.cssText = 'background: #fef2f2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
     previewArea.innerHTML = `<div style="color: #991b1b; font-weight: 500;">
-        🚫 Cannot use this field
+        [BLOCKED] Cannot use this field
         <div style="font-weight: 400; margin-top: 6px; font-size: 0.9rem;">${leagueBlocks[0].reason}</div>
     </div>`;
     submitBtn.disabled = true;
@@ -5063,7 +5068,7 @@ if (softBlocks.length > 0) {
             } catch (e) { console.error('[CreateProposal] Error:', e); }
         }
 
-        showIntegratedToast(`📧 Proposal sent to ${affectedDivisions.length} scheduler(s)`, 'info');
+        showIntegratedToast(`[NOTIFY] Proposal sent to ${affectedDivisions.length} scheduler(s)`, 'info');
     }
 
     async function notifySchedulersOfProposal(proposal) {
@@ -5851,7 +5856,7 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
         setTimeout(() => pcObserver.disconnect(), 30000);
     }
 
-    console.log('📅 Unified Schedule System v4.1.0 loaded successfully');
+    console.log('[Schedule] Unified Schedule System v4.1.0 loaded successfully');
     console.log('   *** FULL DIVISIONTIMES INTEGRATION ***');
     console.log('   [OK] Division-aware time slot management');
     console.log('   [OK] TimeBasedFieldUsage for cross-division conflicts');
