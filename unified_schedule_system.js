@@ -3731,6 +3731,7 @@ if (bypassStatus.highlight) {
             let props = activityProps[fName] || activityProps[fName.toLowerCase()] || {};
             if (!props.accessRestrictions?.enabled) {
                 const specialData = window.getSpecialActivityByName?.(fName);
+                if (fName === 'Woodworking') console.log('[DEBUG Woodworking]', { propsAR: props.accessRestrictions, specialData, specialAR: specialData?.accessRestrictions });
                 if (specialData?.accessRestrictions?.enabled) {
                     props = specialData;
                 } else {
