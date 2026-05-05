@@ -3156,6 +3156,7 @@ if (bypassStatus.highlight) {
                 ...(loc.conflict.nonEditableConflicts || []).map(c => c.bunk)
             ])];
             const simUsage = window.buildFieldUsageBySlot?.([]) || {};
+            const sharedClaimed = {};
             // Mark this field as taken in sim
             targetSlots.forEach(idx => {
                 if (!simUsage[idx]) simUsage[idx] = {};
@@ -3164,8 +3165,10 @@ if (bypassStatus.highlight) {
             const alts = conflictBunks.map(cb => {
                 const cbDiv = getDivisionForBunk(cb);
                 const cbSlots = findSlotsForRange(startMin, endMin, cbDiv, cb);
-                const alt = findAlternativeForBunk(cb, cbSlots.length ? cbSlots : targetSlots, cbDiv, simUsage, [loc.name]);
+                const alt = findAlternativeForBunk(cb, cbSlots.length ? cbSlots : targetSlots, cbDiv, simUsage, [loc.name], sharedClaimed);
                 if (alt) {
+                    if (!sharedClaimed[alt.field]) sharedClaimed[alt.field] = [];
+                    sharedClaimed[alt.field].push({ bunk: cb, div: cbDiv });
                     (cbSlots.length ? cbSlots : targetSlots).forEach(idx => {
                         if (!simUsage[idx]) simUsage[idx] = {};
                         if (!simUsage[idx][alt.field]) simUsage[idx][alt.field] = { count: 0, bunks: {}, divisions: [] };
@@ -3708,7 +3711,7 @@ if (bypassStatus.highlight) {
         return { success, plan, blocked };
     }
 
-    function findAlternativeForBunk(bunk, slots, divName, simulatedUsage, excludeFields = []) {
+    function findAlternativeForBunk(bunk, slots, divName, simulatedUsage, excludeFields = [], claimedFields = {}) {
         const activityProps = getActivityProperties();
         const excludeSet = new Set(excludeFields.map(f => fieldLabel(f)));
         const settings = window.loadGlobalSettings?.() || {};
@@ -3769,11 +3772,25 @@ if (bypassStatus.highlight) {
             const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
             const shareType = props.sharableWith?.type || (props.sharable ? 'all' : 'not_sharable');
 
+            // Check claimedFields (cross-division, slot-independent)
+            const claimed = claimedFields[fName];
+            if (claimed && claimed.length > 0) {
+                const totalUsed = claimed.length;
+                // Count how many are already using it from simUsage at our slots
+                // to avoid double-counting
+                if (totalUsed >= maxCapacity) return false;
+                if (shareType === 'same_division' || shareType === 'not_sharable') {
+                    if (claimed.some(c => c.div !== divName)) return false;
+                } else if (shareType === 'custom') {
+                    const allowedDivs = props.sharableWith?.divisions || [];
+                    if (claimed.some(c => c.div !== divName && !allowedDivs.includes(c.div))) return false;
+                }
+            }
+
             for (const slotIdx of slots) {
                 const usage = simulatedUsage[slotIdx]?.[fName];
                 if (!usage || usage.count === 0) continue;
                 if (usage.count >= maxCapacity) return false;
-                // Cross-division sharing check
                 if (shareType === 'same_division' || shareType === 'not_sharable') {
                     if (usage.divisions && usage.divisions.length > 0 && !usage.divisions.includes(divName)) return false;
                 } else if (shareType === 'custom') {
@@ -4899,6 +4916,7 @@ if (softBlocks.length > 0) {
 
         const timeLabel = `${minutesToTimeStr(timeStartMin)} – ${minutesToTimeStr(timeEndMin)}`;
         const sharedSimUsage = window.buildFieldUsageBySlot?.([]) || {};
+        const sharedClaimed = {};
         const suggestions = overflowBunks.map(bunk => {
             const bunkDiv = getDivisionForBunk(bunk) || divName;
             const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, bunkDiv, bunk);
@@ -4907,9 +4925,11 @@ if (softBlocks.length > 0) {
                 if (!sharedSimUsage[idx]) sharedSimUsage[idx] = {};
                 sharedSimUsage[idx][location] = { count: 999, bunks: {}, divisions: [] };
             });
-            const alt = findAlternativeForBunk(bunk, bunkSlots, bunkDiv, sharedSimUsage, [location]);
-            // Update shared usage with the picked alternative so the next bunk sees it as occupied
+            const alt = findAlternativeForBunk(bunk, bunkSlots, bunkDiv, sharedSimUsage, [location], sharedClaimed);
+            // Track claimed field so next bunk sees cross-division conflict
             if (alt) {
+                if (!sharedClaimed[alt.field]) sharedClaimed[alt.field] = [];
+                sharedClaimed[alt.field].push({ bunk, div: bunkDiv });
                 bunkSlots.forEach(idx => {
                     if (!sharedSimUsage[idx]) sharedSimUsage[idx] = {};
                     if (!sharedSimUsage[idx][alt.field]) sharedSimUsage[idx][alt.field] = { count: 0, bunks: {}, divisions: [] };
