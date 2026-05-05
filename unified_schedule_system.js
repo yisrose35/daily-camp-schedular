@@ -1390,7 +1390,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
             location, activity, 'bypassed'
         );
         if (window.showToast) {
-            window.showToast(`[BYPASS] Bypassed ${nonEditableConflicts.length} bunk(s) from other schedulers`, 'warning');
+            window.showToast(`Bypassed ${nonEditableConflicts.length} bunk(s) from other schedulers`, 'warning');
         }
     }
 }
@@ -1611,7 +1611,7 @@ actualSlots.forEach((slotIdx, i) => {
             results.success = false;
             
             if (window.showToast) {
-                window.showToast(`[!] ${bunk}: No alternative found`, 'warning');
+                window.showToast(`${bunk}: No alternative found`, 'warning');
             }
         }
     }
@@ -1855,7 +1855,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                     _noAlternative: true, _originalActivity: originalActivity, _originalField: avoidLocation 
                 };
             });
-            if (window.showToast) window.showToast(`[!] ${bunk}: No alternative found`, 'warning');
+            if (window.showToast) window.showToast(`${bunk}: No alternative found`, 'warning');
             return { success: false, reason: 'No valid alternative found' };
         }
     }
@@ -2395,7 +2395,7 @@ divBlocks.forEach((block, blockIdx) => {
             const acts = block.electiveActivities || block.reservedFields || [];
             const label = acts.join(', ') || block.event || 'Elective';
             td.style.cssText = 'padding: 10px 16px; background: linear-gradient(135deg, #ede9fe, #ddd6fe); border-left: 4px solid #7c3aed; vertical-align: middle; text-align: center;';
-            td.innerHTML = `<span style="font-weight:600;color:#5b21b6;font-size:0.95rem;">[TARGET] ${escapeHtml(label)}</span>`;
+            td.innerHTML = `<span style="font-weight:600;color:#5b21b6;font-size:0.95rem;">${escapeHtml(label)}</span>`;
         } else {
             const loc = block.location || (Array.isArray(block.reservedFields) && block.reservedFields.length > 0 ? block.reservedFields.join(', ') : '');
             const label = loc ? `${block.event} - ${loc}` : block.event;
@@ -2492,8 +2492,8 @@ if (bypassStatus.highlight) {
         if (isBlocked) { 
             td.style.cursor = 'not-allowed'; 
             td.onclick = () => { 
-                if (window.showToast) window.showToast(`[LOCKED] Cannot edit: ${blockedReason}`, 'error'); 
-                else alert(`[LOCKED] Cannot edit: ${blockedReason}`); 
+                if (window.showToast) window.showToast(`Cannot edit: ${blockedReason}`, 'error');
+                else alert(`Cannot edit: ${blockedReason}`); 
             }; 
         }
         else if (isEditable) { 
@@ -2785,7 +2785,7 @@ if (bypassStatus.highlight) {
                 });
                 const schedulerInfo = updatedSchedulers.length > 0 ? ` (updated: ${updatedSchedulers.join(', ')})` : '';
                 window.showToast(
-                    `[BYPASS] Cross-division bypass: ${modifiedBunks.length} bunk(s) in Div ${[...divisionNames].join(', ')}${schedulerInfo}`, 
+                    `Cross-division bypass: ${modifiedBunks.length} bunk(s) in Div ${[...divisionNames].join(', ')}${schedulerInfo}`, 
                     failCount === 0 ? 'success' : 'warning'
                 );
             }
@@ -2834,7 +2834,7 @@ if (bypassStatus.highlight) {
                 } 
             });
             window.showToast(
-                `[BYPASS] Bypass saved: ${modifiedBunks.length} bunk(s)${[...divisionNames].length ? ` in Div ${[...divisionNames].join(', ')}` : ''} - synced`, 
+                `Bypass saved: ${modifiedBunks.length} bunk(s)${[...divisionNames].length ? ` in Div ${[...divisionNames].join(', ')}` : ''} - synced`, 
                 'success'
             );
         }
@@ -2932,7 +2932,7 @@ if (bypassStatus.highlight) {
             const notifications = notifyUsers.map(targetUserId => ({
                 camp_id: campId, user_id: targetUserId,
                 type: notificationType === 'bypassed' ? 'schedule_bypassed' : 'schedule_conflict',
-                title: notificationType === 'bypassed' ? '[BYPASS] Your schedule was modified' : '[!] Schedule conflict detected',
+                title: notificationType === 'bypassed' ? 'Your schedule was modified' : 'Schedule conflict detected',
                 message: notificationType === 'bypassed' ? `Another scheduler reassigned bunks (${affectedBunks.join(', ')}) for ${location} - ${activity} on ${dateKey}` : `Conflict at ${location} for ${activity} on ${dateKey}. Affected bunks: ${affectedBunks.join(', ')}`,
                 metadata: { dateKey, bunks: affectedBunks, location, activity, initiatedBy: userId },
                 read: false, created_at: new Date().toISOString()
@@ -2964,11 +2964,11 @@ if (bypassStatus.highlight) {
 
         if (!isClear && window.checkSequenceViolation && slots.length > 0) {
             const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
-            if (_seqCheck?.violated) { if (!confirm('[!] Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
+            if (_seqCheck?.violated) { if (!confirm('Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
         }
         if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
             const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
-            if (_coolCheck?.blocked) { if (!confirm('[!] Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
+            if (_coolCheck?.blocked) { if (!confirm('Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
         }
 
         window._postEditInProgress = true; 
@@ -3187,11 +3187,11 @@ if (bypassStatus.highlight) {
 
         overlay.innerHTML = `<div style="background:#fff;border-radius:14px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.25);width:500px;max-width:95vw;max-height:85vh;overflow-y:auto;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h2 style="margin:0;font-size:1.1rem;color:#1e40af;">[BYPASS] Make Room for ${escapeHtml(activityName)}</h2>
+                <h2 style="margin:0;font-size:1.1rem;color:#1e40af;">Make Room for ${escapeHtml(activityName)}</h2>
                 <button id="mr-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#9ca3af;">&times;</button>
             </div>
             <p style="margin:0 0 16px;font-size:0.875rem;color:#6b7280;">All courts that support <strong>${escapeHtml(activityName)}</strong> are in use. Here's the plan to free one up:</p>
-            ${actionable.length === 0 ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#991b1b;font-size:0.875rem;">[X] No room can be made — all displaced bunks have no available alternatives right now.</div>` :
+            ${actionable.length === 0 ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#991b1b;font-size:0.875rem;">No room can be made — all displaced bunks have no available alternatives right now.</div>` :
             actionable.map((plan, pi) => `
                 <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:14px;margin-bottom:12px;">
                     <div style="font-weight:600;color:#0369a1;margin-bottom:8px;">Free up: <strong>${escapeHtml(plan.loc.name)}</strong></div>
@@ -3201,12 +3201,12 @@ if (bypassStatus.highlight) {
                             <span style="font-weight:600;color:#374151;min-width:80px;">${escapeHtml(a.bunk)}</span>
                             <span style="color:#9ca3af;">→</span>
                             <span style="color:${a.alt ? '#065f46' : '#991b1b'};">
-                                ${a.alt ? `${escapeHtml(a.alt.activityName)}${a.alt.field ? ' @ ' + escapeHtml(a.alt.field) : ''}` : (a.editable ? '[!] No alternative' : '[LOCKED] Other scheduler')}
+                                ${a.alt ? `${escapeHtml(a.alt.activityName)}${a.alt.field ? ' @ ' + escapeHtml(a.alt.field) : ''}` : (a.editable ? 'No alternative' : 'Other scheduler')}
                             </span>
                         </div>`).join('')}
                     </div>
                     <button data-plan-idx="${pi}" class="mr-apply-btn" style="margin-top:12px;width:100%;padding:10px;background:#0369a1;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:0.9rem;">
-                        OK - Apply — Free ${escapeHtml(plan.loc.name)} for ${escapeHtml(activityName)}
+                        Apply — Free ${escapeHtml(plan.loc.name)} for ${escapeHtml(activityName)}
                     </button>
                 </div>`).join('')}
             <button id="mr-ignore" style="width:100%;padding:10px;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;font-weight:500;cursor:pointer;margin-top:4px;">Place Without a Court (ignore field)</button>
@@ -3286,7 +3286,7 @@ if (bypassStatus.highlight) {
 
         modal.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-                <h2 style="margin:0;font-size:1.2rem;color:#1f2937;">Edit: Edit Schedule</h2>
+                <h2 style="margin:0;font-size:1.2rem;color:#1f2937;">Edit Schedule</h2>
                 <button id="post-edit-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;">&times;</button>
             </div>
             <div style="background:#f3f4f6;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:0.875rem;">
@@ -3336,13 +3336,13 @@ if (bypassStatus.highlight) {
                 const nonEditableBunks = [...new Set(conflictCheck.nonEditableConflicts.map(c => c.bunk))];
                 conflictArea.style.display = 'block';
                 let html = allAutoResolvable && !conflictCheck.globalLock
-                    ? `<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:8px;padding:12px;"><strong style="color:#1e40af;">[AUTO] Will Auto-Reassign</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#1e3a5f;">${escapeHtml(location)} is in use — affected bunks will be auto-moved:</p>`
-                    : `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;"><strong style="color:#92400e;">[!] Field Conflict</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#78350f;">${escapeHtml(location)} is already in use:</p>`;
-                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">OK - Can auto-reassign: ${editableBunks.join(', ')}</div>`;
+                    ? `<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:8px;padding:12px;"><strong style="color:#1e40af;">Will Auto-Reassign</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#1e3a5f;">${escapeHtml(location)} is in use — affected bunks will be auto-moved:</p>`
+                    : `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;"><strong style="color:#92400e;">Field Conflict</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#78350f;">${escapeHtml(location)} is already in use:</p>`;
+                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">Can auto-reassign: ${editableBunks.join(', ')}</div>`;
                 if (nonEditableBunks.length) html += `<div style="margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:6px;font-size:0.8rem;color:#991b1b;">✗ Other scheduler's bunks: ${nonEditableBunks.join(', ')}</div>
                     <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
-                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">[NOTIFY] Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & warn them</div></div></label>
-                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">[BYPASS] Bypass & reassign</div><div style="font-size:0.75rem;color:#6b7280;">Override and use smart regeneration</div></div></label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & warn them</div></div></label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">Bypass & reassign</div><div style="font-size:0.75rem;color:#6b7280;">Override and use smart regeneration</div></div></label>
                     </div>`;
                 html += '</div>';
                 conflictArea.innerHTML = html;
@@ -3398,7 +3398,7 @@ if (bypassStatus.highlight) {
                 });
             } else {
                 fieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
-                    [!] All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
+                    All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
                     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
                         <button id="pe-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:500;">Place Anyway (no field)</button>
                         <button id="pe-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">Make Room</button>
@@ -3419,7 +3419,7 @@ if (bypassStatus.highlight) {
                         document.getElementById('post-edit-save')?.click();
                         // Show summary toast of all changes
                         if (reassignSummary) {
-                            showIntegratedToast(`[OK] Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
+                            showIntegratedToast(`Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
                         }
                     });
                 });
@@ -4085,7 +4085,7 @@ function minutesToTimeString(mins) {
 
         modal.innerHTML = `
             <div style="margin-bottom: 16px;">
-                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">Edit: Edit Schedule</h2>
+                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">Edit Schedule</h2>
             </div>
             <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
                 <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>
@@ -4098,21 +4098,21 @@ function minutesToTimeString(mins) {
                     <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
                         <input type="radio" name="edit-scope" value="single" checked style="margin-top: 3px;">
                         <div style="flex: 1;">
-                            <div style="font-weight: 500; color: #1f2937;">🏠 Just this bunk</div>
+                            <div style="font-weight: 500; color: #1f2937;">Just this bunk</div>
                             <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Edit ${escapeHtml(bunk)} only</div>
                         </div>
                     </label>
                     <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
                         <input type="radio" name="edit-scope" value="division" style="margin-top: 3px;">
                         <div style="flex: 1;">
-                            <div style="font-weight: 500; color: #1f2937;">👥 Entire division</div>
+                            <div style="font-weight: 500; color: #1f2937;">Entire division</div>
                             <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">All ${bunksInDiv.length} bunks in ${escapeHtml(divName)}</div>
                         </div>
                     </label>
                     <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
                         <input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">
                         <div style="flex: 1;">
-                            <div style="font-weight: 500; color: #1f2937;">Select: Select specific bunks</div>
+                            <div style="font-weight: 500; color: #1f2937;">Select specific bunks</div>
                             <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Choose which bunks to edit</div>
                         </div>
                     </label>
@@ -4137,7 +4137,7 @@ function minutesToTimeString(mins) {
             <input type="hidden" id="edit-end-slot" value="${slotIdx}">
             ${_currentEditContext.isAutoMode ? `
             <div id="time-adjust-section" style="margin-bottom: 20px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; padding: 14px;">
-                <div style="font-weight: 500; color: #0369a1; margin-bottom: 10px; font-size: 0.9rem;">Time: Adjust Time</div>
+                <div style="font-weight: 500; color: #0369a1; margin-bottom: 10px; font-size: 0.9rem;">Adjust Time</div>
                 <div style="display: flex; gap: 12px; align-items: center;">
                     <div style="flex: 1;">
                         <label style="display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 4px;">Start</label>
@@ -4288,7 +4288,7 @@ function minutesToTimeString(mins) {
 
         modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">[TARGET] Multi-Bunk Edit</h2>
+                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">Multi-Bunk Edit</h2>
                 <button onclick="closeIntegratedEditModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
             </div>
             <div style="background: #eff6ff; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
@@ -4315,19 +4315,19 @@ function minutesToTimeString(mins) {
                 </details>
                 <div id="multi-conflict-preview" style="display: none;"></div>
                 <div id="multi-resolution-mode" style="display: none;">
-                    <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">Settings: How to handle other schedulers' bunks?</label>
+                    <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">How to handle other schedulers' bunks?</label>
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                         <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">
                             <input type="radio" name="multi-mode" value="notify" checked style="margin-top: 3px;">
                             <div>
-                                <div style="font-weight: 500; color: #374151;">[NOTIFY] Notify & Request Approval</div>
+                                <div style="font-weight: 500; color: #374151;">Notify & Request Approval</div>
                                 <div style="font-size: 0.85rem; color: #6b7280;">Changes require approval first</div>
                             </div>
                         </label>
                         <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">
                             <input type="radio" name="multi-mode" value="bypass" style="margin-top: 3px;">
                             <div>
-                                <div style="font-weight: 500; color: #374151;">[BYPASS] Bypass & Apply Now</div>
+                                <div style="font-weight: 500; color: #374151;">Bypass & Apply Now</div>
                                 <div style="font-size: 0.85rem; color: #6b7280;">Changes apply immediately</div>
                             </div>
                         </label>
@@ -4414,7 +4414,7 @@ function minutesToTimeString(mins) {
                             // Auto-submit immediately
                             document.getElementById('multi-edit-submit')?.click();
                             if (reassignSummary) {
-                                showIntegratedToast(`[OK] Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
+                                showIntegratedToast(`Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
                             }
                         });
                     });
@@ -4466,7 +4466,7 @@ if (leagueBlocks.length > 0) {
     previewArea.style.display = 'block';
     previewArea.style.cssText = 'background: #fef2f2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
     previewArea.innerHTML = `<div style="color: #991b1b; font-weight: 500;">
-        [BLOCKED] Cannot use this field
+        Cannot use this field
         <div style="font-weight: 400; margin-top: 6px; font-size: 0.9rem;">${leagueBlocks[0].reason}</div>
     </div>`;
     submitBtn.disabled = true;
@@ -4487,7 +4487,7 @@ if (softBlocks.length > 0) {
             previewArea.style.display = 'block';
             previewArea.style.cssText = 'background: #fee2e2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
             previewArea.innerHTML = `
-                <div style="color: #991b1b; font-weight: 500;">[X] Cannot complete - pinned activities blocking:</div>
+                <div style="color: #991b1b; font-weight: 500;">Cannot complete - pinned activities blocking:</div>
                 <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;">
                     ${result.blocked.map(b => `<li>${escapeHtml(b.bunk)}: ${escapeHtml(b.currentActivity)}</li>`).join('')}
                 </ul>
@@ -4507,11 +4507,11 @@ if (softBlocks.length > 0) {
             previewArea.style.display = 'block';
             previewArea.style.cssText = 'background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;';
             
-            let html = `<div style="color: #92400e; font-weight: 500;">[!] ${result.plan.length} bunk(s) will be reassigned</div><div style="margin-top: 12px; max-height: 180px; overflow-y: auto;">`;
+            let html = `<div style="color: #92400e; font-weight: 500;">${result.plan.length} bunk(s) will be reassigned</div><div style="margin-top: 12px; max-height: 180px; overflow-y: auto;">`;
             for (const [div, moves] of Object.entries(byDivision)) {
                 const isOther = !myDivisions.has(div);
                 html += `<div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;">
-                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '[LOCKED]' : 'OK -'} ${escapeHtml(div)}</div>
+                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${escapeHtml(div)}${isOther ? ' (other scheduler)' : ''}</div>
                     <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${escapeHtml(m.bunk)}: ${escapeHtml(m.from.activity)} → ${escapeHtml(m.to.activity)}</li>`).join('')}</ul>
                 </div>`;
             }
@@ -4861,7 +4861,7 @@ if (softBlocks.length > 0) {
         } catch (rcErr) { console.error('[applyMultiBunkEdit] Rotation count update failed:', rcErr); }
 
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
-        showIntegratedToast(`[OK] ${bunks.length} bunks assigned to ${location}` + (plan.length > 0 ? ` - ${plan.length} reassigned` : ''), 'success');
+        showIntegratedToast(`${bunks.length} bunks assigned to ${location}` + (plan.length > 0 ? ` - ${plan.length} reassigned` : ''), 'success');
 
         // *** AUTO MODE: Check for capacity conflicts within the assigned group and offer rebalancing ***
         if (isAutoMode && location && bunks.length > 1) {
@@ -4959,7 +4959,7 @@ if (softBlocks.length > 0) {
 
         modal.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h2 style="margin:0;font-size:1.15rem;color:#b45309;">[!] Field Capacity Conflict</h2>
+                <h2 style="margin:0;font-size:1.15rem;color:#b45309;">Field Capacity Conflict</h2>
                 <button id="ar-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#9ca3af;">&times;</button>
             </div>
             <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:16px;font-size:0.9rem;color:#78350f;">
@@ -4978,7 +4978,7 @@ if (softBlocks.length > 0) {
             </div>
             <div style="display:flex;gap:10px;">
                 <button id="ar-keep" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Keep As-Is</button>
-                <button id="ar-apply" style="flex:1;padding:10px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.95rem;cursor:pointer;font-weight:500;"${suggestions.some(s=>!s.alt)?' disabled':''}>OK - Auto-Rebalance</button>
+                <button id="ar-apply" style="flex:1;padding:10px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.95rem;cursor:pointer;font-weight:500;"${suggestions.some(s=>!s.alt)?' disabled':''}>Auto-Rebalance</button>
             </div>
         `;
 
@@ -5023,7 +5023,7 @@ if (softBlocks.length > 0) {
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
                 const rebalSummary = suggestions.filter(s => s.alt).map(s => `${s.bunk} → ${s.alt.activityName}${s.alt.field ? ' @ ' + s.alt.field : ''}`).join('\n');
-                showIntegratedToast(`[OK] Rebalanced:\n${rebalSummary}`, 'success', 5000);
+                showIntegratedToast(`Rebalanced:\n${rebalSummary}`, 'success', 5000);
             } catch (e) { console.error('[AutoRebalance] Failed:', e); showIntegratedToast('Rebalance failed — try again', 'error'); }
         };
     }
@@ -5066,7 +5066,7 @@ if (softBlocks.length > 0) {
             } catch (e) { console.error('[CreateProposal] Error:', e); }
         }
 
-        showIntegratedToast(`[NOTIFY] Proposal sent to ${affectedDivisions.length} scheduler(s)`, 'info');
+        showIntegratedToast(`Proposal sent to ${affectedDivisions.length} scheduler(s)`, 'info');
     }
 
     async function notifySchedulersOfProposal(proposal) {
@@ -5183,7 +5183,7 @@ if (softBlocks.length > 0) {
                 <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Changes to your bunks:</div>
                 <div style="background: ${myMoves.length > 0 ? '#fef3c7' : '#f0fdf4'}; border-radius: 8px; padding: 12px;">
                     ${myMoves.length === 0 ? 
-                        '<div style="color: #166534;">OK - No direct changes to your bunks</div>' :
+                        '<div style="color: #166534;">No direct changes to your bunks</div>' :
                         `<ul style="margin: 0; padding-left: 20px; color: #92400e;">
                             ${myMoves.map(m => `<li><strong>${escapeHtml(m.bunk)}</strong>: ${escapeHtml(m.from?.activity || '?')} → ${escapeHtml(m.to?.activity || '?')}</li>`).join('')}
                         </ul>`
@@ -5193,11 +5193,11 @@ if (softBlocks.length > 0) {
             <div style="display: flex; gap: 12px;">
                 <button onclick="respondToProposal('${proposal.id}', 'approved')" 
                     style="flex: 1; padding: 12px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">
-                    [OK] Approve
+                    Approve
                 </button>
                 <button onclick="respondToProposal('${proposal.id}', 'rejected')" 
                     style="flex: 1; padding: 12px; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">
-                    [X] Reject
+                    Reject
                 </button>
             </div>
         `;
@@ -5253,7 +5253,7 @@ if (softBlocks.length > 0) {
 
             closeIntegratedEditModal();
             showIntegratedToast(
-                response === 'approved' ? '[OK] Proposal approved' : '[X] Proposal rejected',
+                response === 'approved' ? 'Proposal approved' : 'Proposal rejected',
                 response === 'approved' ? 'success' : 'info'
             );
 
@@ -5340,7 +5340,7 @@ if (softBlocks.length > 0) {
         }
 
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
-        showIntegratedToast(`[OK] Proposal applied: ${(bunks || []).length} bunks → ${location}`, 'success');
+        showIntegratedToast(`Proposal applied: ${(bunks || []).length} bunks → ${location}`, 'success');
     }
 
     async function notifyProposerOfResponse(proposal, response, respondingDivisions) {
@@ -5352,7 +5352,7 @@ if (softBlocks.length > 0) {
                 camp_id: proposal.camp_id,
                 user_id: proposal.created_by,
                 type: 'proposal_response',
-                title: response === 'approved' ? '[OK] Proposal Approved' : '[X] Proposal Rejected',
+                title: response === 'approved' ? 'Proposal Approved' : 'Proposal Rejected',
                 message: `${respondingDivisions.join(', ')} ${response} your claim for ${proposal.claim?.field || 'field'}`,
                 metadata: { proposal_id: proposal.id, response },
                 read: false,
@@ -5441,7 +5441,7 @@ if (softBlocks.length > 0) {
                 if (data.divisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
                 saveSchedule();
                 updateTable();
-                alert('[OK] Version loaded!');
+                alert('Version loaded!');
             } catch (err) { alert('Error: ' + err.message); }
         },
         async mergeVersions() {
@@ -5486,7 +5486,7 @@ if (softBlocks.length > 0) {
                 if (latestDivisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(latestDivisionTimes) || latestDivisionTimes;
                 saveSchedule(); 
                 updateTable();
-                alert(`[OK] Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
+                alert(`Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
                 return { success: true, count: versions.length, bunks: bunksTouched.size };
             } catch (err) { alert('Error: ' + err.message); return { success: false }; }
         }
