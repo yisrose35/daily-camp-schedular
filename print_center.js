@@ -340,10 +340,12 @@ function buildDivisionBlocks(divName) {
         if (isLeagueBlock) {
             var isSpecialty = (bl.item.type === 'specialty_league' || evName === 'Specialty League');
             var divLA = la[divKey] || {};
-            var si_la = bl.startMin;
+            var slotIdx = findFirstSlotForTime(bl.startMin, divName);
             var foundLabel = null;
-            var trySlots = [si_la];
-            for (var off = 1; off <= 2; off++) { trySlots.push(si_la + off, si_la - off); }
+            var trySlots = slotIdx >= 0 ? [slotIdx] : [];
+            for (var off = 1; off <= 2; off++) { trySlots.push(slotIdx + off, slotIdx - off); }
+            trySlots.push(bl.startMin);
+            for (var off2 = 1; off2 <= 2; off2++) { trySlots.push(bl.startMin + off2, bl.startMin - off2); }
             for (var ts = 0; ts < trySlots.length && !foundLabel; ts++) {
                 var sd = divLA[trySlots[ts]];
                 if (sd && sd.gameLabel) foundLabel = sd.gameLabel;
@@ -382,13 +384,13 @@ function buildLeagueMatchups(eventBlock, divName) {
     var la = window.leagueAssignments || {};
     var divLA = la[divName] || {};
 
-    // Strategy 1: Exact startMin match
+    var slotIdx = findFirstSlotForTime(eventBlock.startMin, divName);
     var allSlotEntries = [];
     Object.keys(divLA).forEach(function (k) {
         var slotData = divLA[k];
         if (!slotData) return;
         var sk = parseInt(k);
-        if (Math.abs(sk - eventBlock.startMin) <= 2) {
+        if ((slotIdx >= 0 && Math.abs(sk - slotIdx) <= 2) || Math.abs(sk - eventBlock.startMin) <= 2) {
             allSlotEntries.push({ key: k, data: slotData });
         }
     });
@@ -1220,26 +1222,20 @@ function renderManualBunksTop(divName, bunks, blocks) {
         html += '<tr data-block-start="' + eb.startMin + '" data-block-end="' + eb.endMin + '">';
         html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(eb.label) + '">' + eb.label + '</th>';
-        if (eb.isLeague && _currentTemplate.hideLeagueMatchups) {
-            // Hide matchups: show league label across all bunks
-            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;"><strong>' + escHtml(eb.event) + '</strong></td>';
-        } else if (eb.isLeague) {
-            // Show matchups: per-bunk cells with matchup details
-            var matchups = buildLeagueMatchups(eb, divName);
-            bunks.forEach(function (b, bi) {
-                var bunkMatchup = '';
-                if (matchups.length) {
+        if (eb.isLeague) {
+            var matchups = _currentTemplate.hideLeagueMatchups ? [] : buildLeagueMatchups(eb, divName);
+            if (matchups.length) {
+                bunks.forEach(function (b, bi) {
+                    var bunkMatchup = '';
                     matchups.forEach(function (mu) {
-                        var muLower = mu.toLowerCase();
-                        var bLower = b.toLowerCase();
-                        if (muLower.indexOf(bLower) >= 0) bunkMatchup = mu;
+                        if (mu.toLowerCase().indexOf(b.toLowerCase()) >= 0) bunkMatchup = mu;
                     });
                     if (!bunkMatchup) bunkMatchup = eb.event;
-                } else {
-                    bunkMatchup = eb.event;
-                }
-                html += '<td class="cell-league" data-r="' + rowR + '" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(bunkMatchup) + '" data-bunk="' + escHtml(b) + '" data-div="' + escHtml(divName) + '">' + escHtml(bunkMatchup) + '</td>';
-            });
+                    html += '<td class="cell-league" data-r="' + rowR + '" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(bunkMatchup) + '" data-bunk="' + escHtml(b) + '" data-div="' + escHtml(divName) + '">' + escHtml(bunkMatchup) + '</td>';
+                });
+            } else {
+                html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;"><strong>' + escHtml(eb.event) + '</strong></td>';
+            }
         } else {
             bunks.forEach(function (b, bi) {
                 var si = findFirstSlotForTime(eb.startMin, divName);
@@ -1289,15 +1285,14 @@ function renderManualTimeTop(divName, bunks, blocks) {
             if (!text && type === 'free') text = '\u2014';
             if (eb.isLeague) {
                 type = 'league';
-                if (_currentTemplate.hideLeagueMatchups) {
-                    text = eb.event;
-                } else {
+                text = eb.event;
+                if (!_currentTemplate.hideLeagueMatchups) {
                     var matchups = buildLeagueMatchups(eb, divName);
                     var bunkMatch = '';
                     if (matchups.length) {
                         matchups.forEach(function (mu) { if (mu.toLowerCase().indexOf(b.toLowerCase()) >= 0) bunkMatch = mu; });
                     }
-                    text = bunkMatch || eb.event;
+                    if (bunkMatch) text = bunkMatch;
                 }
             }
             html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
