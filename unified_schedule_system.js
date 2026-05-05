@@ -2435,7 +2435,7 @@ divBlocks.forEach((block, blockIdx) => {
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
             bgColor = getEntryBackground(entry, block.event);
-            if (entry._pinned) displayText = '[PIN] ' + displayText;
+            // pinned state tracked internally, no visual prefix needed
         }
         else if (!entry) {
             if (isFixedBlockType(block.event)) { displayText = block.event; bgColor = '#fff8e1'; }
@@ -2503,7 +2503,7 @@ if (bypassStatus.highlight) {
                 if (typeof openIntegratedEditModal === 'function') {
                     openIntegratedEditModal(bunk, slotIdx, existingEntry);
                 } else {
-                    enhancedEditCell(bunk, block.startMin, block.endMin, displayText.replace('[PIN] ', ''));
+                    enhancedEditCell(bunk, block.startMin, block.endMin, displayText);
                 }
             };
         }
