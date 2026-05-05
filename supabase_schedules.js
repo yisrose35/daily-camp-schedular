@@ -619,8 +619,8 @@
         const originalBunkCount = Object.keys(data?.scheduleAssignments || {}).length;
         log('saveSchedule called:', dateKey, 'with', originalBunkCount, 'bunks');
 
-        if (!client || !campId) {
-            log('No client or camp ID, saving to local only');
+        if (!client || !campId || !userId) {
+            log('No client/campId/userId yet, saving to local only');
             setLocalSchedule(dateKey, data);
             return { success: true, target: 'local' };
         }
