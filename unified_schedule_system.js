@@ -3726,6 +3726,21 @@ if (bypassStatus.highlight) {
             return false;
         }
 
+        // Bunk-level access restriction check
+        function _isBunkBlockedByAccess(fName, bunkName) {
+            const props = activityProps[fName] || activityProps[fName.toLowerCase()] || {};
+            if (!props.accessRestrictions?.enabled) return false;
+            const allowedDivs = props.accessRestrictions.divisions || {};
+            if (!(divName in allowedDivs)) return true;
+            const bunkList = allowedDivs[divName];
+            if (Array.isArray(bunkList) && bunkList.length > 0) {
+                const bStr = String(bunkName);
+                const bNum = parseInt(bunkName);
+                if (!bunkList.some(b => String(b) === bStr || parseInt(b) === bNum)) return true;
+            }
+            return false;
+        }
+
        const candidates = [];
 
         // ★ DEMO FIX: Use proper field iteration in demo mode
@@ -3832,13 +3847,10 @@ if (bypassStatus.highlight) {
 if (disabledFields.includes(fName)) return;
 if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(fName, slots, divName)) return;
 if (_isFieldBlockedByLeagueOrCombo(fName)) return;
+if (_isBunkBlockedByAccess(fName, bunk)) return;
 
 // ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
 const _altProps = activityProps[fName] || {};
-if (_altProps.accessRestrictions?.enabled) {
-    const _allowedDivs = _altProps.accessRestrictions.divisions || {};
-    if (!(divName in _allowedDivs)) return;
-}
 if (_altProps.preferences?.enabled && _altProps.preferences?.exclusive) {
     const _prefList = _altProps.preferences.list || [];
     if (_prefList.length > 0 && !_prefList.includes(divName)) return;
@@ -3874,18 +3886,15 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (disabledFields.includes(special.name)) return;
             if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(special.name, slots, divName)) return;
             if (_isFieldBlockedByLeagueOrCombo(special.name)) return;
+            if (_isBunkBlockedByAccess(special.name, bunk)) return;
 
             // ★ Rainy day filtering for special activities
             const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
             if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) return;
             if (isRainyMode && (special.rainyDayAvailable === false || special.availableOnRainyDay === false || special.isIndoor === false)) return;
 
-            // ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
+            // ★★★ FIX: Enforce preferences for division access during drip-down ★★★
             const _spProps = activityProps[special.name] || {};
-            if (_spProps.accessRestrictions?.enabled) {
-                const _allowedDivs = _spProps.accessRestrictions.divisions || {};
-                if (!(divName in _allowedDivs)) return;
-            }
             if (_spProps.preferences?.enabled && _spProps.preferences?.exclusive) {
                 const _prefList = _spProps.preferences.list || [];
                 if (_prefList.length > 0 && !_prefList.includes(divName)) return;
@@ -3913,13 +3922,10 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (disabledFields.includes(field.name)) return;
             if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(field.name, slots, divName)) return;
             if (_isFieldBlockedByLeagueOrCombo(field.name)) return;
+            if (_isBunkBlockedByAccess(field.name, bunk)) return;
 
-            // ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
+            // ★★★ FIX: Enforce preferences for division access during drip-down ★★★
             const _fProps = activityProps[field.name] || {};
-            if (_fProps.accessRestrictions?.enabled) {
-                const _allowedDivs = _fProps.accessRestrictions.divisions || {};
-                if (!(divName in _allowedDivs)) return;
-            }
             if (_fProps.preferences?.enabled && _fProps.preferences?.exclusive) {
                 const _prefList = _fProps.preferences.list || [];
                 if (_prefList.length > 0 && !_prefList.includes(divName)) return;
