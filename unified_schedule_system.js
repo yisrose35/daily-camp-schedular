@@ -3147,10 +3147,13 @@ if (bypassStatus.highlight) {
         overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10002;display:flex;align-items:center;justify-content:center;';
 
         // Gather displaced bunks per field with alternatives
-        const fieldPlans = busyFields.map(loc => {
+        const fieldPlans = busyFields.filter(loc => {
+            // Only process fields that have a conflict object (skip league-locked / access-restricted)
+            return loc.conflict && (loc.conflict.editableConflicts?.length > 0 || loc.conflict.nonEditableConflicts?.length > 0);
+        }).map(loc => {
             const conflictBunks = [...new Set([
-                ...loc.conflict.editableConflicts.map(c => c.bunk),
-                ...loc.conflict.nonEditableConflicts.map(c => c.bunk)
+                ...(loc.conflict.editableConflicts || []).map(c => c.bunk),
+                ...(loc.conflict.nonEditableConflicts || []).map(c => c.bunk)
             ])];
             const simUsage = window.buildFieldUsageBySlot?.([]) || {};
             // Mark this field as taken in sim
@@ -3162,7 +3165,7 @@ if (bypassStatus.highlight) {
                 const cbDiv = getDivisionForBunk(cb);
                 const cbSlots = findSlotsForRange(startMin, endMin, cbDiv, cb);
                 const alt = findAlternativeForBunk(cb, cbSlots.length ? cbSlots : targetSlots, cbDiv, simUsage, [loc.name]);
-                return { bunk: cb, alt, editable: loc.conflict.editableConflicts.some(c => c.bunk === cb) };
+                return { bunk: cb, alt, editable: (loc.conflict.editableConflicts || []).some(c => c.bunk === cb) };
             });
             return { loc, conflictBunks, alts };
         });
