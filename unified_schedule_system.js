@@ -3256,8 +3256,14 @@ if (bypassStatus.highlight) {
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
 
+                // Build summary of displaced bunk reassignments
+                const reassignSummary = plan.alts
+                    .filter(a => a.alt && a.editable)
+                    .map(a => `${a.bunk} → ${a.alt.activityName}${a.alt.field ? ' @ ' + a.alt.field : ''}`)
+                    .join('\n');
+
                 // Now the field is free — proceed with the original edit
-                onFieldFreed(plan.loc.name);
+                onFieldFreed(plan.loc.name, reassignSummary);
             });
         });
     }
@@ -3403,14 +3409,17 @@ if (bypassStatus.highlight) {
                     fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
                 });
                 fieldResult.querySelector('#pe-make-room')?.addEventListener('click', () => {
-                    showMakeRoomModal(actVal, busy, targetSlots, divName, bunk, startMin, endMin, (freedField) => {
+                    showMakeRoomModal(actVal, busy, targetSlots, divName, bunk, startMin, endMin, (freedField, reassignSummary) => {
                         if (freedField) {
                             locationSelect.value = freedField;
-                            fieldResult.innerHTML = `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;"><strong>${escapeHtml(freedField)}</strong> has been freed up for ${escapeHtml(actVal)}.</div>`;
-                            renderConflictArea(freedField);
                         } else {
                             locationSelect.value = '';
-                            fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Placing <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
+                        }
+                        // Auto-save immediately — no need to click "Save Changes"
+                        document.getElementById('post-edit-save')?.click();
+                        // Show summary toast of all changes
+                        if (reassignSummary) {
+                            showIntegratedToast(`✅ Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
                         }
                     });
                 });
@@ -4398,11 +4407,13 @@ function minutesToTimeString(mins) {
                         multiFieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
                     });
                     multiFieldResult.querySelector('#multi-make-room')?.addEventListener('click', () => {
-                        showMakeRoomModal(actVal, busy, repSlots, ctxDiv, bunks[0], ctxStart ?? repSlots[0], ctxEnd ?? repSlots[repSlots.length-1], (freedField) => {
+                        showMakeRoomModal(actVal, busy, repSlots, ctxDiv, bunks[0], ctxStart ?? repSlots[0], ctxEnd ?? repSlots[repSlots.length-1], (freedField, reassignSummary) => {
                             if (freedField && multiLocSel) multiLocSel.value = freedField;
-                            multiFieldResult.innerHTML = freedField
-                                ? `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;"><strong>${escapeHtml(freedField)}</strong> freed up for ${escapeHtml(actVal)}.</div>`
-                                : `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Placing <strong>${escapeHtml(actVal)}</strong> without a field.</div>`;
+                            // Auto-submit immediately
+                            document.getElementById('multi-edit-submit')?.click();
+                            if (reassignSummary) {
+                                showIntegratedToast(`✅ Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
+                            }
                         });
                     });
                 } else {
@@ -5008,7 +5019,8 @@ if (softBlocks.length > 0) {
                 if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
-                showIntegratedToast(`✅ Rebalanced ${suggestions.length} bunk${suggestions.length!==1?'s':''}`, 'success');
+                const rebalSummary = suggestions.filter(s => s.alt).map(s => `${s.bunk} → ${s.alt.activityName}${s.alt.field ? ' @ ' + s.alt.field : ''}`).join('\n');
+                showIntegratedToast(`✅ Rebalanced:\n${rebalSummary}`, 'success', 5000);
             } catch (e) { console.error('[AutoRebalance] Failed:', e); showIntegratedToast('Rebalance failed — try again', 'error'); }
         };
     }
@@ -5355,13 +5367,13 @@ if (softBlocks.length > 0) {
         _currentEditContext = null;
     }
 
-    function showIntegratedToast(message, type = 'info') {
+    function showIntegratedToast(message, type = 'info', duration = 4000) {
         if (window.showToast) { window.showToast(message, type); return; }
         const toast = document.createElement('div');
-        toast.style.cssText = `position: fixed; bottom: 20px; right: 20px; background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'}; color: white; padding: 12px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000;`;
+        toast.style.cssText = `position: fixed; bottom: 20px; right: 20px; background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'}; color: white; padding: 12px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 10000; white-space: pre-line; max-width: 400px;`;
         toast.textContent = message;
         document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 4000);
+        setTimeout(() => toast.remove(), duration);
     }
 
     // =========================================================================
