@@ -1038,15 +1038,23 @@
 
             // ═══════════════════════════════════════════════════════════════
             // STEP 4: Save PRIMARY date with verified save (retry + verify)
+            // Deduplicate: skip if this date was already saved within 30s
             // ═══════════════════════════════════════════════════════════════
+            if (!window._secondarySaveLog) window._secondarySaveLog = {};
+            const now = Date.now();
+
             if (primaryDateKey && data[primaryDateKey]) {
-                verifiedScheduleSave(primaryDateKey, data[primaryDateKey])
-                    .then(result => {
-                        if (!result?.success) {
-                            console.warn('🔗 Primary schedule save issue:', result?.error);
-                        }
-                    })
-                    .catch(e => logError('Primary schedule save failed:', e));
+                const lastPrimarySave = window._secondarySaveLog[primaryDateKey] || 0;
+                if ((now - lastPrimarySave) > 30000) {
+                    window._secondarySaveLog[primaryDateKey] = now;
+                    verifiedScheduleSave(primaryDateKey, data[primaryDateKey])
+                        .then(result => {
+                            if (!result?.success) {
+                                console.warn('🔗 Primary schedule save issue:', result?.error);
+                            }
+                        })
+                        .catch(e => logError('Primary schedule save failed:', e));
+                }
             }
 
             // ═══════════════════════════════════════════════════════════════
@@ -1064,8 +1072,6 @@
 
             if (secondaryDateKeys.length > 0 && window.ScheduleDB?.saveSchedule) {
                 // Deduplicate: skip dates already saved in the last 30s
-                if (!window._secondarySaveLog) window._secondarySaveLog = {};
-                const now = Date.now();
                 const unsaved = secondaryDateKeys.filter(dk => {
                     return !window._secondarySaveLog[dk] || (now - window._secondarySaveLog[dk]) > 30000;
                 });
