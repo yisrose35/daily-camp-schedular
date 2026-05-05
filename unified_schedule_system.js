@@ -3,23 +3,23 @@
 // =============================================================================
 //
 // This file REPLACES ALL of the following:
-// ❌ scheduler_ui.js
-// ❌ render_sync_fix.js  
-// ❌ view_schedule_loader_fix.js
-// ❌ schedule_version_merger.js
-// ❌ schedule_version_ui.js
-// ❌ post_generation_edit_system.js (NOW INTEGRATED)
-// ❌ pinned_activity_preservation.js (NOW INTEGRATED)
+// [REMOVED] scheduler_ui.js
+// [REMOVED] render_sync_fix.js
+// [REMOVED] view_schedule_loader_fix.js
+// [REMOVED] schedule_version_merger.js
+// [REMOVED] schedule_version_ui.js
+// [REMOVED] post_generation_edit_system.js (NOW INTEGRATED)
+// [REMOVED] pinned_activity_preservation.js (NOW INTEGRATED)
 //
 // CRITICAL FIXES & FEATURES:
-// ✅ v4.0.2: CROSS-DIVISION BYPASS SAVE - updates correct scheduler records directly
-// ✅ v4.0.3: INTEGRATED EDIT SYSTEM with multi-bunk support
-// ✅ v4.0.3: CASCADE RESOLUTION for field priority claims
-// ✅ v4.0.3: PROPOSAL SYSTEM for cross-division changes
-// ✅ v4.0.3: AUTO-BACKUP before complex operations
-// ✅ v4.0.4: DIVISION TIMES SUPPORT in time mapping utilities
-// ✅ v4.0.5: REFACTOR - Core utilities moved to Shared Utils
-// ✅ v4.1.0: ★★★ FULL DIVISIONTIMES INTEGRATION ★★★
+// v4.0.2: CROSS-DIVISION BYPASS SAVE - updates correct scheduler records directly
+// v4.0.3: INTEGRATED EDIT SYSTEM with multi-bunk support
+// v4.0.3: CASCADE RESOLUTION for field priority claims
+// v4.0.3: PROPOSAL SYSTEM for cross-division changes
+// v4.0.3: AUTO-BACKUP before complex operations
+// v4.0.4: DIVISION TIMES SUPPORT in time mapping utilities
+// v4.0.5: REFACTOR - Core utilities moved to Shared Utils
+// v4.1.0: FULL DIVISIONTIMES INTEGRATION
 //            - Removed window.unifiedTimes dependency
 //            - All slot lookups now use window.divisionTimes via SchedulerCoreUtils
 //            - Time-based field usage is canonical conflict detection
@@ -117,7 +117,7 @@
     }
     
     function canEditBunk(bunk) {
-        // ★★★ FIX: Check initialization state and use fallback chain ★★★
+        // *** FIX: Check initialization state and use fallback chain ***
         const role = window.AccessControl?.getCurrentRole?.();
         const isInitialized = window.AccessControl?.isInitialized;
         
@@ -148,7 +148,7 @@
         const editableBunks = new Set();
         const divisions = window.divisions || {};
         
-        // ★★★ FIX: Check initialization state before trusting AccessControl ★★★
+        // *** FIX: Check initialization state before trusting AccessControl ***
         const isInitialized = window.AccessControl?.isInitialized;
         const role = window.AccessControl?.getCurrentRole?.();
         
@@ -366,7 +366,7 @@ function shouldHighlightBunk(bunkName) {
 
     function loadScheduleForDate(dateKey) {
         if (window._postEditInProgress) {
-            console.log('[UnifiedSchedule] 🛡️ Skipping loadScheduleForDate - post-edit in progress');
+            console.log('[UnifiedSchedule] [GUARD] Skipping loadScheduleForDate - post-edit in progress');
             return;
         }
         if (!dateKey) dateKey = getDateKey();
@@ -404,12 +404,12 @@ function shouldHighlightBunk(bunkName) {
                 ? dateData.leagueAssignments : {};
         }
         
-        // ★★★ v4.1.0: LOAD DIVISION TIMES (PRIMARY) ★★★
+        // *** v4.1.0: LOAD DIVISION TIMES (PRIMARY) ***
         const cloudLoaded = window._divisionTimesFromCloud === true;
         if (cloudLoaded && window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
             // Keep cloud data
             debugLog('Using divisionTimes from cloud');
-            // ★★★ AUTO MODE: Reattach _perBunkSlots if lost during serialization ★★★
+            // *** AUTO MODE: Reattach _perBunkSlots if lost during serialization ***
             if (dateData._perBunkSlotsData && window.divisionTimes) {
                 Object.keys(dateData._perBunkSlotsData).forEach(grade => {
                     if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
@@ -421,7 +421,7 @@ function shouldHighlightBunk(bunkName) {
         } else if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
             // Keep existing
             debugLog('Using existing divisionTimes');
-            // ★★★ AUTO MODE: Reattach _perBunkSlots if lost during serialization ★★★
+            // *** AUTO MODE: Reattach _perBunkSlots if lost during serialization ***
             if (dateData._perBunkSlotsData && window.divisionTimes) {
                 Object.keys(dateData._perBunkSlotsData).forEach(grade => {
                     if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
@@ -434,7 +434,7 @@ function shouldHighlightBunk(bunkName) {
             // Deserialize from storage
            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(dateData.divisionTimes) || dateData.divisionTimes;
             debugLog('Loaded divisionTimes from storage');
-            // ★★★ AUTO MODE: Reattach _perBunkSlots from saved data ★★★
+            // *** AUTO MODE: Reattach _perBunkSlots from saved data ***
             if (dateData._perBunkSlotsData) {
                 Object.keys(dateData._perBunkSlotsData).forEach(grade => {
                     if (window.divisionTimes[grade]) {
@@ -476,7 +476,7 @@ function shouldHighlightBunk(bunkName) {
 
     /**
      * Build division times from skeleton
-     * ★★★ v4.1.0: This is the CANONICAL way to build time slots ★★★
+     * *** v4.1.0: This is the CANONICAL way to build time slots ***
      */
     function buildDivisionTimesFromSkeleton(skeleton) {
         if (!skeleton || skeleton.length === 0) return {};
@@ -527,7 +527,7 @@ function shouldHighlightBunk(bunkName) {
     }
 
     /**
-     * ★★★ v4.1.0: DIVISION-AWARE slot finder ★★★
+     * *** v4.1.0: DIVISION-AWARE slot finder ***
      * @param {number} targetMin - Target time in minutes
      * @param {string} bunkOrDiv - Bunk name or division name
      * @returns {number} Slot index or -1
@@ -552,7 +552,7 @@ function shouldHighlightBunk(bunkName) {
     // =========================================================================
     // TIME-BASED FIELD USAGE SYSTEM
     // =========================================================================
-    // ★★★ v4.1.0: CANONICAL cross-division conflict detection ★★★
+    // *** v4.1.0: CANONICAL cross-division conflict detection ***
     
     window.TimeBasedFieldUsage = {
         getUsageAtTime: function(fieldName, startMin, endMin, excludeBunk = null) {
@@ -599,7 +599,7 @@ function shouldHighlightBunk(bunkName) {
        checkAvailability: function(fieldName, startMin, endMin, capacity = 1, excludeBunk = null, forDivision = null) {
             const usage = this.getUsageAtTime(fieldName, startMin, endMin, excludeBunk);
             
-            // ★★★ v4.1.1: Cross-division sharing enforcement ★★★
+            // *** v4.1.1: Cross-division sharing enforcement ***
             const props = (window.activityProperties || {})[fieldName] || {};
             const sharableWith = props.sharableWith || {};
             const sharingType = sharableWith.type || (props.sharable ? 'same_division' : 'not_sharable');
@@ -844,7 +844,7 @@ function shouldHighlightBunk(bunkName) {
         const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
        if (entry._h2h) return entry._gameLabel || sport || 'League Game';
-// ★ FIX: Bunk overrides set _fixed but also have a meaningful field — show both
+// * FIX: Bunk overrides set _fixed but also have a meaningful field — show both
 if (entry._fixed) {
     if (field && activity && field !== activity) return `${field} – ${activity}`;
     if (field && sport && field !== sport) return `${field} – ${sport}`;
@@ -923,9 +923,9 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
 const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(editBunksResult || []);
     const conflicts = [], usageBySlot = {};
     
-    // ★★★ FIX: Get the ACTUAL time range from the editing bunk's slots ★★★
+    // *** FIX: Get the ACTUAL time range from the editing bunk's slots ***
     const excludeBunkDiv = getDivisionForBunk(excludeBunk);
-    // ★★★ AUTO MODE: Use per-bunk slots when available (indices are bunk-specific) ★★★
+    // *** AUTO MODE: Use per-bunk slots when available (indices are bunk-specific) ***
     const _perBunkData = window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots?.[String(excludeBunk)];
     const excludeBunkSlots = _perBunkData || window.divisionTimes?.[excludeBunkDiv] || [];
     
@@ -960,7 +960,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             }
         }
     } else {
-        // ★★★ NEW: Time-based conflict detection across ALL divisions ★★★
+        // *** NEW: Time-based conflict detection across ALL divisions ***
         const divisions = window.divisions || {};
         
         for (const [divName, divData] of Object.entries(divisions)) {
@@ -989,7 +989,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
                     
                     if (!matchesLocation) continue;
                     
-                    // ★★★ KEY FIX: Check TIME OVERLAP, not slot index ★★★
+                    // *** KEY FIX: Check TIME OVERLAP, not slot index ***
                     const slotInfo = divSlots[idx];
                     if (!slotInfo || slotInfo.startMin === undefined) continue;
                     
@@ -1021,7 +1021,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
     }
     
     // Check GlobalFieldLocks
-    // ★★★ Only league games should truly BLOCK an edit ★★★
+    // *** Only league games should truly BLOCK an edit ***
     let globalLock = null;
     if (window.GlobalFieldLocks) {
         const lockInfo = window.GlobalFieldLocks.isFieldLocked(locationName, slots, excludeBunkDiv);
@@ -1047,7 +1047,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         }
     }
     
-    // ★★★ AUTO MODE: All non-league conflicts are resolvable via post-edit ★★★
+    // *** AUTO MODE: All non-league conflicts are resolvable via post-edit ***
     // Mark conflicts as auto-resolvable so UI can show them differently
     const _isAutoEditMode = !!window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots;
     if (_isAutoEditMode && !globalLock) {
@@ -1087,7 +1087,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
     function calculateRotationPenalty(bunk, activityName, slots) {
         if (!activityName || activityName === 'Free') return 0;
         
-        // ★★★ DELEGATE TO ROTATION ENGINE ★★★
+        // *** DELEGATE TO ROTATION ENGINE ***
         if (window.RotationEngine?.calculateRotationScore) {
             const divName = getDivisionForBunk(bunk);
             return window.RotationEngine.calculateRotationScore({
@@ -1122,7 +1122,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         }
         for (const special of (app1.specialActivities || [])) {
             if (!special.name || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
-            // ★ DEMO FIX: Filter rainy-day-only specials on normal days
+            // * DEMO FIX: Filter rainy-day-only specials on normal days
             if (window.__CAMPISTRY_DEMO_MODE__) {
                 const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
                 if (!_isRainy && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
@@ -1164,13 +1164,13 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         
         if (!availability.available) return false;
 
-        // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+        // *** COMBINED FIELD MUTUAL EXCLUSION CHECK ***
         if (window.FieldCombos?.isInCombo?.(fName)) {
             const comboCheck = window.FieldCombos.isBlockedByCombo(fName, startMin, endMin, bunk);
             if (comboCheck.blocked) return false;
         }
 
-        // ★★★ LOCATION COOLDOWN CHECK ★★★
+        // *** LOCATION COOLDOWN CHECK ***
         if (window.isLocationInCooldown) {
             const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
             let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
@@ -1179,7 +1179,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             if (cooldown?.blocked) return false;
         }
 
-        // ★★★ SEQUENCE RULE CHECK ★★★
+        // *** SEQUENCE RULE CHECK ***
         if (window.checkSequenceViolation) {
             const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
             let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
@@ -1240,7 +1240,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             if (avoidSet.has(cand.field.toLowerCase()) || avoidSet.has(cand.activityName?.toLowerCase())) continue;
             if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProps)) continue;
             
-            // ★★★ v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ★★★
+            // *** v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ***
             if (window.SchedulerCoreUtils?.canBlockFit) {
                 const divSlots_fb = window.divisionTimes?.[divName] || [];
                 const pseudoBlock = {
@@ -1314,7 +1314,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     const editingDiv = getDivisionForBunk(bunk);
     const editingDivSlots = window.divisionTimes?.[editingDiv] || [];
     
-    // ★ Capture the actual TIME RANGE being claimed ★
+    // * Capture the actual TIME RANGE being claimed *
     let claimedStartMin = null, claimedEndMin = null;
     if (slots.length > 0 && editingDivSlots[slots[0]]) {
         claimedStartMin = editingDivSlots[slots[0]].startMin;
@@ -1342,7 +1342,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     const bypassMode = resolutionChoice === 'bypass';
     
     if (bypassMode && nonEditableConflicts.length > 0) {
-        console.log('[resolveConflictsAndApply] 🔓 BYPASS MODE - including non-editable conflicts');
+        console.log('[resolveConflictsAndApply] [BYPASS] BYPASS MODE - including non-editable conflicts');
         conflictsToResolve = [...conflictsToResolve, ...nonEditableConflicts];
     }
     
@@ -1390,7 +1390,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
             location, activity, 'bypassed'
         );
         if (window.showToast) {
-            window.showToast(`🔓 Bypassed ${nonEditableConflicts.length} bunk(s) from other schedulers`, 'warning');
+            window.showToast(`[BYPASS] Bypassed ${nonEditableConflicts.length} bunk(s) from other schedulers`, 'warning');
         }
     }
 }
@@ -1404,15 +1404,15 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
 // SMART REGENERATION FOR CONFLICTS (CROSS-DIVISION COMPATIBLE)
 // =========================================================================
 function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedActivity, conflicts, bypassMode = false, timeContext = {}) {
-    console.log('[SmartRegen] ★★★ SMART REGENERATION STARTED ★★★');
+    console.log('[SmartRegen] *** SMART REGENERATION STARTED ***');
     console.log(`[SmartRegen] Pinned: ${pinnedBunk} claiming ${pinnedField}`);
-    if (bypassMode) console.log('[SmartRegen] 🔓 BYPASS MODE ACTIVE');
+    if (bypassMode) console.log('[SmartRegen] [BYPASS] BYPASS MODE ACTIVE');
     
    const { claimedStartMin, claimedEndMin, claimingDivision } = timeContext;
         const _rawActivityProps = window.getActivityProperties();
         let activityProperties = _rawActivityProps;
 
-        // ★ DEMO FIX: activityProperties may be empty in demo mode
+        // * DEMO FIX: activityProperties may be empty in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__ && (!activityProperties || Object.keys(activityProperties).length === 0)) {
             console.warn('[SmartRegen] 🎭 Demo: activityProperties empty — rebuilding');
             if (window.refreshActivityPropertiesFromFields) {
@@ -1514,7 +1514,7 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
         
         console.log(`[SmartRegen] Processing ${bunk} (Division: ${conflictDiv})`);
         
-        // ★ Find the CORRECT slot indices for THIS bunk's division ★
+        // * Find the CORRECT slot indices for THIS bunk's division *
         let actualSlots = [];
         
         if (conflictInfo.timeOverlaps.length > 0) {
@@ -1542,7 +1542,7 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
         } else {
             // Method 3: Fallback - use raw slot indices
             actualSlots = [...conflictInfo.rawSlots];
-            console.warn(`[SmartRegen] ⚠️ No time info for ${bunk}, using raw slots`);
+            console.warn(`[SmartRegen] [!] No time info for ${bunk}, using raw slots`);
         }
         
         actualSlots = [...new Set(actualSlots)].sort((a, b) => a - b);
@@ -1567,7 +1567,7 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
         );
         
         if (bestPick) {
-            console.log(`[SmartRegen] ✅ ${bunk}: ${originalActivity} → ${bestPick.activityName} @ ${bestPick.field}`);
+            console.log(`[SmartRegen] [OK] ${bunk}: ${originalActivity} → ${bestPick.activityName} @ ${bestPick.field}`);
             
             applyPickToBunkDivisionAware(bunk, actualSlots, conflictDiv, bestPick, fieldUsageBySlot, activityProperties, { isBypass: bypassMode });
             
@@ -1580,10 +1580,10 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
             });
             
             if (window.showToast) {
-                window.showToast(`↪️ ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
+                window.showToast(`-> ${bunk}: ${originalActivity} → ${bestPick.activityName}`, 'info');
             }
         } else {
-            console.log(`[SmartRegen] ❌ ${bunk}: No alternative found`);
+            console.log(`[SmartRegen] [X] ${bunk}: No alternative found`);
             
             if (!window.scheduleAssignments[bunk]) {
                 window.scheduleAssignments[bunk] = new Array(conflictDivSlots.length || 50);
@@ -1611,12 +1611,12 @@ actualSlots.forEach((slotIdx, i) => {
             results.success = false;
             
             if (window.showToast) {
-                window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+                window.showToast(`[!] ${bunk}: No alternative found`, 'warning');
             }
         }
     }
     
-    console.log(`[SmartRegen] ★★★ COMPLETE: ${results.reassigned.length} reassigned, ${results.failed.length} failed ★★★`);
+    console.log(`[SmartRegen] *** COMPLETE: ${results.reassigned.length} reassigned, ${results.failed.length} failed ***`);
     return results;
 }
 
@@ -1628,7 +1628,7 @@ actualSlots.forEach((slotIdx, i) => {
         const disabledFields = window.currentDisabledFields || [];
         const avoidSet = new Set(avoidFields.map(f => (f || '').toLowerCase()));
 
-        // ★ DEMO FIX: Ensure activityProperties is populated in demo mode
+        // * DEMO FIX: Ensure activityProperties is populated in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__ && (!activityProperties || Object.keys(activityProperties).length === 0)) {
             activityProperties = window.getActivityProperties?.() || window.activityProperties || {};
             if (Object.keys(activityProperties).length === 0 && window.refreshActivityPropertiesFromFields) {
@@ -1662,7 +1662,7 @@ actualSlots.forEach((slotIdx, i) => {
         // Also check slot-based for backwards compat
         if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
         
-        // ★★★ v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ★★★
+        // *** v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ***
         // Without this, bumped bunks get assigned fields/specials their division can't access
         if (window.SchedulerCoreUtils?.canBlockFit) {
             const pseudoBlock = {
@@ -1690,7 +1690,7 @@ actualSlots.forEach((slotIdx, i) => {
 
 
 // =========================================================================
-// HELPER: Check Field Available By Time (CROSS-DIVISION SAFE v2)// ★★★ v4.1.1: Now enforces sharableWith.type for cross-division rules ★★★
+// HELPER: Check Field Available By Time (CROSS-DIVISION SAFE v2)// *** v4.1.1: Now enforces sharableWith.type for cross-division rules ***
 // =========================================================================
 function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, activityProperties) {
     if (startMin === null || endMin === null) return true;
@@ -1707,7 +1707,7 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
     else if (sharableWith.capacity) { maxCapacity = parseInt(sharableWith.capacity); }
     else if (props.sharable) { maxCapacity = 2; }
     
-    // ★★★ v4.1.1: Determine the division of the bunk being placed ★★★
+    // *** v4.1.1: Determine the division of the bunk being placed ***
     const myDivision = getDivisionForBunk(excludeBunk);
     
     const divisions = window.divisions || {};
@@ -1733,7 +1733,7 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
                     const entryField = fieldLabel(entry.field) || entry._activity;
                     if (entryField?.toLowerCase() === fieldName.toLowerCase()) {
                         
-                        // ★★★ CROSS-DIVISION ENFORCEMENT ★★★
+                        // *** CROSS-DIVISION ENFORCEMENT ***
                         if (sharingType === 'not_sharable') {
                             return false; // Any overlapping usage = blocked
                         }
@@ -1760,7 +1760,7 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
             }
         }
     }
-     // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
+     // *** COMBINED FIELD MUTUAL EXCLUSION CHECK ***
     if (window.FieldCombos?.isInCombo?.(fieldName)) {
         const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, excludeBunk);
         if (comboCheck.blocked) return false;
@@ -1841,7 +1841,7 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
         if (bestPick) {
             applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProps);
            
-if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.activityName}`, 'info');
+if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activityName}`, 'info');
             return { success: true, field: bestPick.field, activity: bestPick.activityName, cost: bestPick.cost };
         } else {
             const divName = getDivisionForBunk(bunk);
@@ -1855,7 +1855,7 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
                     _noAlternative: true, _originalActivity: originalActivity, _originalField: avoidLocation 
                 };
             });
-            if (window.showToast) window.showToast(`⚠️ ${bunk}: No alternative found`, 'warning');
+            if (window.showToast) window.showToast(`[!] ${bunk}: No alternative found`, 'warning');
             return { success: false, reason: 'No valid alternative found' };
         }
     }
@@ -1938,7 +1938,7 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
                 restoredCount++;
             }
         }
-        console.log(`[PinnedPreserve] ✅ Restored ${restoredCount} pinned activities`);
+        console.log(`[PinnedPreserve] [OK] Restored ${restoredCount} pinned activities`);
         return restoredCount;
     }
 
@@ -2037,7 +2037,7 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         if (!window._postEditInProgress) loadScheduleForDate(dateKey);
-        else console.log('[UnifiedSchedule] 🛡️ RENDER: Using in-memory data (post-edit in progress)');
+        else console.log('[UnifiedSchedule] [GUARD] RENDER: Using in-memory data (post-edit in progress)');
         
         const skeleton = getSkeleton(dateKey);
         const divisions = window.divisions || {};
@@ -2053,7 +2053,7 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         
         container.innerHTML = '';
         if (!skeleton || skeleton.length === 0) {
-            // ★★★ AUTO MODE FALLBACK: If divisionTimes + scheduleAssignments exist, proceed without skeleton ★★★
+            // *** AUTO MODE FALLBACK: If divisionTimes + scheduleAssignments exist, proceed without skeleton ***
             const currentBuilderMode = window.getCampBuilderMode?.() || window._daBuilderMode || 'manual';
             const hasDivTimes = window.divisionTimes && Object.keys(window.divisionTimes).length > 0;
             const hasAssignments = window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0;
@@ -2087,7 +2087,7 @@ if (window.showToast) window.showToast(`↪️ ${bunk}: Moved to ${bestPick.acti
         
         const editableDivisions = window.AccessControl?.getEditableDivisions?.() || divisionsToShow;
         
-      // ★★★ AUTO BUILD: Choose renderer based on CURRENT mode + schedule type ★★★
+      // *** AUTO BUILD: Choose renderer based on CURRENT mode + schedule type ***
         // Must check current mode to prevent stale flag from forcing wrong renderer
         const currentBuilderMode = window.getCampBuilderMode?.() || window._daBuilderMode || 'manual';
 const isAutoSchedule = currentBuilderMode === 'auto';
@@ -2116,7 +2116,7 @@ const isAutoSchedule = currentBuilderMode === 'auto';
     }
 
     function renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable) {
-        // ★★★ v4.1.0: Use divisionTimes directly ★★★
+        // *** v4.1.0: Use divisionTimes directly ***
         const divSlots = window.divisionTimes?.[divName] || [];
         
         // Fallback: build from skeleton if divisionTimes not available
@@ -2172,7 +2172,7 @@ const isAutoSchedule = currentBuilderMode === 'auto';
         const tr1 = document.createElement('tr');
         const th = document.createElement('th');
         th.colSpan = 1 + bunks.length;
-        th.innerHTML = escapeHtml(divName) + (isEditable ? '' : ' <span style="opacity:0.7">🔒</span>');
+        th.innerHTML = escapeHtml(divName) + (isEditable ? '' : ' <span style="opacity:0.7">[LOCKED]</span>');
         th.style.cssText = `background: ${divColor}; color: #fff; padding: 12px 16px; font-size: 1.1rem; font-weight: 600; text-align: left;`;
         tr1.appendChild(th); 
         thead.appendChild(tr1);
@@ -2193,7 +2193,7 @@ const isAutoSchedule = currentBuilderMode === 'auto';
         table.appendChild(thead);
         
         const tbody = document.createElement('tbody');
-        // ★★★ v3.2: Pre-compute rowspan map for continuation merging ★★★
+        // *** v3.2: Pre-compute rowspan map for continuation merging ***
 // For each bunk, determine which rows should merge (rowspan > 1)
 // and which rows should be skipped (continuation cells)
 const rowspanMap = {}; // { bunkName: { rowIdx: spanCount } }
@@ -2265,7 +2265,7 @@ divBlocks.forEach((block, blockIdx) => {
     }
     
     bunks.forEach(bunk => {
-        // ★★★ v3.2: Handle continuation merging ★★★
+        // *** v3.2: Handle continuation merging ***
         if (skipMap[bunk].has(blockIdx)) {
             // This row is a continuation for this bunk — cell already covered by rowspan
             return;
@@ -2300,11 +2300,11 @@ divBlocks.forEach((block, blockIdx) => {
     }
 
     // =========================================================================
-    // ★★★ AUTO BUILD: GANTT/TIMELINE RENDERER ★★★
+    // *** AUTO BUILD: GANTT/TIMELINE RENDERER ***
     // =========================================================================
     
     function renderDivisionTimeline(divName, divInfo, bunks, isEditable) {
-        // ★★★ v5.0: Delegate to AutoScheduleGrid for time-scaled per-bunk view ★★★
+        // *** v5.0: Delegate to AutoScheduleGrid for time-scaled per-bunk view ***
         if (window.AutoScheduleGrid?.render) {
             return window.AutoScheduleGrid.render(divName, divInfo, bunks, isEditable);
         }
@@ -2336,7 +2336,7 @@ divBlocks.forEach((block, blockIdx) => {
         td.colSpan = bunks.length;
         td.style.cssText = 'padding: 12px 16px; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7; vertical-align: top;';
         
-        // ★★★ v4.1.0: Use division-specific slot lookup ★★★
+        // *** v4.1.0: Use division-specific slot lookup ***
         const slotIdx = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
         let leagueInfo = getLeagueMatchups(divName, slotIdx);
         
@@ -2409,7 +2409,7 @@ divBlocks.forEach((block, blockIdx) => {
         const td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
         
-        // ★★★ v4.1.0: Use division-specific slot index ★★★
+        // *** v4.1.0: Use division-specific slot index ***
         const slotIdx = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
         const entry = getEntry(bunk, slotIdx);
         
@@ -2442,7 +2442,7 @@ divBlocks.forEach((block, blockIdx) => {
             else bgColor = '#f9fafb';
         }
         
-       // ★★★ AUTO BUILDER v2: _subEntries = multiple activities in one slot ★★★
+       // *** AUTO BUILDER v2: _subEntries = multiple activities in one slot ***
         if (entry && entry._subEntries && entry._subEntries.length > 0) {
             td.innerHTML = '';
             td.style.padding = '2px';
@@ -2492,8 +2492,8 @@ if (bypassStatus.highlight) {
         if (isBlocked) { 
             td.style.cursor = 'not-allowed'; 
             td.onclick = () => { 
-                if (window.showToast) window.showToast(`🔒 Cannot edit: ${blockedReason}`, 'error'); 
-                else alert(`🔒 Cannot edit: ${blockedReason}`); 
+                if (window.showToast) window.showToast(`[LOCKED] Cannot edit: ${blockedReason}`, 'error'); 
+                else alert(`[LOCKED] Cannot edit: ${blockedReason}`); 
             }; 
         }
         else if (isEditable) { 
@@ -2518,7 +2518,7 @@ if (bypassStatus.highlight) {
         const divName = getDivisionForBunk(bunk);
         const divSlots = window.divisionTimes?.[divName] || [];
         
-        // ★★★ AUTO MODE: Reshape per-bunk slots if edit time doesn't match slot boundaries ★★★
+        // *** AUTO MODE: Reshape per-bunk slots if edit time doesn't match slot boundaries ***
         const _isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
         if (_isAutoMode && !isClear && slots.length > 0) {
             const perBunk = window.divisionTimes[divName]._perBunkSlots[String(bunk)];
@@ -2573,7 +2573,7 @@ if (bypassStatus.highlight) {
         if (window.saveCurrentDailyData) {
             window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments, { silent });
             window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments, { silent });
-            // ★★★ v4.1.0: Save divisionTimes (serialized) ★★★
+            // *** v4.1.0: Save divisionTimes (serialized) ***
             const serialized = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
             window.saveCurrentDailyData('divisionTimes', serialized, { silent });
         }
@@ -2621,7 +2621,7 @@ if (bypassStatus.highlight) {
     // =========================================================================
 
     async function bypassSaveAllBunks(modifiedBunks) {
-        console.log('[UnifiedSchedule] 🔓 BYPASS SAVE for bunks:', modifiedBunks);
+        console.log('[UnifiedSchedule] [BYPASS] BYPASS SAVE for bunks:', modifiedBunks);
         const dateKey = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         
         // Step 1: Save to localStorage first (immediate backup)
@@ -2634,7 +2634,7 @@ if (bypassStatus.highlight) {
             allDailyData[dateKey].divisionTimes = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
             allDailyData[dateKey]._bypassSaveAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
-            console.log('[UnifiedSchedule] ✅ Bypass: saved to localStorage');
+            console.log('[UnifiedSchedule] [OK] Bypass: saved to localStorage');
         } catch (e) { 
             console.error('[UnifiedSchedule] Bypass localStorage save error:', e); 
         }
@@ -2650,7 +2650,7 @@ if (bypassStatus.highlight) {
         
         try {
             // Step 3: Load ALL records for this date
-            console.log('[UnifiedSchedule] 🔓 Loading all scheduler records for cross-division update...');
+            console.log('[UnifiedSchedule] [BYPASS] Loading all scheduler records for cross-division update...');
             const { data: allRecords, error: loadError } = await client
                 .from('daily_schedules')
                 .select('*')
@@ -2662,10 +2662,10 @@ if (bypassStatus.highlight) {
                 return await fallbackBypassSave(dateKey, modifiedBunks);
             }
             
-            console.log(`[UnifiedSchedule] 🔓 Found ${allRecords?.length || 0} scheduler records`);
+            console.log(`[UnifiedSchedule] [BYPASS] Found ${allRecords?.length || 0} scheduler records`);
             
             if (!allRecords || allRecords.length === 0) {
-                console.log('[UnifiedSchedule] 🔓 No existing records, using standard save');
+                console.log('[UnifiedSchedule] [BYPASS] No existing records, using standard save');
                 return await fallbackBypassSave(dateKey, modifiedBunks);
             }
             
@@ -2696,7 +2696,7 @@ if (bypassStatus.highlight) {
                 }
             });
             
-            console.log(`[UnifiedSchedule] 🔓 Updates needed:`, 
+            console.log(`[UnifiedSchedule] [BYPASS] Updates needed:`, 
                 [...recordUpdates.entries()].map(([id, data]) => 
                     `${data.record.scheduler_name || 'unknown'}: bunks ${data.bunksToUpdate.join(', ')}`
                 )
@@ -2737,10 +2737,10 @@ if (bypassStatus.highlight) {
                     .eq('id', recordId);
                 
                 if (updateError) {
-                    console.error(`[UnifiedSchedule] ❌ Failed to update ${record.scheduler_name || 'unknown'}:`, updateError);
+                    console.error(`[UnifiedSchedule] [X] Failed to update ${record.scheduler_name || 'unknown'}:`, updateError);
                     failCount++;
                 } else {
-                    console.log(`[UnifiedSchedule] ✅ Updated ${record.scheduler_name || 'unknown'} with bunks: ${bunksToUpdate.join(', ')}`);
+                    console.log(`[UnifiedSchedule] [OK] Updated ${record.scheduler_name || 'unknown'} with bunks: ${bunksToUpdate.join(', ')}`);
                     successCount++;
                     updatedSchedulers.push(record.scheduler_name || record.scheduler_id);
                 }
@@ -2748,7 +2748,7 @@ if (bypassStatus.highlight) {
             
             // Step 7: Handle orphan bunks
             if (orphanBunks.length > 0) {
-                console.log(`[UnifiedSchedule] 🔓 Saving orphan bunks via standard method...`);
+                console.log(`[UnifiedSchedule] [BYPASS] Saving orphan bunks via standard method...`);
                 if (window.ScheduleDB?.saveSchedule) {
                     try {
                         await window.ScheduleDB.saveSchedule(dateKey, {
@@ -2785,7 +2785,7 @@ if (bypassStatus.highlight) {
                 });
                 const schedulerInfo = updatedSchedulers.length > 0 ? ` (updated: ${updatedSchedulers.join(', ')})` : '';
                 window.showToast(
-                    `🔓 Cross-division bypass: ${modifiedBunks.length} bunk(s) in Div ${[...divisionNames].join(', ')}${schedulerInfo}`, 
+                    `[BYPASS] Cross-division bypass: ${modifiedBunks.length} bunk(s) in Div ${[...divisionNames].join(', ')}${schedulerInfo}`, 
                     failCount === 0 ? 'success' : 'warning'
                 );
             }
@@ -2799,7 +2799,7 @@ if (bypassStatus.highlight) {
     }
     
     async function fallbackBypassSave(dateKey, modifiedBunks) {
-        console.log('[UnifiedSchedule] 🔓 Using fallback bypass save (skipFilter)');
+        console.log('[UnifiedSchedule] [BYPASS] Using fallback bypass save (skipFilter)');
         let cloudResult = { success: false };
         if (window.ScheduleDB?.saveSchedule) {
             try {
@@ -2834,7 +2834,7 @@ if (bypassStatus.highlight) {
                 } 
             });
             window.showToast(
-                `🔓 Bypass saved: ${modifiedBunks.length} bunk(s)${[...divisionNames].length ? ` in Div ${[...divisionNames].join(', ')}` : ''} - synced`, 
+                `[BYPASS] Bypass saved: ${modifiedBunks.length} bunk(s)${[...divisionNames].length ? ` in Div ${[...divisionNames].join(', ')}` : ''} - synced`, 
                 'success'
             );
         }
@@ -2905,7 +2905,7 @@ if (bypassStatus.highlight) {
     // =========================================================================
 
    async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
-        // ★ DEMO FIX: No supabase in demo mode
+        // * DEMO FIX: No supabase in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__) {
             console.log('[UnifiedSchedule] 🎭 Demo mode — skipping notification');
             return;
@@ -2932,7 +2932,7 @@ if (bypassStatus.highlight) {
             const notifications = notifyUsers.map(targetUserId => ({
                 camp_id: campId, user_id: targetUserId,
                 type: notificationType === 'bypassed' ? 'schedule_bypassed' : 'schedule_conflict',
-                title: notificationType === 'bypassed' ? '🔓 Your schedule was modified' : '⚠️ Schedule conflict detected',
+                title: notificationType === 'bypassed' ? '[BYPASS] Your schedule was modified' : '[!] Schedule conflict detected',
                 message: notificationType === 'bypassed' ? `Another scheduler reassigned bunks (${affectedBunks.join(', ')}) for ${location} - ${activity} on ${dateKey}` : `Conflict at ${location} for ${activity} on ${dateKey}. Affected bunks: ${affectedBunks.join(', ')}`,
                 metadata: { dateKey, bunks: affectedBunks, location, activity, initiatedBy: userId },
                 read: false, created_at: new Date().toISOString()
@@ -2952,7 +2952,7 @@ if (bypassStatus.highlight) {
         const divName = getDivisionForBunk(bunk);
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
-            console.error('[UnifiedSchedule] ❌ Demo: applyEdit called with undefined activity:', editData);
+            console.error('[UnifiedSchedule] [X] Demo: applyEdit called with undefined activity:', editData);
             alert('Error: No activity specified.');
             return;
         }
@@ -2964,11 +2964,11 @@ if (bypassStatus.highlight) {
 
         if (!isClear && window.checkSequenceViolation && slots.length > 0) {
             const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
-            if (_seqCheck?.violated) { if (!confirm('⚠️ Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
+            if (_seqCheck?.violated) { if (!confirm('[!] Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
         }
         if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
             const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
-            if (_coolCheck?.blocked) { if (!confirm('⚠️ Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
+            if (_coolCheck?.blocked) { if (!confirm('[!] Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
         }
 
         window._postEditInProgress = true; 
@@ -2977,7 +2977,7 @@ if (bypassStatus.highlight) {
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
 
-        // ★★★ CAPTURE old activities BEFORE edit overwrites them ★★★
+        // *** CAPTURE old activities BEFORE edit overwrites them ***
         const _oldActivities = [];
         slots.forEach(idx => {
             const old = window.scheduleAssignments[bunk]?.[idx];
@@ -3187,11 +3187,11 @@ if (bypassStatus.highlight) {
 
         overlay.innerHTML = `<div style="background:#fff;border-radius:14px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.25);width:500px;max-width:95vw;max-height:85vh;overflow-y:auto;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h2 style="margin:0;font-size:1.1rem;color:#1e40af;">🔓 Make Room for ${escapeHtml(activityName)}</h2>
+                <h2 style="margin:0;font-size:1.1rem;color:#1e40af;">[BYPASS] Make Room for ${escapeHtml(activityName)}</h2>
                 <button id="mr-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#9ca3af;">&times;</button>
             </div>
             <p style="margin:0 0 16px;font-size:0.875rem;color:#6b7280;">All courts that support <strong>${escapeHtml(activityName)}</strong> are in use. Here's the plan to free one up:</p>
-            ${actionable.length === 0 ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#991b1b;font-size:0.875rem;">❌ No room can be made — all displaced bunks have no available alternatives right now.</div>` :
+            ${actionable.length === 0 ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;color:#991b1b;font-size:0.875rem;">[X] No room can be made — all displaced bunks have no available alternatives right now.</div>` :
             actionable.map((plan, pi) => `
                 <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:14px;margin-bottom:12px;">
                     <div style="font-weight:600;color:#0369a1;margin-bottom:8px;">Free up: <strong>${escapeHtml(plan.loc.name)}</strong></div>
@@ -3201,12 +3201,12 @@ if (bypassStatus.highlight) {
                             <span style="font-weight:600;color:#374151;min-width:80px;">${escapeHtml(a.bunk)}</span>
                             <span style="color:#9ca3af;">→</span>
                             <span style="color:${a.alt ? '#065f46' : '#991b1b'};">
-                                ${a.alt ? `${escapeHtml(a.alt.activityName)}${a.alt.field ? ' @ ' + escapeHtml(a.alt.field) : ''}` : (a.editable ? '⚠️ No alternative' : '🔒 Other scheduler')}
+                                ${a.alt ? `${escapeHtml(a.alt.activityName)}${a.alt.field ? ' @ ' + escapeHtml(a.alt.field) : ''}` : (a.editable ? '[!] No alternative' : '[LOCKED] Other scheduler')}
                             </span>
                         </div>`).join('')}
                     </div>
                     <button data-plan-idx="${pi}" class="mr-apply-btn" style="margin-top:12px;width:100%;padding:10px;background:#0369a1;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:0.9rem;">
-                        ✓ Apply — Free ${escapeHtml(plan.loc.name)} for ${escapeHtml(activityName)}
+                        OK - Apply — Free ${escapeHtml(plan.loc.name)} for ${escapeHtml(activityName)}
                     </button>
                 </div>`).join('')}
             <button id="mr-ignore" style="width:100%;padding:10px;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;font-weight:500;cursor:pointer;margin-top:4px;">Place Without a Court (ignore field)</button>
@@ -3286,7 +3286,7 @@ if (bypassStatus.highlight) {
 
         modal.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-                <h2 style="margin:0;font-size:1.2rem;color:#1f2937;">✏️ Edit Schedule</h2>
+                <h2 style="margin:0;font-size:1.2rem;color:#1f2937;">Edit: Edit Schedule</h2>
                 <button id="post-edit-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;">&times;</button>
             </div>
             <div style="background:#f3f4f6;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:0.875rem;">
@@ -3337,12 +3337,12 @@ if (bypassStatus.highlight) {
                 conflictArea.style.display = 'block';
                 let html = allAutoResolvable && !conflictCheck.globalLock
                     ? `<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:8px;padding:12px;"><strong style="color:#1e40af;">🔄 Will Auto-Reassign</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#1e3a5f;">${escapeHtml(location)} is in use — affected bunks will be auto-moved:</p>`
-                    : `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;"><strong style="color:#92400e;">⚠️ Field Conflict</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#78350f;">${escapeHtml(location)} is already in use:</p>`;
-                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">✓ Can auto-reassign: ${editableBunks.join(', ')}</div>`;
+                    : `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;"><strong style="color:#92400e;">[!] Field Conflict</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#78350f;">${escapeHtml(location)} is already in use:</p>`;
+                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">OK - Can auto-reassign: ${editableBunks.join(', ')}</div>`;
                 if (nonEditableBunks.length) html += `<div style="margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:6px;font-size:0.8rem;color:#991b1b;">✗ Other scheduler's bunks: ${nonEditableBunks.join(', ')}</div>
                     <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
                         <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">📧 Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & warn them</div></div></label>
-                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">🔓 Bypass & reassign</div><div style="font-size:0.75rem;color:#6b7280;">Override and use smart regeneration</div></div></label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">[BYPASS] Bypass & reassign</div><div style="font-size:0.75rem;color:#6b7280;">Override and use smart regeneration</div></div></label>
                     </div>`;
                 html += '</div>';
                 conflictArea.innerHTML = html;
@@ -3374,7 +3374,7 @@ if (bypassStatus.highlight) {
                     const bg = l.shared ? '#fffbeb' : '#f0fdf4';
                     const border = l.shared ? '#fcd34d' : '#86efac';
                     const color = l.shared ? '#92400e' : '#065f46';
-                    const label = escapeHtml(l.name) + (l.shared ? ' <span style="font-size:0.72rem;opacity:0.8;">⚠ shared</span>' : '') + (l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : '');
+                    const label = escapeHtml(l.name) + (l.shared ? ' <span style="font-size:0.72rem;opacity:0.8;">! shared</span>' : '') + (l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : '');
                     return `<button class="pe-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:${bg};border:1.5px solid ${border};border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:${color};transition:all 0.15s;">${label}</button>`;
                 }).join('');
                 const busyNote = busy.length > 0
@@ -3398,7 +3398,7 @@ if (bypassStatus.highlight) {
                 });
             } else {
                 fieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
-                    ⚠️ All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
+                    [!] All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
                     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
                         <button id="pe-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:500;">Place Anyway (no field)</button>
                         <button id="pe-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">Make Room</button>
@@ -3419,7 +3419,7 @@ if (bypassStatus.highlight) {
                         document.getElementById('post-edit-save')?.click();
                         // Show summary toast of all changes
                         if (reassignSummary) {
-                            showIntegratedToast(`✅ Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
+                            showIntegratedToast(`[OK] Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
                         }
                     });
                 });
@@ -3511,7 +3511,7 @@ if (bypassStatus.highlight) {
         // No field selected (activity-first "place without court") — no conflicts to resolve
         if (!fieldName) return { success: true, plan: [], blocked: [] };
 
-        console.log('[CascadeClaim] ★★★ BUILDING RESOLUTION PLAN ★★★');
+        console.log('[CascadeClaim] *** BUILDING RESOLUTION PLAN ***');
         console.log(`[CascadeClaim] Claiming ${fieldName} for ${claimingDivision} (${claimingActivity})`);
         console.log(`[CascadeClaim] Slots: ${slots.join(', ')}`);
 
@@ -3530,13 +3530,13 @@ if (bypassStatus.highlight) {
             };
         }
 
-       // ★ Check GlobalFieldLocks for league games / specialty events on this field
+       // * Check GlobalFieldLocks for league games / specialty events on this field
         const globalLock = window.GlobalFieldLocks?.isFieldLocked?.(fieldName, slots, claimingDivision);
         if (globalLock) {
             const lockDesc = globalLock.leagueName 
                 ? `League game: ${globalLock.leagueName}` 
                 : (globalLock.activity || globalLock.lockedBy || 'Another event');
-            console.log(`[CascadeClaim] ❌ BLOCKED by global lock: ${lockDesc}`);
+            console.log(`[CascadeClaim] [X] BLOCKED by global lock: ${lockDesc}`);
             return { 
                 success: false, 
                 plan: [], 
@@ -3548,9 +3548,9 @@ if (bypassStatus.highlight) {
             };
         }
 
-       // ★ Check for league games using this field (scans leagueAssignments directly — works post-generation)
+       // * Check for league games using this field (scans leagueAssignments directly — works post-generation)
         const claimDivSlots = window.divisionTimes?.[claimingDivision] || [];
-        // ★★★ AUTO MODE: Get time range from per-bunk slots or use first claiming bunk ★★★
+        // *** AUTO MODE: Get time range from per-bunk slots or use first claiming bunk ***
         const _claimPerBunk = claimingBunks.length > 0 
             ? window.divisionTimes?.[claimingDivision]?._perBunkSlots?.[String(claimingBunks[0])]
             : null;
@@ -3599,7 +3599,7 @@ if (bypassStatus.highlight) {
             }
         }
         if (leagueConflictDesc) {
-            console.log(`[CascadeClaim] ❌ BLOCKED by league game: ${leagueConflictDesc}`);
+            console.log(`[CascadeClaim] [X] BLOCKED by league game: ${leagueConflictDesc}`);
             return {
                 success: false,
                 plan: [],
@@ -3610,8 +3610,8 @@ if (bypassStatus.highlight) {
                 }]
             };
         }
-// ★★★ AUTO MODE: findAllConflictsForClaim uses slot indices which are bunk-specific.
-        // In auto mode, we need to find conflicts by TIME overlap instead. ★★★
+// *** AUTO MODE: findAllConflictsForClaim uses slot indices which are bunk-specific.
+        // In auto mode, we need to find conflicts by TIME overlap instead. ***
         const _isAutoMode = !!window.divisionTimes?.[claimingDivision]?._perBunkSlots;
         let conflictQueue;
         if (_isAutoMode && claimDivSlots.length > 0 && slots.length > 0) {
@@ -3663,7 +3663,7 @@ if (bypassStatus.highlight) {
             console.log(`[CascadeClaim] Processing conflict #${iteration}: ${conflict.bunk} @ slot ${conflict.slot}`);
 
             if (conflict.isPinned) {
-                console.log(`[CascadeClaim] ❌ BLOCKED: ${conflict.bunk} has PINNED activity`);
+                console.log(`[CascadeClaim] [X] BLOCKED: ${conflict.bunk} has PINNED activity`);
                 blocked.push(conflict);
                 continue;
             }
@@ -3677,12 +3677,12 @@ if (bypassStatus.highlight) {
             );
 
             if (!alternative) {
-                console.log(`[CascadeClaim] ❌ BLOCKED: No alternative for ${conflict.bunk}`);
+                console.log(`[CascadeClaim] [X] BLOCKED: No alternative for ${conflict.bunk}`);
                 blocked.push({ ...conflict, reason: 'No alternative activity available' });
                 continue;
             }
 
-            console.log(`[CascadeClaim] ✓ Found alternative: ${alternative.activityName} @ ${alternative.field}`);
+            console.log(`[CascadeClaim] OK - Found alternative: ${alternative.activityName} @ ${alternative.field}`);
 
             plan.push({
                 bunk: conflict.bunk,
@@ -3810,7 +3810,7 @@ if (bypassStatus.highlight) {
             return true;
         }
 
-        // ★ DEMO FIX: Use proper field iteration in demo mode
+        // * DEMO FIX: Use proper field iteration in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__) {
             const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
             const disabledSet = new Set(disabledFields);
@@ -3833,7 +3833,7 @@ if (bypassStatus.highlight) {
                 if (!isRainyMode && (fp.rainyDayOnly === true || fp.rainyDayExclusive === true)) continue;
                 if (isRainyMode && (fp.rainyDayAvailable === false && field.rainyDayAvailable !== true)) continue;
 
-                // ★★★ FIX: Enforce accessRestrictions for division access ★★★
+                // *** FIX: Enforce accessRestrictions for division access ***
                 if (fp.accessRestrictions?.enabled) {
                     const allowedDivs = fp.accessRestrictions.divisions || {};
                     if (!(divName in allowedDivs)) continue;
@@ -3872,7 +3872,7 @@ if (bypassStatus.highlight) {
                 if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
                 if (isRainyMode && special.rainyDayAvailable === false) continue;
 
-                // ★★★ FIX: Enforce accessRestrictions for division access ★★★
+                // *** FIX: Enforce accessRestrictions for division access ***
                 const sp_props = activityProps[special.name] || {};
                 if (sp_props.accessRestrictions?.enabled) {
                     const allowedDivs = sp_props.accessRestrictions.divisions || {};
@@ -3917,14 +3917,14 @@ if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLock
 if (_isFieldBlockedByLeagueOrCombo(fName)) return;
 if (_isBunkBlockedByAccess(fName, bunk)) return;
 
-// ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
+// *** FIX: Enforce accessRestrictions & preferences for division access during drip-down ***
 const _altProps = activityProps[fName] || {};
 if (_altProps.preferences?.enabled && _altProps.preferences?.exclusive) {
     const _prefList = _altProps.preferences.list || [];
     if (_prefList.length > 0 && !_prefList.includes(divName)) return;
 }
 
-// ★ Rainy day filtering: skip rainy-day-only activities on normal days
+// * Rainy day filtering: skip rainy-day-only activities on normal days
 const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
 const fieldProps = activityProps[fName] || {};
 if (!isRainyMode && (fieldProps.rainyDayOnly === true || fieldProps.rainyDayExclusive === true)) return;
@@ -3948,12 +3948,12 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (_isFieldBlockedByLeagueOrCombo(special.name)) return;
             if (_isBunkBlockedByAccess(special.name, bunk)) return;
 
-            // ★ Rainy day filtering for special activities
+            // * Rainy day filtering for special activities
             const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
             if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) return;
             if (isRainyMode && (special.rainyDayAvailable === false || special.availableOnRainyDay === false || special.isIndoor === false)) return;
 
-            // ★★★ FIX: Enforce preferences for division access during drip-down ★★★
+            // *** FIX: Enforce preferences for division access during drip-down ***
             const _spProps = activityProps[special.name] || {};
             if (_spProps.preferences?.enabled && _spProps.preferences?.exclusive) {
                 const _prefList = _spProps.preferences.list || [];
@@ -3976,7 +3976,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (_isFieldBlockedByLeagueOrCombo(field.name)) return;
             if (_isBunkBlockedByAccess(field.name, bunk)) return;
 
-            // ★★★ FIX: Enforce preferences for division access during drip-down ★★★
+            // *** FIX: Enforce preferences for division access during drip-down ***
             const _fProps = activityProps[field.name] || {};
             if (_fProps.preferences?.enabled && _fProps.preferences?.exclusive) {
                 const _prefList = _fProps.preferences.list || [];
@@ -4037,7 +4037,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
 
         const divName = getDivisionForBunk(bunk);
         const bunksInDivision = getBunksForDivision(divName);
-        // ★★★ AUTO MODE: Per-bunk slots have bunk-specific time indices ★★★
+        // *** AUTO MODE: Per-bunk slots have bunk-specific time indices ***
         // In manual mode _perBunkSlots is undefined → perBunkSlots is undefined → uses division-level (unchanged)
         const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
         const times = perBunkSlots || window.divisionTimes?.[divName] || [];
@@ -4045,7 +4045,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
 
         _currentEditContext = { 
             bunk, slotIdx, divName, bunksInDivision, existingEntry, slotInfo,
-            // ★★★ AUTO MODE: Store canonical time range for cross-bunk resolution ★★★
+            // *** AUTO MODE: Store canonical time range for cross-bunk resolution ***
             startMin: slotInfo.startMin ?? null,
             endMin: slotInfo.endMin ?? null,
             isAutoMode: !!window.divisionTimes?.[divName]?._perBunkSlots
@@ -4085,7 +4085,7 @@ function minutesToTimeString(mins) {
 
         modal.innerHTML = `
             <div style="margin-bottom: 16px;">
-                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">✏️ Edit Schedule</h2>
+                <h2 style="margin: 0; color: #1e40af; font-size: 1.2rem;">Edit: Edit Schedule</h2>
             </div>
             <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
                 <div style="font-size: 0.9rem; color: #6b7280;">Selected Cell</div>
@@ -4112,7 +4112,7 @@ function minutesToTimeString(mins) {
                     <label class="edit-scope-option" style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 10px; cursor: pointer;">
                         <input type="radio" name="edit-scope" value="select" style="margin-top: 3px;">
                         <div style="flex: 1;">
-                            <div style="font-weight: 500; color: #1f2937;">☑️ Select specific bunks</div>
+                            <div style="font-weight: 500; color: #1f2937;">Select: Select specific bunks</div>
                             <div style="font-size: 0.85rem; color: #6b7280; margin-top: 2px;">Choose which bunks to edit</div>
                         </div>
                     </label>
@@ -4137,7 +4137,7 @@ function minutesToTimeString(mins) {
             <input type="hidden" id="edit-end-slot" value="${slotIdx}">
             ${_currentEditContext.isAutoMode ? `
             <div id="time-adjust-section" style="margin-bottom: 20px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; padding: 14px;">
-                <div style="font-weight: 500; color: #0369a1; margin-bottom: 10px; font-size: 0.9rem;">⏱️ Adjust Time</div>
+                <div style="font-weight: 500; color: #0369a1; margin-bottom: 10px; font-size: 0.9rem;">Time: Adjust Time</div>
                 <div style="display: flex; gap: 12px; align-items: center;">
                     <div style="flex: 1;">
                         <label style="display: block; font-size: 0.8rem; color: #6b7280; margin-bottom: 4px;">Start</label>
@@ -4196,7 +4196,7 @@ function minutesToTimeString(mins) {
             return;
         }
 
-        // ★★★ AUTO MODE: Read adjusted time from UI ★★★
+        // *** AUTO MODE: Read adjusted time from UI ***
         let editStartMin = ctx.startMin;
         let editEndMin = ctx.endMin;
         if (ctx.isAutoMode) {
@@ -4229,7 +4229,7 @@ function minutesToTimeString(mins) {
                 return; 
             }
 
-            // ★★★ AUTO MODE: Resolve per-bunk slots by TIME, not shared slot index ★★★
+            // *** AUTO MODE: Resolve per-bunk slots by TIME, not shared slot index ***
             if (ctx.isAutoMode && editStartMin != null && editEndMin != null) {
                 closeIntegratedEditModal();
                 openMultiBunkEditModal(targetBunks, null, ctx.divName, editStartMin, editEndMin);
@@ -4247,7 +4247,7 @@ function minutesToTimeString(mins) {
     }
 
    function openMultiBunkEditModal(bunks, slots, divName, timeStartMin = null, timeEndMin = null) {
-        // ★★★ AUTO MODE: Resolve per-bunk slots from time range ★★★
+        // *** AUTO MODE: Resolve per-bunk slots from time range ***
         const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
         let perBunkSlots = null;
         
@@ -4315,7 +4315,7 @@ function minutesToTimeString(mins) {
                 </details>
                 <div id="multi-conflict-preview" style="display: none;"></div>
                 <div id="multi-resolution-mode" style="display: none;">
-                    <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">⚙️ How to handle other schedulers' bunks?</label>
+                    <label style="display: block; font-weight: 500; margin-bottom: 8px; color: #374151;">Settings: How to handle other schedulers' bunks?</label>
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                         <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">
                             <input type="radio" name="multi-mode" value="notify" checked style="margin-top: 3px;">
@@ -4327,7 +4327,7 @@ function minutesToTimeString(mins) {
                         <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">
                             <input type="radio" name="multi-mode" value="bypass" style="margin-top: 3px;">
                             <div>
-                                <div style="font-weight: 500; color: #374151;">🔓 Bypass & Apply Now</div>
+                                <div style="font-weight: 500; color: #374151;">[BYPASS] Bypass & Apply Now</div>
                                 <div style="font-size: 0.85rem; color: #6b7280;">Changes apply immediately</div>
                             </div>
                         </label>
@@ -4335,7 +4335,7 @@ function minutesToTimeString(mins) {
                 </div>
             </div>
             <div style="display: flex; gap: 12px; margin-top: 20px;">
-                <button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">👁️ Preview</button>
+                <button onclick="previewMultiBunkEdit()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 8px; font-weight: 500; cursor: pointer;">Preview: Preview</button>
                 <button id="multi-edit-submit" onclick="submitMultiBunkEdit()" style="flex: 1; padding: 12px; background: #2563eb; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;" disabled>🎯 Apply</button>
             </div>
         `;
@@ -4412,7 +4412,7 @@ function minutesToTimeString(mins) {
                             // Auto-submit immediately
                             document.getElementById('multi-edit-submit')?.click();
                             if (reassignSummary) {
-                                showIntegratedToast(`✅ Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
+                                showIntegratedToast(`[OK] Room made! Reassigned:\n${reassignSummary}`, 'success', 5000);
                             }
                         });
                     });
@@ -4444,7 +4444,7 @@ function minutesToTimeString(mins) {
         const result = buildCascadeResolutionPlan(location, slots, divName, activity, bunks);
         _multiBunkPreviewResult = { 
             ...result, location, slots, divName, activity, bunks,
-            // ★★★ AUTO MODE: Carry per-bunk slots and time range through to apply ★★★
+            // *** AUTO MODE: Carry per-bunk slots and time range through to apply ***
             perBunkSlots: _multiBunkEditContext.perBunkSlots || null,
             isAutoMode: _multiBunkEditContext.isAutoMode || false,
             timeStartMin: _multiBunkEditContext.timeStartMin || null,
@@ -4477,14 +4477,14 @@ if (softBlocks.length > 0) {
         if (result.plan.length === 0 && result.blocked.length === 0) {
             previewArea.style.display = 'block';
             previewArea.style.cssText = 'background: #d1fae5; border: 1px solid #10b981; border-radius: 8px; padding: 12px;';
-            previewArea.innerHTML = `<div style="color: #065f46; font-weight: 500;">✅ No conflicts! Ready to assign.</div>`;
+            previewArea.innerHTML = `<div style="color: #065f46; font-weight: 500;">[OK] No conflicts! Ready to assign.</div>`;
             resolutionMode.style.display = 'none';
             submitBtn.disabled = false;
         } else if (result.blocked.length > 0) {
             previewArea.style.display = 'block';
             previewArea.style.cssText = 'background: #fee2e2; border: 1px solid #ef4444; border-radius: 8px; padding: 12px;';
             previewArea.innerHTML = `
-                <div style="color: #991b1b; font-weight: 500;">❌ Cannot complete - pinned activities blocking:</div>
+                <div style="color: #991b1b; font-weight: 500;">[X] Cannot complete - pinned activities blocking:</div>
                 <ul style="margin: 8px 0 0 20px; padding: 0; color: #b91c1c;">
                     ${result.blocked.map(b => `<li>${escapeHtml(b.bunk)}: ${escapeHtml(b.currentActivity)}</li>`).join('')}
                 </ul>
@@ -4504,11 +4504,11 @@ if (softBlocks.length > 0) {
             previewArea.style.display = 'block';
             previewArea.style.cssText = 'background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px;';
             
-            let html = `<div style="color: #92400e; font-weight: 500;">⚠️ ${result.plan.length} bunk(s) will be reassigned</div><div style="margin-top: 12px; max-height: 180px; overflow-y: auto;">`;
+            let html = `<div style="color: #92400e; font-weight: 500;">[!] ${result.plan.length} bunk(s) will be reassigned</div><div style="margin-top: 12px; max-height: 180px; overflow-y: auto;">`;
             for (const [div, moves] of Object.entries(byDivision)) {
                 const isOther = !myDivisions.has(div);
                 html += `<div style="margin-bottom: 8px; padding: 8px; background: ${isOther ? '#fef2f2' : '#f0fdf4'}; border-radius: 6px;">
-                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '🔒' : '✓'} ${escapeHtml(div)}</div>
+                    <div style="font-weight: 500; color: ${isOther ? '#991b1b' : '#166534'};">${isOther ? '[LOCKED]' : 'OK -'} ${escapeHtml(div)}</div>
                     <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 0.85rem;">${moves.map(m => `<li>${escapeHtml(m.bunk)}: ${escapeHtml(m.from.activity)} → ${escapeHtml(m.to.activity)}</li>`).join('')}</ul>
                 </div>`;
             }
@@ -4552,13 +4552,13 @@ if (softBlocks.length > 0) {
         }
 
         const backupName = `${AUTO_BACKUP_PREFIX} ${activityName} (${divisionName})`;
-        console.log(`[AutoBackup] ★ Creating restore point: ${backupName}`);
+        console.log(`[AutoBackup] * Creating restore point: ${backupName}`);
 
         try {
             const result = await VersionManager.saveVersion(backupName);
             
             if (result?.success) {
-                console.log(`[AutoBackup] ✅ Backup created successfully`);
+                console.log(`[AutoBackup] [OK] Backup created successfully`);
                 cleanupOldAutoBackups().catch(e => 
                     console.warn('[AutoBackup] Cleanup error (non-critical):', e)
                 );
@@ -4601,7 +4601,7 @@ if (softBlocks.length > 0) {
                     if (window.ScheduleVersionsDB.deleteVersion) {
                         await window.ScheduleVersionsDB.deleteVersion(old.id);
                         cleaned++;
-                        console.log(`[AutoBackup] 🗑️ Deleted old backup: ${old.name}`);
+                        console.log(`[AutoBackup] [DEL] Deleted old backup: ${old.name}`);
                     }
                 } catch (e) {
                     console.warn(`[AutoBackup] Failed to delete ${old.name}:`, e);
@@ -4635,7 +4635,7 @@ if (softBlocks.length > 0) {
     // =========================================================================
 
     /**
-     * ★★★ AUTO MODE: Reshape a bunk's per-bunk slots to guarantee an exact time window ★★★
+     * *** AUTO MODE: Reshape a bunk's per-bunk slots to guarantee an exact time window ***
      * Splits overlapping slots so the target range has its own dedicated slot(s).
      * Returns the slot indices that now exactly cover [targetStart, targetEnd].
      */
@@ -4709,7 +4709,7 @@ if (softBlocks.length > 0) {
         // Rebuild slotIndex
         newSlots.forEach(function(s, idx) { s.slotIndex = idx; });
 
-        // ★★★ CRITICAL: Remap existing scheduleAssignments to new slot layout ★★★
+        // *** CRITICAL: Remap existing scheduleAssignments to new slot layout ***
         var oldAssignments = window.scheduleAssignments?.[bunkName] || [];
         var newAssignments = new Array(newSlots.length);
 
@@ -4753,7 +4753,7 @@ if (softBlocks.length > 0) {
         const isAutoMode = !!window.divisionTimes?.[divName]?._perBunkSlots;
         const perBunkSlotMap = result.perBunkSlots || null;
 
-        // ★★★ FIX: Capture old activities per-bunk BEFORE overwriting, for rotation count delta ★★★
+        // *** FIX: Capture old activities per-bunk BEFORE overwriting, for rotation count delta ***
         const oldActivitiesByBunk = {};
         for (const bunk of bunks) {
             let capSlots;
@@ -4775,7 +4775,7 @@ if (softBlocks.length > 0) {
 
            console.log('[applyMultiBunkEdit] ' + bunk + ': isAutoMode=' + isAutoMode + ' timeStartMin=' + result.timeStartMin + ' timeEndMin=' + result.timeEndMin);
             if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
-                // ★★★ AUTO MODE: Reshape per-bunk slots to guarantee exact time window ★★★
+                // *** AUTO MODE: Reshape per-bunk slots to guarantee exact time window ***
                 bunkSlots = ensurePerBunkSlotForRange(bunk, divName, result.timeStartMin, result.timeEndMin);
             } else if (isAutoMode && perBunkSlotMap && perBunkSlotMap[String(bunk)]) {
                 bunkSlots = perBunkSlotMap[String(bunk)];
@@ -4834,7 +4834,7 @@ if (softBlocks.length > 0) {
             }
         }
 
-        // ★★★ FIX: Update rotation counts for each edited bunk (delta: decrement old, increment new) ★★★
+        // *** FIX: Update rotation counts for each edited bunk (delta: decrement old, increment new) ***
         try {
             const _gs = window.loadGlobalSettings?.() || {};
             const _hc = _gs.historicalCounts || {};
@@ -4858,9 +4858,9 @@ if (softBlocks.length > 0) {
         } catch (rcErr) { console.error('[applyMultiBunkEdit] Rotation count update failed:', rcErr); }
 
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
-        showIntegratedToast(`✅ ${bunks.length} bunks assigned to ${location}` + (plan.length > 0 ? ` - ${plan.length} reassigned` : ''), 'success');
+        showIntegratedToast(`[OK] ${bunks.length} bunks assigned to ${location}` + (plan.length > 0 ? ` - ${plan.length} reassigned` : ''), 'success');
 
-        // ★★★ AUTO MODE: Check for capacity conflicts within the assigned group and offer rebalancing ★★★
+        // *** AUTO MODE: Check for capacity conflicts within the assigned group and offer rebalancing ***
         if (isAutoMode && location && bunks.length > 1) {
             setTimeout(() => autoModeRebalanceCheck(divName, bunks, location, activity, result.timeStartMin, result.timeEndMin), 400);
         }
@@ -4956,7 +4956,7 @@ if (softBlocks.length > 0) {
 
         modal.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h2 style="margin:0;font-size:1.15rem;color:#b45309;">⚠️ Field Capacity Conflict</h2>
+                <h2 style="margin:0;font-size:1.15rem;color:#b45309;">[!] Field Capacity Conflict</h2>
                 <button id="ar-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#9ca3af;">&times;</button>
             </div>
             <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:16px;font-size:0.9rem;color:#78350f;">
@@ -4975,7 +4975,7 @@ if (softBlocks.length > 0) {
             </div>
             <div style="display:flex;gap:10px;">
                 <button id="ar-keep" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Keep As-Is</button>
-                <button id="ar-apply" style="flex:1;padding:10px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.95rem;cursor:pointer;font-weight:500;"${suggestions.some(s=>!s.alt)?' disabled':''}>✓ Auto-Rebalance</button>
+                <button id="ar-apply" style="flex:1;padding:10px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.95rem;cursor:pointer;font-weight:500;"${suggestions.some(s=>!s.alt)?' disabled':''}>OK - Auto-Rebalance</button>
             </div>
         `;
 
@@ -5020,7 +5020,7 @@ if (softBlocks.length > 0) {
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
                 const rebalSummary = suggestions.filter(s => s.alt).map(s => `${s.bunk} → ${s.alt.activityName}${s.alt.field ? ' @ ' + s.alt.field : ''}`).join('\n');
-                showIntegratedToast(`✅ Rebalanced:\n${rebalSummary}`, 'success', 5000);
+                showIntegratedToast(`[OK] Rebalanced:\n${rebalSummary}`, 'success', 5000);
             } catch (e) { console.error('[AutoRebalance] Failed:', e); showIntegratedToast('Rebalance failed — try again', 'error'); }
         };
     }
@@ -5180,7 +5180,7 @@ if (softBlocks.length > 0) {
                 <div style="font-weight: 500; color: #374151; margin-bottom: 8px;">Changes to your bunks:</div>
                 <div style="background: ${myMoves.length > 0 ? '#fef3c7' : '#f0fdf4'}; border-radius: 8px; padding: 12px;">
                     ${myMoves.length === 0 ? 
-                        '<div style="color: #166534;">✓ No direct changes to your bunks</div>' :
+                        '<div style="color: #166534;">OK - No direct changes to your bunks</div>' :
                         `<ul style="margin: 0; padding-left: 20px; color: #92400e;">
                             ${myMoves.map(m => `<li><strong>${escapeHtml(m.bunk)}</strong>: ${escapeHtml(m.from?.activity || '?')} → ${escapeHtml(m.to?.activity || '?')}</li>`).join('')}
                         </ul>`
@@ -5190,11 +5190,11 @@ if (softBlocks.length > 0) {
             <div style="display: flex; gap: 12px;">
                 <button onclick="respondToProposal('${proposal.id}', 'approved')" 
                     style="flex: 1; padding: 12px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">
-                    ✅ Approve
+                    [OK] Approve
                 </button>
                 <button onclick="respondToProposal('${proposal.id}', 'rejected')" 
                     style="flex: 1; padding: 12px; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 500; cursor: pointer;">
-                    ❌ Reject
+                    [X] Reject
                 </button>
             </div>
         `;
@@ -5250,7 +5250,7 @@ if (softBlocks.length > 0) {
 
             closeIntegratedEditModal();
             showIntegratedToast(
-                response === 'approved' ? '✅ Proposal approved' : '❌ Proposal rejected',
+                response === 'approved' ? '[OK] Proposal approved' : '[X] Proposal rejected',
                 response === 'approved' ? 'success' : 'info'
             );
 
@@ -5261,7 +5261,7 @@ if (softBlocks.length > 0) {
     }
 
     async function applyApprovedProposal(proposal) {
-        console.log('[ApplyProposal] ★ All approvals received, applying...');
+        console.log('[ApplyProposal] * All approvals received, applying...');
 
         const claim = proposal.claim || {};
         
@@ -5337,7 +5337,7 @@ if (softBlocks.length > 0) {
         }
 
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
-        showIntegratedToast(`✅ Proposal applied: ${(bunks || []).length} bunks → ${location}`, 'success');
+        showIntegratedToast(`[OK] Proposal applied: ${(bunks || []).length} bunks → ${location}`, 'success');
     }
 
     async function notifyProposerOfResponse(proposal, response, respondingDivisions) {
@@ -5349,7 +5349,7 @@ if (softBlocks.length > 0) {
                 camp_id: proposal.camp_id,
                 user_id: proposal.created_by,
                 type: 'proposal_response',
-                title: response === 'approved' ? '✅ Proposal Approved' : '❌ Proposal Rejected',
+                title: response === 'approved' ? '[OK] Proposal Approved' : '[X] Proposal Rejected',
                 message: `${respondingDivisions.join(', ')} ${response} your claim for ${proposal.claim?.field || 'field'}`,
                 metadata: { proposal_id: proposal.id, response },
                 read: false,
@@ -5402,13 +5402,13 @@ if (softBlocks.length > 0) {
                     if (!confirm(`Version "${existing.name}" already exists. Overwrite?`)) return { success: false }; 
                     if (window.ScheduleVersionsDB.updateVersion) { 
                         const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload); 
-                        if (result.success) { alert('✅ Version updated!'); return { success: true }; } 
-                        else { alert('❌ Error: ' + result.error); return { success: false }; } 
+                        if (result.success) { alert('[OK] Version updated!'); return { success: true }; } 
+                        else { alert('[X] Error: ' + result.error); return { success: false }; } 
                     } 
                 }
                 const result = await window.ScheduleVersionsDB.createVersion(dateKey, name, payload);
-                if (result.success) { alert('✅ Version saved!'); return { success: true }; } 
-                else { alert('❌ Error: ' + result.error); return { success: false }; }
+                if (result.success) { alert('[OK] Version saved!'); return { success: true }; } 
+                else { alert('[X] Error: ' + result.error); return { success: false }; }
             } catch (err) { alert('Error: ' + err.message); return { success: false }; }
         },
         async loadVersion() {
@@ -5438,7 +5438,7 @@ if (softBlocks.length > 0) {
                 if (data.divisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
                 saveSchedule();
                 updateTable();
-                alert('✅ Version loaded!');
+                alert('[OK] Version loaded!');
             } catch (err) { alert('Error: ' + err.message); }
         },
         async mergeVersions() {
@@ -5483,7 +5483,7 @@ if (softBlocks.length > 0) {
                 if (latestDivisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(latestDivisionTimes) || latestDivisionTimes;
                 saveSchedule(); 
                 updateTable();
-                alert(`✅ Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
+                alert(`[OK] Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
                 return { success: true, count: versions.length, bunks: bunksTouched.size };
             } catch (err) { alert('Error: ' + err.message); return { success: false }; }
         }
@@ -5747,7 +5747,7 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
             Object.entries(window.divisionTimes || {}).forEach(([div, slots]) => {
                 console.log(`  ${div}: ${slots.length} slots`);
             });
-            console.log(`TimeBasedFieldUsage: ${window.TimeBasedFieldUsage ? '✅' : '❌'}`);
+            console.log(`TimeBasedFieldUsage: ${window.TimeBasedFieldUsage ? '[OK]' : '[X]'}`);
             console.log(`Pinned activities: ${getPinnedActivities().length}`); 
            console.log(`Bypass cells tracked: ${_myBypassedCells?.size || 0}`);
         },
@@ -5852,11 +5852,11 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
     }
 
     console.log('📅 Unified Schedule System v4.1.0 loaded successfully');
-    console.log('   ★★★ FULL DIVISIONTIMES INTEGRATION ★★★');
-    console.log('   ✅ Division-aware time slot management');
-    console.log('   ✅ TimeBasedFieldUsage for cross-division conflicts');
-    console.log('   ✅ Removed unifiedTimes dependency');
-    console.log('   ✅ Data persistence uses divisionTimes');
-    console.log('   ✅ Print center rowspan merging');
+    console.log('   *** FULL DIVISIONTIMES INTEGRATION ***');
+    console.log('   [OK] Division-aware time slot management');
+    console.log('   [OK] TimeBasedFieldUsage for cross-division conflicts');
+    console.log('   [OK] Removed unifiedTimes dependency');
+    console.log('   [OK] Data persistence uses divisionTimes');
+    console.log('   [OK] Print center rowspan merging');
 
 })();
