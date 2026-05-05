@@ -1665,10 +1665,10 @@ function liveRefresh() {
     var html = '';
 
     if (_activeView === 'division') {
+        var divs = getDivisions();
         if (_currentTemplate.layoutMode === 'all-bunks' && isAutoMode()) {
             // Combined: gather ALL bunks across all selected divisions → one unified table
             var allDivBunks = [];
-            var divs = getDivisions();
             sel.forEach(function (d) {
                 var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).sort(naturalSort);
                 bunks.forEach(function (b) { allDivBunks.push({ bunk: b, div: d }); });
