@@ -614,7 +614,6 @@
         // Render
         console.log('[PostEdit] 🔄 Calling updateTable() immediately');
         if (typeof window.updateTable === 'function') window.updateTable();
-        setTimeout(() => { if (typeof window.updateTable === 'function') window.updateTable(); }, 200);
     }
 
     // =========================================================================
@@ -972,7 +971,15 @@
                 let fieldOnly = fieldName;
                 if (fieldName.includes(' – ')) fieldOnly = fieldName.split(' – ')[0].trim();
                 if (window.TimeBasedFieldUsage?.checkAvailability) {
-                    const actProps = (window.activityProperties || {})[fieldOnly] || {};
+                    const allProps = window.activityProperties || {};
+                    let actProps = allProps[fieldOnly];
+                    if (!actProps) {
+                        const lower = fieldOnly.toLowerCase();
+                        for (const key in allProps) {
+                            if (key.toLowerCase() === lower) { actProps = allProps[key]; break; }
+                        }
+                    }
+                    actProps = actProps || {};
                     const capacity = actProps.sharableWith?.capacity ? parseInt(actProps.sharableWith.capacity) || 1 : (actProps.sharable ? 2 : 1);
                     const avail = window.TimeBasedFieldUsage.checkAvailability(fieldOnly, proposedStart, proposedEnd, capacity, bunk);
                     if (!avail.available) { result.fieldConflicts = avail.conflicts || []; result.hasConflict = true; }
@@ -1450,11 +1457,17 @@
         // 3) Build candidates
         const candidates = [];
 
+        const allProps = window.SchedulerCoreUtils?.getActivityProperties?.() ||
+                         window.activityProperties || {};
+
         (app1.fields || []).forEach(f => {
             if (!f.name || f.available === false) return;
             if (todayFields.has(f.name.toLowerCase())) return;
             if (f.rainyDayOnly && !isRainyDay) return;
             if (f.outdoors && isRainyDay && !f.rainyDayOnly) return;
+
+            const fieldProps = allProps[f.name] || allProps[f.name.toLowerCase()] || {};
+            const fieldMax = fieldProps.maxUsage != null ? parseInt(fieldProps.maxUsage) : Infinity;
 
             (f.activities || f.sports || []).forEach(sport => {
                 const sn = typeof sport === 'string' ? sport : sport.name;
@@ -1464,6 +1477,7 @@
                     if (!window.TimeBasedFieldUsage.checkAvailability(f.name, startMin, endMin, cap, bunk).available) return;
                 }
                 const usageCount = window.RotationEngine?.getActivityCount?.(bunk, sn) || 0;
+                if (usageCount >= fieldMax) return;
                 const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, sn, 0);
                 let score = 100 - usageCount;
                 if (daysSince === null) score += 20;
@@ -1481,7 +1495,10 @@
             if (window.TimeBasedFieldUsage?.checkAvailability) {
                 if (!window.TimeBasedFieldUsage.checkAvailability(s.name, startMin, endMin, cap, bunk).available) return;
             }
+            const specProps = allProps[s.name] || allProps[s.name.toLowerCase()] || {};
+            const specMax = specProps.maxUsage != null ? parseInt(specProps.maxUsage) : Infinity;
             const usageCount = window.RotationEngine?.getActivityCount?.(bunk, s.name) || 0;
+            if (usageCount >= specMax) return;
             const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, s.name, 0);
             let score = 100 - usageCount;
             if (daysSince === null) score += 20;
@@ -1562,6 +1579,17 @@
         const oldSlots = peiFindEntrySlots(assignments, origSlotIdx);
 
         // 2) Save a clean copy of the entry (without continuation flag)
+        // Recalculate travel time for the new position
+        const location = origEntry._location || origEntry._travelZone;
+        if (location && (window.getTravelForField || window.getTravelForSpecialActivity)) {
+            const travelInfo = window.getTravelForField?.(location, true) || window.getTravelForSpecialActivity?.(location, true) || null;
+            if (travelInfo) {
+                origEntry._travelPre = travelInfo.preMin;
+                origEntry._travelPost = travelInfo.postMin;
+                origEntry._travelZone = travelInfo.zoneName;
+                origEntry._travelMode = 'deduct';
+            }
+        }
         const cleanEntry = Object.assign({}, origEntry, { continuation: false });
 
         // 3) Clear ONLY the slots this entry occupied
@@ -1625,6 +1653,15 @@
         if (firstWritten !== undefined && assignments[firstWritten]) {
             assignments[firstWritten] = Object.assign({}, cleanEntry, {
                 continuation: false, _startMin: newStart, _endMin: newEnd, _blockStart: newStart, _postEdited: true
+            });
+        }
+
+        // Seam-merge: drop boundary travel for adjacent same-zone blocks
+        if (cleanEntry._travelZone) {
+            newSlotIndices.forEach(idx => {
+                const cur = assignments[idx], prev = assignments[idx - 1], next = assignments[idx + 1];
+                if (cur && prev && prev._travelZone === cur._travelZone) { prev._travelPost = 0; cur._travelPre = 0; }
+                if (cur && next && next._travelZone === cur._travelZone) { cur._travelPost = 0; next._travelPre = 0; }
             });
         }
 
@@ -1870,7 +1907,7 @@
             window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
         }
         peiUpdateRotationHistory(bunk);
-        setTimeout(() => { window._postEditInProgress = false; }, 500);
+        setTimeout(() => { window._postEditInProgress = false; }, 4000);
     }
 
     /**
@@ -1884,6 +1921,11 @@
         // Save to localStorage
         try {
             localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            const perDateKey = `campDailyData_v1_${dateKey}`;
+            const perDateData = JSON.parse(localStorage.getItem(perDateKey) || '{}');
+            perDateData.scheduleAssignments = window.scheduleAssignments;
+            perDateData._postEditAt = Date.now();
+            localStorage.setItem(perDateKey, JSON.stringify(perDateData));
             const allDaily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDaily[dateKey]) allDaily[dateKey] = {};
             allDaily[dateKey].scheduleAssignments = window.scheduleAssignments;
@@ -1897,7 +1939,7 @@
             window.saveSchedule?.();
         }
         peiUpdateRotationHistory(bunk);
-        setTimeout(() => { window._postEditInProgress = false; }, 500);
+        setTimeout(() => { window._postEditInProgress = false; }, 4000);
     }
 
     function peiUpdateRotationHistory(bunk) {
