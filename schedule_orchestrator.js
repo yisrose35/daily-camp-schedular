@@ -293,6 +293,57 @@
     }
 
     // =========================================================================
+    // ROTATION HISTORY HYDRATION (loads past dates from cloud)
+    // =========================================================================
+
+    async function hydrateRotationHistory(todayKey) {
+        try {
+            if (!window.ScheduleDB?.loadDateRange || !navigator.onLine) return;
+            const d = new Date(todayKey + 'T12:00:00');
+            d.setDate(d.getDate() - 14);
+            const startDate = d.toISOString().split('T')[0];
+
+            const allDaily = JSON.parse(localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY) || '{}');
+            const pastDates = Object.keys(allDaily).filter(k => k < todayKey && k >= startDate && allDaily[k]?.scheduleAssignments && Object.keys(allDaily[k].scheduleAssignments).length > 0);
+            if (pastDates.length >= 5) return;
+
+            log('Hydrating rotation history from cloud:', startDate, '→', todayKey);
+            const records = await window.ScheduleDB.loadDateRange(startDate, todayKey);
+            if (!records || records.length === 0) return;
+
+            let hydrated = 0;
+            const byDate = {};
+            for (const rec of records) {
+                const dk = rec.date_key;
+                if (!dk || dk === todayKey) continue;
+                if (!byDate[dk]) byDate[dk] = [];
+                byDate[dk].push(rec);
+            }
+            for (const [dk, recs] of Object.entries(byDate)) {
+                const existing = allDaily[dk] || {};
+                if (existing.scheduleAssignments && Object.keys(existing.scheduleAssignments).length > 0) continue;
+                const merged = {};
+                for (const rec of recs) {
+                    const sd = rec.schedule_data || {};
+                    if (sd.scheduleAssignments) Object.assign(merged, sd.scheduleAssignments);
+                }
+                if (Object.keys(merged).length > 0) {
+                    allDaily[dk] = { ...existing, scheduleAssignments: merged };
+                    LOCAL_ONLY_FIELDS.forEach(f => { if (existing[f] !== undefined) allDaily[dk][f] = existing[f]; });
+                    hydrated++;
+                }
+            }
+            if (hydrated > 0) {
+                localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(allDaily));
+                window.invalidateDailyDataCache?.();
+                log('✅ Hydrated', hydrated, 'past date(s) for rotation history');
+            }
+        } catch (e) {
+            logWarn('Rotation history hydration failed:', e);
+        }
+    }
+
+    // =========================================================================
     // WINDOW GLOBALS MANAGEMENT
     // =========================================================================
 
@@ -567,9 +618,14 @@
             hydrateWindowGlobals(result.data);
 
             // ═══════════════════════════════════════════════════════════════
+            // STEP 3b: Hydrate past dates for rotation history (background)
+            // ═══════════════════════════════════════════════════════════════
+            hydrateRotationHistory(dateKey);
+
+            // ═══════════════════════════════════════════════════════════════
             // STEP 4: Ensure empty state for all divisions
             // ═══════════════════════════════════════════════════════════════
-            
+
             log('Step 4: Ensuring empty state for unscheduled divisions...');
             ensureEmptyStateForAllDivisions();
 
