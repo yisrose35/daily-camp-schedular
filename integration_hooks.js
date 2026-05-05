@@ -1063,29 +1063,33 @@
             );
 
             if (secondaryDateKeys.length > 0 && window.ScheduleDB?.saveSchedule) {
-                log(`[saveGlobalSettings] Syncing ${secondaryDateKeys.length} secondary date(s) to cloud...`);
-
-                secondaryDateKeys.forEach((dk, index) => {
-                    setTimeout(() => {
-                        window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
-                            .then(r => {
-                                if (r?.success) {
-                                    log(`  ✅ Secondary save: ${dk}`);
-                                } else {
-                                    console.warn(`  ⚠️ Secondary save failed: ${dk} — retrying via verifiedScheduleSave`, r?.error);
-                                    verifiedScheduleSave(dk, data[dk]).catch(e =>
-                                        logError(`  ✗ Secondary save retry failed: ${dk}`, e)
-                                    );
-                                }
-                            })
-                            .catch(e => {
-                                console.warn(`  ⚠️ Secondary save error: ${dk} — retrying via verifiedScheduleSave`, e.message);
-                                verifiedScheduleSave(dk, data[dk]).catch(e2 =>
-                                    logError(`  ✗ Secondary save retry failed: ${dk}`, e2)
-                                );
-                            });
-                    }, (index + 1) * 500);
+                // Deduplicate: skip dates already saved in the last 30s
+                if (!window._secondarySaveLog) window._secondarySaveLog = {};
+                const now = Date.now();
+                const unsaved = secondaryDateKeys.filter(dk => {
+                    return !window._secondarySaveLog[dk] || (now - window._secondarySaveLog[dk]) > 30000;
                 });
+
+                if (unsaved.length > 0) {
+                    log(`[saveGlobalSettings] Syncing ${unsaved.length} secondary date(s) to cloud...`);
+                    unsaved.forEach(dk => { window._secondarySaveLog[dk] = now; });
+
+                    unsaved.forEach((dk, index) => {
+                        setTimeout(() => {
+                            window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
+                                .then(r => {
+                                    if (r?.success) {
+                                        log(`  ✅ Secondary save: ${dk}`);
+                                    } else {
+                                        console.warn(`  ⚠️ Secondary save failed: ${dk}`, r?.error);
+                                    }
+                                })
+                                .catch(e => {
+                                    console.warn(`  ⚠️ Secondary save error: ${dk}`, e.message);
+                                });
+                        }, (index + 1) * 500);
+                    });
+                }
             }
 
             return true;
