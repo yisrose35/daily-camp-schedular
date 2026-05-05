@@ -3763,6 +3763,27 @@ if (bypassStatus.highlight) {
         // Same-day repetition guard: never suggest an activity this bunk already has today
         const _doneToday = getActivitiesDoneToday(bunk, slots[0]);
 
+        // Check if a field is available considering capacity AND sharing rules
+        function _isFieldAvailableForBunk(fName) {
+            const props = activityProps[fName] || activityProps[fName.toLowerCase()] || {};
+            const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
+            const shareType = props.sharableWith?.type || (props.sharable ? 'all' : 'not_sharable');
+
+            for (const slotIdx of slots) {
+                const usage = simulatedUsage[slotIdx]?.[fName];
+                if (!usage || usage.count === 0) continue;
+                if (usage.count >= maxCapacity) return false;
+                // Cross-division sharing check
+                if (shareType === 'same_division' || shareType === 'not_sharable') {
+                    if (usage.divisions && usage.divisions.length > 0 && !usage.divisions.includes(divName)) return false;
+                } else if (shareType === 'custom') {
+                    const allowedDivs = props.sharableWith?.divisions || [];
+                    if (usage.divisions && usage.divisions.some(d => d !== divName && !allowedDivs.includes(d))) return false;
+                }
+            }
+            return true;
+        }
+
         // ★ DEMO FIX: Use proper field iteration in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__) {
             const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
@@ -3883,16 +3904,7 @@ const fieldProps = activityProps[fName] || {};
 if (!isRainyMode && (fieldProps.rainyDayOnly === true || fieldProps.rainyDayExclusive === true)) return;
 if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availableOnRainyDay === false)) return;
 
-                let available = true;
-                const props = activityProps[fName] || {};
-                const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
-
-                for (const slotIdx of slots) {
-                    const usage = simulatedUsage[slotIdx]?.[fName];
-                    if (usage && usage.count >= maxCapacity) { available = false; break; }
-                }
-
-                if (available) {
+                if (_isFieldAvailableForBunk(fName)) {
                     const penalty = calculateRotationPenalty(bunk, sport, slots);
                     if (penalty !== Infinity) {
                         candidates.push({ field: fName, activityName: sport, type: 'sport', penalty });
@@ -3922,15 +3934,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
                 if (_prefList.length > 0 && !_prefList.includes(divName)) return;
             }
 
-            let available = true;            const props = activityProps[special.name] || {};
-            const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
-
-            for (const slotIdx of slots) {
-                const usage = simulatedUsage[slotIdx]?.[special.name];
-                if (usage && usage.count >= maxCapacity) { available = false; break; }
-            }
-
-            if (available) {
+            if (_isFieldAvailableForBunk(special.name)) {
                 const penalty = calculateRotationPenalty(bunk, special.name, slots);
                 if (penalty !== Infinity) {
                     candidates.push({ field: special.name, activityName: special.name, type: 'special', penalty });
@@ -3953,15 +3957,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
                 if (_prefList.length > 0 && !_prefList.includes(divName)) return;
             }
 
-            let available = true;
-            const props = activityProps[field.name] || {};
-            const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
-            for (const slotIdx of slots) {
-                const usage = simulatedUsage[slotIdx]?.[field.name];
-                if (usage && usage.count >= maxCapacity) { available = false; break; }
-            }
-
-            if (available) {
+            if (_isFieldAvailableForBunk(field.name)) {
                 (field.activities || []).forEach(activity => {
                     if (_doneToday.has(activity.toLowerCase().trim())) return;
                     const penalty = calculateRotationPenalty(bunk, activity, slots);
