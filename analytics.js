@@ -207,6 +207,24 @@
             });
         });
 
+        // Debug: log usage data summary
+        const withField = items.filter(i => i.field);
+        const withoutField = items.filter(i => !i.field);
+        console.log(`[FieldAvail] buildUsageData(${dateKey}): ${items.length} items total, ${withField.length} with field, ${withoutField.length} without field`);
+        if (withField.length > 0) {
+            const uniqueFields = [...new Set(withField.map(i => i.field))];
+            console.log('[FieldAvail] Unique field names in schedule:', uniqueFields);
+        }
+        if (withoutField.length > 0) {
+            const sample = withoutField.slice(0, 3);
+            console.log('[FieldAvail] Sample items WITHOUT field:', sample);
+        }
+        if (items.length === 0) {
+            console.log('[FieldAvail] assignments keys:', Object.keys(assignments).length, 'sample:', Object.keys(assignments).slice(0, 2));
+            const firstBunk = Object.keys(assignments)[0];
+            if (firstBunk) console.log('[FieldAvail] First bunk schedule sample:', assignments[firstBunk]?.slice(0, 3));
+        }
+
         return items;
     }
 
@@ -837,13 +855,25 @@
         const totalMin = campEnd - campStart;
 
         const byField = {}, bySpecial = {};
+        const _fieldKeyMap = {};
         items.forEach(item => {
-            if (item.field) (byField[item.field] = byField[item.field] || []).push(item);
+            if (item.field) {
+                const normKey = item.field.trim().toLowerCase();
+                if (!_fieldKeyMap[normKey]) _fieldKeyMap[normKey] = item.field;
+                (byField[normKey] = byField[normKey] || []).push(item);
+            }
             if (item.isSpecial) {
                 const arr = (bySpecial[item.activity] = bySpecial[item.activity] || []);
                 if (!arr.some(x => x.bunk === item.bunk && x.startMin === item.startMin)) arr.push(item);
             }
         });
+        console.log('[FieldAvail] byField keys (normalized):', Object.keys(byField));
+        console.log('[FieldAvail] resource names:', resources.map(r => r.name));
+        const matchedResources = resources.filter(r => r.type === 'field' && byField[r.name.trim().toLowerCase()]?.length > 0);
+        console.log(`[FieldAvail] ${matchedResources.length}/${fieldResources.length} fields have usages`);
+        if (matchedResources.length === 0 && Object.keys(byField).length > 0) {
+            console.warn('[FieldAvail] ⚠️ MISMATCH: schedule has field names but none match configured resources!');
+        }
 
         const nowLegend = showNow
             ? `<span style="display:inline-flex;align-items:center;gap:7px;">
@@ -869,10 +899,11 @@
                 </div>
             </div>`;
 
-        const fieldPeriods = getBellPeriods();
+        const isAutoMode = window._daBuilderMode === 'auto';
+        const fieldPeriods = isAutoMode ? getBellPeriods() : [];
         let rows = '';
         resources.forEach((r, i) => {
-            const usages = r.type === 'field' ? (byField[r.name] || []) : (bySpecial[r.name] || []);
+            const usages = r.type === 'field' ? (byField[r.name.trim().toLowerCase()] || []) : (bySpecial[r.name] || []);
             let track = buildTrack(usages, campStart, campEnd, totalMin, u => `${u.bunk}  ·  ${u.activity}`, fieldPeriods);
             if (showNow) track += buildNowLine(campStart, totalMin);
             rows += buildRow(r.name, track, i % 2 === 1);
@@ -925,6 +956,7 @@
     // ========================================================================
 
     function renderBunkGantt(area, items, campStart, campEnd, divFilter, showNow) {
+        const isAutoMode = window._daBuilderMode === 'auto';
         const totalMin = campEnd - campStart;
 
         const bunkMap = {};
@@ -952,7 +984,7 @@
                 <div style="flex:1;background:#fafafa;"></div>
             </div>`;
 
-            const divPeriods = getBellPeriods(divName);
+            const divPeriods = isAutoMode ? getBellPeriods(divName) : [];
             bunks.forEach(bunk => {
                 const usages = bunkMap[bunk] || [];
                 let track = buildTrack(usages, campStart, campEnd, totalMin, u => u.activity, divPeriods);
@@ -985,7 +1017,7 @@
                 <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">${filterBadge}</div>
             </div>`;
 
-        const globalPeriods = getBellPeriods();
+        const globalPeriods = isAutoMode ? getBellPeriods() : [];
         const hasBunkPeriods = globalPeriods.length > 0;
         const axisRow = `
             <div style="display:flex;padding:${hasBunkPeriods ? '0' : '14px'} 0 6px;border-bottom:1px solid #f1f5f9;">
