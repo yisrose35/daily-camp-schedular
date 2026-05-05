@@ -3045,13 +3045,33 @@ if (bypassStatus.highlight) {
         const actProps = getActivityProperties();
         const open = [], busy = [];
         for (const loc of matching) {
+            const props = actProps[loc.name] || actProps[loc.name.toLowerCase()] || {};
+
+            // Access restriction check: division not allowed to use this field
+            if (props.accessRestrictions?.enabled && divName) {
+                const allowedDivs = props.accessRestrictions.divisions || {};
+                if (!(divName in allowedDivs)) {
+                    busy.push({ ...loc, reason: 'access_restricted' });
+                    continue;
+                }
+            }
+
+            // League lock check: field occupied by a league game at this time
+            if (window.GlobalFieldLocks && targetSlots.length > 0) {
+                const lockInfo = window.GlobalFieldLocks.isFieldLocked(loc.name, targetSlots, divName);
+                if (lockInfo) {
+                    busy.push({ ...loc, reason: 'league_locked', lockInfo });
+                    continue;
+                }
+            }
+
             // Full constraint check: capacity, sharing rules, cross-division, combos
             const timeAvail = (startMin != null && endMin != null)
                 ? checkFieldAvailableByTime(loc.name, startMin, endMin, excludeBunk, actProps)
                 : true;
             if (!timeAvail) {
                 const check = checkLocationConflict(loc.name, targetSlots, excludeBunk);
-                busy.push({ ...loc, conflict: check, reason: 'constraints' });
+                busy.push({ ...loc, conflict: check, reason: 'capacity' });
                 continue;
             }
             const check = checkLocationConflict(loc.name, targetSlots, excludeBunk);
@@ -3277,7 +3297,10 @@ if (bypassStatus.highlight) {
                     `<button class="pe-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#065f46;transition:all 0.15s;">${escapeHtml(l.name)}${l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : ''}</button>`
                 ).join('');
                 const busyNote = busy.length > 0
-                    ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => escapeHtml(b.name)).join(', ')}</div>`
+                    ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => {
+                        const reason = b.reason === 'access_restricted' ? 'no access' : b.reason === 'league_locked' ? 'league' : 'in use';
+                        return escapeHtml(b.name) + ' <span style="opacity:0.7">(' + reason + ')</span>';
+                    }).join(', ')}</div>`
                     : '';
                 fieldResult.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;">
                     <div style="font-weight:600;font-size:0.85rem;color:#166534;margin-bottom:8px;">Available fields for ${escapeHtml(actVal)}:</div>
