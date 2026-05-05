@@ -3,27 +3,24 @@
  *
  *   RotationAudit.run()        full report for today (window.currentScheduleDate)
  *   RotationAudit.run('2026-04-14')   audit a specific date
- *   RotationAudit.history()    just dump the raw weekActivityHistory
- *   RotationAudit.bunk('Bunk1')        deep-dive on one bunk
- *   RotationAudit.simulate(bunk, opts) replay findBestSport scoring math
+ *   RotationAudit.history()    just dump the raw history from saved schedules
+ *   RotationAudit.bunk('1')    deep-dive on one bunk
+ *   RotationAudit.simulate(bunk, opts) replay scoring math
  *
- * Checks every layer of the auto rotation pipeline:
- *   1. History storage     (localStorage + globalSettings + in-memory match)
+ * Checks every layer of the rotation pipeline:
+ *   1. History storage     (campDailyData_v1 past schedules)
  *   2. Today's snapshot    (each bunk's sport assignments today)
  *   3. Yesterday penalty   (sports played today AND yesterday → soft fail)
  *   4. Streak detection    (same sport 2+ consecutive days → hard fail)
  *   5. Variety entropy     (distinct sports / total over last 5 days)
  *   6. Overdue boost       (sports not seen in 4+ days that were available)
  *   7. Draft adherence     (planned sports actually being placed)
- *   8. Persistence cycle   (write a probe → reload → confirm round-trip)
+ *   8. Persistence cycle   (confirm campDailyData_v1 has past dates)
  * ========================================================================= */
 
 (function () {
     'use strict';
 
-    const HISTORY_LS_KEY = 'campistry_activityHistory';
-    const PENALTY_YESTERDAY = -300;
-    const BOOST_OVERDUE = 200;
     const LOOKBACK_DAYS = 5;
 
     // ---- helpers -----------------------------------------------------------
@@ -35,17 +32,6 @@
         h1:  (s)    => console.log('\n%c' + s + ' ', 'font-size:14px;font-weight:bold;background:#222;color:#fff;padding:4px 8px;border-radius:4px'),
         h2:  (s)    => console.log('%c' + s, 'font-weight:bold;color:#0d47a1;border-bottom:1px solid #0d47a1'),
     };
-
-    function getHistory() {
-        let fromLs = null, fromGs = null;
-        try { fromLs = JSON.parse(localStorage.getItem(HISTORY_LS_KEY) || 'null'); } catch (_) {}
-        try {
-            const gs = (window.getGlobalSettings && window.getGlobalSettings())
-                    || window.globalSettings || {};
-            fromGs = gs.activityHistory || (gs.app1 && gs.app1.activityHistory) || null;
-        } catch (_) {}
-        return { fromLs, fromGs, merged: Object.assign({}, fromLs || {}, fromGs || {}) };
-    }
 
     function recentDays(today, count) {
         const out = [];
@@ -59,6 +45,31 @@
         return out;
     }
 
+    // Build history from campDailyData_v1 (actual saved schedules)
+    function buildHistoryFromSchedules(today) {
+        const allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+        const history = {}; // bunk → { dateKey → [sport1, sport2, ...] }
+        const dates = Object.keys(allDaily)
+            .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && d < today)
+            .sort((a, b) => b.localeCompare(a))
+            .slice(0, 14);
+
+        for (const dateKey of dates) {
+            const sched = allDaily[dateKey]?.scheduleAssignments || {};
+            for (const [bunk, slots] of Object.entries(sched)) {
+                if (!history[bunk]) history[bunk] = {};
+                const sports = [];
+                const arr = Array.isArray(slots) ? slots : Object.values(slots);
+                for (const entry of arr) {
+                    if (!entry || !entry.sport || entry.continuation) continue;
+                    sports.push(entry.sport);
+                }
+                if (sports.length > 0) history[bunk][dateKey] = sports;
+            }
+        }
+        return { history, dates };
+    }
+
     // Pull sport-only activities from window.scheduleAssignments
     function todaysSportsByBunk() {
         const out = {};
@@ -66,9 +77,9 @@
         Object.keys(sa).forEach(bunk => {
             const slots = sa[bunk] || [];
             const sports = [];
-            slots.forEach(slot => {
-                if (!slot) return;
-                // Sport blocks have a non-null .sport field
+            const arr = Array.isArray(slots) ? slots : Object.values(slots);
+            arr.forEach(slot => {
+                if (!slot || slot.continuation) return;
                 if (slot.sport) sports.push(slot.sport);
             });
             out[bunk] = sports;
@@ -77,23 +88,22 @@
     }
 
     // ---- check 1: history storage -----------------------------------------
-    function checkHistoryStorage() {
-        c.h2('1. History storage');
-        const h = getHistory();
-        const lsKeys = h.fromLs ? Object.keys(h.fromLs).length : 0;
-        const gsKeys = h.fromGs ? Object.keys(h.fromGs).length : 0;
-        c.info('localStorage[' + HISTORY_LS_KEY + ']:', lsKeys + ' bunks');
-        c.info('globalSettings.app1.activityHistory:', gsKeys + ' bunks');
-        if (lsKeys === 0 && gsKeys === 0) {
-            c.warn('No history found anywhere. Run the auto scheduler at least once first.');
+    function checkHistoryStorage(today) {
+        c.h2('1. History storage (campDailyData_v1 — past schedules)');
+        const { history, dates } = buildHistoryFromSchedules(today);
+        const bunkCount = Object.keys(history).length;
+        c.info('Past dates with schedule data:', dates.length);
+        c.info('Bunks with history:', bunkCount);
+        if (dates.length > 0) {
+            c.info('Date range:', dates[dates.length - 1], '→', dates[0]);
+        }
+        if (dates.length === 0) {
+            c.warn('No past schedule data in localStorage. The rotation engine has no history to work with.');
+            c.info('Fix: Generate schedules for multiple days, or check that cloud hydration ran on page load.');
             return { pass: false, history: {} };
         }
-        if (lsKeys && gsKeys && lsKeys !== gsKeys) {
-            c.warn('Bunk count differs between localStorage (' + lsKeys + ') and globalSettings (' + gsKeys + ') — saveWeekHistory may not be syncing both.');
-        } else {
-            c.ok('History present in both stores.');
-        }
-        return { pass: lsKeys + gsKeys > 0, history: h.merged };
+        c.ok(dates.length + ' past date(s) available for rotation scoring.');
+        return { pass: true, history };
     }
 
     // ---- check 2: today's snapshot ----------------------------------------
@@ -110,7 +120,6 @@
         c.info('Bunks scheduled:', bunks.length, '| with sports:', withSports, '| total sport blocks:', totalBlocks);
         if (totalBlocks === 0) c.bad('No sport blocks were placed today. Rotation cannot be evaluated.');
         else c.ok('Sport blocks present in schedule.');
-        // Distribution
         const dist = {};
         bunks.forEach(b => today[b].forEach(s => { dist[s] = (dist[s] || 0) + 1; }));
         console.table(dist);
@@ -132,9 +141,9 @@
             });
         });
         if (repeats === 0) {
-            c.ok('No bunk repeated a sport from ' + yesterday + '. Penalty (' + PENALTY_YESTERDAY + ') is winning.');
+            c.ok('No bunk repeated a sport from ' + yesterday + '.');
         } else {
-            c.warn(repeats + ' bunk×sport repeats from yesterday. (Soft penalty — can lose to "+500 not-used-today" when no alternatives exist.)');
+            c.warn(repeats + ' bunk×sport repeats from yesterday.');
             console.table(violations);
         }
         return { repeats, violations };
@@ -144,11 +153,10 @@
     function checkStreaks(date, history, today) {
         c.h2('4. Consecutive-day streaks (target: 0 streaks ≥ 2)');
         const days = [date].concat(recentDays(date, LOOKBACK_DAYS));
-        const todayMap = today;
         const streaks = [];
-        Object.keys(todayMap).forEach(bunk => {
+        Object.keys(today).forEach(bunk => {
             const seenByDay = {};
-            seenByDay[date] = todayMap[bunk] || [];
+            seenByDay[date] = today[bunk] || [];
             recentDays(date, LOOKBACK_DAYS).forEach(d => {
                 seenByDay[d] = (history[bunk] && history[bunk][d]) || [];
             });
@@ -174,11 +182,9 @@
     // ---- check 5: variety entropy -----------------------------------------
     function checkVariety(date, history, today) {
         c.h2('5. Variety per bunk (last ' + LOOKBACK_DAYS + ' days + today)');
-        const days = [date].concat(recentDays(date, LOOKBACK_DAYS));
         const rows = [];
         Object.keys(today).forEach(bunk => {
-            const all = [];
-            (today[bunk] || []).forEach(s => all.push(s));
+            const all = [...(today[bunk] || [])];
             recentDays(date, LOOKBACK_DAYS).forEach(d => {
                 ((history[bunk] && history[bunk][d]) || []).forEach(s => all.push(s));
             });
@@ -207,7 +213,7 @@
     function checkOverdueBoost(date, history, today) {
         c.h2('6. Overdue-boost evidence (sports not seen in 4+ days should resurface)');
         const cutoffWindow = recentDays(date, 4);
-        const olderWindow = recentDays(date, LOOKBACK_DAYS).slice(4); // day 5+
+        const olderWindow = recentDays(date, LOOKBACK_DAYS).slice(4);
         let resurfaced = 0;
         Object.keys(today).forEach(bunk => {
             const recent = new Set();
@@ -218,19 +224,17 @@
             });
         });
         c.info('Overdue-and-resurfaced placements today:', resurfaced);
-        if (resurfaced > 0) c.ok('+' + BOOST_OVERDUE + ' boost is producing comebacks for stale sports.');
-        else c.warn('No overdue resurfacing detected — could mean history is too short, or boost is being outweighed by demand penalties.');
+        if (resurfaced > 0) c.ok('Overdue boost is producing comebacks for stale sports.');
+        else c.warn('No overdue resurfacing detected — could mean history is too short, or boost is being outweighed.');
         return { resurfaced };
     }
 
     // ---- check 7: draft adherence -----------------------------------------
     function checkDraftAdherence() {
         c.h2('7. Draft adherence (Phase-2 plan vs actual placements)');
-        // The draft lives inside the closure of runAutoScheduler — not exposed.
-        // Best-effort: look for a stash on window.* if anything has hooked it.
         const draft = window.__lastDraftResults || window.draftResults || null;
         if (!draft) {
-            c.warn('No draft snapshot exposed (runGlobalPlanner keeps draftResults closure-private). To enable this check, add  window.__lastDraftResults = draftResults;  inside scheduler_core_auto.js after the planner returns.');
+            c.warn('No draft snapshot exposed. To enable: add window.__lastDraftResults = draftResults; in scheduler_core_auto.js after the planner returns.');
             return { skipped: true };
         }
         const today = todaysSportsByBunk();
@@ -251,23 +255,30 @@
         return { rows };
     }
 
-    // ---- check 8: persistence round-trip ----------------------------------
-    function checkPersistence() {
-        c.h2('8. Persistence round-trip (probe write → reload)');
-        const probeKey = '__rotationAuditProbe__';
-        const probeDate = '1999-01-01';
-        let history = {};
-        try { history = JSON.parse(localStorage.getItem(HISTORY_LS_KEY) || '{}'); } catch (_) {}
-        const original = JSON.stringify(history);
-        history[probeKey] = { [probeDate]: ['ProbeSport'] };
-        localStorage.setItem(HISTORY_LS_KEY, JSON.stringify(history));
-        const rl = JSON.parse(localStorage.getItem(HISTORY_LS_KEY) || '{}');
-        const ok = rl[probeKey] && rl[probeKey][probeDate] && rl[probeKey][probeDate][0] === 'ProbeSport';
-        // restore
-        localStorage.setItem(HISTORY_LS_KEY, original);
-        if (ok) c.ok('localStorage round-trip works — saveWeekHistory should persist correctly.');
-        else c.bad('localStorage round-trip FAILED. History will not persist between days.');
-        return { pass: ok };
+    // ---- check 8: persistence check ---------------------------------------
+    function checkPersistence(today) {
+        c.h2('8. Persistence (campDailyData_v1 integrity)');
+        const allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+        const allDates = Object.keys(allDaily).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+        const withSched = allDates.filter(d => {
+            const sa = allDaily[d]?.scheduleAssignments;
+            return sa && Object.keys(sa).length > 0;
+        });
+        c.info('Total date entries:', allDates.length, '| With scheduleAssignments:', withSched.length);
+        if (withSched.length > 0) {
+            c.info('Dates with schedules:', withSched.join(', '));
+        }
+        const todayEntry = allDaily[today];
+        if (todayEntry?.scheduleAssignments && Object.keys(todayEntry.scheduleAssignments).length > 0) {
+            c.ok('Today\'s schedule is persisted in localStorage.');
+        } else {
+            c.warn('Today\'s schedule NOT found in localStorage — rotation for tomorrow will lack today\'s data.');
+        }
+        const pastCount = withSched.filter(d => d < today).length;
+        if (pastCount >= 3) c.ok(pastCount + ' past dates available — rotation engine has enough history.');
+        else if (pastCount > 0) c.warn('Only ' + pastCount + ' past date(s) — rotation scoring may be weak.');
+        else c.bad('No past dates — rotation engine is blind. Generate for multiple days or ensure cloud hydration runs.');
+        return { pass: pastCount >= 1, allDates: withSched, pastCount };
     }
 
     // ---- public ------------------------------------------------------------
@@ -275,7 +286,7 @@
         run(dateOverride) {
             const date = dateOverride || window.currentScheduleDate || new Date().toISOString().split('T')[0];
             c.h1('Rotation Audit — ' + date);
-            const r1 = checkHistoryStorage();
+            const r1 = checkHistoryStorage(date);
             const r2 = checkTodaysSnapshot(date);
             const history = r1.history;
             const today = r2.today;
@@ -284,7 +295,7 @@
             const r5 = checkVariety(date, history, today);
             const r6 = checkOverdueBoost(date, history, today);
             const r7 = checkDraftAdherence();
-            const r8 = checkPersistence();
+            const r8 = checkPersistence(date);
 
             c.h1('Summary');
             const fails = [];
@@ -293,7 +304,7 @@
             if (r3.repeats > 0) fails.push('yesterday-repeats:' + r3.repeats);
             if (r4.streaks.length > 0) fails.push('streaks:' + r4.streaks.length);
             if (!r8.pass) fails.push('persistence-broken');
-            if (fails.length === 0) c.ok('All hard checks passed.');
+            if (fails.length === 0) c.ok('All checks passed.');
             else c.bad('Issues: ' + fails.join(', '));
             return { date, history, today, fails,
                      details: { storage: r1, snapshot: r2, yesterday: r3,
@@ -301,61 +312,58 @@
                                 draft: r7, persistence: r8 } };
         },
 
-        history() { return getHistory(); },
+        history() {
+            const date = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            return buildHistoryFromSchedules(date);
+        },
 
         bunk(bunkId) {
             const date = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            const h = getHistory().merged;
+            const { history } = buildHistoryFromSchedules(date);
             const today = todaysSportsByBunk()[bunkId] || [];
             const days = [date].concat(recentDays(date, LOOKBACK_DAYS));
             c.h1('Bunk ' + bunkId + ' — rotation history');
             const rows = days.map(d => ({
                 date: d,
-                sports: (d === date ? today : ((h[bunkId] && h[bunkId][d]) || [])).join(', ') || '—'
+                sports: (d === date ? today : ((history[bunkId] && history[bunkId][d]) || [])).join(', ') || '—'
             }));
             console.table(rows);
             return rows;
         },
 
-        // Re-implement the findBestSport scoring math so you can verify it
-        // matches the picker's actual decisions.  Pass a list of candidate
-        // sports + the bunk's history and see scores.
         simulate(bunkId, opts) {
             opts = opts || {};
             const date = opts.date || window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            const candidates = opts.candidates || ['Basketball', 'Soccer', 'Football', 'Baseball'];
-            const drafted = new Set(opts.drafted || []);
-            const used = new Set(opts.usedToday || []);
-            const fieldDemand = opts.fieldDemand || 0;
-            const fieldPressure = opts.fieldPressure || 0;
-            const h = getHistory().merged[bunkId] || {};
+            const candidates = opts.candidates || ['Basketball', 'Soccer', 'Football', 'Baseball', 'Hockey', 'Kickball'];
+            const used = new Set(opts.usedToday || todaysSportsByBunk()[bunkId] || []);
+            const { history } = buildHistoryFromSchedules(date);
+            const h = history[bunkId] || {};
             const lookback = recentDays(date, LOOKBACK_DAYS);
-            c.h1('Score simulation — ' + bunkId + ' on ' + date);
+            c.h1('Score simulation — Bunk ' + bunkId + ' on ' + date);
             const rows = candidates.map(sport => {
-                let daysAgo = Infinity;
+                let daysAgo = '—';
                 for (let i = 0; i < lookback.length; i++) {
                     if ((h[lookback[i]] || []).indexOf(sport) >= 0) { daysAgo = i + 1; break; }
                 }
-                const isDrafted = drafted.has(sport), isUsed = used.has(sport);
+                const isUsed = used.has(sport);
                 let score = 0, breakdown = [];
-                if (isDrafted && !isUsed) { score += 1000; breakdown.push('+1000 drafted-unused'); }
-                else if (!isUsed)         { score += 500;  breakdown.push('+500 unused'); }
-                else                      { breakdown.push('0 reuse'); }
-                score -= fieldDemand * 10; if (fieldDemand) breakdown.push('-' + (fieldDemand*10) + ' demand');
-                if (daysAgo <= 1)  { score -= 300; breakdown.push('-300 yesterday'); }
-                else if (daysAgo >= 4) { score += 200; breakdown.push('+200 overdue'); }
-                if (fieldPressure >= 0.8) { score -= 150; breakdown.push('-150 capacity'); }
-                else if (fieldPressure <= 0.2) { score += 100; breakdown.push('+100 empty'); }
-                return { sport, daysAgo: daysAgo === Infinity ? '—' : daysAgo, score, breakdown: breakdown.join(' | ') };
+                if (isUsed) { score -= 100000; breakdown.push('-100000 already-today'); }
+                if (daysAgo === 1) { score += 12000; breakdown.push('+12000 yesterday'); }
+                else if (daysAgo === 2) { score += 8000; breakdown.push('+8000 2-days-ago'); }
+                else if (daysAgo === 3) { score += 5000; breakdown.push('+5000 3-days-ago'); }
+                else if (daysAgo === 4) { score += 3000; breakdown.push('+3000 4-days-ago'); }
+                else if (daysAgo === '—') { score -= 5000; breakdown.push('-5000 never-done'); }
+                else { score += 800; breakdown.push('+800 recent-ish'); }
+                return { sport, daysAgo, penalty: score, breakdown: breakdown.join(' | '), wouldPick: !isUsed };
             });
-            rows.sort((a, b) => b.score - a.score);
+            rows.sort((a, b) => a.penalty - b.penalty);
             console.table(rows);
-            c.info('Picker would choose:', rows[0] && rows[0].sport);
+            c.info('Lowest penalty (best pick):', rows[0]?.sport, '(' + rows[0]?.penalty + ')');
             return rows;
         },
     };
 
     window.RotationAudit = RotationAudit;
     console.log('%cRotationAudit loaded.', 'color:#1b5e20;font-weight:bold');
-    console.log('Try: RotationAudit.run() | RotationAudit.bunk("Bunk1") | RotationAudit.simulate("Bunk1")');
+    console.log('Try: RotationAudit.run() | RotationAudit.bunk("1") | RotationAudit.simulate("1")');
 })();
