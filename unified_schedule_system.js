@@ -3729,14 +3729,17 @@ if (bypassStatus.highlight) {
         // Bunk-level access restriction check
         function _isBunkBlockedByAccess(fName, bunkName) {
             const props = activityProps[fName] || activityProps[fName.toLowerCase()] || {};
+            console.log(`[_isBunkBlockedByAccess] fName="${fName}" bunk="${bunkName}" divName="${divName}" hasAccess=${!!props.accessRestrictions?.enabled} divisions=`, props.accessRestrictions?.divisions);
             if (!props.accessRestrictions?.enabled) return false;
             const allowedDivs = props.accessRestrictions.divisions || {};
-            if (!(divName in allowedDivs)) return true;
+            if (!(divName in allowedDivs)) { console.log(`  → BLOCKED: division "${divName}" not in allowedDivs`, Object.keys(allowedDivs)); return true; }
             const bunkList = allowedDivs[divName];
             if (Array.isArray(bunkList) && bunkList.length > 0) {
                 const bStr = String(bunkName);
                 const bNum = parseInt(bunkName);
-                if (!bunkList.some(b => String(b) === bStr || parseInt(b) === bNum)) return true;
+                const found = bunkList.some(b => String(b) === bStr || parseInt(b) === bNum);
+                console.log(`  → bunkList check: bunkName="${bunkName}" bStr="${bStr}" bNum=${bNum} bunkList=`, bunkList, `found=${found}`);
+                if (!found) return true;
             }
             return false;
         }
