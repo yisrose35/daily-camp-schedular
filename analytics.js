@@ -207,23 +207,6 @@
             });
         });
 
-        // Debug: log usage data summary
-        const withField = items.filter(i => i.field);
-        const withoutField = items.filter(i => !i.field);
-        console.log(`[FieldAvail] buildUsageData(${dateKey}): ${items.length} items total, ${withField.length} with field, ${withoutField.length} without field`);
-        if (withField.length > 0) {
-            const uniqueFields = [...new Set(withField.map(i => i.field))];
-            console.log('[FieldAvail] Unique field names in schedule:', uniqueFields);
-        }
-        if (withoutField.length > 0) {
-            const sample = withoutField.slice(0, 3);
-            console.log('[FieldAvail] Sample items WITHOUT field:', sample);
-        }
-        if (items.length === 0) {
-            console.log('[FieldAvail] assignments keys:', Object.keys(assignments).length, 'sample:', Object.keys(assignments).slice(0, 2));
-            const firstBunk = Object.keys(assignments)[0];
-            if (firstBunk) console.log('[FieldAvail] First bunk schedule sample:', assignments[firstBunk]?.slice(0, 3));
-        }
 
         return items;
     }
@@ -841,6 +824,12 @@
             specialResources = specialResources.filter(s => s.name.toLowerCase().includes(activityFilter));
         }
 
+        // Only show specials that actually have usages in the current schedule
+        specialResources = specialResources.filter(s => {
+            const normKey = s.name.trim().toLowerCase();
+            return items.some(item => item.isSpecial && item.activity && item.activity.trim().toLowerCase() === normKey);
+        });
+
         const resources = [...fieldResources, ...specialResources].sort((a, b) => a.name.localeCompare(b.name));
 
         if (!resources.length) {
@@ -867,13 +856,6 @@
                 if (!arr.some(x => x.bunk === item.bunk && x.startMin === item.startMin)) arr.push(item);
             }
         });
-        console.log('[FieldAvail] byField keys (normalized):', Object.keys(byField));
-        console.log('[FieldAvail] resource names:', resources.map(r => r.name));
-        const matchedResources = resources.filter(r => r.type === 'field' && byField[r.name.trim().toLowerCase()]?.length > 0);
-        console.log(`[FieldAvail] ${matchedResources.length}/${fieldResources.length} fields have usages`);
-        if (matchedResources.length === 0 && Object.keys(byField).length > 0) {
-            console.warn('[FieldAvail] ⚠️ MISMATCH: schedule has field names but none match configured resources!');
-        }
 
         const nowLegend = showNow
             ? `<span style="display:inline-flex;align-items:center;gap:7px;">
