@@ -1414,7 +1414,7 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
 
         // * DEMO FIX: activityProperties may be empty in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__ && (!activityProperties || Object.keys(activityProperties).length === 0)) {
-            console.warn('[SmartRegen] 🎭 Demo: activityProperties empty — rebuilding');
+            console.warn('[SmartRegen] [DEMO] Demo: activityProperties empty — rebuilding');
             if (window.refreshActivityPropertiesFromFields) {
                 window.refreshActivityPropertiesFromFields();
                 activityProperties = window.activityProperties || {};
@@ -1441,7 +1441,7 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
                     };
                 });
                 window.activityProperties = activityProperties;
-                console.log('[SmartRegen] 🎭 Built ' + Object.keys(activityProperties).length + ' entries from settings');
+                console.log('[SmartRegen] [DEMO] Built ' + Object.keys(activityProperties).length + ' entries from settings');
             }
         }    const results = { success: true, reassigned: [], failed: [], pinnedLock: null, bypassMode };
     
@@ -2907,7 +2907,7 @@ if (bypassStatus.highlight) {
    async function sendSchedulerNotification(affectedBunks, location, activity, notificationType) {
         // * DEMO FIX: No supabase in demo mode
         if (window.__CAMPISTRY_DEMO_MODE__) {
-            console.log('[UnifiedSchedule] 🎭 Demo mode — skipping notification');
+            console.log('[UnifiedSchedule] [DEMO] Demo mode — skipping notification');
             return;
         }
 
@@ -3903,7 +3903,7 @@ if (bypassStatus.highlight) {
             }
 
             candidates.sort((a, b) => a.penalty - b.penalty);
-            console.log('[findAlternative] 🎭 Demo: ' + bunk + ': ' + candidates.length + ' candidates, best: ' + (candidates[0]?.activityName || 'none'));
+            console.log('[findAlternative] [DEMO] Demo: ' + bunk + ': ' + candidates.length + ' candidates, best: ' + (candidates[0]?.activityName || 'none'));
             return candidates[0] || null;
         }
 
@@ -4480,9 +4480,7 @@ if (softBlocks.length > 0) {
     result.blocked = result.blocked.filter(b => !softBlocks.includes(b));
 }
         if (result.plan.length === 0 && result.blocked.length === 0) {
-            previewArea.style.display = 'block';
-            previewArea.style.cssText = 'background: #d1fae5; border: 1px solid #10b981; border-radius: 8px; padding: 12px;';
-            previewArea.innerHTML = `<div style="color: #065f46; font-weight: 500;">[OK] No conflicts! Ready to assign.</div>`;
+            previewArea.style.display = 'none';
             resolutionMode.style.display = 'none';
             submitBtn.disabled = false;
         } else if (result.blocked.length > 0) {
@@ -4548,7 +4546,7 @@ if (softBlocks.length > 0) {
 
     async function createAutoBackup(activityName, divisionName) {
         if (window.__CAMPISTRY_DEMO_MODE__) {
-            console.log('[AutoBackup] 🎭 Demo mode — skipping auto-backup');
+            console.log('[AutoBackup] [DEMO] Demo mode — skipping auto-backup');
             return { success: true, reason: 'demo_mode' };
         }
         if (!VersionManager?.saveVersion) {
@@ -4560,7 +4558,7 @@ if (softBlocks.length > 0) {
         console.log(`[AutoBackup] * Creating restore point: ${backupName}`);
 
         try {
-            const result = await VersionManager.saveVersion(backupName);
+            const result = await VersionManager.saveVersion(backupName, { silent: true });
             
             if (result?.success) {
                 console.log(`[AutoBackup] [OK] Backup created successfully`);
@@ -5386,9 +5384,9 @@ if (softBlocks.length > 0) {
     // =========================================================================
     
     const VersionManager = {
-        async saveVersion(name) {
+        async saveVersion(name, { silent = false } = {}) {
             const dateKey = getDateKey();
-            if (!dateKey) { alert('Please select a date first.'); return { success: false }; }
+            if (!dateKey) { if (!silent) alert('Please select a date first.'); return { success: false }; }
             if (!name) { name = prompt('Enter a name for this version:'); if (!name) return { success: false }; }
             const dailyData = loadDailyData(); 
             const dateData = dailyData[dateKey] || {};
@@ -5398,23 +5396,23 @@ if (softBlocks.length > 0) {
                 leagueAssignments: window.leagueAssignments || dateData.leagueAssignments || {},
                 divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {}
             };
-            if (Object.keys(payload.scheduleAssignments).length === 0) { alert('No schedule data to save.'); return { success: false }; }
-            if (!window.ScheduleVersionsDB) { alert('Version database not available.'); return { success: false }; }
+            if (Object.keys(payload.scheduleAssignments).length === 0) { if (!silent) alert('No schedule data to save.'); return { success: false }; }
+            if (!window.ScheduleVersionsDB) { if (!silent) alert('Version database not available.'); return { success: false }; }
             try {
                 const versions = await window.ScheduleVersionsDB.listVersions(dateKey);
                 const existing = versions.find(v => v.name.toLowerCase() === name.toLowerCase());
-                if (existing) { 
-                    if (!confirm(`Version "${existing.name}" already exists. Overwrite?`)) return { success: false }; 
-                    if (window.ScheduleVersionsDB.updateVersion) { 
-                        const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload); 
-                        if (result.success) { alert('[OK] Version updated!'); return { success: true }; } 
-                        else { alert('[X] Error: ' + result.error); return { success: false }; } 
-                    } 
+                if (existing) {
+                    if (!silent && !confirm(`Version "${existing.name}" already exists. Overwrite?`)) return { success: false };
+                    if (window.ScheduleVersionsDB.updateVersion) {
+                        const result = await window.ScheduleVersionsDB.updateVersion(existing.id, payload);
+                        if (result.success) { if (!silent) alert('Version updated!'); return { success: true }; }
+                        else { if (!silent) alert('Error: ' + result.error); return { success: false }; }
+                    }
                 }
                 const result = await window.ScheduleVersionsDB.createVersion(dateKey, name, payload);
-                if (result.success) { alert('[OK] Version saved!'); return { success: true }; } 
-                else { alert('[X] Error: ' + result.error); return { success: false }; }
-            } catch (err) { alert('Error: ' + err.message); return { success: false }; }
+                if (result.success) { if (!silent) alert('Version saved!'); return { success: true }; }
+                else { if (!silent) alert('Error: ' + result.error); return { success: false }; }
+            } catch (err) { if (!silent) alert('Error: ' + err.message); return { success: false }; }
         },
         async loadVersion() {
             const dateKey = getDateKey();
