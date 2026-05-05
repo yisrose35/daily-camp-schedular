@@ -270,7 +270,7 @@
             log('Saved to localStorage:', dateKey);
             return true;
         } catch (e) {
-            logError('Failed to write localStorage:', e);
+            if (e.name !== 'QuotaExceededError') logError('Failed to write localStorage:', e);
             return false;
         }
     }

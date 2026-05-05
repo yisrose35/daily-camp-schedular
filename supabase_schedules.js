@@ -152,11 +152,17 @@
             return {};
         }
     }
+    let _localQuotaWarned = false;
     function setLocalData(data) {
         try {
             localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
         } catch (e) {
-            logError('Failed to write local storage:', e);
+            if (!_localQuotaWarned && e.name === 'QuotaExceededError') {
+                _localQuotaWarned = true;
+                logWarn('localStorage quota exceeded — using cloud only (this message shown once)');
+            } else if (e.name !== 'QuotaExceededError') {
+                logError('Failed to write local storage:', e);
+            }
         }
     }
     function getLocalSchedule(dateKey) {

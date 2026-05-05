@@ -3780,18 +3780,22 @@ if (success) {
               isRainyDay: window.isRainyDay || false,
               rainyDayStartTime: window.rainyDayStartTime ?? null
           };
-          // Save to BOTH localStorage keys
-          const DAILY_KEY = 'campDailyData_v1';
-          const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-          allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
-          localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-          const ORCH_KEY = 'campistry_schedule_data';
-          const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
-          orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
-          localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
+          // Save to localStorage (best-effort — may be full)
+          try {
+              const DAILY_KEY = 'campDailyData_v1';
+              const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+              allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
+              localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+              const ORCH_KEY = 'campistry_schedule_data';
+              const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
+              orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
+              localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
+          } catch (e) {
+              if (e.name !== 'QuotaExceededError') console.warn('[Optimizer] localStorage save failed:', e);
+          }
           // Save to cloud
           window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
-          console.log('[Optimizer] ★ Post-generation save complete:', 
+          console.log('[Optimizer] ★ Post-generation save complete:',
               Object.keys(freshData.scheduleAssignments).length, 'bunks,',
               Object.keys(freshData.leagueAssignments).length, 'league entries');
       } catch (e) {

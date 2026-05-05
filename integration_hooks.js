@@ -1002,7 +1002,7 @@
             try {
                 localStorage.setItem('campDailyData_v1', JSON.stringify(data));
             } catch (e) {
-                logError('[saveGlobalSettings] localStorage write failed:', e);
+                if (e.name !== 'QuotaExceededError') logError('[saveGlobalSettings] localStorage write failed:', e);
             }
 
             // ═══════════════════════════════════════════════════════════════
