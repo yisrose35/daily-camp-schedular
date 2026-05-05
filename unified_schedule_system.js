@@ -3063,6 +3063,20 @@ if (bypassStatus.highlight) {
                     busy.push({ ...loc, reason: 'league_locked', lockInfo });
                     continue;
                 }
+                // Also check if a combo-related field is league-locked
+                // (e.g. "Full Gym" locked → "Gym 2" should be blocked)
+                if (window.FieldCombos?.isInCombo?.(loc.name)) {
+                    const exclusiveFields = window.FieldCombos.getExclusiveFields(loc.name);
+                    let comboLocked = false;
+                    for (const exField of exclusiveFields) {
+                        const exLock = window.GlobalFieldLocks.isFieldLocked(exField, targetSlots, divName);
+                        if (exLock) { comboLocked = true; break; }
+                    }
+                    if (comboLocked) {
+                        busy.push({ ...loc, reason: 'league_locked' });
+                        continue;
+                    }
+                }
             }
 
             // Full constraint check: capacity, sharing rules, cross-division, combos
