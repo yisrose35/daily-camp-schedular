@@ -3707,6 +3707,25 @@ if (bypassStatus.highlight) {
         const fieldsBySport = settings.fieldsBySport || {};
         const disabledFields = window.currentDisabledFields || [];
 
+        // Pre-compute league fields and time range for this slot window
+        const divSlots = window.divisionTimes?.[divName] || [];
+        const _altStartMin = divSlots[slots[0]]?.startMin;
+        const _altEndMin = divSlots[slots[slots.length - 1]]?.endMin;
+        const _leagueFields = (_altStartMin != null && _altEndMin != null)
+            ? _getLeagueFieldsInTimeRange(_altStartMin, _altEndMin) : new Set();
+
+        function _isFieldBlockedByLeagueOrCombo(fName) {
+            if (_leagueFields.has(fName.toLowerCase())) return true;
+            if (window.FieldCombos?.isInCombo?.(fName)) {
+                const exclusive = window.FieldCombos.getExclusiveFields(fName);
+                if (exclusive.some(f => _leagueFields.has(f.toLowerCase()))) return true;
+            }
+            if (_altStartMin != null && _altEndMin != null) {
+                if (!checkFieldAvailableByTime(fName, _altStartMin, _altEndMin, bunk, activityProps)) return true;
+            }
+            return false;
+        }
+
        const candidates = [];
 
         // ★ DEMO FIX: Use proper field iteration in demo mode
@@ -3725,7 +3744,8 @@ if (bypassStatus.highlight) {
                 if (!field.name || field.available === false) continue;
                 if (excludeSet.has(field.name)) continue;
                 if (disabledSet.has(field.name)) continue;
-                if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) continue;
+                if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(field.name, slots, divName)) continue;
+                if (_isFieldBlockedByLeagueOrCombo(field.name)) continue;
 
                 const fp = activityProps[field.name] || {};
                 if (!isRainyMode && (fp.rainyDayOnly === true || fp.rainyDayExclusive === true)) continue;
@@ -3765,7 +3785,8 @@ if (bypassStatus.highlight) {
             for (const special of (app1.specialActivities || [])) {
                 if (!special.name) continue;
                 if (excludeSet.has(special.name) || disabledSet.has(special.name)) continue;
-                if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
+                if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(special.name, slots, divName)) continue;
+                if (_isFieldBlockedByLeagueOrCombo(special.name)) continue;
                 if (!isRainyMode && (special.rainyDayOnly === true || special.rainyDayExclusive === true)) continue;
                 if (isRainyMode && special.rainyDayAvailable === false) continue;
 
@@ -3809,7 +3830,8 @@ if (bypassStatus.highlight) {
             (sportFields || []).forEach(fName => {
                 if (excludeSet.has(fName)) return;
 if (disabledFields.includes(fName)) return;
-if (window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
+if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(fName, slots, divName)) return;
+if (_isFieldBlockedByLeagueOrCombo(fName)) return;
 
 // ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
 const _altProps = activityProps[fName] || {};
@@ -3850,7 +3872,8 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (!special.name) return;
             if (excludeSet.has(special.name)) return;
             if (disabledFields.includes(special.name)) return;
-            if (window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) return;
+            if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(special.name, slots, divName)) return;
+            if (_isFieldBlockedByLeagueOrCombo(special.name)) return;
 
             // ★ Rainy day filtering for special activities
             const isRainyMode = window.isRainyDayModeActive?.() || window.isRainyDay === true;
@@ -3888,7 +3911,8 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
             if (!field.name || field.available === false) return;
             if (excludeSet.has(field.name)) return;
             if (disabledFields.includes(field.name)) return;
-            if (window.GlobalFieldLocks?.isFieldLocked(field.name, slots, divName)) return;
+            if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(field.name, slots, divName)) return;
+            if (_isFieldBlockedByLeagueOrCombo(field.name)) return;
 
             // ★★★ FIX: Enforce accessRestrictions & preferences for division access during drip-down ★★★
             const _fProps = activityProps[field.name] || {};
