@@ -207,6 +207,43 @@
             });
         });
 
+        // ═══════════════════════════════════════════════════════════════
+        // League assignments: extract field usages from matchup strings
+        // leagueAssignments[divName][slotIdx].matchups = ["Team vs Team @ Field (Sport)", ...]
+        // ═══════════════════════════════════════════════════════════════
+        const leagueData = (dateKey && dateKey !== liveDate && allDaily[dateKey]?.leagueAssignments)
+            ? allDaily[dateKey].leagueAssignments
+            : (window.leagueAssignments || {});
+
+        Object.entries(leagueData).forEach(([divName, slots]) => {
+            const times = dTimes[divName] || [];
+            Object.entries(slots).forEach(([slotIdx, entry]) => {
+                if (!entry?.matchups?.length) return;
+                const idx = parseInt(slotIdx, 10);
+                const slotInfo = times[idx];
+                if (!slotInfo) return;
+                const startMin = slotInfo.startMin;
+                const endMin = slotInfo.endMin;
+                if (startMin === undefined || endMin === undefined) return;
+
+                const leagueName = entry.leagueName || entry.gameLabel || 'League';
+                entry.matchups.forEach(m => {
+                    const atMatch = m.match(/@\s*(.+?)\s*\(/);
+                    if (!atMatch) return;
+                    const fieldName = atMatch[1].trim();
+                    if (!fieldName || fieldName === 'Free') return;
+                    items.push({
+                        bunk: leagueName,
+                        division: divName,
+                        field: fieldName,
+                        activity: leagueName,
+                        startMin,
+                        endMin,
+                        isSpecial: false
+                    });
+                });
+            });
+        });
 
         return items;
     }
