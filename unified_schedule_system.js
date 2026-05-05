@@ -3035,15 +3035,25 @@ if (bypassStatus.highlight) {
     // ── Activity-first field search ─────────────────────────────────────────
     // Returns { open: [{name,capacity,...}], busy: [{name,capacity,conflict,...}] }
     // for fields that support the given activity at the given time range.
-    function findFieldsForActivity(activityName, targetSlots, divName, excludeBunk) {
+    function findFieldsForActivity(activityName, targetSlots, divName, excludeBunk, startMin, endMin) {
         if (!activityName) return { open: [], busy: [], none: true };
         const locs = getAllLocations();
         const matching = locs.filter(l =>
             (l.activities || []).some(a => a.toLowerCase() === activityName.toLowerCase())
         );
         if (matching.length === 0) return { open: [], busy: [], none: true };
+        const actProps = getActivityProperties();
         const open = [], busy = [];
         for (const loc of matching) {
+            // Full constraint check: capacity, sharing rules, cross-division, combos
+            const timeAvail = (startMin != null && endMin != null)
+                ? checkFieldAvailableByTime(loc.name, startMin, endMin, excludeBunk, actProps)
+                : true;
+            if (!timeAvail) {
+                const check = checkLocationConflict(loc.name, targetSlots, excludeBunk);
+                busy.push({ ...loc, conflict: check, reason: 'constraints' });
+                continue;
+            }
             const check = checkLocationConflict(loc.name, targetSlots, excludeBunk);
             if (check.hasConflict) busy.push({ ...loc, conflict: check });
             else open.push(loc);
@@ -3205,10 +3215,7 @@ if (bypassStatus.highlight) {
                     </select>
                 </details>
                 <div id="post-edit-conflict" style="display:none;"></div>
-                <div style="display:flex;gap:10px;margin-top:4px;">
-                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill</button>
-                </div>
-                <div style="display:flex;gap:10px;margin-top:8px;">
+                <div style="display:flex;gap:10px;margin-top:12px;">
                     <button id="post-edit-cancel" style="flex:1;padding:11px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Cancel</button>
                     <button id="post-edit-save" style="flex:1;padding:11px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:0.95rem;cursor:pointer;font-weight:600;">Save Changes</button>
                 </div>
@@ -3216,14 +3223,6 @@ if (bypassStatus.highlight) {
 
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
-
-        document.getElementById('post-edit-autofill').onclick = () => {
-            const pick = window.PostEditInteractions?.autoFillActivity?.(bunk, divName, startMin, endMin);
-            if (!pick) { alert('No suitable activity found based on current constraints.'); return; }
-            actInput.value = pick.activity;
-            clearTimeout(_searchTimer);
-            runActivitySearch();
-        };
 
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea  = document.getElementById('post-edit-conflict');
@@ -3263,50 +3262,57 @@ if (bypassStatus.highlight) {
         function runActivitySearch() {
             const actVal = actInput.value.trim();
             const isClear = !actVal || ['clear','free'].includes(actVal.toLowerCase());
-            if (isClear) { fieldResult.style.display = 'none'; return; }
+            if (isClear) { fieldResult.style.display = 'none'; locationSelect.value = ''; return; }
 
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
-            const { open, busy, none } = findFieldsForActivity(actVal, targetSlots, divName, bunk);
+            const { open, busy, none } = findFieldsForActivity(actVal, targetSlots, divName, bunk, startMin, endMin);
 
-            if (none) { fieldResult.style.display = 'none'; return; } // no fields configured for this activity
+            if (none) { fieldResult.style.display = 'none'; return; }
 
             fieldResult.style.display = 'block';
+            locationSelect.value = '';
 
             if (open.length > 0) {
-                // Auto-select the first open field in the dropdown
-                locationSelect.value = open[0].name;
-                renderConflictArea(open[0].name);
-                const altLinks = open.slice(1).map(l =>
-                    `<a href="#" style="color:#1d4ed8;text-decoration:none;" onclick="event.preventDefault();document.getElementById('post-edit-location').value='${escapeHtml(l.name)}';document.getElementById('post-edit-location').dispatchEvent(new Event('change'));">${escapeHtml(l.name)}</a>`
-                ).join(', ');
-                fieldResult.innerHTML = `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;">
-                    ✅ <strong>${escapeHtml(open[0].name)}</strong> is open — auto-selected
-                    ${open.length > 1 ? `<div style="margin-top:4px;font-size:0.8rem;">Other free courts: ${altLinks}</div>` : ''}
+                const fieldButtons = open.map(l =>
+                    `<button class="pe-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#065f46;transition:all 0.15s;">${escapeHtml(l.name)}${l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : ''}</button>`
+                ).join('');
+                const busyNote = busy.length > 0
+                    ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => escapeHtml(b.name)).join(', ')}</div>`
+                    : '';
+                fieldResult.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;">
+                    <div style="font-weight:600;font-size:0.85rem;color:#166534;margin-bottom:8px;">Available fields for ${escapeHtml(actVal)}:</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;">${fieldButtons}</div>
+                    ${busyNote}
                 </div>`;
+                fieldResult.querySelectorAll('.pe-field-pick').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        fieldResult.querySelectorAll('.pe-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                        btn.style.background = '#dcfce7'; btn.style.borderColor = '#16a34a'; btn.style.color = '#14532d';
+                        locationSelect.value = btn.dataset.field;
+                        renderConflictArea(btn.dataset.field);
+                    });
+                });
             } else {
-                // All courts busy
-                locationSelect.value = '';
-                renderConflictArea('');
                 fieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
-                    ⚠️ All courts for <strong>${escapeHtml(actVal)}</strong> are busy.
+                    ⚠️ All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
                     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
-                        <button id="pe-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:500;">Place Anyway (no court)</button>
-                        <button id="pe-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">🔓 Make Room →</button>
+                        <button id="pe-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:500;">Place Anyway (no field)</button>
+                        <button id="pe-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">Make Room</button>
                     </div>
                 </div>`;
                 fieldResult.querySelector('#pe-ignore-field')?.addEventListener('click', () => {
                     locationSelect.value = '';
-                    fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">ℹ️ Will place <strong>${escapeHtml(actVal)}</strong> without a specific court.</div>`;
+                    fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
                 });
                 fieldResult.querySelector('#pe-make-room')?.addEventListener('click', () => {
                     showMakeRoomModal(actVal, busy, targetSlots, divName, bunk, startMin, endMin, (freedField) => {
                         if (freedField) {
                             locationSelect.value = freedField;
-                            fieldResult.innerHTML = `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;">✅ <strong>${escapeHtml(freedField)}</strong> has been freed up for ${escapeHtml(actVal)}.</div>`;
+                            fieldResult.innerHTML = `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;"><strong>${escapeHtml(freedField)}</strong> has been freed up for ${escapeHtml(actVal)}.</div>`;
                             renderConflictArea(freedField);
                         } else {
                             locationSelect.value = '';
-                            fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">ℹ️ Placing <strong>${escapeHtml(actVal)}</strong> without a specific court.</div>`;
+                            fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Placing <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
                         }
                     });
                 });
@@ -4198,42 +4204,53 @@ function minutesToTimeString(mins) {
                 const actVal = multiActInput.value.trim();
                 if (!actVal || ['clear','free'].includes(actVal.toLowerCase())) {
                     if (multiFieldResult) multiFieldResult.style.display = 'none';
+                    if (multiLocSel) multiLocSel.value = '';
                     return;
                 }
-                const { open, busy, none } = findFieldsForActivity(actVal, repSlots, ctxDiv, bunks[0]);
+                const { open, busy, none } = findFieldsForActivity(actVal, repSlots, ctxDiv, bunks[0], ctxStart, ctxEnd);
                 if (none || !multiFieldResult) return;
                 multiFieldResult.style.display = 'block';
                 document.getElementById('multi-edit-submit').disabled = true;
                 document.getElementById('multi-conflict-preview').style.display = 'none';
+                if (multiLocSel) multiLocSel.value = '';
 
                 if (open.length > 0) {
-                    if (multiLocSel) multiLocSel.value = open[0].name;
-                    const altLinks = open.slice(1).map(l =>
-                        `<a href="#" style="color:#1d4ed8;" onclick="event.preventDefault();var s=document.getElementById('multi-edit-location');if(s)s.value='${escapeHtml(l.name)}';">${escapeHtml(l.name)}</a>`
-                    ).join(', ');
-                    multiFieldResult.innerHTML = `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;">
-                        ✅ <strong>${escapeHtml(open[0].name)}</strong> is open for ${escapeHtml(actVal)} — auto-selected
-                        ${open.length > 1 ? `<div style="margin-top:4px;font-size:0.8rem;">Other free courts: ${altLinks}</div>` : ''}
+                    const fieldButtons = open.map(l =>
+                        `<button class="multi-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#065f46;transition:all 0.15s;">${escapeHtml(l.name)}${l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : ''}</button>`
+                    ).join('');
+                    const busyNote = busy.length > 0
+                        ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => escapeHtml(b.name)).join(', ')}</div>`
+                        : '';
+                    multiFieldResult.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;">
+                        <div style="font-weight:600;font-size:0.85rem;color:#166534;margin-bottom:8px;">Available fields for ${escapeHtml(actVal)}:</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;">${fieldButtons}</div>
+                        ${busyNote}
                     </div>`;
+                    multiFieldResult.querySelectorAll('.multi-field-pick').forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            multiFieldResult.querySelectorAll('.multi-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                            btn.style.background = '#dcfce7'; btn.style.borderColor = '#16a34a'; btn.style.color = '#14532d';
+                            if (multiLocSel) multiLocSel.value = btn.dataset.field;
+                        });
+                    });
                 } else if (busy.length > 0) {
-                    if (multiLocSel) multiLocSel.value = '';
                     multiFieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
-                        ⚠️ All courts for <strong>${escapeHtml(actVal)}</strong> are busy.
+                        All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
                         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
-                            <button id="multi-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;">Place Anyway (no court)</button>
-                            <button id="multi-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">🔓 Make Room →</button>
+                            <button id="multi-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;">Place Anyway (no field)</button>
+                            <button id="multi-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">Make Room</button>
                         </div>
                     </div>`;
                     multiFieldResult.querySelector('#multi-ignore-field')?.addEventListener('click', () => {
                         if (multiLocSel) multiLocSel.value = '';
-                        multiFieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">ℹ️ Will place <strong>${escapeHtml(actVal)}</strong> without a specific court.</div>`;
+                        multiFieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
                     });
                     multiFieldResult.querySelector('#multi-make-room')?.addEventListener('click', () => {
                         showMakeRoomModal(actVal, busy, repSlots, ctxDiv, bunks[0], ctxStart ?? repSlots[0], ctxEnd ?? repSlots[repSlots.length-1], (freedField) => {
                             if (freedField && multiLocSel) multiLocSel.value = freedField;
                             multiFieldResult.innerHTML = freedField
-                                ? `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;">✅ <strong>${escapeHtml(freedField)}</strong> freed up for ${escapeHtml(actVal)}.</div>`
-                                : `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">ℹ️ Placing <strong>${escapeHtml(actVal)}</strong> without a court.</div>`;
+                                ? `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px;font-size:0.875rem;color:#065f46;"><strong>${escapeHtml(freedField)}</strong> freed up for ${escapeHtml(actVal)}.</div>`
+                                : `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Placing <strong>${escapeHtml(actVal)}</strong> without a field.</div>`;
                         });
                     });
                 } else {
