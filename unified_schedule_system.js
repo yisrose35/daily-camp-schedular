@@ -3017,7 +3017,9 @@ if (bypassStatus.highlight) {
         } catch (e) { console.error('[UnifiedSchedule] Failed to save to localStorage:', e); }
         setTimeout(() => { window._postEditInProgress = false; }, 8000);
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { bunk, slots, activity, location, date: currentDate } }));
-        saveSchedule(); 
+        saveSchedule();
+        // Save to cloud via cross-division bypass save
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([bunk]);
 
         // Post-edit counts + rotation history (single shared implementation)
         if (window.SchedulerCoreUtils?.applyPostEditCounts) {
