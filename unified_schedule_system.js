@@ -4900,13 +4900,14 @@ if (softBlocks.length > 0) {
         const timeLabel = `${minutesToTimeStr(timeStartMin)} – ${minutesToTimeStr(timeEndMin)}`;
         const sharedSimUsage = window.buildFieldUsageBySlot?.([]) || {};
         const suggestions = overflowBunks.map(bunk => {
-            const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
+            const bunkDiv = getDivisionForBunk(bunk) || divName;
+            const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, bunkDiv, bunk);
             // Mark the original location as "taken" so findAlternativeForBunk avoids it
             bunkSlots.forEach(idx => {
                 if (!sharedSimUsage[idx]) sharedSimUsage[idx] = {};
                 sharedSimUsage[idx][location] = { count: 999, bunks: {}, divisions: [] };
             });
-            const alt = findAlternativeForBunk(bunk, bunkSlots, divName, sharedSimUsage, [location]);
+            const alt = findAlternativeForBunk(bunk, bunkSlots, bunkDiv, sharedSimUsage, [location]);
             // Update shared usage with the picked alternative so the next bunk sees it as occupied
             if (alt) {
                 bunkSlots.forEach(idx => {
@@ -4914,8 +4915,8 @@ if (softBlocks.length > 0) {
                     if (!sharedSimUsage[idx][alt.field]) sharedSimUsage[idx][alt.field] = { count: 0, bunks: {}, divisions: [] };
                     sharedSimUsage[idx][alt.field].count++;
                     sharedSimUsage[idx][alt.field].bunks[bunk] = alt.activityName;
-                    if (!sharedSimUsage[idx][alt.field].divisions.includes(divName)) {
-                        sharedSimUsage[idx][alt.field].divisions.push(divName);
+                    if (!sharedSimUsage[idx][alt.field].divisions.includes(bunkDiv)) {
+                        sharedSimUsage[idx][alt.field].divisions.push(bunkDiv);
                     }
                 });
             }
