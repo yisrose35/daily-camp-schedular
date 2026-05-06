@@ -391,9 +391,11 @@ function buildLeagueMatchups(eventBlock, divName) {
         if (!slotData) return;
         var sk = parseInt(k);
         if ((slotIdx >= 0 && Math.abs(sk - slotIdx) <= 2) || Math.abs(sk - eventBlock.startMin) <= 2) {
-            allSlotEntries.push({ key: k, data: slotData });
+            var dist = slotIdx >= 0 ? Math.abs(sk - slotIdx) : Math.abs(sk - eventBlock.startMin);
+            allSlotEntries.push({ key: k, data: slotData, dist: dist });
         }
     });
+    allSlotEntries.sort(function(a, b) { return a.dist - b.dist; });
 
     if (allSlotEntries.length > 0) {
         var bestEntry = allSlotEntries[0].data;
