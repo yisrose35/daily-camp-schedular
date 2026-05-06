@@ -435,6 +435,30 @@
         }
         if (window.RotationEngine && window.RotationEngine.rebuildAllHistory)
             window.RotationEngine.rebuildAllHistory();
+
+        // ★ Load rotation counts from cloud so RotationEngine has up-to-date history
+        if (window.RotationCloud?.load) {
+            try {
+                const rotData = await window.RotationCloud.load(true); // force refresh
+                if (rotData?.counts && Object.keys(rotData.counts).length > 0) {
+                    // Merge cloud counts into globalSettings.historicalCounts so
+                    // RotationEngine.getActivityCount() / calculateRotationScore() see them
+                    const gs = getGlobalSettings();
+                    if (!gs.historicalCounts) gs.historicalCounts = {};
+                    for (const [bunk, activities] of Object.entries(rotData.counts)) {
+                        if (!gs.historicalCounts[bunk]) gs.historicalCounts[bunk] = {};
+                        for (const [act, count] of Object.entries(activities)) {
+                            gs.historicalCounts[bunk][act] = count;
+                        }
+                    }
+                    if (typeof window.saveGlobalSettings === 'function') {
+                        window.saveGlobalSettings('historicalCounts', gs.historicalCounts);
+                    }
+                    log('[STEP 0] ☁️ Loaded ' + Object.keys(rotData.counts).length + ' bunk rotation records from cloud');
+                }
+            } catch (e) { warn('[STEP 0] RotationCloud load failed: ' + e.message); }
+        }
+
         log('[STEP 0] ✅ Wiped');
 
         // =====================================================================
@@ -9528,16 +9552,19 @@
         }
         function saveWeekHistory(timelines) {
             try {
-                // Record today's sport assignments per bunk
+                // Record today's sport + special assignments per bunk
                 Object.keys(timelines).forEach(function(bunk) {
                     if (!weekActivityHistory[bunk]) weekActivityHistory[bunk] = {};
-                    var sports = [];
+                    var activities = [];
                     (timelines[bunk] || []).forEach(function(b) {
-                        if ((b.type || '').toLowerCase() === 'sport' && b._assignedSport) {
-                            sports.push(b._assignedSport);
+                        var t = (b.type || '').toLowerCase();
+                        if (t === 'sport' && b._assignedSport) {
+                            activities.push(b._assignedSport);
+                        } else if (t === 'special' && b.event) {
+                            activities.push(b.event);
                         }
                     });
-                    if (sports.length > 0) weekActivityHistory[bunk][currentDate] = sports;
+                    if (activities.length > 0) weekActivityHistory[bunk][currentDate] = activities;
                 });
                 // Prune history older than 2 weeks
                 var cutoff = getMondayOfWeek(currentDate, -1); // Monday of last week
@@ -14396,6 +14423,15 @@
         if (window.SupabaseSyncEngine?.pushSchedule) {
             try { await window.SupabaseSyncEngine.pushSchedule(window.scheduleAssignments, window.currentScheduleDate || window.currentDate); log('[5] Synced'); }
             catch (e) { warn('[5] Sync: ' + e.message); }
+        }
+
+        // ★ Save rotation counts to cloud so next generation (or another scheduler) sees them
+        if (window.RotationCloud?.save) {
+            try {
+                const rotDateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                await window.RotationCloud.save(rotDateKey, window.scheduleAssignments || {});
+                log('[5] ☁️ Rotation counts saved to cloud');
+            } catch (e) { warn('[5] RotationCloud save: ' + e.message); }
         }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);

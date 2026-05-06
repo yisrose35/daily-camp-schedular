@@ -413,7 +413,8 @@
             });
         }
 
-        // Pre-compute rotation scores per bunk per sport
+        // Rotation score cache — invalidated per-bunk after each assignment
+        // so scores reflect what was already placed today
         const rotationCache = new Map();
         function getCachedRotation(bunk, sport, grade) {
             const key = bunk + '|' + sport;
@@ -421,6 +422,15 @@
             const score = getRotationScore(bunk, sport, grade);
             rotationCache.set(key, score);
             return score;
+        }
+        function invalidateRotationCacheForBunk(bunk) {
+            for (const key of rotationCache.keys()) {
+                if (key.startsWith(bunk + '|')) rotationCache.delete(key);
+            }
+            // Also clear RotationEngine's today-cache for this bunk
+            if (window.RotationEngine?.invalidateBunkTodayCache) {
+                window.RotationEngine.invalidateBunkTodayCache(bunk);
+            }
         }
 
       // ── Build cross-grade scarcity map ───────────────────────────        // For each time window, compute how "scarce" fields are per grade.
@@ -728,6 +738,8 @@
             // Update tracking
             doneToday.add(pick.sportNorm);
             bunkActivities.set(bunk, doneToday);
+            // Invalidate this bunk's cached rotation scores so next block scores fresh
+            invalidateRotationCacheForBunk(bunk);
 
             // Update field index so subsequent blocks see this assignment
             const fn = pick.fieldNorm;
