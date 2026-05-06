@@ -112,21 +112,16 @@
 
     if (!window.campPeriods) return;
 
-    // Extract globalStart from the first ruler tick
+    // Extract globalStart from the first ruler tick (vertical layout: top-based)
     const firstTick = gridEl.querySelector('.ms-daw-ruler-tick');
     if (!firstTick) return;
 
-    // The ruler tick left value = (tickMin - globalStart) * PX_PER_MIN
-    // For the first tick left=0 → tickMin = globalStart
-    // But first tick might not be at 0 if it is a partial hour.
-    // Better: scan the ruler and find the tick at left=0 or smallest left.
     let globalStart = null;
     const PX = window.MasterSchedulerInternal?.DAW_PIXELS_PER_MINUTE || 4;
 
     gridEl.querySelectorAll('.ms-daw-ruler-tick').forEach(tick => {
-      const left = parseFloat(tick.style.left) || 0;
-      if (left === 0) {
-        // parse label like "9:00am" or "9:00"
+      const top = parseFloat(tick.style.top) || 0;
+      if (top === 0) {
         const label = tick.textContent.trim();
         const parsed = parseTimePicker(label);
         if (parsed !== null) globalStart = parsed;
@@ -142,32 +137,33 @@
 
       periods.forEach((period, idx) => {
         const clr = PERIOD_COLORS[idx % PERIOD_COLORS.length];
-        const left = (period.startMin - globalStart) * PX;
-        const width = (period.endMin - period.startMin) * PX;
-        if (width <= 0) return;
+        const top = (period.startMin - globalStart) * PX;
+        const height = (period.endMin - period.startMin) * PX;
+        if (height <= 0) return;
 
         const el = document.createElement('div');
         el.className = 'period-block-overlay';
         el.style.cssText = [
           'position:absolute',
-          `left:${left}px`,
-          `width:${width}px`,
-          'top:0',
-          'bottom:0',
+          `top:${top}px`,
+          `height:${height}px`,
+          'left:0',
+          'right:0',
           `background:${clr.bg}`,
-          `border-left:2px solid ${clr.border}`,
-          `border-right:1px dashed ${clr.border}`,
+          `border-top:2px solid ${clr.border}`,
+          `border-bottom:1px dashed ${clr.border}`,
           'pointer-events:none',
-          'z-index:2',
+          'z-index:0',
           'display:flex',
           'align-items:flex-start',
+          'justify-content:center',
           'overflow:hidden',
         ].join(';');
 
         const label = document.createElement('div');
         label.style.cssText = [
           `color:${clr.text}`,
-          'font-size:10px',
+          'font-size:9px',
           'font-weight:700',
           'padding:2px 4px',
           'white-space:nowrap',
@@ -176,10 +172,10 @@
           'max-width:100%',
           'line-height:1.2',
         ].join(';');
-        label.textContent = `${period.name} (${minsToTimeStr(period.startMin)}-${minsToTimeStr(period.endMin)})`;
+        label.textContent = `${period.name}`;
 
         el.appendChild(label);
-        track.style.position = 'relative'; // ensure stacking context
+        track.style.position = 'relative';
         track.appendChild(el);
       });
     });

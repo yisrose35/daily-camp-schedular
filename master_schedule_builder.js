@@ -1510,19 +1510,19 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   const onChanged = externalCallbacks?.onLayersChanged || null;
   const onSave = isExternal ? (onChanged || function(){}) : saveDAWLayers;
   const onRender = isExternal ? function(){ renderDAWGrid(externalEl, externalLayers, externalCallbacks); } : renderDAWGrid;
-  
+
   const divisions = window.divisions || {};
   const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort((a, b) => {
     const na = parseInt(a), nb = parseInt(b);
     if (!isNaN(na) && !isNaN(nb)) return na - nb;
     return a.localeCompare(b);
   });
-  
+
   if (grades.length === 0) {
     gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
     return;
   }
-  
+
   // Find global time bounds dynamically based on divisions
   let globalStart = null, globalEnd = null;
   grades.forEach(g => {
@@ -1532,43 +1532,29 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     if (s !== null && (globalStart === null || s < globalStart)) globalStart = s;
     if (e !== null && (globalEnd === null || e > globalEnd)) globalEnd = e;
   });
-  
+
   // Fallbacks if no times are set
   if (globalStart === null) globalStart = 540; // 9:00 AM
   if (globalEnd === null) globalEnd = 960;     // 4:00 PM
-  
-  const totalWidth = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
-  
+
+  const totalHeight = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
+  // Column width per grade (adapts to layer stacking)
+  const GRADE_COL_WIDTH = 160;
+
   let html = '';
-  
-  // Time ruler
-  html += `<div class="ms-daw-ruler" style="width:${totalWidth}px;">`;
-  for (let m = globalStart; m < globalEnd; m += 30) {
-    const left = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
-    const isMajor = m % 60 === 0;
-    html += `<div class="ms-daw-ruler-tick${isMajor ? ' major-tick' : ''}" style="position:absolute;left:${left}px;">${minutesToTime(m)}</div>`;
-  }
-  html += '</div>';
-  
-  // Grid lines container (behind bands)
-  html += `<div style="position:relative;">`;
-  
-  // Grade rows
+
+  // === VERTICAL LAYOUT: Time on Y-axis, Grades on X-axis ===
+
+  // Grade header row (top)
+  html += `<div class="ms-daw-grade-header-row">`;
+  // Spacer for time ruler column
+  html += `<div class="ms-daw-time-ruler-spacer"></div>`;
   grades.forEach(gradeKey => {
     const div = divisions[gradeKey];
-    const divStart = parseTimeToMinutes(div?.startTime) || globalStart;
-    const divEnd = parseTimeToMinutes(div?.endTime) || globalEnd;
-    const layers = layerSource[gradeKey] || [];
-    
-    // Calculate row height based on layer count (stacking)
-    const layerCount = Math.max(1, layers.length);
-    const rowHeight = Math.max(62, layerCount * 38 + 16);
-    
-    html += `<div class="ms-daw-grade" data-grade="${gradeKey}" style="height:${rowHeight}px;">`;
-    
-    // Grade label
     const bunkCount = (div?.bunks || []).length;
-    html += `<div class="ms-daw-grade-label">
+    const layers = layerSource[gradeKey] || [];
+    const colWidth = Math.max(GRADE_COL_WIDTH, layers.length * 38 + 16);
+    html += `<div class="ms-daw-grade-col-header" data-grade="${gradeKey}" style="width:${colWidth}px;">
       <span class="ms-daw-grade-tag">${gradeKey}</span>
       <div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''}</div>
       <div class="ms-daw-grade-actions">
@@ -1576,33 +1562,60 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
         <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
       </div>
     </div>`;
-    
+  });
+  html += `</div>`;
+
+  // Main grid body: time ruler on left, grade columns to the right
+  html += `<div class="ms-daw-body" style="position:relative;display:flex;">`;
+
+  // Time ruler (left column)
+  html += `<div class="ms-daw-ruler-vertical" style="height:${totalHeight}px;">`;
+  for (let m = globalStart; m < globalEnd; m += 30) {
+    const top = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
+    const isMajor = m % 60 === 0;
+    html += `<div class="ms-daw-ruler-tick${isMajor ? ' major-tick' : ''}" style="position:absolute;top:${top}px;">${minutesToTime(m)}</div>`;
+  }
+  html += `</div>`;
+
+  // Grade columns
+  grades.forEach(gradeKey => {
+    const div = divisions[gradeKey];
+    const divStart = parseTimeToMinutes(div?.startTime) || globalStart;
+    const divEnd = parseTimeToMinutes(div?.endTime) || globalEnd;
+    const layers = layerSource[gradeKey] || [];
+
+    // Column width based on layer count (stacking horizontally)
+    const layerCount = Math.max(1, layers.length);
+    const colWidth = Math.max(GRADE_COL_WIDTH, layerCount * 38 + 16);
+
+    html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;height:${totalHeight}px;">`;
+
     // Track area
-    html += `<div class="ms-daw-track" data-grade="${gradeKey}" style="width:${totalWidth}px;">`;
-    
-    // Gridlines
+    html += `<div class="ms-daw-track" data-grade="${gradeKey}" style="height:${totalHeight}px;width:100%;position:relative;">`;
+
+    // Horizontal gridlines
     for (let m = globalStart; m < globalEnd; m += 30) {
-      const left = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const top = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
       const cls = m % 60 === 0 ? 'major' : '';
-      html += `<div class="ms-daw-gridline ${cls}" style="left:${left}px;"></div>`;
+      html += `<div class="ms-daw-gridline ${cls}" style="top:${top}px;"></div>`;
     }
-    
+
     // Inactive zones (before div start, after div end)
     if (divStart > globalStart) {
-      const w = (divStart - globalStart) * DAW_PIXELS_PER_MINUTE;
-      html += `<div class="ms-daw-inactive-zone" style="left:0;width:${w}px;"></div>`;
+      const h = (divStart - globalStart) * DAW_PIXELS_PER_MINUTE;
+      html += `<div class="ms-daw-inactive-zone" style="top:0;height:${h}px;"></div>`;
     }
     if (divEnd < globalEnd) {
-      const left = (divEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
-      const w = (globalEnd - divEnd) * DAW_PIXELS_PER_MINUTE;
-      html += `<div class="ms-daw-inactive-zone" style="left:${left}px;width:${w}px;"></div>`;
+      const top = (divEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const h = (globalEnd - divEnd) * DAW_PIXELS_PER_MINUTE;
+      html += `<div class="ms-daw-inactive-zone" style="top:${top}px;height:${h}px;"></div>`;
     }
-    
-    // Render bands
+
+    // Render bands (vertically positioned)
     layers.forEach((layer, idx) => {
-      const left = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
-      const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
-      const top = 8 + idx * 38;
+      const top = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const height = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
+      const left = 8 + idx * 38;
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
       let durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
         ? `${layer.durationMin}-${layer.durationMax}m`
@@ -1614,23 +1627,23 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
         const swimOnly = layer.durationMin || layer.periodMin || ((layer.endMin - layer.startMin) - pre - post);
         durLabel = `${pre}+${swimOnly}+${post}m`;
       }
-      html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}" 
+      html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}"
         data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
-        style="left:${left}px; width:${width}px; top:${top}px;"
+        style="top:${top}px; height:${height}px; left:${left}px; width:28px;"
         draggable="true">
-        <div class="band-resize band-resize-left"></div>
+        <div class="band-resize band-resize-top"></div>
         <span class="band-label">${DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type}</span>
         <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
-        <div class="band-resize band-resize-right"></div>
+        <div class="band-resize band-resize-bottom"></div>
       </div>`;
     });
-    
+
     html += '</div>'; // track
-    html += '</div>'; // grade row
+    html += '</div>'; // grade col
   });
-  
-  html += '</div>'; // relative container
-  
+
+  html += '</div>'; // body
+
   gridEl.innerHTML = html;
 
   // Overlay period blocks from bell schedule
@@ -1655,21 +1668,21 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       const id = band.dataset.id;
       const grade = band.dataset.grade;
       dawSelectedBand = dawSelectedBand === id ? null : id;
-      
+
       // Remove existing popovers
       gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
-      
+
       if (dawSelectedBand) {
         const layer = (layerSource[grade] || []).find(l => l.id === id);
         if (layer) showDAWPopover(band, layer, grade, { onSave, onRender, layerSource });
       }
-      
+
       // Update selection styling
       gridEl.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
       if (dawSelectedBand) band.classList.add('selected');
     });
-    
-    // Drag existing band to reposition
+
+    // Drag existing band to reposition (vertical)
     band.addEventListener('dragstart', (e) => {
       if (e.target.classList.contains('band-resize')) { e.preventDefault(); return; }
       const id = band.dataset.id;
@@ -1677,72 +1690,72 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       const layer = (layerSource[grade] || []).find(l => l.id === id);
       if (!layer) return;
       dawDragData = { source: 'band', id, grade, layer, offsetMin: 0 };
-      
+
       const rect = band.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
-      dawDragData.offsetMin = Math.round(clickX / DAW_PIXELS_PER_MINUTE);
-      
+      const clickY = e.clientY - rect.top;
+      dawDragData.offsetMin = Math.round(clickY / DAW_PIXELS_PER_MINUTE);
+
       e.dataTransfer.setData('text/daw-band-move', id);
       e.dataTransfer.effectAllowed = 'move';
       band.style.opacity = '0.4';
     });
-    
+
     band.addEventListener('dragend', () => {
       band.style.opacity = '1';
       dawDragData = null;
     });
-    
-    // Resize handles
+
+    // Resize handles (top/bottom for vertical layout)
     band.querySelectorAll('.band-resize').forEach(handle => {
       let isResizing = false;
-      let startX, startMin, startWidth, isLeft;
-      
+      let startY, startMin, isTop;
+
       handle.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
         isResizing = true;
-        isLeft = handle.classList.contains('band-resize-left');
-        startX = e.clientX;
-        
+        isTop = handle.classList.contains('band-resize-top');
+        startY = e.clientY;
+
         const id = band.dataset.id;
         const grade = band.dataset.grade;
         const layer = (layerSource[grade] || []).find(l => l.id === id);
         if (!layer) return;
-        startMin = isLeft ? layer.startMin : layer.endMin;
-        
+        startMin = isTop ? layer.startMin : layer.endMin;
+
         const onMove = (e2) => {
           if (!isResizing) return;
-          const dx = e2.clientX - startX;
-          const dMin = Math.round(dx / DAW_PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+          const dy = e2.clientY - startY;
+          const dMin = Math.round(dy / DAW_PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
           const newMin = startMin + dMin;
-          
-          if (isLeft) {
+
+          if (isTop) {
             layer.startMin = Math.max(globalStart, Math.min(layer.endMin - 15, newMin));
           } else {
             layer.endMin = Math.min(globalEnd, Math.max(layer.startMin + 15, newMin));
           }
-          
-          // Live update position
-          const left = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
-          const width = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
-          band.style.left = left + 'px';
-          band.style.width = width + 'px';
+
+          // Live update position (vertical)
+          const top = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+          const height = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
+          band.style.top = top + 'px';
+          band.style.height = height + 'px';
         };
-        
+
         const onUp = () => {
           isResizing = false;
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
           onSave();
         };
-        
+
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
       });
     });
   });
-  
-  // Drop on tracks (palette → track, or band move)
+
+  // Drop on tracks (palette → track, or band move) — vertical axis
   gridEl.querySelectorAll('.ms-daw-track').forEach(track => {
     track.addEventListener('dragover', (e) => {
       const isDawDrop = e.dataTransfer.types.includes('text/daw-layer') || e.dataTransfer.types.includes('text/daw-band-move');
@@ -1751,30 +1764,30 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       e.dataTransfer.dropEffect = e.dataTransfer.types.includes('text/daw-band-move') ? 'move' : 'copy';
       track.classList.add('drop-target');
     });
-    
+
     track.addEventListener('dragleave', (e) => {
       if (!track.contains(e.relatedTarget)) track.classList.remove('drop-target');
     });
-    
+
     track.addEventListener('drop', (e) => {
       e.preventDefault();
       track.classList.remove('drop-target');
-      
+
       const grade = track.dataset.grade;
       const rect = track.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const dropMin = Math.round((x / DAW_PIXELS_PER_MINUTE + globalStart) / SNAP_MINS) * SNAP_MINS;
-      
+      const y = e.clientY - rect.top;
+      const dropMin = Math.round((y / DAW_PIXELS_PER_MINUTE + globalStart) / SNAP_MINS) * SNAP_MINS;
+
       if (e.dataTransfer.types.includes('text/daw-layer')) {
         // New band from palette
         const type = e.dataTransfer.getData('text/daw-layer');
         const layerDef = DAW_LAYER_TYPES.find(t => t.type === type);
         if (!layerDef) return;
-        
+
         const div = (window.divisions || {})[grade] || {};
         const divStart = parseTimeToMinutes(div.startTime) || globalStart;
         const divEnd = parseTimeToMinutes(div.endTime) || globalEnd;
-        
+
         let startMin, endMin;
         if (layerDef.anchor) {
           // Anchors get a fixed 30-min window at drop point
@@ -1785,7 +1798,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
           startMin = divStart;
           endMin = divEnd;
         }
-        
+
         if (!layerSource[grade]) layerSource[grade] = [];
         layerSource[grade].push({
           id: 'daw_' + Math.random().toString(36).slice(2, 9),
@@ -1798,7 +1811,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
           durationMax: layerDef.anchor ? (endMin - startMin) : 50,
           periodMin: layerDef.anchor ? (endMin - startMin) : 30,
         });
-        
+
         onSave();
         onRender();
       }
@@ -1808,7 +1821,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         const duration = layer.endMin - layer.startMin;
         const newStart = Math.round((dropMin - offsetMin) / SNAP_MINS) * SNAP_MINS;
         const newEnd = newStart + duration;
-        
+
         // Remove from old grade if moving between grades
         if (fromGrade !== grade) {
           layerSource[fromGrade] = (layerSource[fromGrade] || []).filter(l => l.id !== id);
@@ -1820,11 +1833,11 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
           layer.startMin = Math.max(globalStart, newStart);
           layer.endMin = Math.min(globalEnd, newEnd);
         }
-        
+
         onSave();
         onRender();
       }
-      
+
       dawDragData = null;
     });
   });
