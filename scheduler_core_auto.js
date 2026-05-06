@@ -415,11 +415,14 @@
         const startTime = Date.now();
         const warnings = [];
 
+      try { // ★ top-level try — finally clears generation flags no matter what
+
         // =====================================================================
         // STEP 0 — WIPE CLEAN
         // =====================================================================
         log('\n[STEP 0] Wiping clean...');
         window._preGenClearActive = true;
+        window._generationInProgress = true;
         window._divisionTimesLocked = false;
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
@@ -14854,6 +14857,12 @@
         window._dbgDivisions = divisions;
 
         return { success: true, warnings, elapsed, blocksScheduled: solverBlocks.length, specialBlocksLocked: specialWriteCount };
+
+      } finally {
+        // ★ Always clear generation flags, even on crash
+        window._preGenClearActive = false;
+        window._generationInProgress = false;
+      }
     };
 
     log('scheduler_core_auto.js v' + VERSION + ' loaded — WHAT→WHEN→WHERE');

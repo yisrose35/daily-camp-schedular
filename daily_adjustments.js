@@ -3797,10 +3797,14 @@ async function runOptimizer() {
   console.log(`[Optimizer] Restored resource overrides after wipe (${savedResourceOverrides.overrides.disabledFields.length} disabled fields, ${savedResourceOverrides.overrides.leagues.length} disabled leagues)`);
 
   window.invalidateSmartLogicSpecialsCache?.();
-  const success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
-
-  // ★★★ POST-GENERATION CLEANUP ★★★
-  window._preGenClearActive = false;
+  let success = false;
+  try {
+    success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
+  } finally {
+    // ★★★ POST-GENERATION CLEANUP — always clear even if generation throws ★★★
+    window._preGenClearActive = false;
+    window._generationInProgress = false;
+  }
 
 if (success) {
       // Force save the fresh schedule to ALL storage layers immediately

@@ -863,9 +863,8 @@
                     if (currIsSolved && !prevIsSolved) demoteIdx = idx;
                     else if (!currIsSolved && prevIsSolved) demoteIdx = prevIdx;
                     else {
-                        // Both same type — demote by rotation score
-                        const currScore = getRotationScore(bunk, act, grade);
-                        demoteIdx = idx; // default: demote current
+                        // Both same type — demote the later occurrence
+                        demoteIdx = idx;
                     }
 
                     slots[demoteIdx] = {

@@ -1423,8 +1423,7 @@
                 }
             }
         }
-// ★★★ v17.12: Clear generation flag ★★★
-        window._generationInProgress = false;
+// ★★★ v17.12: generation flag stays true — cleared at end of runSkeletonOptimizer ★★★
         // ★★★ 2. FORCE CLOUD LOAD + AUTO-SNAPSHOT FOR PRESERVATION ★★★
         if (allowedDivisions && (!existingScheduleSnapshot || Object.keys(existingScheduleSnapshot).length === 0)) {
             console.log("[OPTIMIZER] Partial generation detected without snapshot. Loading latest from cloud first...");
@@ -3075,6 +3074,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         console.log("\n" + "=".repeat(70));
         console.log("★★★ OPTIMIZER FINISHED SUCCESSFULLY ★★★");
         console.log("=".repeat(70));
+
+        // ★★★ Clear generation-in-progress flag now that we're truly done ★★★
+        window._generationInProgress = false;
 
         if (window.GlobalFieldLocks) {
             window.GlobalFieldLocks.debugPrintLocks();

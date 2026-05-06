@@ -49,18 +49,18 @@
             };
 
             const history = JSON.parse(raw);
-            // Migrate old format to new
-            history.teamSports = history.teamSports || {};
-            history.matchupHistory = history.matchupHistory || {};
-            history.gamesPerDate = history.gamesPerDate || {};
-            history.offCampusCounts = history.offCampusCounts || {};
-            
-            
-            // Migrate from old roundCounters/dayStartRound if present
+
+            // Migrate from old roundCounters/dayStartRound if present (must run before defaults)
             if (history.roundCounters && !history.gamesPerDate) {
                 console.log("[RegularLeagues] Migrating old history format...");
                 history.gamesPerDate = {};
             }
+
+            // Fill defaults for missing fields
+            history.teamSports = history.teamSports || {};
+            history.matchupHistory = history.matchupHistory || {};
+            history.gamesPerDate = history.gamesPerDate || {};
+            history.offCampusCounts = history.offCampusCounts || {};
             
             return history;
         } catch (e) {
@@ -720,7 +720,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             var score = 0;
             for (var mi = 0; mi < repairings[ri].length; mi++) {
                 var pair = repairings[ri][mi];
-                score += (history.matchupHistory || {})[leagueName + ':' + [pair[0], pair[1]].sort().join('-vs-')] || 0;
+                score += (history.matchupHistory || {})[leagueName + ':' + [pair[0], pair[1]].sort().join('|')] || 0;
             }
             if (score < bestScore) { bestScore = score; best = repairings[ri]; }
         }
@@ -1143,7 +1143,6 @@ for (const futureDate of Object.keys(allDailyData)) {
                 // the matchup is identical (e.g., 2-team league).
                 if (todayGameIndex > 0 && availablePool.length > 1) {
                     var _prevSports = new Set();
-                    (history.teamSports || {});
                     var _leagueTeamKeys = leagueTeams.map(function(t) { return league.name + '|' + t; });
                     _leagueTeamKeys.forEach(function(k) {
                         var hist = history.teamSports[k] || [];
