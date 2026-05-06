@@ -1922,8 +1922,6 @@ function renderDAWTimeline(gridEl) {
       return;
   }
 
-  gridEl.style.overflow = 'auto';
-  
   window.MasterSchedulerInternal.renderDAWGridWith(gridEl, daAutoLayers, {
    onLayersChanged: function(updatedLayers) {
       if (updatedLayers && typeof updatedLayers === 'object') {
@@ -4899,8 +4897,8 @@ function getStyles() {
     .da-subtab.active { color:#6366f1; border-bottom-color:#6366f1; background:#fff; font-weight:600; }
     
     /* Panes */
-    .da-pane { display:none; flex:1; overflow:auto; padding:16px; }
-    .da-pane.active { display:block; }
+    .da-pane { display:none; flex:1; overflow:hidden; padding:0; flex-direction:column; }
+    .da-pane.active { display:flex; }
     
     /* Toolbar */
     .da-toolbar { display:flex; align-items:center; gap:8px; padding:0 16px; height:44px; background:#fff; border-bottom:1px solid #eef0f3; flex-wrap:nowrap; overflow:hidden; flex-shrink:0; }
@@ -4908,7 +4906,7 @@ function getStyles() {
     .da-toolbar-label { font-size:12px; color:var(--da-text2); font-weight:500; }
     
     /* Grid */
-    .da-grid-wrapper { flex:1; overflow:auto; background:#fafbfc; margin:0; border:none; border-radius:0; }
+    .da-grid-wrapper { flex:1; overflow:auto; background:#fafbfc; margin:0; border:none; border-radius:0; padding:0; }
     .da-grid { display:grid; min-width:700px; }
     .da-grid-header { position:sticky; top:0; z-index:10; padding:12px 10px; font-weight:600; font-size:13px; text-align:center; border-bottom:2px solid var(--da-border); background:var(--da-bg); letter-spacing:0.3px; }
     .da-time-header { background:var(--da-surface); font-size:11px; font-weight:500; color:var(--da-text3); }
@@ -5246,10 +5244,8 @@ function getMainHTML(useMS) {
             <div id="da-displaced-tiles-panel" style="display:none;"></div>
             ${window._daBuilderMode === 'auto' ? `
   <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
-  <div id="da-view-auto-layers" style="height:calc(100vh - 300px);overflow:auto;">
-    <div class="ms-grid-wrapper">
-      <div id="da-skeleton-grid"></div>
-    </div>
+  <div id="da-view-auto-layers" style="flex:1;overflow:auto;">
+    <div id="da-skeleton-grid"></div>
   </div>
 ` : `
   <div id="da-view-skeleton">

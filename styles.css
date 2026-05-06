@@ -4158,6 +4158,8 @@ a:hover {
 /* ── Auto Mode Inner ── */
 .ms-auto-container { display:flex; flex-direction:column; height:100%; overflow:hidden; }
 .ms-daw-wrapper { flex:1; overflow:auto; background:#fafbfc; position:relative; }
+/* When DAW grid is inside DA view, the parent scrolls — avoid nested scrollbars */
+#da-view-auto-layers .ms-daw-grid { min-width:0; }
 .ms-daw-grid { position:relative; }
 
 /* ── Columns container ── */
