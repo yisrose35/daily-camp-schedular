@@ -25,7 +25,7 @@
     'use strict';
 
     const VERSION = '1.3.1';
-    const DEBUG = true;
+    const DEBUG = false;
 
     function log(...args) {
         if (DEBUG) console.log('[DivTimesIntegration]', ...args);

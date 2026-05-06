@@ -141,14 +141,26 @@
 
     function buildUsageData(dateKey) {
         const allDaily = window.loadAllDailyData?.() || {};
+        const liveDate = window.currentScheduleDate;
         let assignments;
-        if (dateKey && allDaily[dateKey]) {
-            assignments = allDaily[dateKey].scheduleAssignments || {};
+        // Prefer live in-memory state for the current date so freshly generated
+        // schedules (manual or auto) show immediately without a save round-trip.
+        if (dateKey && dateKey === liveDate && window.scheduleAssignments &&
+            Object.keys(window.scheduleAssignments).length) {
+            assignments = window.scheduleAssignments;
+        } else if (dateKey && allDaily[dateKey]?.scheduleAssignments) {
+            assignments = allDaily[dateKey].scheduleAssignments;
         } else {
-            assignments = window.scheduleAssignments || window.loadCurrentDailyData?.()?.scheduleAssignments || {};
+            assignments = window.scheduleAssignments
+                || window.loadCurrentDailyData?.()?.scheduleAssignments
+                || {};
         }
 
-        const dTimes = window.divisionTimes || {};
+        // For the current date, use the live divisionTimes; for historical dates,
+        // try the snapshot saved with that day so slots map to the right times.
+        const dTimes = (dateKey && dateKey !== liveDate && allDaily[dateKey]?.divisionTimes)
+            ? allDaily[dateKey].divisionTimes
+            : (window.divisionTimes || {});
         const items = [];
 
         Object.entries(assignments).forEach(([bunk, schedule]) => {
@@ -192,6 +204,44 @@
                 const hasField = fName && fName !== 'Free' && fName !== 'No Field';
 
                 items.push({ bunk, division: divName, field: hasField ? fName : null, activity, startMin, endMin, isSpecial: isSpecialByName(activity) });
+            });
+        });
+
+        // ═══════════════════════════════════════════════════════════════
+        // League assignments: extract field usages from matchup strings
+        // leagueAssignments[divName][slotIdx].matchups = ["Team vs Team @ Field (Sport)", ...]
+        // ═══════════════════════════════════════════════════════════════
+        const leagueData = (dateKey && dateKey !== liveDate && allDaily[dateKey]?.leagueAssignments)
+            ? allDaily[dateKey].leagueAssignments
+            : (window.leagueAssignments || {});
+
+        Object.entries(leagueData).forEach(([divName, slots]) => {
+            const times = dTimes[divName] || [];
+            Object.entries(slots).forEach(([slotIdx, entry]) => {
+                if (!entry?.matchups?.length) return;
+                const idx = parseInt(slotIdx, 10);
+                const slotInfo = times[idx];
+                if (!slotInfo) return;
+                const startMin = slotInfo.startMin;
+                const endMin = slotInfo.endMin;
+                if (startMin === undefined || endMin === undefined) return;
+
+                const leagueName = entry.leagueName || entry.gameLabel || 'League';
+                entry.matchups.forEach(m => {
+                    const atMatch = m.match(/@\s*(.+?)\s*\(/);
+                    if (!atMatch) return;
+                    const fieldName = atMatch[1].trim();
+                    if (!fieldName || fieldName === 'Free') return;
+                    items.push({
+                        bunk: leagueName,
+                        division: divName,
+                        field: fieldName,
+                        activity: leagueName,
+                        startMin,
+                        endMin,
+                        isSpecial: false
+                    });
+                });
             });
         });
 
@@ -247,7 +297,16 @@
         if (!wrapper) return;
 
         const allDaily = window.loadAllDailyData?.() || {};
-        const dates = Object.keys(allDaily).sort().reverse();
+        // Only treat keys that look like ISO dates (YYYY-MM-DD) AND have a
+        // schedule attached as real entries — skip metadata keys like updated_at.
+        const dates = Object.keys(allDaily)
+            .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && allDaily[k]?.scheduleAssignments
+                       && Object.keys(allDaily[k].scheduleAssignments).length)
+            .sort()
+            .reverse();
+        // Make sure today / current date is always selectable even if it has not
+        // been saved yet (e.g. just-built manual schedule still in memory).
+        if (selectedDate && !dates.includes(selectedDate)) dates.unshift(selectedDate);
         const dateOptions = dates.length
             ? dates.map(d => `<option value="${d}" ${d === selectedDate ? 'selected' : ''}>${formatDateDisplay(d)}</option>`).join('')
             : `<option value="${selectedDate}">${formatDateDisplay(selectedDate)}</option>`;
@@ -286,6 +345,8 @@
                     </div>
                 </div>
 
+                <button id="gantt-refresh-btn" title="Re-read schedule data" style="padding:5px 12px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#475569;font-size:0.78rem;font-weight:600;cursor:pointer;">↻ Refresh</button>
+
             </div>
 
             <div id="gantt-chart-area"></div>
@@ -296,6 +357,8 @@
         document.getElementById('gantt-btn-bunk').onclick = () => setView('bunk');
         const divSel = document.getElementById('gantt-div-select');
         if (divSel) divSel.onchange = () => renderGantt();
+        const refreshBtn = document.getElementById('gantt-refresh-btn');
+        if (refreshBtn) refreshBtn.onclick = () => { loadMasterData(); renderAvailabilityShell(); };
 
         const actInput = document.getElementById('gantt-activity-filter');
         const actClear = document.getElementById('gantt-activity-clear');
@@ -798,6 +861,12 @@
             specialResources = specialResources.filter(s => s.name.toLowerCase().includes(activityFilter));
         }
 
+        // Only show specials that actually have usages in the current schedule
+        specialResources = specialResources.filter(s => {
+            const normKey = s.name.trim().toLowerCase();
+            return items.some(item => item.isSpecial && item.activity && item.activity.trim().toLowerCase() === normKey);
+        });
+
         const resources = [...fieldResources, ...specialResources].sort((a, b) => a.name.localeCompare(b.name));
 
         if (!resources.length) {
@@ -812,8 +881,13 @@
         const totalMin = campEnd - campStart;
 
         const byField = {}, bySpecial = {};
+        const _fieldKeyMap = {};
         items.forEach(item => {
-            if (item.field) (byField[item.field] = byField[item.field] || []).push(item);
+            if (item.field) {
+                const normKey = item.field.trim().toLowerCase();
+                if (!_fieldKeyMap[normKey]) _fieldKeyMap[normKey] = item.field;
+                (byField[normKey] = byField[normKey] || []).push(item);
+            }
             if (item.isSpecial) {
                 const arr = (bySpecial[item.activity] = bySpecial[item.activity] || []);
                 if (!arr.some(x => x.bunk === item.bunk && x.startMin === item.startMin)) arr.push(item);
@@ -844,10 +918,11 @@
                 </div>
             </div>`;
 
-        const fieldPeriods = getBellPeriods();
+        const isAutoMode = window._daBuilderMode === 'auto';
+        const fieldPeriods = isAutoMode ? getBellPeriods() : [];
         let rows = '';
         resources.forEach((r, i) => {
-            const usages = r.type === 'field' ? (byField[r.name] || []) : (bySpecial[r.name] || []);
+            const usages = r.type === 'field' ? (byField[r.name.trim().toLowerCase()] || []) : (bySpecial[r.name] || []);
             let track = buildTrack(usages, campStart, campEnd, totalMin, u => `${u.bunk}  ·  ${u.activity}`, fieldPeriods);
             if (showNow) track += buildNowLine(campStart, totalMin);
             rows += buildRow(r.name, track, i % 2 === 1);
@@ -900,6 +975,7 @@
     // ========================================================================
 
     function renderBunkGantt(area, items, campStart, campEnd, divFilter, showNow) {
+        const isAutoMode = window._daBuilderMode === 'auto';
         const totalMin = campEnd - campStart;
 
         const bunkMap = {};
@@ -927,7 +1003,7 @@
                 <div style="flex:1;background:#fafafa;"></div>
             </div>`;
 
-            const divPeriods = getBellPeriods(divName);
+            const divPeriods = isAutoMode ? getBellPeriods(divName) : [];
             bunks.forEach(bunk => {
                 const usages = bunkMap[bunk] || [];
                 let track = buildTrack(usages, campStart, campEnd, totalMin, u => u.activity, divPeriods);
@@ -960,7 +1036,7 @@
                 <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">${filterBadge}</div>
             </div>`;
 
-        const globalPeriods = getBellPeriods();
+        const globalPeriods = isAutoMode ? getBellPeriods() : [];
         const hasBunkPeriods = globalPeriods.length > 0;
         const axisRow = `
             <div style="display:flex;padding:${hasBunkPeriods ? '0' : '14px'} 0 6px;border-bottom:1px solid #f1f5f9;">
@@ -1033,6 +1109,9 @@
                         <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Activity</label>
                         <input id="rotation-activity-filter" type="text" placeholder="e.g. Basketball" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;box-sizing:border-box;" />
                     </div>
+                    <div style="display:flex;align-items:flex-end;">
+                        <button id="rotation-refresh-btn" title="Re-read schedule data" style="padding:8px 14px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.8rem;font-weight:600;cursor:pointer;">↻ Refresh</button>
+                    </div>
                 </div>
             </div>
             <div id="rotation-table-container"></div>
@@ -1046,6 +1125,12 @@
         let _timer = null;
         document.getElementById('rotation-activity-filter').oninput = () => {
             clearTimeout(_timer); _timer = setTimeout(() => renderRotationTable(divSelect.value), 300);
+        };
+        const rotRefresh = document.getElementById('rotation-refresh-btn');
+        if (rotRefresh) rotRefresh.onclick = () => {
+            loadMasterData();
+            const cur = divSelect.value;
+            if (cur) renderRotationTable(cur);
         };
     }
 
@@ -1066,6 +1151,22 @@
             return;
         }
 
+        // Try cloud-first: if RotationCloud is available, load from Supabase
+        if (window.RotationCloud?.load) {
+            window.RotationCloud.load().then(function(cloudData) {
+                _renderRotationTableWithData(divName, cloudData);
+            }).catch(function() {
+                _renderRotationTableWithData(divName, null);
+            });
+            return;
+        }
+        _renderRotationTableWithData(divName, null);
+    }
+
+    function _renderRotationTableWithData(divName, cloudData) {
+        const cont = document.getElementById('rotation-table-container');
+        if (!divName) return;
+
         const bunks = divisionsDat[divName]?.bunks || [];
         if (!bunks.length) {
             cont.innerHTML = `<div style="padding:20px;text-align:center;color:#b91c1c;background:#fee2e2;border-radius:12px;">No bunks in this division.</div>`;
@@ -1080,10 +1181,9 @@
         const actSearch = (document.getElementById('rotation-activity-filter')?.value || '').trim().toLowerCase();
         if (actSearch) filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
 
-        if (!filteredActivities.length) {
-            cont.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No activities match the filter.</div>`;
-            return;
-        }
+        // Note: the "no activities match" early-exit happens AFTER we merge
+        // schedule-derived activities below, so a manual-mode custom activity
+        // still surfaces even if the master list is empty.
 
         const bunkFilter = document.getElementById('rotation-bunk-filter')?.value || '';
         const filteredBunks = bunkFilter ? bunks.filter(b => b === bunkFilter) : bunks;
@@ -1094,31 +1194,120 @@
 
         const allDaily = window.loadAllDailyData?.() || {};
         const manualOffsets = (window.loadGlobalSettings?.() || {}).manualUsageOffsets || {};
+        const liveDate = window.currentScheduleDate;
 
-        // Compute counts and lastDone live from schedule data so they always
-        // reflect the current state of allDaily (no stale historicalCounts cache).
+        const masterNames = new Set(allActivities.map(a => a.name));
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const hCounts = globalSettings.historicalCounts || {};
+        const countedDates = globalSettings.historicalCountedDates || {};
         const liveCounts = {};
         const lastDone   = {};
+        const usedActivityNames = new Set();
 
-        Object.keys(allDaily).sort().forEach(dateKey => {
-            const sched = allDaily[dateKey]?.scheduleAssignments || {};
+        // Step 1: Seed counts — prefer cloud data, fall back to historicalCounts
+        if (cloudData && cloudData.counts && Object.keys(cloudData.counts).length) {
             bunks.forEach(bunk => {
-                (sched[bunk] || []).forEach(entry => {
-                    if (!entry || entry.continuation || entry._isTransition) return;
-                    const act = entry._activity || entry.activity || entry.sport || '';
-                    if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
-
-                    liveCounts[bunk]       = liveCounts[bunk] || {};
-                    liveCounts[bunk][act]  = (liveCounts[bunk][act] || 0) + 1;
-
-                    lastDone[bunk]         = lastDone[bunk] || {};
-                    // Sorted date iteration → later dates naturally overwrite
-                    if (!lastDone[bunk][act] || dateKey > lastDone[bunk][act]) {
-                        lastDone[bunk][act] = dateKey;
-                    }
+                const cBunk = cloudData.counts[bunk] || {};
+                Object.keys(cBunk).forEach(act => {
+                    if (!cBunk[act]) return;
+                    liveCounts[bunk] = liveCounts[bunk] || {};
+                    liveCounts[bunk][act] = cBunk[act];
+                    usedActivityNames.add(act);
                 });
             });
+            // Seed lastDone from cloud
+            if (cloudData.lastDone) {
+                bunks.forEach(bunk => {
+                    const cLD = cloudData.lastDone[bunk] || {};
+                    Object.keys(cLD).forEach(act => {
+                        lastDone[bunk] = lastDone[bunk] || {};
+                        if (!lastDone[bunk][act] || cLD[act] > lastDone[bunk][act]) {
+                            lastDone[bunk][act] = cLD[act];
+                        }
+                    });
+                });
+            }
+        } else {
+            bunks.forEach(bunk => {
+                const hBunk = hCounts[bunk] || {};
+                Object.keys(hBunk).forEach(act => {
+                    if (!hBunk[act]) return;
+                    liveCounts[bunk] = liveCounts[bunk] || {};
+                    liveCounts[bunk][act] = hBunk[act];
+                    usedActivityNames.add(act);
+                });
+            });
+        }
+
+        // Step 2: Scan current day's live schedule for unsaved changes.
+        // If today hasn't been counted yet in historicalCounts, add its
+        // activities on top. If it has been counted, the counts are already
+        // included via historicalCounts above.
+        const todaySched = (liveDate && window.scheduleAssignments &&
+            Object.keys(window.scheduleAssignments).length)
+            ? window.scheduleAssignments
+            : (allDaily[liveDate]?.scheduleAssignments || {});
+        const todayCounted = !!(liveDate && countedDates[liveDate]);
+
+        if (!todayCounted && liveDate) {
+            bunks.forEach(bunk => {
+                (todaySched[bunk] || []).forEach(entry => {
+                    if (!entry || entry.continuation || entry._isTransition) return;
+                    let rawAct = entry._activity || entry.activity || entry.sport || '';
+                    if (typeof rawAct === 'string' && rawAct.trim() && entry.sport &&
+                        rawAct !== entry.sport && !masterNames.has(rawAct.trim()) && masterNames.has(entry.sport)) {
+                        rawAct = entry.sport;
+                    }
+                    const act = (typeof rawAct === 'string' ? rawAct : '').trim();
+                    if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
+                    usedActivityNames.add(act);
+                    liveCounts[bunk] = liveCounts[bunk] || {};
+                    liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + 1;
+                });
+            });
+        }
+
+        // Step 3: Build lastDone from allDaily + rotationHistory (merged below)
+        Object.keys(allDaily)
+            .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
+            .sort()
+            .forEach(dateKey => {
+                const sched = (dateKey === liveDate) ? todaySched
+                    : (allDaily[dateKey]?.scheduleAssignments || {});
+                bunks.forEach(bunk => {
+                    (sched[bunk] || []).forEach(entry => {
+                        if (!entry || entry.continuation || entry._isTransition) return;
+                        let rawAct = entry._activity || entry.activity || entry.sport || '';
+                        if (typeof rawAct === 'string' && rawAct.trim() && entry.sport &&
+                            rawAct !== entry.sport && !masterNames.has(rawAct.trim()) && masterNames.has(entry.sport)) {
+                            rawAct = entry.sport;
+                        }
+                        const act = (typeof rawAct === 'string' ? rawAct : '').trim();
+                        if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
+                        usedActivityNames.add(act);
+                        lastDone[bunk] = lastDone[bunk] || {};
+                        if (!lastDone[bunk][act] || dateKey > lastDone[bunk][act]) {
+                            lastDone[bunk][act] = dateKey;
+                        }
+                    });
+                });
+            });
+
+        const extraActivities = [];
+        usedActivityNames.forEach(name => {
+            if (!masterNames.has(name)) extraActivities.push({ name, type: 'other', max: 0 });
         });
+        if (extraActivities.length && filter === 'all') {
+            filteredActivities = filteredActivities.concat(extraActivities);
+            if (actSearch) {
+                filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
+            }
+        }
+
+        if (!filteredActivities.length) {
+            cont.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;">No activities match the filter.</div>`;
+            return;
+        }
 
         // Merge rotation history as a secondary source for lastDone
         const rotHist = window.loadRotationHistory?.() || { bunks: {} };
@@ -1174,7 +1363,9 @@
 
                 const typeLabel = act.type === 'special'
                     ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Special</span>'
-                    : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Sport</span>';
+                    : act.type === 'other'
+                        ? '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Used in schedule but not in master activity list">Other</span>'
+                        : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Sport</span>';
 
                 html += `
                     <tr style="background:${rowBg};">
@@ -1259,10 +1450,49 @@
     }
 
     // ========================================================================
+    // LIVE REFRESH
+    // ========================================================================
+
+    // Re-render whichever sub-report is visible. Safe to call when the
+    // Report tab isn't open — it just no-ops.
+    function refreshActiveReport() {
+        const root = document.getElementById('report-content');
+        if (!root || !root.offsetParent) return; // not visible
+        // Refresh master data so newly-added fields/specials appear too.
+        loadMasterData();
+        const sel = document.getElementById('report-view-select');
+        const val = sel?.value || 'availability';
+        if (val === 'availability') {
+            // Re-snap selectedDate to the live date if user hasn't picked one
+            // explicitly — keeps "today" tracking after a generate.
+            const dateSel = document.getElementById('gantt-date-select');
+            if (!dateSel || !dateSel.value) {
+                selectedDate = window.currentScheduleDate || selectedDate;
+            }
+            renderAvailabilityShell();
+        } else if (val === 'rotation') {
+            const div = document.getElementById('rotation-div-select')?.value || '';
+            if (div) renderRotationTable(div);
+            else renderBunkRotationUI();
+        }
+    }
+
+    // Listen for schedule changes so the report stays in sync with manual
+    // generations and post-edits without the user needing to leave & come back.
+    let _refreshTimer = null;
+    function scheduleRefresh() {
+        clearTimeout(_refreshTimer);
+        _refreshTimer = setTimeout(refreshActiveReport, 120);
+    }
+    document.addEventListener('campistry-schedule-generated', scheduleRefresh);
+    document.addEventListener('campistry-post-edit-complete',  scheduleRefresh);
+
+    // ========================================================================
     // EXPORTS
     // ========================================================================
 
     window.initReportTab = initReportTab;
+    window.refreshReportTab = refreshActiveReport;
     window.debugAnalytics = { buildUsageData, getCampTimes };
 
 })();

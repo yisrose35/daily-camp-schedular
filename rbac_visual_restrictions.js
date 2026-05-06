@@ -442,9 +442,9 @@
     function isFieldRelevantToScheduler(field) {
         if (!field) return false;
         // If field has no access restrictions, it's open to all — scheduler can view but not edit
-        if (!field.limitUsage?.enabled) return false;
+        if (!field.accessRestrictions?.enabled) return false;
         // If restricted, check overlap with scheduler's editable divisions
-        const fieldDivisions = Object.keys(field.limitUsage.divisions || {});
+        const fieldDivisions = Object.keys(field.accessRestrictions.divisions || {});
         if (fieldDivisions.length === 0) return false;
         return fieldDivisions.some(d => _editableDivisions.includes(d));
     }

@@ -801,7 +801,7 @@
     
     function saveData() {
         const app1Data = window.loadGlobalSettings?.()?.app1 || {};
-        
+
         const data = {
             ...app1Data,
             bunks: state.bunks,
@@ -813,12 +813,23 @@
             skeletonAssignments: state.skeletonAssignments,
             specialActivities: state.specialActivities,
             bunkMetaData: state.bunkMetaData,
-            sportMetaData: state.sportMetaData,
+            // sportMetaData is written by facilities.js — prefer the fresh storage
+            // value so that app1 saves don't overwrite facilities.js changes.
+            sportMetaData: app1Data.sportMetaData || state.sportMetaData,
             divisionGroups: state.divisionGroups
         };
-        
+        // ★ camperRoster is owned exclusively by Campistry Me. If Flow ever loads
+        //   before Me's CSV-import sync arrives (or before hydrateFromCloud
+        //   completes), app1Data.camperRoster is empty/missing and the spread
+        //   above silently propagates that. The downstream cloud merge replaces
+        //   app1 wholesale, so Flow's stale-empty camperRoster wipes the
+        //   freshly imported 480-camper roster from cloud. Drop the key here so
+        //   the cloud-side merge in executeBatchSync preserves whatever Me last
+        //   wrote.
+        delete data.camperRoster;
+
         window.saveGlobalSettings?.("app1", data);
-        
+
         updateWindowApp1();
     }
     
@@ -853,30 +864,49 @@
                         gradeNameCounts[gradeName] = (gradeNameCounts[gradeName] || 0) + 1;
                     });
                 });
-                
+
+                // Count bunk name occurrences across ALL grades to detect cross-grade collisions
+                const bunkNameCounts = {};
                 Object.entries(campStructure).forEach(([divName, divData]) => {
                     if (typeof divData !== 'object' || divData === null) return;
-                    
+                    Object.entries(divData.grades || {}).forEach(([, gradeData]) => {
+                        (gradeData.bunks || []).forEach(b => {
+                            bunkNameCounts[b] = (bunkNameCounts[b] || 0) + 1;
+                        });
+                    });
+                });
+
+                Object.entries(campStructure).forEach(([divName, divData]) => {
+                    if (typeof divData !== 'object' || divData === null) return;
+
                     const parentColor = divData.color || getNextUniqueDivisionColor(gradeBasedDivisions);
                     const gradeNames = Object.keys(divData.grades || {});
-                    
+
                     divGroups[divName] = { color: parentColor, grades: [] };
-                    
+
                     gradeNames.forEach(gradeName => {
                         const gradeData = divData.grades[gradeName];
-                        const bunks = gradeData.bunks || [];
-                        bunks.forEach(b => { if (!allBunks.includes(b)) allBunks.push(b); });
-                        
+                        const rawBunks = gradeData.bunks || [];
+
                         const key = gradeNameCounts[gradeName] > 1
                             ? `${divName} > ${gradeName}`
                             : gradeName;
-                        
+
                         if (gradeNameCounts[gradeName] > 1) {
                             console.warn(`[app1 v5.2] Grade "${gradeName}" exists in multiple divisions — using "${key}"`);
                         }
-                        
+
+                        // Qualify bunk names that appear in more than one grade to prevent
+                        // key collisions in scheduleAssignments (e.g. Grade 1 "Bunk 1" vs Grade 2 "Bunk 1")
+                        const bunks = rawBunks.map(b => bunkNameCounts[b] > 1 ? `${key}:${b}` : b);
+                        if (bunks.some((b, i) => b !== rawBunks[i])) {
+                            console.warn(`[app1 v5.2] Grade "${key}" has bunk name conflicts — qualified:`, bunks);
+                        }
+
+                        bunks.forEach(b => { if (!allBunks.includes(b)) allBunks.push(b); });
+
                         const times = existingTimes[key] || existingTimes[gradeName] || existingTimes[divName] || {};
-                        
+
                         gradeBasedDivisions[key] = {
                             startTime: times.startTime || "",
                             endTime: times.endTime || "",
@@ -884,7 +914,7 @@
                             color: parentColor,
                             parentDivision: divName
                         };
-                        
+
                         divGroups[divName].grades.push(key);
                     });
                 });
@@ -960,6 +990,13 @@
             state.savedSkeletons = data.savedSkeletons || {};
             state.skeletonAssignments = data.skeletonAssignments || {};
             
+            // Recompute bunk sizes from the live camperRoster every load.
+            // This is the bridge from Campistry Me's roster → Flow's
+            // bunkMetaData[bunk].size, which the sport player-count rules
+            // and shared-field capacity checks consume. It runs on every
+            // app1.loadData (cloud-hydrate, page reload, cross-tab storage
+            // event), so Flow always gets fresh counts even when Me was
+            // never opened in the current session.
             const camperRoster = data.camperRoster || {};
             const bunkCounts = {};
             Object.values(camperRoster).forEach(camper => {
@@ -967,17 +1004,36 @@
                     bunkCounts[camper.bunk] = (bunkCounts[camper.bunk] || 0) + 1;
                 }
             });
+            const rosterIsPopulated = Object.keys(camperRoster).length > 0;
+            // Set size for bunks that have campers
             Object.entries(bunkCounts).forEach(([bunk, count]) => {
                 if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
-                if (!state.bunkMetaData[bunk].size) {
-                    state.bunkMetaData[bunk].size = count;
-                }
+                state.bunkMetaData[bunk].size = count;
             });
+            // Zero out sizes for known bunks with no campers — but ONLY when
+            // the roster is actually populated. If roster is totally empty
+            // (e.g. cloud not yet hydrated, or new camp with no CSV imported
+            // yet), preserve any manually-configured sizes instead of
+            // wiping them.
+            if (rosterIsPopulated) {
+                (state.bunks || []).forEach(b => {
+                    if (!(b in bunkCounts)) {
+                        if (!state.bunkMetaData[b]) state.bunkMetaData[b] = {};
+                        state.bunkMetaData[b].size = 0;
+                    }
+                });
+            }
+
+            const orphanedBunks = Object.keys(bunkCounts).filter(b => !state.bunks.includes(b));
+            if (orphanedBunks.length > 0) {
+                console.warn('[app1] Campers assigned to bunks not found in any grade:', orphanedBunks);
+            }
             
             updateWindowApp1();
-            
+            syncSpine();
+
             console.log(`[app1 v5.2] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
-            
+
         } catch (e) {
             console.error("Error loading app1 data:", e);
         }
@@ -1110,7 +1166,11 @@
     
     window.getDivisions = () => state.divisions;
     window.getBunkMetaData = () => state.bunkMetaData;
-    window.getSportMetaData = () => state.sportMetaData;
+    // Read fresh from storage so facilities.js changes are always visible
+    window.getSportMetaData = () => {
+        const fresh = window.loadGlobalSettings?.()?.app1?.sportMetaData;
+        return fresh || state.sportMetaData;
+    };
     window.getGlobalSpecialActivities = () => state.specialActivities;
     window.getAllGlobalSports = () => [...state.allSports].sort();
     window.getSavedSkeletons = () => state.savedSkeletons || {};
@@ -1172,6 +1232,15 @@
     window.saveGlobalSpecialActivities = (updatedActivities) => {
         state.specialActivities = updatedActivities;
         saveData();
+        // Also write the root-level key that all readers check first —
+        // without this, the cloud_sync_helpers version's dual-write is lost
+        // once app1 initialises and replaces that function.
+        window.saveGlobalSettings?.('specialActivities', updatedActivities);
+        // Sync special_activities.js in-memory cache so getAllSpecialActivities()
+        // returns the fresh list immediately without needing a storage reload.
+        // The setter defined in special_activities.js accepts an array directly.
+        try { window.specialActivities = updatedActivities; } catch(_) {}
+        window.refreshSpecialActivitiesFromStorage?.();
     };
     
     window.addDivisionBunk = (divName, bunkName) => {

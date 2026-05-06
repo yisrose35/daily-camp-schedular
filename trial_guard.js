@@ -429,9 +429,14 @@
 
                 // Camper count from cloud
                 try {
-                    var stateResult = await client.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
-                    if (stateResult.data?.state?.app1?.camperRoster) {
-                        _starterCamperCount = Object.keys(stateResult.data.state.app1.camperRoster).length;
+                    var kvResult = await client.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'app1').maybeSingle();
+                    if (kvResult.data?.value?.camperRoster) {
+                        _starterCamperCount = Object.keys(kvResult.data.value.camperRoster).length;
+                    } else {
+                        var stateResult = await client.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
+                        if (stateResult.data?.state?.app1?.camperRoster) {
+                            _starterCamperCount = Object.keys(stateResult.data.state.app1.camperRoster).length;
+                        }
                     }
                 } catch (_) {}
 

@@ -152,11 +152,29 @@
             return {};
         }
     }
+    function pruneOldDates(data, keepCount) {
+        const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+        const dateKeys = Object.keys(data).filter(k => DATE_RE.test(k));
+        if (dateKeys.length <= keepCount) return data;
+        dateKeys.sort();
+        const toRemove = dateKeys.slice(0, dateKeys.length - keepCount);
+        toRemove.forEach(k => delete data[k]);
+        return data;
+    }
+
     function setLocalData(data) {
         try {
+            pruneOldDates(data, 5);
             localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
         } catch (e) {
-            logError('Failed to write local storage:', e);
+            if (e.name === 'QuotaExceededError') {
+                pruneOldDates(data, 2);
+                try {
+                    localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
+                } catch (_) { /* cloud has it */ }
+            } else {
+                logError('Failed to write local storage:', e);
+            }
         }
     }
     function getLocalSchedule(dateKey) {
@@ -601,8 +619,8 @@
         const originalBunkCount = Object.keys(data?.scheduleAssignments || {}).length;
         log('saveSchedule called:', dateKey, 'with', originalBunkCount, 'bunks');
 
-        if (!client || !campId) {
-            log('No client or camp ID, saving to local only');
+        if (!client || !campId || !userId) {
+            log('No client/campId/userId yet, saving to local only');
             setLocalSchedule(dateKey, data);
             return { success: true, target: 'local' };
         }

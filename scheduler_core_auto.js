@@ -180,6 +180,41 @@
         return null;
     }
 
+    // Grade-aware variant of getSpecialTimeWindow. Filters timeRules to only
+    // those that apply to the given grade before computing the union window.
+    // Falls back to grade-agnostic behaviour when grade is null/undefined.
+    function getSpecialTimeWindowForGrade(cfg, grade) {
+        if (!cfg) return null;
+        const start = cfg.availableFrom || cfg.windowStart || cfg.startTime;
+        const end = cfg.availableTo || cfg.windowEnd || cfg.endTime;
+        if (start && end) {
+            return {
+                startMin: typeof start === 'number' ? start : parseTimeToMinutes(start),
+                endMin: typeof end === 'number' ? end : parseTimeToMinutes(end)
+            };
+        }
+        if (Array.isArray(cfg.timeRules) && cfg.timeRules.length > 0) {
+            // Only keep rules that are not scoped to specific grades, or that
+            // include this grade. Scoped rules for OTHER grades are ignored.
+            const applicable = cfg.timeRules.filter(function(r) {
+                if (!grade) return true;
+                return !r.divisions || r.divisions.length === 0 || r.divisions.indexOf(grade) >= 0;
+            });
+            const available = applicable.filter(function(r) { return r.type === 'Available' || !r.type; });
+            if (available.length > 0) {
+                let earliest = Infinity, latest = -Infinity;
+                available.forEach(function(r) {
+                    const rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.start);
+                    const re = r.endMin != null ? r.endMin : parseTimeToMinutes(r.end);
+                    if (rs != null && rs < earliest) earliest = rs;
+                    if (re != null && re > latest) latest = re;
+                });
+                if (earliest < Infinity && latest > -Infinity) return { startMin: earliest, endMin: latest };
+            }
+        }
+        return null;
+    }
+
     // Return all user-configured allowed durations for a special, in ascending
     // order. Empty array = user has not configured any → caller should fall
     // back to the layer's dMin/dMax range. Used by the period-packer integration
@@ -294,7 +329,7 @@
     function isSpecialAvailableForDivision(specialName, divName, gs) {
         const cfg = getSpecialConfig(specialName, gs);
         if (!cfg) return true;
-        const rules = cfg.limitUsage;
+        const rules = cfg.accessRestrictions;
         if (!rules || !rules.enabled) return true;
         const allowed = rules.divisions;
         if (!allowed || typeof allowed !== 'object') return true;
@@ -302,14 +337,14 @@
         return divName in allowed;
     }
     // Per-bunk access check. Honors the per-bunk filter inside
-    // limitUsage.divisions[grade]: an empty array (or missing) means
+    // accessRestrictions.divisions[grade]: an empty array (or missing) means
     // "all bunks in this grade", a non-empty array means only those
     // listed bunks are allowed.
     function isSpecialAvailableForBunk(specialName, divName, bunkName, gs) {
         if (!isSpecialAvailableForDivision(specialName, divName, gs)) return false;
         const cfg = getSpecialConfig(specialName, gs);
         if (!cfg) return true;
-        const rules = cfg.limitUsage;
+        const rules = cfg.accessRestrictions;
         if (!rules || !rules.enabled) return true;
         const allowed = rules.divisions;
         if (!allowed || typeof allowed !== 'object' || Array.isArray(allowed)) return true;
@@ -559,6 +594,7 @@
         // ★ v7.0: Filter out daily-disabled specials from resource overrides
         const dailyDisabledSpecials = (dailyData?.overrides?.disabledSpecials) || [];
         const todaysSpecials = allSpecials.filter(s => {
+            if (s.available === false) return false;
             if (!isSpecialAvailableOnDay(s.name, dayName, isRainy, globalSettings)) return false;
             if (dailyDisabledSpecials.includes(s.name)) return false;
             return true;
@@ -640,6 +676,41 @@
 
         const allGrades = Object.keys(divisions).filter(g => !allowedSet || allowedSet.has(String(g)));
 
+        // ★ PRIORITY ORDERING: sort grades so higher-priority grades are processed first.
+        // Each field with usePriority=true contributes rank votes; grades that rank first
+        // across the most fields get processed earliest → they claim contested fields first.
+        {
+            const gradeScore = {}; // grade → sum of rank indices (lower = higher priority)
+            const gradeCount = {}; // grade → how many priority fields mention it
+            (getFields(globalSettings) || []).forEach(f => {
+                if (f.accessRestrictions?.usePriority && Array.isArray(f.accessRestrictions.priorityList) && f.accessRestrictions.priorityList.length > 0) {
+                    f.accessRestrictions.priorityList.forEach((g, idx) => {
+                        gradeScore[g] = (gradeScore[g] || 0) + idx;
+                        gradeCount[g] = (gradeCount[g] || 0) + 1;
+                    });
+                }
+            });
+            // Also incorporate per-special grade priority votes
+            todaysSpecials.forEach(function(_spri) {
+                const _scfg = getSpecialConfig(_spri.name, globalSettings);
+                if (_scfg && _scfg.accessRestrictions && _scfg.accessRestrictions.usePriority && Array.isArray(_scfg.accessRestrictions.priorityList) && _scfg.accessRestrictions.priorityList.length > 0) {
+                    _scfg.accessRestrictions.priorityList.forEach(function(g, idx) {
+                        gradeScore[g] = (gradeScore[g] || 0) + idx;
+                        gradeCount[g] = (gradeCount[g] || 0) + 1;
+                    });
+                }
+            });
+            if (Object.keys(gradeScore).length > 0) {
+                allGrades.sort((a, b) => {
+                    const cA = gradeCount[a] || 0, cB = gradeCount[b] || 0;
+                    if (cA === 0 && cB === 0) return 0;
+                    if (cA === 0) return 1;
+                    if (cB === 0) return -1;
+                    return (gradeScore[a] / cA) - (gradeScore[b] / cB);
+                });
+                log('[STEP 1] Grade processing order (priority-sorted): ' + allGrades.join(', '));
+            }
+        }
 
         // =====================================================================
         // MUTABLE STATE
@@ -1116,10 +1187,16 @@
                     name: field.name, capacity, shareType,
                     allowedDivisions: props.sharableWith?.divisions || field.sharableWith?.divisions || [],
                     allowedPairs: props.sharableWith?.allowedPairs || field.sharableWith?.allowedPairs || {},
-                    isIndoor: field.isIndoor || false,
+                    isIndoor: field.isIndoor || field.rainyDayAvailable || false,
                     timeRules, unavailableRules,
                     disabledSports: dailyDisabledSports[field.name] || [],
                     activities: field.activities || [],
+                    // Access restriction — which grades are allowed + priority order
+                    accessRestrictions: props.accessRestrictions || field.accessRestrictions || { enabled: false },
+                    usePriority: props.accessRestrictions?.usePriority || field.accessRestrictions?.usePriority || false,
+                    priorityList: props.accessRestrictions?.priorityList || field.accessRestrictions?.priorityList || [],
+                    // Per-grade sharing overrides
+                    gradeShareRules: props.gradeShareRules || field.gradeShareRules || {},
                     claims: []
                 };
             });
@@ -1168,16 +1245,71 @@
             });
             if (!timeOk) return false;
 
+            // ★ GRADE ACCESS RESTRICTION (accessRestrictions)
+            if (ledger.accessRestrictions?.enabled) {
+                const divRules = ledger.accessRestrictions.divisions || {};
+                if (!(grade in divRules)) return false;
+            }
+
             // Capacity
             const overlapping = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
             if (overlapping.length >= ledger.capacity) return false;
 
-            // Sharing rules
-            if (ledger.shareType === 'not_sharable' && overlapping.length > 0) return false;
-            if (ledger.shareType === 'same_division') {
+            // ★ PRIORITY ENFORCEMENT: if field uses priority order and this grade has lower
+            // priority than a grade that is already at capacity, or if a higher-priority grade
+            // that hasn't yet been assigned would be blocked by this claim, defer.
+            if (ledger.usePriority && ledger.priorityList.length > 0 && overlapping.length > 0) {
+                const myRank = ledger.priorityList.indexOf(grade);
+                if (myRank > 0) {
+                    // If all remaining capacity would be consumed by this claim and a higher-
+                    // priority grade is among the current claimants, allow it (they co-use).
+                    // But if a LOWER-priority grade has claimed a slot that a higher-priority
+                    // grade should have had, that means we processed in wrong order — the
+                    // grade sort at the top prevents this for single-cap fields.
+                    // For shared fields: reject if every current claimant outranks this grade
+                    // and we're at the last slot — protects the slot for equally-ranked peers.
+                    const remainingSlots = ledger.capacity - overlapping.length;
+                    if (remainingSlots === 1) {
+                        const higherRankClaimants = overlapping.filter(c => {
+                            const r = ledger.priorityList.indexOf(c.grade);
+                            return r >= 0 && r < myRank;
+                        });
+                        // If higher-priority grades have already claimed AND there are other
+                        // priority-eligible grades that haven't claimed yet, hold the slot.
+                        const unclaimedHigherPriorityGrades = ledger.priorityList.slice(0, myRank).filter(g =>
+                            !overlapping.some(c => c.grade === g)
+                        );
+                        if (higherRankClaimants.length > 0 && unclaimedHigherPriorityGrades.length === 0) {
+                            // All higher-priority grades have been served; lower grade may proceed.
+                        } else if (unclaimedHigherPriorityGrades.length > 0) {
+                            // Hold last slot for unclaimed higher-priority grades.
+                            log('[PRIORITY] ' + grade + ' deferred from ' + fieldName + ' — holding slot for ' + unclaimedHigherPriorityGrades.join(', '));
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            // ★ PER-GRADE SHARING OVERRIDE: if this grade has a custom rule, apply it
+            // instead of the global shareType / capacity for this grade's claims.
+            const gradeOverride = ledger.gradeShareRules?.[grade];
+            const effectiveShareType = gradeOverride ? (gradeOverride.type || 'not_sharable') : ledger.shareType;
+            const effectiveCapacity = gradeOverride
+                ? (parseInt(gradeOverride.capacity) || (gradeOverride.type === 'not_sharable' ? 1 : 2))
+                : ledger.capacity;
+
+            // Re-check capacity with the effective (possibly overridden) capacity
+            if (overlapping.length >= effectiveCapacity) return false;
+
+            // Sharing rules (using effective values)
+            if (effectiveShareType === 'not_sharable' && overlapping.length > 0) return false;
+            if (effectiveShareType === 'same_division') {
                 if (overlapping.some(c => c.grade !== grade)) return false;
             }
-            if (ledger.shareType === 'custom') {
+            if (effectiveShareType === 'custom' || (effectiveShareType !== 'not_sharable' && effectiveShareType !== 'same_division' && effectiveShareType !== 'cross_division')) {
+                // fall through to original custom logic
+            }
+            if (ledger.shareType === 'custom' && !gradeOverride) {
                 const allowedDivs = ledger.allowedDivisions || [];
                 if (allowedDivs.length > 0) {
                     if (overlapping.some(c => c.grade !== grade && !allowedDivs.includes(c.grade))) return false;
@@ -1212,6 +1344,76 @@
             // Sport restriction check — field may have certain sports disabled for the day
             if (activity && ledger.disabledSports && ledger.disabledSports.length > 0) {
                 if (ledger.disabledSports.includes(activity)) return false;
+            }
+
+            // ★ SPORT MAX PLAYER COUNT CHECK (uses cached globals — never call getBunkMetaData() here)
+            if (activity) {
+                const _bm = window.bunkMetaData || {};
+                const _sm = window.sportMetaData?.[activity];
+                if (_sm?.maxPlayers) {
+                    const _overlap = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
+                    let _total = _bm[bunk]?.size || 0;
+                    for (const c of _overlap) _total += _bm[c.bunk]?.size || 0;
+                    if (_total > _sm.maxPlayers) return false;
+                }
+            }
+
+            // ★ COMBINED FIELD ENFORCEMENT
+            // Rule: combined field (A+B) in use → neither A nor B can be used.
+            //       sub-field A in use → combined field (A+B) cannot be used.
+            //       sub-field A in use → sub-field B can still be used independently.
+            let comboLookup = window.getFieldComboLookup?.();
+            // Fallback: build lookup from global settings if API unavailable
+            if (!comboLookup || Object.keys(comboLookup.combinedToSubs || {}).length === 0) {
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _fc = _gs.app1?.fieldCombos || _gs.fieldCombos || {};
+                const _entries = Object.values(_fc);
+                if (_entries.length > 0) {
+                    comboLookup = { combinedToSubs: {}, subToCombined: {} };
+                    for (const combo of _entries) {
+                        if (!combo.combinedField || !Array.isArray(combo.subFields)) continue;
+                        const cN = combo.combinedField.toLowerCase().trim();
+                        comboLookup.combinedToSubs[cN] = combo.subFields.slice();
+                        for (const sub of combo.subFields) {
+                            comboLookup.subToCombined[sub.toLowerCase().trim()] = combo.combinedField;
+                        }
+                    }
+                }
+            }
+            if (comboLookup) {
+                const normFn = (n) => (n || '').toLowerCase().trim();
+                const normField = normFn(fieldName);
+
+                // Case 1: requesting the combined field — block if any sub-field is in use
+                const subs = comboLookup.combinedToSubs[normField];
+                if (subs) {
+                    for (const subField of subs) {
+                        // find the ledger by normalised name
+                        const subLedger = fieldLedger[subField] ||
+                            fieldLedger[Object.keys(fieldLedger).find(k => normFn(k) === normFn(subField)) || ''];
+                        if (subLedger) {
+                            const subOverlap = subLedger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
+                            if (subOverlap.length > 0) {
+                                log('[COMBO] ' + fieldName + ' blocked — sub-field ' + subField + ' is in use');
+                                return false;
+                            }
+                        }
+                    }
+                }
+
+                // Case 2: requesting a sub-field — block if the combined field is in use
+                const combinedField = comboLookup.subToCombined[normField];
+                if (combinedField) {
+                    const comboLedgerKey = Object.keys(fieldLedger).find(k => normFn(k) === normFn(combinedField));
+                    const comboLedger = comboLedgerKey ? fieldLedger[comboLedgerKey] : null;
+                    if (comboLedger) {
+                        const comboOverlap = comboLedger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
+                        if (comboOverlap.length > 0) {
+                            log('[COMBO] ' + fieldName + ' blocked — combined field ' + combinedField + ' is in use');
+                            return false;
+                        }
+                    }
+                }
             }
 
             return true;
@@ -2444,6 +2646,9 @@
                 const maxUsage = parseInt(props.maxUsage) || 0;
                 const maxUsagePeriod = props.maxUsagePeriod || 'half';
                 if (maxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= maxUsage) return;
+                // Per-grade cap overrides the global cap for this grade
+                const gradeMaxUsage = parseInt((props.maxUsagePerGrade || {})[grade]) || 0;
+                if (gradeMaxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= gradeMaxUsage) return;
                 // Rotation cohort: every bunk in the cohort must visit this
                 // special the same number of times before any bunk visits it
                 // again. Skip this special for `bunk` if its lifetime count
@@ -2495,15 +2700,50 @@
                     }
                 }
 
+                // Cooldown: frequencyDays = minimum days between visits for this bunk.
+                // Informs users this is to force breaks — the schedule cycles on its own.
+                {
+                    const _cdDays = parseInt(props.frequencyDays) || 0;
+                    if (_cdDays > 0) {
+                        const _cdKeys = Object.keys(allDailyData).sort();
+                        for (let _cdk = _cdKeys.length - 1; _cdk >= 0; _cdk--) {
+                            if (_cdKeys[_cdk] >= currentDate) continue;
+                            const _cdSlots = allDailyData[_cdKeys[_cdk]]?.scheduleAssignments?.[String(bunk)];
+                            if (Array.isArray(_cdSlots) && _cdSlots.some(function(e) {
+                                return e && !e.continuation && (e._activity === s.name || e.field === s.name);
+                            })) {
+                                const _cdDiff = Math.floor((new Date(currentDate) - new Date(_cdKeys[_cdk])) / 86400000);
+                                if (_cdDiff < _cdDays) {
+                                    log('[cooldown] skip ' + s.name + ' for ' + bunk + ' (' + _cdDiff + 'd since last, need ' + _cdDays + 'd)');
+                                    return;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 const specificDuration = getSpecialDuration(s.name, activityProperties, globalSettings);
                 const cfg = getSpecialConfig(s.name, globalSettings);
                 const location = getLocationForSpecial(s.name, activityProperties, globalSettings);
                 const scarce = isScarce(s.name, dayName, globalSettings);
-                const timeWindow = getSpecialTimeWindow(cfg);
+                const timeWindow = getSpecialTimeWindowForGrade(cfg, grade);
                 const prepDuration = cfg?.prepDuration || 0;
                 const prepCfgEntry = cfg?.prepConfig || null;
                 const prepAttached = !prepCfgEntry || prepCfgEntry.timing !== 'flexible';
                 const effectivePrepDur = prepAttached ? prepDuration : 0;
+
+                // Min frequency floor: if this bunk is below the required minimum
+                // visits, heavily boost priority so the scheduler fills the gap first.
+                // Per-grade override takes precedence over the global minimum.
+                {
+                    const _mfMin = parseInt((props.minFrequencyPerGrade || {})[grade]) || parseInt(props.minFrequency) || parseInt(cfg?.minFrequency) || 0;
+                    if (_mfMin > 0) {
+                        const _mfPeriod = props.minFrequencyPeriod || cfg?.minFrequencyPeriod || 'week';
+                        const _mfCount = getPeriodCount(bunk, s.name, _mfPeriod);
+                        if (_mfCount < _mfMin) score -= 100000 * (_mfMin - _mfCount);
+                    }
+                }
 
                 specialPriorityList.push({
                     name: s.name, type: 'special', rotationScore: score,
@@ -2645,8 +2885,8 @@
                 globalSpecialUsage[specialName].push({ grade: grade, startMin: startMin, endMin: endMin });
             }
 
-            function isFieldStillAvailableGP(fieldName, startMin, endMin, bunk, grade) {
-                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade)) return false;
+            function isFieldStillAvailableGP(fieldName, startMin, endMin, bunk, grade, activity) {
+                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade, activity)) return false;
                 var ledger = fieldLedger[fieldName];
                 if (!ledger) return false;
                 var plannerOverlap = globalFieldClaims.filter(function(c) {
@@ -2659,8 +2899,9 @@
             }
 
             function claimFieldGlobal(fieldName, startMin, endMin, bunk, grade, activity) {
-                claimField(fieldName, startMin, endMin, bunk, grade, activity);
+                if (!claimField(fieldName, startMin, endMin, bunk, grade, activity)) return false;
                 globalFieldClaims.push({ field: fieldName, startMin: startMin, endMin: endMin, bunk: bunk, grade: grade, activity: activity });
+                return true;
             }
 
             function getUpdatedFreeWindowsForBunk(bunk, sl, result) {
@@ -2685,7 +2926,7 @@
             }
 
             // Find time within a specific range (for stagger band preference)
-            function findTimeInRange(fieldName, bunk, grade, dur, freeWindows, rangeStart, rangeEnd, specialName) {
+            function findTimeInRange(fieldName, bunk, grade, dur, freeWindows, rangeStart, rangeEnd, specialName, activity) {
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
                     if (!win || win.start == null) continue;
@@ -2693,7 +2934,7 @@
                     var effEnd = Math.min(win.end, rangeEnd);
                     if (effEnd - effStart < dur) continue;
                     for (var t = effStart; t + dur <= effEnd; t += 5) {
-                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade)) continue;
+                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
                         return { startMin: t, endMin: t + dur };
                     }
@@ -2702,13 +2943,13 @@
             }
 
             // Find time anywhere in free windows
-            function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName) {
+            function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName, activity) {
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
                     if (!win || win.start == null) continue;
                     if (win.duration < dur) continue;
                     for (var t = win.start; t + dur <= win.end; t += 5) {
-                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade)) continue;
+                        if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
                         return { startMin: t, endMin: t + dur };
                     }
@@ -2716,12 +2957,12 @@
                 return null;
             }
 
-            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows) {
+            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows, activity) {
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
                     if (win.duration < duration) continue;
                     for (var t = win.start; t + duration <= win.end; t += 5) {
-                        if (isFieldStillAvailableGP(fieldName, t, t + duration, bunk, grade))
+                        if (isFieldStillAvailableGP(fieldName, t, t + duration, bunk, grade, activity))
                             return { startMin: t, endMin: t + duration };
                     }
                 }
@@ -2978,8 +3219,8 @@
                         var assigned = false;
                         var fields = sport.fields || [];
                         for (var fli = 0; fli < fields.length; fli++) {
-                            if (!isFieldStillAvailableGP(fields[fli], slotStart, slotEnd, bunk, grade)) continue;
-                            claimFieldGlobal(fields[fli], slotStart, slotEnd, bunk, grade, sport.name);
+                            if (!isFieldStillAvailableGP(fields[fli], slotStart, slotEnd, bunk, grade, sport.name)) continue;
+                            if (!claimFieldGlobal(fields[fli], slotStart, slotEnd, bunk, grade, sport.name)) continue;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
                                 dMin: sport.dMin, dMax: sport.dMax, dIdeal: sport.dIdeal,
@@ -3015,9 +3256,9 @@
                     var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     var fields = sport.fields || [];
                     for (var j = 0; j < fields.length; j++) {
-                        var time = findTimeForFieldGP(fields[j], bunk, grade, sport.dIdeal, fw);
+                        var time = findTimeForFieldGP(fields[j], bunk, grade, sport.dIdeal, fw, sport.name);
                         if (time) {
-                            claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name);
+                            if (!claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
                                 dMin: sport.dMin, dMax: sport.dMax, dIdeal: sport.dIdeal,
@@ -3194,7 +3435,7 @@
                     for (const field of sport.fields) {
                         const time = findTimeForField(field, bunk, grade, sport.dIdeal, fw);
                         if (time) {
-                            claimField(field, time.startMin, time.endMin, bunk, grade, sport.name);
+                            if (!claimField(field, time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                             result.usedActivities.add(sport.name);
                             claimed = true;
@@ -3279,8 +3520,8 @@
             let _gpCurrentGrade = '';
             const plannerFieldClaims = [];
 
-            function isFieldStillAvailable(fieldName, startMin, endMin, bunk) {
-                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, _gpCurrentGrade)) return false;
+            function isFieldStillAvailable(fieldName, startMin, endMin, bunk, activity) {
+                if (!isFieldAvailable(fieldName, startMin, endMin, bunk, _gpCurrentGrade, activity)) return false;
                 const ledger = fieldLedger[fieldName];
                 if (!ledger) return false;
                 const plannerOverlap = plannerFieldClaims.filter(c =>
@@ -3294,8 +3535,9 @@
             }
 
             function claimFieldForPlanner(fieldName, startMin, endMin, bunk, activity) {
-                claimField(fieldName, startMin, endMin, bunk, _gpCurrentGrade, activity);
+                if (!claimField(fieldName, startMin, endMin, bunk, _gpCurrentGrade, activity)) return false;
                 plannerFieldClaims.push({ field: fieldName, startMin, endMin, bunk, grade: _gpCurrentGrade, activity });
+                return true;
             }
 
             // ─── PRE-PASS: Assign 1 special to every bunk across all grades ──
@@ -3824,9 +4066,9 @@
                             if (result.usedActivities.has(sport.name)) continue;
                             const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             for (const field of (sport.fields || [])) {
-                                const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw);
+                                const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw, sport.name);
                                 if (time) {
-                                    claimFieldForPlanner(field, time.startMin, time.endMin, bunk, sport.name);
+                                    if (!claimFieldForPlanner(field, time.startMin, time.endMin, bunk, sport.name)) continue;
                                     result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                                     result.usedActivities.add(sport.name);
                                     break;
@@ -3895,9 +4137,9 @@
                         for (const fs of fieldSlots) {
                             if (fs.remaining <= 0) continue;
                             if (!fs.activities.includes(sport.name)) continue;
-                            if (!isFieldStillAvailable(fs.name, win.start, win.end, bunk)) continue;
+                            if (!isFieldStillAvailable(fs.name, win.start, win.end, bunk, sport.name)) continue;
 
-                            claimFieldForPlanner(fs.name, win.start, win.end, bunk, sport.name);
+                            if (!claimFieldForPlanner(fs.name, win.start, win.end, bunk, sport.name)) continue;
                             fs.remaining--;
 
                             const claimedTime = { startMin: win.start, endMin: win.end };
@@ -3976,9 +4218,9 @@
                     if (result.usedActivities.has(sport.name)) continue;
                     const fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     for (const field of (sport.fields || [])) {
-                        const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw);
+                        const time = findTimeForFieldGP(field, bunk, grade, sport.dIdeal, fw, sport.name);
                         if (time) {
-                            claimField(field, time.startMin, time.endMin, bunk, grade, sport.name);
+                            if (!claimField(field, time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                             result.usedActivities.add(sport.name);
                             break;
@@ -4020,12 +4262,12 @@
             }
 
             // ─── Helper: Find time in a field's free windows ─────────
-            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows) {
+            function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows, activity) {
                 for (const win of freeWindows) {
                     if (!win || win.start == null) continue;
                     if (win.duration < duration) continue;
                     for (let t = win.start; t + duration <= win.end; t += 5) {
-                        if (isFieldAvailable(fieldName, t, t + duration, bunk, grade))
+                        if (isFieldAvailable(fieldName, t, t + duration, bunk, grade, activity))
                             return { startMin: t, endMin: t + duration };
                     }
                 }
@@ -6103,7 +6345,7 @@
                             if (shareable.length >= 2) {
                                 // Assign ALL shareable bunks to this field at the same time
                                 for (var sh = 0; sh < shareable.length; sh++) {
-                                    claimField(fieldName, startMin, endMin, shareable[sh].bunk, gradeKey, sport.name);
+                                    if (!claimField(fieldName, startMin, endMin, shareable[sh].bunk, gradeKey, sport.name)) continue;
                                     usedSports[shareable[sh].bunk].add(sport.name);
                                     var shMeta = bunkMeta[shareable[sh].bunk];
                                     var shBlk = makeBlock({
@@ -6356,8 +6598,8 @@
                         }
 
                         if (result) {
-                            claimField(result.field, cursor, blockEnd, sBunk, sMeta.grade, result.name);
-                            usedSports[sBunk].add(result.name);
+                            if (!claimField(result.field, cursor, blockEnd, sBunk, sMeta.grade, result.name)) result = null;
+                            else usedSports[sBunk].add(result.name);
                         }
                         var blk = makeBlock({
                             startMin: cursor, endMin: blockEnd,
@@ -6406,8 +6648,8 @@
                         });
                         var rResult = findBestSport(fBunk, fMeta.grade, rgap.start, rgap.end, fMeta, usedSports[fBunk], _rAdjSports);
                         if (rResult) {
-                            claimField(rResult.field, rgap.start, rgap.end, fBunk, fMeta.grade, rResult.name);
-                            usedSports[fBunk].add(rResult.name);
+                            if (!claimField(rResult.field, rgap.start, rgap.end, fBunk, fMeta.grade, rResult.name)) rResult = null;
+                            else usedSports[fBunk].add(rResult.name);
                         }
                         addSportBlocks(tmpl, rgap.start, rgap.end, {
                             type: rResult ? 'sport' : 'slot',

@@ -34,7 +34,7 @@
     let detailPaneEl = null;
     let _isInitialized = false;
     let _refreshTimeout = null;
-    let _saveInProgress = false;  // ★ Prevent refresh during save
+    let _saveInProgress = 0;  // ★ Counter: >0 means save in flight (prevents refresh)
     let _lastSaveTime = 0;        // ★ Track when last save happened
 
     // ★ FIX: Track active event listeners for cleanup (with target info)
@@ -197,19 +197,12 @@
         return div.innerHTML;
     }
 
-    function getPlaceSuffix(n) {
-        const s = ['th', 'st', 'nd', 'rd'];
-        const v = n % 100;
-        return s[(v - 20) % 10] || s[v] || s[0];
-    }
-
     /**
      * Get valid division names for orphan detection
      */
     function getValidDivisionNames() {
         try {
-            const settings = window.loadGlobalSettings?.() || {};
-            const divisions = settings.divisions || {};
+            const divisions = window.divisions || window.getGlobalDivisions?.() || {};
             return new Set(Object.keys(divisions));
         } catch (e) {
             return null;
@@ -287,8 +280,7 @@
         // ★ v2.6: Validate teams against actual bunks in assigned divisions
         if (validDivisions && validDivisions.size > 0 && validated.divisions.length > 0) {
             try {
-                const settings = window.loadGlobalSettings?.() || {};
-                const allDivisions = settings.divisions || settings.app1?.divisions || {};
+                const allDivisions = window.divisions || window.getGlobalDivisions?.() || {};
                 const validBunks = new Set();
                 
                 validated.divisions.forEach(divName => {
@@ -367,36 +359,42 @@
 
         try {
             // ★ Set flag to prevent race condition with refresh
-            _saveInProgress = true;
+            _saveInProgress++;
             _lastSaveTime = Date.now();
             
             // ★ FIX: Also update localStorage immediately (not just queue for cloud)
             // This prevents the race condition where load reads stale localStorage
+            // Strip transient computed fields before persisting
+            var cleanData = JSON.parse(JSON.stringify(leaguesByName));
+            for (var _lk in cleanData) {
+                if (cleanData[_lk] && cleanData[_lk]._h2h) delete cleanData[_lk]._h2h;
+            }
+
             try {
                 const lsKey = 'campistryGlobalSettings';
                 const lsRaw = localStorage.getItem(lsKey);
                 const lsData = lsRaw ? JSON.parse(lsRaw) : {};
-                lsData.leaguesByName = leaguesByName;
+                lsData.leaguesByName = cleanData;
                 lsData.updated_at = new Date().toISOString();
                 localStorage.setItem(lsKey, JSON.stringify(lsData));
                 console.log("[LEAGUES] Data written to localStorage immediately");
             } catch (lsErr) {
                 console.warn("[LEAGUES] localStorage write failed:", lsErr);
             }
-            
+
             // ★ Save via saveGlobalSettings (handles batching + cloud sync)
-            window.saveGlobalSettings?.('leaguesByName', leaguesByName);
+            window.saveGlobalSettings?.('leaguesByName', cleanData);
             
             console.log("[LEAGUES] Data saved to cloud");
             
             // ★ Clear flag after protection window to prevent stale refresh
             // Must match the 5-second window in refreshFromStorage
             setTimeout(() => {
-                _saveInProgress = false;
+                _saveInProgress = Math.max(0, _saveInProgress - 1);
             }, 5500);
         } catch (e) {
             console.error("[LEAGUES] Save failed:", e);
-            _saveInProgress = false;
+            _saveInProgress = Math.max(0, _saveInProgress - 1);
         }
     }
 
@@ -614,39 +612,6 @@
     }
 
     // =========================================================================
-    // TIME HELPERS
-    // =========================================================================
-    function parseTimeToMinutes(str) {
-        if (!str || typeof str !== "string") return null;
-        let s = str.trim().toLowerCase();
-        let mer = null;
-        if (s.endsWith("am") || s.endsWith("pm")) {
-            mer = s.endsWith("am") ? "am" : "pm";
-            s = s.replace(/am|pm/g, "").trim();
-        }
-        const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-        if (!m) return null;
-        let hh = parseInt(m[1], 10);
-        const mm = parseInt(m[2], 10);
-        if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-        if (mer) {
-            if (hh === 12) hh = (mer === "am") ? 0 : 12;
-            else if (mer === "pm") hh += 12;
-        }
-        return hh * 60 + mm;
-    }
-
-    function minutesToTimeStr(m) {
-        if (m == null || isNaN(m)) return "";
-        let hh = Math.floor(m / 60) % 24;
-        const mm = m % 60;
-        const mer = hh >= 12 ? "pm" : "am";
-        if (hh === 0) hh = 12;
-        else if (hh > 12) hh -= 12;
-        return hh + ":" + String(mm).padStart(2, '0') + mer;
-    }
-
-    // =========================================================================
     // INIT - ★ WITH CLOUD SUBSCRIPTION AND TAB VISIBILITY HANDLING
     // =========================================================================
     window.initLeagues = function () {
@@ -725,7 +690,7 @@
             const name = addInput?.value?.trim();
             if (!name) return;
             if (leaguesByName[name]) {
-                alert('League "' + escapeHtml(name) + '" already exists.');
+                alert('League "' + name + '" already exists.');
                 return;
             }
             leaguesByName[name] = {
@@ -848,7 +813,7 @@
                 renderMasterList();
                 renderDetailPane();
             } else if (leaguesByName[newName]) {
-                alert('League "' + escapeHtml(newName) + '" already exists.');
+                alert('League "' + newName + '" already exists.');
             }
         });
 
@@ -877,7 +842,7 @@
                 return;
             }
 
-            if (confirm("Delete league \"" + escapeHtml(selectedLeagueName) + "\"?")) {
+            if (confirm("Delete league \"" + selectedLeagueName + "\"?")) {
                 delete leaguesByName[selectedLeagueName];
                 selectedLeagueName = null;
                 saveLeaguesData();
@@ -1125,149 +1090,112 @@
       teamCard.appendChild(teamInput);
         container.appendChild(teamCard);
 
-        // ═══════════════════════════════════════════════════════════════
-        // ADVANCED SETTINGS (Collapsible)
-        // ═══════════════════════════════════════════════════════════════
-        const advancedWrap = document.createElement('div');
-        advancedWrap.style.cssText = 'margin-top:4px;';
-        const advancedToggle = document.createElement('div');
-        advancedToggle.style.cssText = 'display:flex; align-items:center; gap:6px; padding:10px 0; cursor:pointer; user-select:none;';
-        const advancedCaret = document.createElement('span');
-        advancedCaret.textContent = '\u25B6';
-        advancedCaret.style.cssText = 'font-size:0.65rem; color:#9CA3AF; transition:transform 0.2s;';
-        const advancedLabel = document.createElement('span');
-        advancedLabel.style.cssText = 'font-size:0.8rem; color:#9CA3AF; font-weight:500; letter-spacing:0.02em;';
-        advancedLabel.textContent = 'Advanced Settings';
-        advancedToggle.appendChild(advancedCaret);
-        advancedToggle.appendChild(advancedLabel);
-        const advancedBody = document.createElement('div');
-        advancedBody.style.cssText = 'display:none; padding-top:4px;';
-        const advancedShouldOpen = league.offCampus?.enabled === true;
-        advancedToggle.onclick = function () {
-            const isOpen = advancedBody.style.display !== 'none';
-            advancedBody.style.display = isOpen ? 'none' : 'block';
-            advancedCaret.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
-            advancedLabel.style.color = isOpen ? '#9CA3AF' : '#475569';
-        };
-        if (advancedShouldOpen) {
-            advancedBody.style.display = 'block';
-            advancedCaret.style.transform = 'rotate(90deg)';
-            advancedLabel.style.color = '#475569';
-        }
-
-        const offCampusCard = document.createElement('div');
-        offCampusCard.className = 'league-section-card';
-        offCampusCard.innerHTML = '<div class="league-section-header"><span class="league-section-title">Off-Campus Double-Header</span><span>Back-to-back away games</span></div>';
+        // \u2500\u2500\u2500 Away Games Card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         if (!league.offCampus) league.offCampus = { enabled: false, zone: '', teamsPerDay: 0 };
+        const settings = window.loadGlobalSettings?.() || {};
+        const locationZones = settings.locationZones || settings.global?.locationZones || {};
+        const totalTeams = (league.teams || []).length;
 
-        const ocToggleWrap = document.createElement('div');
-        ocToggleWrap.style.cssText = 'display:flex; align-items:center; gap:12px; margin-bottom:12px;';
-        const ocToggle = document.createElement('label');
-        ocToggle.style.cssText = 'display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem;';
-        const ocCb = document.createElement('input');
-        ocCb.type = 'checkbox';
-        ocCb.checked = league.offCampus.enabled === true;
-        ocCb.onchange = function () { league.offCampus.enabled = ocCb.checked; saveLeaguesData(); renderConfigSections(league, container); };
-        ocToggle.appendChild(ocCb);
-        ocToggle.appendChild(document.createTextNode('Enable off-campus double-headers'));
-        ocToggleWrap.appendChild(ocToggle);
-        offCampusCard.appendChild(ocToggleWrap);
+        const awayCard = document.createElement('div');
+        awayCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        // Header bar \u2014 toggle lives here
+        const awayHeader = document.createElement('label');
+        awayHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.offCampus.enabled ? '#EFF6FF' : '#F9FAFB') + '; border-bottom:' + (league.offCampus.enabled ? '1px solid #BFDBFE' : 'none') + ';';
+        const awayCb = document.createElement('input');
+        awayCb.type = 'checkbox';
+        awayCb.checked = league.offCampus.enabled === true;
+        awayCb.style.cssText = 'width:16px; height:16px; accent-color:#2563EB;';
+        awayCb.onchange = function () { league.offCampus.enabled = awayCb.checked; saveLeaguesData(); renderConfigSections(league, container); };
+        awayHeader.appendChild(awayCb);
+        const awayTitle = document.createElement('div');
+        awayTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Away Games</div><div style="font-size:0.75rem; color:#64748B;">Some teams travel off-campus for back-to-back games</div>';
+        awayHeader.appendChild(awayTitle);
+        awayCard.appendChild(awayHeader);
 
         if (league.offCampus.enabled) {
-            const zoneWrap = document.createElement('div');
-            zoneWrap.style.cssText = 'margin-bottom:12px;';
-            const zoneLabel = document.createElement('div');
-            zoneLabel.style.cssText = 'font-size:0.8rem; color:#6B7280; margin-bottom:4px;';
-            zoneLabel.textContent = 'Off-Campus Zone:';
-            zoneWrap.appendChild(zoneLabel);
+            const awayBody = document.createElement('div');
+            awayBody.style.cssText = 'padding:14px;';
+
+            // Inline sentence: "[X] teams go to [Zone \u25BC] each game day"
+            const sentenceRow = document.createElement('div');
+            sentenceRow.style.cssText = 'display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:0.85rem; color:#374151; margin-bottom:14px;';
+
+            const teamsInput = document.createElement('input');
+            teamsInput.type = 'number'; teamsInput.min = '2'; teamsInput.max = String(totalTeams);
+            teamsInput.step = '2'; teamsInput.value = league.offCampus.teamsPerDay || '';
+            teamsInput.placeholder = '#';
+            teamsInput.style.cssText = 'width:52px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; text-align:center; background:white;';
+            teamsInput.onchange = function () {
+                var val = parseInt(teamsInput.value) || 0;
+                if (val % 2 !== 0 && val > 0) val = val + 1;
+                if (val >= totalTeams) val = totalTeams - (totalTeams % 2 === 0 ? 2 : 1);
+                teamsInput.value = val || '';
+                league.offCampus.teamsPerDay = val; saveLeaguesData(); renderConfigSections(league, container);
+            };
+
             const zoneSelect = document.createElement('select');
-            zoneSelect.style.cssText = 'width:100%; padding:8px 12px; border:1px solid #E5E7EB; border-radius:8px; font-size:0.85rem; background:white;';
-            const settings = window.loadGlobalSettings?.() || {};
-            const locationZones = settings.locationZones || settings.global?.locationZones || {};
-            zoneSelect.innerHTML = '<option value="">-- Select Zone --</option>';
+            zoneSelect.style.cssText = 'padding:5px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:white; max-width:180px;';
+            zoneSelect.innerHTML = '<option value="">choose location...</option>';
             Object.keys(locationZones).forEach(function (zoneName) {
                 const zone = locationZones[zoneName];
                 if (zone.isDefault) return;
                 const opt = document.createElement('option');
                 opt.value = zoneName;
-                opt.textContent = zoneName + ' (' + (zone.fields?.length || 0) + ' fields)';
+                opt.textContent = zoneName;
                 if (league.offCampus.zone === zoneName) opt.selected = true;
                 zoneSelect.appendChild(opt);
             });
             zoneSelect.onchange = function () { league.offCampus.zone = zoneSelect.value; saveLeaguesData(); renderConfigSections(league, container); };
-            zoneWrap.appendChild(zoneSelect);
-            offCampusCard.appendChild(zoneWrap);
 
-            const teamsWrap = document.createElement('div');
-            teamsWrap.style.cssText = 'margin-bottom:12px;';
-            const teamsLabel = document.createElement('div');
-            teamsLabel.style.cssText = 'font-size:0.8rem; color:#6B7280; margin-bottom:4px;';
-            teamsLabel.textContent = 'Teams going off-campus per day:';
-            teamsWrap.appendChild(teamsLabel);
-            const teamsInput = document.createElement('input');
-            teamsInput.type = 'number'; teamsInput.min = '2'; teamsInput.max = String(league.teams?.length || 20);
-            teamsInput.step = '2'; teamsInput.value = league.offCampus.teamsPerDay || '';
-            teamsInput.placeholder = 'e.g., 4 (must be even)';
-            teamsInput.style.cssText = 'width:100%; padding:8px 12px; border:1px solid #E5E7EB; border-radius:8px; font-size:0.85rem; background:white;';
-            teamsInput.onchange = function () {
-                var val = parseInt(teamsInput.value) || 0;
-                if (val % 2 !== 0 && val > 0) { val = val + 1; teamsInput.value = val; }
-                league.offCampus.teamsPerDay = val; saveLeaguesData(); renderConfigSections(league, container);
-            };
-            teamsWrap.appendChild(teamsInput);
-            offCampusCard.appendChild(teamsWrap);
+            sentenceRow.appendChild(teamsInput);
+            sentenceRow.appendChild(document.createTextNode(' teams travel to '));
+            sentenceRow.appendChild(zoneSelect);
+            sentenceRow.appendChild(document.createTextNode(' each game day'));
+            awayBody.appendChild(sentenceRow);
 
-            if (league.offCampus.teamsPerDay > 0 && league.offCampus.zone) {
-                var numTeamsAway = league.offCampus.teamsPerDay;
-                var totalTeams = (league.teams || []).length;
-                var numTeamsHome = totalTeams - numTeamsAway;
-                var infoDiv = document.createElement('div');
-                infoDiv.style.cssText = 'background:#F0FDF4; border:1px solid #BBF7D0; border-radius:8px; padding:10px 12px; font-size:0.8rem; color:#166534; margin-bottom:12px;';
-                infoDiv.innerHTML = '<strong>' + numTeamsAway + ' teams</strong> (' + Math.floor(numTeamsAway/2) + ' matchups) go to <strong>' + escapeHtml(league.offCampus.zone) + '</strong> each game day<br><span style="color:#6B7280;">\u2192 ' + numTeamsHome + ' teams (' + Math.floor(numTeamsHome/2) + ' matchups) stay on campus</span><br><span style="color:#6B7280;">\u2192 Teams stay at the same location for both games, switching opponents for Game 2</span>';
-                var zoneFieldNames = locationZones[league.offCampus.zone]?.fields || [];
-                var globalFields = settings.fields || settings.app1?.fields || [];
-                var zoneSports = new Set();
-                zoneFieldNames.forEach(function(fn) { var fc = globalFields.find(function(f){return f.name===fn;}); if (fc && fc.activities) fc.activities.forEach(function(s){zoneSports.add(s);}); });
-                if (zoneSports.size > 0) infoDiv.innerHTML += '<br><span style="color:#6B7280; font-style:italic;">Sports at ' + escapeHtml(league.offCampus.zone) + ': ' + Array.from(zoneSports).join(', ') + '</span>';
-                offCampusCard.appendChild(infoDiv);
-                if (numTeamsAway >= totalTeams) {
-                    var warnDiv = document.createElement('div');
-                    warnDiv.style.cssText = 'background:#FEF2F2; border:1px solid #FECACA; border-radius:8px; padding:8px 12px; font-size:0.8rem; color:#991B1B; margin-bottom:12px;';
-                    warnDiv.textContent = 'Teams per day must be less than total teams (' + totalTeams + '). Some teams need to stay on campus.';
-                    offCampusCard.appendChild(warnDiv);
-                }
+            // Summary pill
+            var numAway = league.offCampus.teamsPerDay || 0;
+            var numHome = totalTeams - numAway;
+            if (numAway > 0 && league.offCampus.zone) {
+                var pill = document.createElement('div');
+                pill.style.cssText = 'display:flex; gap:8px; margin-bottom:14px;';
+                pill.innerHTML = '<div style="flex:1; background:#DBEAFE; border-radius:8px; padding:8px 10px; text-align:center; font-size:0.78rem; color:#1E40AF;"><strong>' + numAway + '</strong> away<br>' + Math.floor(numAway/2) + ' matchups</div>' +
+                    '<div style="flex:1; background:#F0FDF4; border-radius:8px; padding:8px 10px; text-align:center; font-size:0.78rem; color:#166534;"><strong>' + numHome + '</strong> home<br>' + Math.floor(numHome/2) + ' matchups</div>';
+                awayBody.appendChild(pill);
             }
 
-            var leagueHist = window.loadGlobalSettings?.()?.leagueHistory || {};
+            // Trip fairness chips
+            var leagueHist = settings.leagueHistory || {};
             var ocCounts = leagueHist.offCampusCounts || {};
-            var teamTrips = {}, hasHist = false;
-            (league.teams || []).forEach(function (team) { var c = ocCounts[league.name + '|' + team] || 0; teamTrips[team] = c; if (c > 0) hasHist = true; });
+            var teamTrips = [], hasHist = false;
+            (league.teams || []).forEach(function (team) {
+                var c = ocCounts[league.name + '|' + team] || 0;
+                teamTrips.push({ name: team, trips: c });
+                if (c > 0) hasHist = true;
+            });
             if (hasHist) {
-                var histDiv = document.createElement('div');
-                histDiv.style.cssText = 'margin-bottom:12px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 12px;';
-                var histTitle = document.createElement('div');
-                histTitle.style.cssText = 'font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:6px;';
-                histTitle.textContent = 'Off-Campus Trip Counts:';
-                histDiv.appendChild(histTitle);
-                var chipWrap = document.createElement('div');
-                chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px;';
-                Object.entries(teamTrips).sort(function(a,b){return a[1]-b[1];}).forEach(function(entry) {
+                teamTrips.sort(function(a,b){ return a.trips - b.trips; });
+                var tripsRow = document.createElement('div');
+                tripsRow.style.cssText = 'display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px;';
+                teamTrips.forEach(function(t) {
                     var chip = document.createElement('span');
-                    chip.style.cssText = 'display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; font-size:0.75rem; background:#E2E8F0; color:#334155;';
-                    chip.textContent = entry[0] + ': ' + entry[1]; chipWrap.appendChild(chip);
+                    var intensity = Math.min(t.trips * 15, 90);
+                    chip.style.cssText = 'padding:3px 8px; border-radius:20px; font-size:0.72rem; font-weight:500; background:hsl(215,' + intensity + '%,95%); color:hsl(215,60%,35%); border:1px solid hsl(215,' + intensity + '%,85%);';
+                    chip.textContent = t.name + ' ' + t.trips;
+                    tripsRow.appendChild(chip);
                 });
-                histDiv.appendChild(chipWrap); offCampusCard.appendChild(histDiv);
+                var tripsLabel = document.createElement('div');
+                tripsLabel.style.cssText = 'font-size:0.72rem; color:#94A3B8; margin-bottom:4px;';
+                tripsLabel.textContent = 'Away trips per team (fewest goes next):';
+                awayBody.appendChild(tripsLabel);
+                awayBody.appendChild(tripsRow);
             }
 
-            var note = document.createElement('p');
-            note.className = 'league-priority-note';
-            note.textContent = 'When 2 back-to-back league slots are linked as a double-header, teams with the fewest off-campus trips get priority. In Sport Variety mode, teams who recently played the off-campus sports are deprioritized.';
-            offCampusCard.appendChild(note);
+            awayCard.appendChild(awayBody);
         }
-        advancedBody.appendChild(offCampusCard);
-        advancedWrap.appendChild(advancedToggle);
-        advancedWrap.appendChild(advancedBody);
-        container.appendChild(advancedWrap);
+
+        container.appendChild(awayCard);
     }
 
     // =========================================================================
@@ -1564,12 +1492,11 @@
         const todaysGames = [];
         const pastGames = [];
         
-        games.forEach((g, idx) => {
-            const gameWithIdx = { ...g, _idx: idx };
+        games.forEach((g) => {
             if (g.date === currentDate) {
-                todaysGames.push(gameWithIdx);
+                todaysGames.push(g);
             } else {
-                pastGames.push(gameWithIdx);
+                pastGames.push(g);
             }
         });
         
@@ -1676,7 +1603,7 @@
         
         const gameTitle = document.createElement('div');
         gameTitle.className = 'league-card-title';
-        gameTitle.textContent = game.gameLabel || ('Game ' + (game._idx + 1));
+        gameTitle.textContent = game.gameLabel || ('Game ' + (league.games.indexOf(game) + 1));
         
         const headerRight = document.createElement('div');
         headerRight.style.cssText = 'display:flex; align-items:center; gap:12px;';
@@ -1693,10 +1620,12 @@
         deleteBtn.onclick = (e) => {
             e.stopPropagation();
             if (confirm('Delete this game? This action cannot be undone.')) {
-                league.games.splice(game._idx, 1);
+                const idx = league.games.indexOf(game);
+                if (idx >= 0) league.games.splice(idx, 1);
                 recalcStandings(league);
                 saveLeaguesData();
-                renderGameEntryUI(league, card.parentElement);
+                const gamesContainer = card.closest('[data-section="games"]') || card.parentElement;
+                renderGameEntryUI(league, gamesContainer);
             }
         };
         
@@ -1735,13 +1664,13 @@
             addMatchBtn.onclick = () => {
                 if (!game.matches) game.matches = [];
                 game.matches.push({ teamA: '', teamB: '', scoreA: null, scoreB: null });
-                league.games[game._idx] = game;
                 saveLeaguesData();
-                renderGameEntryUI(league, card.parentElement);
+                const gamesContainer = card.closest('[data-section="games"]') || card.parentElement;
+                renderGameEntryUI(league, gamesContainer);
             };
             
             const saveStatus = document.createElement('span');
-            saveStatus.id = 'save-status-' + game._idx;
+            saveStatus.id = 'save-status-' + league.games.indexOf(game);
             saveStatus.className = 'league-save-status';
             saveStatus.textContent = 'Saved';
             
@@ -1822,10 +1751,10 @@
             deleteBtn.className = 'league-match-delete';
             deleteBtn.onclick = () => {
                 game.matches.splice(matchIdx, 1);
-                league.games[game._idx] = game;
                 recalcStandings(league);
                 saveLeaguesData();
-                renderGameEntryUI(league, row.closest('[data-section="games"]'));
+                const gamesContainer = row.closest('[data-section="games"]');
+                if (gamesContainer) renderGameEntryUI(league, gamesContainer);
             };
             actionsDiv.appendChild(deleteBtn);
         }
@@ -1834,25 +1763,24 @@
         const handleScoreChange = () => {
             match.scoreA = scoreAInput.value !== '' ? parseInt(scoreAInput.value, 10) : null;
             match.scoreB = scoreBInput.value !== '' ? parseInt(scoreBInput.value, 10) : null;
-            league.games[game._idx].matches[matchIdx] = match;
-            
+
             recalcStandings(league);
             saveLeaguesData();
-            
+
             // Update styling
             const newHasScores = match.scoreA != null && match.scoreB != null;
             const newAWins = newHasScores && match.scoreA > match.scoreB;
             const newBWins = newHasScores && match.scoreB > match.scoreA;
             const newIsTie = newHasScores && match.scoreA === match.scoreB;
-            
+
             teamAName.className = 'league-match-team' + (newAWins ? ' winner' : '');
             teamBName.className = 'league-match-team' + (newBWins ? ' winner' : '');
-            
+
             scoreAInput.className = 'league-score-input' + (newAWins ? ' winner-bg' : (newIsTie ? ' tie-bg' : ''));
             scoreBInput.className = 'league-score-input' + (newBWins ? ' winner-bg' : (newIsTie ? ' tie-bg' : ''));
-            
+
             // Show save indicator
-            const saveStatus = document.getElementById('save-status-' + game._idx);
+            const saveStatus = document.getElementById('save-status-' + league.games.indexOf(game));
             if (saveStatus) {
                 saveStatus.classList.add('visible');
                 setTimeout(() => saveStatus.classList.remove('visible'), 1500);
@@ -1947,17 +1875,6 @@
         if (num1 && num2) {
             // Numbers must match exactly (prevents "1" matching "11")
             return num1.number === num2.number;
-        }
-        
-        // Check if one contains the other as a word boundary match
-        // e.g., "Junior Boys" contains "Junior Boys 1" - but we want exact for numbers
-        const s1 = String(div1).toLowerCase().trim();
-        const s2 = String(div2).toLowerCase().trim();
-        
-        // If neither has a number, check for substring with word boundaries
-        if (!num1 && !num2) {
-            // One must fully contain the other
-            return s1.includes(s2) || s2.includes(s1);
         }
         
         return false;
@@ -2165,8 +2082,17 @@
                 );
 
                 if (existingIdx >= 0) {
-                    // Update existing
-                    league.games[existingIdx] = newGame;
+                    // Merge: add new matchups but preserve existing scores
+                    const existing = league.games[existingIdx];
+                    newGame.matches.forEach(nm => {
+                        const found = (existing.matches || []).find(em =>
+                            em.teamA === nm.teamA && em.teamB === nm.teamB
+                        );
+                        if (!found) {
+                            if (!existing.matches) existing.matches = [];
+                            existing.matches.push(nm);
+                        }
+                    });
                 } else {
                     // Add new
                     league.games.push(newGame);
@@ -2225,6 +2151,7 @@
      */
     function recalcStandings(league) {
         if (!league || !league.teams) return;
+        if (!league.standings) league.standings = {};
 
         // Initialize standings for all teams
         league.teams.forEach(function (t) {

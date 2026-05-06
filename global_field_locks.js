@@ -81,10 +81,17 @@
     fieldName: fieldName,
     timestamp: Date.now()
 };
-            
+
             // console.log(`[GLOBAL_LOCKS] 🔒 LOCKED: "${fieldName}" at slot ${slotIdx} by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
         }
-        
+
+        // ★ Propagate the lock to combo partners (e.g. locking Full Gym also
+        //   locks Gym 1 / Gym 2). Skip when already inside a combo propagation
+        //   to prevent infinite recursion (lockComboPartners → lockField → ...).
+        if (!lockInfo || !lockInfo._fromComboPropagation) {
+            this.lockComboPartners(fieldName, slots, lockInfo || {});
+        }
+
         return true;
     };
 
@@ -259,7 +266,11 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
 
         // Check TIME OVERLAP (not slot index match)
         if (lockStartMin < queryEndMin && lockEndMin > queryStartMin) {
-            console.log(`[GLOBAL_LOCKS] ⏰ TIME-BASED LOCK HIT: "${fieldName}" locked ${lockStartMin}-${lockEndMin} overlaps query ${queryStartMin}-${queryEndMin} (by ${lock.lockedBy}: ${lock.leagueName || lock.activity})`);
+            // NOTE: This function is called per-candidate inside the solver hot loop —
+            // logging every hit floods devtools and dominates solve time. Gate on a debug flag.
+            if (window.DEBUG_GLOBAL_LOCKS) {
+                console.log(`[GLOBAL_LOCKS] ⏰ TIME-BASED LOCK HIT: "${fieldName}" locked ${lockStartMin}-${lockEndMin} overlaps query ${queryStartMin}-${queryEndMin} (by ${lock.lockedBy}: ${lock.leagueName || lock.activity})`);
+            }
             return lock;
         }
     }
@@ -386,7 +397,8 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
             this.lockField(partner, slots, {
                 ...lockInfo,
                 lockedBy: 'combined_field',
-                reason: '"' + partner + '" blocked because "' + fieldName + '" is locked (combined field)'
+                reason: '"' + partner + '" blocked because "' + fieldName + '" is locked (combined field)',
+                _fromComboPropagation: true
             });
         }
     };

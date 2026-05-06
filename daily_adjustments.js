@@ -46,6 +46,24 @@ let selectedTileId = null;
 // ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
 let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
 
+function _daIsBackToBack(ev) {
+  if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
+  const parseT = window.SchedulerCoreUtils?.parseTimeToMinutes;
+  if (!parseT) return false;
+  const evStart = parseT(ev.startTime);
+  const evEnd = parseT(ev.endTime);
+  for (let i = 0; i < dailyOverrideSkeleton.length; i++) {
+    const other = dailyOverrideSkeleton[i];
+    if (other === ev || other.id === ev.id) continue;
+    if (other.leagueName !== ev.leagueName) continue;
+    if (other.type !== 'league' && other.type !== 'specialty_league') continue;
+    const oStart = parseT(other.startTime);
+    const oEnd = parseT(other.endTime);
+    if (Math.abs(oStart - evEnd) <= 5 || Math.abs(evStart - oEnd) <= 5) return true;
+  }
+  return false;
+}
+
 // DOM References
 let skeletonContainer = null;
 let tripsFormContainer = null;
@@ -53,6 +71,12 @@ let bunkOverridesContainer = null;
 let resourceOverridesContainer = null;
 let activeSubTab = 'skeleton';
 let selectedOverrideId = null;
+
+function _escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // Event listener tracking for cleanup
 let _keyHandler = null;
@@ -516,8 +540,8 @@ function getAvailableSkeletons() {
 function getRainyDayStats() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
-  const specials = g.app1?.specialActivities || [];
-  
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
+
   // Indoor fields = marked as rainyDayAvailable
   const indoorFields = fields.filter(f => f.rainyDayAvailable === true);
   // Outdoor fields = NOT marked as rainyDayAvailable
@@ -896,7 +920,7 @@ function activateFullDayRainyMode() {
 function buildRainyDayResourceOverrides() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
-  const specials = g.app1?.specialActivities || [];
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
   const overrides = {};
   
   // Fields
@@ -1441,7 +1465,7 @@ function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false
 // =================================================================
 async function promptForReservedFields(eventName) {
   const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-  const specialActivities = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+  const specialActivities = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
   if (allLocations.length === 0) return [];
 
@@ -1828,9 +1852,17 @@ function renderGrid() {
         const top = (start - earliestMin) * PIXELS_PER_MINUTE;
         const height = (end - start) * PIXELS_PER_MINUTE;
         html += renderEventTile(ev, top, height);
+        // Override indicator: show a subtle badge if any bunk in this division has an override at this time
+        const _ovForSlot = (currentOverrides.bunkActivityOverrides || []).filter(o => {
+          const bunkDiv = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(o.bunk));
+          return bunkDiv === divName && o.startMin === start && o.endMin === end;
+        });
+        if (_ovForSlot.length > 0) {
+          html += `<div title="${_ovForSlot.length} bunk override(s)" style="position:absolute;top:${top + 2}px;right:6px;background:#f59e0b;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;z-index:2;pointer-events:none;">${_ovForSlot.length}</div>`;
+        }
       }
     });
-    
+
     html += `<div class="da-drop-preview"></div>`;
     html += `</div>`;
   });
@@ -2066,9 +2098,15 @@ function renderEventTile(ev, top, height) {
     content = `<strong>${eventName}</strong>`;
     if (isNight) content += ' 🌙';
     content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
-    // ★★★ MULTIPLE LEAGUE SUPPORT: Show league name on tile ★★★
     if (ev.leagueName) {
-      content += `<div style="font-size:9px;opacity:0.8;">🏆 ${ev.leagueName}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">${ev.leagueName}</div>`;
+    }
+    if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _lObj = (_gs.leaguesByName || {})[ev.leagueName];
+      if (_lObj?.offCampus?.enabled && _daIsBackToBack(ev)) {
+        content += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">AWAY PAIR</div>`;
+      }
     }
     const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
     if (locationDisplay && ev.type !== 'elective') {
@@ -2512,7 +2550,7 @@ function addDropListeners(gridEl) {
       // ===== ELECTIVE =====
       else if (tileData.type === 'elective') {
         const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-        const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const allSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
         const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
         const daTaken = daGetConflictingFacilities(startStr, endStr, null);
         const daSportMap = daGetSportFacilitiesMap();
@@ -2557,7 +2595,7 @@ function addDropListeners(gridEl) {
       // ===== CUSTOM PINNED =====
       else if (tileData.type === 'custom') {
         const _cAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
-        const _cAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const _cAllSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
         const _cAllLocations = [...new Set([..._cAllFields, ..._cAllSpecials])].sort();
         const customModalFields = [
           { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
@@ -2792,12 +2830,78 @@ function addDropListeners(gridEl) {
           const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
           return !overlaps;
         });
+
+        // Stamp travel info for off-campus facilities
+        const _travelLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || '';
+        if (_travelLoc) {
+          const _ti = window.getTravelForField?.(_travelLoc, true) || window.getTravelForSpecialActivity?.(_travelLoc, true);
+          if (_ti) {
+            newEvent._travelPre = _ti.preMin;
+            newEvent._travelPost = _ti.postMin;
+            newEvent._travelZone = _ti.zoneName;
+            newEvent._travelMode = _ti.mode;
+          }
+        }
+
+        // Soft cooldown check for manual-mode rules
+        if (window.SchedulingRules) {
+          const _cdLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || null;
+          const _cdCandidate = {
+            startMin: newStartVal, endMin: newEndVal,
+            type: window.SchedulingRules.inferTypeFromActivity(newEvent.event || ''),
+            event: newEvent.event || '', field: _cdLoc
+          };
+          const _cdTemplate = dailyOverrideSkeleton
+            .filter(ev => ev.division === divName)
+            .map(ev => {
+              const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+              if (s == null || e == null) return null;
+              const loc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || null;
+              return { startMin: s, endMin: e, type: window.SchedulingRules.inferTypeFromActivity(ev.event || ''), event: ev.event || '', field: loc };
+            })
+            .filter(Boolean);
+          const _cdResult = window.SchedulingRules.checkCandidateDetailed(_cdCandidate, _cdTemplate, { mode: 'manual' });
+          if (!_cdResult.allowed) {
+            const _cdMsg = _cdResult.violated.map(r => '• ' + window.SchedulingRules.describeRule(r)).join('\n');
+            const _cdOk = await daShowConfirm('This placement may violate the following cooldown rule(s):<br><br>' + _cdMsg.replace(/\n/g, '<br>') + '<br><br>Place anyway?');
+            if (!_cdOk) return;
+          }
+        }
+
+        // Sport player count check
+        if (newEvent.type === 'sport' && newEvent.event && window.SchedulerCoreUtils?.checkPlayerCountForSport) {
+          const _pcBunkMeta = window.getBunkMetaData?.() || {};
+          const _pcDivObj   = (window.divisions || {})[divName] || {};
+          const _pcDivBunks = _pcDivObj.bunks || [];
+          const _pcDivPlayers = _pcDivBunks.reduce((s, b) => s + (_pcBunkMeta[b]?.size || 0), 0);
+          const _pcSportName  = (newEvent.event || '').toLowerCase();
+          const _pcConcurrent = dailyOverrideSkeleton
+            .filter(ev => ev.division !== divName && ev.type === 'sport' &&
+              (ev.event || '').toLowerCase() === _pcSportName &&
+              parseTimeToMinutes(ev.startTime) < newEndVal &&
+              parseTimeToMinutes(ev.endTime)   > newStartVal)
+            .reduce((s, ev) => {
+              const d = (window.divisions || {})[ev.division] || {};
+              return s + (d.bunks || []).reduce((ss, b) => ss + (_pcBunkMeta[b]?.size || 0), 0);
+            }, 0);
+          const _pcTotal = _pcDivPlayers + _pcConcurrent;
+          if (_pcTotal > 0) {
+            const _pcResult = window.SchedulerCoreUtils.checkPlayerCountForSport(newEvent.event, _pcTotal);
+            if (!_pcResult.valid && _pcResult.reason) {
+              const _pcNote = _pcConcurrent > 0
+                ? '<br>(Includes ' + _pcConcurrent + ' players from other divisions at the same time)' : '';
+              const _pcOk = await daShowConfirm('Player count warning for "' + newEvent.event + '":<br>' + _pcResult.reason + _pcNote + '<br><br>Place anyway?');
+              if (!_pcOk) return;
+            }
+          }
+        }
+
         dailyOverrideSkeleton.push(newEvent);
         saveDailySkeleton();
         renderGrid();
       }
     };
-    
+
     // Mobile touch support — defers to mobile_touch_drag.js when available
     cell.addEventListener('touchend', (e) => {
       if (window.MobileTouchDrag) return;
@@ -2853,22 +2957,14 @@ function addRemoveListeners(gridEl) {
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(tile.dataset.id); return; }
       clearTimeout(_clickTimer);
-      _clickTimer = setTimeout(() => { editTile(tile.dataset.id); }, 280);
+      _clickTimer = setTimeout(() => { _showTileActionBar(tile); }, 280);
     };
 
-    tile.ondblclick = async (e) => {
+    tile.ondblclick = (e) => {
       e.stopPropagation();
       clearTimeout(_clickTimer);
       if (e.target.classList.contains('da-resize-handle')) return;
-      const id = tile.dataset.id;
-      if (!id) return;
-      const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
-      if (ok) {
-        dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== id);
-        selectedTileId = null;
-        saveDailySkeleton();
-        renderGrid();
-      }
+      _showTileActionBar(tile);
     };
   });
 }
@@ -2883,7 +2979,64 @@ function selectTile(id) {
 function deselectAllTiles() {
   selectedTileId = null;
   document.querySelectorAll('.da-event.selected').forEach(el => el.classList.remove('selected'));
+  const existing = document.getElementById('da-tile-action-bar');
+  if (existing) existing.remove();
 }
+
+function _showTileActionBar(tileEl) {
+  const existing = document.getElementById('da-tile-action-bar');
+  if (existing) existing.remove();
+
+  const id = tileEl.dataset.id;
+  if (!id) return;
+  selectTile(id);
+
+  const bar = document.createElement('div');
+  bar.id = 'da-tile-action-bar';
+  bar.style.cssText = 'position:fixed;z-index:10000;display:flex;gap:4px;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:4px;';
+
+  const rect = tileEl.getBoundingClientRect();
+  bar.style.top = Math.min(rect.bottom + 4, window.innerHeight - 40) + 'px';
+  bar.style.left = Math.max(rect.left, 8) + 'px';
+
+  const btnStyle = 'padding:5px 12px;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;';
+
+  const editBtn = document.createElement('button');
+  editBtn.textContent = 'Edit';
+  editBtn.style.cssText = btnStyle + 'background:#f1f5f9;color:#374151;';
+  editBtn.onmouseenter = () => { editBtn.style.background = '#e2e8f0'; };
+  editBtn.onmouseleave = () => { editBtn.style.background = '#f1f5f9'; };
+  editBtn.onclick = () => { bar.remove(); editTile(id); };
+
+  const delBtn = document.createElement('button');
+  delBtn.textContent = 'Delete';
+  delBtn.style.cssText = btnStyle + 'background:#fef2f2;color:#dc2626;';
+  delBtn.onmouseenter = () => { delBtn.style.background = '#fee2e2'; };
+  delBtn.onmouseleave = () => { delBtn.style.background = '#fef2f2'; };
+  delBtn.onclick = () => {
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== id);
+    selectedTileId = null;
+    bar.remove();
+    saveDailySkeleton();
+    renderGrid();
+  };
+
+  bar.appendChild(editBtn);
+  bar.appendChild(delBtn);
+
+
+  document.body.appendChild(bar);
+
+  const closeHandler = (e) => {
+    if (!bar.contains(e.target) && e.target !== tileEl && !tileEl.contains(e.target)) {
+      bar.remove();
+      deselectAllTiles();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
 
 async function editTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
@@ -2990,6 +3143,22 @@ async function editTile(id) {
       ev.location = result.reservedFields.length === 1 ? result.reservedFields[0] : (result.reservedFields.length > 1 ? null : ev.location);
     }
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  // Re-stamp travel info since location may have changed
+  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+  if (_editTravelLoc) {
+    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+    if (_eti) {
+      ev._travelPre = _eti.preMin;
+      ev._travelPost = _eti.postMin;
+      ev._travelZone = _eti.zoneName;
+      ev._travelMode = _eti.mode;
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
+  } else {
+    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
   }
 
   saveDailySkeleton();
@@ -3307,6 +3476,12 @@ function renderToolbar() {
 
     <div class="da-toolbar-group">
       ${isAutoMode ? '<button id="da-periods-btn" class="da-btn da-btn-ghost">Bell Schedule</button>' : ''}
+      ${!isAutoMode ? (() => {
+        const ovCount = (currentOverrides.bunkActivityOverrides || []).length;
+        const badge = ovCount > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + ovCount + '</span>' : '';
+        return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">Bunk Overrides' + badge + '</button>';
+      })() : ''}
+      <button id="da-trips-btn" class="da-btn da-btn-ghost">Trips${(() => { const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0]; const tc = loadDailyTrips(dateKey).length; return tc > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + tc + '</span>' : ''; })()}</button>
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
     </div>
   `;
@@ -3393,6 +3568,48 @@ function renderToolbar() {
       }
     };
   }
+
+  // Bunk View toggle
+  const bunkViewBtn = document.getElementById('da-bunk-view-btn');
+  if (bunkViewBtn) {
+    bunkViewBtn.onclick = () => {
+      _boBunkViewActive = !_boBunkViewActive;
+      _boToggleView();
+      renderToolbar();
+    };
+  }
+
+  // Trips popover toggle
+  const tripsBtn = document.getElementById('da-trips-btn');
+  if (tripsBtn) {
+    tripsBtn.onclick = () => {
+      const existing = document.getElementById('da-trips-popover');
+      if (existing) { existing.remove(); return; }
+      _showTripsPopover(tripsBtn);
+    };
+  }
+}
+
+function _boToggleView() {
+  const skeletonView = document.getElementById('da-view-skeleton');
+  const gridWrapper = document.querySelector('.da-grid-wrapper');
+  const boContainer = document.getElementById('da-bunk-overrides-container');
+  // MS layout uses different wrapper
+  const msGridWrapper = document.querySelector('.ms-grid-wrapper');
+  const autoView = document.getElementById('da-view-auto-layers');
+
+  if (_boBunkViewActive) {
+    if (msGridWrapper) msGridWrapper.style.display = 'none';
+    if (gridWrapper) gridWrapper.style.display = 'none';
+    if (autoView) autoView.style.display = 'none';
+    if (boContainer) { boContainer.style.display = ''; renderBunkOverridesUI(); }
+  } else {
+    if (msGridWrapper) msGridWrapper.style.display = '';
+    if (gridWrapper) gridWrapper.style.display = '';
+    if (autoView) autoView.style.display = '';
+    if (boContainer) boContainer.style.display = 'none';
+    renderGrid();
+  }
 }
 
 // =================================================================
@@ -3461,6 +3678,7 @@ async function runOptimizer() {
         if (allLayers.length === 0) { await daShowAlert("No layers defined. Add layers before generating."); return; }
 
         try {
+            window.invalidateSmartLogicSpecialsCache?.();
             const success = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
             if (!success) await daShowAlert("Auto scheduler did not complete successfully.");
         } catch (e) {
@@ -3488,6 +3706,19 @@ async function runOptimizer() {
     // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
+
+  // Preserve user-defined inputs across the wipe — these are not generated data
+  const savedBunkOverrides = currentOverrides.bunkActivityOverrides || [];
+  const savedResourceOverrides = {
+    overrides: {
+      leagues: currentOverrides.leagues || [],
+      disabledFields: currentOverrides.disabledFields || [],
+      disabledSpecials: currentOverrides.disabledSpecials || []
+    },
+    dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
+    dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
+    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+  };
 
   // 1. Clear window globals
   window.scheduleAssignments = {};
@@ -3544,9 +3775,22 @@ async function runOptimizer() {
   window._generationInProgress = true;
 
   console.log('[Optimizer] ★ FULL WIPE COMPLETE. Running optimizer...');
-  
+
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
+  // Restore user-defined inputs so the scheduler can read them from loadCurrentDailyData
+  if (savedBunkOverrides.length > 0) {
+    window.saveCurrentDailyData("bunkActivityOverrides", savedBunkOverrides);
+    currentOverrides.bunkActivityOverrides = savedBunkOverrides;
+    console.log(`[Optimizer] Restored ${savedBunkOverrides.length} bunk override(s) after wipe`);
+  }
+  window.saveCurrentDailyData("overrides", savedResourceOverrides.overrides);
+  window.saveCurrentDailyData("dailyDisabledSportsByField", savedResourceOverrides.dailyDisabledSportsByField);
+  window.saveCurrentDailyData("dailyFieldAvailability", savedResourceOverrides.dailyFieldAvailability);
+  window.saveCurrentDailyData("disabledSpecialtyLeagues", savedResourceOverrides.disabledSpecialtyLeagues);
+  console.log(`[Optimizer] Restored resource overrides after wipe (${savedResourceOverrides.overrides.disabledFields.length} disabled fields, ${savedResourceOverrides.overrides.leagues.length} disabled leagues)`);
+
+  window.invalidateSmartLogicSpecialsCache?.();
   const success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
 
   // ★★★ POST-GENERATION CLEANUP ★★★
@@ -3563,24 +3807,41 @@ if (success) {
               isRainyDay: window.isRainyDay || false,
               rainyDayStartTime: window.rainyDayStartTime ?? null
           };
-          // Save to BOTH localStorage keys
-          const DAILY_KEY = 'campDailyData_v1';
-          const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-          allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
-          localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-          const ORCH_KEY = 'campistry_schedule_data';
-          const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
-          orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
-          localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
+          // Save to localStorage (best-effort — may be full)
+          try {
+              const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+              const DAILY_KEY = 'campDailyData_v1';
+              const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+              allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
+              const dKeys = Object.keys(allData).filter(k => DATE_RE.test(k));
+              if (dKeys.length > 5) { dKeys.sort(); dKeys.slice(0, dKeys.length - 5).forEach(k => delete allData[k]); }
+              localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+              const ORCH_KEY = 'campistry_schedule_data';
+              const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
+              orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
+              const oKeys = Object.keys(orchData).filter(k => DATE_RE.test(k));
+              if (oKeys.length > 5) { oKeys.sort(); oKeys.slice(0, oKeys.length - 5).forEach(k => delete orchData[k]); }
+              localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
+          } catch (e) {
+              if (e.name !== 'QuotaExceededError') console.warn('[Optimizer] localStorage save failed:', e);
+          }
           // Save to cloud
           window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
-          console.log('[Optimizer] ★ Post-generation save complete:', 
+          console.log('[Optimizer] ★ Post-generation save complete:',
               Object.keys(freshData.scheduleAssignments).length, 'bunks,',
               Object.keys(freshData.leagueAssignments).length, 'league entries');
       } catch (e) {
           console.warn('[Optimizer] Post-generation save failed:', e);
       }
-      await daShowAlert("✅ Schedule Generated!"); 
+      // Notify reports + any other listeners that the schedule for this date changed.
+      // Reports tab uses this to live-refresh availability/usage views.
+      try {
+          document.dispatchEvent(new CustomEvent('campistry-schedule-generated', {
+              detail: { date: dateKey, mode: 'manual' }
+          }));
+      } catch (e) { /* non-fatal */ }
+
+      await daShowAlert("✅ Schedule Generated!");
       window.showTab?.('schedule');
       // Force full re-render with clean state
       const schedEl = document.getElementById('scheduleTable');
@@ -3674,364 +3935,565 @@ function saveDailyTrips(dateKey, trips) {
 window.loadDailyTrips = loadDailyTrips;
 window.saveDailyTrips = saveDailyTrips;
   // =================================================================
-// TRIPS FORM
+// TRIPS POPOVER
 // =================================================================
 function renderTripsForm() {
-  const container = document.getElementById('da-trips-container');
-  if (!container) return;
-  
-  const divisions = window.availableDivisions || [];
-  
- // ★ Auto mode: show existing trips list
- const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-  const existingTrips = (window._daBuilderMode === 'auto') ? loadDailyTrips(dateKey) : [];
-  const tripsListHTML = existingTrips.length > 0 ? `
-    <div class="da-section" style="margin-bottom:12px;">
-      <h3 class="da-section-title">Today's Trips (${existingTrips.length})</h3>
-      ${existingTrips.map(t => `
-        <div class="da-override-item" style="margin-bottom:6px;">
-          <div>
-            <strong>${t.event || 'Trip'}</strong> — <span style="color:#3b82f6;">${t.division}</span>
-            <div style="font-size:12px;color:#64748b;">${t.startTime} – ${t.endTime}</div>
-          </div>
-          <button class="da-btn da-btn-danger da-btn-sm da-trip-remove-btn" data-trip-id="${t.id}">Remove</button>
-        </div>
-      `).join('')}
-    </div>
-  ` : '';
+  const pop = document.getElementById('da-trips-popover');
+  if (pop) _renderTripsPopoverContent(pop);
+}
 
-  container.innerHTML = tripsListHTML + `
-    <div class="da-section">
-      <h3 class="da-section-title">Add Trip</h3>
-      <p class="da-section-desc">Add an off-campus trip.${window._daBuilderMode === 'auto' ? ' All bunks in the division will be blocked for this time.' : ' Overlapping events will be bumped.'}</p>
-      
-      <div class="da-form-grid">
-        <div class="da-form-field">
-          <label>Division</label>
-          <select id="da-trip-division" class="da-select">
-            <option value="">-- Select --</option>
-            ${divisions.map(d => `<option value="${d}">${d}</option>`).join("")}
-          </select>
+function _showTripsPopover(anchorEl) {
+  const pop = document.createElement('div');
+  pop.id = 'da-trips-popover';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.18);width:340px;max-height:480px;overflow:auto;padding:16px;';
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.top = Math.min(rect.bottom + 6, window.innerHeight - 490) + 'px';
+  pop.style.right = Math.max(window.innerWidth - rect.right, 8) + 'px';
+  document.body.appendChild(pop);
+  _renderTripsPopoverContent(pop);
+
+  const closeHandler = (e) => {
+    if (!pop.contains(e.target) && e.target !== anchorEl && !anchorEl.contains(e.target)) {
+      pop.remove();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
+let _tripEditId = null;
+
+function _renderTripsPopoverContent(pop) {
+  const allDivisions = window.availableDivisions || [];
+  const divColors = masterSettings.app1?.divisions || {};
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const existingTrips = loadDailyTrips(dateKey);
+
+  // Merge skeleton trip events not yet in the trips store (legacy manual-mode trips)
+  if (window._daBuilderMode !== 'auto' && dailyOverrideSkeleton) {
+    const tripIds = new Set(existingTrips.map(t => t.id));
+    dailyOverrideSkeleton.forEach(ev => {
+      if (ev.id && ev.id.startsWith('trip_') && !tripIds.has(ev.id)) {
+        existingTrips.push({ id: ev.id, event: ev.event, division: ev.division, startTime: ev.startTime, endTime: ev.endTime });
+      }
+    });
+    if (existingTrips.length > 0) saveDailyTrips(dateKey, existingTrips);
+  }
+
+  const editing = _tripEditId ? existingTrips.find(t => t.id === _tripEditId) : null;
+
+  let html = '<div style="font-weight:700;font-size:14px;margin-bottom:10px;">Trips</div>';
+
+  if (existingTrips.length > 0) {
+    existingTrips.forEach(t => {
+      const isEditing = editing && editing.id === t.id;
+      const divList = Array.isArray(t.division) ? t.division.join(', ') : t.division;
+      html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;${isEditing ? 'background:#fffbeb;margin:0 -16px;padding:6px 16px;' : ''}">
+        <div>
+          <div style="font-weight:600;font-size:13px;">${_escHtml(t.event || 'Trip')}</div>
+          <div style="font-size:11px;color:#64748b;">${_escHtml(divList)} · ${t.startTime} – ${t.endTime}</div>
         </div>
-        <div class="da-form-field">
-          <label>Trip Name</label>
-          <input id="da-trip-name" type="text" placeholder="e.g. Six Flags" class="da-input" />
+        <div style="display:flex;gap:4px;">
+          <button class="da-trip-pop-edit" data-trip-id="${t.id}" style="background:none;border:none;color:#3b82f6;cursor:pointer;font-size:11px;font-weight:600;padding:4px 8px;">${isEditing ? 'Cancel' : 'Edit'}</button>
+          <button class="da-trip-pop-remove" data-trip-id="${t.id}" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;font-weight:600;padding:4px 8px;">Remove</button>
         </div>
-        <div class="da-form-field">
-          <label>Start</label>
-          <input id="da-trip-start" type="text" placeholder="10:00am" class="da-input" />
-        </div>
-        <div class="da-form-field">
-          <label>End</label>
-          <input id="da-trip-end" type="text" placeholder="3:30pm" class="da-input" />
-        </div>
-      </div>
-      
-      <button id="da-apply-trip-btn" class="da-btn da-btn-primary" style="margin-top:16px;">Add Trip</button>
+      </div>`;
+    });
+    html += '<div style="height:10px;"></div>';
+  }
+
+  const prefill = editing || {};
+  const selectedDivs = editing ? (Array.isArray(editing.division) ? editing.division : [editing.division]) : [];
+  const btnLabel = editing ? 'Save Changes' : 'Add Trip';
+  const inputStyle = 'padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;';
+
+  html += `<div style="display:flex;flex-direction:column;gap:8px;">
+    <div style="font-size:11px;color:#64748b;font-weight:600;">Divisions</div>
+    <div id="da-trip-div-chips" style="display:flex;gap:4px;flex-wrap:wrap;">
+      ${allDivisions.map(d => {
+        const color = divColors[d]?.color || '#64748b';
+        const sel = selectedDivs.includes(d);
+        return `<button type="button" class="da-trip-div-chip" data-div="${_escHtml(d)}"
+          style="padding:4px 10px;border-radius:99px;border:1.5px solid ${color};cursor:pointer;font-size:11px;font-weight:600;font-family:inherit;
+          background:${sel ? color : '#fff'};color:${sel ? '#fff' : color};">${_escHtml(d)}</button>`;
+      }).join('')}
     </div>
-  `;
-  
-  document.getElementById("da-apply-trip-btn").onclick = () => {
-    const division = document.getElementById("da-trip-division").value;
-    const tripName = document.getElementById("da-trip-name").value.trim();
-    const startTime = document.getElementById("da-trip-start").value.trim();
-    const endTime = document.getElementById("da-trip-end").value.trim();
-    
-  if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
+    <input id="da-trip-name" type="text" placeholder="Trip name" value="${_escHtml(prefill.event || '')}" style="${inputStyle}" />
+    <div style="display:flex;gap:6px;">
+      <input id="da-trip-start" type="text" placeholder="Start (10:00am)" value="${_escHtml(prefill.startTime || '')}" style="flex:1;${inputStyle}" />
+      <input id="da-trip-end" type="text" placeholder="End (3:30pm)" value="${_escHtml(prefill.endTime || '')}" style="flex:1;${inputStyle}" />
+    </div>
+    <button id="da-apply-trip-btn" style="padding:7px 0;background:#3b82f6;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">${btnLabel}</button>
+  </div>`;
+
+  pop.innerHTML = html;
+
+  // Division chip toggle
+  const chipSelectedDivs = new Set(selectedDivs);
+  pop.querySelectorAll('.da-trip-div-chip').forEach(chip => {
+    chip.onclick = () => {
+      const d = chip.dataset.div;
+      const color = divColors[d]?.color || '#64748b';
+      if (chipSelectedDivs.has(d)) {
+        chipSelectedDivs.delete(d);
+        chip.style.background = '#fff';
+        chip.style.color = color;
+      } else {
+        chipSelectedDivs.add(d);
+        chip.style.background = color;
+        chip.style.color = '#fff';
+      }
+    };
+  });
+
+  // Add / Save
+  pop.querySelector('#da-apply-trip-btn').onclick = () => {
+    const selDivs = [...chipSelectedDivs];
+    const tripName = pop.querySelector('#da-trip-name').value.trim();
+    const startTime = pop.querySelector('#da-trip-start').value.trim();
+    const endTime = pop.querySelector('#da-trip-end').value.trim();
+    if (selDivs.length === 0 || !tripName || !startTime || !endTime) { daShowAlert("Select at least one division and fill all fields."); return; }
     const startMin = parseTimeToMinutes(startTime);
     const endMin = parseTimeToMinutes(endTime);
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
-    
-  if (window._daBuilderMode === 'auto') {
-      // ★ Auto mode: save trips to dedicated localStorage key + dailyData
-      const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-      const trips = loadDailyTrips(dateKey);
-      trips.push({ id: 'trip_' + Date.now(), event: tripName, division, startTime, endTime, startMin, endMin });
-      saveDailyTrips(dateKey, trips);
-      renderTripsForm();
-      renderGrid(); // ★ refresh DAW grid to show trip overlay
-      daShowAlert("✅ Trip added!");
-    } else {
-      loadDailySkeleton();
-      const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
-      eraseOverlappingTiles(newEvent, division);
-      dailyOverrideSkeleton.push(newEvent);
-      saveDailySkeleton();
-      renderGrid();
-      document.querySelector('.da-subtab[data-tab="skeleton"]')?.click();
-      daShowAlert("✅ Trip added!");
-    }
-    document.getElementById("da-trip-name").value = "";
-    document.getElementById("da-trip-start").value = "";
-    document.getElementById("da-trip-end").value = "";  };
 
-  // ★ Auto mode: bind remove buttons for existing trips
-  if (window._daBuilderMode === 'auto') {
-    container.querySelectorAll('.da-trip-remove-btn').forEach(btn => {
-      btn.onclick = async () => {
-        const tripId = btn.dataset.tripId;
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        const trips = loadDailyTrips(dateKey).filter(t => t.id !== tripId);
+    if (editing) {
+      // Update existing trip
+      const trips = loadDailyTrips(dateKey);
+      const idx = trips.findIndex(t => t.id === editing.id);
+      if (idx !== -1) {
+        trips[idx] = { ...trips[idx], event: tripName, division: selDivs.length === 1 ? selDivs[0] : selDivs, startTime, endTime, startMin, endMin };
         saveDailyTrips(dateKey, trips);
-        renderTripsForm();
-        renderGrid(); // ★ refresh DAW grid to remove trip overlay
-      };
-    });
-  }
+      }
+      if (window._daBuilderMode !== 'auto') {
+        loadDailySkeleton();
+        const oldIdx = dailyOverrideSkeleton.findIndex(e => e.id === editing.id);
+        if (oldIdx !== -1) dailyOverrideSkeleton.splice(oldIdx, 1);
+        selDivs.forEach(div => {
+          eraseOverlappingTiles({ startTime, endTime, division: div }, div);
+          dailyOverrideSkeleton.push({ id: editing.id + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] });
+        });
+        saveDailySkeleton();
+      }
+      _tripEditId = null;
+    } else {
+      // Add new trip(s) — one per division, always save to trips store
+      const trips = loadDailyTrips(dateKey);
+      selDivs.forEach(div => {
+        const tripId = 'trip_' + Date.now() + '_' + div;
+        trips.push({ id: tripId, event: tripName, division: div, startTime, endTime, startMin, endMin });
+      });
+      saveDailyTrips(dateKey, trips);
+
+      if (window._daBuilderMode !== 'auto') {
+        loadDailySkeleton();
+        selDivs.forEach(div => {
+          const newEvent = { id: 'trip_' + Date.now() + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
+          eraseOverlappingTiles(newEvent, div);
+          dailyOverrideSkeleton.push(newEvent);
+        });
+        saveDailySkeleton();
+      }
+    }
+    _renderTripsPopoverContent(pop);
+    renderToolbar();
+    renderGrid();
+  };
+
+  // Edit buttons
+  pop.querySelectorAll('.da-trip-pop-edit').forEach(btn => {
+    btn.onclick = () => {
+      _tripEditId = (_tripEditId === btn.dataset.tripId) ? null : btn.dataset.tripId;
+      _renderTripsPopoverContent(pop);
+    };
+  });
+
+  // Remove buttons
+  pop.querySelectorAll('.da-trip-pop-remove').forEach(btn => {
+    btn.onclick = () => {
+      const tripId = btn.dataset.tripId;
+      const trips = loadDailyTrips(dateKey).filter(t => t.id !== tripId);
+      saveDailyTrips(dateKey, trips);
+      if (window._daBuilderMode !== 'auto') {
+        loadDailySkeleton();
+        const idx = dailyOverrideSkeleton.findIndex(e => e.id === tripId);
+        if (idx !== -1) { dailyOverrideSkeleton.splice(idx, 1); saveDailySkeleton(); }
+      }
+      if (_tripEditId === tripId) _tripEditId = null;
+      _renderTripsPopoverContent(pop);
+      renderToolbar();
+      renderGrid();
+    };
+  });
 }
 
 
 // =================================================================
-// BUNK OVERRIDES UI
+// BUNK OVERRIDES UI — Visual per-bunk skeleton editor
 // =================================================================
+let _boSelectedDiv = null;
+let _boBunkViewActive = false;
+
+function _boGetActivityGroups() {
+  const pinnedDefaults = masterSettings.global?.pinnedTileDefaults || {};
+  const allFields = (masterSettings.app1?.fields || []).map(f => ({
+    name: f.name, activities: f.activities || [], isIndoor: f.rainyDayAvailable === true
+  }));
+  const allSportsSet = new Set();
+  allFields.forEach(f => (f.activities || []).forEach(act => allSportsSet.add(act)));
+  const allSpecials = [...new Set((masterSettings.app1?.specialActivities || []).map(s => s.name))].sort();
+  const locationZones = masterSettings.global?.locationZones || {};
+  const facilities = [];
+  Object.entries(locationZones).forEach(([zn, zone]) => {
+    if (zone && zone.locations) Object.keys(zone.locations).forEach(loc => {
+      facilities.push({ name: loc, zone: zn, displayName: loc + ' (' + zn + ')' });
+    });
+  });
+  return {
+    pinned: Object.entries(pinnedDefaults).sort(([a],[b]) => a.localeCompare(b)).map(([act, fac]) => ({
+      name: act, location: fac, type: 'pinned', label: act + ' → ' + fac
+    })),
+    facilities: facilities.sort((a,b) => a.name.localeCompare(b.name)).map(f => ({
+      name: f.name, location: f.name, type: 'pinned', label: f.displayName
+    })),
+    fields: allFields.sort((a,b) => a.name.localeCompare(b.name)).map(f => ({
+      name: f.name, location: f.name, type: 'field', label: f.name + (f.isIndoor ? ' 🏠' : '')
+    })),
+    specials: allSpecials.map(act => ({ name: act, location: null, type: 'special', label: act })),
+    sports: [...allSportsSet].sort().map(s => ({ name: s, location: null, type: 'sport', label: s }))
+  };
+}
+
+function _boGetTileStyle(ev) {
+  let tile = TILES.find(t => t.name === ev.event);
+  if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
+  if (!tile) {
+    if (ev.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
+    else if (ev.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
+    else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
+    else tile = TILES.find(t => t.type === 'custom');
+  }
+  return tile ? tile.style : 'background:#d1d5db;color:#374151;';
+}
+
+function _boSaveOverrides(overrides) {
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  window.saveCurrentDailyData("bunkActivityOverrides", overrides);
+  try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(overrides)); } catch(e) {}
+  currentOverrides.bunkActivityOverrides = overrides;
+}
+
 function renderBunkOverridesUI() {
   const container = document.getElementById('da-bunk-overrides-container');
   if (!container) return;
-  
+
   const divisions = masterSettings.app1?.divisions || {};
   const availableDivisions = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
-  const allBunksByDiv = {};
-  availableDivisions.forEach(divName => {
-    allBunksByDiv[divName] = (divisions[divName]?.bunks || []).sort((a, b) => {
-      const numA = parseInt(a.match(/\d+/)?.[0] || 0);
-      const numB = parseInt(b.match(/\d+/)?.[0] || 0);
-      return numA - numB || a.localeCompare(b);
-    });
-  });
-  
-  // Get fields (from app1.fields) - these are the FIELD NAMES
-  const allFields = (masterSettings.app1?.fields || []).map(f => ({
-    name: f.name,
-    activities: f.activities || [],
-    isIndoor: f.rainyDayAvailable === true
-  }));
-  
-  // Get all sports (activities from fields)
-  const allSportsSet = new Set();
-  allFields.forEach(f => {
-    (f.activities || []).forEach(act => allSportsSet.add(act));
-  });
-  const allSports = [...allSportsSet].sort();
-  
-  // Get special activities
-  const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name).sort();
-  
-  // Get facilities from locationZones (Pool, Lunchroom, etc.)
-  const locationZones = masterSettings.global?.locationZones || {};
-  const facilities = [];
-  Object.entries(locationZones).forEach(([zoneName, zone]) => {
-    if (zone && zone.locations) {
-      Object.keys(zone.locations).forEach(locName => {
-        facilities.push({
-          name: locName,
-          zone: zoneName,
-          displayName: `${locName} (${zoneName})`
-        });
-      });
-    }
-  });
-  
-  // Get pinned tile defaults (Swim → Pool, Lunch → Lunchroom, etc.)
-  const pinnedDefaults = masterSettings.global?.pinnedTileDefaults || {};
-  const pinnedActivities = Object.keys(pinnedDefaults);
-  
-  // Build grouped options
-  let activityOptions = '<option value="">-- Select Activity --</option>';
-  
-  // Pinned Activities group (Swim, Lunch, Snacks, etc.) - if available
-  if (pinnedActivities.length > 0) {
-    activityOptions += '<optgroup label="📌 Pinned Activities">';
-    pinnedActivities.sort().forEach(act => {
-      const facility = pinnedDefaults[act];
-      activityOptions += `<option value="${act}" data-type="pinned" data-location="${facility}">${act} → ${facility}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  // Facilities group (Pool, Lunchroom, etc.) - from locationZones
-  if (facilities.length > 0) {
-    activityOptions += '<optgroup label="🏢 Facilities">';
-    facilities.sort((a, b) => a.name.localeCompare(b.name)).forEach(fac => {
-      activityOptions += `<option value="${fac.name}" data-type="facility" data-location="${fac.name}">${fac.displayName}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  // Fields group (Hockey Arena, Baseball Field, etc.)
-  if (allFields.length > 0) {
-    activityOptions += '<optgroup label="🏟️ Fields">';
-    allFields.sort((a, b) => a.name.localeCompare(b.name)).forEach(field => {
-      const indoorBadge = field.isIndoor ? ' 🏠' : '';
-      activityOptions += `<option value="${field.name}" data-type="field" data-location="${field.name}">${field.name}${indoorBadge}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  // Special Activities group (Canteen, Gameroom, etc.)
-  if (allSpecials.length > 0) {
-    activityOptions += '<optgroup label="🎨 Special Activities">';
-    allSpecials.forEach(act => {
-      activityOptions += `<option value="${act}" data-type="special">${act}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  // Sports group (Basketball, Soccer, etc.)
-  if (allSports.length > 0) {
-    activityOptions += '<optgroup label="⚽ Sports">';
-    allSports.forEach(sport => {
-      activityOptions += `<option value="${sport}" data-type="sport">${sport}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  container.innerHTML = `
-    <div class="da-section">
-      <h3 class="da-section-title">Bunk-Specific Overrides</h3>
-      <p class="da-section-desc">Assign a specific activity to bunks at a specific time. This pins the activity for those bunks.</p>
-      
-      <div class="da-form-grid">
-        <div class="da-form-field" style="grid-column: span 2;">
-          <label>Select Activity:</label>
-          <select id="da-bunk-override-activity" class="da-select">${activityOptions}</select>
-        </div>
-        <div class="da-form-field">
-          <label>Start Time:</label>
-          <input id="da-bunk-override-start" placeholder="9:00am" class="da-input">
-        </div>
-        <div class="da-form-field">
-          <label>End Time:</label>
-          <input id="da-bunk-override-end" placeholder="10:00am" class="da-input">
-        </div>
-      </div>
-      
-      <p style="margin-top:16px;font-weight:600;">Select Bunks:</p>
-      <div id="da-bunk-chips"></div>
-      
-      <button id="da-add-override-btn" class="da-btn da-btn-primary" style="margin-top:16px;">Add Pinned Activity</button>
-    </div>
-    
-    <div class="da-section" style="margin-top:20px;">
-      <h4>Current Overrides</h4>
-      <div id="da-overrides-list"></div>
-    </div>
-  `;
-  
-  // Render bunk chips
-  const chipsContainer = document.getElementById('da-bunk-chips');
-  availableDivisions.forEach(divName => {
-    const bunks = allBunksByDiv[divName];
-    if (!bunks || bunks.length === 0) return;
-    
-    const divLabel = document.createElement('div');
-    divLabel.textContent = divName;
-    divLabel.style.cssText = 'font-weight:600;font-size:12px;color:#64748b;margin-top:8px;';
-    chipsContainer.appendChild(divLabel);
-    
-    const chipBox = document.createElement('div');
-    chipBox.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;';
-    bunks.forEach(bunkName => {
-      const chip = createChip(bunkName, divisions[divName]?.color || '#64748b');
-      chipBox.appendChild(chip);
-    });
-    chipsContainer.appendChild(chipBox);
-  });
-  
-  // Add button handler
-  document.getElementById('da-add-override-btn').onclick = () => {
-    const activityEl = document.getElementById('da-bunk-override-activity');
-    const startEl = document.getElementById('da-bunk-override-start');
-    const endEl = document.getElementById('da-bunk-override-end');
-    const selectedBunks = Array.from(document.querySelectorAll('#da-bunk-chips .da-chip.selected')).map(el => el.dataset.value);
-    
-    const activity = activityEl.value;
-    const selectedOption = activityEl.options[activityEl.selectedIndex];
-    const activityType = selectedOption?.dataset?.type || 'special';
-    const location = selectedOption?.dataset?.location || null;
-    
-    // Determine type based on what was selected
-    let type = 'special';
-    if (activityType === 'pinned' || activityType === 'facility') {
-      type = 'pinned';
-    } else if (activityType === 'sport') {
-      type = 'sport';
-    }
-    
-   if (!activity) { daShowAlert('Please select an activity.'); return; }
-    if (!startEl.value || !endEl.value) { daShowAlert('Please enter a start and end time.'); return; }
-    if (selectedBunks.length === 0) { daShowAlert('Please select at least one bunk.'); return; }
-    const startMin = parseTimeToMinutes(startEl.value);
-    const endMin = parseTimeToMinutes(endEl.value);
-    
-    if (startMin == null || endMin == null || endMin <= startMin) {
-      daShowAlert('Invalid time range. Use format like 9:00am.');
-      return;
-    }
-    
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const overrides = dailyData.bunkActivityOverrides || [];
-    
-    const ovStartMin = parseTimeToMinutes(startEl.value);
-    const ovEndMin = parseTimeToMinutes(endEl.value);
-    selectedBunks.forEach(bunk => {
-      overrides.push({
-        id: uid(),
-        bunk,
-        activity,
-        location,
-        startTime: startEl.value,
-        endTime: endEl.value,
-        startMin: ovStartMin, endMin: ovEndMin,
-        type
-      });
-    });
-    
-    // Save to both dailyData (cloud sync) AND dedicated localStorage key (survives overwrites)
-    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-    window.saveCurrentDailyData("bunkActivityOverrides", overrides);
-    try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(overrides)); } catch(e) {}
-    currentOverrides.bunkActivityOverrides = overrides;
-    console.log('[BunkOverrides] Saved ' + overrides.length + ' overrides for ' + dateKey);
 
-    activityEl.value = "";
-    startEl.value = "";
-    endEl.value = "";
-    document.querySelectorAll('#da-bunk-chips .da-chip.selected').forEach(chip => chip.click());
-    renderBunkOverridesUI();
-  };
-  
-  // Render existing overrides list
-  const listContainer = document.getElementById('da-overrides-list');
-  const overrides = currentOverrides.bunkActivityOverrides;
-  if (overrides.length === 0) {
-    listContainer.innerHTML = '<p style="color:#94a3b8;font-size:13px;">No overrides added yet.</p>';
-  } else {
-    listContainer.innerHTML = '';
-    overrides.forEach(item => {
-      const el = document.createElement('div');
-      el.className = 'da-override-item';
-      const locationInfo = item.location ? ` <span style="color:#059669;">@ ${item.location}</span>` : '';
-      const typeIcon = item.type === 'pinned' ? '📌' : (item.type === 'sport' ? '⚽' : '🎨');
-      el.innerHTML = `
-        <div>
-          <strong>${item.bunk}</strong> → <span style="color:#3b82f6;">${typeIcon} ${item.activity}</span>${locationInfo}
-          <div style="font-size:12px;color:#64748b;">${item.startTime} - ${item.endTime}</div>
-        </div>
-        <button class="da-btn da-btn-danger da-btn-sm" data-id="${item.id}">Remove</button>
-      `;
-      el.querySelector('button').onclick = () => {
-        let currentList = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
-        currentList = currentList.filter(o => o.id !== item.id);
-        const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        window.saveCurrentDailyData("bunkActivityOverrides", currentList);
-        try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(currentList)); } catch(e) {}
-        currentOverrides.bunkActivityOverrides = currentList;
-        renderBunkOverridesUI();
-      };
-      listContainer.appendChild(el);
-    });
+  if (availableDivisions.length === 0) {
+    container.innerHTML = '<div class="da-empty-state">No divisions found.</div>';
+    return;
   }
+
+  // Build header + grade selector
+  let html = '<div class="da-section">';
+  html += '<h3 class="da-section-title">Bunk-Level Overrides</h3>';
+  html += '<p class="da-section-desc">Select a grade to see its skeleton expanded per-bunk. Click any block to change it for that specific bunk.</p>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">';
+  availableDivisions.forEach(divName => {
+    const color = divisions[divName]?.color || '#64748b';
+    const active = _boSelectedDiv === divName;
+    html += `<button type="button" class="bo-div-btn${active ? ' active' : ''}" data-div="${_escHtml(divName)}"
+      style="padding:6px 14px;border-radius:8px;border:2px solid ${color};cursor:pointer;font-size:13px;font-weight:600;font-family:inherit;
+      background:${active ? color : '#fff'};color:${active ? '#fff' : color};">${_escHtml(divName)}</button>`;
+  });
+  html += '</div></div>';
+
+  // Override count badge + clear all
+  const overrides = currentOverrides.bunkActivityOverrides || [];
+  const divOverrides = _boSelectedDiv ? overrides.filter(o => {
+    const divForBunk = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(o.bunk));
+    return divForBunk === _boSelectedDiv;
+  }) : [];
+
+  if (overrides.length > 0) {
+    html += '<div class="da-section" style="margin-top:12px;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;">';
+    html += `<span style="font-size:13px;color:#374151;"><strong>${overrides.length}</strong> override(s) total`;
+    if (_boSelectedDiv && divOverrides.length > 0) html += ` · <strong>${divOverrides.length}</strong> for ${_escHtml(_boSelectedDiv)}`;
+    html += '</span>';
+    html += '<button type="button" id="bo-clear-all" class="da-btn da-btn-danger da-btn-sm">Clear All Overrides</button>';
+    html += '</div>';
+  }
+
+  // Bunk grid (only if a division is selected)
+  html += '<div id="bo-bunk-grid-wrap"></div>';
+
+  container.innerHTML = html;
+
+  // Grade selector click handlers
+  container.querySelectorAll('.bo-div-btn').forEach(btn => {
+    btn.onclick = () => {
+      _boSelectedDiv = btn.dataset.div;
+      renderBunkOverridesUI();
+    };
+  });
+
+  // Clear all handler
+  const clearBtn = container.querySelector('#bo-clear-all');
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      if (!confirm('Remove all bunk overrides?')) return;
+      _boSaveOverrides([]);
+      renderBunkOverridesUI();
+    };
+  }
+
+  // Render the bunk grid if a division is selected
+  if (_boSelectedDiv) {
+    _boRenderBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
+  }
+}
+
+function _boRenderBunkGrid(wrap, divName) {
+  if (!wrap) return;
+  const divisions = masterSettings.app1?.divisions || {};
+  const div = divisions[divName];
+  if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
+
+  const bunks = (div.bunks || []).slice().sort((a, b) => {
+    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
+    return na - nb || a.localeCompare(b);
+  });
+  if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
+
+  // Get skeleton events for this division
+  const divEvents = dailyOverrideSkeleton.filter(ev => ev.division === divName);
+  if (divEvents.length === 0) {
+    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No skeleton events for this division. Add events to the skeleton first.</p>';
+    return;
+  }
+
+  // Compute time range
+  const divStart = parseTimeToMinutes(div.startTime) || 540;
+  const divEnd = parseTimeToMinutes(div.endTime) || 960;
+  let earliestMin = divStart, latestMin = divEnd;
+  divEvents.forEach(ev => {
+    const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+    if (s != null && s < earliestMin) earliestMin = s;
+    if (e != null && e > latestMin) latestMin = e;
+  });
+  if (latestMin <= earliestMin) latestMin = earliestMin + 60;
+
+  const PX = PIXELS_PER_MINUTE;
+  const totalHeight = (latestMin - earliestMin) * PX;
+  const overrides = currentOverrides.bunkActivityOverrides || [];
+  const color = div.color || '#64748b';
+
+  let html = `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:12px;">`;
+
+  // Header row
+  html += '<div class="da-grid-header da-time-header" style="font-size:11px;">Time</div>';
+  bunks.forEach(bunk => {
+    const bunkOverrides = overrides.filter(o => o.bunk === bunk);
+    const badge = bunkOverrides.length > 0 ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;">${bunkOverrides.length}</span>` : '';
+    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;font-size:11px;padding:6px 4px;text-align:center;">${_escHtml(bunk)}${badge}</div>`;
+  });
+
+  // Time column
+  html += `<div class="da-time-column" style="height:${totalHeight}px;">`;
+  for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
+    html += `<div class="da-time-marker" style="top:${(m - earliestMin) * PX}px;">${minutesToTime(m)}</div>`;
+  }
+  html += '</div>';
+
+  // Bunk columns
+  bunks.forEach(bunk => {
+    html += `<div class="da-grid-cell bo-bunk-col" data-bunk="${_escHtml(bunk)}" style="height:${totalHeight}px;position:relative;">`;
+
+    // Build merged view: for each skeleton block, check if there's an override for this bunk at that time
+    divEvents.forEach(ev => {
+      const evStart = parseTimeToMinutes(ev.startTime);
+      const evEnd = parseTimeToMinutes(ev.endTime);
+      if (evStart == null || evEnd == null || evEnd <= evStart) return;
+
+      // Check for override at this time slot for this bunk
+      const override = overrides.find(o =>
+        o.bunk === bunk && o.startMin === evStart && o.endMin === evEnd
+      );
+
+      const top = (evStart - earliestMin) * PX;
+      const height = Math.max((evEnd - evStart) * PX - 2, 24);
+
+      if (override) {
+        // Render the override block (highlighted)
+        const oStyle = 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
+        const typeIcon = override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 '));
+        let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
+        let content;
+        if (height < 35) {
+          content = `<span style="font-weight:600;font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</span>`;
+        } else {
+          content = `<strong style="font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</strong>`;
+          if (override.location) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(override.location)}</div>`;
+        }
+        html += `<div class="da-event bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ov-id="${_escHtml(override.id)}"
+          title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to edit, right-click to revert"
+          style="${oStyle}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
+          ${content}
+          <div style="position:absolute;top:2px;right:4px;font-size:9px;cursor:pointer;" class="bo-revert-btn" title="Revert to original">✕</div>
+        </div>`;
+      } else {
+        // Render the skeleton block (normal)
+        const style = _boGetTileStyle(ev);
+        let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
+        const evName = ev.event || 'Event';
+        let content;
+        if (height < 35) {
+          content = `<span style="font-weight:600;font-size:${fontSize};">${_escHtml(evName)}</span>`;
+        } else {
+          content = `<strong style="font-size:${fontSize};">${_escHtml(evName)}</strong>`;
+          const locDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
+          if (locDisplay) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(locDisplay)}</div>`;
+        }
+        html += `<div class="da-event bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ev-type="${ev.type || 'slot'}"
+          title="${_escHtml(evName)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to override for ${_escHtml(bunk)}"
+          style="${style}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
+          ${content}
+        </div>`;
+      }
+    });
+
+    html += '</div>';
+  });
+
+  html += '</div>';
+  wrap.innerHTML = html;
+
+  // Attach click handlers on blocks
+  wrap.querySelectorAll('.bo-block').forEach(block => {
+    block.onclick = (e) => {
+      if (e.target.classList.contains('bo-revert-btn')) return;
+      const bunk = block.dataset.bunk;
+      const startMin = parseInt(block.dataset.start);
+      const endMin = parseInt(block.dataset.end);
+      _boShowPicker(block, bunk, startMin, endMin);
+    };
+  });
+
+  // Revert buttons on overrides
+  wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const block = btn.closest('.bo-override');
+      if (!block) return;
+      const ovId = block.dataset.ovId;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list = list.filter(o => o.id !== ovId);
+      _boSaveOverrides(list);
+      renderBunkOverridesUI();
+    };
+  });
+}
+
+function _boShowPicker(anchorEl, bunk, startMin, endMin) {
+  // Remove any existing picker
+  const existing = document.getElementById('bo-activity-picker');
+  if (existing) existing.remove();
+
+  const groups = _boGetActivityGroups();
+
+  const picker = document.createElement('div');
+  picker.id = 'bo-activity-picker';
+  picker.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.15);max-height:400px;width:280px;overflow:auto;padding:8px 0;';
+
+  // Position near the clicked block
+  const rect = anchorEl.getBoundingClientRect();
+  picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - 410) + 'px';
+  picker.style.left = Math.min(rect.left, window.innerWidth - 290) + 'px';
+
+  // Header
+  const header = document.createElement('div');
+  header.style.cssText = 'padding:6px 12px;font-size:12px;color:#64748b;border-bottom:1px solid #e5e7eb;';
+  header.textContent = bunk + ' · ' + minutesToTime(startMin) + '-' + minutesToTime(endMin);
+  picker.appendChild(header);
+
+  // Revert option (if this is an override)
+  if (anchorEl.classList.contains('bo-override')) {
+    const revertRow = document.createElement('div');
+    revertRow.style.cssText = 'padding:6px 12px;cursor:pointer;font-size:12px;color:#dc2626;font-weight:600;border-bottom:1px solid #e5e7eb;';
+    revertRow.textContent = '↩ Revert to grade skeleton';
+    revertRow.onmouseenter = () => { revertRow.style.background = '#fef2f2'; };
+    revertRow.onmouseleave = () => { revertRow.style.background = ''; };
+    revertRow.onclick = () => {
+      const ovId = anchorEl.dataset.ovId;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list = list.filter(o => o.id !== ovId);
+      _boSaveOverrides(list);
+      picker.remove();
+      renderBunkOverridesUI();
+    };
+    picker.appendChild(revertRow);
+  }
+
+  const categoryDefs = [
+    { key: 'pinned', label: '📌 Pinned Activities', items: groups.pinned },
+    { key: 'facilities', label: '🏢 Facilities', items: groups.facilities },
+    { key: 'fields', label: '🏟️ Fields', items: groups.fields },
+    { key: 'specials', label: '🎨 Special Activities', items: groups.specials },
+    { key: 'sports', label: '⚽ Sports', items: groups.sports }
+  ];
+
+  categoryDefs.forEach(cat => {
+    if (cat.items.length === 0) return;
+    const groupLabel = document.createElement('div');
+    groupLabel.style.cssText = 'padding:6px 12px 2px;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;';
+    groupLabel.textContent = cat.label;
+    picker.appendChild(groupLabel);
+
+    cat.items.forEach(item => {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:5px 12px;cursor:pointer;font-size:12px;color:#374151;';
+      row.textContent = item.label;
+      row.onmouseenter = () => { row.style.background = '#f1f5f9'; };
+      row.onmouseleave = () => { row.style.background = ''; };
+      row.onclick = () => {
+        _boApplyOverride(bunk, startMin, endMin, item);
+        picker.remove();
+      };
+      picker.appendChild(row);
+    });
+  });
+
+  document.body.appendChild(picker);
+
+  // Close on outside click
+  const closeHandler = (e) => {
+    if (!picker.contains(e.target) && e.target !== anchorEl) {
+      picker.remove();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
+function _boApplyOverride(bunk, startMin, endMin, item) {
+  let overrides = currentOverrides.bunkActivityOverrides || [];
+  // Remove any existing override for this bunk at this exact time
+  overrides = overrides.filter(o => !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin));
+  overrides.push({
+    id: uid(),
+    bunk: bunk,
+    activity: item.name,
+    location: item.location || null,
+    startTime: minutesToTime(startMin),
+    endTime: minutesToTime(endMin),
+    startMin: startMin,
+    endMin: endMin,
+    type: item.type
+  });
+  _boSaveOverrides(overrides);
+  renderBunkOverridesUI();
 }
 
 function createChip(name, color) {
@@ -4351,7 +4813,7 @@ function renderOverrideDetailPane() {
       if (startMin === null || endMin === null) { daShowAlert('Invalid time format. Use format like 9:00am or 2:30pm.'); return; }
       if (startMin >= endMin) { daShowAlert('End time must be after start time.'); return; }
       
-      dailyRules.push({ type: ruleType, start, end });
+      dailyRules.push({ type: ruleType, start, end, startMin, endMin });
       currentOverrides.dailyFieldAvailability[name] = dailyRules;
       window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
       renderOverrideDetailPane();
@@ -4752,7 +5214,6 @@ function getStyles() {
     .ms-container #da-skeleton-grid { padding:0; }
     .ms-container .da-section { margin:16px; }
     .ms-container .da-resource-layout { padding:16px; }
-    .ms-container #da-trips-container { padding:16px; }
     .ms-container #da-bunk-overrides-container { padding:16px; }
     .ms-container #da-resources-container { padding:16px; }
    
@@ -4776,12 +5237,10 @@ function getMainHTML(useMS) {
         <div class="ms-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
           <div class="da-subtabs">
             <button class="da-subtab active" data-tab="skeleton">Schedule</button>
-            <button class="da-subtab" data-tab="trips">Trips</button>
-            <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
             <button class="da-subtab" data-tab="resources">Resources</button>
-           
+
           </div>
-          
+
           <div id="da-pane-skeleton" class="da-pane active">
             <div id="da-rainy-panel"></div>
             <div id="da-displaced-tiles-panel" style="display:none;"></div>
@@ -4799,14 +5258,8 @@ function getMainHTML(useMS) {
       <div id="da-skeleton-grid"></div>
     </div>
   </div>
-`}          </div>
-          
-          <div id="da-pane-trips" class="da-pane">
-            <div id="da-trips-container"></div>
-          </div>
-          
-          <div id="da-pane-bunk-overrides" class="da-pane">
-            <div id="da-bunk-overrides-container"></div>
+`}
+            <div id="da-bunk-overrides-container" style="display:none;"></div>
           </div>
           
           <div id="da-pane-resources" class="da-pane">
@@ -4829,11 +5282,9 @@ function getMainHTML(useMS) {
       <div class="da-main">
         <div class="da-subtabs">
           <button class="da-subtab active" data-tab="skeleton">Schedule</button>
-          <button class="da-subtab" data-tab="trips">Trips</button>
-          <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
         </div>
-        
+
         <div id="da-pane-skeleton" class="da-pane active">
           <div id="da-rainy-panel"></div>
           <div id="da-displaced-tiles-panel" style="display:none;"></div>
@@ -4842,14 +5293,7 @@ function getMainHTML(useMS) {
           <div class="da-grid-wrapper">
             <div id="da-skeleton-grid"></div>
           </div>
-        </div>
-        
-        <div id="da-pane-trips" class="da-pane">
-          <div id="da-trips-container"></div>
-        </div>
-        
-        <div id="da-pane-bunk-overrides" class="da-pane">
-          <div id="da-bunk-overrides-container"></div>
+          <div id="da-bunk-overrides-container" style="display:none;"></div>
         </div>
         
        <div id="da-pane-resources" class="da-pane">
@@ -5058,7 +5502,6 @@ function init() {
   renderDisplacedTilesPanel();
   renderToolbar();
   renderGrid();
-  renderTripsForm();
   renderBunkOverridesUI();
   renderResourceOverridesUI();
   if (window.RotationEvents?.injectSubtab) window.RotationEvents.injectSubtab();
@@ -5086,13 +5529,13 @@ function init() {
   // ★ v7.0: Re-render trips when cloud data syncs (trips may arrive after init)
   window.addEventListener('campistry-cloud-sync', function() {
     const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-    // Merge: if cloud has trips that localStorage doesn't, sync them in
-    loadDailyTrips(dateKey); // triggers cross-sync
+    loadDailyTrips(dateKey);
     renderTripsForm();
+    renderToolbar();
   });
-  // Also listen for schedule-saved events (trips are part of daily_schedules)
   window.addEventListener('campistry-schedule-saved', function() {
     renderTripsForm();
+    renderToolbar();
   });
 }
     

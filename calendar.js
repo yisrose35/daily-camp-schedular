@@ -157,10 +157,35 @@
     // 3. DAILY DATA API
     // ==========================================================
     
+    // In-memory cache for loadAllDailyData. Reading + JSON.parsing this blob is
+    // ~10ms when localStorage is near quota; the solver calls this from inside
+    // canBlockFit on every candidate evaluation (~10k+ times per generate),
+    // which used to be 130+ seconds of pure parse cost. Cache by raw-string
+    // identity so any external setItem (which produces a different raw string)
+    // automatically invalidates on the next read.
+    let _dailyDataCacheRaw = null;
+    let _dailyDataCacheParsed = null;
+    let _dailyDataMemoryOverride = null;
+    window.invalidateDailyDataCache = function() {
+        _dailyDataCacheRaw = null;
+        _dailyDataCacheParsed = null;
+    };
+    window.setDailyDataMemoryOverride = function(data) {
+        _dailyDataMemoryOverride = data;
+        _dailyDataCacheRaw = null;
+        _dailyDataCacheParsed = null;
+    };
     window.loadAllDailyData = function() {
+        if (_dailyDataMemoryOverride) return _dailyDataMemoryOverride;
         try {
             const raw = localStorage.getItem(DAILY_DATA_KEY);
-            return raw ? JSON.parse(raw) : {};
+            if (raw === _dailyDataCacheRaw && _dailyDataCacheParsed !== null) {
+                return _dailyDataCacheParsed;
+            }
+            const parsed = raw ? JSON.parse(raw) : {};
+            _dailyDataCacheRaw = raw;
+            _dailyDataCacheParsed = parsed;
+            return parsed;
         } catch {
             return {};
         }
@@ -300,6 +325,9 @@ all[date].updated_at = new Date().toISOString();
                 }
             }
 
+            // Clear rotation_counts table in Supabase
+            await window.RotationCloud?.clearAll?.();
+
             console.log("✅ All rotation histories cleared.");
             alert("Activity & Smart Tile History reset successfully!");
             window.location.reload();
@@ -397,8 +425,11 @@ all[date].updated_at = new Date().toISOString();
                 }
             }
             
+            // Clear rotation_counts table in Supabase
+            await window.RotationCloud?.clearAll?.();
+
             console.log("⭐ NEW HALF RESET COMPLETE ⭐");
-            
+
             alert(
                 "✅ New Half Started!\n\n" +
                 "All activity and league counters have been reset.\n" +
@@ -960,6 +991,9 @@ all[date].updated_at = new Date().toISOString();
             // Clear league gamesPerDate — all schedule-derived game counts are now stale
             window.SchedulerCoreLeagues?.clearAllGamesPerDate?.();
             window.SchedulerCoreSpecialtyLeagues?.clearAllGamesPerDate?.();
+
+            // Clear cloud rotation counts
+            window.RotationCloud?.clearAll?.();
 
             // Reset leagueRoundState — currentRound/sportRotationIndex are stale with no schedules
             window.leagueRoundState = {};

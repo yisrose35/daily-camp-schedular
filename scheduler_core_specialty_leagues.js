@@ -512,14 +512,42 @@ for (const futureDate of Object.keys(allDailyData)) {
             return [];
         }
 
-        // ★★★ FILTER OUT ALREADY-LOCKED FIELDS ★★★
-        let availableFields = [...fields];
+        // ★★★ FILTER OUT DISABLED AND ALREADY-LOCKED FIELDS ★★★
+        const _disabledSet = new Set(window.currentDisabledFields || []);
+        let availableFields = fields.filter(f => !_disabledSet.has(f));
         if (window.GlobalFieldLocks && slots && slots.length > 0) {
-            availableFields = window.GlobalFieldLocks.filterAvailableFields(fields, slots);
+            availableFields = window.GlobalFieldLocks.filterAvailableFields(availableFields, slots);
 
             const lockedFields = fields.filter(f => !availableFields.includes(f));
             if (lockedFields.length > 0) {
                 console.log(`[SpecialtyLeagues] ⚠️ Fields already locked: ${lockedFields.join(', ')}`);
+            }
+        }
+
+        // ★★★ FILTER OUT FIELDS BLOCKED BY TIME RULES ★★★
+        if (slots && slots.length > 0) {
+            const _divSlots = window.divisionTimes?.[Object.keys(window.divisionTimes || {})[0]] || [];
+            const _slotStart = _divSlots[slots[0]]?.startMin;
+            const _slotEnd = _divSlots[slots[slots.length - 1]]?.endMin;
+            if (_slotStart != null && _slotEnd != null) {
+                const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                availableFields = availableFields.filter(fName => {
+                    const rules = window.activityProperties?.[fName]?.timeRules;
+                    if (!rules || rules.length === 0) return true;
+                    let hasAvail = false, inAvail = false;
+                    for (const r of rules) {
+                        const rS = r.startMin ?? (_parseMin ? _parseMin(r.start || r.startTime) : null);
+                        const rE = r.endMin ?? (_parseMin ? _parseMin(r.end || r.endTime) : null);
+                        if (rS == null || rE == null) continue;
+                        const rType = (r.type || '').toLowerCase();
+                        if ((rType === 'unavailable' || r.available === false) && rS < _slotEnd && rE > _slotStart) return false;
+                        if (rType === 'available' || r.available === true) {
+                            hasAvail = true;
+                            if (_slotStart >= rS && _slotEnd <= rE) inAvail = true;
+                        }
+                    }
+                    return !hasAvail || inAvail;
+                });
             }
         }
 
@@ -550,6 +578,20 @@ for (const futureDate of Object.keys(allDailyData)) {
         const fieldGamesCount = {};
         availableFields.forEach(f => fieldGamesCount[f] = 0);
 
+        // Combo-aware "effective games count": at slotOrder N, all of
+        // {Full Gym, Gym 1, Gym 2} share capacity — a game on any one of them
+        // consumes that slot for the others. Compute the effective count as
+        // the max of the field's own count and its combo partners' counts.
+        const _effectiveGames = (field) => {
+            let v = fieldGamesCount[field] || 0;
+            const partners = window.FieldCombos?.getExclusiveFields?.(field) || [];
+            for (const p of partners) {
+                const pv = fieldGamesCount[p];
+                if (pv != null && pv > v) v = pv;
+            }
+            return v;
+        };
+
         workingMatchups = workingMatchups.map(m => ({
             ...m,
             waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, id)
@@ -564,7 +606,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             let minGames = Infinity;
 
             for (const field of availableFields) {
-                const currentGames = fieldGamesCount[field];
+                const currentGames = _effectiveGames(field);
                 const maxGames = gamesPerFieldSlot || 3;
 
                 if (currentGames < maxGames && currentGames < minGames) {
@@ -578,7 +620,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             }
 
             if (bestField) {
-                const slotOrder = fieldGamesCount[bestField] + 1;
+                const slotOrder = _effectiveGames(bestField) + 1;
                 assignments.push({
                     teamA: matchup.teamA,
                     teamB: matchup.teamB,
@@ -588,7 +630,15 @@ for (const futureDate of Object.keys(allDailyData)) {
                     isInterConference: matchup.isInterConference
                 });
 
-                fieldGamesCount[bestField]++;
+                fieldGamesCount[bestField] = slotOrder;
+                // Bump combo partners to the same slotOrder so a future game
+                // can't be assigned to a partner at the slot we just consumed.
+                const partners = window.FieldCombos?.getExclusiveFields?.(bestField) || [];
+                for (const p of partners) {
+                    if (fieldGamesCount[p] != null && fieldGamesCount[p] < slotOrder) {
+                        fieldGamesCount[p] = slotOrder;
+                    }
+                }
                 assignedMatchups.add(matchupKey);
                 console.log(`[SpecialtyLeagues] ✅ Assigned ${matchup.teamA} vs ${matchup.teamB} to ${bestField} (slot ${slotOrder})`);
             }
@@ -763,6 +813,18 @@ for (const futureDate of Object.keys(allDailyData)) {
             // ★★★ ASSIGN MATCHUPS - RESPECTING GLOBAL LOCKS ★★★
             const assignments = assignMatchupsToFieldsAndSlots(matchups, league, history, uniqueSlots);
 
+            // Carry playoff sport through to assignments for display/downstream
+            if (_playoffRoundNum && assignments.length > 0) {
+                const _muSportMap = {};
+                matchups.forEach(function (m) {
+                    if (m._playoffSport) _muSportMap[m.teamA + '|' + m.teamB] = m._playoffSport;
+                });
+                assignments.forEach(function (a) {
+                    var _ps = _muSportMap[a.teamA + '|' + a.teamB];
+                    if (_ps) a._playoffSport = _ps;
+                });
+            }
+
             if (assignments.length === 0) {
                 console.log(`[SpecialtyLeagues] ❌ No assignments made`);
                 continue;
@@ -776,16 +838,6 @@ for (const futureDate of Object.keys(allDailyData)) {
             console.log(`\n[SpecialtyLeagues] 🔒 LOCKING FIELDS: ${usedFields.join(', ')}`);
 
             if (window.GlobalFieldLocks) {
-    // ★★★ FIX: Include time range for cross-division lock detection ★★★
-    const divSlots = window.divisionTimes?.[divName] || [];
-    let lockStartMin = null, lockEndMin = null;
-    if (uniqueSlots.length > 0 && divSlots[uniqueSlots[0]]) {
-        lockStartMin = divSlots[uniqueSlots[0]].startMin;
-        const lastSlot = divSlots[uniqueSlots[uniqueSlots.length - 1]];
-        lockEndMin = lastSlot?.endMin || (lockStartMin + 40);
-    }
-    
-   // ★★★ FIX v13.1: Include time range for cross-division lock detection ★★★
 var _specDivSlots = window.divisionTimes?.[divName] || [];
 var _specLockStart = null, _specLockEnd = null;
 if (uniqueSlots.length > 0 && _specDivSlots[uniqueSlots[0]]) {
@@ -858,7 +910,8 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                     _gameLabel: gameLabel,
                     _leagueName: league.name,
                     _isSpecialtyLeague: true,
-                    _assignments: assignments
+                    _assignments: assignments,
+                    _playoffRound: _playoffRoundNum || null
                 };
 
                 fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);

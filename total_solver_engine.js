@@ -54,6 +54,14 @@
     var _normalizedNames = new Map();
     var _rotationScoreCache = new Map();
     var _todayCache = new Map();
+    // Generation counter — bumped whenever _todayCache is cleared. Per-block caches
+    // (e.g. block._cachedOtherActs) compare against this to know when to refresh.
+    var _todayCacheGen = 0;
+    // Override .clear() to bump the generation counter automatically.
+    (function() {
+        var _origClear = _todayCache.clear.bind(_todayCache);
+        _todayCache.clear = function() { _todayCacheGen++; _origClear(); };
+    })();
     var _fieldTimeIndex = new Map();
     var _fieldPropertyMap = new Map();
     var _rotationScoreMap = new Map();
@@ -72,6 +80,9 @@
     var _timeConstrainedBoost = new Map();
     var _skeletonContext = new Map();
     var _smallBunkFlags = new Set();
+    var _sportPlayerReqs = new Map();   // actNorm → { min, max } cached sport player rules
+    var _bunkSizeCache = new Map();     // bunk → size (camper count) cached once per solve
+    var _comboExclusiveMap = new Map(); // fieldNorm → [partnerFieldNorm, …] cached combo partners
     var _passNumber = 0;
     var _passAnalysis = null;
 
@@ -95,6 +106,8 @@
         _isRainyDay = false; _rainyCapOverrides.clear(); _rainyTimeBypasses.clear();
         _perfCounters = { rotationCacheHits: 0, rotationCacheMisses: 0, timeIndexQueries: 0, domainPruned: 0, augmentingPathAttempts: 0, augmentingPathSuccesses: 0 };
         _fieldGroupMap = {}; _fieldGroups = {}; _divisionSeniorityMap = {};
+        _sportPlayerReqs.clear(); _bunkSizeCache.clear(); _comboExclusiveMap.clear();
+        if (window.RotationEngine?.invalidateMetaCaches) window.RotationEngine.invalidateMetaCaches();
     }
     // ========================================================================
     // LOGGING
@@ -249,7 +262,51 @@
             if (!prefProps?.preferences?.enabled) { var actProps = props[cand.activityName]; if (actProps?.preferences?.enabled) prefProps = actProps; }
             if (prefProps?.preferences?.enabled) { prefList = prefProps.preferences.list || []; prefExclusive = !!prefProps.preferences.exclusive; }
 
-           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, hasProps: true });
+            // ★ Cache accessRestrictions so the hard-constraint check below can run without
+            //   re-traversing fieldProps on every candidate evaluation.
+            var accessRestrictionsCache = null;
+            if (fieldProps.accessRestrictions && fieldProps.accessRestrictions.enabled === true) {
+                accessRestrictionsCache = {
+                    enabled: true,
+                    divisions: fieldProps.accessRestrictions.divisions || {}
+                };
+            }
+
+            // ★ Cache timeRules (split by type) so the hard constraint can fire
+            //   regardless of whether canBlockFit's gated path runs.
+            var unavailableRulesCache = null;
+            var availableRulesCache = null;
+            var rawTR = fieldProps.timeRules;
+            if (Array.isArray(rawTR) && rawTR.length > 0) {
+                for (var trI = 0; trI < rawTR.length; trI++) {
+                    var trRule = rawTR[trI];
+                    var trStart = trRule.startMin;
+                    var trEnd = trRule.endMin;
+                    if (trStart == null && (trRule.start || trRule.startTime)) {
+                        trStart = (window.SchedulerCoreUtils?.parseTimeToMinutes)?.(trRule.start || trRule.startTime);
+                    }
+                    if (trEnd == null && (trRule.end || trRule.endTime)) {
+                        trEnd = (window.SchedulerCoreUtils?.parseTimeToMinutes)?.(trRule.end || trRule.endTime);
+                    }
+                    if (trStart == null || trEnd == null) continue;
+                    var trCached = { startMin: trStart, endMin: trEnd, divisions: Array.isArray(trRule.divisions) ? trRule.divisions : null };
+                    var trType = (trRule.type || '').toLowerCase();
+                    var isAvail = trType === 'available' || trRule.available === true;
+                    var isUnavail = trType === 'unavailable' || trRule.available === false;
+                    if (isUnavail) {
+                        if (!unavailableRulesCache) unavailableRulesCache = [];
+                        unavailableRulesCache.push(trCached);
+                    } else if (isAvail) {
+                        if (!availableRulesCache) availableRulesCache = [];
+                        availableRulesCache.push(trCached);
+                    }
+                }
+            }
+
+           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
+            if (unavailableRulesCache || availableRulesCache) {
+                v12Log('[TIME-RULES] Cached ' + (unavailableRulesCache ? unavailableRulesCache.length : 0) + ' unavailable + ' + (availableRulesCache ? availableRulesCache.length : 0) + ' available rules for "' + fieldName + '"');
+            }
         }
 
         // ★★★ FIX v15.4: Also index SPECIALS in _fieldPropertyMap ★★★
@@ -425,13 +482,30 @@
     function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
         if (startMin === undefined || endMin === undefined) return null;
         var fieldNorm = normName(fieldName);
-        var entries = _fieldTimeIndex.get(fieldNorm); if (!entries) return null;
-        var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
-        for (var i = 0; i < upperBound; i++) {
-            var e = entries[i];
-            if (e.divName === blockDivName) continue;
-            if (e.bunk === excludeBunk) continue;
-            if (e.endMin > startMin) return { conflictingDiv: e.divName, conflictingBunk: e.bunk, theirTime: e.startMin + '-' + e.endMin, ourTime: startMin + '-' + endMin, overlapTime: Math.max(startMin, e.startMin) + '-' + Math.min(endMin, e.endMin) };
+        // Check the field itself
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (entries) {
+            var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
+            for (var i = 0; i < upperBound; i++) {
+                var e = entries[i];
+                if (e.divName === blockDivName) continue;
+                if (e.bunk === excludeBunk) continue;
+                if (e.endMin > startMin) return { conflictingDiv: e.divName, conflictingBunk: e.bunk, theirTime: e.startMin + '-' + e.endMin, ourTime: startMin + '-' + endMin, overlapTime: Math.max(startMin, e.startMin) + '-' + Math.min(endMin, e.endMin) };
+            }
+        }
+        // Check combo-exclusive partners (e.g. "Full Gym" blocks "Gym 1"/"Gym 2" and vice versa)
+        var comboPartners = _comboExclusiveMap.get(fieldNorm);
+        if (comboPartners) {
+            for (var cpi = 0; cpi < comboPartners.length; cpi++) {
+                var cpEntries = _fieldTimeIndex.get(comboPartners[cpi]);
+                if (!cpEntries) continue;
+                var cpUpper = findFirstOverlapIndex(cpEntries, startMin, endMin);
+                for (var cpj = 0; cpj < cpUpper; cpj++) {
+                    var cpe = cpEntries[cpj];
+                    if (cpe.bunk === excludeBunk) continue;
+                    if (cpe.endMin > startMin) return { conflictingDiv: cpe.divName, conflictingBunk: cpe.bunk, theirTime: cpe.startMin + '-' + cpe.endMin, ourTime: startMin + '-' + endMin, overlapTime: Math.max(startMin, cpe.startMin) + '-' + Math.min(endMin, cpe.endMin), comboConflict: comboPartners[cpi] };
+                }
+            }
         }
         return null;
     }
@@ -472,10 +546,12 @@
             if (lockStartMin < endMin && lockEndMin > startMin) return true;
         }
         
-        // ★★★ COMBINED FIELD CHECK ★★★
-        if (window.FieldCombos?.isBlockedByCombo) {
-            var comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, null);
-            if (comboCheck.blocked) return true;
+        // ★★★ COMBINED FIELD CHECK (uses solver's cached map, no dependency on FieldCombos API) ★★★
+        var _cflPartners = _comboExclusiveMap.get(normName(fieldName));
+        if (_cflPartners) {
+            for (var _cfli = 0; _cfli < _cflPartners.length; _cfli++) {
+                if (getFieldUsageFromTimeIndex(_cflPartners[_cfli], startMin, endMin, null) > 0) return true;
+            }
         }
         return false;
     }
@@ -617,28 +693,133 @@
         if (actNorm && actNorm !== 'free' && actNorm !== 'free play') {
             var todayDone = getActivitiesDoneToday(bunk, slots[0] ?? 999);
             if (todayDone.has(actNorm)) return 999999;
-           // v14.3: Direct live check — also check field name for robustness
-            var liveSlots = window.scheduleAssignments?.[bunk] || [];
-            var mySlotSet = new Set(slots);
-            for (var lsi = 0; lsi < liveSlots.length; lsi++) {
-                if (mySlotSet.has(lsi)) continue;
-                var lsEntry = liveSlots[lsi];
-                if (!lsEntry || lsEntry.continuation || lsEntry._isTransition) continue;
-                var lsAct = normName(lsEntry._activity || lsEntry.sport || '');
-                var lsField = normName(lsEntry.field || '');
-                if ((lsAct && lsAct === actNorm) || (lsField && lsField !== 'free' && lsAct === actNorm)) return 999999;
+            // v14.3 (cached): activities already booked in OTHER slots for this bunk.
+            // Was previously a per-candidate linear scan over liveSlots; with ~50
+            // candidates × 67 blocks × 3 passes, that scan dominated solve time.
+            // Cached on the block itself, invalidated by _todayCacheGen.
+            var otherActs = block._cachedOtherActs;
+            if (!otherActs || block._cachedOtherActsGen !== _todayCacheGen) {
+                otherActs = new Set();
+                var _liveSlots = window.scheduleAssignments?.[bunk] || [];
+                var _mySlotSet = slots.length ? new Set(slots) : null;
+                for (var _lsi = 0; _lsi < _liveSlots.length; _lsi++) {
+                    if (_mySlotSet && _mySlotSet.has(_lsi)) continue;
+                    var _lsE = _liveSlots[_lsi];
+                    if (!_lsE || _lsE.continuation || _lsE._isTransition) continue;
+                    var _lsA = normName(_lsE._activity || _lsE.sport || '');
+                    if (_lsA) otherActs.add(_lsA);
+                }
+                block._cachedOtherActs = otherActs;
+                block._cachedOtherActsGen = _todayCacheGen;
+            }
+            if (otherActs.has(actNorm)) return 999999;
+        }
+
+        // ★ HARD CONSTRAINT: cooldown rules from rules.js (e.g. "Full Gym must
+        //   be ≥20min from Lunch"). The combo-aware facility descriptor in
+        //   blockMatchesDescriptor means a rule on Full Gym also blocks
+        //   Gym 1 / Gym 2 in the gap window. Template is cached per block.
+        if (window.SchedulingRules && window.SchedulingRules.isCandidateAllowed && blockStart !== undefined && blockEnd !== undefined) {
+            var _cdRules = window.SchedulingRules.getCooldownRules?.() || [];
+            if (_cdRules.length > 0) {
+                var _cdTemplate = block._cachedRuleTemplate;
+                if (!_cdTemplate || block._cachedRuleTemplateGen !== _todayCacheGen) {
+                    _cdTemplate = [];
+                    var _cdLive = window.scheduleAssignments?.[bunk] || [];
+                    var _cdMySet = slots.length ? new Set(slots) : null;
+                    var _cdDivSlots = (blockDivName && window.divisionTimes && window.divisionTimes[blockDivName]) || [];
+                    for (var _cdi = 0; _cdi < _cdLive.length; _cdi++) {
+                        if (_cdMySet && _cdMySet.has(_cdi)) continue;
+                        var _cdE = _cdLive[_cdi];
+                        if (!_cdE || _cdE.continuation || _cdE._isTransition) continue;
+                        var _cdSM = _cdE._startMin, _cdEM = _cdE._endMin;
+                        if (_cdSM == null || _cdEM == null) {
+                            var _cdSlot = _cdDivSlots[_cdi];
+                            if (_cdSlot) { _cdSM = _cdSlot.startMin; _cdEM = _cdSlot.endMin; }
+                        }
+                        if (_cdSM == null || _cdEM == null) continue;
+                        _cdTemplate.push({
+                            startMin: _cdSM, endMin: _cdEM,
+                            type: _cdE._type || '',
+                            event: _cdE._activity || _cdE.sport || _cdE.field || '',
+                            field: _cdE.field || '',
+                            _assignedSpecial: _cdE._assignedSpecial || null,
+                            _specialLocation: _cdE._specialLocation || null
+                        });
+                    }
+                    block._cachedRuleTemplate = _cdTemplate;
+                    block._cachedRuleTemplateGen = _todayCacheGen;
+                }
+                var _cdCand = {
+                    startMin: blockStart, endMin: blockEnd,
+                    type: pick._type || '',
+                    event: pick._activity || pick.field || '',
+                    field: pick.field || '',
+                    _assignedSpecial: pick._type === 'special' ? (pick._activity || pick.field) : null,
+                    _specialLocation: pick._type === 'special' ? pick.field : null
+                };
+                if (!window.SchedulingRules.isCandidateAllowed(_cdCand, _cdTemplate, { mode: 'auto' })) {
+                    return 999999;
+                }
             }
         }
+
         if (fieldName && fieldName !== 'Free' && blockDivName && blockStart !== undefined && blockEnd !== undefined) {
             var fp = _fieldPropertyMap.get(fieldName);
             var sType = fp ? fp.sharingType : getSharingType(fieldName);
             var cap = fp ? fp.capacity : getFieldCapacity(fieldName);
             if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
+            // Combined field: block if ANY combo partner is in use (same or different division)
+            var _cbPartners = _comboExclusiveMap.get(fieldNorm);
+            if (_cbPartners) {
+                for (var _cbi = 0; _cbi < _cbPartners.length; _cbi++) {
+                    if (getFieldUsageFromTimeIndex(_cbPartners[_cbi], blockStart, blockEnd, bunk) > 0) return 999999;
+                }
+            }
             if (checkSameFieldActivityMismatch(fieldName, blockStart, blockEnd, act, bunk)) return 999999;
             if (sType === 'not_sharable') { if (getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk) >= cap) return 999999; }
             else { if (countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk) >= cap) return 999999; }
         }
         var fieldProp = _fieldPropertyMap.get(fieldName);
+        // ★ HARD CONSTRAINT: accessRestrictions division access — never assign a field
+        //   to a division that isn't in its allowed list.
+        if (fieldProp?.accessRestrictions?.enabled && blockDivName) {
+            if (!(blockDivName in fieldProp.accessRestrictions.divisions)) return 999999;
+            var luBunkRule = fieldProp.accessRestrictions.divisions[blockDivName];
+            if (Array.isArray(luBunkRule) && luBunkRule.length > 0) {
+                var bs = String(bunk), bn = parseInt(bunk);
+                var ok = false;
+                for (var lui = 0; lui < luBunkRule.length; lui++) {
+                    var br = luBunkRule[lui];
+                    if (String(br) === bs || parseInt(br) === bn) { ok = true; break; }
+                }
+                if (!ok) return 999999;
+            }
+        }
+        // ★ HARD CONSTRAINT: field timeRules — never assign during an Unavailable
+        //   window, and only inside an Available window when one is configured.
+        if (fieldProp && blockStart !== undefined && blockEnd !== undefined) {
+            var unRules = fieldProp.unavailableRules;
+            if (unRules) {
+                for (var unI = 0; unI < unRules.length; unI++) {
+                    var unR = unRules[unI];
+                    if (unR.divisions && unR.divisions.length > 0 && blockDivName && unR.divisions.indexOf(blockDivName) === -1) continue;
+                    if (unR.startMin < blockEnd && unR.endMin > blockStart) return 999999;
+                }
+            }
+            var avRules = fieldProp.availableRules;
+            if (avRules && avRules.length > 0) {
+                var anyAvail = avRules.some(function(av) {
+                    if (av.divisions && av.divisions.length > 0 && blockDivName && av.divisions.indexOf(blockDivName) === -1) return false;
+                    return blockStart >= av.startMin && blockEnd <= av.endMin;
+                });
+                // Only enforce if at least one Available rule applies to this division
+                var anyApplicable = avRules.some(function(av) {
+                    return !av.divisions || av.divisions.length === 0 || !blockDivName || av.divisions.indexOf(blockDivName) !== -1;
+                });
+                if (anyApplicable && !anyAvail) return 999999;
+            }
+        }
         if (fieldProp?.prefList) { if (fieldProp.prefList.indexOf(blockDivName) === -1 && fieldProp.prefExclusive) return 999999; }
         else { var actPrefProps = activityProperties[act]; if (actPrefProps?.preferences?.enabled && (actPrefProps.preferences.list || []).indexOf(blockDivName) === -1 && actPrefProps.preferences.exclusive) return 999999; }
         var rotationPenalty = getPrecomputedRotationScore(bunk, act);
@@ -690,6 +871,10 @@
 
         // === SOFT PENALTIES ===
         penalty += rotationPenalty;
+        // Yesterday-repeat floor: solver bonuses must never fully negate a strong rotation penalty
+        if (rotationPenalty >= 50000) {
+            penalty = Math.max(penalty, 25000);
+        }
         if (actNorm === 'free' || fieldName === 'Free') penalty += 100000;
 
         // Type balance for GA Slots
@@ -710,8 +895,35 @@
         if (fieldProp?.prefList) { var prefIdx = fieldProp.prefList.indexOf(blockDivName); if (prefIdx !== -1) penalty -= (50 - prefIdx * 5); else penalty += 8000; }
         else { var actPrefProps2 = activityProperties[act]; if (actPrefProps2?.preferences?.enabled) { var prefIdx2 = (actPrefProps2.preferences.list || []).indexOf(blockDivName); if (prefIdx2 !== -1) penalty -= (50 - prefIdx2 * 5); else penalty += 8000; } }
 
-        // Sharing incentive
-        // ★★★ FIELD GROUP SENIORITY PENALTY ★★★
+        // ★★★ UNIFIED FIELD-OCCUPANCY SCAN ★★★
+        // Three penalty blocks (field-group quality, sharing incentive, fill-to-capacity)
+        // each previously walked _fieldTimeIndex.get(fieldNorm) independently for every
+        // candidate evaluation. Combine into a single pass — same conditions, three
+        // sets of counters — to cut the per-candidate work to ~1/3.
+        var _hasTime = blockStart !== undefined && blockEnd !== undefined;
+        var _wantOccupancy = fieldName && fieldName !== 'Free' && _hasTime;
+        var occOccupied = false, occSameAct = false, occOccupierSeniority = Infinity;
+        var occSameDivCount = 0, occSameDivSameAct = true;
+        if (_wantOccupancy) {
+            var occEntries = _fieldTimeIndex.get(fieldNorm) || [];
+            for (var occi = 0; occi < occEntries.length; occi++) {
+                var occE = occEntries[occi];
+                if (occE.bunk === bunk) continue;
+                if (occE.endMin <= blockStart || occE.startMin >= blockEnd) continue;
+                occOccupied = true;
+                if (occE.activityName && occE.activityName === actNorm) occSameAct = true;
+                var _occSen = _divisionSeniorityMap[occE.divName];
+                if (_occSen !== undefined && _occSen < occOccupierSeniority) occOccupierSeniority = _occSen;
+                if (occE.divName === blockDivName) {
+                    occSameDivCount++;
+                    if (occE.activityName && occE.activityName !== actNorm) occSameDivSameAct = false;
+                }
+            }
+        }
+
+        // ★★★ FIELD GROUP QUALITY PREFERENCE ★★★
+        // Always prefer best available free field (lowest qualityRank).
+        // Yield to more senior divisions only when the field is already occupied.
         if (fieldName && fieldName !== 'Free') {
             var fgInfo = _fieldGroupMap[fieldName];
             if (fgInfo) {
@@ -720,45 +932,39 @@
                 if (groupMembers && divSeniority !== undefined) {
                     var fieldQR = fgInfo.qualityRank;
                     var totalInGroup = groupMembers.length;
-                    var idealRank = divSeniority + 1;
-                    if (fieldQR === idealRank) {
-                        // Perfect match: this division's seniority = this field's quality
-                        penalty -= 8000;
-                    } else if (idealRank <= totalInGroup) {
-                        var rankDiff = Math.abs(fieldQR - idealRank);
-                        if (fieldQR < idealRank) {
-                            // Getting a BETTER field than seniority warrants — leave it for seniors
-                            penalty += 4000 + rankDiff * 2000;
-                        } else {
-                            // Getting a WORSE field — ok if better ones are taken
-                            penalty += 1000 + rankDiff * 500;
-                        }
+                    var fgQualityBonus = (totalInGroup - fieldQR + 1) * 1500;
+
+                    if (!occOccupied) {
+                        penalty -= fgQualityBonus;
+                    } else if (divSeniority <= occOccupierSeniority) {
+                        penalty -= Math.round(fgQualityBonus * 0.5);
                     } else {
-                        // More divisions than fields in group — prefer lower-ranked fields
-                        penalty += (totalInGroup - fieldQR) * 1500;
+                        var idealRank = divSeniority + 1;
+                        if (fieldQR < idealRank) {
+                            penalty += 3000 + (idealRank - fieldQR) * 1500;
+                        } else {
+                            penalty -= Math.round(fgQualityBonus * 0.25);
+                        }
                     }
                 }
             }
         }
-        if (fieldName && fieldName !== 'Free' && slots.length > 0 && blockStart !== undefined && blockEnd !== undefined) {
-            var sharingEntries = _fieldTimeIndex.get(fieldNorm) || [];
-            var fieldOccupied = false, sameActivityOnField = false;
-            for (var sei = 0; sei < sharingEntries.length; sei++) { var se = sharingEntries[sei]; if (se.bunk === bunk) continue; if (se.endMin <= blockStart || se.startMin >= blockEnd) continue; fieldOccupied = true; if (se.activityName && se.activityName === actNorm) sameActivityOnField = true; }
-           if (sameActivityOnField) penalty -= 1500;
-else if (fieldOccupied) penalty += 500;
-else penalty += 200;
+
+        // Sharing incentive — uses occupancy data computed above
+        if (_wantOccupancy && slots.length > 0) {
+            if (occSameAct) penalty -= 1500;
+            else if (occOccupied) penalty += 500;
+            else penalty += 200;
         }
-        // Fill-to-capacity
-        if (fieldName && fieldName !== 'Free' && blockStart !== undefined && blockEnd !== undefined) {
+
+        // Fill-to-capacity — uses same-division counters from the scan above
+        if (_wantOccupancy) {
             var fcFp = _fieldPropertyMap.get(fieldName);
             var fcCap = fcFp ? fcFp.capacity : getFieldCapacity(fieldName);
-            var fcSameDiv = 0, fcSameAct = true;
-            var fcEntries = _fieldTimeIndex.get(fieldNorm) || [];
-            for (var fci = 0; fci < fcEntries.length; fci++) { var fce = fcEntries[fci]; if (fce.bunk === bunk) continue; if (fce.endMin <= blockStart || fce.startMin >= blockEnd) continue; if (fce.divName === blockDivName) { fcSameDiv++; if (fce.activityName && fce.activityName !== actNorm) fcSameAct = false; } }
-            if (fcCap > 1 && fcSameAct) {
-                var spotsLeft = fcCap - 1 - fcSameDiv;
-                if (fcSameDiv > 0 && spotsLeft >= 0) { var fillRatio = fcSameDiv / (fcCap - 1); penalty -= Math.round(1500 + (fillRatio * 2000)); }
-                if (fcSameDiv === 0 && fcCap > 1) penalty += 500;
+            if (fcCap > 1 && occSameDivSameAct) {
+                var spotsLeft = fcCap - 1 - occSameDivCount;
+                if (occSameDivCount > 0 && spotsLeft >= 0) { var fillRatio = occSameDivCount / (fcCap - 1); penalty -= Math.round(1500 + (fillRatio * 2000)); }
+                if (occSameDivCount === 0 && fcCap > 1) penalty += 500;
             }
         }
         // Adjacent bunk distance
@@ -791,6 +997,41 @@ else penalty += 200;
             var prevZone = null;
             if (slots.length > 0 && slots[0] > 0) { var prevEntry = bunkAssigns[slots[0] - 1]; if (prevEntry && prevEntry.field && prevEntry.field !== 'Free') prevZone = window.getZoneForField?.(prevEntry.field); }
             if (myZone && prevZone) { var mzn = (typeof myZone === 'object') ? (myZone.name || '') : myZone; var pzn = (typeof prevZone === 'object') ? (prevZone.name || '') : prevZone; if (mzn && pzn) { if (mzn === pzn) penalty -= 300; else penalty += 500; } }
+        }
+        // ★ Player count enforcement — penalise picks that would violate min/max rules
+        if (_sportPlayerReqs.size > 0 && actNorm && _hasTime) {
+            var _pcReq = _sportPlayerReqs.get(actNorm);
+            if (_pcReq) {
+                var _pcMySize = _bunkSizeCache.get(bunk) || 0;
+                if (_pcMySize > 0) {
+                    var _pcProjected = _pcMySize;
+                    var _pcOtherCount = 0;
+                    var _pcActEntries = _fieldTimeIndex.get(actNorm) || [];
+                    for (var _pci = 0; _pci < _pcActEntries.length; _pci++) {
+                        var _pcE = _pcActEntries[_pci];
+                        if (_pcE.bunk === bunk) continue;
+                        if (_pcE.endMin <= blockStart || _pcE.startMin >= blockEnd) continue;
+                        _pcProjected += (_bunkSizeCache.get(_pcE.bunk) || 0);
+                        _pcOtherCount++;
+                    }
+                    if (_pcReq.max > 0 && _pcProjected > _pcReq.max) {
+                        var _pcOverPct = (_pcProjected - _pcReq.max) / _pcReq.max;
+                        if (_pcOverPct > 0.2) return 999999;
+                        else if (_pcOverPct > 0.05) penalty += 20000 + Math.round(_pcOverPct * 50000);
+                        else penalty += 8000;
+                    } else if (_pcReq.min > 0 && _pcProjected < _pcReq.min) {
+                        var _pcUnderPct = (_pcReq.min - _pcProjected) / _pcReq.min;
+                        if (_pcUnderPct > 0.35) return 999999;
+                        else if (_pcUnderPct > 0.2) penalty += 25000;
+                        else penalty += 8000;
+                    } else if (_pcReq.min > 0 && _pcProjected >= _pcReq.min) {
+                        // ★ Valid range bonus: projected is between min and max
+                        penalty -= 15000;
+                        // Extra pull when completing a partial group (another bunk already there)
+                        if (_pcOtherCount > 0) penalty -= 8000;
+                    }
+                }
+            }
         }
         // Time-constrained boost
         if (act) { var tcBoost = _timeConstrainedBoost.get(act); if (tcBoost) penalty -= tcBoost.boost; }
@@ -911,8 +1152,53 @@ else penalty += 200;
         var bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
         var sportMeta = window.getSportMetaData?.() || window.sportMetaData || {};
         var minThresholds = [];
-        for (var sport in sportMeta) { if (sportMeta[sport].minPlayers) minThresholds.push(sportMeta[sport].minPlayers); }
+        for (var sport in sportMeta) {
+            if (sportMeta[sport].minPlayers || sportMeta[sport].maxPlayers) {
+                _sportPlayerReqs.set(normName(sport), { min: sportMeta[sport].minPlayers || 0, max: sportMeta[sport].maxPlayers || 0 });
+            }
+            if (sportMeta[sport].minPlayers) minThresholds.push(sportMeta[sport].minPlayers);
+        }
+        for (var bkName in bunkMeta) { var bkSize = bunkMeta[bkName]?.size || 0; if (bkSize > 0) _bunkSizeCache.set(bkName, bkSize); }
         if (minThresholds.length > 0) { minThresholds.sort(function(a, b) { return a - b; }); var medianMin = minThresholds[Math.floor(minThresholds.length / 2)]; for (var bunkName in bunkMeta) { var size = bunkMeta[bunkName]?.size || 0; if (size > 0 && size < medianMin) _smallBunkFlags.add(bunkName); } }
+        if (_sportPlayerReqs.size > 0) v12Log('Player count rules cached: ' + _sportPlayerReqs.size + ' sports, ' + _bunkSizeCache.size + ' bunks with sizes');
+        // Cache combined-field exclusive partners for fast lookup in penalty/conflict checks
+        _comboExclusiveMap.clear();
+        if (window.FieldCombos?.getExclusiveFields) {
+            var _cfAllNames = new Set(Object.keys(activityProperties));
+            for (var _cfi2 = 0; _cfi2 < allCandidateOptions.length; _cfi2++) {
+                if (allCandidateOptions[_cfi2].field) _cfAllNames.add(allCandidateOptions[_cfi2].field);
+            }
+            var _comboLookupData = window.getFieldComboLookup?.();
+            if (_comboLookupData) {
+                for (var _ck in _comboLookupData.combinedToSubs) _cfAllNames.add(_ck);
+                for (var _sk in _comboLookupData.subToCombined) _cfAllNames.add(_sk);
+            }
+            _cfAllNames.forEach(function(_cfn) {
+                var _cfPartners = window.FieldCombos.getExclusiveFields(_cfn);
+                if (_cfPartners && _cfPartners.length > 0) {
+                    _comboExclusiveMap.set(normName(_cfn), _cfPartners.map(normName));
+                }
+            });
+        }
+        // Fallback: read fieldCombos from global settings if FieldCombos API unavailable or empty
+        if (_comboExclusiveMap.size === 0) {
+            var _fcGs = window.loadGlobalSettings?.() || {};
+            var _fcRaw = _fcGs.app1?.fieldCombos || _fcGs.fieldCombos || {};
+            var _fcEntries = Object.values(_fcRaw);
+            for (var _fci = 0; _fci < _fcEntries.length; _fci++) {
+                var _fcCombo = _fcEntries[_fci];
+                if (!_fcCombo.combinedField || !Array.isArray(_fcCombo.subFields)) continue;
+                var _fcCombNorm = normName(_fcCombo.combinedField);
+                var _fcSubNorms = _fcCombo.subFields.map(normName);
+                // Combined → subs
+                _comboExclusiveMap.set(_fcCombNorm, _fcSubNorms);
+                // Each sub → combined
+                for (var _fsi = 0; _fsi < _fcSubNorms.length; _fsi++) {
+                    _comboExclusiveMap.set(_fcSubNorms[_fsi], [_fcCombNorm]);
+                }
+            }
+        }
+        if (_comboExclusiveMap.size > 0) v12Log('Combined field exclusions cached: ' + _comboExclusiveMap.size + ' fields');
         // Skeleton context
         var bunkBlocks = {};
         for (var bi = 0; bi < activityBlocks.length; bi++) { var blk = activityBlocks[bi]; var bk = blk.bunk; if (!bunkBlocks[bk]) bunkBlocks[bk] = []; bunkBlocks[bk].push({ idx: bi, startTime: blk.startTime || 0, event: blk.event || '' }); }
@@ -990,7 +1276,22 @@ else penalty += 200;
             var activitySupply = {}; for (var afs in actFieldSlots) activitySupply[afs] = actFieldSlots[afs].size;
             var bunkList = blockIndices.map(function(bi2) { return activityBlocks[bi2].bunk; });
             var pairedBunks = new Map();
-            for (var sbi = 0; sbi < bunkList.length; sbi++) { var sBunk = bunkList[sbi]; if (!_smallBunkFlags.has(sBunk) || pairedBunks.has(sBunk)) continue; var myNum = getBunkNumber(sBunk) || 0, bestPartner = null, bestDist = Infinity; for (var pbi = 0; pbi < bunkList.length; pbi++) { var pBunk = bunkList[pbi]; if (pBunk === sBunk) continue; if (pairedBunks.has(pBunk) && pairedBunks.get(pBunk) !== sBunk) continue; var dist = Math.abs((getBunkNumber(pBunk) || 0) - myNum); if (dist < bestDist) { bestDist = dist; bestPartner = pBunk; } } if (bestPartner) pairedBunks.set(sBunk, bestPartner); }
+            // Pair any bunk that can't meet any sport's minimum alone (not just globally small bunks)
+            var _maxMinReq = 0;
+            for (var [, _mmr] of _sportPlayerReqs) { if (_mmr.min > _maxMinReq) _maxMinReq = _mmr.min; }
+            for (var sbi = 0; sbi < bunkList.length; sbi++) {
+                var sBunk = bunkList[sbi]; if (pairedBunks.has(sBunk)) continue;
+                var sBunkSize = bunkSizes[sBunk] || 0;
+                if (sBunkSize >= _maxMinReq && !_smallBunkFlags.has(sBunk)) continue;
+                var myNum = getBunkNumber(sBunk) || 0, bestPartner = null, bestDist = Infinity;
+                for (var pbi = 0; pbi < bunkList.length; pbi++) {
+                    var pBunk = bunkList[pbi]; if (pBunk === sBunk) continue;
+                    if (pairedBunks.has(pBunk) && pairedBunks.get(pBunk) !== sBunk) continue;
+                    var dist = Math.abs((getBunkNumber(pBunk) || 0) - myNum);
+                    if (dist < bestDist) { bestDist = dist; bestPartner = pBunk; }
+                }
+                if (bestPartner) pairedBunks.set(sBunk, bestPartner);
+            }
             var allocated = {}, activityUsed = {};
             var sortedBunks = bunkList.slice().sort(function(a, b) { return (wishLists[a]?.length || 0) - (wishLists[b]?.length || 0); });
             for (var abi = 0; abi < sortedBunks.length; abi++) {
@@ -1003,12 +1304,59 @@ else penalty += 200;
                     var projectedPlayers = bunkSizes[aBunk] || 0;
                     for (var existBunk in allocated) { if (allocated[existBunk] === wish.activity) projectedPlayers += (bunkSizes[existBunk] || 0); }
                     var maxReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(wish.activity);
-                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers * 1.3) continue;
+                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers) continue;
+                    // ★ Min player check: allow if a partner could be pulled in by the repair pass
+                    // Guard: skip enforcement when bunk size data is unconfigured (projectedPlayers === 0)
+                    if (projectedPlayers > 0 && maxReqs?.minPlayers && projectedPlayers < maxReqs.minPlayers) {
+                        // Check if any unallocated bunk could bring us to min
+                        var _canReachMin = false;
+                        for (var _mci = 0; _mci < sortedBunks.length; _mci++) {
+                            var _mcB = sortedBunks[_mci];
+                            if (_mcB === aBunk || allocated[_mcB]) continue;
+                            var _mcTotal = projectedPlayers + (bunkSizes[_mcB] || 0);
+                            if (_mcTotal >= maxReqs.minPlayers && (!maxReqs.maxPlayers || _mcTotal <= maxReqs.maxPlayers)) { _canReachMin = true; break; }
+                        }
+                        if (!_canReachMin) continue;
+                    }
                     allocated[aBunk] = wish.activity; activityUsed[wish.activity] = (activityUsed[wish.activity] || 0) + 1;
                     if (pairedBunks.has(aBunk) && !allocated[pairedBunks.get(aBunk)]) { var prt = pairedBunks.get(aBunk); if ((wishLists[prt] || []).some(function(w) { return w.activity === wish.activity; }) && (activityUsed[wish.activity] || 0) < (activitySupply[wish.activity] || 0)) { allocated[prt] = wish.activity; activityUsed[wish.activity]++; } }
                     break;
                 }
                 if (allocated[aBunk] && wishes2.length > 0 && allocated[aBunk] !== wishes2[0].activity) { var dk2 = aBunk + '|' + wishes2[0].activity; _activityDebt.set(dk2, (_activityDebt.get(dk2) || 0) - 2000); }
+            }
+            // ★ Min-violation repair: find activities under-min and pull in unallocated bunks
+            if (_sportPlayerReqs.size > 0) {
+                var actBunks = {};
+                for (var rpBunk in allocated) { var rpAct = allocated[rpBunk]; if (!actBunks[rpAct]) actBunks[rpAct] = []; actBunks[rpAct].push(rpBunk); }
+                for (var rpAct2 in actBunks) {
+                    var rpReq = _sportPlayerReqs.get(normName(rpAct2));
+                    if (!rpReq || !rpReq.min) continue;
+                    var rpTotal = 0;
+                    actBunks[rpAct2].forEach(function(b) { rpTotal += (bunkSizes[b] || 0); });
+                    if (rpTotal >= rpReq.min) continue;
+                    // Under minimum — try to pull in unallocated or over-served bunks
+                    var rpUnalloc = sortedBunks.filter(function(b) { return !allocated[b]; });
+                    // Sort candidates: prefer bunks whose size would bring total closest to min without exceeding max
+                    rpUnalloc.sort(function(a, b) {
+                        var aTotal = rpTotal + (bunkSizes[a] || 0);
+                        var bTotal = rpTotal + (bunkSizes[b] || 0);
+                        var aInRange = aTotal >= rpReq.min && (!rpReq.max || aTotal <= rpReq.max);
+                        var bInRange = bTotal >= rpReq.min && (!rpReq.max || bTotal <= rpReq.max);
+                        if (aInRange !== bInRange) return aInRange ? -1 : 1;
+                        return Math.abs(aTotal - rpReq.min) - Math.abs(bTotal - rpReq.min);
+                    });
+                    for (var rpUi = 0; rpUi < rpUnalloc.length; rpUi++) {
+                        var rpCand = rpUnalloc[rpUi];
+                        var rpNew = rpTotal + (bunkSizes[rpCand] || 0);
+                        if (rpReq.max && rpNew > rpReq.max) continue;
+                        // Check this bunk has the activity in its wish list
+                        if (!(wishLists[rpCand] || []).some(function(w) { return w.activity === rpAct2; })) continue;
+                        if ((activityUsed[rpAct2] || 0) >= (activitySupply[rpAct2] || 0)) break;
+                        allocated[rpCand] = rpAct2; activityUsed[rpAct2] = (activityUsed[rpAct2] || 0) + 1;
+                        rpTotal = rpNew;
+                        if (rpTotal >= rpReq.min) break;
+                    }
+                }
             }
           // ★★★ v15.3: fullGrade coordination — if any bunk got a fullGrade activity,
             // force ALL bunks in this group to be planned for it ★★★
@@ -1054,7 +1402,7 @@ else penalty += 200;
             if (actNorm === 'free' || actNorm === 'free (timeout)') { analysis.freeBlocks.push({ blockIdx: i, bunk: block.bunk, divName: block.divName, startTime: block.startTime, endTime: block.endTime }); analysis.freeBlockBunks.add(block.bunk); analysis.totalFree++; analysis.score += 10000; }
             if (actNorm && actNorm !== 'free') { var daysSince = getDaysSinceActivity(block.bunk, asgn.pick._activity); if (daysSince === 1) { analysis.yesterdayRepeats.push({ blockIdx: i, bunk: block.bunk, activity: asgn.pick._activity }); analysis.score += 5000; } }
             if (actNorm && actNorm !== 'free' && asgn.pick.field && asgn.pick.field !== 'Free') {
-                var fieldNorm2 = normName(asgn.pick.field); var entries = _fieldTimeIndex.get(fieldNorm2) || [];
+                var entries = _fieldTimeIndex.get(actNorm) || [];
                 var totalPlayers = bunkMeta[block.bunk]?.size || 0;
                 for (var ei = 0; ei < entries.length; ei++) { var e = entries[ei]; if (e.bunk === block.bunk) continue; if (e.endMin <= block.startTime || e.startMin >= block.endTime) continue; totalPlayers += (bunkMeta[e.bunk]?.size || 0); }
                 var pCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(asgn.pick._activity, totalPlayers, false);
@@ -1104,9 +1452,10 @@ else penalty += 200;
             
         }
     }
-    }    for (var i = 0; i < slots.length; i++) {
-        window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: pick._activity || fName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
-        if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || pick._activity; }
+    }    var _actName = pick._activity || pick.activityName || pick.sport || fName;
+    for (var i = 0; i < slots.length; i++) {
+        window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: _actName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
+        if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || _actName; }
     }
     // ★★★ v15.1 FIX: Clear stale caches so next penalty check sees this assignment ★★★
     // Without this, _todayCache returns stale "not done today" for this bunk,
@@ -1158,11 +1507,17 @@ else penalty += 200;
         get _scarcityMap() { return _scarcityMap; },
         get _fieldPropertyMap() { return _fieldPropertyMap; },
         get _fieldTimeIndex() { return _fieldTimeIndex; },
+        // Exposed for Part 2's fieldQualityReoptimize, which lives in a
+        // separate IIFE and can't reach Part 1's closure directly.
+        get _fieldGroupMap() { return _fieldGroupMap; },
+        get _fieldGroups() { return _fieldGroups; },
+        get _divisionSeniorityMap() { return _divisionSeniorityMap; },
         get _todayCache() { return _todayCache; },
         get _perfCounters() { return _perfCounters; }, set _perfCounters(v) { _perfCounters = v; },
         get _isRainyDay() { return _isRainyDay; },
         get _rainyCapOverrides() { return _rainyCapOverrides; },
         get _rainyTimeBypasses() { return _rainyTimeBypasses; },
+        get _comboExclusiveMap() { return _comboExclusiveMap; },
         get _passNumber() { return _passNumber; }, set _passNumber(v) { _passNumber = v; },
         ROTATION_CONFIG: ROTATION_CONFIG,
         precomputeFieldProperties: precomputeFieldProperties,
@@ -1255,6 +1610,42 @@ else penalty += 200;
                 // ★ v15.0: Rainy time bypass — skip canBlockFit (which enforces time rules)
                 var skipTimeCheck = S._isRainyDay && S._rainyTimeBypasses.has(fn);
                 var fp = S._fieldPropertyMap.get(fn);
+                // ★ Hard filter: accessRestrictions division access (mirrors hard constraint in penalty)
+                if (fp?.accessRestrictions?.enabled && blockDiv) {
+                    if (!(blockDiv in fp.accessRestrictions.divisions)) continue;
+                    var dluRule = fp.accessRestrictions.divisions[blockDiv];
+                    if (Array.isArray(dluRule) && dluRule.length > 0) {
+                        var dbs = String(bunk), dbn = parseInt(bunk), dluOk = false;
+                        for (var dlui = 0; dlui < dluRule.length; dlui++) {
+                            var dbr = dluRule[dlui];
+                            if (String(dbr) === dbs || parseInt(dbr) === dbn) { dluOk = true; break; }
+                        }
+                        if (!dluOk) continue;
+                    }
+                }
+                // ★ Hard filter: field timeRules (mirrors hard constraint in penalty)
+                if (fp && hasTime) {
+                    var unR2 = fp.unavailableRules, badTime = false;
+                    if (unR2) {
+                        for (var unJ = 0; unJ < unR2.length; unJ++) {
+                            var unX = unR2[unJ];
+                            if (unX.divisions && unX.divisions.length > 0 && blockDiv && unX.divisions.indexOf(blockDiv) === -1) continue;
+                            if (unX.startMin < endMin && unX.endMin > startMin) { badTime = true; break; }
+                        }
+                    }
+                    if (badTime) continue;
+                    var avR2 = fp.availableRules;
+                    if (avR2 && avR2.length > 0) {
+                        var anyAvail2 = avR2.some(function(av) {
+                            if (av.divisions && av.divisions.length > 0 && blockDiv && av.divisions.indexOf(blockDiv) === -1) return false;
+                            return startMin >= av.startMin && endMin <= av.endMin;
+                        });
+                        var anyApplicable2 = avR2.some(function(av) {
+                            return !av.divisions || av.divisions.length === 0 || !blockDiv || av.divisions.indexOf(blockDiv) !== -1;
+                        });
+                        if (anyApplicable2 && !anyAvail2) continue;
+                    }
+                }
                 if (fp?.prefExclusive && fp.prefList && fp.prefList.indexOf(blockDiv) === -1) continue;
               if (!skipTimeCheck && window.unifiedTimes) { var fits = window.SchedulerCoreUtils?.canBlockFit?.(block, fn, actProps, window.fieldUsageBySlot, c2.activityName, false); if (fits === false) continue; }
                 if (hasTime) {
@@ -1266,6 +1657,19 @@ else penalty += 200;
                 }
                 if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
                 domain.add(ci2);
+            }
+            // Hard-filter yesterday-repeats if fresher alternatives exist
+            if (domain.size > 1) {
+                var freshOpts = new Set();
+                var staleOpts = new Set();
+                for (var dci of domain) {
+                    var dScore = S.getPrecomputedRotationScore(bunk, allCands[dci].activityName);
+                    if (dScore >= 50000) staleOpts.add(dci);
+                    else freshOpts.add(dci);
+                }
+                if (freshOpts.size > 0 && staleOpts.size > 0) {
+                    domain = freshOpts;
+                }
             }
             domains.set(bi, domain);
         }
@@ -1308,16 +1712,14 @@ else penalty += 200;
     function wouldConflict(aBlock,aPick,oBlock,oCand) {
         var afn = normName(aPick.field), ofn = oCand._fieldNorm || normName(oCand.field);
         if (afn !== ofn) {
-            // ★★★ COMBINED FIELD: check if these are combo partners ★★★
-            if (window.FieldCombos?.isInCombo) {
-                var exclusive = window.FieldCombos.getExclusiveFields(aPick.field || '');
-                var isPartner = false;
-                for (var _ei = 0; _ei < exclusive.length; _ei++) {
-                    if (exclusive[_ei].toLowerCase().trim() === ofn) { isPartner = true; break; }
-                }
+            // Combined field: check if these are combo partners via cached map
+            var _wcPartners = S._comboExclusiveMap.get(afn);
+            if (_wcPartners) {
                 var aS=aBlock.startTime,aE=aBlock.endTime,oS=oBlock.startTime,oE=oBlock.endTime;
-                if (isPartner && aS !== undefined && oS !== undefined && !(aS >= oE || aE <= oS)) {
-                    return true; // Mutually exclusive combo partners at overlapping times
+                if (aS !== undefined && oS !== undefined && !(aS >= oE || aE <= oS)) {
+                    for (var _ei = 0; _ei < _wcPartners.length; _ei++) {
+                        if (_wcPartners[_ei] === ofn) return true;
+                    }
                 }
             }
             return false;
@@ -1473,6 +1875,59 @@ else penalty += 200;
                 }
               // v15.8: Hard capacity check removed — primary check now uses time index directly
 
+                // ★ Player count check: validate min/max against this bunk + concurrent bunks at same activity
+                if (canFit && cAn && cAn !== 'free' && cAn !== 'free play' && window.SchedulerCoreUtils?.getSportPlayerRequirements) {
+                    var _pcSReqs = window.SchedulerCoreUtils.getSportPlayerRequirements(c2.activityName);
+                    if (_pcSReqs && (_pcSReqs.minPlayers || _pcSReqs.maxPlayers)) {
+                        var _pcBMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+                        var _pcTotal = _pcBMeta[b2.bunk]?.size || 0;
+                        var _pcSeenBunks = new Set(); _pcSeenBunks.add(b2.bunk);
+                        // Check time index (prior-pass assignments)
+                        var _pcIdxEntries = S._fieldTimeIndex.get(cAn) || [];
+                        for (var _pcTi = 0; _pcTi < _pcIdxEntries.length; _pcTi++) {
+                            var _pcTE = _pcIdxEntries[_pcTi];
+                            if (_pcSeenBunks.has(_pcTE.bunk)) continue;
+                            if (_pcTE.endMin <= b2.startTime || _pcTE.startMin >= b2.endTime) continue;
+                            _pcTotal += (_pcBMeta[_pcTE.bunk]?.size || 0);
+                            _pcSeenBunks.add(_pcTE.bunk);
+                        }
+                        // Check same-pass results
+                        for (var _pcRi = 0; _pcRi < results.length; _pcRi++) {
+                            var _pcR = results[_pcRi]; if (_pcR.candIdx === -1) continue;
+                            var _pcRan = normName(_pcR.pick._activity || _pcR.pick.field);
+                            if (_pcRan !== cAn) continue;
+                            var _pcRb = activityBlocks[_pcR.blockIdx];
+                            if (!_pcRb || _pcSeenBunks.has(_pcRb.bunk)) continue;
+                            if (_pcRb.startTime < b2.endTime && _pcRb.endTime > b2.startTime) _pcTotal += (_pcBMeta[_pcRb.bunk]?.size || 0);
+                            _pcSeenBunks.add(_pcRb.bunk);
+                        }
+                        // Guard: skip enforcement when bunk size data is unconfigured (_pcTotal === 0)
+                        if (_pcTotal > 0) {
+                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers) canFit = false;
+                            if (canFit && _pcSReqs.minPlayers && _pcTotal < _pcSReqs.minPlayers) {
+                                if ((_pcSReqs.minPlayers - _pcTotal) / _pcSReqs.minPlayers > 0.2) canFit = false;
+                            }
+                        }
+                    }
+                }
+
+                // Combined field: check if any combo partner was assigned in this batch
+                if (canFit && b2.startTime !== undefined && b2.endTime !== undefined) {
+                    var _cbBatch = S._comboExclusiveMap.get(fn2);
+                    if (_cbBatch) {
+                        for (var _cbr = 0; _cbr < results.length && canFit; _cbr++) {
+                            var _cbrPick = results[_cbr];
+                            if (_cbrPick.candIdx === -1) continue;
+                            var _cbrFn = normName(_cbrPick.pick.field);
+                            var _cbrBlk = activityBlocks[_cbrPick.blockIdx];
+                            if (_cbrBlk.startTime >= b2.endTime || _cbrBlk.endTime <= b2.startTime) continue;
+                            for (var _cbp = 0; _cbp < _cbBatch.length; _cbp++) {
+                                if (_cbBatch[_cbp] === _cbrFn) { canFit = false; break; }
+                            }
+                        }
+                    }
+                }
+
                 if (canFit) {
                     var newPk = S.clonePick(c2);
                     results.push({blockIdx:bo.bi,candIdx:opt.ci,pick:newPk,cost:opt.cost});
@@ -1503,6 +1958,10 @@ else penalty += 200;
                             var aeu=hBlk.startTime!==undefined?S.getFieldUsageFromTimeIndex(afn,hBlk.startTime,hBlk.endTime,hBlk.bunk):0;
                             if (aeu+agu<acap) {
                                 if (S.checkCrossDivisionTimeConflict(ac.field,hBlk.divName,hBlk.startTime,hBlk.endTime,hBlk.bunk)) continue;
+                                // Combo check for augmenting path alternative
+                                var _augCombo = S._comboExclusiveMap.get(afn), _augBlocked = false;
+                                if (_augCombo && hBlk.startTime !== undefined) { for (var _aci = 0; _aci < _augCombo.length && !_augBlocked; _aci++) { if (S.getFieldUsageFromTimeIndex(_augCombo[_aci],hBlk.startTime,hBlk.endTime,hBlk.bunk) > 0) _augBlocked = true; for (var _acr = 0; _acr < results.length && !_augBlocked; _acr++) { var _acrPick = results[_acr]; if (_acrPick.candIdx===-1) continue; if (normName(_acrPick.pick.field)===_augCombo[_aci]) { var _acrB = activityBlocks[_acrPick.blockIdx]; if (_acrB.startTime<hBlk.endTime&&_acrB.endTime>hBlk.startTime) _augBlocked=true; } } } }
+                                if (_augBlocked) continue;
                                 var agd=fieldDivsGrp.get(afn); if (agd&&hBlk.divName) { var bad=false; for (var d of agd) { if (d&&d!==hBlk.divName) { bad=true; break; } } if (bad) continue; }
                                 fieldUsageGrp.set(fn2,(fieldUsageGrp.get(fn2)||1)-1);
                                 results[holder]={blockIdx:hBi,candIdx:ao.ci,pick:S.clonePick(ac),cost:ao.cost};
@@ -1556,6 +2015,9 @@ else penalty += 200;
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
         var fp=S._fieldPropertyMap.get(fn); var cap=fp?fp.capacity:S.getFieldCapacity(fn); var st=fp?fp.sharingType:S.getSharingType(fn);
         if (S.checkCrossDivisionTimeConflict(fn,bDiv,sM,eM,bunk)) return false;
+        // Combined field: block if any combo partner is in use
+        var _vpPartners = S._comboExclusiveMap.get(fnorm);
+        if (_vpPartners) { for (var _vpi = 0; _vpi < _vpPartners.length; _vpi++) { if (S.getFieldUsageFromTimeIndex(_vpPartners[_vpi],sM,eM,bunk) > 0) return false; } }
         if (st==='not_sharable') return S.getFieldUsageFromTimeIndex(fnorm,sM,eM,bunk)<cap;
         return S.countSameDivisionUsage(fn,bDiv,sM,eM,bunk)<cap;
     }
@@ -1628,6 +2090,7 @@ else penalty += 200;
                 if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue;
                 if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue;
                 if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
+                var _dfCombo = S._comboExclusiveMap.get(c._fieldNorm); if (_dfCombo) { var _dfBlocked = false; for (var _dfi2 = 0; _dfi2 < _dfCombo.length; _dfi2++) { if (S.getFieldUsageFromTimeIndex(_dfCombo[_dfi2],sM,eM,bunk) > 0) { _dfBlocked = true; break; } } if (_dfBlocked) continue; }
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; if(S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
@@ -1754,6 +2217,231 @@ else penalty += 200;
     }
 
     // ========================================================================
+    // ★★★ v15.5: FIELD-QUALITY RE-OPTIMIZATION ★★★
+    // After all heuristic phases, sweep through every assignment whose field
+    // belongs to a quality group and try to swap it onto the best free
+    // higher-ranked field. We only swap when every hard constraint that
+    // mattered for the original placement still holds for the better field.
+    // ========================================================================
+    // Verify a candidate field passes every hard constraint that mattered
+    // for the original placement (timeRules, access, locks, capacity,
+    // sport-disabled, cross-div, sharing-mismatch). Capacity checks accept
+    // an optional `excludeBunk` so a same-time-slot re-pairing doesn't
+    // fail itself. All Part 1 internals reached through S.
+    function _fqValidSwap(blk, candName, actName, excludeBunk) {
+        var DBG = !!window.DEBUG_FQ_REOPT;
+        var rej = function(why) {
+            if (DBG) console.log('[v15.5-DEBUG]   reject ' + candName + ': ' + why);
+            return false;
+        };
+        var actProps = S.activityProperties;
+        var actNorm = normName(actName);
+        var candProps = actProps && actProps[candName];
+        var candActs = (candProps && candProps.activities) || [];
+        if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(actNorm)) {
+            return rej('activity "' + actName + '" not in field.activities [' + candActs.join(',') + ']');
+        }
+
+        var fits = window.SchedulerCoreUtils && window.SchedulerCoreUtils.canBlockFit
+            ? window.SchedulerCoreUtils.canBlockFit(blk, candName, actProps, window.fieldUsageBySlot, actName, false)
+            : null;
+        if (fits === false) return rej('canBlockFit returned false (set window.DEBUG_FITS=true for the specific reason)');
+
+        var sM = blk.startTime, eM = blk.endTime;
+        if (S.checkCrossDivisionTimeConflict(candName, blk.divName, sM, eM, excludeBunk)) return rej('cross-division time conflict');
+        if (S.checkSameFieldActivityMismatch(candName, sM, eM, actName, excludeBunk)) return rej('same-field activity mismatch');
+
+        var candFp = S._fieldPropertyMap.get(candName);
+        if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && blk.divName) {
+            if (!(blk.divName in candFp.accessRestrictions.divisions)) return rej('accessRestrictions: division "' + blk.divName + '" not allowed');
+        }
+        if (S.isFieldLockedByTime(candName, sM, eM, blk.divName)) return rej('time-based field lock');
+
+        var candCap = candFp ? candFp.capacity : S.getFieldCapacity(candName);
+        var candSt = candFp ? candFp.sharingType : S.getSharingType(candName);
+        var candNorm = normName(candName);
+        var inUse = (candSt === 'not_sharable')
+            ? S.getFieldUsageFromTimeIndex(candNorm, sM, eM, excludeBunk)
+            : S.countSameDivisionUsage(candName, blk.divName, sM, eM, excludeBunk);
+        if (inUse >= candCap) return rej('capacity full (' + inUse + '/' + candCap + ', sharingType=' + candSt + ')');
+        return true;
+    }
+
+    function _fqApplySwap(bi, blk, asgn, newField) {
+        var pick = asgn.pick;
+        var actName = pick._activity || pick.field;
+        var newPick = { field: newField, sport: pick.sport, _activity: pick._activity, _type: pick._type, _fullGrade: pick._fullGrade || false };
+        S.undoPickFromSchedule(blk, pick);
+        S.removeFromFieldTimeIndex(normName(pick.field), blk.startTime, blk.endTime, blk.bunk);
+        S.applyPickToSchedule(blk, newPick);
+        S.addToFieldTimeIndex(normName(newField), blk.startTime, blk.endTime, blk.bunk, blk.divName, normName(actName));
+        var allCands = S.allCandidateOptions;
+        var matchedCi = -1;
+        for (var ci = 0; ci < allCands.length; ci++) {
+            if (allCands[ci].field === newField && (allCands[ci].activityName === actName || allCands[ci].sport === pick.sport)) { matchedCi = ci; break; }
+        }
+        S._assignments.set(bi, { candIdx: matchedCi, pick: newPick, cost: asgn.cost });
+        S.invalidateRotationCacheForBunk(blk.bunk);
+    }
+
+    function fieldQualityReoptimize(activityBlocks) {
+        var fgMap = S._fieldGroupMap, fgGroups = S._fieldGroups, seniorityMap = S._divisionSeniorityMap;
+        if (!fgMap || !fgGroups || Object.keys(fgGroups).length === 0) {
+            console.log('[v15.5] 🏟️ Field quality re-optimize: skipped (no field groups configured)');
+            return;
+        }
+
+        // Diagnostic mode: log every reason a candidate swap was rejected.
+        // Toggle on with `window.DEBUG_FQ_REOPT = true` before running generate.
+        var DEBUG = !!window.DEBUG_FQ_REOPT;
+        var skipReasons = {};
+        var _logSkip = function(why) { skipReasons[why] = (skipReasons[why] || 0) + 1; };
+
+        // PHASE A — pull each block to a free higher-ranked field where possible.
+        var improved = 0, considered = 0, blocksWithBetterCandidate = 0;
+        for (var bi = 0; bi < activityBlocks.length; bi++) {
+            if (!S._assignedBlocks.has(bi)) continue;
+            var asgn = S._assignments.get(bi);
+            if (!asgn) continue;
+            var pick = asgn.pick;
+            var blk = activityBlocks[bi];
+            var curField = pick.field;
+            if (!curField || curField === 'Free') continue;
+
+            var fgInfo = fgMap[curField];
+            if (!fgInfo) continue;
+            var groupArr = fgGroups[fgInfo.groupName];
+            if (!groupArr) continue;
+            considered++;
+
+            var curRank = fgInfo.qualityRank;
+            var actName = pick._activity || pick.field;
+            var actNorm = normName(actName);
+            var bunk = blk.bunk;
+            var sM = blk.startTime, eM = blk.endTime;
+            if (sM === undefined || eM === undefined) continue;
+
+            // Walk group members from best rank toward current rank
+            var sorted = groupArr.slice().sort(function(a, b) { return a.qualityRank - b.qualityRank; });
+            var bestSwapField = null;
+            var hadBetterCandidate = false;
+            for (var gi = 0; gi < sorted.length; gi++) {
+                var member = sorted[gi];
+                if (member.qualityRank >= curRank) break;
+                hadBetterCandidate = true;
+                if (_fqValidSwap(blk, member.name, actName, bunk)) {
+                    bestSwapField = member.name;
+                    break;
+                } else if (DEBUG) {
+                    console.log('[v15.5-DEBUG] bunk ' + bunk + ' ' + actName + ' @ ' + sM + '-' + eM
+                        + ' wanted ' + member.name + ' (rank ' + member.qualityRank + ') but _fqValidSwap rejected');
+                }
+            }
+            if (hadBetterCandidate) blocksWithBetterCandidate++;
+            if (!bestSwapField) continue;
+            _fqApplySwap(bi, blk, asgn, bestSwapField);
+            improved++;
+        }
+        S._todayCache.clear();
+
+        // PHASE B — for each (group, time slot), re-pair so most senior grade
+        // gets the best-ranked field. Sort placements by seniority desc; sort
+        // their currently-held fields by quality rank asc; pair them up.
+        // Only commits a swap when every involved placement still passes
+        // hard checks for its new field.
+        var seniorityImproved = 0;
+        var slotKeyToPlacements = {}; // key = group + '|' + startMin + '|' + endMin
+        for (var bi2 = 0; bi2 < activityBlocks.length; bi2++) {
+            if (!S._assignedBlocks.has(bi2)) continue;
+            var asgn2 = S._assignments.get(bi2);
+            if (!asgn2) continue;
+            var p2 = asgn2.pick;
+            if (!p2.field || p2.field === 'Free') continue;
+            var fg2 = fgMap[p2.field];
+            if (!fg2) continue;
+            var blk2 = activityBlocks[bi2];
+            if (blk2.startTime === undefined || blk2.endTime === undefined) continue;
+            var key = fg2.groupName + '|' + blk2.startTime + '|' + blk2.endTime;
+            if (!slotKeyToPlacements[key]) slotKeyToPlacements[key] = [];
+            slotKeyToPlacements[key].push({ bi: bi2, blk: blk2, asgn: asgn2, currentField: p2.field, currentRank: fg2.qualityRank });
+        }
+
+        Object.keys(slotKeyToPlacements).forEach(function(key) {
+            var list = slotKeyToPlacements[key];
+            if (list.length < 2) return; // nothing to re-pair
+
+            // Sort placements by seniority asc (0 = most senior). Stable for ties.
+            var seniority = function(divName) {
+                var s = seniorityMap && seniorityMap[divName];
+                return (s === undefined) ? Infinity : s;
+            };
+            list.sort(function(a, b) { return seniority(a.blk.divName) - seniority(b.blk.divName); });
+
+            // Sorted desired fields by rank asc (rank 1 first). Each placement
+            // should ideally hold the i-th best field, where i = seniority order.
+            var heldFields = list.map(function(p) { return p.currentField; });
+            heldFields.sort(function(a, b) {
+                var ra = (fgMap[a] && fgMap[a].qualityRank) || 999;
+                var rb = (fgMap[b] && fgMap[b].qualityRank) || 999;
+                return ra - rb;
+            });
+
+            // Build the desired (placement, newField) pairs
+            var swaps = [];
+            var anyChange = false;
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].currentField !== heldFields[i]) anyChange = true;
+                swaps.push({ p: list[i], newField: heldFields[i] });
+            }
+            if (!anyChange) return;
+
+            // Validate every swap simultaneously: each placement's new field
+            // must support its activity + division, and any held field that's
+            // moving away should be considered free for its taker. Since we're
+            // re-pairing fields among the same time-slot users, capacity at
+            // that field is unchanged — but support/access can differ.
+            for (var si = 0; si < swaps.length; si++) {
+                var sp = swaps[si];
+                if (sp.p.currentField === sp.newField) continue;
+                var actNm = sp.p.asgn.pick._activity || sp.p.asgn.pick.field;
+                var actProps = S.activityProperties;
+                var candProps = actProps && actProps[sp.newField];
+                var candActs = (candProps && candProps.activities) || [];
+                if (candActs.length > 0 && !candActs.map(function(a) { return normName(a); }).includes(normName(actNm))) return;
+                var candFp = S._fieldPropertyMap.get(sp.newField);
+                if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && sp.p.blk.divName) {
+                    if (!(sp.p.blk.divName in candFp.accessRestrictions.divisions)) return;
+                }
+                if (candFp && candFp.unavailableRules) {
+                    for (var ri = 0; ri < candFp.unavailableRules.length; ri++) {
+                        var ur = candFp.unavailableRules[ri];
+                        if (ur.divisions && ur.divisions.length > 0 && sp.p.blk.divName && ur.divisions.indexOf(sp.p.blk.divName) === -1) continue;
+                        if (ur.startMin < sp.p.blk.endTime && ur.endMin > sp.p.blk.startTime) return;
+                    }
+                }
+            }
+
+            // Apply atomically: undo all olds first, then apply all news.
+            swaps.forEach(function(sp) {
+                if (sp.p.currentField === sp.newField) return;
+                S.undoPickFromSchedule(sp.p.blk, sp.p.asgn.pick);
+                S.removeFromFieldTimeIndex(normName(sp.p.currentField), sp.p.blk.startTime, sp.p.blk.endTime, sp.p.blk.bunk);
+            });
+            swaps.forEach(function(sp) {
+                if (sp.p.currentField === sp.newField) return;
+                _fqApplySwap(sp.p.bi, sp.p.blk, sp.p.asgn, sp.newField);
+                seniorityImproved++;
+            });
+        });
+        S._todayCache.clear();
+
+        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s) (' + considered + ' grouped placements considered, ' + blocksWithBetterCandidate + ' had a higher-ranked group member to try)');
+        if (blocksWithBetterCandidate > improved) {
+            console.log('[v15.5]    ' + (blocksWithBetterCandidate - improved) + ' block(s) had a higher-ranked candidate but the swap was rejected. Set window.DEBUG_FQ_REOPT = true and regenerate to see why.');
+        }
+    }
+
+    // ========================================================================
     // ★★★ v14.1: CROSS-DIVISION VIOLATION RE-SOLVE ★★★
     // ========================================================================
     function crossDivisionReSolve(activityBlocks) {
@@ -1877,6 +2565,12 @@ else penalty += 200;
 
         // v14.2: Same-day duplicate sweep (with pinned check)
         sameDayDuplicateSweep(activityBlocks);
+
+        // v15.5: Field-quality re-optimization pass — heuristic group solving
+        //        sometimes leaves a block on a lower-ranked field even when a
+        //        better-ranked one in the same group is genuinely free. Sweep
+        //        once at the end and swap upward where every constraint allows.
+        fieldQualityReoptimize(activityBlocks);
 
         // Final stats
         var freeCount = 0;

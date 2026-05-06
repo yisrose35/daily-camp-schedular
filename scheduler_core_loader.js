@@ -213,7 +213,7 @@
                 allowedFields: null,
                 transition: null,
                 preferences: null,
-                limitUsage: null,
+                accessRestrictions: null,
                 timeRules: [],
                 minDurationMin: 0,
                 maxUsage: 0,
@@ -237,7 +237,8 @@
                 }
                 : null; // null lets base() default take over
 
-            props[a.name] = base({
+            // Store under BOTH original case and lowercase so solver's normName() lookups work
+            const propEntry = base({
                 available: a.available !== false,
                 sharable: a.sharable || false,
                 sharableWith: normalizedActivitySW,
@@ -246,7 +247,7 @@
                 allowedFields: a.allowedFields || null,
                 transition: a.transition || null,
                 preferences: a.preferences || null,
-                limitUsage: a.limitUsage || null,
+                accessRestrictions: a.accessRestrictions || null,
                 timeRules: a.timeRules || [],
                 minDurationMin: a.minDurationMin || 0,
                 maxUsage: a.maxUsage || 0,
@@ -257,6 +258,9 @@
                 rainyDayExclusive: a.rainyDayExclusive === true,
                 fullGrade: a.fullGrade === true
             });
+            props[a.name] = propEntry;
+            const lowerKey = a.name.toLowerCase().trim();
+            if (lowerKey !== a.name) props[lowerKey] = propEntry;
         });
 
         // ★★★ ENHANCED: Include ALL field properties ★★★
@@ -268,11 +272,12 @@
                 capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'all' ? 999 : 1)
             };
             
-            // ★ Normalize limitUsage with complete structure
-            const normalizedLimitUsage = f.limitUsage ? {
-                enabled: f.limitUsage.enabled === true,
-                divisions: typeof f.limitUsage.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage.priorityList) ? f.limitUsage.priorityList : []
+            // ★ Normalize accessRestrictions with complete structure
+            const normalizedLimitUsage = f.accessRestrictions ? {
+                enabled: f.accessRestrictions.enabled === true,
+                divisions: typeof f.accessRestrictions.divisions === 'object' ? f.accessRestrictions.divisions : {},
+                priorityList: Array.isArray(f.accessRestrictions.priorityList) ? f.accessRestrictions.priorityList : [],
+                usePriority: f.accessRestrictions.usePriority === true
             } : null;
             
             // ★ Parse timeRules to include startMin/endMin
@@ -284,7 +289,7 @@
                 endMin: r.endMin ?? parseTimeString(r.end)
             })) : [];
 
-            props[f.name] = base({
+            const fieldEntry = base({
                 type: 'field',
                 available: f.available !== false,
                 sharable: normalizedSharable.type !== 'not_sharable',
@@ -292,13 +297,15 @@
                 allowedDivisions: normalizedSharable.type === 'custom' ? normalizedSharable.divisions : [],
                 transition: f.transition || null,
                 preferences: f.preferences || null,
-                limitUsage: normalizedLimitUsage,
+                accessRestrictions: normalizedLimitUsage,
                 timeRules: parsedTimeRules,
-                // ★★★ v2.2: Include rainyDayAvailable for fields ★★★
                 rainyDayAvailable: f.rainyDayAvailable === true,
-                // ★★★ Include activities array (sports this field supports) ★★★
-                activities: Array.isArray(f.activities) ? f.activities : []
+                activities: Array.isArray(f.activities) ? f.activities : [],
+                gradeShareRules: (f.gradeShareRules && typeof f.gradeShareRules === 'object') ? f.gradeShareRules : {}
             });
+            props[f.name] = fieldEntry;
+            const fLower = f.name.toLowerCase().trim();
+            if (fLower !== f.name) props[fLower] = fieldEntry;
         });
 
         return props;
@@ -521,8 +528,8 @@
             specialActivityNames: effectiveSpecialActivityNames,
             dailyFieldAvailability: dailyOverrides.dailyFieldAvailability || {},
             masterZones: window.loadZones?.() || {},
-            bunkMetaData: window.bunkMetaData || {},
-            sportMetaData: window.sportMetaData || {},
+            bunkMetaData: window.getBunkMetaData?.() || window.bunkMetaData || {},
+            sportMetaData: window.getSportMetaData?.() || window.sportMetaData || {},
             isRainyDayMode: isRainyMode
         };
     }

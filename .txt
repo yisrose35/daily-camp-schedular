@@ -1,0 +1,1 @@
+function ship { git add . ; git commit -m "wip: auto push" ; git push origin auto-builder }

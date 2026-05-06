@@ -23,6 +23,25 @@ let selectedTileId = null;
 let builderMode = 'manual';
 let hasUnsavedChanges = false;
 
+function _mbIsBackToBack(ev) {
+  if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
+  const parseT = typeof parseTimeToMinutes === 'function' ? parseTimeToMinutes : window.SchedulerCoreUtils?.parseTimeToMinutes;
+  if (!parseT) return false;
+  const evStart = parseT(ev.startTime);
+  const evEnd = parseT(ev.endTime);
+  for (let i = 0; i < dailySkeleton.length; i++) {
+    const other = dailySkeleton[i];
+    if (other === ev || other.id === ev.id) continue;
+    if (other.leagueName !== ev.leagueName) continue;
+    if (other.division !== ev.division) continue;
+    if (other.type !== 'league' && other.type !== 'specialty_league') continue;
+    const oStart = parseT(other.startTime);
+    const oEnd = parseT(other.endTime);
+    if (Math.abs(oStart - evEnd) <= 5 || Math.abs(evStart - oEnd) <= 5) return true;
+  }
+  return false;
+}
+
 // --- UNIVERSAL BUILDER MODE ---
 window.getCampBuilderMode = function() {
   const g = window.loadGlobalSettings?.() || {};
@@ -490,12 +509,16 @@ function getAllLocations() {
   const directFacilities = extractNames(directSettings.facilities);
   const directApp1Locations = extractNames(directSettings.app1?.locations);
   const directApp1Facilities = extractNames(directSettings.app1?.facilities);
-  
+
+  // Live in-memory sources — more up-to-date than storage snapshots above
+  const liveFacilities = extractNames(window.getFacilities?.());
+  const liveSpecials = extractNames(window.getGlobalSpecialActivities?.());
+
   // Combine all and remove duplicates
   const all = [...new Set([
-    ...fields, 
-    ...facilities, 
-    ...locations, 
+    ...fields,
+    ...facilities,
+    ...locations,
     ...topLevelLocations,
     ...topLevelFacilities,
     ...windowLocations,
@@ -504,7 +527,9 @@ function getAllLocations() {
     ...directFacilities,
     ...directApp1Locations,
     ...directApp1Facilities,
-    ...specialActivities
+    ...specialActivities,
+    ...liveFacilities,
+    ...liveSpecials
   ])].filter(Boolean).sort();
   
   console.log('[getAllLocations] Searched sources:', { 
@@ -568,7 +593,8 @@ function getGroupedLocationOptions() {
   });
   
   // Get pinned tile defaults (Swim → Pool, Lunch → Lunchroom, etc.)
-  const pinnedDefaults = globalSettings.pinnedTileDefaults || {};
+  // Use live API so recently-saved defaults are visible immediately
+  const pinnedDefaults = window.getPinnedTileDefaults?.() || globalSettings.pinnedTileDefaults || {};
   const pinnedOptions = Object.entries(pinnedDefaults).map(([act, loc]) => ({
     value: loc, label: `${act} → ${loc}`
   }));
@@ -579,8 +605,8 @@ function getGroupedLocationOptions() {
     label: f.name + (f.rainyDayAvailable ? ' 🏠' : '')
   }));
   
-  // Get special activities
-  const allSpecials = (app1.specialActivities || []).map(s => ({
+  // Get special activities — prefer live in-memory cache over stale app1 snapshot
+  const allSpecials = (window.getGlobalSpecialActivities?.() || app1.specialActivities || []).map(s => ({
     value: s.name, label: s.name
   }));
   
@@ -862,6 +888,22 @@ async function editTile(id) {
     ev.reservedFields = reservedFields;
     ev.location = reservedFields.length === 1 ? reservedFields[0] : (reservedFields.length > 1 ? null : ev.location);
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  // Re-stamp travel info since location may have changed
+  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+  if (_editTravelLoc) {
+    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+    if (_eti) {
+      ev._travelPre = _eti.preMin;
+      ev._travelPost = _eti.postMin;
+      ev._travelZone = _eti.zoneName;
+      ev._travelMode = _eti.mode;
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
+  } else {
+    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
   }
 
   markUnsavedChanges();
@@ -2665,9 +2707,15 @@ function renderEventTile(ev, top, height) {
   }
   
   
-// ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
   if (ev.leagueName) {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.leagueName}</div>`;
+  }
+  if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
+    const _gs = window.loadGlobalSettings?.() || {};
+    const _lObj = (_gs.leaguesByName || {})[ev.leagueName];
+    if (_lObj?.offCampus?.enabled && _mbIsBackToBack(ev)) {
+      innerHtml += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">AWAY PAIR</div>`;
+    }
   }
 
   if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
@@ -3115,6 +3163,71 @@ function addDropListeners(selector) {
           const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
           return !overlaps;
         });
+
+        // Stamp travel info for off-campus facilities
+        const _travelLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || '';
+        if (_travelLoc) {
+          const _ti = window.getTravelForField?.(_travelLoc, true) || window.getTravelForSpecialActivity?.(_travelLoc, true);
+          if (_ti) {
+            newEvent._travelPre = _ti.preMin;
+            newEvent._travelPost = _ti.postMin;
+            newEvent._travelZone = _ti.zoneName;
+            newEvent._travelMode = _ti.mode;
+          }
+        }
+
+        // Soft cooldown check for manual-mode rules
+        if (window.SchedulingRules) {
+          const _cdLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || null;
+          const _cdCandidate = {
+            startMin: newStartVal, endMin: newEndVal,
+            type: window.SchedulingRules.inferTypeFromActivity(newEvent.event || ''),
+            event: newEvent.event || '', field: _cdLoc
+          };
+          const _cdTemplate = dailySkeleton
+            .filter(ev => ev.division === divName)
+            .map(ev => {
+              const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+              if (s == null || e == null) return null;
+              const loc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || null;
+              return { startMin: s, endMin: e, type: window.SchedulingRules.inferTypeFromActivity(ev.event || ''), event: ev.event || '', field: loc };
+            })
+            .filter(Boolean);
+          const _cdResult = window.SchedulingRules.checkCandidateDetailed(_cdCandidate, _cdTemplate, { mode: 'manual' });
+          if (!_cdResult.allowed) {
+            const _cdMsg = _cdResult.violated.map(r => '• ' + window.SchedulingRules.describeRule(r)).join('\n');
+            const _cdOk = await showConfirm(`This placement may violate the following cooldown rule(s):\n\n${_cdMsg}\n\nPlace anyway?`);
+            if (!_cdOk) return;
+          }
+        }
+
+        // Sport player count check
+        if (newEvent.type === 'sport' && newEvent.event && window.SchedulerCoreUtils?.checkPlayerCountForSport) {
+          const _pcBunkMeta = window.getBunkMetaData?.() || {};
+          const _pcDivObj   = (window.divisions || {})[divName] || {};
+          const _pcDivBunks = _pcDivObj.bunks || [];
+          const _pcDivPlayers = _pcDivBunks.reduce((s, b) => s + (_pcBunkMeta[b]?.size || 0), 0);
+          const _pcSportName  = (newEvent.event || '').toLowerCase();
+          const _pcConcurrent = dailySkeleton
+            .filter(ev => ev.division !== divName && ev.type === 'sport' &&
+              (ev.event || '').toLowerCase() === _pcSportName &&
+              parseTimeToMinutes(ev.startTime) < newEndVal &&
+              parseTimeToMinutes(ev.endTime)   > newStartVal)
+            .reduce((s, ev) => {
+              const d = (window.divisions || {})[ev.division] || {};
+              return s + (d.bunks || []).reduce((ss, b) => ss + (_pcBunkMeta[b]?.size || 0), 0);
+            }, 0);
+          const _pcTotal = _pcDivPlayers + _pcConcurrent;
+          if (_pcTotal > 0) {
+            const _pcResult = window.SchedulerCoreUtils.checkPlayerCountForSport(newEvent.event, _pcTotal);
+            if (!_pcResult.valid && _pcResult.reason) {
+              const _pcNote = _pcConcurrent > 0
+                ? `\n(Includes ${_pcConcurrent} players from other divisions at the same time)` : '';
+              const _pcOk = await showConfirm(`Player count warning for "${newEvent.event}":\n${_pcResult.reason}${_pcNote}\n\nPlace anyway?`);
+              if (!_pcOk) return;
+            }
+          }
+        }
 
         dailySkeleton.push(newEvent);
         markUnsavedChanges();

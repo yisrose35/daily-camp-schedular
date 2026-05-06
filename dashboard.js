@@ -761,15 +761,26 @@
         try {
             const campId = localStorage.getItem('campistry_user_id') || currentUser.id;
 
-            const { data, error } = await window.supabase
-                .from('camp_state')
-                .select('state')
-                .eq('camp_id', campId)
-                .maybeSingle();
+            // Read per-key rows from camp_state_kv, fall back to legacy blob
+            let state = null;
+            const { data: kvRows, error: kvErr } = await window.supabase
+                .from('camp_state_kv')
+                .select('key, value')
+                .eq('camp_id', campId);
 
-            if (data?.state) {
-                const state = data.state;
+            if (!kvErr && kvRows && kvRows.length > 0) {
+                state = {};
+                kvRows.forEach(r => { state[r.key] = r.value; });
+            } else {
+                const { data } = await window.supabase
+                    .from('camp_state')
+                    .select('state')
+                    .eq('camp_id', campId)
+                    .maybeSingle();
+                if (data?.state) state = data.state;
+            }
 
+            if (state) {
                 // ★ Divisions: prefer campStructure (Campistry Me format) over old app1 format
                 const campStructure = state.campStructure || {};
                 const oldDivisions = state.divisions || state.app1?.divisions || {};

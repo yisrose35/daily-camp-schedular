@@ -1038,7 +1038,7 @@
         }
 
         // Division-limited fields
-        const limitedFields = fields.filter(f => f.limitUsage?.enabled === true);
+        const limitedFields = fields.filter(f => f.accessRestrictions?.enabled === true);
         if (limitedFields.length > 0) {
             pass(CAT, 'Division-Limited Fields', `${limitedFields.length} field(s) with priority/restriction rules`);
         }

@@ -47,6 +47,24 @@
     const RotationEngine = {};
 
     // =========================================================================
+    // PERF: Cached lookups for special-activity names and all-activity names.
+    // Rebuilt once per solver run via RotationEngine.invalidateMetaCaches().
+    // =========================================================================
+    let _specialNamesCache = null;   // Set of lowercase-trimmed special names
+    let _allActivityNamesCache = null; // Array of all activity names
+
+    function _ensureSpecialNamesCache() {
+        if (_specialNamesCache) return _specialNamesCache;
+        var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
+        _specialNamesCache = new Set();
+        specials.forEach(function(s) {
+            if (s.name) _specialNamesCache.add(s.name.toLowerCase().trim());
+        });
+        return _specialNamesCache;
+    }
+
+    // =========================================================================
     // ★★★ SUPERCHARGED CONFIGURATION ★★★
     // =========================================================================
 
@@ -59,21 +77,21 @@
         // =====================================================================
         // RECENCY PENALTIES - MUCH STRONGER
         // =====================================================================
-        YESTERDAY_PENALTY: 12000,                // Did it yesterday - EXTREMELY BAD
-        TWO_DAYS_AGO_PENALTY: 8000,              // 2 days ago - VERY BAD
-        THREE_DAYS_AGO_PENALTY: 5000,            // 3 days ago - BAD
-        FOUR_DAYS_AGO_PENALTY: 3000,             // 4 days ago - moderate
-        FIVE_DAYS_AGO_PENALTY: 1500,             // 5 days ago - slight concern
-        SIX_SEVEN_DAYS_PENALTY: 800,             // 6-7 days ago - mild
-        FOUR_TO_SEVEN_DAYS_PENALTY: 800,         // Alias for compatibility
+        YESTERDAY_PENALTY: 50000,                // Did it yesterday - MUST NOT REPEAT
+        TWO_DAYS_AGO_PENALTY: 25000,             // 2 days ago - VERY BAD
+        THREE_DAYS_AGO_PENALTY: 12000,           // 3 days ago - BAD
+        FOUR_DAYS_AGO_PENALTY: 6000,             // 4 days ago - moderate
+        FIVE_DAYS_AGO_PENALTY: 2500,             // 5 days ago - slight concern
+        SIX_SEVEN_DAYS_PENALTY: 1200,            // 6-7 days ago - mild
+        FOUR_TO_SEVEN_DAYS_PENALTY: 1200,        // Alias for compatibility
         WEEK_PLUS_PENALTY: 0,                  // 8+ days ago - minimal
 
         // =====================================================================
         // ★★★ STREAK PENALTIES - Escalating for patterns ★★★
         // =====================================================================
-        STREAK_TWO_DAYS_MULTIPLIER: 2.0,         // Did it 2 of last 3 days
-        STREAK_THREE_DAYS_MULTIPLIER: 4.0,       // Did it 3 of last 5 days
-        STREAK_FOUR_PLUS_MULTIPLIER: 8.0,        // Did it 4+ of last 7 days
+        STREAK_TWO_DAYS_MULTIPLIER: 1.5,         // Did it 2 of last 3 days
+        STREAK_THREE_DAYS_MULTIPLIER: 2.5,       // Did it 3 of last 5 days
+        STREAK_FOUR_PLUS_MULTIPLIER: 4.0,        // Did it 4+ of last 7 days
 
         // =====================================================================
         // FREQUENCY PENALTIES - Compared to other activities
@@ -198,19 +216,22 @@ var _todayCacheGeneration = 0;
                     if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
                         const actName = entry._activity;
                         const actLower = (actName || '').toLowerCase().trim();
-                        
+
                         if (actLower === 'free' || actLower === 'free play' || actLower.indexOf('transition') !== -1) return;
-                        
+
+                        // Use normalized key for case-insensitive matching
+                        const historyKey = actLower;
+
                         // Initialize if needed
-                        if (!history.byActivity[actName]) {
-                            history.byActivity[actName] = {
+                        if (!history.byActivity[historyKey]) {
+                            history.byActivity[historyKey] = {
                                 dates: [],
                                 count: 0,
                                 daysSinceLast: null
                             };
                         }
-                        
-                        const actHistory = history.byActivity[actName];
+
+                        const actHistory = history.byActivity[historyKey];
                         actHistory.dates.push({ dateKey: dateKey, daysAgo: actualDaysAgo });
                         actHistory.count++;
                         
@@ -221,11 +242,11 @@ var _todayCacheGeneration = 0;
                         
                         // Track last 7 days
                         if (actualDaysAgo <= 7) {
-                            history.recentWeek[actName] = (history.recentWeek[actName] || 0) + 1;
+                            history.recentWeek[historyKey] = (history.recentWeek[historyKey] || 0) + 1;
                         }
                         
                         history.totalActivities++;
-                        history.uniqueActivities.add(actName);
+                        history.uniqueActivities.add(historyKey);
                     }
                 });
             });
@@ -474,10 +495,10 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return 0;
         }
         
-        // Use history scanner (primary source)
+        // Use history scanner (primary source, keys are normalized lowercase)
         var history = RotationEngine.getBunkHistory(bunkName);
-        var actHistory = history.byActivity[activityName];
-        
+        var actHistory = history.byActivity[actLower];
+
         if (actHistory && actHistory.daysSinceLast !== null) {
             return actHistory.daysSinceLast;
         }
@@ -514,12 +535,26 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getActivityCount) {
             return window.SchedulerCoreUtils.getActivityCount(bunkName, activityName);
         }
-        // Fallback
+        // Fallback — case-insensitive lookup
         var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
         var historicalCounts = globalSettings.historicalCounts || {};
         var manualOffsets = globalSettings.manualUsageOffsets || {};
-        var baseCount = (historicalCounts[bunkName] && historicalCounts[bunkName][activityName]) || 0;
-        var offset = (manualOffsets[bunkName] && manualOffsets[bunkName][activityName]) || 0;
+        var bunkCounts = historicalCounts[bunkName] || {};
+        var baseCount = bunkCounts[activityName] || 0;
+        if (baseCount === 0) {
+            var lower = activityName.toLowerCase();
+            for (var key in bunkCounts) {
+                if (key.toLowerCase() === lower) { baseCount = bunkCounts[key]; break; }
+            }
+        }
+        var bunkOffsets = manualOffsets[bunkName] || {};
+        var offset = bunkOffsets[activityName] || 0;
+        if (offset === 0) {
+            var lower2 = activityName.toLowerCase();
+            for (var key2 in bunkOffsets) {
+                if (key2.toLowerCase() === lower2) { offset = bunkOffsets[key2]; break; }
+            }
+        }
         return Math.max(0, baseCount + offset);
     };
 
@@ -551,6 +586,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      * Get all unique activity names from config
      */
     RotationEngine.getAllActivityNames = function() {
+        if (_allActivityNamesCache) return _allActivityNamesCache;
         var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
         var fields = (globalSettings.app1 && globalSettings.app1.fields) || [];
         var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
@@ -567,20 +603,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             if (s.name) names.add(s.name);
         });
 
-        return Array.from(names);
+        _allActivityNamesCache = Array.from(names);
+        return _allActivityNamesCache;
     };
 
     /**
      * Check if activity is a "special" type
      */
     RotationEngine.isSpecialActivity = function(activityName) {
-        var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-        var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
-        var specialNames = new Set();
-        specials.forEach(function(s) {
-            if (s.name) specialNames.add(s.name.toLowerCase().trim());
-        });
-        return specialNames.has((activityName || '').toLowerCase().trim());
+        return _ensureSpecialNamesCache().has((activityName || '').toLowerCase().trim());
     };
 
     // =========================================================================
@@ -605,10 +636,10 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return CONFIG.SAME_DAY_PENALTY;
         }
         
-        // Get comprehensive history
+        // Get comprehensive history (keys are normalized lowercase)
         var history = RotationEngine.getBunkHistory(bunkName);
-        var actHistory = history.byActivity[activityName];
-        
+        var actHistory = history.byActivity[actLower];
+
         // Never done at all - HUGE bonus! (no recency conflict possible)
         if (!actHistory || actHistory.count === 0) {
             return CONFIG.NEVER_DONE_BONUS;
@@ -680,10 +711,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      * FIX: Strengthen weekCount penalties to bridge the cliff.
      */
     RotationEngine.calculateStreakScore = function(bunkName, activityName) {
+        var actLower = (activityName || '').toLowerCase().trim();
         var history = RotationEngine.getBunkHistory(bunkName);
-        
-        // Check consecutive day streak
-        var streak = history.recentStreak[activityName] || 0;
+
+        // Check consecutive day streak (keys are normalized)
+        var streak = history.recentStreak[actLower] || 0;
         
         if (streak >= 4) {
             return CONFIG.YESTERDAY_PENALTY * CONFIG.STREAK_FOUR_PLUS_MULTIPLIER;
@@ -696,8 +728,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         }
         
         // ★★★ v2.4 FIX: Stronger weekCount penalties to close the cliff ★★★
-        // Old: weekCount>=2 → ABOVE_AVERAGE_PENALTY (1200). New: escalated properly.
-        var weekCount = history.recentWeek[activityName] || 0;
+        var weekCount = history.recentWeek[actLower] || 0;
         
         if (weekCount >= 4) {
             // 4+ times this week (non-consecutive) — nearly as bad as a 3-day streak
@@ -865,29 +896,26 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      * FIX: Scale the bonus by how much coverage the bunk still needs.
      */
     RotationEngine.calculateCoverageScore = function(bunkName, activityName) {
+        var actLower = (activityName || '').toLowerCase().trim();
         var allActivities = RotationEngine.getAllActivityNames();
         if (allActivities.length === 0) return 0;
-        
+
         var history = RotationEngine.getBunkHistory(bunkName);
         var triedActivities = history.uniqueActivities.size;
         var coverageRatio = triedActivities / allActivities.length;
-        
-        // Has this bunk ever tried this activity?
-        var hasTriedThis = history.byActivity[activityName] && history.byActivity[activityName].count > 0;
-        
+
+        // Has this bunk ever tried this activity? (keys are normalized)
+        var hasTriedThis = history.byActivity[actLower] && history.byActivity[actLower].count > 0;
+
         if (!hasTriedThis) {
-            // ★★★ v2.4 FIX: Scale bonus by how much coverage is still needed ★★★
-            // Low coverage (tried 20% of activities) → full bonus
-            // High coverage (tried 80% of activities) → reduced bonus
-            // This prevents the last untried activity from overpowering recency
-            var needRatio = 1 - coverageRatio;  // 0.0 (tried everything) to 1.0 (tried nothing)
+            var needRatio = 1 - coverageRatio;
             var scaledBonus = CONFIG.MISSING_ACTIVITY_BONUS * Math.max(0.3, needRatio);
             return scaledBonus;
         }
-        
+
         // Low overall coverage - bonus for trying less-used activities
         if (coverageRatio < 0.5) {
-            var actCount = (history.byActivity[activityName] && history.byActivity[activityName].count) || 0;
+            var actCount = (history.byActivity[actLower] && history.byActivity[actLower].count) || 0;
             if (actCount <= 1) {
                 return CONFIG.LOW_COVERAGE_BONUS;
             }
@@ -1142,7 +1170,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 activityProperties: activityProperties
             });
             var streak = RotationEngine.calculateStreakScore(bunkName, act);
-            var weekCount = history.recentWeek[act] || 0;
+            var weekCount = history.recentWeek[(act || '').toLowerCase().trim()] || 0;
             return { activity: act, score: score, streak: streak, weekCount: weekCount };
         }).sort(function(a, b) { return a.score - b.score; });
 
@@ -1203,6 +1231,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         });
 
         console.log('\n' + '='.repeat(70));
+    };
+
+    RotationEngine.invalidateMetaCaches = function() {
+        _specialNamesCache = null;
+        _allActivityNamesCache = null;
     };
 
     // =========================================================================
