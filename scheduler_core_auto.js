@@ -441,8 +441,8 @@
             try {
                 const rotData = await window.RotationCloud.load(true); // force refresh
                 if (rotData?.counts && Object.keys(rotData.counts).length > 0) {
-                    // Merge cloud counts into globalSettings.historicalCounts so
-                    // RotationEngine.getActivityCount() / calculateRotationScore() see them
+                    // 1. Merge cloud counts into globalSettings.historicalCounts
+                    //    (used by RotationEngine.getActivityCount fallback)
                     const gs = getGlobalSettings();
                     if (!gs.historicalCounts) gs.historicalCounts = {};
                     for (const [bunk, activities] of Object.entries(rotData.counts)) {
@@ -454,6 +454,14 @@
                     if (typeof window.saveGlobalSettings === 'function') {
                         window.saveGlobalSettings('historicalCounts', gs.historicalCounts);
                     }
+
+                    // 2. Merge cloud lastDone + counts into RotationEngine's
+                    //    history cache so recency scoring works even when
+                    //    localStorage allDailyData is incomplete
+                    if (window.RotationEngine?.mergeCloudData) {
+                        window.RotationEngine.mergeCloudData(rotData);
+                    }
+
                     log('[STEP 0] ☁️ Loaded ' + Object.keys(rotData.counts).length + ' bunk rotation records from cloud');
                 }
             } catch (e) { warn('[STEP 0] RotationCloud load failed: ' + e.message); }

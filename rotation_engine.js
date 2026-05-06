@@ -1238,6 +1238,85 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         _allActivityNamesCache = null;
     };
 
+    /**
+     * Merge cloud rotation data (from RotationCloud.load()) into the history
+     * cache so recency/count scoring sees cloud-backed history even when
+     * allDailyData in localStorage is incomplete.
+     *
+     * @param {{ counts: Object, lastDone: Object }} cloudData
+     *   counts:   { bunkName: { activityName: totalCount } }
+     *   lastDone: { bunkName: { activityName: "YYYY-MM-DD" } }
+     */
+    RotationEngine.mergeCloudData = function(cloudData) {
+        if (!cloudData) return;
+        var today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        var todayMs = new Date(today + 'T12:00:00').getTime();
+        var msPerDay = 86400000;
+        var merged = 0;
+
+        // Ensure cache date is current
+        if (_historyCacheDate !== today) {
+            _historyCache.clear();
+            _historyCacheDate = today;
+        }
+
+        var allBunks = new Set();
+        if (cloudData.counts) Object.keys(cloudData.counts).forEach(function(b) { allBunks.add(b); });
+        if (cloudData.lastDone) Object.keys(cloudData.lastDone).forEach(function(b) { allBunks.add(b); });
+
+        allBunks.forEach(function(bunk) {
+            // Get or build the history for this bunk
+            var history = _historyCache.has(bunk) ? _historyCache.get(bunk) : buildBunkActivityHistory(bunk);
+
+            var cloudCounts = (cloudData.counts || {})[bunk] || {};
+            var cloudLast = (cloudData.lastDone || {})[bunk] || {};
+
+            // For each cloud activity, fill gaps the local scan may have missed
+            var allActs = new Set(Object.keys(cloudCounts).concat(Object.keys(cloudLast)));
+            allActs.forEach(function(act) {
+                var actLower = act.toLowerCase().trim();
+                var local = history.byActivity[actLower];
+                var cloudCount = cloudCounts[act] || 0;
+                var cloudLastDate = cloudLast[act] || null;
+
+                if (!local) {
+                    // Activity not seen in local 14-day scan — cloud fills the gap
+                    var daysSince = null;
+                    if (cloudLastDate && cloudLastDate < today) {
+                        daysSince = Math.max(1, Math.round((todayMs - new Date(cloudLastDate + 'T12:00:00').getTime()) / msPerDay));
+                    }
+                    history.byActivity[actLower] = {
+                        dates: cloudLastDate ? [{ dateKey: cloudLastDate, daysAgo: daysSince || 14 }] : [],
+                        count: cloudCount,
+                        daysSinceLast: daysSince
+                    };
+                    if (cloudCount > 0) history.uniqueActivities.add(actLower);
+                    history.totalActivities += cloudCount;
+                    merged++;
+                } else {
+                    // Local exists but cloud may have a higher total (covers more dates)
+                    if (cloudCount > local.count) {
+                        history.totalActivities += (cloudCount - local.count);
+                        local.count = cloudCount;
+                    }
+                    // Cloud may have a more recent lastDone than local's 14-day window
+                    if (cloudLastDate && cloudLastDate < today) {
+                        var cloudDays = Math.max(1, Math.round((todayMs - new Date(cloudLastDate + 'T12:00:00').getTime()) / msPerDay));
+                        if (local.daysSinceLast === null || cloudDays < local.daysSinceLast) {
+                            local.daysSinceLast = cloudDays;
+                        }
+                    }
+                }
+            });
+
+            _historyCache.set(bunk, history);
+        });
+
+        if (merged > 0) {
+            console.log('[RotationEngine] Merged ' + merged + ' cloud-only activity records into history cache');
+        }
+    };
+
     // =========================================================================
     // EXPORT
     // =========================================================================
