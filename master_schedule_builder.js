@@ -1539,10 +1539,10 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
   const totalHeight = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
   // Column width per grade (adapts to layer stacking)
-  const BAND_WIDTH = 80;
-  const BAND_GAP = 6;
-  const BAND_PAD = 10;
-  const GRADE_COL_MIN = 180;
+  const BAND_WIDTH = 36;
+  const BAND_GAP = 3;
+  const BAND_PAD = 6;
+  const GRADE_COL_MIN = 100;
 
   let html = '';
 

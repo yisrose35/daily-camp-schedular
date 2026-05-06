@@ -4208,8 +4208,8 @@ a:hover {
 .ms-daw-band[data-type="custom"] { background:linear-gradient(180deg,#e2e8f0,#cbd5e1); color:#1e293b; }
 .ms-daw-band[data-type="league"] { background:linear-gradient(180deg,#fecaca,#fca5a5); color:#7f1d1d; }
 .ms-daw-band[data-type="elective"] { background:linear-gradient(180deg,#f5d0fe,#f0abfc); color:#701a75; }
-.ms-daw-band .band-label { font-size:10px; font-weight:700; padding:6px 4px 2px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
-.ms-daw-band .band-qty { font-size:9px; font-weight:500; text-align:center; padding:0 3px 4px; opacity:0.75; flex-shrink:0; }
+.ms-daw-band .band-label { font-size:8px; font-weight:700; padding:4px 2px 1px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+.ms-daw-band .band-qty { font-size:7px; font-weight:500; text-align:center; padding:0 2px 2px; opacity:0.75; flex-shrink:0; }
 .ms-daw-band .band-resize { position:absolute; left:0; right:0; height:8px; cursor:ns-resize; z-index:5; opacity:0; transition:opacity 0.15s; display:flex; align-items:center; justify-content:center; }
 .ms-daw-band:hover .band-resize { opacity:1; }
 .ms-daw-band .band-resize::after { content:''; display:block; width:12px; height:3px; background:rgba(0,0,0,0.25); border-radius:2px; }
