@@ -1594,11 +1594,19 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   const hasPeriods = allPeriodTimes.size > 0;
 
   // Build ruler tick times: period boundaries if periods exist, else 30-min intervals
+  // Merge times within 10 min of each other into a single tick at the midpoint
   const rulerTicks = [];
   if (hasPeriods) {
-    [...allPeriodTimes].filter(m => m >= globalStart && m <= globalEnd).sort((a, b) => a - b).forEach(m => {
-      rulerTicks.push({ min: m, major: true });
-    });
+    const sorted = [...allPeriodTimes].filter(m => m >= globalStart && m <= globalEnd).sort((a, b) => a - b);
+    const MERGE_MIN = 10; // merge times within 10 minutes
+    for (let i = 0; i < sorted.length; i++) {
+      const group = [sorted[i]];
+      while (i + 1 < sorted.length && sorted[i + 1] - group[0] <= MERGE_MIN) {
+        group.push(sorted[++i]);
+      }
+      const mid = Math.round(group.reduce((a, b) => a + b, 0) / group.length);
+      rulerTicks.push({ min: mid, major: true });
+    }
   } else {
     for (let m = globalStart; m < globalEnd; m += 30) {
       rulerTicks.push({ min: m, major: m % 60 === 0 });
@@ -1607,7 +1615,9 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
   // Time ruler column (fixed left)
   html += `<div class="ms-daw-ruler-col">`;
-  // Ruler body (no header spacer — ruler aligns with tracks directly)
+  // Header spacer to align with grade headers
+  html += `<div class="ms-daw-ruler-header-spacer"></div>`;
+  // Ruler body
   html += `<div class="ms-daw-ruler-vertical" style="height:${totalHeight}px;">`;
   rulerTicks.forEach(tick => {
     const top = (tick.min - globalStart) * DAW_PIXELS_PER_MINUTE;
@@ -1629,6 +1639,14 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
     html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
 
+    // ── Thin grade header (outside the scrolling track) ──
+    html += `<div class="ms-daw-grade-header">
+      <span class="ms-daw-grade-tag">${gradeKey}</span>
+      <span class="ms-daw-grade-info">${bunkCount} bunks</span>
+      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+</button>
+      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
+    </div>`;
+
     // Collect period boundary pixel positions for this grade (used by notch clip-paths)
     const gradePeriods = (window.campPeriods || {})[gradeKey] || [];
     const periodBoundaryPx = [];
@@ -1638,18 +1656,21 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       if (startPx > 0) periodBoundaryPx.push(startPx);
       if (endPx > 0 && endPx < totalHeight) periodBoundaryPx.push(endPx);
     });
-    const uniqueBoundaries = [...new Set(periodBoundaryPx)].sort((a, b) => a - b);
+    // Merge boundaries that are within 10min (30px) of each other → single midpoint
+    const rawBoundaries = [...new Set(periodBoundaryPx)].sort((a, b) => a - b);
+    const MERGE_THRESHOLD = 10 * DAW_PIXELS_PER_MINUTE; // 10 min in px
+    const uniqueBoundaries = [];
+    for (let i = 0; i < rawBoundaries.length; i++) {
+      const group = [rawBoundaries[i]];
+      while (i + 1 < rawBoundaries.length && rawBoundaries[i + 1] - group[0] <= MERGE_THRESHOLD) {
+        group.push(rawBoundaries[++i]);
+      }
+      // Use midpoint of the group
+      uniqueBoundaries.push(Math.round(group.reduce((a, b) => a + b, 0) / group.length));
+    }
 
-    // ── Timeline track (ALL layers — header is inside track as sticky overlay) ──
+    // ── Timeline track ──
     html += `<div class="ms-daw-track" data-grade="${gradeKey}" data-boundaries="${uniqueBoundaries.join(',')}" style="height:${totalHeight}px;width:100%;position:relative;">`;
-
-    // Grade label overlay (sticky at top of scroll)
-    html += `<div class="ms-daw-grade-overlay">
-      <span class="ms-daw-grade-tag">${gradeKey}</span>
-      <span class="ms-daw-grade-info">${bunkCount} bunks</span>
-      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+</button>
-      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
-    </div>`;
 
     // Horizontal gridlines
     for (let m = globalStart; m < globalEnd; m += 30) {
@@ -1669,11 +1690,10 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       html += `<div class="ms-daw-inactive-zone" style="top:${topPx}px;height:${h}px;"></div>`;
     }
 
-    // Subtle period boundary lines (no labels)
-    gradePeriods.forEach((period) => {
-      const pTop = (period.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
-      if (pTop > 0) {
-        html += `<div class="ms-daw-period-line" style="top:${pTop}px;"></div>`;
+    // Subtle period boundary lines (merged — one line per merged boundary)
+    uniqueBoundaries.forEach(py => {
+      if (py > 0) {
+        html += `<div class="ms-daw-period-line" style="top:${py}px;"></div>`;
       }
     });
 
@@ -1758,7 +1778,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       dawDragData.offsetMin = Math.round(clickY / DAW_PIXELS_PER_MINUTE);
 
       e.dataTransfer.setData('text/daw-band-move', id);
-      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.effectAllowed = 'copyMove';
       band.style.opacity = '0.4';
     });
 
@@ -1828,7 +1848,12 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       const isDawDrop = e.dataTransfer.types.includes('text/daw-layer') || e.dataTransfer.types.includes('text/daw-band-move');
       if (!isDawDrop) return;
       e.preventDefault();
-      e.dataTransfer.dropEffect = e.dataTransfer.types.includes('text/daw-band-move') ? 'move' : 'copy';
+      // Cross-grade band drag = copy, same-grade = move, palette = copy
+      if (e.dataTransfer.types.includes('text/daw-band-move') && dawDragData) {
+        e.dataTransfer.dropEffect = (dawDragData.grade === track.dataset.grade) ? 'move' : 'copy';
+      } else {
+        e.dataTransfer.dropEffect = 'copy';
+      }
       track.classList.add('drop-target');
     });
 
@@ -1883,20 +1908,22 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         onRender();
       }
       else if (e.dataTransfer.types.includes('text/daw-band-move') && dawDragData?.source === 'band') {
-        // Move existing band
         const { id, grade: fromGrade, layer, offsetMin } = dawDragData;
         const duration = layer.endMin - layer.startMin;
         const newStart = Math.round((dropMin - offsetMin) / SNAP_MINS) * SNAP_MINS;
         const newEnd = newStart + duration;
 
-        // Remove from old grade if moving between grades
         if (fromGrade !== grade) {
-          layerSource[fromGrade] = (layerSource[fromGrade] || []).filter(l => l.id !== id);
+          // Cross-grade drop → COPY the layer to the target grade
           if (!layerSource[grade]) layerSource[grade] = [];
-          layer.startMin = Math.max(globalStart, newStart);
-          layer.endMin = Math.min(globalEnd, newEnd);
-          layerSource[grade].push(layer);
+          layerSource[grade].push({
+            ...JSON.parse(JSON.stringify(layer)),
+            id: 'daw_' + Math.random().toString(36).slice(2, 9),
+            startMin: Math.max(globalStart, newStart),
+            endMin: Math.min(globalEnd, newEnd),
+          });
         } else {
+          // Same grade → move in place
           layer.startMin = Math.max(globalStart, newStart);
           layer.endMin = Math.min(globalEnd, newEnd);
         }
