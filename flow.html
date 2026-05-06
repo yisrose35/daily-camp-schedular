@@ -623,7 +623,7 @@
     function showApp() {
         if (loadingScreen) {
             var elapsed = Date.now() - (window._flowAnimStart || Date.now());
-            var minDisplay = 2400;
+            var minDisplay = 2000;
             var remaining = Math.max(0, minDisplay - elapsed);
             setTimeout(function() {
                 loadingScreen.classList.add('hide');
