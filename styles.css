@@ -4119,10 +4119,10 @@ a:hover {
 .ms-mode-btn.active { background:#fff; color:#0f172a; box-shadow:0 1px 3px rgba(0,0,0,0.08); }
 
 /* ── DAW Sidebar (light) ── */
-.ms-daw-sidebar { width:172px; min-width:172px; background:#fff; border-right:1px solid #eef0f3; display:flex; flex-direction:column; height:100%; overflow:hidden; }
-.ms-daw-sidebar-brand { font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#94a3b8; padding:10px 12px 6px; flex-shrink:0; }
+.ms-daw-sidebar { width:140px; min-width:140px; background:#fff; border-right:1px solid #eef0f3; display:flex; flex-direction:column; height:100%; overflow:hidden; }
+.ms-daw-sidebar-brand { font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#94a3b8; padding:8px 10px 4px; flex-shrink:0; }
 .ms-daw-palette { flex:1; overflow-y:auto; overflow-x:hidden; padding:4px 0 8px; display:flex; flex-direction:column; scrollbar-width:thin; scrollbar-color:#e2e8f0 #fff; }
-.ms-daw-tile { display:flex; align-items:center; gap:8px; padding:7px 12px; cursor:grab; transition:background 0.12s; user-select:none; }
+.ms-daw-tile { display:flex; align-items:center; gap:6px; padding:6px 10px; cursor:grab; transition:background 0.12s; user-select:none; }
 .ms-daw-tile:hover { background:#f8fafc; }
 .ms-daw-tile:active { cursor:grabbing; }
 .ms-daw-tile.ms-daw-tile-dragging { opacity:0.4; }
@@ -4136,7 +4136,7 @@ a:hover {
 .ms-daw-tile-hint { font-size:10px; color:#94a3b8; line-height:1.5; }
 
 /* ── DAW Status Bar (light) ── */
-.ms-daw-statusbar { display:flex; align-items:center; gap:8px; padding:0 16px; height:44px; background:#fff; border-bottom:1px solid #eef0f3; flex-shrink:0; }
+.ms-daw-statusbar { display:flex; align-items:center; gap:6px; padding:0 10px; height:38px; background:#fff; border-bottom:1px solid #eef0f3; flex-shrink:0; }
 .ms-daw-sb-left { display:flex; align-items:center; gap:8px; min-width:140px; overflow:hidden; }
 .ms-daw-sb-center { display:flex; align-items:center; gap:6px; flex:1; justify-content:center; }
 .ms-daw-sb-right { display:flex; align-items:center; gap:6px; min-width:140px; justify-content:flex-end; }
@@ -4157,7 +4157,7 @@ a:hover {
 
 /* ── Auto Mode Inner ── */
 .ms-auto-container { display:flex; flex-direction:column; height:100%; overflow:hidden; }
-.ms-daw-wrapper { flex:1; overflow:auto; background:#fafbfc; position:relative; }
+.ms-daw-wrapper { flex:1; overflow:auto; background:#fafbfc; position:relative; padding:0; }
 /* When DAW grid is inside DA view, the parent scrolls — avoid nested scrollbars */
 #da-view-auto-layers .ms-daw-grid { min-width:0; }
 .ms-daw-grid { position:relative; }
@@ -4167,8 +4167,8 @@ a:hover {
 
 /* ── Ruler column (fixed left) ── */
 .ms-daw-ruler-col { flex-shrink:0; position:sticky; left:0; z-index:6; background:#fff; }
-.ms-daw-ruler-vertical { width:64px; min-width:64px; border-right:1px solid #eef0f3; position:relative; background:#fff; }
-.ms-daw-ruler-vertical .ms-daw-ruler-tick { position:absolute; right:6px; font-size:10px; color:#94a3b8; line-height:1; font-family:-apple-system,system-ui,sans-serif; font-weight:500; white-space:nowrap; border-top:1px solid #f0f2f5; padding-top:3px; width:58px; text-align:right; }
+.ms-daw-ruler-vertical { width:52px; min-width:52px; border-right:1px solid #eef0f3; position:relative; background:#fff; }
+.ms-daw-ruler-vertical .ms-daw-ruler-tick { position:absolute; right:4px; font-size:9px; color:#94a3b8; line-height:1; font-family:-apple-system,system-ui,sans-serif; font-weight:500; white-space:nowrap; border-top:1px solid #f0f2f5; padding-top:2px; width:46px; text-align:right; }
 .ms-daw-ruler-vertical .ms-daw-ruler-tick.major-tick { color:#475569; font-weight:700; border-top-color:#e2e8f0; }
 
 /* ── Grade Columns ── */

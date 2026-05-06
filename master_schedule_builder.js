@@ -1500,6 +1500,41 @@ function renderDAWExpandSection() {
     renderDAWToolbar(); // Sync auto toolbar status
   };
 }
+
+// ── DAW Constants (module-level so event handlers can access) ──
+const DAW_BAND_WIDTH = 40;
+const DAW_BAND_GAP = 4;
+const DAW_BAND_PAD = 4;
+const DAW_GRADE_COL_MIN = 120;
+const DAW_NOTCH_DEPTH = 5;
+const DAW_NOTCH_HALF = 4;
+
+// Build clip-path polygon with >< notches at period boundaries
+function buildNotchClipPath(bandTopPx, bandHeightPx, periodBoundariesPx, bandWidthPx) {
+  const notches = periodBoundariesPx
+    .map(py => py - bandTopPx)
+    .filter(y => y > DAW_NOTCH_HALF + 2 && y < bandHeightPx - DAW_NOTCH_HALF - 2);
+  if (notches.length === 0) return '';
+  const W = bandWidthPx;
+  const right = [];
+  const left = [];
+  right.push(`${W}px 0px`);
+  notches.forEach(y => {
+    right.push(`${W}px ${y - DAW_NOTCH_HALF}px`);
+    right.push(`${W - DAW_NOTCH_DEPTH}px ${y}px`);
+    right.push(`${W}px ${y + DAW_NOTCH_HALF}px`);
+  });
+  right.push(`${W}px ${bandHeightPx}px`);
+  left.push(`0px ${bandHeightPx}px`);
+  notches.slice().reverse().forEach(y => {
+    left.push(`0px ${y + DAW_NOTCH_HALF}px`);
+    left.push(`${DAW_NOTCH_DEPTH}px ${y}px`);
+    left.push(`0px ${y - DAW_NOTCH_HALF}px`);
+  });
+  left.push(`0px 0px`);
+  return `clip-path:polygon(${right.join(',')},${left.join(',')});`;
+}
+
 function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   const gridEl = externalEl || document.getElementById('daw-grid');
   if (!gridEl) return;
@@ -1538,12 +1573,10 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   if (globalEnd === null) globalEnd = 960;     // 4:00 PM
 
   const totalHeight = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
-  const BAND_WIDTH = 40;
-  const BAND_GAP = 4;
-  const BAND_PAD = 6;
-  const GRADE_COL_MIN = 140;
-  const NOTCH_DEPTH = 5;   // how far the >< cuts inward (px)
-  const NOTCH_HALF = 4;    // half-height of the notch diamond (px)
+  const BAND_WIDTH = DAW_BAND_WIDTH;
+  const BAND_GAP = DAW_BAND_GAP;
+  const BAND_PAD = DAW_BAND_PAD;
+  const GRADE_COL_MIN = DAW_GRADE_COL_MIN;
 
   let html = '';
 
@@ -1582,41 +1615,6 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   });
   html += `</div></div>`;
 
-  // Helper: build clip-path polygon with >< notches at period boundaries
-  function buildNotchClipPath(bandTopPx, bandHeightPx, periodBoundariesPx, bandWidthPx) {
-    // Collect boundary Y positions that fall inside this band (relative to band top)
-    const notches = periodBoundariesPx
-      .map(py => py - bandTopPx)
-      .filter(y => y > NOTCH_HALF + 2 && y < bandHeightPx - NOTCH_HALF - 2);
-
-    if (notches.length === 0) return ''; // no clip needed
-
-    // Build polygon points: right side going down, then left side going up
-    const W = bandWidthPx;
-    const right = [];
-    const left = [];
-
-    // Right side: top to bottom
-    right.push(`${W}px 0px`);
-    notches.forEach(y => {
-      right.push(`${W}px ${y - NOTCH_HALF}px`);
-      right.push(`${W - NOTCH_DEPTH}px ${y}px`);
-      right.push(`${W}px ${y + NOTCH_HALF}px`);
-    });
-    right.push(`${W}px ${bandHeightPx}px`);
-
-    // Left side: bottom to top
-    left.push(`0px ${bandHeightPx}px`);
-    notches.slice().reverse().forEach(y => {
-      left.push(`0px ${y + NOTCH_HALF}px`);
-      left.push(`${NOTCH_DEPTH}px ${y}px`);
-      left.push(`0px ${y - NOTCH_HALF}px`);
-    });
-    left.push(`0px 0px`);
-
-    return `clip-path:polygon(${right.join(',')},${left.join(',')});`;
-  }
-
   // Grade columns
   grades.forEach(gradeKey => {
     const div = divisions[gradeKey];
@@ -1631,8 +1629,19 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
     html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
 
+    // Collect period boundary pixel positions for this grade (used by notch clip-paths)
+    const gradePeriods = (window.campPeriods || {})[gradeKey] || [];
+    const periodBoundaryPx = [];
+    gradePeriods.forEach(period => {
+      const startPx = (period.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const endPx = (period.endMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+      if (startPx > 0) periodBoundaryPx.push(startPx);
+      if (endPx > 0 && endPx < totalHeight) periodBoundaryPx.push(endPx);
+    });
+    const uniqueBoundaries = [...new Set(periodBoundaryPx)].sort((a, b) => a - b);
+
     // ── Timeline track (ALL layers — header is inside track as sticky overlay) ──
-    html += `<div class="ms-daw-track" data-grade="${gradeKey}" style="height:${totalHeight}px;width:100%;position:relative;">`;
+    html += `<div class="ms-daw-track" data-grade="${gradeKey}" data-boundaries="${uniqueBoundaries.join(',')}" style="height:${totalHeight}px;width:100%;position:relative;">`;
 
     // Grade label overlay (sticky at top of scroll)
     html += `<div class="ms-daw-grade-overlay">
@@ -1661,24 +1670,12 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     }
 
     // Subtle period boundary lines (no labels)
-    const gradePeriods = (window.campPeriods || {})[gradeKey] || [];
     gradePeriods.forEach((period) => {
       const pTop = (period.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
       if (pTop > 0) {
         html += `<div class="ms-daw-period-line" style="top:${pTop}px;"></div>`;
       }
     });
-
-    // Collect period boundary pixel positions for notch clip-paths
-    const periodBoundaryPx = [];
-    gradePeriods.forEach(period => {
-      const startPx = (period.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
-      const endPx = (period.endMin - globalStart) * DAW_PIXELS_PER_MINUTE;
-      if (startPx > 0) periodBoundaryPx.push(startPx);
-      if (endPx > 0 && endPx < totalHeight) periodBoundaryPx.push(endPx);
-    });
-    // Deduplicate (adjacent periods share a boundary)
-    const uniqueBoundaries = [...new Set(periodBoundaryPx)].sort((a, b) => a - b);
 
     // Render ALL bands with >< notch clip-paths at period boundaries
     layers.forEach((layer, idx) => {
@@ -1800,11 +1797,16 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
             layer.endMin = Math.min(globalEnd, Math.max(layer.startMin + 15, newMin));
           }
 
-          // Live update position (vertical)
+          // Live update position + clip-path (vertical)
           const top = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
           const height = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
           band.style.top = top + 'px';
           band.style.height = height + 'px';
+          // Recalculate notch clip-path
+          const track = band.closest('.ms-daw-track');
+          const boundaries = (track?.dataset.boundaries || '').split(',').filter(Boolean).map(Number);
+          const clip = buildNotchClipPath(top, height, boundaries, DAW_BAND_WIDTH);
+          band.style.clipPath = clip ? clip.replace('clip-path:', '').replace(';', '') : '';
         };
 
         const onUp = () => {
