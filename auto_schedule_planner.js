@@ -506,7 +506,8 @@ function renderBand(layer, dayStart, stackIdx, maxStack) {
 
   // Duration label
   var durText = layer.periodMin ? layer.periodMin + 'm' : '';
-  if (layer.type === 'swim' && (layer.preChangeMin || layer.postChangeMin)) {
+  var _alHasSplitSwim = layer.type === 'split' && (layer.subEvents || []).some(function(se) { return se.event && se.event.toLowerCase() === 'swim'; });
+  if ((layer.type === 'swim' || _alHasSplitSwim) && (layer.preChangeMin || layer.postChangeMin)) {
     var pre  = layer.preChangeMin  || 0;
     var post = layer.postChangeMin || 0;
     var swimOnly = layer.periodMin || ((layer.endMin - layer.startMin) - pre - post);
@@ -879,8 +880,9 @@ function openPopover(layerId, bandEl) {
       '</div>';
   }
 
-  // ── Section 4: Change Time (swim only) ──
-  if (layer.type === 'swim') {
+  // ── Section 4: Change Time (swim, or split tile with swim) ──
+  var _alPopHasSplitSwim = layer.type === 'split' && (layer.subEvents || []).some(function(se) { return se.event && se.event.toLowerCase() === 'swim'; });
+  if (layer.type === 'swim' || _alPopHasSplitSwim) {
     html += '<div class="al-pop-divider"></div>';
     html += '<div class="al-pop-section-label">Change Time</div>';
     html += '<div class="al-pop-field">' +
@@ -993,8 +995,9 @@ function openPopover(layerId, bandEl) {
       layer.fullGrade = activeGmode.dataset.gmode === 'fullgrade';
     }
 
-    // Change Time (swim only)
-    if (layer.type === 'swim') {
+    // Change Time (swim, or split tile with swim)
+    var _alSaveSplitSwim = layer.type === 'split' && (layer.subEvents || []).some(function(se) { return se.event && se.event.toLowerCase() === 'swim'; });
+    if (layer.type === 'swim' || _alSaveSplitSwim) {
       var preEl  = popoverEl.querySelector('#al-pop-pre-change');
       var postEl = popoverEl.querySelector('#al-pop-post-change');
       layer.preChangeMin  = preEl  && preEl.value.trim()  !== '' ? Math.max(0, parseInt(preEl.value)  || 0) : null;
