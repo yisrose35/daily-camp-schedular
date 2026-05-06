@@ -682,7 +682,7 @@
         {
             const gradeScore = {}; // grade → sum of rank indices (lower = higher priority)
             const gradeCount = {}; // grade → how many priority fields mention it
-            (config.fields || fields || []).forEach(f => {
+            (getFields(globalSettings) || []).forEach(f => {
                 if (f.accessRestrictions?.usePriority && Array.isArray(f.accessRestrictions.priorityList) && f.accessRestrictions.priorityList.length > 0) {
                     f.accessRestrictions.priorityList.forEach((g, idx) => {
                         gradeScore[g] = (gradeScore[g] || 0) + idx;
