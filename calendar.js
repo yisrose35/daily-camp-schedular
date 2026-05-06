@@ -325,6 +325,9 @@ all[date].updated_at = new Date().toISOString();
                 }
             }
 
+            // Clear rotation_counts table in Supabase
+            await window.RotationCloud?.clearAll?.();
+
             console.log("✅ All rotation histories cleared.");
             alert("Activity & Smart Tile History reset successfully!");
             window.location.reload();
@@ -422,8 +425,11 @@ all[date].updated_at = new Date().toISOString();
                 }
             }
             
+            // Clear rotation_counts table in Supabase
+            await window.RotationCloud?.clearAll?.();
+
             console.log("⭐ NEW HALF RESET COMPLETE ⭐");
-            
+
             alert(
                 "✅ New Half Started!\n\n" +
                 "All activity and league counters have been reset.\n" +
