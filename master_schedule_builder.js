@@ -23,6 +23,25 @@ let selectedTileId = null;
 let builderMode = 'manual';
 let hasUnsavedChanges = false;
 
+function _mbIsBackToBack(ev) {
+  if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
+  const parseT = typeof parseTimeToMinutes === 'function' ? parseTimeToMinutes : window.SchedulerCoreUtils?.parseTimeToMinutes;
+  if (!parseT) return false;
+  const evStart = parseT(ev.startTime);
+  const evEnd = parseT(ev.endTime);
+  for (let i = 0; i < dailySkeleton.length; i++) {
+    const other = dailySkeleton[i];
+    if (other === ev || other.id === ev.id) continue;
+    if (other.leagueName !== ev.leagueName) continue;
+    if (other.division !== ev.division) continue;
+    if (other.type !== 'league' && other.type !== 'specialty_league') continue;
+    const oStart = parseT(other.startTime);
+    const oEnd = parseT(other.endTime);
+    if (Math.abs(oStart - evEnd) <= 5 || Math.abs(evStart - oEnd) <= 5) return true;
+  }
+  return false;
+}
+
 // --- UNIVERSAL BUILDER MODE ---
 window.getCampBuilderMode = function() {
   const g = window.loadGlobalSettings?.() || {};
@@ -2688,9 +2707,15 @@ function renderEventTile(ev, top, height) {
   }
   
   
-// ★★★ MULTIPLE LEAGUE SUPPORT: Show league name badge ★★★
   if (ev.leagueName) {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏆 ${ev.leagueName}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.leagueName}</div>`;
+  }
+  if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
+    const _gs = window.loadGlobalSettings?.() || {};
+    const _lObj = (_gs.leaguesByName || {})[ev.leagueName];
+    if (_lObj?.offCampus?.enabled && _mbIsBackToBack(ev)) {
+      innerHtml += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">AWAY PAIR</div>`;
+    }
   }
 
   if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {

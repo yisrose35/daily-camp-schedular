@@ -867,21 +867,26 @@ for (const futureDate of Object.keys(allDailyData)) {
         // Sort time slots to ensure consistent ordering
      const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
-        // ★★★ OFF-CAMPUS: Propagate _doubleHeaderPairId from skeleton to league blocks ★★★
-        const manualSkeleton = window.dailyOverrideSkeleton || window.loadCurrentDailyData?.()?.manualSkeleton || [];
-        manualSkeleton.forEach(function(skelItem) {
-            if (!skelItem._doubleHeaderPairId || skelItem.type !== 'league') return;
-            var skelStart = window.SchedulerCoreUtils?.parseTimeToMinutes?.(skelItem.startTime);
-            sortedTimeKeys.forEach(function(tk) {
-                if (Math.abs(Number(tk) - skelStart) > 5) return;
-                blocksByTime[tk].allBlocks.forEach(function(b) {
-                    if (b.type !== 'league' && !/league/i.test(b.event)) return;
-                    if (skelItem.leagueName && b.leagueName && skelItem.leagueName !== b.leagueName) return;
-                    if (skelItem.division && b.divName && String(skelItem.division) !== String(b.divName)) return;
-                    b._doubleHeaderPairId = skelItem._doubleHeaderPairId;
+        // ★★★ OFF-CAMPUS: Auto-detect consecutive league slots as back-to-back pairs ★★★
+        for (var i = 0; i < sortedTimeKeys.length - 1; i++) {
+            var tk1 = sortedTimeKeys[i], tk2 = sortedTimeKeys[i + 1];
+            var blocks1 = blocksByTime[tk1].allBlocks.filter(function(b) { return b.type === 'league' || /league/i.test(b.event); });
+            var blocks2 = blocksByTime[tk2].allBlocks.filter(function(b) { return b.type === 'league' || /league/i.test(b.event); });
+            if (!blocks1.length || !blocks2.length) continue;
+            blocks1.forEach(function(b1) {
+                var lName = b1.leagueName || '';
+                var league = lName && masterLeagues[lName];
+                if (!league || !league.offCampus?.enabled) return;
+                var matched = blocks2.filter(function(b2) {
+                    return (b2.leagueName === lName) || (!b2.leagueName && !lName);
                 });
+                if (!matched.length) return;
+                if (b1._doubleHeaderPairId) return;
+                var pairId = 'auto_' + lName + '_' + tk1;
+                b1._doubleHeaderPairId = pairId;
+                matched.forEach(function(b2) { b2._doubleHeaderPairId = pairId; });
             });
-        });
+        }
 
         // ★★★ OFF-CAMPUS DOUBLE-HEADER PRE-PROCESSING ★★★
         const offCampusScheduled = {};

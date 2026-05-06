@@ -1090,149 +1090,112 @@
       teamCard.appendChild(teamInput);
         container.appendChild(teamCard);
 
-        // ═══════════════════════════════════════════════════════════════
-        // ADVANCED SETTINGS (Collapsible)
-        // ═══════════════════════════════════════════════════════════════
-        const advancedWrap = document.createElement('div');
-        advancedWrap.style.cssText = 'margin-top:4px;';
-        const advancedToggle = document.createElement('div');
-        advancedToggle.style.cssText = 'display:flex; align-items:center; gap:6px; padding:10px 0; cursor:pointer; user-select:none;';
-        const advancedCaret = document.createElement('span');
-        advancedCaret.textContent = '\u25B6';
-        advancedCaret.style.cssText = 'font-size:0.65rem; color:#9CA3AF; transition:transform 0.2s;';
-        const advancedLabel = document.createElement('span');
-        advancedLabel.style.cssText = 'font-size:0.8rem; color:#9CA3AF; font-weight:500; letter-spacing:0.02em;';
-        advancedLabel.textContent = 'Advanced Settings';
-        advancedToggle.appendChild(advancedCaret);
-        advancedToggle.appendChild(advancedLabel);
-        const advancedBody = document.createElement('div');
-        advancedBody.style.cssText = 'display:none; padding-top:4px;';
-        const advancedShouldOpen = league.offCampus?.enabled === true;
-        advancedToggle.onclick = function () {
-            const isOpen = advancedBody.style.display !== 'none';
-            advancedBody.style.display = isOpen ? 'none' : 'block';
-            advancedCaret.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
-            advancedLabel.style.color = isOpen ? '#9CA3AF' : '#475569';
-        };
-        if (advancedShouldOpen) {
-            advancedBody.style.display = 'block';
-            advancedCaret.style.transform = 'rotate(90deg)';
-            advancedLabel.style.color = '#475569';
-        }
-
-        const offCampusCard = document.createElement('div');
-        offCampusCard.className = 'league-section-card';
-        offCampusCard.innerHTML = '<div class="league-section-header"><span class="league-section-title">Off-Campus Double-Header</span><span>Back-to-back away games</span></div>';
+        // \u2500\u2500\u2500 Away Games Card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         if (!league.offCampus) league.offCampus = { enabled: false, zone: '', teamsPerDay: 0 };
+        const settings = window.loadGlobalSettings?.() || {};
+        const locationZones = settings.locationZones || settings.global?.locationZones || {};
+        const totalTeams = (league.teams || []).length;
 
-        const ocToggleWrap = document.createElement('div');
-        ocToggleWrap.style.cssText = 'display:flex; align-items:center; gap:12px; margin-bottom:12px;';
-        const ocToggle = document.createElement('label');
-        ocToggle.style.cssText = 'display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem;';
-        const ocCb = document.createElement('input');
-        ocCb.type = 'checkbox';
-        ocCb.checked = league.offCampus.enabled === true;
-        ocCb.onchange = function () { league.offCampus.enabled = ocCb.checked; saveLeaguesData(); renderConfigSections(league, container); };
-        ocToggle.appendChild(ocCb);
-        ocToggle.appendChild(document.createTextNode('Enable off-campus double-headers'));
-        ocToggleWrap.appendChild(ocToggle);
-        offCampusCard.appendChild(ocToggleWrap);
+        const awayCard = document.createElement('div');
+        awayCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        // Header bar \u2014 toggle lives here
+        const awayHeader = document.createElement('label');
+        awayHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.offCampus.enabled ? '#EFF6FF' : '#F9FAFB') + '; border-bottom:' + (league.offCampus.enabled ? '1px solid #BFDBFE' : 'none') + ';';
+        const awayCb = document.createElement('input');
+        awayCb.type = 'checkbox';
+        awayCb.checked = league.offCampus.enabled === true;
+        awayCb.style.cssText = 'width:16px; height:16px; accent-color:#2563EB;';
+        awayCb.onchange = function () { league.offCampus.enabled = awayCb.checked; saveLeaguesData(); renderConfigSections(league, container); };
+        awayHeader.appendChild(awayCb);
+        const awayTitle = document.createElement('div');
+        awayTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Away Games</div><div style="font-size:0.75rem; color:#64748B;">Some teams travel off-campus for back-to-back games</div>';
+        awayHeader.appendChild(awayTitle);
+        awayCard.appendChild(awayHeader);
 
         if (league.offCampus.enabled) {
-            const zoneWrap = document.createElement('div');
-            zoneWrap.style.cssText = 'margin-bottom:12px;';
-            const zoneLabel = document.createElement('div');
-            zoneLabel.style.cssText = 'font-size:0.8rem; color:#6B7280; margin-bottom:4px;';
-            zoneLabel.textContent = 'Off-Campus Zone:';
-            zoneWrap.appendChild(zoneLabel);
+            const awayBody = document.createElement('div');
+            awayBody.style.cssText = 'padding:14px;';
+
+            // Inline sentence: "[X] teams go to [Zone \u25BC] each game day"
+            const sentenceRow = document.createElement('div');
+            sentenceRow.style.cssText = 'display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:0.85rem; color:#374151; margin-bottom:14px;';
+
+            const teamsInput = document.createElement('input');
+            teamsInput.type = 'number'; teamsInput.min = '2'; teamsInput.max = String(totalTeams);
+            teamsInput.step = '2'; teamsInput.value = league.offCampus.teamsPerDay || '';
+            teamsInput.placeholder = '#';
+            teamsInput.style.cssText = 'width:52px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; text-align:center; background:white;';
+            teamsInput.onchange = function () {
+                var val = parseInt(teamsInput.value) || 0;
+                if (val % 2 !== 0 && val > 0) val = val + 1;
+                if (val >= totalTeams) val = totalTeams - (totalTeams % 2 === 0 ? 2 : 1);
+                teamsInput.value = val || '';
+                league.offCampus.teamsPerDay = val; saveLeaguesData(); renderConfigSections(league, container);
+            };
+
             const zoneSelect = document.createElement('select');
-            zoneSelect.style.cssText = 'width:100%; padding:8px 12px; border:1px solid #E5E7EB; border-radius:8px; font-size:0.85rem; background:white;';
-            const settings = window.loadGlobalSettings?.() || {};
-            const locationZones = settings.locationZones || settings.global?.locationZones || {};
-            zoneSelect.innerHTML = '<option value="">-- Select Zone --</option>';
+            zoneSelect.style.cssText = 'padding:5px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:white; max-width:180px;';
+            zoneSelect.innerHTML = '<option value="">choose location...</option>';
             Object.keys(locationZones).forEach(function (zoneName) {
                 const zone = locationZones[zoneName];
                 if (zone.isDefault) return;
                 const opt = document.createElement('option');
                 opt.value = zoneName;
-                opt.textContent = zoneName + ' (' + (zone.fields?.length || 0) + ' fields)';
+                opt.textContent = zoneName;
                 if (league.offCampus.zone === zoneName) opt.selected = true;
                 zoneSelect.appendChild(opt);
             });
             zoneSelect.onchange = function () { league.offCampus.zone = zoneSelect.value; saveLeaguesData(); renderConfigSections(league, container); };
-            zoneWrap.appendChild(zoneSelect);
-            offCampusCard.appendChild(zoneWrap);
 
-            const teamsWrap = document.createElement('div');
-            teamsWrap.style.cssText = 'margin-bottom:12px;';
-            const teamsLabel = document.createElement('div');
-            teamsLabel.style.cssText = 'font-size:0.8rem; color:#6B7280; margin-bottom:4px;';
-            teamsLabel.textContent = 'Teams going off-campus per day:';
-            teamsWrap.appendChild(teamsLabel);
-            const teamsInput = document.createElement('input');
-            teamsInput.type = 'number'; teamsInput.min = '2'; teamsInput.max = String(league.teams?.length || 20);
-            teamsInput.step = '2'; teamsInput.value = league.offCampus.teamsPerDay || '';
-            teamsInput.placeholder = 'e.g., 4 (must be even)';
-            teamsInput.style.cssText = 'width:100%; padding:8px 12px; border:1px solid #E5E7EB; border-radius:8px; font-size:0.85rem; background:white;';
-            teamsInput.onchange = function () {
-                var val = parseInt(teamsInput.value) || 0;
-                if (val % 2 !== 0 && val > 0) { val = val + 1; teamsInput.value = val; }
-                league.offCampus.teamsPerDay = val; saveLeaguesData(); renderConfigSections(league, container);
-            };
-            teamsWrap.appendChild(teamsInput);
-            offCampusCard.appendChild(teamsWrap);
+            sentenceRow.appendChild(teamsInput);
+            sentenceRow.appendChild(document.createTextNode(' teams travel to '));
+            sentenceRow.appendChild(zoneSelect);
+            sentenceRow.appendChild(document.createTextNode(' each game day'));
+            awayBody.appendChild(sentenceRow);
 
-            if (league.offCampus.teamsPerDay > 0 && league.offCampus.zone) {
-                var numTeamsAway = league.offCampus.teamsPerDay;
-                var totalTeams = (league.teams || []).length;
-                var numTeamsHome = totalTeams - numTeamsAway;
-                var infoDiv = document.createElement('div');
-                infoDiv.style.cssText = 'background:#F0FDF4; border:1px solid #BBF7D0; border-radius:8px; padding:10px 12px; font-size:0.8rem; color:#166534; margin-bottom:12px;';
-                infoDiv.innerHTML = '<strong>' + numTeamsAway + ' teams</strong> (' + Math.floor(numTeamsAway/2) + ' matchups) go to <strong>' + escapeHtml(league.offCampus.zone) + '</strong> each game day<br><span style="color:#6B7280;">\u2192 ' + numTeamsHome + ' teams (' + Math.floor(numTeamsHome/2) + ' matchups) stay on campus</span><br><span style="color:#6B7280;">\u2192 Teams stay at the same location for both games, switching opponents for Game 2</span>';
-                var zoneFieldNames = locationZones[league.offCampus.zone]?.fields || [];
-                var globalFields = settings.fields || settings.app1?.fields || [];
-                var zoneSports = new Set();
-                zoneFieldNames.forEach(function(fn) { var fc = globalFields.find(function(f){return f.name===fn;}); if (fc && fc.activities) fc.activities.forEach(function(s){zoneSports.add(s);}); });
-                if (zoneSports.size > 0) infoDiv.innerHTML += '<br><span style="color:#6B7280; font-style:italic;">Sports at ' + escapeHtml(league.offCampus.zone) + ': ' + Array.from(zoneSports).map(escapeHtml).join(', ') + '</span>';
-                offCampusCard.appendChild(infoDiv);
-                if (numTeamsAway >= totalTeams) {
-                    var warnDiv = document.createElement('div');
-                    warnDiv.style.cssText = 'background:#FEF2F2; border:1px solid #FECACA; border-radius:8px; padding:8px 12px; font-size:0.8rem; color:#991B1B; margin-bottom:12px;';
-                    warnDiv.textContent = 'Teams per day must be less than total teams (' + totalTeams + '). Some teams need to stay on campus.';
-                    offCampusCard.appendChild(warnDiv);
-                }
+            // Summary pill
+            var numAway = league.offCampus.teamsPerDay || 0;
+            var numHome = totalTeams - numAway;
+            if (numAway > 0 && league.offCampus.zone) {
+                var pill = document.createElement('div');
+                pill.style.cssText = 'display:flex; gap:8px; margin-bottom:14px;';
+                pill.innerHTML = '<div style="flex:1; background:#DBEAFE; border-radius:8px; padding:8px 10px; text-align:center; font-size:0.78rem; color:#1E40AF;"><strong>' + numAway + '</strong> away<br>' + Math.floor(numAway/2) + ' matchups</div>' +
+                    '<div style="flex:1; background:#F0FDF4; border-radius:8px; padding:8px 10px; text-align:center; font-size:0.78rem; color:#166534;"><strong>' + numHome + '</strong> home<br>' + Math.floor(numHome/2) + ' matchups</div>';
+                awayBody.appendChild(pill);
             }
 
-            var leagueHist = window.loadGlobalSettings?.()?.leagueHistory || {};
+            // Trip fairness chips
+            var leagueHist = settings.leagueHistory || {};
             var ocCounts = leagueHist.offCampusCounts || {};
-            var teamTrips = {}, hasHist = false;
-            (league.teams || []).forEach(function (team) { var c = ocCounts[league.name + '|' + team] || 0; teamTrips[team] = c; if (c > 0) hasHist = true; });
+            var teamTrips = [], hasHist = false;
+            (league.teams || []).forEach(function (team) {
+                var c = ocCounts[league.name + '|' + team] || 0;
+                teamTrips.push({ name: team, trips: c });
+                if (c > 0) hasHist = true;
+            });
             if (hasHist) {
-                var histDiv = document.createElement('div');
-                histDiv.style.cssText = 'margin-bottom:12px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 12px;';
-                var histTitle = document.createElement('div');
-                histTitle.style.cssText = 'font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:6px;';
-                histTitle.textContent = 'Off-Campus Trip Counts:';
-                histDiv.appendChild(histTitle);
-                var chipWrap = document.createElement('div');
-                chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px;';
-                Object.entries(teamTrips).sort(function(a,b){return a[1]-b[1];}).forEach(function(entry) {
+                teamTrips.sort(function(a,b){ return a.trips - b.trips; });
+                var tripsRow = document.createElement('div');
+                tripsRow.style.cssText = 'display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px;';
+                teamTrips.forEach(function(t) {
                     var chip = document.createElement('span');
-                    chip.style.cssText = 'display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; font-size:0.75rem; background:#E2E8F0; color:#334155;';
-                    chip.textContent = entry[0] + ': ' + entry[1]; chipWrap.appendChild(chip);
+                    var intensity = Math.min(t.trips * 15, 90);
+                    chip.style.cssText = 'padding:3px 8px; border-radius:20px; font-size:0.72rem; font-weight:500; background:hsl(215,' + intensity + '%,95%); color:hsl(215,60%,35%); border:1px solid hsl(215,' + intensity + '%,85%);';
+                    chip.textContent = t.name + ' ' + t.trips;
+                    tripsRow.appendChild(chip);
                 });
-                histDiv.appendChild(chipWrap); offCampusCard.appendChild(histDiv);
+                var tripsLabel = document.createElement('div');
+                tripsLabel.style.cssText = 'font-size:0.72rem; color:#94A3B8; margin-bottom:4px;';
+                tripsLabel.textContent = 'Away trips per team (fewest goes next):';
+                awayBody.appendChild(tripsLabel);
+                awayBody.appendChild(tripsRow);
             }
 
-            var note = document.createElement('p');
-            note.className = 'league-priority-note';
-            note.textContent = 'When 2 back-to-back league slots are linked as a double-header, teams with the fewest off-campus trips get priority. In Sport Variety mode, teams who recently played the off-campus sports are deprioritized.';
-            offCampusCard.appendChild(note);
+            awayCard.appendChild(awayBody);
         }
-        advancedBody.appendChild(offCampusCard);
-        advancedWrap.appendChild(advancedToggle);
-        advancedWrap.appendChild(advancedBody);
-        container.appendChild(advancedWrap);
+
+        container.appendChild(awayCard);
     }
 
     // =========================================================================

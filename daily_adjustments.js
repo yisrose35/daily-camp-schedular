@@ -46,6 +46,24 @@ let selectedTileId = null;
 // ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
 let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
 
+function _daIsBackToBack(ev) {
+  if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
+  const parseT = window.SchedulerCoreUtils?.parseTimeToMinutes;
+  if (!parseT) return false;
+  const evStart = parseT(ev.startTime);
+  const evEnd = parseT(ev.endTime);
+  for (let i = 0; i < dailyOverrideSkeleton.length; i++) {
+    const other = dailyOverrideSkeleton[i];
+    if (other === ev || other.id === ev.id) continue;
+    if (other.leagueName !== ev.leagueName) continue;
+    if (other.type !== 'league' && other.type !== 'specialty_league') continue;
+    const oStart = parseT(other.startTime);
+    const oEnd = parseT(other.endTime);
+    if (Math.abs(oStart - evEnd) <= 5 || Math.abs(evStart - oEnd) <= 5) return true;
+  }
+  return false;
+}
+
 // DOM References
 let skeletonContainer = null;
 let tripsFormContainer = null;
@@ -2080,9 +2098,15 @@ function renderEventTile(ev, top, height) {
     content = `<strong>${eventName}</strong>`;
     if (isNight) content += ' 🌙';
     content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
-    // ★★★ MULTIPLE LEAGUE SUPPORT: Show league name on tile ★★★
     if (ev.leagueName) {
-      content += `<div style="font-size:9px;opacity:0.8;">🏆 ${ev.leagueName}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">${ev.leagueName}</div>`;
+    }
+    if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _lObj = (_gs.leaguesByName || {})[ev.leagueName];
+      if (_lObj?.offCampus?.enabled && _daIsBackToBack(ev)) {
+        content += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">AWAY PAIR</div>`;
+      }
     }
     const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
     if (locationDisplay && ev.type !== 'elective') {
@@ -2999,6 +3023,8 @@ function _showTileActionBar(tileEl) {
 
   bar.appendChild(editBtn);
   bar.appendChild(delBtn);
+
+
   document.body.appendChild(bar);
 
   const closeHandler = (e) => {
@@ -3010,6 +3036,7 @@ function _showTileActionBar(tileEl) {
   };
   setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
+
 
 async function editTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
