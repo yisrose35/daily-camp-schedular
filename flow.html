@@ -25,21 +25,27 @@
             position: fixed; inset: 0; z-index: 999999;
             background: #ffffff;
             display: flex; flex-direction: column;
-            align-items: center; justify-content: center; gap: 24px;
+            align-items: center; justify-content: center; gap: 28px;
             font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
             transition: opacity 0.4s ease;
         }
         #auth-loading-screen.hide { opacity: 0; pointer-events: none; }
-        .auth-loading-logo {
-            width: 88px; height: 88px;
-            object-fit: contain;
-            animation: flowLoadingPulse 1.8s ease-in-out infinite;
+        .auth-loading-logo { display: none; }
+        .auth-loading-brand { display: none; }
+        .auth-draw-wrap {
+            width: 280px; height: 100px;
         }
-        .auth-loading-brand {
-            font-size: 22px; font-weight: 700;
-            color: #147D91;
-            letter-spacing: -0.01em;
-            margin: 0;
+        .auth-draw-wrap svg { width: 100%; height: 100%; overflow: visible; }
+        .auth-draw-letter {
+            fill: none;
+            stroke: #147D91;
+            stroke-width: 3;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .auth-draw-fill {
+            fill: #147D91;
+            opacity: 0;
         }
         .auth-loading-row {
             display: flex; align-items: center; gap: 10px;
@@ -55,9 +61,8 @@
             font-size: 13px; color: #6B7280; letter-spacing: 0.02em;
         }
         @keyframes flowLoadingSpin { to { transform: rotate(360deg); } }
-        @keyframes flowLoadingPulse {
-            0%, 100% { transform: scale(1);    opacity: 1;   }
-            50%      { transform: scale(1.05); opacity: 0.85; }
+        @keyframes flowFillIn {
+            to { opacity: 1; }
         }
         
         /* =============================================================== */
@@ -182,12 +187,58 @@
 <!-- AUTH LOADING SCREEN (Shown while checking session) -->
 <!-- =============================================================== -->
 <div id="auth-loading-screen" role="status" aria-live="polite">
-    <img src="Flow_clean.png" alt="" class="auth-loading-logo">
-    <h1 class="auth-loading-brand">Campistry Flow</h1>
+    <div class="auth-draw-wrap">
+        <svg viewBox="0 0 280 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <style>
+                    @import url('https://fonts.googleapis.com/css2?family=Pacifico&amp;display=swap');
+                </style>
+            </defs>
+            <!-- Fill layer (fades in after stroke draws) -->
+            <text id="flow-fill" x="140" y="75" text-anchor="middle"
+                  font-family="Pacifico, cursive" font-size="72" fill="#147D91"
+                  opacity="0">Flow</text>
+            <!-- Stroke layer (draws on) -->
+            <text id="flow-stroke" x="140" y="75" text-anchor="middle"
+                  font-family="Pacifico, cursive" font-size="72"
+                  fill="none" stroke="#147D91" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">Flow</text>
+        </svg>
+    </div>
     <div class="auth-loading-row">
         <div class="auth-loading-spinner" aria-hidden="true"></div>
         <div class="auth-loading-text">Loading your schedule data...</div>
     </div>
+    <script>
+    (function() {
+        var el = document.getElementById('flow-stroke');
+        var fill = document.getElementById('flow-fill');
+        if (!el) return;
+        function startAnim() {
+            var len = el.getComputedTextLength ? el.getComputedTextLength() : 800;
+            len = Math.max(len * 2.5, 800);
+            el.style.strokeDasharray = len;
+            el.style.strokeDashoffset = len;
+            el.style.transition = 'stroke-dashoffset 2.2s cubic-bezier(0.4, 0, 0.2, 1)';
+            requestAnimationFrame(function() {
+                el.style.strokeDashoffset = '0';
+            });
+            setTimeout(function() {
+                if (fill) {
+                    fill.style.transition = 'opacity 0.5s ease';
+                    fill.style.opacity = '1';
+                }
+                el.style.transition = 'opacity 0.5s ease';
+                el.style.opacity = '0';
+            }, 2300);
+        }
+        if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(startAnim);
+        } else {
+            setTimeout(startAnim, 300);
+        }
+    })();
+    </script>
 </div>
 
 <!-- =============================================================== -->
