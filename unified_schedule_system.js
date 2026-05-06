@@ -2584,6 +2584,10 @@ if (bypassStatus.highlight) {
                 dateKey, window.scheduleAssignments || {}, true
             );
         }
+        // Sync rotation counts to cloud
+        if (dateKey && window.RotationCloud?.save) {
+            window.RotationCloud.save(dateKey, window.scheduleAssignments || {});
+        }
     }
 
     function updateTable() {

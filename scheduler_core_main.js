@@ -3051,6 +3051,10 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         window.scheduleAssignments || {},
                         true
                     );
+                    // Sync rotation counts to cloud after rebuild
+                    if (window.RotationCloud?.save) {
+                        window.RotationCloud.save(schedDateKey, window.scheduleAssignments || {});
+                    }
                 }, 200);
             } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
                 setTimeout(() => {

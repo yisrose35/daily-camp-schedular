@@ -986,6 +986,9 @@ all[date].updated_at = new Date().toISOString();
             window.SchedulerCoreLeagues?.clearAllGamesPerDate?.();
             window.SchedulerCoreSpecialtyLeagues?.clearAllGamesPerDate?.();
 
+            // Clear cloud rotation counts
+            window.RotationCloud?.clearAll?.();
+
             // Reset leagueRoundState — currentRound/sportRotationIndex are stale with no schedules
             window.leagueRoundState = {};
             if (typeof window.saveGlobalSettings === 'function') {

@@ -1151,6 +1151,22 @@
             return;
         }
 
+        // Try cloud-first: if RotationCloud is available, load from Supabase
+        if (window.RotationCloud?.load) {
+            window.RotationCloud.load().then(function(cloudData) {
+                _renderRotationTableWithData(divName, cloudData);
+            }).catch(function() {
+                _renderRotationTableWithData(divName, null);
+            });
+            return;
+        }
+        _renderRotationTableWithData(divName, null);
+    }
+
+    function _renderRotationTableWithData(divName, cloudData) {
+        const cont = document.getElementById('rotation-table-container');
+        if (!divName) return;
+
         const bunks = divisionsDat[divName]?.bunks || [];
         if (!bunks.length) {
             cont.innerHTML = `<div style="padding:20px;text-align:center;color:#b91c1c;background:#fee2e2;border-radius:12px;">No bunks in this division.</div>`;
@@ -1180,11 +1196,6 @@
         const manualOffsets = (window.loadGlobalSettings?.() || {}).manualUsageOffsets || {};
         const liveDate = window.currentScheduleDate;
 
-        // historicalCounts (persisted in globalSettings/cloud) is the primary
-        // source for rotation tracking — it survives across 60+ days regardless
-        // of how many dates localStorage can hold.  We supplement with a live
-        // scan of the current day's in-memory schedule so unsaved edits appear
-        // immediately.
         const masterNames = new Set(allActivities.map(a => a.name));
         const globalSettings = window.loadGlobalSettings?.() || {};
         const hCounts = globalSettings.historicalCounts || {};
@@ -1193,16 +1204,40 @@
         const lastDone   = {};
         const usedActivityNames = new Set();
 
-        // Step 1: Seed from historicalCounts (covers all past dates)
-        bunks.forEach(bunk => {
-            const hBunk = hCounts[bunk] || {};
-            Object.keys(hBunk).forEach(act => {
-                if (!hBunk[act]) return;
-                liveCounts[bunk] = liveCounts[bunk] || {};
-                liveCounts[bunk][act] = hBunk[act];
-                usedActivityNames.add(act);
+        // Step 1: Seed counts — prefer cloud data, fall back to historicalCounts
+        if (cloudData && cloudData.counts && Object.keys(cloudData.counts).length) {
+            bunks.forEach(bunk => {
+                const cBunk = cloudData.counts[bunk] || {};
+                Object.keys(cBunk).forEach(act => {
+                    if (!cBunk[act]) return;
+                    liveCounts[bunk] = liveCounts[bunk] || {};
+                    liveCounts[bunk][act] = cBunk[act];
+                    usedActivityNames.add(act);
+                });
             });
-        });
+            // Seed lastDone from cloud
+            if (cloudData.lastDone) {
+                bunks.forEach(bunk => {
+                    const cLD = cloudData.lastDone[bunk] || {};
+                    Object.keys(cLD).forEach(act => {
+                        lastDone[bunk] = lastDone[bunk] || {};
+                        if (!lastDone[bunk][act] || cLD[act] > lastDone[bunk][act]) {
+                            lastDone[bunk][act] = cLD[act];
+                        }
+                    });
+                });
+            }
+        } else {
+            bunks.forEach(bunk => {
+                const hBunk = hCounts[bunk] || {};
+                Object.keys(hBunk).forEach(act => {
+                    if (!hBunk[act]) return;
+                    liveCounts[bunk] = liveCounts[bunk] || {};
+                    liveCounts[bunk][act] = hBunk[act];
+                    usedActivityNames.add(act);
+                });
+            });
+        }
 
         // Step 2: Scan current day's live schedule for unsaved changes.
         // If today hasn't been counted yet in historicalCounts, add its
