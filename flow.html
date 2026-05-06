@@ -31,9 +31,12 @@
         }
         #auth-loading-screen.hide { opacity: 0; pointer-events: none; }
         .auth-draw-wrap {
-            width: 280px; height: 100px;
+            display: flex; gap: 0; align-items: center; justify-content: center;
         }
-        .auth-draw-wrap svg { width: 100%; height: 100%; overflow: visible; }
+        .auth-draw-letter {
+            display: inline-block;
+            clip-path: inset(0 100% 0 0);
+        }
         
         /* =============================================================== */
         /* MULTI-SCHEDULER UI STYLES */
@@ -158,53 +161,30 @@
 <!-- =============================================================== -->
 <div id="auth-loading-screen" role="status" aria-live="polite">
     <div class="auth-draw-wrap">
-        <svg viewBox="0 0 280 100" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-                <style>@import url('https://fonts.googleapis.com/css2?family=Pacifico&amp;display=swap');</style>
-            </defs>
-            <text class="flow-letter-fill" x="28" y="75" font-family="Pacifico,cursive" font-size="72" fill="#147D91" opacity="0">F</text>
-            <text class="flow-letter-stroke" data-idx="0" x="28" y="75" font-family="Pacifico,cursive" font-size="72" fill="none" stroke="#147D91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0">F</text>
-            <text class="flow-letter-fill" x="88" y="75" font-family="Pacifico,cursive" font-size="72" fill="#147D91" opacity="0">l</text>
-            <text class="flow-letter-stroke" data-idx="1" x="88" y="75" font-family="Pacifico,cursive" font-size="72" fill="none" stroke="#147D91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0">l</text>
-            <text class="flow-letter-fill" x="128" y="75" font-family="Pacifico,cursive" font-size="72" fill="#147D91" opacity="0">o</text>
-            <text class="flow-letter-stroke" data-idx="2" x="128" y="75" font-family="Pacifico,cursive" font-size="72" fill="none" stroke="#147D91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0">o</text>
-            <text class="flow-letter-fill" x="185" y="75" font-family="Pacifico,cursive" font-size="72" fill="#147D91" opacity="0">w</text>
-            <text class="flow-letter-stroke" data-idx="3" x="185" y="75" font-family="Pacifico,cursive" font-size="72" fill="none" stroke="#147D91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0">w</text>
-        </svg>
+        <img src="Flow_clean.png" alt="" class="auth-draw-letter" id="flow-logo-draw" style="height:72px;">
     </div>
     <script>
     (function() {
-        var strokes = document.querySelectorAll('.flow-letter-stroke');
-        var fills = document.querySelectorAll('.flow-letter-fill');
-        if (!strokes.length) return;
-        var durations = [600, 400, 450, 500];
-        function startAnim() {
-            var delay = 0;
-            strokes.forEach(function(el, i) {
-                var len = el.getComputedTextLength ? el.getComputedTextLength() : 200;
-                len = Math.max(len * 2.5, 200);
-                el.style.strokeDasharray = len;
-                el.style.strokeDashoffset = len;
-                el.style.opacity = '1';
-                var dur = durations[i] || 500;
-                setTimeout(function() {
-                    el.style.transition = 'stroke-dashoffset ' + dur + 'ms cubic-bezier(0.4, 0, 0.2, 1)';
-                    el.style.strokeDashoffset = '0';
-                }, delay);
-                setTimeout(function() {
-                    fills[i].style.transition = 'opacity 0.3s ease';
-                    fills[i].style.opacity = '1';
-                    el.style.transition = 'opacity 0.3s ease';
-                    el.style.opacity = '0';
-                }, delay + dur + 50);
-                delay += dur + 80;
-            });
+        var img = document.getElementById('flow-logo-draw');
+        if (!img) return;
+        window._flowAnimStart = Date.now();
+        function run() {
+            var w = img.naturalWidth || img.offsetWidth || 280;
+            var steps = 60;
+            var totalMs = 1800;
+            var stepMs = totalMs / steps;
+            var i = 0;
+            function tick() {
+                i++;
+                var pct = Math.min(i / steps, 1);
+                var ease = pct < 0.5 ? 2 * pct * pct : 1 - Math.pow(-2 * pct + 2, 2) / 2;
+                img.style.clipPath = 'inset(0 ' + ((1 - ease) * 100).toFixed(1) + '% 0 0)';
+                if (i < steps) setTimeout(tick, stepMs);
+            }
+            tick();
         }
-        if (document.fonts && document.fonts.ready) {
-            document.fonts.ready.then(startAnim);
-        } else {
-            setTimeout(startAnim, 300);
-        }
+        if (img.complete) run();
+        else img.onload = run;
     })();
     </script>
 </div>
@@ -642,8 +622,13 @@
     
     function showApp() {
         if (loadingScreen) {
-            loadingScreen.classList.add('hide');
-            setTimeout(() => { loadingScreen.style.display = 'none'; }, 500);
+            var elapsed = Date.now() - (window._flowAnimStart || Date.now());
+            var minDisplay = 2200;
+            var remaining = Math.max(0, minDisplay - elapsed);
+            setTimeout(function() {
+                loadingScreen.classList.add('hide');
+                setTimeout(() => { loadingScreen.style.display = 'none'; }, 500);
+            }, remaining);
         }
         if (mainApp) mainApp.style.display = 'block';
         
