@@ -30,40 +30,10 @@
             transition: opacity 0.4s ease;
         }
         #auth-loading-screen.hide { opacity: 0; pointer-events: none; }
-        .auth-loading-logo { display: none; }
-        .auth-loading-brand { display: none; }
         .auth-draw-wrap {
             width: 280px; height: 100px;
         }
         .auth-draw-wrap svg { width: 100%; height: 100%; overflow: visible; }
-        .auth-draw-letter {
-            fill: none;
-            stroke: #147D91;
-            stroke-width: 3;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-        }
-        .auth-draw-fill {
-            fill: #147D91;
-            opacity: 0;
-        }
-        .auth-loading-row {
-            display: flex; align-items: center; gap: 10px;
-        }
-        .auth-loading-spinner {
-            width: 18px; height: 18px;
-            border: 2px solid #E5E7EB;
-            border-top-color: #147D91;
-            border-radius: 50%;
-            animation: flowLoadingSpin 0.9s linear infinite;
-        }
-        .auth-loading-text {
-            font-size: 13px; color: #6B7280; letter-spacing: 0.02em;
-        }
-        @keyframes flowLoadingSpin { to { transform: rotate(360deg); } }
-        @keyframes flowFillIn {
-            to { opacity: 1; }
-        }
         
         /* =============================================================== */
         /* MULTI-SCHEDULER UI STYLES */
@@ -190,47 +160,45 @@
     <div class="auth-draw-wrap">
         <svg viewBox="0 0 280 100" xmlns="http://www.w3.org/2000/svg">
             <defs>
-                <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Pacifico&amp;display=swap');
-                </style>
+                <style>@import url('https://fonts.googleapis.com/css2?family=Pacifico&amp;display=swap');</style>
             </defs>
-            <!-- Fill layer (fades in after stroke draws) -->
-            <text id="flow-fill" x="140" y="75" text-anchor="middle"
-                  font-family="Pacifico, cursive" font-size="72" fill="#147D91"
-                  opacity="0">Flow</text>
-            <!-- Stroke layer (draws on) -->
-            <text id="flow-stroke" x="140" y="75" text-anchor="middle"
-                  font-family="Pacifico, cursive" font-size="72"
-                  fill="none" stroke="#147D91" stroke-width="2"
-                  stroke-linecap="round" stroke-linejoin="round">Flow</text>
+            <text class="flow-letter-fill" x="28" y="75" font-family="Pacifico,cursive" font-size="72" fill="#147D91" opacity="0">F</text>
+            <text class="flow-letter-stroke" data-idx="0" x="28" y="75" font-family="Pacifico,cursive" font-size="72" fill="none" stroke="#147D91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0">F</text>
+            <text class="flow-letter-fill" x="88" y="75" font-family="Pacifico,cursive" font-size="72" fill="#147D91" opacity="0">l</text>
+            <text class="flow-letter-stroke" data-idx="1" x="88" y="75" font-family="Pacifico,cursive" font-size="72" fill="none" stroke="#147D91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0">l</text>
+            <text class="flow-letter-fill" x="128" y="75" font-family="Pacifico,cursive" font-size="72" fill="#147D91" opacity="0">o</text>
+            <text class="flow-letter-stroke" data-idx="2" x="128" y="75" font-family="Pacifico,cursive" font-size="72" fill="none" stroke="#147D91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0">o</text>
+            <text class="flow-letter-fill" x="185" y="75" font-family="Pacifico,cursive" font-size="72" fill="#147D91" opacity="0">w</text>
+            <text class="flow-letter-stroke" data-idx="3" x="185" y="75" font-family="Pacifico,cursive" font-size="72" fill="none" stroke="#147D91" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0">w</text>
         </svg>
-    </div>
-    <div class="auth-loading-row">
-        <div class="auth-loading-spinner" aria-hidden="true"></div>
-        <div class="auth-loading-text">Loading your schedule data...</div>
     </div>
     <script>
     (function() {
-        var el = document.getElementById('flow-stroke');
-        var fill = document.getElementById('flow-fill');
-        if (!el) return;
+        var strokes = document.querySelectorAll('.flow-letter-stroke');
+        var fills = document.querySelectorAll('.flow-letter-fill');
+        if (!strokes.length) return;
+        var durations = [600, 400, 450, 500];
         function startAnim() {
-            var len = el.getComputedTextLength ? el.getComputedTextLength() : 800;
-            len = Math.max(len * 2.5, 800);
-            el.style.strokeDasharray = len;
-            el.style.strokeDashoffset = len;
-            el.style.transition = 'stroke-dashoffset 2.2s cubic-bezier(0.4, 0, 0.2, 1)';
-            requestAnimationFrame(function() {
-                el.style.strokeDashoffset = '0';
+            var delay = 0;
+            strokes.forEach(function(el, i) {
+                var len = el.getComputedTextLength ? el.getComputedTextLength() : 200;
+                len = Math.max(len * 2.5, 200);
+                el.style.strokeDasharray = len;
+                el.style.strokeDashoffset = len;
+                el.style.opacity = '1';
+                var dur = durations[i] || 500;
+                setTimeout(function() {
+                    el.style.transition = 'stroke-dashoffset ' + dur + 'ms cubic-bezier(0.4, 0, 0.2, 1)';
+                    el.style.strokeDashoffset = '0';
+                }, delay);
+                setTimeout(function() {
+                    fills[i].style.transition = 'opacity 0.3s ease';
+                    fills[i].style.opacity = '1';
+                    el.style.transition = 'opacity 0.3s ease';
+                    el.style.opacity = '0';
+                }, delay + dur + 50);
+                delay += dur + 80;
             });
-            setTimeout(function() {
-                if (fill) {
-                    fill.style.transition = 'opacity 0.5s ease';
-                    fill.style.opacity = '1';
-                }
-                el.style.transition = 'opacity 0.5s ease';
-                el.style.opacity = '0';
-            }, 2300);
         }
         if (document.fonts && document.fonts.ready) {
             document.fonts.ready.then(startAnim);
