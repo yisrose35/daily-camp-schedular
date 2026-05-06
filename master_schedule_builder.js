@@ -1552,17 +1552,34 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   // Grade columns container
   html += `<div class="ms-daw-columns-wrap">`;
 
+  // Collect all unique period boundary times across all grades for the ruler
+  const allPeriodTimes = new Set();
+  grades.forEach(gk => {
+    const gp = (window.campPeriods || {})[gk] || [];
+    gp.forEach(p => { allPeriodTimes.add(p.startMin); allPeriodTimes.add(p.endMin); });
+  });
+  const hasPeriods = allPeriodTimes.size > 0;
+
+  // Build ruler tick times: period boundaries if periods exist, else 30-min intervals
+  const rulerTicks = [];
+  if (hasPeriods) {
+    [...allPeriodTimes].filter(m => m >= globalStart && m <= globalEnd).sort((a, b) => a - b).forEach(m => {
+      rulerTicks.push({ min: m, major: true });
+    });
+  } else {
+    for (let m = globalStart; m < globalEnd; m += 30) {
+      rulerTicks.push({ min: m, major: m % 60 === 0 });
+    }
+  }
+
   // Time ruler column (fixed left)
   html += `<div class="ms-daw-ruler-col">`;
-  // Empty header spacer
-  html += `<div class="ms-daw-ruler-col-header"></div>`;
-  // Ruler body
+  // Ruler body (no header spacer — ruler aligns with tracks directly)
   html += `<div class="ms-daw-ruler-vertical" style="height:${totalHeight}px;">`;
-  for (let m = globalStart; m < globalEnd; m += 30) {
-    const top = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
-    const isMajor = m % 60 === 0;
-    html += `<div class="ms-daw-ruler-tick${isMajor ? ' major-tick' : ''}" style="position:absolute;top:${top}px;">${minutesToTime(m)}</div>`;
-  }
+  rulerTicks.forEach(tick => {
+    const top = (tick.min - globalStart) * DAW_PIXELS_PER_MINUTE;
+    html += `<div class="ms-daw-ruler-tick${tick.major ? ' major-tick' : ''}" style="position:absolute;top:${top}px;">${minutesToTime(tick.min)}</div>`;
+  });
   html += `</div></div>`;
 
   // Helper: build clip-path polygon with >< notches at period boundaries
@@ -1614,20 +1631,16 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
     html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
 
-    // ── Grade header ──
-    html += `<div class="ms-daw-grade-col-header" data-grade="${gradeKey}">`;
-    html += `<div class="ms-daw-grade-col-header-top">`;
-    html += `<span class="ms-daw-grade-tag">${gradeKey}</span>`;
-    html += `<div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''}</div>`;
-    html += `</div>`;
-    html += `<div class="ms-daw-grade-actions">
-      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+ Add</button>
+    // ── Timeline track (ALL layers — header is inside track as sticky overlay) ──
+    html += `<div class="ms-daw-track" data-grade="${gradeKey}" style="height:${totalHeight}px;width:100%;position:relative;">`;
+
+    // Grade label overlay (sticky at top of scroll)
+    html += `<div class="ms-daw-grade-overlay">
+      <span class="ms-daw-grade-tag">${gradeKey}</span>
+      <span class="ms-daw-grade-info">${bunkCount} bunks</span>
+      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+</button>
       <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
     </div>`;
-    html += `</div>`; // header
-
-    // ── Timeline track (ALL layers) ──
-    html += `<div class="ms-daw-track" data-grade="${gradeKey}" style="height:${totalHeight}px;width:100%;position:relative;">`;
 
     // Horizontal gridlines
     for (let m = globalStart; m < globalEnd; m += 30) {

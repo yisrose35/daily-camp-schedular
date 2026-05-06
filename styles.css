@@ -4166,32 +4166,22 @@ a:hover {
 .ms-daw-columns-wrap { display:flex; align-items:stretch; }
 
 /* ── Ruler column (fixed left) ── */
-.ms-daw-ruler-col { flex-shrink:0; position:sticky; left:0; z-index:6; background:#fff; display:flex; flex-direction:column; }
+.ms-daw-ruler-col { flex-shrink:0; position:sticky; left:0; z-index:6; background:#fff; }
 .ms-daw-ruler-vertical { width:64px; min-width:64px; border-right:1px solid #eef0f3; position:relative; background:#fff; }
 .ms-daw-ruler-vertical .ms-daw-ruler-tick { position:absolute; right:6px; font-size:10px; color:#94a3b8; line-height:1; font-family:-apple-system,system-ui,sans-serif; font-weight:500; white-space:nowrap; border-top:1px solid #f0f2f5; padding-top:3px; width:58px; text-align:right; }
 .ms-daw-ruler-vertical .ms-daw-ruler-tick.major-tick { color:#475569; font-weight:700; border-top-color:#e2e8f0; }
 
 /* ── Grade Columns ── */
-.ms-daw-grade-col { display:flex; flex-direction:column; border-right:2px solid #e2e8f0; background:#fff; flex-shrink:0; }
+.ms-daw-grade-col { border-right:2px solid #e2e8f0; background:#fff; flex-shrink:0; }
 .ms-daw-grade-col:nth-child(odd) { background:#f8fafc; }
 
-/* ── Grade Column Header (with floating chips) ── */
-.ms-daw-grade-col-header { padding:10px 10px 8px; border-bottom:1px solid #eef0f3; background:inherit; }
-.ms-daw-grade-col-header-top { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
-.ms-daw-grade-tag { display:inline-block; background:#6366f1; color:#fff; font-size:12px; font-weight:700; border-radius:6px; padding:3px 10px; letter-spacing:0.02em; }
-.ms-daw-grade-info { font-size:10px; color:#94a3b8; }
-.ms-daw-grade-actions { display:flex; gap:4px; margin-top:6px; }
-.ms-daw-grade-btn { padding:2px 8px; font-size:9px; border:1px solid #e2e8f0; border-radius:4px; background:#f9fafb; color:#64748b; cursor:pointer; transition:all 0.15s; font-weight:600; }
+/* ── Grade Overlay (inside track, sticky at top) ── */
+.ms-daw-grade-overlay { position:sticky; top:0; z-index:4; display:flex; align-items:center; gap:4px; padding:4px 6px; background:rgba(255,255,255,0.92); backdrop-filter:blur(4px); border-bottom:1px solid #eef0f3; }
+.ms-daw-grade-tag { display:inline-block; background:#6366f1; color:#fff; font-size:11px; font-weight:700; border-radius:5px; padding:2px 8px; letter-spacing:0.02em; }
+.ms-daw-grade-info { font-size:9px; color:#94a3b8; }
+.ms-daw-grade-btn { padding:1px 6px; font-size:8px; border:1px solid #e2e8f0; border-radius:3px; background:#f9fafb; color:#64748b; cursor:pointer; transition:all 0.15s; font-weight:600; }
 .ms-daw-grade-btn:hover { background:#f1f5f9; color:#1e293b; border-color:#cbd5e1; }
 
-/* ── Floating Layer Chips ── */
-.ms-daw-chip-list { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0 2px; }
-.ms-daw-chip { display:flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; background:#fff; border:1px solid #e2e8f0; cursor:pointer; transition:all 0.15s; user-select:none; }
-.ms-daw-chip:hover { border-color:#a5b4fc; background:#f5f3ff; }
-.ms-daw-chip.selected { border-color:#6366f1; background:#eef2ff; box-shadow:0 0 0 2px rgba(99,102,241,0.2); }
-.ms-daw-chip-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
-.ms-daw-chip-name { font-size:10px; font-weight:600; color:#334155; white-space:nowrap; }
-.ms-daw-chip-meta { font-size:9px; color:#94a3b8; white-space:nowrap; }
 
 /* ── DAW Track (vertical timeline) ── */
 .ms-daw-track { position:relative; width:100%; flex:1; background:inherit; }
