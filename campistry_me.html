@@ -18,51 +18,39 @@
             position: fixed; inset: 0; z-index: 999999;
             background: #ffffff;
             display: flex; flex-direction: column;
-            align-items: center; justify-content: center; gap: 24px;
+            align-items: center; justify-content: center;
             transition: opacity 0.4s ease;
         }
         .me-loading-overlay.hide { opacity: 0; pointer-events: none; }
         .me-loading-logo {
             width: 88px; height: 88px;
             object-fit: contain;
-            animation: meLoadingPulse 1.8s ease-in-out infinite;
-        }
-        .me-loading-brand {
-            font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
-            font-size: 22px; font-weight: 700;
-            color: #D97706;
-            letter-spacing: -0.01em;
-            margin: 0;
-        }
-        .me-loading-row {
-            display: flex; align-items: center; gap: 10px;
-        }
-        .me-loading-spinner {
-            width: 18px; height: 18px;
-            border: 2px solid #E5E7EB;
-            border-top-color: #D97706;
-            border-radius: 50%;
-            animation: meLoadingSpin 0.9s linear infinite;
-        }
-        .me-loading-text {
-            font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
-            font-size: 13px; color: #6B7280; letter-spacing: 0.02em;
-        }
-        @keyframes meLoadingSpin { to { transform: rotate(360deg); } }
-        @keyframes meLoadingPulse {
-            0%, 100% { transform: scale(1);    opacity: 1;   }
-            50%      { transform: scale(1.05); opacity: 0.85; }
+            opacity: 0.15;
         }
     </style>
 </head>
 <body>
 <div id="meLoadingOverlay" class="me-loading-overlay" role="status" aria-live="polite">
-    <img src="Me_clean.png" alt="" class="me-loading-logo">
-    <h1 class="me-loading-brand">Campistry Me</h1>
-    <div class="me-loading-row">
-        <div class="me-loading-spinner" aria-hidden="true"></div>
-        <div class="me-loading-text">Loading your camp data...</div>
-    </div>
+    <img src="Me_clean.png" alt="" class="me-loading-logo" id="me-logo-draw">
+    <script>
+    (function() {
+        var img = document.getElementById('me-logo-draw');
+        if (!img) return;
+        window._meAnimStart = Date.now();
+        var steps = 60;
+        var totalMs = 2000;
+        var stepMs = totalMs / steps;
+        var i = 0;
+        function tick() {
+            i++;
+            var pct = Math.min(i / steps, 1);
+            var ease = pct < 0.5 ? 2 * pct * pct : 1 - Math.pow(-2 * pct + 2, 2) / 2;
+            img.style.opacity = 0.15 + ease * 0.85;
+            if (i < steps) setTimeout(tick, stepMs);
+        }
+        tick();
+    })();
+    </script>
 </div>
 
 <!-- HEADER (matches Flow) -->

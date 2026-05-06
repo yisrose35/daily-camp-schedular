@@ -26,10 +26,14 @@ function hideMeLoadingOverlay(){
     _meOverlayHidden = true;
     var ov = document.getElementById('meLoadingOverlay');
     if (!ov) return;
-    ov.classList.add('hide');
+    var elapsed = Date.now() - (window._meAnimStart || Date.now());
+    var remaining = Math.max(0, 2000 - elapsed);
     setTimeout(function(){
-        if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
-    }, 500);
+        ov.classList.add('hide');
+        setTimeout(function(){
+            if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+        }, 500);
+    }, remaining);
 }
 
 // ═══ INIT ════════════════════════════════════════════════════════
