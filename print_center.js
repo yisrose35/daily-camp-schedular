@@ -1223,19 +1223,12 @@ function renderManualBunksTop(divName, bunks, blocks) {
         html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(eb.label) + '">' + eb.label + '</th>';
         if (eb.isLeague) {
-            var matchups = _currentTemplate.hideLeagueMatchups ? [] : buildLeagueMatchups(eb, divName);
-            if (matchups.length) {
-                bunks.forEach(function (b, bi) {
-                    var bunkMatchup = '';
-                    matchups.forEach(function (mu) {
-                        if (mu.toLowerCase().indexOf(b.toLowerCase()) >= 0) bunkMatchup = mu;
-                    });
-                    if (!bunkMatchup) bunkMatchup = eb.event;
-                    html += '<td class="cell-league" data-r="' + rowR + '" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(bunkMatchup) + '" data-bunk="' + escHtml(b) + '" data-div="' + escHtml(divName) + '">' + escHtml(bunkMatchup) + '</td>';
-                });
-            } else {
-                html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;"><strong>' + escHtml(eb.event) + '</strong></td>';
+            var leagueText = eb.event;
+            if (!_currentTemplate.hideLeagueMatchups) {
+                var matchups = buildLeagueMatchups(eb, divName);
+                if (matchups.length) leagueText += '<br>' + matchups.join(', ');
             }
+            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;"><strong>' + leagueText + '</strong></td>';
         } else {
             bunks.forEach(function (b, bi) {
                 var si = findFirstSlotForTime(eb.startMin, divName);
@@ -1288,11 +1281,7 @@ function renderManualTimeTop(divName, bunks, blocks) {
                 text = eb.event;
                 if (!_currentTemplate.hideLeagueMatchups) {
                     var matchups = buildLeagueMatchups(eb, divName);
-                    var bunkMatch = '';
-                    if (matchups.length) {
-                        matchups.forEach(function (mu) { if (mu.toLowerCase().indexOf(b.toLowerCase()) >= 0) bunkMatch = mu; });
-                    }
-                    if (bunkMatch) text = bunkMatch;
+                    if (matchups.length) text += ' | ' + matchups.join(', ');
                 }
             }
             html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
@@ -2474,7 +2463,8 @@ function buildExcelRows(item) {
                                 // Try to get matchups from leagueAssignments
                                 var la = window.leagueAssignments || {};
                                 var divLA = la[item] || {};
-                                var laEntry = divLA[ts.startMin] || divLA[String(ts.startMin)];
+                                var laSlotIdx = findFirstSlotForTime(ts.startMin, item);
+                                var laEntry = (laSlotIdx >= 0 ? divLA[laSlotIdx] || divLA[String(laSlotIdx)] : null) || divLA[ts.startMin] || divLA[String(ts.startMin)];
                                 if (laEntry && laEntry.matchups) {
                                     laEntry.matchups.forEach(function (m) {
                                         var desc = '';
@@ -2562,7 +2552,8 @@ function buildExcelRows(item) {
                         // Check leagueAssignments for matchup details
                         var la = window.leagueAssignments || {};
                         var divLA = la[dn] || {};
-                        var laEntry = divLA[slot.startMin] || divLA[String(slot.startMin)];
+                        var laSlotIdx2 = findFirstSlotForTime(slot.startMin, dn);
+                        var laEntry = (laSlotIdx2 >= 0 ? divLA[laSlotIdx2] || divLA[String(laSlotIdx2)] : null) || divLA[slot.startMin] || divLA[String(slot.startMin)];
                         if (laEntry && laEntry.matchups) {
                             laEntry.matchups.forEach(function (m) {
                                 var desc = typeof m === 'string' ? m : (m.display || ((m.teamA || '') + ' vs ' + (m.teamB || '')));
