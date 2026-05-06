@@ -487,7 +487,7 @@
                     continuation: i > 0,
                     _fixed: pick._fixed || false,
                     _h2h: pick._h2h || false,
-                    _activity: pick._activity || fName,
+                    _activity: pick._activity || pick.activityName || pick.sport || fName,
                     _allMatchups: pick._allMatchups || null,
                     _gameLabel: pick._gameLabel || null,
                     _zone: zone,
@@ -3027,19 +3027,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
                 (window.scheduleAssignments[bunk] || []).forEach(entry => {
-                    if (entry?._activity && !entry.continuation && !entry._isTransition) {
-                        const actName = entry._activity;
+                    if (!entry || entry.continuation || entry._isTransition) return;
+                    const actName = entry._activity || entry.sport || '';
+                    if (!actName) return;
 
-                        // Skip "Free" and transition types
-                        const actLower = actName.toLowerCase();
-                        if (actLower === 'free' || actLower.includes('transition')) {
-                            return;
-                        }
+                    const actLower = actName.toLowerCase();
+                    if (actLower === 'free' || actLower.includes('transition')) return;
 
-                        // Update rotation history (timestamps)
-                        newHistory.bunks[bunk] = newHistory.bunks[bunk] || {};
-                        newHistory.bunks[bunk][actName] = timestamp;
-                    }
+                    newHistory.bunks[bunk] = newHistory.bunks[bunk] || {};
+                    newHistory.bunks[bunk][actName] = timestamp;
                 });
             });
 

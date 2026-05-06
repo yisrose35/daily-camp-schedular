@@ -1188,6 +1188,7 @@
         const liveCounts = {};
         const lastDone   = {};
         const usedActivityNames = new Set();
+        const masterNames = new Set(allActivities.map(a => a.name));
 
         // Skip non-date keys (like updated_at) and walk dates in order so the
         // latest assignment naturally wins for lastDone.
@@ -1207,7 +1208,11 @@
                 bunks.forEach(bunk => {
                     (sched[bunk] || []).forEach(entry => {
                         if (!entry || entry.continuation || entry._isTransition) return;
-                        const rawAct = entry._activity || entry.activity || entry.sport || '';
+                        let rawAct = entry._activity || entry.activity || entry.sport || '';
+                        if (typeof rawAct === 'string' && rawAct.trim() && entry.sport &&
+                            rawAct !== entry.sport && !masterNames.has(rawAct.trim()) && masterNames.has(entry.sport)) {
+                            rawAct = entry.sport;
+                        }
                         const act = (typeof rawAct === 'string' ? rawAct : '').trim();
                         if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
 
@@ -1229,7 +1234,6 @@
         // what the master configuration knows about. These appear as type
         // 'other' (no max) and respect the same Sport/Special filter logic
         // (they show under "All Activities" only).
-        const masterNames = new Set(allActivities.map(a => a.name));
         const extraActivities = [];
         usedActivityNames.forEach(name => {
             if (!masterNames.has(name)) extraActivities.push({ name, type: 'other', max: 0 });

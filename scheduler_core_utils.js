@@ -2330,8 +2330,12 @@ Utils.getValidActivityNames = function() {
 const validActivities = Utils.getValidActivityNames();
         Object.keys(sched).forEach(bunk => {
             (sched[bunk] || []).forEach(entry => {
-                if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
-                    const actName = entry._activity;
+                if (entry && !entry.continuation && !entry._isTransition) {
+                    let actName = entry._activity || entry.sport || '';
+                    if (!actName) return;
+                    if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {
+                        actName = entry.sport;
+                    }
                     const actLower = actName.toLowerCase();
                     if (actLower === 'free' || actLower.includes('transition')) return;
 
@@ -2376,8 +2380,12 @@ const validActivities = Utils.getValidActivityNames();
 const validActivities = Utils.getValidActivityNames();
             Object.keys(oldSched).forEach(bunk => {
                 (oldSched[bunk] || []).forEach(entry => {
-                    if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
-                        const actName = entry._activity;
+                    if (entry && !entry.continuation && !entry._isTransition) {
+                        let actName = entry._activity || entry.sport || '';
+                        if (!actName) return;
+                        if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {
+                            actName = entry.sport;
+                        }
                         const actLower = actName.toLowerCase();
                         if (actLower === 'free' || actLower.includes('transition')) return;
 
