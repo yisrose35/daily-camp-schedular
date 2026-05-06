@@ -1946,7 +1946,9 @@ function renderDAWTimeline(gridEl) {
 
 function overlayTripsOnDAW(gridEl) {
   // Remove existing trip overlays to prevent duplicates on re-render
-  gridEl.querySelectorAll('.da-trip-overlay, .da-trip-regen-warning').forEach(el => el.remove());
+  gridEl.querySelectorAll('.da-trip-overlay').forEach(el => el.remove());
+  // Banner lives in the parent wrapper now
+  if (gridEl.parentElement) gridEl.parentElement.querySelectorAll('.da-trip-regen-warning').forEach(el => el.remove());
 
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const trips = loadDailyTrips(dateKey);
@@ -1962,40 +1964,46 @@ function overlayTripsOnDAW(gridEl) {
     if (s !== null && (globalStart === null || s < globalStart)) globalStart = s;
   });
   if (globalStart === null) globalStart = 540;
-  const PX_PER_MIN = 4; // matches DAW_PIXELS_PER_MINUTE in master_schedule_builder
+  const PX_PER_MIN = 3; // matches DAW_PIXELS_PER_MINUTE in master_schedule_builder
 
   trips.forEach(trip => {
-    const track = gridEl.querySelector('.ms-daw-track[data-grade="' + trip.division + '"]');
-    console.log('[TripOverlay] trip=' + trip.event + ' div=' + trip.division + ' trackFound=' + !!track);
-    if (!track) return;
+    // Trips can target one or multiple divisions
+    const divs = Array.isArray(trip.division) ? trip.division : [trip.division];
     const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
     const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
     if (tStart == null || tEnd == null) return;
 
-    const left = (tStart - globalStart) * PX_PER_MIN;
-    const width = (tEnd - tStart) * PX_PER_MIN;
+    const top = (tStart - globalStart) * PX_PER_MIN;
+    const height = (tEnd - tStart) * PX_PER_MIN;
 
-    const el = document.createElement('div');
-    el.className = 'da-trip-overlay';
-    el.style.cssText = 'position:absolute; left:' + left + 'px; width:' + width + 'px; top:0; bottom:0;' +
-      'background:repeating-linear-gradient(45deg, rgba(239,68,68,0.12), rgba(239,68,68,0.12) 4px, rgba(239,68,68,0.04) 4px, rgba(239,68,68,0.04) 8px);' +
-      'border:2px solid #ef4444; border-radius:4px; z-index:8; pointer-events:none;' +
-      'display:flex; align-items:center; justify-content:center;';
-    el.innerHTML = '<span style="background:#ef4444; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700; pointer-events:none; white-space:nowrap;">' +
-      'Trip: ' + (trip.event || 'Trip') + ' (' + minutesToTime(tStart) + '–' + minutesToTime(tEnd) + ')' +
-      '</span>';
-    track.appendChild(el);
+    divs.forEach(div => {
+      const track = gridEl.querySelector('.ms-daw-track[data-grade="' + div + '"]');
+      console.log('[TripOverlay] trip=' + trip.event + ' div=' + div + ' trackFound=' + !!track);
+      if (!track) return;
+
+      const el = document.createElement('div');
+      el.className = 'da-trip-overlay';
+      el.style.cssText = 'position:absolute; top:' + top + 'px; height:' + height + 'px; left:0; right:0;' +
+        'background:repeating-linear-gradient(135deg, rgba(239,68,68,0.10), rgba(239,68,68,0.10) 4px, rgba(239,68,68,0.03) 4px, rgba(239,68,68,0.03) 8px);' +
+        'border:2px solid #ef4444; border-radius:4px; z-index:8; pointer-events:none;' +
+        'display:flex; align-items:flex-start; justify-content:center; padding-top:4px;';
+      el.innerHTML = '<span style="background:#ef4444; color:#fff; padding:2px 8px; border-radius:4px; font-size:9px; font-weight:700; pointer-events:none; white-space:nowrap;">' +
+        (trip.event || 'Trip') + ' ' + minutesToTime(tStart) + '–' + minutesToTime(tEnd) +
+        '</span>';
+      track.appendChild(el);
+    });
   });
 
   // ★ Show regen warning banner above the grid
   if (trips.length > 0) {
-    const existing = gridEl.querySelector('.da-trip-regen-warning');
-    if (!existing) {
+    const parent = gridEl.parentElement;
+    const existing = parent?.querySelector('.da-trip-regen-warning');
+    if (!existing && parent) {
       const banner = document.createElement('div');
       banner.className = 'da-trip-regen-warning';
-      banner.style.cssText = 'padding:10px 16px; margin-bottom:8px; background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; font-size:13px; color:#92400e; display:flex; align-items:center; gap:8px;';
-      banner.innerHTML = '<span style="font-size:16px;">⚠️</span> <span><strong>' + trips.length + ' trip' + (trips.length > 1 ? 's' : '') + '</strong> added today. Press <strong>▶ Generate Schedule</strong> to rebuild the day around ' + (trips.length > 1 ? 'them' : 'it') + '.</span>';
-      gridEl.insertBefore(banner, gridEl.firstChild);
+      banner.style.cssText = 'padding:8px 14px; background:#fef3c7; border:1px solid #fcd34d; border-radius:6px; font-size:12px; color:#92400e; display:flex; align-items:center; gap:8px; flex-shrink:0;';
+      banner.innerHTML = '<span style="font-size:14px;">⚠️</span> <span><strong>' + trips.length + ' trip' + (trips.length > 1 ? 's' : '') + '</strong> added. Press <strong>▶ Generate Schedule</strong> to rebuild around ' + (trips.length > 1 ? 'them' : 'it') + '.</span>';
+      parent.insertBefore(banner, gridEl);
     }
   }
 }
