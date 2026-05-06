@@ -4180,8 +4180,8 @@ a:hover {
 .ms-daw-ruler-vertical .ms-daw-ruler-tick.major-tick { color:#475569; font-weight:700; border-top-color:#e2e8f0; }
 
 /* ── Grade Columns ── */
-.ms-daw-grade-col { border-right:1px solid #f0f2f5; position:relative; background:#fff; }
-.ms-daw-grade-col:nth-child(even) { background:#fafbfc; }
+.ms-daw-grade-col { border-right:2px solid #e2e8f0; position:relative; background:#fff; }
+.ms-daw-grade-col:nth-child(even) { background:#f8fafc; }
 
 /* ── DAW Track (vertical) ── */
 .ms-daw-track { position:relative; width:100%; }
@@ -4195,21 +4195,21 @@ a:hover {
 .ms-daw-inactive-zone { position:absolute; left:0; right:0; background:repeating-linear-gradient(45deg,transparent,transparent 5px,rgba(0,0,0,0.02) 5px,rgba(0,0,0,0.02) 10px); z-index:1; pointer-events:none; }
 
 /* ── Band Pills (vertical orientation) ── */
-.ms-daw-band { position:absolute; width:28px; border-radius:8px; cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:4px 2px; font-size:10px; font-weight:600; transition:box-shadow 0.15s,transform 0.1s; z-index:2; user-select:none; box-shadow:0 1px 2px rgba(0,0,0,0.08),0 0 0 1px rgba(0,0,0,0.04); border:none; overflow:hidden; }
+.ms-daw-band { position:absolute; border-radius:8px; cursor:pointer; display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; padding:0; font-size:10px; font-weight:600; transition:box-shadow 0.15s,transform 0.1s; z-index:2; user-select:none; box-shadow:0 1px 2px rgba(0,0,0,0.08),0 0 0 1px rgba(0,0,0,0.04); border:none; overflow:hidden; }
 .ms-daw-band:hover { box-shadow:0 3px 10px rgba(0,0,0,0.12); transform:translateX(-1px); z-index:3; }
 .ms-daw-band.selected { z-index:4; outline:none !important; box-shadow:0 0 0 2px #fff,0 0 0 4px #6366f1,0 4px 12px rgba(0,0,0,0.08) !important; transform:translateX(-2px) !important; }
-.ms-daw-band[data-type="sport"] { background:linear-gradient(180deg,#bbf7d0,#4ade80); color:#14532d; }
-.ms-daw-band[data-type="special"] { background:linear-gradient(180deg,#ddd6fe,#a78bfa); color:#3b0764; }
-.ms-daw-band[data-type="activity"] { background:linear-gradient(180deg,#bfdbfe,#60a5fa); color:#1e3a5f; }
-.ms-daw-band[data-type="swim"] { background:linear-gradient(180deg,#a5f3fc,#22d3ee); color:#164e63; }
-.ms-daw-band[data-type="lunch"] { background:linear-gradient(180deg,#fed7aa,#fb923c); color:#7c2d12; }
-.ms-daw-band[data-type="snacks"] { background:linear-gradient(180deg,#fef08a,#fcd34d); color:#78350f; }
-.ms-daw-band[data-type="dismissal"] { background:linear-gradient(180deg,#fbcfe8,#f472b6); color:#831843; }
-.ms-daw-band[data-type="custom"] { background:linear-gradient(180deg,#e2e8f0,#94a3b8); color:#1e293b; }
-.ms-daw-band[data-type="league"] { background:linear-gradient(180deg,#fecaca,#f87171); color:#7f1d1d; }
-.ms-daw-band[data-type="elective"] { background:linear-gradient(180deg,#f5d0fe,#e879f9); color:#701a75; }
-.ms-daw-band .band-label { writing-mode:vertical-rl; text-orientation:mixed; transform:rotate(180deg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-size:9px; }
-.ms-daw-band .band-qty { writing-mode:vertical-rl; text-orientation:mixed; transform:rotate(180deg); background:rgba(0,0,0,0.12); padding:2px 1px; border-radius:4px; font-size:8px; margin-top:2px; flex-shrink:0; }
+.ms-daw-band[data-type="sport"] { background:linear-gradient(180deg,#bbf7d0,#86efac); color:#14532d; }
+.ms-daw-band[data-type="special"] { background:linear-gradient(180deg,#ddd6fe,#c4b5fd); color:#3b0764; }
+.ms-daw-band[data-type="activity"] { background:linear-gradient(180deg,#bfdbfe,#93c5fd); color:#1e3a5f; }
+.ms-daw-band[data-type="swim"] { background:linear-gradient(180deg,#a5f3fc,#67e8f9); color:#164e63; }
+.ms-daw-band[data-type="lunch"] { background:linear-gradient(180deg,#fed7aa,#fdba74); color:#7c2d12; }
+.ms-daw-band[data-type="snacks"] { background:linear-gradient(180deg,#fef08a,#fde047); color:#78350f; }
+.ms-daw-band[data-type="dismissal"] { background:linear-gradient(180deg,#fbcfe8,#f9a8d4); color:#831843; }
+.ms-daw-band[data-type="custom"] { background:linear-gradient(180deg,#e2e8f0,#cbd5e1); color:#1e293b; }
+.ms-daw-band[data-type="league"] { background:linear-gradient(180deg,#fecaca,#fca5a5); color:#7f1d1d; }
+.ms-daw-band[data-type="elective"] { background:linear-gradient(180deg,#f5d0fe,#f0abfc); color:#701a75; }
+.ms-daw-band .band-label { font-size:10px; font-weight:700; padding:6px 4px 2px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+.ms-daw-band .band-qty { font-size:9px; font-weight:500; text-align:center; padding:0 3px 4px; opacity:0.75; flex-shrink:0; }
 .ms-daw-band .band-resize { position:absolute; left:0; right:0; height:8px; cursor:ns-resize; z-index:5; opacity:0; transition:opacity 0.15s; display:flex; align-items:center; justify-content:center; }
 .ms-daw-band:hover .band-resize { opacity:1; }
 .ms-daw-band .band-resize::after { content:''; display:block; width:12px; height:3px; background:rgba(0,0,0,0.25); border-radius:2px; }

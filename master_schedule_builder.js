@@ -1539,7 +1539,10 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
   const totalHeight = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
   // Column width per grade (adapts to layer stacking)
-  const GRADE_COL_WIDTH = 160;
+  const BAND_WIDTH = 80;
+  const BAND_GAP = 6;
+  const BAND_PAD = 10;
+  const GRADE_COL_MIN = 180;
 
   let html = '';
 
@@ -1553,7 +1556,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     const div = divisions[gradeKey];
     const bunkCount = (div?.bunks || []).length;
     const layers = layerSource[gradeKey] || [];
-    const colWidth = Math.max(GRADE_COL_WIDTH, layers.length * 38 + 16);
+    const colWidth = Math.max(GRADE_COL_MIN, layers.length * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
     html += `<div class="ms-daw-grade-col-header" data-grade="${gradeKey}" style="width:${colWidth}px;">
       <span class="ms-daw-grade-tag">${gradeKey}</span>
       <div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''}</div>
@@ -1586,7 +1589,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
     // Column width based on layer count (stacking horizontally)
     const layerCount = Math.max(1, layers.length);
-    const colWidth = Math.max(GRADE_COL_WIDTH, layerCount * 38 + 16);
+    const colWidth = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
     html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;height:${totalHeight}px;">`;
 
@@ -1615,7 +1618,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     layers.forEach((layer, idx) => {
       const top = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
       const height = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
-      const left = 8 + idx * 38;
+      const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
       let durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
         ? `${layer.durationMin}-${layer.durationMax}m`
@@ -1629,7 +1632,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       }
       html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}"
         data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
-        style="top:${top}px; height:${height}px; left:${left}px; width:28px;"
+        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
         <span class="band-label">${DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type}</span>
