@@ -1594,18 +1594,17 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   const hasPeriods = allPeriodTimes.size > 0;
 
   // Build ruler tick times: period boundaries if periods exist, else 30-min intervals
-  // Merge times within 10 min of each other into a single tick at the midpoint
+  // Merge times within 10 min of each other → use the latest time (start of next period)
   const rulerTicks = [];
   if (hasPeriods) {
     const sorted = [...allPeriodTimes].filter(m => m >= globalStart && m <= globalEnd).sort((a, b) => a - b);
     const MERGE_MIN = 10; // merge times within 10 minutes
     for (let i = 0; i < sorted.length; i++) {
-      const group = [sorted[i]];
-      while (i + 1 < sorted.length && sorted[i + 1] - group[0] <= MERGE_MIN) {
-        group.push(sorted[++i]);
+      let latest = sorted[i];
+      while (i + 1 < sorted.length && sorted[i + 1] - sorted[i] <= MERGE_MIN) {
+        latest = sorted[++i];
       }
-      const mid = Math.round(group.reduce((a, b) => a + b, 0) / group.length);
-      rulerTicks.push({ min: mid, major: true });
+      rulerTicks.push({ min: latest, major: true });
     }
   } else {
     for (let m = globalStart; m < globalEnd; m += 30) {
@@ -1656,17 +1655,16 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       if (startPx > 0) periodBoundaryPx.push(startPx);
       if (endPx > 0 && endPx < totalHeight) periodBoundaryPx.push(endPx);
     });
-    // Merge boundaries that are within 10min (30px) of each other → single midpoint
+    // Merge boundaries that are within 10min of each other → use the latest (next period start)
     const rawBoundaries = [...new Set(periodBoundaryPx)].sort((a, b) => a - b);
     const MERGE_THRESHOLD = 10 * DAW_PIXELS_PER_MINUTE; // 10 min in px
     const uniqueBoundaries = [];
     for (let i = 0; i < rawBoundaries.length; i++) {
-      const group = [rawBoundaries[i]];
-      while (i + 1 < rawBoundaries.length && rawBoundaries[i + 1] - group[0] <= MERGE_THRESHOLD) {
-        group.push(rawBoundaries[++i]);
+      let latest = rawBoundaries[i];
+      while (i + 1 < rawBoundaries.length && rawBoundaries[i + 1] - rawBoundaries[i] <= MERGE_THRESHOLD) {
+        latest = rawBoundaries[++i];
       }
-      // Use midpoint of the group
-      uniqueBoundaries.push(Math.round(group.reduce((a, b) => a + b, 0) / group.length));
+      uniqueBoundaries.push(latest);
     }
 
     // ── Timeline track ──
