@@ -107,78 +107,11 @@
   ];
 
   function overlayPeriodsOnDAWGrid(gridEl) {
+    // Period overlays are now rendered inline by renderDAWGrid() as subtle
+    // boundary lines (.ms-daw-period-line). This function is kept as a no-op
+    // so existing callers don't break.
     if (!gridEl) return;
     gridEl.querySelectorAll('.period-block-overlay').forEach(el => el.remove());
-
-    if (!window.campPeriods) return;
-
-    // Extract globalStart from the first ruler tick (vertical layout: top-based)
-    const firstTick = gridEl.querySelector('.ms-daw-ruler-tick');
-    if (!firstTick) return;
-
-    let globalStart = null;
-    const PX = window.MasterSchedulerInternal?.DAW_PIXELS_PER_MINUTE || 4;
-
-    gridEl.querySelectorAll('.ms-daw-ruler-tick').forEach(tick => {
-      const top = parseFloat(tick.style.top) || 0;
-      if (top === 0) {
-        const label = tick.textContent.trim();
-        const parsed = parseTimePicker(label);
-        if (parsed !== null) globalStart = parsed;
-      }
-    });
-
-    if (globalStart === null) return;
-
-    Object.entries(window.campPeriods).forEach(([divName, periods]) => {
-      if (!periods || periods.length === 0) return;
-      const track = gridEl.querySelector(`.ms-daw-track[data-grade="${CSS.escape(divName)}"]`);
-      if (!track) return;
-
-      periods.forEach((period, idx) => {
-        const clr = PERIOD_COLORS[idx % PERIOD_COLORS.length];
-        const top = (period.startMin - globalStart) * PX;
-        const height = (period.endMin - period.startMin) * PX;
-        if (height <= 0) return;
-
-        const el = document.createElement('div');
-        el.className = 'period-block-overlay';
-        el.style.cssText = [
-          'position:absolute',
-          `top:${top}px`,
-          `height:${height}px`,
-          'left:0',
-          'right:0',
-          `background:${clr.bg}`,
-          `border-top:2px solid ${clr.border}`,
-          `border-bottom:1px dashed ${clr.border}`,
-          'pointer-events:none',
-          'z-index:0',
-          'display:flex',
-          'align-items:flex-start',
-          'justify-content:center',
-          'overflow:hidden',
-        ].join(';');
-
-        const label = document.createElement('div');
-        label.style.cssText = [
-          `color:${clr.text}`,
-          'font-size:9px',
-          'font-weight:700',
-          'padding:2px 4px',
-          'white-space:nowrap',
-          'overflow:hidden',
-          'text-overflow:ellipsis',
-          'max-width:100%',
-          'line-height:1.2',
-        ].join(';');
-        label.textContent = `${period.name}`;
-
-        el.appendChild(label);
-        track.style.position = 'relative';
-        track.appendChild(el);
-      });
-    });
   }
 
   // ─── Copy modal ────────────────────────────────────────────────────────────

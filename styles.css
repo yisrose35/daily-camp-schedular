@@ -4160,56 +4160,63 @@ a:hover {
 .ms-daw-wrapper { flex:1; overflow:auto; background:#fafbfc; position:relative; }
 .ms-daw-grid { position:relative; }
 
-/* ── Grade Column Header Row (top) ── */
-.ms-daw-grade-header-row { display:flex; position:sticky; top:0; z-index:10; background:#fff; border-bottom:1px solid #eef0f3; }
-.ms-daw-time-ruler-spacer { width:60px; min-width:60px; flex-shrink:0; border-right:1px solid #eef0f3; }
-.ms-daw-grade-col-header { padding:10px 12px; display:flex; flex-direction:column; align-items:center; justify-content:center; border-right:1px solid #f0f2f5; background:#fff; }
-.ms-daw-grade-col-header:nth-child(even) { background:#fafbfc; }
-.ms-daw-grade-tag { display:inline-block; background:#f1f5f9; color:#334155; font-size:11px; font-weight:700; border-radius:6px; padding:3px 10px; letter-spacing:0.02em; }
-.ms-daw-grade-info { font-size:10px; color:#94a3b8; margin-top:4px; }
-.ms-daw-grade-actions { margin-top:6px; display:flex; gap:4px; }
-.ms-daw-grade-btn { padding:2px 8px; font-size:9px; border:1px solid #e2e8f0; border-radius:4px; background:#f9fafb; color:#64748b; cursor:pointer; transition:all 0.15s; font-weight:600; }
-.ms-daw-grade-btn:hover { background:#f1f5f9; color:#1e293b; border-color:#cbd5e1; }
+/* ── Columns container ── */
+.ms-daw-columns-wrap { display:flex; align-items:stretch; }
 
-/* ── DAW Body (time ruler left + grade columns) ── */
-.ms-daw-body { display:flex; position:relative; }
-
-/* ── DAW Vertical Ruler (left side) ── */
-.ms-daw-ruler-vertical { width:60px; min-width:60px; flex-shrink:0; background:#fff; border-right:1px solid #eef0f3; position:sticky; left:0; z-index:5; }
-.ms-daw-ruler-vertical .ms-daw-ruler-tick { position:absolute; right:6px; font-size:10px; color:#94a3b8; line-height:1; font-family:-apple-system,system-ui,sans-serif; font-weight:500; white-space:nowrap; border-top:1px solid #f0f2f5; padding-top:2px; width:54px; text-align:right; }
+/* ── Ruler column (fixed left) ── */
+.ms-daw-ruler-col { flex-shrink:0; position:sticky; left:0; z-index:6; background:#fff; display:flex; flex-direction:column; }
+.ms-daw-ruler-vertical { width:64px; min-width:64px; border-right:1px solid #eef0f3; position:relative; background:#fff; }
+.ms-daw-ruler-vertical .ms-daw-ruler-tick { position:absolute; right:6px; font-size:10px; color:#94a3b8; line-height:1; font-family:-apple-system,system-ui,sans-serif; font-weight:500; white-space:nowrap; border-top:1px solid #f0f2f5; padding-top:3px; width:58px; text-align:right; }
 .ms-daw-ruler-vertical .ms-daw-ruler-tick.major-tick { color:#475569; font-weight:700; border-top-color:#e2e8f0; }
 
 /* ── Grade Columns ── */
-.ms-daw-grade-col { border-right:2px solid #e2e8f0; position:relative; background:#fff; }
-.ms-daw-grade-col:nth-child(even) { background:#f8fafc; }
+.ms-daw-grade-col { display:flex; flex-direction:column; border-right:2px solid #e2e8f0; background:#fff; flex-shrink:0; }
+.ms-daw-grade-col:nth-child(odd) { background:#f8fafc; }
 
-/* ── DAW Track (vertical) ── */
-.ms-daw-track { position:relative; width:100%; }
+/* ── Grade Column Header (with floating chips) ── */
+.ms-daw-grade-col-header { padding:10px 10px 8px; border-bottom:1px solid #eef0f3; background:inherit; }
+.ms-daw-grade-col-header-top { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+.ms-daw-grade-tag { display:inline-block; background:#6366f1; color:#fff; font-size:12px; font-weight:700; border-radius:6px; padding:3px 10px; letter-spacing:0.02em; }
+.ms-daw-grade-info { font-size:10px; color:#94a3b8; }
+.ms-daw-grade-actions { display:flex; gap:4px; margin-top:6px; }
+.ms-daw-grade-btn { padding:2px 8px; font-size:9px; border:1px solid #e2e8f0; border-radius:4px; background:#f9fafb; color:#64748b; cursor:pointer; transition:all 0.15s; font-weight:600; }
+.ms-daw-grade-btn:hover { background:#f1f5f9; color:#1e293b; border-color:#cbd5e1; }
+
+/* ── Floating Layer Chips ── */
+.ms-daw-chip-list { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0 2px; }
+.ms-daw-chip { display:flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; background:#fff; border:1px solid #e2e8f0; cursor:pointer; transition:all 0.15s; user-select:none; }
+.ms-daw-chip:hover { border-color:#a5b4fc; background:#f5f3ff; }
+.ms-daw-chip.selected { border-color:#6366f1; background:#eef2ff; box-shadow:0 0 0 2px rgba(99,102,241,0.2); }
+.ms-daw-chip-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.ms-daw-chip-name { font-size:10px; font-weight:600; color:#334155; white-space:nowrap; }
+.ms-daw-chip-meta { font-size:9px; color:#94a3b8; white-space:nowrap; }
+
+/* ── DAW Track (vertical timeline) ── */
+.ms-daw-track { position:relative; width:100%; flex:1; background:inherit; }
 .ms-daw-track.drop-target { background:rgba(99,102,241,0.04); outline:2px dashed #a5b4fc; outline-offset:-2px; }
 
-/* ── Grid lines (horizontal for vertical layout) ── */
+/* ── Grid lines (horizontal) ── */
 .ms-daw-gridline { position:absolute; left:0; right:0; height:1px; background:rgba(0,0,0,0.04); z-index:1; pointer-events:none; }
 .ms-daw-gridline.major { background:rgba(0,0,0,0.08); }
+
+/* ── Period boundary lines (subtle per-grade) ── */
+.ms-daw-period-line { position:absolute; left:0; right:0; border-top:1.5px solid rgba(99,102,241,0.25); pointer-events:none; z-index:1; }
+.ms-daw-period-label { position:absolute; top:2px; left:3px; font-size:8px; font-weight:700; color:rgba(99,102,241,0.5); line-height:1; }
 
 /* ── Inactive zones (horizontal bands) ── */
 .ms-daw-inactive-zone { position:absolute; left:0; right:0; background:repeating-linear-gradient(45deg,transparent,transparent 5px,rgba(0,0,0,0.02) 5px,rgba(0,0,0,0.02) 10px); z-index:1; pointer-events:none; }
 
-/* ── Band Pills (vertical orientation) ── */
-.ms-daw-band { position:absolute; border-radius:8px; cursor:pointer; display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; padding:0; font-size:10px; font-weight:600; transition:box-shadow 0.15s,transform 0.1s; z-index:2; user-select:none; box-shadow:0 1px 2px rgba(0,0,0,0.08),0 0 0 1px rgba(0,0,0,0.04); border:none; overflow:hidden; }
-.ms-daw-band:hover { box-shadow:0 3px 10px rgba(0,0,0,0.12); transform:translateX(-1px); z-index:3; }
+/* ── Pinned Band Blocks (vertical orientation) ── */
+.ms-daw-band { position:absolute; border-radius:8px; cursor:pointer; display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; padding:0; font-size:10px; font-weight:600; transition:box-shadow 0.15s,transform 0.1s; z-index:2; user-select:none; box-shadow:0 1px 3px rgba(0,0,0,0.1),0 0 0 1px rgba(0,0,0,0.05); border:none; overflow:hidden; }
+.ms-daw-band:hover { box-shadow:0 3px 10px rgba(0,0,0,0.15); transform:translateX(-1px); z-index:3; }
 .ms-daw-band.selected { z-index:4; outline:none !important; box-shadow:0 0 0 2px #fff,0 0 0 4px #6366f1,0 4px 12px rgba(0,0,0,0.08) !important; transform:translateX(-2px) !important; }
-.ms-daw-band[data-type="sport"] { background:linear-gradient(180deg,#bbf7d0,#86efac); color:#14532d; }
-.ms-daw-band[data-type="special"] { background:linear-gradient(180deg,#ddd6fe,#c4b5fd); color:#3b0764; }
-.ms-daw-band[data-type="activity"] { background:linear-gradient(180deg,#bfdbfe,#93c5fd); color:#1e3a5f; }
 .ms-daw-band[data-type="swim"] { background:linear-gradient(180deg,#a5f3fc,#67e8f9); color:#164e63; }
 .ms-daw-band[data-type="lunch"] { background:linear-gradient(180deg,#fed7aa,#fdba74); color:#7c2d12; }
 .ms-daw-band[data-type="snacks"] { background:linear-gradient(180deg,#fef08a,#fde047); color:#78350f; }
 .ms-daw-band[data-type="dismissal"] { background:linear-gradient(180deg,#fbcfe8,#f9a8d4); color:#831843; }
 .ms-daw-band[data-type="custom"] { background:linear-gradient(180deg,#e2e8f0,#cbd5e1); color:#1e293b; }
-.ms-daw-band[data-type="league"] { background:linear-gradient(180deg,#fecaca,#fca5a5); color:#7f1d1d; }
-.ms-daw-band[data-type="elective"] { background:linear-gradient(180deg,#f5d0fe,#f0abfc); color:#701a75; }
-.ms-daw-band .band-label { font-size:8px; font-weight:700; padding:4px 2px 1px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
-.ms-daw-band .band-qty { font-size:7px; font-weight:500; text-align:center; padding:0 2px 2px; opacity:0.75; flex-shrink:0; }
+.ms-daw-band .band-label { font-size:9px; font-weight:700; padding:4px 4px 1px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+.ms-daw-band .band-qty { font-size:8px; font-weight:500; text-align:center; padding:0 3px 3px; opacity:0.7; flex-shrink:0; }
 .ms-daw-band .band-resize { position:absolute; left:0; right:0; height:8px; cursor:ns-resize; z-index:5; opacity:0; transition:opacity 0.15s; display:flex; align-items:center; justify-content:center; }
 .ms-daw-band:hover .band-resize { opacity:1; }
 .ms-daw-band .band-resize::after { content:''; display:block; width:12px; height:3px; background:rgba(0,0,0,0.25); border-radius:2px; }
@@ -4322,7 +4329,6 @@ a:hover {
   .ms-daw-sb-btn.ms-daw-sb-generate-btn { order:-1; }
   .ms-daw-palette { display:none; }
   .ms-daw-ruler-vertical { width:44px; min-width:44px; }
-  .ms-daw-time-ruler-spacer { width:44px; min-width:44px; }
   .ms-toolbar { flex-wrap:wrap; height:auto; padding:6px 10px; gap:4px; }
   .ms-sidebar { display:none; }
 }

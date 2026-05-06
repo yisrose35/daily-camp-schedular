@@ -1538,62 +1538,92 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   if (globalEnd === null) globalEnd = 960;     // 4:00 PM
 
   const totalHeight = (globalEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
-  // Column width per grade (adapts to layer stacking)
-  const BAND_WIDTH = 36;
-  const BAND_GAP = 3;
-  const BAND_PAD = 6;
-  const GRADE_COL_MIN = 100;
+  const PINNED_BAND_WIDTH = 50;
+  const PINNED_BAND_GAP = 4;
+  const PINNED_PAD = 8;
+  const GRADE_COL_MIN = 140;
+
+  // Dot colors for floating chips
+  const DAW_DOTS = {
+    sport:'#22c55e', special:'#8b5cf6', activity:'#3b82f6',
+    swim:'#06b6d4', lunch:'#f97316', snacks:'#eab308',
+    dismissal:'#ec4899', custom:'#64748b', league:'#ef4444', elective:'#d946ef'
+  };
+
+  // Determine which layer types are anchored (pinned to a time)
+  const anchorTypes = new Set(DAW_LAYER_TYPES.filter(t => t.anchor).map(t => t.type));
 
   let html = '';
 
   // === VERTICAL LAYOUT: Time on Y-axis, Grades on X-axis ===
 
-  // Grade header row (top)
-  html += `<div class="ms-daw-grade-header-row">`;
-  // Spacer for time ruler column
-  html += `<div class="ms-daw-time-ruler-spacer"></div>`;
-  grades.forEach(gradeKey => {
-    const div = divisions[gradeKey];
-    const bunkCount = (div?.bunks || []).length;
-    const layers = layerSource[gradeKey] || [];
-    const colWidth = Math.max(GRADE_COL_MIN, layers.length * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
-    html += `<div class="ms-daw-grade-col-header" data-grade="${gradeKey}" style="width:${colWidth}px;">
-      <span class="ms-daw-grade-tag">${gradeKey}</span>
-      <div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''}</div>
-      <div class="ms-daw-grade-actions">
-        <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+ Add</button>
-        <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
-      </div>
-    </div>`;
-  });
-  html += `</div>`;
+  // Grade columns container
+  html += `<div class="ms-daw-columns-wrap">`;
 
-  // Main grid body: time ruler on left, grade columns to the right
-  html += `<div class="ms-daw-body" style="position:relative;display:flex;">`;
-
-  // Time ruler (left column)
+  // Time ruler column (fixed left)
+  html += `<div class="ms-daw-ruler-col">`;
+  // Empty header spacer
+  html += `<div class="ms-daw-ruler-col-header"></div>`;
+  // Ruler body
   html += `<div class="ms-daw-ruler-vertical" style="height:${totalHeight}px;">`;
   for (let m = globalStart; m < globalEnd; m += 30) {
     const top = (m - globalStart) * DAW_PIXELS_PER_MINUTE;
     const isMajor = m % 60 === 0;
     html += `<div class="ms-daw-ruler-tick${isMajor ? ' major-tick' : ''}" style="position:absolute;top:${top}px;">${minutesToTime(m)}</div>`;
   }
-  html += `</div>`;
+  html += `</div></div>`;
 
   // Grade columns
   grades.forEach(gradeKey => {
     const div = divisions[gradeKey];
     const divStart = parseTimeToMinutes(div?.startTime) || globalStart;
     const divEnd = parseTimeToMinutes(div?.endTime) || globalEnd;
+    const bunkCount = (div?.bunks || []).length;
     const layers = layerSource[gradeKey] || [];
 
-    // Column width based on layer count (stacking horizontally)
-    const layerCount = Math.max(1, layers.length);
-    const colWidth = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
+    // Split layers into floating (chips) and pinned (timeline blocks)
+    const floatingLayers = layers.filter(l => !anchorTypes.has(l.type));
+    const pinnedLayers = layers.filter(l => anchorTypes.has(l.type));
 
-    html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;height:${totalHeight}px;">`;
+    // Column width based on pinned layer count
+    const pinnedCount = Math.max(1, pinnedLayers.length);
+    const colWidth = Math.max(GRADE_COL_MIN, pinnedCount * (PINNED_BAND_WIDTH + PINNED_BAND_GAP) + PINNED_PAD * 2);
 
-    // Track area
+    html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
+
+    // ── Grade header + floating chips ──
+    html += `<div class="ms-daw-grade-col-header" data-grade="${gradeKey}">`;
+    html += `<div class="ms-daw-grade-col-header-top">`;
+    html += `<span class="ms-daw-grade-tag">${gradeKey}</span>`;
+    html += `<div class="ms-daw-grade-info">${bunkCount} bunk${bunkCount !== 1 ? 's' : ''}</div>`;
+    html += `</div>`;
+
+    // Floating layer chips
+    if (floatingLayers.length > 0) {
+      html += `<div class="ms-daw-chip-list">`;
+      floatingLayers.forEach(layer => {
+        const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
+        const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+        let durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
+          ? `${layer.durationMin}-${layer.durationMax}m`
+          : `${layer.durationMin || layer.periodMin || (layer.endMin - layer.startMin)}m`;
+        html += `<div class="ms-daw-chip ${dawSelectedBand === layer.id ? 'selected' : ''}" data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}">
+          <span class="ms-daw-chip-dot" style="background:${DAW_DOTS[layer.type] || '#64748b'}"></span>
+          <span class="ms-daw-chip-name">${typeDef?.name || layer.type}</span>
+          <span class="ms-daw-chip-meta">${opSymbol}${layer.qty} ${durLabel}</span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    // Action buttons
+    html += `<div class="ms-daw-grade-actions">
+      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+ Add</button>
+      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
+    </div>`;
+    html += `</div>`; // header
+
+    // ── Timeline track (pinned layers only) ──
     html += `<div class="ms-daw-track" data-grade="${gradeKey}" style="height:${totalHeight}px;width:100%;position:relative;">`;
 
     // Horizontal gridlines
@@ -1609,33 +1639,44 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       html += `<div class="ms-daw-inactive-zone" style="top:0;height:${h}px;"></div>`;
     }
     if (divEnd < globalEnd) {
-      const top = (divEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const topPx = (divEnd - globalStart) * DAW_PIXELS_PER_MINUTE;
       const h = (globalEnd - divEnd) * DAW_PIXELS_PER_MINUTE;
-      html += `<div class="ms-daw-inactive-zone" style="top:${top}px;height:${h}px;"></div>`;
+      html += `<div class="ms-daw-inactive-zone" style="top:${topPx}px;height:${h}px;"></div>`;
     }
 
-    // Render bands (vertically positioned)
-    layers.forEach((layer, idx) => {
+    // Period boundary lines (subtle, per-grade)
+    const gradePeriods = (window.campPeriods || {})[gradeKey] || [];
+    gradePeriods.forEach((period, idx) => {
+      const pTop = (period.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
+      const pHeight = (period.endMin - period.startMin) * DAW_PIXELS_PER_MINUTE;
+      if (pHeight <= 0) return;
+      html += `<div class="ms-daw-period-line" style="top:${pTop}px;height:${pHeight}px;">
+        <span class="ms-daw-period-label">P${idx + 1}</span>
+      </div>`;
+    });
+
+    // Render pinned bands only (vertically positioned)
+    pinnedLayers.forEach((layer, idx) => {
       const top = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
       const height = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
-      const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
+      const left = PINNED_PAD + idx * (PINNED_BAND_WIDTH + PINNED_BAND_GAP);
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
       let durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
         ? `${layer.durationMin}-${layer.durationMax}m`
         : `${layer.durationMin || layer.periodMin || (layer.endMin - layer.startMin)}m`;
-      // Swim: show pre+swim+post breakdown on the chip
       if (layer.type === 'swim' && (layer.preChangeMin || layer.postChangeMin)) {
         const pre  = layer.preChangeMin  || 0;
         const post = layer.postChangeMin || 0;
         const swimOnly = layer.durationMin || layer.periodMin || ((layer.endMin - layer.startMin) - pre - post);
         durLabel = `${pre}+${swimOnly}+${post}m`;
       }
+      const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
       html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}"
         data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
-        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;"
+        style="top:${top}px; height:${height}px; left:${left}px; width:${PINNED_BAND_WIDTH}px;"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
-        <span class="band-label">${DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type}</span>
+        <span class="band-label">${typeDef?.name || layer.type}</span>
         <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
         <div class="band-resize band-resize-bottom"></div>
       </div>`;
@@ -1645,16 +1686,11 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     html += '</div>'; // grade col
   });
 
-  html += '</div>'; // body
+  html += '</div>'; // columns-wrap
 
   gridEl.innerHTML = html;
 
-  // Overlay period blocks from bell schedule
-  if (typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
-    window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
-  }
-
-  // Bind events
+  // Bind events (chips + bands + tracks)
   bindDAWEvents(gridEl, globalStart, globalEnd, { layerSource, onSave, onRender, isExternal });
 }
 
@@ -1755,6 +1791,27 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
       });
+    });
+  });
+
+  // Click on floating chip to select/edit
+  gridEl.querySelectorAll('.ms-daw-chip').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+      const id = chip.dataset.id;
+      const grade = chip.dataset.grade;
+      dawSelectedBand = dawSelectedBand === id ? null : id;
+
+      // Remove existing popovers
+      gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
+
+      if (dawSelectedBand) {
+        const layer = (layerSource[grade] || []).find(l => l.id === id);
+        if (layer) showDAWPopover(chip, layer, grade, { onSave, onRender, layerSource });
+      }
+
+      // Update selection styling on both chips and bands
+      gridEl.querySelectorAll('.ms-daw-band,.ms-daw-chip').forEach(b => b.classList.remove('selected'));
+      if (dawSelectedBand) chip.classList.add('selected');
     });
   });
 
