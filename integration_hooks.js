@@ -1000,18 +1000,20 @@
             // (Previously missing! The handler returned true without saving.)
             // ═══════════════════════════════════════════════════════════════
             try {
-                const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-                const dateKeys = Object.keys(data).filter(k => DATE_RE.test(k));
-                let lsData = data;
-                if (dateKeys.length > 5) {
-                    lsData = JSON.parse(JSON.stringify(data));
-                    const lsDateKeys = Object.keys(lsData).filter(k => DATE_RE.test(k));
-                    lsDateKeys.sort();
-                    lsDateKeys.slice(0, lsDateKeys.length - 5).forEach(k => delete lsData[k]);
-                }
-                localStorage.setItem('campDailyData_v1', JSON.stringify(lsData));
+                localStorage.setItem('campDailyData_v1', JSON.stringify(data));
             } catch (e) {
-                if (e.name !== 'QuotaExceededError') logError('[saveGlobalSettings] localStorage write failed:', e);
+                if (e.name === 'QuotaExceededError') {
+                    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+                    const lsData = JSON.parse(JSON.stringify(data));
+                    const lsDateKeys = Object.keys(lsData).filter(k => DATE_RE.test(k)).sort();
+                    while (lsDateKeys.length > 3) {
+                        delete lsData[lsDateKeys.shift()];
+                        try { localStorage.setItem('campDailyData_v1', JSON.stringify(lsData)); break; }
+                        catch (_) { /* keep pruning */ }
+                    }
+                } else {
+                    logError('[saveGlobalSettings] localStorage write failed:', e);
+                }
             }
 
             // ═══════════════════════════════════════════════════════════════

@@ -2577,6 +2577,13 @@ if (bypassStatus.highlight) {
             const serialized = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
             window.saveCurrentDailyData('divisionTimes', serialized, { silent });
         }
+        // Update historicalCounts so rotation tracking works across all dates
+        const dateKey = window.currentScheduleDate;
+        if (dateKey && window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
+            window.SchedulerCoreUtils.reIncrementHistoricalCounts(
+                dateKey, window.scheduleAssignments || {}, true
+            );
+        }
     }
 
     function updateTable() {

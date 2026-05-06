@@ -1180,31 +1180,65 @@
         const manualOffsets = (window.loadGlobalSettings?.() || {}).manualUsageOffsets || {};
         const liveDate = window.currentScheduleDate;
 
-        // Compute counts and lastDone live from schedule data so they always
-        // reflect the current state of allDaily (no stale historicalCounts cache).
-        // Also track every activity name actually used in the schedule so we can
-        // surface custom/override activities that aren't in the master list —
-        // this is what makes the report truly reflect what's used in manual mode.
+        // historicalCounts (persisted in globalSettings/cloud) is the primary
+        // source for rotation tracking — it survives across 60+ days regardless
+        // of how many dates localStorage can hold.  We supplement with a live
+        // scan of the current day's in-memory schedule so unsaved edits appear
+        // immediately.
+        const masterNames = new Set(allActivities.map(a => a.name));
+        const globalSettings = window.loadGlobalSettings?.() || {};
+        const hCounts = globalSettings.historicalCounts || {};
+        const countedDates = globalSettings.historicalCountedDates || {};
         const liveCounts = {};
         const lastDone   = {};
         const usedActivityNames = new Set();
-        const masterNames = new Set(allActivities.map(a => a.name));
 
-        // Skip non-date keys (like updated_at) and walk dates in order so the
-        // latest assignment naturally wins for lastDone.
+        // Step 1: Seed from historicalCounts (covers all past dates)
+        bunks.forEach(bunk => {
+            const hBunk = hCounts[bunk] || {};
+            Object.keys(hBunk).forEach(act => {
+                if (!hBunk[act]) return;
+                liveCounts[bunk] = liveCounts[bunk] || {};
+                liveCounts[bunk][act] = hBunk[act];
+                usedActivityNames.add(act);
+            });
+        });
+
+        // Step 2: Scan current day's live schedule for unsaved changes.
+        // If today hasn't been counted yet in historicalCounts, add its
+        // activities on top. If it has been counted, the counts are already
+        // included via historicalCounts above.
+        const todaySched = (liveDate && window.scheduleAssignments &&
+            Object.keys(window.scheduleAssignments).length)
+            ? window.scheduleAssignments
+            : (allDaily[liveDate]?.scheduleAssignments || {});
+        const todayCounted = !!(liveDate && countedDates[liveDate]);
+
+        if (!todayCounted && liveDate) {
+            bunks.forEach(bunk => {
+                (todaySched[bunk] || []).forEach(entry => {
+                    if (!entry || entry.continuation || entry._isTransition) return;
+                    let rawAct = entry._activity || entry.activity || entry.sport || '';
+                    if (typeof rawAct === 'string' && rawAct.trim() && entry.sport &&
+                        rawAct !== entry.sport && !masterNames.has(rawAct.trim()) && masterNames.has(entry.sport)) {
+                        rawAct = entry.sport;
+                    }
+                    const act = (typeof rawAct === 'string' ? rawAct : '').trim();
+                    if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
+                    usedActivityNames.add(act);
+                    liveCounts[bunk] = liveCounts[bunk] || {};
+                    liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + 1;
+                });
+            });
+        }
+
+        // Step 3: Build lastDone from allDaily + rotationHistory (merged below)
         Object.keys(allDaily)
             .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
             .sort()
             .forEach(dateKey => {
-                // For the live (current) date prefer the in-memory state so
-                // a freshly built manual schedule appears before save.
-                let sched;
-                if (dateKey === liveDate && window.scheduleAssignments &&
-                    Object.keys(window.scheduleAssignments).length) {
-                    sched = window.scheduleAssignments;
-                } else {
-                    sched = allDaily[dateKey]?.scheduleAssignments || {};
-                }
+                const sched = (dateKey === liveDate) ? todaySched
+                    : (allDaily[dateKey]?.scheduleAssignments || {});
                 bunks.forEach(bunk => {
                     (sched[bunk] || []).forEach(entry => {
                         if (!entry || entry.continuation || entry._isTransition) return;
@@ -1215,34 +1249,14 @@
                         }
                         const act = (typeof rawAct === 'string' ? rawAct : '').trim();
                         if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
-
                         usedActivityNames.add(act);
-
-                        liveCounts[bunk]       = liveCounts[bunk] || {};
-                        liveCounts[bunk][act]  = (liveCounts[bunk][act] || 0) + 1;
-
-                        lastDone[bunk]         = lastDone[bunk] || {};
+                        lastDone[bunk] = lastDone[bunk] || {};
                         if (!lastDone[bunk][act] || dateKey > lastDone[bunk][act]) {
                             lastDone[bunk][act] = dateKey;
                         }
                     });
                 });
             });
-
-        // Use historicalCounts as fallback when allDaily is missing past dates
-        const hCounts = (window.loadGlobalSettings?.() || {}).historicalCounts || {};
-        bunks.forEach(bunk => {
-            const hBunk = hCounts[bunk] || {};
-            Object.keys(hBunk).forEach(act => {
-                const hVal = hBunk[act] || 0;
-                const lVal = liveCounts[bunk]?.[act] || 0;
-                if (hVal > lVal) {
-                    liveCounts[bunk] = liveCounts[bunk] || {};
-                    liveCounts[bunk][act] = hVal;
-                    usedActivityNames.add(act);
-                }
-            });
-        });
 
         const extraActivities = [];
         usedActivityNames.forEach(name => {
