@@ -1229,11 +1229,21 @@
                 });
             });
 
-        // Add any actually-scheduled activity that isn't in the master list, so
-        // the rotation table truly reflects what bunks are doing — not just
-        // what the master configuration knows about. These appear as type
-        // 'other' (no max) and respect the same Sport/Special filter logic
-        // (they show under "All Activities" only).
+        // Use historicalCounts as fallback when allDaily is missing past dates
+        const hCounts = (window.loadGlobalSettings?.() || {}).historicalCounts || {};
+        bunks.forEach(bunk => {
+            const hBunk = hCounts[bunk] || {};
+            Object.keys(hBunk).forEach(act => {
+                const hVal = hBunk[act] || 0;
+                const lVal = liveCounts[bunk]?.[act] || 0;
+                if (hVal > lVal) {
+                    liveCounts[bunk] = liveCounts[bunk] || {};
+                    liveCounts[bunk][act] = hVal;
+                    usedActivityNames.add(act);
+                }
+            });
+        });
+
         const extraActivities = [];
         usedActivityNames.forEach(name => {
             if (!masterNames.has(name)) extraActivities.push({ name, type: 'other', max: 0 });
