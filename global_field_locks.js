@@ -248,10 +248,12 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
 
         // If lock doesn't have explicit times, try to derive from the lock's division slots
         if (lockStartMin == null || lockEndMin == null) {
-            const lockDiv = lock.division;
+            // ★ Division locks (electives, swim+elective hybrids) store allowedDivision,
+            //   not division. Fall back to it so league checks see those locks.
+            const lockDiv = lock.division || lock.allowedDivision;
             if (lockDiv) {
                 // Handle comma-separated division strings (e.g., "Div A, Div B")
-                const firstDiv = lockDiv.split(',')[0].trim();
+                const firstDiv = String(lockDiv).split(',')[0].trim();
                 const divSlots = window.divisionTimes?.[firstDiv] || [];
                 const slot = divSlots[parseInt(slotIdx, 10)];
                 if (slot) {
