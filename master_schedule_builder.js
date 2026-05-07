@@ -107,11 +107,86 @@ const TILES=[
   
   // Pinned Events
   {type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', description:'Pinned.'},
+  {type:'swim_elective', name:'Swim + Elective', style:'background:linear-gradient(to right, #67e8f9 0%, #67e8f9 50%, #f0abfc 50%, #f0abfc 100%);color:#155e75;', description:'Hybrid: pool reserved + activities reserved. Created by dropping a Swim onto an Elective (or vice versa).'},
   {type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', description:'Pinned.'},
   {type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', description:'Pinned.'},
   {type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', description:'Pinned.'},
   {type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', description:'Pinned custom (e.g., Regroup).'}
 ];
+
+// =========================================================================
+// SWIM + ELECTIVE MERGE HELPERS
+// When a user drops swim onto an existing elective (or vice versa), prompt
+// to merge into a single hybrid 'swim_elective' tile.
+// =========================================================================
+function isSwimEvent(ev) {
+  if (!ev) return false;
+  return (ev.type === 'pinned' && /^swim$/i.test(ev.event || ''));
+}
+function isElectiveEvent(ev) {
+  return !!ev && ev.type === 'elective';
+}
+function buildSwimElectiveHybrid(newEvent, existingEvent, divName) {
+  const swimEv = isSwimEvent(newEvent) ? newEvent : existingEvent;
+  const electiveEv = isElectiveEvent(newEvent) ? newEvent : existingEvent;
+  // Use the new event's time range as the hybrid's window.
+  const swimLoc = swimEv.location ||
+    (Array.isArray(swimEv.reservedFields) && swimEv.reservedFields[0]) || null;
+  const electiveActs = electiveEv.electiveActivities || [];
+  const electiveFields = electiveEv.reservedFields || [];
+  const combinedFields = Array.from(new Set([
+    ...(swimLoc ? [swimLoc] : []),
+    ...electiveFields
+  ]));
+  return {
+    id: 'hybrid_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+    type: 'swim_elective',
+    event: 'Swim + Elective',
+    division: divName,
+    startTime: newEvent.startTime,
+    endTime: newEvent.endTime,
+    // Swim half:
+    _preChangeMin: swimEv._preChangeMin,
+    _postChangeMin: swimEv._postChangeMin,
+    fullGrade: swimEv.fullGrade,
+    swimLocation: swimLoc,
+    // Elective half:
+    electiveActivities: electiveActs,
+    reservedFields: combinedFields
+  };
+}
+async function tryMergeSwimElective(newEvent, divName, skeleton) {
+  const newIsSwim = isSwimEvent(newEvent);
+  const newIsElective = isElectiveEvent(newEvent);
+  if (!newIsSwim && !newIsElective) return null;
+  const newStart = parseTimeToMinutes(newEvent.startTime);
+  const newEnd = parseTimeToMinutes(newEvent.endTime);
+  if (newStart === null || newEnd === null) return null;
+  const overlap = skeleton.find(ex => {
+    if (ex.division !== divName) return false;
+    if (ex.id === newEvent.id) return false;
+    const xs = parseTimeToMinutes(ex.startTime);
+    const xe = parseTimeToMinutes(ex.endTime);
+    if (xs === null || xe === null) return false;
+    if (!(xs < newEnd && xe > newStart)) return false;
+    if (newIsSwim && isElectiveEvent(ex)) return true;
+    if (newIsElective && isSwimEvent(ex)) return true;
+    return false;
+  });
+  if (!overlap) return null;
+  const droppedKind = newIsSwim ? 'Swim' : 'Elective';
+  const existingKind = newIsSwim ? 'Elective' : 'Swim';
+  const ok = await showConfirm(
+    `Merge ${droppedKind} with the existing ${existingKind} into one hybrid tile?\n\n` +
+    `The combined tile will reserve the pool AND the elective activities at the same time, so some campers can swim while others use the reserved fields.`
+  );
+  if (!ok) return null;
+  return {
+    hybrid: buildSwimElectiveHybrid(newEvent, overlap, divName),
+    overlapId: overlap.id,
+    swimEvent: newIsSwim ? newEvent : overlap
+  };
+}
 
 function mapEventNameForOptimizer(name){
   if(!name) name='Free';
@@ -2836,6 +2911,24 @@ function renderEventTile(ev, top, height) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🎯 ${actList}${more}</div>`;
   }
 
+  // ★ Swim + Elective hybrid badges
+  if (ev.type === 'swim_elective') {
+    const _seActs = ev.electiveActivities || [];
+    if (_seActs.length > 0) {
+      const _seList = _seActs.slice(0, 3).join(', ');
+      const _seMore = _seActs.length > 3 ? ` +${_seActs.length - 3}` : '';
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏊 ${ev.swimLocation || 'Pool'} · 🎯 ${_seList}${_seMore}</div>`;
+    } else {
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏊 ${ev.swimLocation || 'Pool'} · Elective</div>`;
+    }
+    if (ev._preChangeMin || ev._postChangeMin) {
+      const _sePre = ev._preChangeMin || 0;
+      const _sePost = ev._postChangeMin || 0;
+      const _seLbl = _sePre === _sePost ? _sePre + 'm' : _sePre + 'm / ' + _sePost + 'm';
+      innerHtml += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${_seLbl}</div>`;
+    }
+  }
+
   if (ev.type === 'smart' && ev.smartData) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${ev.smartData.fallbackActivity}</div>`;
   }
@@ -3081,6 +3174,73 @@ function addDropListeners(selector) {
           reservedFields: chosen
         };
       }
+      // ★ SWIM + ELECTIVE HYBRID — direct drop from palette
+      else if (tileData.type === 'swim_elective') {
+        const locations = getAllLocations();
+        if (locations.length === 0) {
+          await showAlert('No locations configured. Please set up fields/facilities first.');
+          return;
+        }
+        // Pick a default pool location (same logic as swim tile)
+        let defaultPool = window.getPinnedTileDefaultLocation?.('swim') || null;
+        if (!defaultPool) {
+          const _gs = window.loadGlobalSettings?.() || {};
+          const _f = (_gs.app1?.fields || []).find(f => /\b(swim|pool)\b/i.test(f.name));
+          if (_f) defaultPool = _f.name;
+        }
+        const taken = getConflictingFacilities(startStr, endStr, null);
+        const sportMap = getSportFacilitiesMap();
+        const sportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(sportMap).sort().map(s => ({ value: s, label: s }))];
+        // Exclude the pool from elective options (it's already implicit)
+        const electiveLocOptions = locations
+          .filter(l => l !== defaultPool)
+          .map(l => taken.has(l) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
+        const result = await showModal({
+          title: `Swim + Elective for ${divName}`,
+          description: 'Hybrid: pool reserved + listed activities reserved at the same time. Campers choose individually.',
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr },
+            { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 5' },
+            { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 5' },
+            ...(sportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: sportOptions }] : []),
+            { name: 'activities', label: 'Reserve Locations (electives)', type: 'checkbox-group', options: electiveLocOptions }
+          ],
+          postRender: (overlay) => {
+            const sportSel = overlay.querySelector('[data-field="sport"]');
+            if (!sportSel) return;
+            sportSel.addEventListener('change', () => {
+              const s = sportSel.value;
+              const matching = s ? (sportMap[s] || []) : [];
+              overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(cb => {
+                cb.checked = matching.includes(cb.value);
+              });
+            });
+          }
+        });
+        if (!result) return;
+        let chosen = result.activities || [];
+        if (result.sport && chosen.length === 0) chosen = (sportMap[result.sport] || []).filter(f => !taken.has(f) && f !== defaultPool);
+        if (!chosen.length) {
+          await showAlert('Pick at least one elective activity to reserve.');
+          return;
+        }
+        const _hPre = parseInt(result.preChangeMin) || 0;
+        const _hPost = parseInt(result.postChangeMin) || 0;
+        newEvent = {
+          id: Date.now().toString(),
+          type: 'swim_elective',
+          event: 'Swim + Elective',
+          division: divName,
+          startTime: result.startTime,
+          endTime: result.endTime,
+          _preChangeMin: _hPre || undefined,
+          _postChangeMin: _hPost || undefined,
+          swimLocation: defaultPool,
+          electiveActivities: chosen,
+          reservedFields: Array.from(new Set([...(defaultPool ? [defaultPool] : []), ...chosen]))
+        };
+      }
       // ★ v2.5: CUSTOM PINNED - Now uses grouped locations from locationZones (matches DA bunk overrides)
       else if (tileData.type === 'custom') {
         const { groups: locationGroups, hasAny: hasLocations } = getGroupedLocationOptions();
@@ -3287,6 +3447,28 @@ function addDropListeners(selector) {
       }
 
       if (newEvent) {
+        // ★ SWIM + ELECTIVE MERGE — prompt to combine when dropping one over the other
+        const _mergeRes = await tryMergeSwimElective(newEvent, divName, dailySkeleton);
+        if (_mergeRes) {
+          // Remove the overlapping complementary tile
+          dailySkeleton = dailySkeleton.filter(ev => ev.id !== _mergeRes.overlapId);
+          // Remove pre/post change tiles that belong to the swim being merged
+          const swimSt = parseTimeToMinutes(_mergeRes.swimEvent.startTime);
+          const swimEt = parseTimeToMinutes(_mergeRes.swimEvent.endTime);
+          dailySkeleton = dailySkeleton.filter(ev => {
+            if (!ev._swimChange) return true;
+            if (ev.division !== divName) return true;
+            const evS = parseTimeToMinutes(ev.startTime);
+            const evE = parseTimeToMinutes(ev.endTime);
+            if (evS === null || evE === null) return true;
+            if (ev._swimChange === 'pre' && Math.abs(evE - swimSt) <= 30) return false;
+            if (ev._swimChange === 'post' && Math.abs(evS - swimEt) <= 30) return false;
+            return true;
+          });
+          // Replace newEvent with the hybrid layer
+          newEvent = _mergeRes.hybrid;
+        }
+
         const newStartVal = parseTimeToMinutes(newEvent.startTime);
         const newEndVal = parseTimeToMinutes(newEvent.endTime);
 
