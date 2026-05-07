@@ -158,6 +158,7 @@ function buildSwimElectiveHybrid(newEvent, existingEvent, divName) {
 async function tryMergeSwimElective(newEvent, divName, skeleton) {
   const newIsSwim = isSwimEvent(newEvent);
   const newIsElective = isElectiveEvent(newEvent);
+  console.log('[MERGE] check', { newType: newEvent.type, newEvent: newEvent.event, newIsSwim, newIsElective, divName, skelLen: skeleton.length });
   if (!newIsSwim && !newIsElective) return null;
   const newStart = parseTimeToMinutes(newEvent.startTime);
   const newEnd = parseTimeToMinutes(newEvent.endTime);
@@ -169,10 +170,14 @@ async function tryMergeSwimElective(newEvent, divName, skeleton) {
     const xe = parseTimeToMinutes(ex.endTime);
     if (xs === null || xe === null) return false;
     if (!(xs < newEnd && xe > newStart)) return false;
-    if (newIsSwim && isElectiveEvent(ex)) return true;
-    if (newIsElective && isSwimEvent(ex)) return true;
+    const exIsSwim = isSwimEvent(ex);
+    const exIsElective = isElectiveEvent(ex);
+    console.log('[MERGE]   overlap candidate', { exType: ex.type, exEvent: ex.event, exIsSwim, exIsElective, xs, xe, newStart, newEnd });
+    if (newIsSwim && exIsElective) return true;
+    if (newIsElective && exIsSwim) return true;
     return false;
   });
+  console.log('[MERGE] result', overlap ? 'FOUND match - prompting' : 'no match');
   if (!overlap) return null;
   const droppedKind = newIsSwim ? 'Swim' : 'Elective';
   const existingKind = newIsSwim ? 'Elective' : 'Swim';
@@ -2541,7 +2546,7 @@ function renderPalette() {
   
   const categories = [
     { label: 'Slots', types: ['activity', 'sports', 'special'] },
-    { label: 'Advanced', types: ['smart', 'split', 'elective'] },
+    { label: 'Advanced', types: ['smart', 'split', 'elective', 'swim_elective'] },
     { label: 'Leagues', types: ['league', 'specialty_league'] },
     { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
   ];
