@@ -91,6 +91,17 @@ var _inspectMode = false;
 var _openPopover = null;
 var _activePreset = 'classic';
 var _activePack = null;
+var _savedLayouts = []; // [{ id, name, preset, view, layout, selection (null = current at apply time), inspectMode }]
+
+function loadSavedLayouts() {
+    try {
+        var raw = localStorage.getItem('campistry_pc3_layouts');
+        _savedLayouts = raw ? JSON.parse(raw) : [];
+    } catch (e) { _savedLayouts = []; }
+}
+function persistSavedLayouts() {
+    try { localStorage.setItem('campistry_pc3_layouts', JSON.stringify(_savedLayouts)); } catch (e) {}
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // PRINT PACKS — outcome-oriented one-click workflows.
@@ -818,6 +829,31 @@ function getStyles() {
     '.pc3-popover-link{font-size:12px;color:#147D91;text-decoration:none;font-weight:600;padding:6px 10px;cursor:pointer;display:inline-block;}' +
     '.pc3-popover-link:hover{text-decoration:underline;}' +
 
+    /* Keyboard shortcuts overlay */
+    '.pc3-shortcuts-overlay{position:fixed;inset:0;z-index:300;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;animation:pc3-shortcut-fade .15s ease-out;}' +
+    '@keyframes pc3-shortcut-fade{from{opacity:0}to{opacity:1}}' +
+    '.pc3-shortcuts-card{background:#fff;border-radius:14px;box-shadow:0 30px 60px -20px rgba(0,0,0,.3);width:min(640px,92vw);max-height:80vh;overflow:auto;padding:24px 28px;font-family:inherit;}' +
+    '.pc3-shortcuts-card h2{margin:0 0 4px;font-size:18px;font-weight:700;color:#0f172a;letter-spacing:-.01em;}' +
+    '.pc3-shortcuts-card .pc3-shortcuts-sub{color:#78716c;font-size:13px;margin-bottom:18px;}' +
+    '.pc3-shortcuts-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;}' +
+    '.pc3-shortcut-row{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid #f5f5f4;}' +
+    '.pc3-shortcut-row:last-child{border-bottom:none;}' +
+    '.pc3-shortcut-keys{display:flex;gap:4px;flex-shrink:0;}' +
+    '.pc3-shortcut-key{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:24px;padding:0 7px;background:#fafaf9;border:1px solid #e7e5e4;border-bottom-width:2px;border-radius:5px;font-size:11px;font-weight:600;color:#1c1917;font-family:ui-monospace,Consolas,Menlo,monospace;}' +
+    '.pc3-shortcut-label{flex:1;color:#44403c;font-size:13px;}' +
+    '.pc3-shortcuts-card .pc3-shortcuts-foot{margin-top:18px;text-align:center;color:#a8a29e;font-size:11px;}' +
+
+    /* Saved layouts list (in Style popover) */
+    '.pc3-layouts-list{display:flex;flex-direction:column;gap:2px;}' +
+    '.pc3-layouts-list .pc3-layout-row{display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;border:1px solid transparent;border-radius:6px;background:transparent;cursor:pointer;font-family:inherit;text-align:left;color:inherit;}' +
+    '.pc3-layouts-list .pc3-layout-row:hover{background:#f5f5f4;}' +
+    '.pc3-layouts-list .pc3-layout-row .pc3-layout-name{flex:1;font-size:13px;color:#1c1917;font-weight:500;}' +
+    '.pc3-layouts-list .pc3-layout-row .pc3-layout-del{opacity:0;color:#dc2626;background:transparent;border:none;cursor:pointer;padding:2px 6px;border-radius:4px;}' +
+    '.pc3-layouts-list .pc3-layout-row:hover .pc3-layout-del{opacity:1;}' +
+    '.pc3-layouts-list .pc3-layout-row .pc3-layout-del:hover{background:#fef2f2;}' +
+    '.pc3-save-layout-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px dashed #d6d3d1;border-radius:7px;background:transparent;cursor:pointer;color:#147D91;font-size:12px;font-weight:600;font-family:inherit;}' +
+    '.pc3-save-layout-btn:hover{border-color:#147D91;background:#ecfeff;}' +
+
     /* Hover-tooltip card */
     '.pc3-celltip{position:fixed;z-index:200;pointer-events:none;background:#0f172a;color:#f8fafc;font-size:12px;line-height:1.45;padding:10px 12px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.1);max-width:280px;opacity:0;transform:translateY(2px);transition:opacity .12s,transform .12s;font-family:inherit;}' +
     '.pc3-celltip.show{opacity:1;transform:none;}' +
@@ -1130,7 +1166,13 @@ function buildMainUI() {
                         }).join('') +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
+                        '<div class="pc3-popover-label">Saved layouts</div>' +
+                        '<div id="pc3-layouts-list" class="pc3-layouts-list"></div>' +
+                        '<button class="pc3-save-layout-btn" id="pc3-save-layout-btn">+ Save current as layout</button>' +
+                    '</div>' +
+                    '<div class="pc3-popover-section">' +
                         (canEditTemplates() ? '<button class="pc3-popover-item" onclick="window._pc3ToggleAdvanced()"><span class="pc3-popover-icon">' + ICO.gear + '</span>Customize…</button>' : '') +
+                        '<button class="pc3-popover-item" onclick="window._pc3ShowShortcuts && window._pc3ShowShortcuts()"><span class="pc3-popover-icon">⌘</span>Keyboard shortcuts<span class="pc3-popover-hint">?</span></button>' +
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-inspect-mode"' + (_inspectMode ? ' checked' : '') + '>Inspect mode<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Excel-like</span></label>' +
                     '</div>' +
                 '</div>' +
@@ -3526,6 +3568,11 @@ function bindAll() {
         });
     });
 
+    // Saved layouts
+    var saveBtn = el('pc3-save-layout-btn');
+    if (saveBtn) saveBtn.addEventListener('click', function () { window._pc3SaveLayout(); });
+    renderSavedLayoutsList();
+
     // Transpose / Combined / Hide Matchups
     ['pc3-transpose', 'pc3-combined', 'pc3-hide-matchups'].forEach(function (id) {
         var e = el(id);
@@ -3614,7 +3661,21 @@ function bindAll() {
                 return;
             }
         }
+        // Single-key shortcuts (no modifier, only when print tab is active and not typing)
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && !inField && printActive) {
+            if (e.key === '?' || (e.key === '/' && e.shiftKey)) { e.preventDefault(); window._pc3ShowShortcuts(); return; }
+            if (e.key === 'l' || e.key === 'L') { e.preventDefault(); var lb = el('pc3-live-btn'); if (lb) lb.click(); return; }
+            if (e.key === 'f' || e.key === 'F') { e.preventDefault(); window._pc3ToggleFullscreen(); return; }
+        }
         if (e.key === 'Escape') {
+            // Close any open popover first
+            if (_openPopover) {
+                document.querySelectorAll('.pc3-popover.open').forEach(function (m) { m.classList.remove('open'); });
+                document.querySelectorAll('.pc3-tab-btn.open, .pc3-hero-btn.open').forEach(function (b) { b.classList.remove('open'); });
+                _openPopover = null;
+                e.preventDefault();
+                return;
+            }
             if (_selAnchor) { _selAnchor = null; _selFocus = null; paintSelection(); updateFormulaBar(); }
         }
         // Arrow-key navigation across the active sheet
@@ -3679,6 +3740,7 @@ function initPrintCenter() {
     } catch (e) {}
 
     loadTemplates();
+    loadSavedLayouts();
     var lastId = localStorage.getItem('campistry_last_print_template');
     if (lastId && lastId !== 'default') {
         _savedTemplates.forEach(function (t) {
@@ -3717,6 +3779,136 @@ window._pc3ZoomReset = function () {
     var delta = 100 - _zoomLevel;
     if (delta !== 0) window._pc3Zoom(delta);
 };
+// ─────────────────────────────────────────────────────────────────────────
+// SAVED LAYOUTS
+// ─────────────────────────────────────────────────────────────────────────
+function renderSavedLayoutsList() {
+    var list = el('pc3-layouts-list');
+    if (!list) return;
+    if (!_savedLayouts.length) {
+        list.innerHTML = '<div class="pc3-popover-row" style="color:#a8a29e;font-style:italic;font-size:12px;">No saved layouts yet.</div>';
+        return;
+    }
+    list.innerHTML = _savedLayouts.map(function (lt) {
+        return '<button class="pc3-layout-row" data-layout="' + escHtml(lt.id) + '">' +
+            '<span class="pc3-layout-name">' + escHtml(lt.name) + '</span>' +
+            '<button class="pc3-layout-del" data-layout-del="' + escHtml(lt.id) + '" title="Delete">' + ICO.trash + '</button>' +
+        '</button>';
+    }).join('');
+    list.querySelectorAll('[data-layout]').forEach(function (btn) {
+        btn.addEventListener('click', function (ev) {
+            if (ev.target.closest('[data-layout-del]')) return;
+            window._pc3ApplyLayout(this.getAttribute('data-layout'));
+        });
+    });
+    list.querySelectorAll('[data-layout-del]').forEach(function (btn) {
+        btn.addEventListener('click', function (ev) {
+            ev.stopPropagation(); ev.preventDefault();
+            var id = this.getAttribute('data-layout-del');
+            _savedLayouts = _savedLayouts.filter(function (l) { return l.id !== id; });
+            persistSavedLayouts();
+            renderSavedLayoutsList();
+        });
+    });
+}
+
+window._pc3SaveLayout = function () {
+    var name = (window.prompt && window.prompt('Name this layout:')) || '';
+    name = name.trim();
+    if (!name) return;
+    var id = 'lt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5);
+    var t = _currentTemplate;
+    var entry = {
+        id: id,
+        name: name,
+        preset: _activePreset,
+        view: _activeView,
+        layout: {
+            tableOrientation: t.tableOrientation,
+            layoutMode: t.layoutMode,
+            hideLeagueMatchups: !!t.hideLeagueMatchups,
+            orientation: t.orientation,
+            paperSize: t.paperSize
+        },
+        timeIncrement: _timeIncrement,
+        inspectMode: !!_inspectMode
+    };
+    _savedLayouts.push(entry);
+    persistSavedLayouts();
+    renderSavedLayoutsList();
+    if (window.showToast) window.showToast('Layout “' + name + '” saved.', 'info');
+};
+
+window._pc3ApplyLayout = function (id) {
+    var lt = _savedLayouts.filter(function (l) { return l.id === id; })[0];
+    if (!lt) return;
+    if (lt.preset) window._pc3ApplyPreset(lt.preset);
+    if (lt.layout) {
+        Object.keys(lt.layout).forEach(function (k) { _currentTemplate[k] = lt.layout[k]; });
+    }
+    if (lt.view && lt.view !== _activeView) {
+        _activeView = lt.view;
+        document.querySelectorAll('[data-view]').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-view') === lt.view);
+        });
+        populateSidebar();
+    }
+    if (lt.timeIncrement) {
+        _timeIncrement = lt.timeIncrement;
+        var inc = el('pc3-time-increment'); if (inc) inc.value = lt.timeIncrement;
+    }
+    _inspectMode = !!lt.inspectMode;
+    var insBox = el('pc3-inspect-mode'); if (insBox) insBox.checked = _inspectMode;
+    var root = el('pc3-root'); if (root) root.classList.toggle('inspect-mode', _inspectMode);
+    // Sync layout popover
+    var tr = el('pc3-transpose'); if (tr) tr.checked = (_currentTemplate.tableOrientation === 'time-top');
+    var cb = el('pc3-combined'); if (cb) cb.checked = (_currentTemplate.layoutMode === 'all-bunks');
+    var hm = el('pc3-hide-matchups'); if (hm) hm.checked = !!_currentTemplate.hideLeagueMatchups;
+    liveRefresh();
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// KEYBOARD SHORTCUTS OVERLAY
+// ─────────────────────────────────────────────────────────────────────────
+var _shortcutsOpen = false;
+window._pc3ShowShortcuts = function () {
+    if (_shortcutsOpen) return;
+    var ov = document.createElement('div');
+    ov.className = 'pc3-shortcuts-overlay';
+    ov.id = 'pc3-shortcuts-overlay';
+    var isMac = /mac/i.test(navigator.platform || '');
+    var mod = isMac ? '⌘' : 'Ctrl';
+    var rows = [
+        { keys: [mod, 'P'], label: 'Print this view' },
+        { keys: [mod, '+'], label: 'Zoom in' },
+        { keys: [mod, '-'], label: 'Zoom out' },
+        { keys: ['F'], label: 'Toggle fullscreen' },
+        { keys: ['L'], label: 'Open Live View' },
+        { keys: ['?'], label: 'Show this help' },
+        { keys: ['Esc'], label: 'Close menus / overlays' },
+        { keys: [mod, 'C'], label: 'Copy selected cells (Inspect mode)' }
+    ];
+    ov.innerHTML = '<div class="pc3-shortcuts-card" id="pc3-shortcuts-card">' +
+        '<h2>Keyboard shortcuts</h2>' +
+        '<div class="pc3-shortcuts-sub">Click anywhere outside to close.</div>' +
+        '<div class="pc3-shortcuts-grid">' +
+            rows.map(function (r) {
+                return '<div class="pc3-shortcut-row">' +
+                    '<div class="pc3-shortcut-keys">' + r.keys.map(function (k) { return '<span class="pc3-shortcut-key">' + escHtml(k) + '</span>'; }).join('') + '</div>' +
+                    '<span class="pc3-shortcut-label">' + escHtml(r.label) + '</span>' +
+                '</div>';
+            }).join('') +
+        '</div>' +
+        '<div class="pc3-shortcuts-foot">Press <strong>?</strong> any time to bring this back.</div>' +
+    '</div>';
+    document.body.appendChild(ov);
+    _shortcutsOpen = true;
+    function close() { ov.remove(); _shortcutsOpen = false; document.removeEventListener('keydown', onKey); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    document.addEventListener('keydown', onKey);
+};
+
 window._pc3OpenInDA = function (bunk, slotIdx, divName) {
     // Best-effort: switch to the Daily Adjustments tab and surface a hint.
     try {
