@@ -1181,10 +1181,28 @@ function renderAutoDivisionTable(divName, bunks) {
                 var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
                 var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
                 html += ' style="padding:3px;vertical-align:middle;">';
-                html += '<div style="border-radius:5px;background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
-                html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
-                if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
-                html += '</div></td>';
+                // ★ Split-swim change: show Change → Swim → Change subdivisions
+                var splitPre = matchAct.entry ? (matchAct.entry._splitPreChange || 0) : 0;
+                var splitPost = matchAct.entry ? (matchAct.entry._splitPostChange || 0) : 0;
+                if (splitPre > 0 || splitPost > 0) {
+                    var swimMin = durMin - splitPre - splitPost;
+                    html += '<div style="border-radius:5px;overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
+                    if (splitPre > 0) {
+                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #F59E0B;">Change</div>';
+                    }
+                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;flex:1;display:flex;flex-direction:column;justify-content:center;">';
+                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
+                    html += '</div>';
+                    if (splitPost > 0) {
+                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #F59E0B;">Change</div>';
+                    }
+                    html += '</div></td>';
+                } else {
+                    html += '<div style="border-radius:5px;background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
+                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
+                    if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
+                    html += '</div></td>';
+                }
 
                 colIdx = nextCol;
             } else {
