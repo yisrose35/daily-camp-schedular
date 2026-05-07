@@ -89,6 +89,73 @@ var _isFullscreen = false;
 var _advancedOpen = false;
 var _inspectMode = false;
 var _openPopover = null;
+var _activePreset = 'classic';
+
+// Style presets — Classic (default), Bold, Minimal, Dark.
+// Each preset is a partial overlay applied on top of DEFAULT_TEMPLATE.
+var STYLE_PRESETS = [
+    {
+        id: 'classic',
+        name: 'Classic',
+        description: 'Campistry teal header, soft grays.',
+        swatch: ['#147D91', '#FFF8E1', '#EFF6FF'],
+        overlay: {} // identity (DEFAULT_TEMPLATE is Classic)
+    },
+    {
+        id: 'bold',
+        name: 'Bold',
+        description: 'Strong contrast, big type, dark grid header.',
+        swatch: ['#0F172A', '#FBBF24', '#1E293B'],
+        overlay: {
+            headerBgColor: '#0F172A', headerTextColor: '#F8FAFC',
+            headerFontSize: 28,
+            gridFontSize: 13, gridBorderWidth: 2, gridBorderColor: '#334155',
+            gridHeaderBgColor: '#1E293B', gridHeaderTextColor: '#F8FAFC',
+            gridRowColor: '#FFFFFF', gridRowAltColor: '#F1F5F9',
+            pinnedBgColor: '#FEF3C7', pinnedTextColor: '#78350F',
+            leagueBgColor: '#DBEAFE', leagueTextColor: '#1E3A8A',
+            timeColBgColor: '#1E293B', timeColTextColor: '#F1F5F9',
+            cellPadding: 8
+        }
+    },
+    {
+        id: 'minimal',
+        name: 'Minimal',
+        description: 'No color, no alternating rows, generous whitespace.',
+        swatch: ['#FFFFFF', '#F5F5F4', '#A8A29E'],
+        overlay: {
+            headerBgColor: '#FFFFFF', headerTextColor: '#0F172A',
+            headerFontSize: 22,
+            gridHeaderBgColor: '#FFFFFF', gridHeaderTextColor: '#44403C',
+            gridBorderColor: '#F5F5F4', gridBorderWidth: 1,
+            gridRowColor: '#FFFFFF', gridRowAltColor: '#FFFFFF',
+            generalBgColor: '#FFFFFF', generalTextColor: '#1C1917',
+            pinnedBgColor: '#FAFAF9', pinnedTextColor: '#44403C',
+            leagueBgColor: '#FAFAF9', leagueTextColor: '#44403C',
+            freeBgColor: '#FFFFFF', freeTextColor: '#A8A29E',
+            timeColBgColor: '#FFFFFF', timeColTextColor: '#78716C',
+            cellPadding: 10
+        }
+    },
+    {
+        id: 'dark',
+        name: 'Dark',
+        description: 'Bright on dark — for TV screens and dim rooms.',
+        swatch: ['#0F172A', '#FBBF24', '#818CF8'],
+        overlay: {
+            headerBgColor: '#0F172A', headerTextColor: '#F8FAFC',
+            headerFontSize: 24,
+            gridHeaderBgColor: '#1E293B', gridHeaderTextColor: '#E2E8F0',
+            gridBorderColor: '#334155',
+            gridRowColor: '#0F172A', gridRowAltColor: '#1E293B',
+            generalBgColor: '#1E293B', generalTextColor: '#E2E8F0',
+            pinnedBgColor: '#422006', pinnedTextColor: '#FBBF24',
+            leagueBgColor: '#1E1B4B', leagueTextColor: '#A5B4FC',
+            freeBgColor: '#0F172A', freeTextColor: '#475569',
+            timeColBgColor: '#1E293B', timeColTextColor: '#94A3B8'
+        }
+    }
+];
 var _previewHtml = '';
 var _cloudSyncTimeout = null;
 var _liveInterval = null;
@@ -681,6 +748,17 @@ function getStyles() {
     '.pc3-popover-link{font-size:12px;color:#147D91;text-decoration:none;font-weight:600;padding:6px 10px;cursor:pointer;display:inline-block;}' +
     '.pc3-popover-link:hover{text-decoration:underline;}' +
 
+    /* Style preset rows */
+    '.pc3-preset-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;text-align:left;font-family:inherit;color:inherit;}' +
+    '.pc3-preset-item:hover{background:#f5f5f4;}' +
+    '.pc3-preset-item.active{border-color:#147D91;background:#ecfeff;}' +
+    '.pc3-preset-swatch{display:flex;gap:0;border-radius:6px;overflow:hidden;border:1px solid #e7e5e4;flex-shrink:0;height:28px;}' +
+    '.pc3-preset-swatch span{display:block;width:14px;height:100%;}' +
+    '.pc3-preset-text{flex:1;min-width:0;}' +
+    '.pc3-preset-name{font-size:13px;font-weight:600;color:#1c1917;}' +
+    '.pc3-preset-desc{font-size:11px;color:#78716c;line-height:1.3;margin-top:1px;}' +
+    '.pc3-preset-check{color:#147D91;font-weight:700;flex-shrink:0;}' +
+
     /* legacy alias kept for any stragglers */
     '.pc3-tb-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;color:#334155;font-size:12px;font-weight:500;cursor:pointer;}' +
     '.pc3-tb-select{padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;cursor:pointer;}' +
@@ -870,10 +948,23 @@ function buildMainUI() {
         '<div class="pc3-tab-actions">' +
             '<div class="pc3-popover-wrap">' +
                 '<button class="pc3-tab-btn" id="pc3-style-btn">Style <span class="caret">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-style-menu" style="min-width:240px;">' +
+                '<div class="pc3-popover" id="pc3-style-menu" style="min-width:280px;">' +
                     '<div class="pc3-popover-section">' +
                         '<div class="pc3-popover-label">Presets</div>' +
-                        '<div class="pc3-popover-row" style="color:#a8a29e;font-style:italic;font-size:12px;">Coming next…</div>' +
+                        STYLE_PRESETS.map(function (p) {
+                            var active = _activePreset === p.id;
+                            var sw = '<div class="pc3-preset-swatch">' +
+                                p.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') +
+                            '</div>';
+                            return '<button class="pc3-preset-item' + (active ? ' active' : '') + '" data-preset="' + p.id + '">' +
+                                sw +
+                                '<div class="pc3-preset-text">' +
+                                    '<div class="pc3-preset-name">' + escHtml(p.name) + '</div>' +
+                                    '<div class="pc3-preset-desc">' + escHtml(p.description) + '</div>' +
+                                '</div>' +
+                                (active ? '<span class="pc3-preset-check">' + (ICO.check || '✓') + '</span>' : '') +
+                            '</button>';
+                        }).join('') +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
                         (canEditTemplates() ? '<button class="pc3-popover-item" onclick="window._pc3ToggleAdvanced()"><span class="pc3-popover-icon">' + ICO.gear + '</span>Customize…</button>' : '') +
@@ -2991,6 +3082,14 @@ function bindAll() {
         if (root) root.classList.toggle('inspect-mode', _inspectMode);
     });
 
+    // Style preset clicks
+    document.querySelectorAll('.pc3-preset-item').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var pid = this.getAttribute('data-preset');
+            window._pc3ApplyPreset && window._pc3ApplyPreset(pid);
+        });
+    });
+
     // Transpose / Combined / Hide Matchups
     ['pc3-transpose', 'pc3-combined', 'pc3-hide-matchups'].forEach(function (id) {
         var e = el(id);
@@ -3131,6 +3230,17 @@ function initPrintCenter() {
 
     // Restore saved time increment
     try { var savedInc = localStorage.getItem('campistry_pc3_timeIncrement'); if (savedInc) _timeIncrement = parseInt(savedInc) || 15; } catch (e) {}
+    // Restore last-used style preset
+    try {
+        var savedPreset = localStorage.getItem('campistry_pc3_preset');
+        if (savedPreset) {
+            var matched = STYLE_PRESETS.filter(function (p) { return p.id === savedPreset; })[0];
+            if (matched) {
+                _activePreset = matched.id;
+                _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE, matched.overlay);
+            }
+        }
+    } catch (e) {}
 
     loadTemplates();
     var lastId = localStorage.getItem('campistry_last_print_template');
@@ -3166,6 +3276,39 @@ window._pc3Zoom = function (delta) {
         zb.innerHTML = 'Zoom <span style="font-variant-numeric:tabular-nums;">' + _zoomLevel + '%</span> <span class="caret">▼</span>';
     }
 };
+window._pc3ApplyPreset = function (presetId) {
+    var preset = STYLE_PRESETS.filter(function (p) { return p.id === presetId; })[0];
+    if (!preset) return;
+    _activePreset = preset.id;
+    // Apply overlay on top of the existing template (preserves campName, watermark, etc.)
+    var keep = {
+        campName: _currentTemplate.campName,
+        campLogo: _currentTemplate.campLogo,
+        customSubtitle: _currentTemplate.customSubtitle,
+        showHeader: _currentTemplate.showHeader,
+        showDate: _currentTemplate.showDate,
+        showDivisionName: _currentTemplate.showDivisionName,
+        watermarkEnabled: _currentTemplate.watermarkEnabled,
+        watermarkText: _currentTemplate.watermarkText,
+        watermarkColor: _currentTemplate.watermarkColor,
+        watermarkOpacity: _currentTemplate.watermarkOpacity,
+        footerEnabled: _currentTemplate.footerEnabled,
+        footerText: _currentTemplate.footerText,
+        tableOrientation: _currentTemplate.tableOrientation,
+        layoutMode: _currentTemplate.layoutMode,
+        hideLeagueMatchups: _currentTemplate.hideLeagueMatchups,
+        orientation: _currentTemplate.orientation,
+        paperSize: _currentTemplate.paperSize
+    };
+    _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE, preset.overlay, keep);
+    try { localStorage.setItem('campistry_pc3_preset', presetId); } catch (e) {}
+    // Refresh the popover swatch active state
+    document.querySelectorAll('.pc3-preset-item').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-preset') === presetId);
+    });
+    liveRefresh();
+};
+
 window._pc3ExportCSV = function () {
     try {
         var sel = (typeof getSelectedItems === 'function') ? getSelectedItems() : [];
