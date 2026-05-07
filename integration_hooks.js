@@ -1068,7 +1068,26 @@
             // activity rename/delete, league future-date updates, etc.)
             // Uses skipFilter:true since propagation changes affect all bunks.
             // Staggered 500ms apart to avoid hammering the cloud.
+            //
+            // ★ Hash-gated: we only fan out a save when the date's
+            // scheduleAssignments JSON differs from the last hash we sent.
+            // Without this, every generation would re-save 14 days of
+            // hydrated rotation history that hadn't actually changed.
             // ═══════════════════════════════════════════════════════════════
+            if (!window._secondarySaveHash) window._secondarySaveHash = {};
+            function _hashDateData(d) {
+                try {
+                    const sa = d?.scheduleAssignments || {};
+                    const la = d?.leagueAssignments || {};
+                    const s = JSON.stringify(sa) + '|' + JSON.stringify(la);
+                    let h = 0;
+                    for (let i = 0; i < s.length; i++) {
+                        h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+                    }
+                    return h;
+                } catch (_) { return Math.random(); }
+            }
+
             const secondaryDateKeys = allDateKeys.filter(k =>
                 k !== primaryDateKey &&
                 data[k]?.scheduleAssignments &&
@@ -1076,14 +1095,22 @@
             );
 
             if (secondaryDateKeys.length > 0 && window.ScheduleDB?.saveSchedule) {
-                // Deduplicate: skip dates already saved in the last 30s
+                // Drop dates whose content hash matches what we last sent —
+                // those dates are unchanged and don't need a cloud round-trip.
+                // Also keep the existing 30s timestamp dedupe as a safety net.
                 const unsaved = secondaryDateKeys.filter(dk => {
-                    return !window._secondarySaveLog[dk] || (now - window._secondarySaveLog[dk]) > 30000;
+                    const hash = _hashDateData(data[dk]);
+                    if (window._secondarySaveHash[dk] === hash) return false;
+                    if (window._secondarySaveLog[dk] && (now - window._secondarySaveLog[dk]) <= 30000) return false;
+                    return true;
                 });
 
                 if (unsaved.length > 0) {
-                    log(`[saveGlobalSettings] Syncing ${unsaved.length} secondary date(s) to cloud...`);
-                    unsaved.forEach(dk => { window._secondarySaveLog[dk] = now; });
+                    log(`[saveGlobalSettings] Syncing ${unsaved.length} secondary date(s) to cloud (skipped ${secondaryDateKeys.length - unsaved.length} unchanged)`);
+                    unsaved.forEach(dk => {
+                        window._secondarySaveLog[dk] = now;
+                        window._secondarySaveHash[dk] = _hashDateData(data[dk]);
+                    });
 
                     unsaved.forEach((dk, index) => {
                         setTimeout(() => {
@@ -1100,6 +1127,8 @@
                                 });
                         }, (index + 1) * 500);
                     });
+                } else if (secondaryDateKeys.length > 0) {
+                    log(`[saveGlobalSettings] Skipped ${secondaryDateKeys.length} unchanged secondary date(s)`);
                 }
             }
 
