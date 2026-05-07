@@ -87,6 +87,8 @@ var _activeView = 'division';
 var _zoomLevel = 100;
 var _isFullscreen = false;
 var _advancedOpen = false;
+var _inspectMode = false;
+var _openPopover = null;
 var _previewHtml = '';
 var _cloudSyncTimeout = null;
 var _liveInterval = null;
@@ -621,37 +623,77 @@ function canEditTemplates() {
 function getStyles() {
     return '<style id="pc-styles">' +
     /* ── Container ── */
-    '.pc3{font-family:"DM Sans",system-ui,sans-serif;font-size:13px;color:#1E293B;display:flex;flex-direction:column;height:100%;min-height:0;background:#f5f5f4;position:relative;}' +
-    '.pc3.pc3-fullscreen{position:fixed;inset:0;z-index:9999;background:#f5f5f4;}' +
+    '.pc3{font-family:"DM Sans",system-ui,sans-serif;font-size:13px;color:#0f172a;display:flex;flex-direction:column;height:100%;min-height:0;background:#fafaf9;position:relative;}' +
+    '.pc3.pc3-fullscreen{position:fixed;inset:0;z-index:9999;background:#fafaf9;}' +
 
-    /* ── Toolbar ── */
-    '.pc3-topbar{display:flex;align-items:center;gap:10px;padding:0 14px;height:50px;background:#fff;border-bottom:1px solid #e5e5e5;flex-shrink:0;}' +
-    '.pc3-topbar-name{font-size:14px;font-weight:500;color:#1a1a1a;}' +
-    '.pc3-topbar-date{font-size:12px;color:#666;padding:2px 9px;background:#f5f5f4;border-radius:6px;}' +
-    '.pc3-topbar-sep{width:0.5px;height:18px;background:#e5e5e5;flex-shrink:0;}' +
-    '.pc3-topbar-space{flex:1;}' +
-    '.pc3-toolbar{display:flex;align-items:center;gap:6px;padding:4px 10px;background:#fff;border-bottom:1px solid #e2e8f0;flex-shrink:0;flex-wrap:wrap;min-height:36px;}' +
-    '.pc3-toolbar-group{display:flex;align-items:center;gap:4px;}' +
-    '.pc3-toolbar-sep{width:1px;height:20px;background:#e2e8f0;margin:0 4px;}' +
-    '.pc3-tb-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;color:#334155;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;transition:all .15s;}' +
-    '.pc3-tb-btn:hover{background:#f8fafc;border-color:#cbd5e1;box-shadow:0 1px 2px rgba(0,0,0,.04);}' +
-    '.pc3-tb-btn.active{background:#147D91;color:#fff;border-color:#147D91;}' +
-    '.pc3-tb-btn.primary{background:#147D91;color:#fff;border-color:#0F6E80;}' +
-    '.pc3-tb-btn.primary:hover{background:#0F6E80;}' +
-    '.pc3-tb-btn.danger{color:#dc2626;border-color:#fecaca;}' +
-    '.pc3-tb-btn.danger:hover{background:#fef2f2;}' +
-    '.pc3-tb-btn.live{background:#dc2626;color:#fff;border-color:#dc2626;animation:pc3-pulse 2s infinite;}' +
-    '@keyframes pc3-pulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.4)}50%{box-shadow:0 0 0 6px rgba(220,38,38,0)}}' +
+    /* ── Hero header ── */
+    '.pc3-hero{display:flex;align-items:flex-end;gap:24px;padding:18px 28px 16px;background:#fff;border-bottom:1px solid #e7e5e4;flex-shrink:0;}' +
+    '.pc3-hero-title-block{flex:1;min-width:0;}' +
+    '.pc3-hero h1{margin:0 0 2px;font-size:22px;font-weight:700;letter-spacing:-.01em;color:#0f172a;line-height:1.2;}' +
+    '.pc3-hero-meta{font-size:12px;color:#78716c;font-weight:500;display:flex;align-items:center;gap:8px;}' +
+    '.pc3-hero-meta-dot{width:3px;height:3px;border-radius:50%;background:#a8a29e;}' +
+    '.pc3-hero-mode{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;}' +
+    '.pc3-hero-mode.auto{background:#eff6ff;color:#1d4ed8;}' +
+    '.pc3-hero-mode.manual{background:#f0fdf4;color:#15803d;}' +
+    '.pc3-hero-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;}' +
+    '.pc3-hero-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:1px solid #e7e5e4;border-radius:8px;background:#fff;color:#1c1917;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s,box-shadow .15s,transform .05s;}' +
+    '.pc3-hero-btn:hover{background:#fafaf9;border-color:#d6d3d1;}' +
+    '.pc3-hero-btn:active{transform:translateY(1px);}' +
+    '.pc3-hero-btn.primary{background:#147D91;color:#fff;border-color:#0F6E80;box-shadow:0 1px 2px rgba(15,110,128,.2);}' +
+    '.pc3-hero-btn.primary:hover{background:#10657a;border-color:#0a5566;}' +
+    '.pc3-hero-btn.live-on{background:#dc2626;color:#fff;border-color:#b91c1c;}' +
+    '.pc3-hero-btn.live-on:hover{background:#b91c1c;}' +
+    '.pc3-hero-btn .pc3-live-dot{width:7px;height:7px;border-radius:50%;background:#fff;animation:pc3-pulse-dot 1.6s infinite;}' +
+    '@keyframes pc3-pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.85)}}' +
+    '.pc3-hero-icon-btn{width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:1px solid #e7e5e4;border-radius:8px;background:#fff;color:#57534e;cursor:pointer;transition:background .15s,border-color .15s;}' +
+    '.pc3-hero-icon-btn:hover{background:#fafaf9;border-color:#d6d3d1;color:#1c1917;}' +
+
+    /* ── Tab bar ── */
+    '.pc3-tabbar{display:flex;align-items:center;gap:24px;padding:0 28px;background:#fff;border-bottom:1px solid #e7e5e4;flex-shrink:0;}' +
+    '.pc3-tabs{display:flex;align-items:center;gap:4px;}' +
+    '.pc3-tab{position:relative;padding:11px 4px;margin:0 6px;border:none;background:transparent;color:#78716c;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:color .15s;}' +
+    '.pc3-tab:hover{color:#1c1917;}' +
+    '.pc3-tab.active{color:#147D91;}' +
+    '.pc3-tab.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:#147D91;border-radius:2px 2px 0 0;}' +
+    '.pc3-tab-actions{margin-left:auto;display:flex;align-items:center;gap:4px;}' +
+    '.pc3-tab-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border:1px solid transparent;border-radius:7px;background:transparent;color:#57534e;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s,color .15s;}' +
+    '.pc3-tab-btn:hover{background:#f5f5f4;color:#1c1917;}' +
+    '.pc3-tab-btn.open{background:#f5f5f4;color:#147D91;}' +
+    '.pc3-tab-btn .caret{font-size:9px;opacity:.6;}' +
+
+    /* ── Popover menu ── */
+    '.pc3-popover-wrap{position:relative;}' +
+    '.pc3-popover{display:none;position:absolute;top:calc(100% + 6px);right:0;min-width:240px;background:#fff;border:1px solid #e7e5e4;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.08),0 2px 8px rgba(0,0,0,.04);padding:6px;z-index:100;animation:pc3-pop-in .12s ease-out;}' +
+    '.pc3-popover.open{display:block;}' +
+    '@keyframes pc3-pop-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}' +
+    '.pc3-popover-section{padding:6px 4px;}' +
+    '.pc3-popover-section + .pc3-popover-section{border-top:1px solid #f5f5f4;}' +
+    '.pc3-popover-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#a8a29e;padding:4px 8px;}' +
+    '.pc3-popover-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:#1c1917;width:100%;border:none;background:transparent;text-align:left;font-family:inherit;font-weight:500;}' +
+    '.pc3-popover-item:hover{background:#f5f5f4;}' +
+    '.pc3-popover-item .pc3-popover-icon{width:18px;height:18px;color:#78716c;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;}' +
+    '.pc3-popover-item .pc3-popover-hint{margin-left:auto;font-size:11px;color:#a8a29e;}' +
+    '.pc3-popover-row{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;font-size:12px;color:#44403c;}' +
+    '.pc3-popover-toggle{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:#1c1917;}' +
+    '.pc3-popover-toggle:hover{background:#f5f5f4;}' +
+    '.pc3-popover-toggle input{accent-color:#147D91;cursor:pointer;}' +
+    '.pc3-popover-select{width:100%;padding:6px 8px;border:1px solid #e7e5e4;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;cursor:pointer;}' +
+    '.pc3-popover-link{font-size:12px;color:#147D91;text-decoration:none;font-weight:600;padding:6px 10px;cursor:pointer;display:inline-block;}' +
+    '.pc3-popover-link:hover{text-decoration:underline;}' +
+
+    /* legacy alias kept for any stragglers */
+    '.pc3-tb-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;color:#334155;font-size:12px;font-weight:500;cursor:pointer;}' +
     '.pc3-tb-select{padding:4px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;cursor:pointer;}' +
     '.pc3-tb-label{font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.3px;}' +
 
-    /* ── Formula Bar ── */
-    '.pc3-formula{display:flex;align-items:center;gap:8px;padding:3px 10px;background:#fafbfc;border-bottom:1px solid #e2e8f0;flex-shrink:0;font-size:12px;min-height:26px;}' +
-    '.pc3-formula-cell{font-weight:700;color:#147D91;min-width:80px;font-size:11px;}' +
-    '.pc3-formula-val{flex:1;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-    '.pc3-formula-mode{margin-left:auto;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:4px;}' +
-    '.pc3-formula-mode.auto{background:#dbeafe;color:#1e40af;}' +
-    '.pc3-formula-mode.manual{background:#f0fdf4;color:#166534;}' +
+    /* Hide formula bar + Excel coord rows / row numbers by default — they reappear in Inspect mode */
+    '.pc3-formula{display:none !important;}' +
+    '.pc3 .pc3-tbl tr.pc3-coord-row,.pc3 .pc3-tbl th.pc3-row-num{display:none;}' +
+    '.pc3.inspect-mode .pc3-tbl tr.pc3-coord-row{display:table-row;}' +
+    '.pc3.inspect-mode .pc3-tbl th.pc3-row-num{display:table-cell;}' +
+    /* Suppress the cell-hover outline — too noisy when you're not selecting cells */
+    '.pc3 .pc3-tbl td:hover{outline:none;}' +
+    '.pc3.inspect-mode .pc3-tbl td:hover{outline:2px solid #147D91;outline-offset:-1px;}' +
 
     /* ── Workspace ── */
     '.pc3-workspace{flex:1;display:flex;min-height:0;overflow:hidden;position:relative;}' +
@@ -781,63 +823,102 @@ function getStyles() {
 function buildMainUI() {
     var t = _currentTemplate;
     var mode = isAutoMode() ? 'auto' : 'manual';
+    var dateLabel = window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '';
+    var liveOpen = !!(_liveWindow && !_liveWindow.closed);
     return getStyles() +
-    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + '" id="pc3-root">' +
+    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + '" id="pc3-root">' +
 
-    /* ── Toolbar ── */
-    '<div class="pc3-topbar no-print">' +
-        '<span class="pc3-topbar-name">' + (t.campName || 'Camp Schedule') + '</span>' +
-        '<div class="pc3-topbar-sep"></div>' +
-        '<span class="pc3-topbar-date">' + (window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '') + '</span>' +
-        '<div class="pc3-topbar-space"></div>' +
-        '<button class="pc3-tb-btn" id="pc3-live-btn" title="Open Live View in a new window">' + ICO.monitor + ' Live View</button>' +
-        (canEditTemplates() ? '<button class="pc3-tb-btn" onclick="window._pc3ToggleAdvanced()" title="Design settings">' + ICO.gear + '</button>' : '') +
-        '<button class="pc3-tb-btn" onclick="window._pc3ExportExcel()">' + ICO.excel + ' Excel</button>' +
-        '<button class="pc3-tb-btn primary" onclick="window._pc3Print()">' + ICO.print + ' Print</button>' +
+    /* ── Hero header ── */
+    '<div class="pc3-hero no-print">' +
+        '<div class="pc3-hero-title-block">' +
+            '<h1>' + escHtml(t.campName || 'Camp Schedule') + '</h1>' +
+            '<div class="pc3-hero-meta">' +
+                (dateLabel ? '<span>' + escHtml(dateLabel) + '</span><span class="pc3-hero-meta-dot"></span>' : '') +
+                '<span class="pc3-hero-mode ' + mode + '">' + mode + ' builder</span>' +
+            '</div>' +
+        '</div>' +
+        '<div class="pc3-hero-actions">' +
+            '<button class="pc3-hero-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="' + (liveOpen ? 'Live View is open' : 'Open Live View in a new window') + '">' +
+                (liveOpen ? '<span class="pc3-live-dot"></span>Live · On' : ICO.monitor + ' Live View') +
+            '</button>' +
+            '<div class="pc3-popover-wrap">' +
+                '<button class="pc3-hero-btn primary" id="pc3-output-btn">' + ICO.print + ' Output <span style="opacity:.7;font-size:9px;">▼</span></button>' +
+                '<div class="pc3-popover" id="pc3-output-menu" style="min-width:260px;">' +
+                    '<div class="pc3-popover-section">' +
+                        '<div class="pc3-popover-label">Print</div>' +
+                        '<button class="pc3-popover-item" onclick="window._pc3Print()"><span class="pc3-popover-icon">' + ICO.print + '</span>Print this view</button>' +
+                        '<button class="pc3-popover-item" onclick="window.printAllDivisions()"><span class="pc3-popover-icon">' + ICO.grid + '</span>Print every division</button>' +
+                    '</div>' +
+                    '<div class="pc3-popover-section">' +
+                        '<div class="pc3-popover-label">Export</div>' +
+                        '<button class="pc3-popover-item" onclick="window._pc3ExportExcel()"><span class="pc3-popover-icon">' + ICO.excel + '</span>Export to Excel</button>' +
+                        '<button class="pc3-popover-item" onclick="window._pc3ExportCSV && window._pc3ExportCSV()"><span class="pc3-popover-icon">' + ICO.excel + '</span>Export to CSV</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>' +
+            '<button class="pc3-hero-icon-btn" onclick="window._pc3ToggleFullscreen()" title="Toggle fullscreen">' + ICO.expand + '</button>' +
+        '</div>' +
     '</div>' +
 
-    '<div class="pc3-toolbar no-print">' +
-        '<div class="pc3-toolbar-group">' +
-            '<span class="pc3-tb-label">View</span>' +
-            '<button class="pc3-tb-btn' + (_activeView === 'division' ? ' active' : '') + '" data-view="division">' + ICO.grid + ' Divisions</button>' +
-            '<button class="pc3-tb-btn' + (_activeView === 'bunk' ? ' active' : '') + '" data-view="bunk">' + ICO.user + ' Bunks</button>' +
-            '<button class="pc3-tb-btn' + (_activeView === 'location' ? ' active' : '') + '" data-view="location">' + ICO.mapPin + ' Locations</button>' +
+    /* ── Tab bar ── */
+    '<div class="pc3-tabbar no-print">' +
+        '<div class="pc3-tabs">' +
+            '<button class="pc3-tab' + (_activeView === 'division' ? ' active' : '') + '" data-view="division">Divisions</button>' +
+            '<button class="pc3-tab' + (_activeView === 'bunk' ? ' active' : '') + '" data-view="bunk">Bunks</button>' +
+            '<button class="pc3-tab' + (_activeView === 'location' ? ' active' : '') + '" data-view="location">Locations</button>' +
         '</div>' +
-        '<div class="pc3-toolbar-sep"></div>' +
-        '<div class="pc3-toolbar-group">' +
-            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-transpose" style="accent-color:#147D91;margin-right:4px;"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '>Transpose</label>' +
-            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-combined" style="accent-color:#147D91;margin-right:4px;"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combined</label>' +
-            '<label class="pc3-tb-btn" style="cursor:pointer;"><input type="checkbox" id="pc3-hide-matchups" style="accent-color:#147D91;margin-right:4px;"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide Matchups</label>' +
-        '</div>' +
-        /* Time increment selector — visible in all modes but most relevant for auto */
-        '<div class="pc3-toolbar-sep"></div>' +
-        '<div class="pc3-toolbar-group">' +
-            '<span class="pc3-tb-label">Sub-segment</span>' +
-            '<select id="pc3-time-increment" class="pc3-tb-select" title="Sub-segment increment within each period">' +
-                (function () {
-                    var opts = '';
-                    for (var iv = 5; iv <= 60; iv += 5) {
-                        opts += '<option value="' + iv + '"' + (_timeIncrement === iv ? ' selected' : '') + '>' + iv + ' min</option>';
-                    }
-                    return opts;
-                })() +
-            '</select>' +
-        '</div>' +
-        '<div class="pc3-toolbar-sep"></div>' +
-        '<div class="pc3-toolbar-group">' +
-            '<select id="pc3-template-select" class="pc3-tb-select"><option value="default">Default Template</option></select>' +
-            (canEditTemplates() ? '<button class="pc3-tb-btn" onclick="window._pc3SaveTemplate()" title="Save as template">' + ICO.save + '</button>' : '') +
-        '</div>' +
-        '<div style="flex:1;"></div>' +
-        '<div class="pc3-toolbar-group">' +
-            '<div class="pc3-zoom">' +
-                '<span class="pc3-tb-label" style="margin-right:2px;">Zoom</span>' +
-                '<button class="pc3-tb-btn" onclick="window._pc3Zoom(-10)">' + ICO.zoomOut + '</button>' +
-                '<input type="range" min="50" max="200" value="' + _zoomLevel + '" id="pc3-zoom-range">' +
-                '<button class="pc3-tb-btn" onclick="window._pc3Zoom(10)">' + ICO.zoomIn + '</button>' +
-                '<span class="pc3-zoom-label" id="pc3-zoom-label">' + _zoomLevel + '%</span>' +
+        '<div class="pc3-tab-actions">' +
+            '<div class="pc3-popover-wrap">' +
+                '<button class="pc3-tab-btn" id="pc3-style-btn">Style <span class="caret">▼</span></button>' +
+                '<div class="pc3-popover" id="pc3-style-menu" style="min-width:240px;">' +
+                    '<div class="pc3-popover-section">' +
+                        '<div class="pc3-popover-label">Presets</div>' +
+                        '<div class="pc3-popover-row" style="color:#a8a29e;font-style:italic;font-size:12px;">Coming next…</div>' +
+                    '</div>' +
+                    '<div class="pc3-popover-section">' +
+                        (canEditTemplates() ? '<button class="pc3-popover-item" onclick="window._pc3ToggleAdvanced()"><span class="pc3-popover-icon">' + ICO.gear + '</span>Customize…</button>' : '') +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-inspect-mode"' + (_inspectMode ? ' checked' : '') + '>Inspect mode<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Excel-like</span></label>' +
+                    '</div>' +
+                '</div>' +
             '</div>' +
-            '<button class="pc3-tb-btn" onclick="window._pc3ToggleFullscreen()">' + ICO.expand + '</button>' +
+            '<div class="pc3-popover-wrap">' +
+                '<button class="pc3-tab-btn" id="pc3-layout-btn">Layout <span class="caret">▼</span></button>' +
+                '<div class="pc3-popover" id="pc3-layout-menu" style="min-width:280px;">' +
+                    '<div class="pc3-popover-section">' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-transpose"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '>Time across the top<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Transpose</span></label>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combine all bunks into one sheet</label>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide league matchups</label>' +
+                    '</div>' +
+                    '<div class="pc3-popover-section">' +
+                        '<div class="pc3-popover-row"><span>Sub-segment</span>' +
+                            '<select id="pc3-time-increment" class="pc3-popover-select" style="max-width:110px;">' +
+                                (function () {
+                                    var opts = '';
+                                    for (var iv = 5; iv <= 60; iv += 5) {
+                                        opts += '<option value="' + iv + '"' + (_timeIncrement === iv ? ' selected' : '') + '>' + iv + ' min</option>';
+                                    }
+                                    return opts;
+                                })() +
+                            '</select>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="pc3-popover-wrap">' +
+                '<button class="pc3-tab-btn" id="pc3-zoom-btn">Zoom <span style="font-variant-numeric:tabular-nums;">' + _zoomLevel + '%</span> <span class="caret">▼</span></button>' +
+                '<div class="pc3-popover" id="pc3-zoom-menu" style="min-width:240px;">' +
+                    '<div class="pc3-popover-section">' +
+                        '<div class="pc3-popover-row" style="gap:8px;">' +
+                            '<button class="pc3-hero-icon-btn" onclick="window._pc3Zoom(-10)" style="width:30px;height:30px;">' + ICO.zoomOut + '</button>' +
+                            '<input type="range" min="50" max="200" value="' + _zoomLevel + '" id="pc3-zoom-range" style="flex:1;accent-color:#147D91;">' +
+                            '<button class="pc3-hero-icon-btn" onclick="window._pc3Zoom(10)" style="width:30px;height:30px;">' + ICO.zoomIn + '</button>' +
+                        '</div>' +
+                        '<div class="pc3-popover-row" style="justify-content:center;color:#78716c;font-variant-numeric:tabular-nums;"><span id="pc3-zoom-label">' + _zoomLevel + '%</span></div>' +
+                    '</div>' +
+                '</div>' +
+            '</div>' +
+            /* hidden controls preserved for legacy JS bindings */
+            '<select id="pc3-template-select" style="display:none;"><option value="default">Default Template</option></select>' +
         '</div>' +
     '</div>' +
 
@@ -859,11 +940,11 @@ function buildMainUI() {
 
         /* Grid Area */
         '<div class="pc3-grid-area" id="pc3-grid-area">' +
-            '<div id="pc3-preview-empty" style="display:flex;align-items:center;justify-content:center;height:100%;color:#94a3b8;">' +
-                '<div style="text-align:center;">' +
-                    '<div style="font-size:32px;margin-bottom:6px;opacity:.4;">' + ICO.grid + '</div>' +
-                    '<p style="margin:0 0 4px;font-size:14px;font-weight:600;color:#64748b;">Select items from the sidebar</p>' +
-                    '<p style="margin:0;font-size:12px;">Your schedule will render as a spreadsheet</p>' +
+            '<div id="pc3-preview-empty" style="display:flex;align-items:center;justify-content:center;height:100%;">' +
+                '<div style="text-align:center;max-width:340px;">' +
+                    '<div style="font-size:36px;margin-bottom:10px;opacity:.35;color:#a8a29e;">' + ICO.grid + '</div>' +
+                    '<p style="margin:0 0 6px;font-size:15px;font-weight:600;color:#1c1917;">Pick what you want to print</p>' +
+                    '<p style="margin:0;font-size:12px;color:#78716c;line-height:1.5;">Choose divisions, bunks, or locations from the left and they will appear here. Then hit <strong>Output</strong> to print, share, or export.</p>' +
                 '</div>' +
             '</div>' +
             '<div id="pc3-preview-content" style="display:none;"></div>' +
@@ -871,7 +952,7 @@ function buildMainUI() {
 
         /* Advanced Drawer */
         '<div class="pc3-drawer' + (_advancedOpen ? ' open' : '') + '" id="pc3-drawer">' +
-            '<div class="pc3-drawer-header"><span>' + ICO.gear + ' Design Settings</span><button class="pc3-tb-btn" onclick="window._pc3ToggleAdvanced()" style="padding:2px 6px;">' + ICO.x + '</button></div>' +
+            '<div class="pc3-drawer-header"><span>' + ICO.gear + ' Design Settings</span><button class="pc3-hero-icon-btn" onclick="window._pc3ToggleAdvanced()" style="width:28px;height:28px;">' + ICO.x + '</button></div>' +
             '<div class="pc3-drawer-scroll" id="pc3-drawer-scroll">' + buildAdvancedSections() + '</div>' +
         '</div>' +
     '</div>' +
@@ -2865,6 +2946,51 @@ function bindAll() {
         });
     });
 
+    // Popovers — Output / Style / Layout / Zoom
+    var popoverPairs = [
+        ['pc3-output-btn', 'pc3-output-menu'],
+        ['pc3-style-btn', 'pc3-style-menu'],
+        ['pc3-layout-btn', 'pc3-layout-menu'],
+        ['pc3-zoom-btn', 'pc3-zoom-menu']
+    ];
+    function closeAllPopovers() {
+        popoverPairs.forEach(function (p) {
+            var b = el(p[0]); var m = el(p[1]);
+            if (b) b.classList.remove('open');
+            if (m) m.classList.remove('open');
+        });
+        _openPopover = null;
+    }
+    popoverPairs.forEach(function (p) {
+        var btn = el(p[0]); var menu = el(p[1]);
+        if (!btn || !menu) return;
+        btn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            var isOpen = menu.classList.contains('open');
+            closeAllPopovers();
+            if (!isOpen) {
+                btn.classList.add('open');
+                menu.classList.add('open');
+                _openPopover = p[1];
+            }
+        });
+        // Clicks inside the popover should not close it (unless the action handler closes manually)
+        menu.addEventListener('click', function (ev) { ev.stopPropagation(); });
+        // Items that trigger app actions auto-close the popover
+        menu.querySelectorAll('.pc3-popover-item').forEach(function (it) {
+            it.addEventListener('click', function () { setTimeout(closeAllPopovers, 0); });
+        });
+    });
+    document.addEventListener('click', function () { if (_openPopover) closeAllPopovers(); });
+
+    // Inspect mode toggle (in Style popover)
+    var insBox = el('pc3-inspect-mode');
+    if (insBox) insBox.addEventListener('change', function () {
+        _inspectMode = !!this.checked;
+        var root = document.getElementById('pc3-root');
+        if (root) root.classList.toggle('inspect-mode', _inspectMode);
+    });
+
     // Transpose / Combined / Hide Matchups
     ['pc3-transpose', 'pc3-combined', 'pc3-hide-matchups'].forEach(function (id) {
         var e = el(id);
@@ -2896,9 +3022,27 @@ function bindAll() {
         if (zl) zl.textContent = _zoomLevel + '%';
     });
 
-    // Live mode
+    // Live mode — re-render the button label after opening so the "Live · On" pill shows
+    function refreshLiveBtn() {
+        var b = el('pc3-live-btn');
+        if (!b) return;
+        var on = !!(_liveWindow && !_liveWindow.closed);
+        b.classList.toggle('live-on', on);
+        if (on) {
+            b.innerHTML = '<span class="pc3-live-dot"></span>Live · On';
+            b.title = 'Live View is open in another window';
+        } else {
+            b.innerHTML = ICO.monitor + ' Live View';
+            b.title = 'Open Live View in a new window';
+        }
+    }
     var liveBtn = el('pc3-live-btn');
-    if (liveBtn) liveBtn.addEventListener('click', openLiveWindow);
+    if (liveBtn) liveBtn.addEventListener('click', function () {
+        if (_liveWindow && !_liveWindow.closed) { try { _liveWindow.focus(); } catch (e) {} return; }
+        openLiveWindow();
+        setTimeout(refreshLiveBtn, 200);
+    });
+    setInterval(refreshLiveBtn, 2000);
 
     // Advanced drawer design change listeners
     var drawerScroll = el('pc3-drawer-scroll');
@@ -3016,6 +3160,20 @@ window._pc3Zoom = function (delta) {
     if (pc) { pc.style.transform = 'scale(' + (_zoomLevel / 100) + ')'; pc.style.transformOrigin = 'top left'; }
     var zr = el('pc3-zoom-range'); if (zr) zr.value = _zoomLevel;
     var zl = el('pc3-zoom-label'); if (zl) zl.textContent = _zoomLevel + '%';
+    var zb = el('pc3-zoom-btn');
+    if (zb) {
+        // Update the inline zoom % in the tab-bar button label
+        zb.innerHTML = 'Zoom <span style="font-variant-numeric:tabular-nums;">' + _zoomLevel + '%</span> <span class="caret">▼</span>';
+    }
+};
+window._pc3ExportCSV = function () {
+    try {
+        var sel = (typeof getSelectedItems === 'function') ? getSelectedItems() : [];
+        if (!sel || !sel.length) { alert('Select at least one item to export.'); return; }
+        var csv = buildCSV(sel);
+        var stamp = (window.currentScheduleDate || new Date().toISOString().slice(0, 10));
+        downloadFile(csv, 'schedule-' + stamp + '.csv', 'text/csv;charset=utf-8;');
+    } catch (e) { console.error('[PrintCenter] CSV export failed', e); alert('CSV export failed: ' + e.message); }
 };
 window._pc3ToggleFullscreen = function () {
     _isFullscreen = !_isFullscreen;
