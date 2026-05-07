@@ -2446,33 +2446,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const splitHasSwim = splitSwimIs1 || splitSwimIs2;
                 const splitChangeMin = splitHasSwim ? (parseInt(item._midChangeMin) || 0) : 0;
 
-                // With swim change, the block is divided into 5 segments:
-                // [preChange][swimHalf][midChange][swimHalf][postChange]
-                // preChange: swim-first group changes IN, other group starts their activity
-                // midChange: ALL change (swim-first changes OUT, swim-second changes IN)
-                // postChange: swim-second group changes OUT, other group continues activity
-                //
-                // H = (T - 3C) / 2 where T = total block, C = change duration
-                let midMin, seg1End, seg2End, seg3End, seg4End;
-                if (splitChangeMin > 0) {
-                    const C = splitChangeMin;
-                    const H = Math.floor(((eMin - sMin) - 3 * C) / 2);
-                    if (H <= 0) {
-                        console.warn(`[SPLIT] Change time too large for block! Falling back to no-change split.`);
-                        midMin = Math.floor(sMin + (eMin - sMin) / 2);
-                        seg1End = midMin; seg2End = midMin; seg3End = midMin; seg4End = midMin;
-                    } else {
-                        seg1End = sMin + C;         // end of pre-change
-                        seg2End = seg1End + H;      // end of first swim half
-                        seg3End = seg2End + C;      // end of mid-change
-                        seg4End = seg3End + H;      // end of second swim half
-                        // seg5 = seg4End to eMin (post-change, duration = C or remainder)
-                        midMin = seg2End; // conceptual midpoint
-                    }
-                } else {
-                    midMin = Math.floor(sMin + (eMin - sMin) / 2);
-                    seg1End = sMin; seg2End = midMin; seg3End = midMin; seg4End = eMin;
-                }
+                // Split block in half. Within each group's swim half, change is carved:
+                // Swim half = [Change][Swim][Change] — sports half stays as one continuous tile.
+                // Group A (swim first): Change→Swim→Change | Sports
+                // Group B (swim second): Sports | Change→Swim→Change
+                const midMin = Math.floor(sMin + (eMin - sMin) / 2);
 
                 // Determine which activity is swim and which is the other
                 const swimActName = splitSwimIs1 ? act1Name : act2Name;
@@ -2483,23 +2461,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
                 console.log(`[SPLIT] Main 1 (act1Name): "${act1Name}"`);
                 console.log(`[SPLIT] Main 2 (act2Name): "${act2Name}"`);
-                console.log(`[SPLIT] Time block: ${sMin} to ${eMin}${splitChangeMin ? ' (change: ' + splitChangeMin + 'min)' : ''}`);
+                console.log(`[SPLIT] Time block: ${sMin} to ${eMin} (mid: ${midMin})${splitChangeMin ? ' change: ' + splitChangeMin + 'min' : ''}`);
                 console.log(`[SPLIT] Group 1 (${groupA.length} bunks): ${groupA.join(', ')}`);
                 console.log(`[SPLIT] Group 2 (${groupB.length} bunks): ${groupB.join(', ')}`);
                 console.log(`[SPLIT] ---------------------------------------------------`);
                 if (splitChangeMin > 0) {
-                    console.log(`[SPLIT] SEG1 PRE-CHANGE (${sMin}-${seg1End}): Swim-first → Change, Other → ${otherActName}`);
-                    console.log(`[SPLIT] SEG2 SWIM HALF 1 (${seg1End}-${seg2End}): Swim-first → ${swimActName}, Other → ${otherActName}`);
-                    console.log(`[SPLIT] SEG3 MID-CHANGE (${seg2End}-${seg3End}): ALL → Change`);
-                    console.log(`[SPLIT] SEG4 SWIM HALF 2 (${seg3End}-${seg4End}): Swim-first → ${otherActName}, Other → ${swimActName}`);
-                    console.log(`[SPLIT] SEG5 POST-CHANGE (${seg4End}-${eMin}): Swim-first → ${otherActName}, Other → Change`);
+                    const swimTime = Math.floor((eMin - sMin) / 2) - 2 * splitChangeMin;
+                    console.log(`[SPLIT] Swim-first group: Change(${splitChangeMin}m) → Swim(${swimTime}m) → Change(${splitChangeMin}m) | ${otherActName}`);
+                    console.log(`[SPLIT] Swim-second group: ${otherActName} | Change(${splitChangeMin}m) → Swim(${swimTime}m) → Change(${splitChangeMin}m)`);
                 } else {
-                    console.log(`[SPLIT] FIRST HALF (${sMin}-${midMin}):`);
-                    console.log(`[SPLIT]    Group 1 → ${act1Name} (main 1)`);
-                    console.log(`[SPLIT]    Group 2 → ${act2Name} (main 2)`);
-                    console.log(`[SPLIT] SECOND HALF (${midMin}-${eMin}):`);
-                    console.log(`[SPLIT]    Group 1 → ${act2Name} (main 2) ← SWITCHED`);
-                    console.log(`[SPLIT]    Group 2 → ${act1Name} (main 1) ← SWITCHED`);
+                    console.log(`[SPLIT] FIRST HALF (${sMin}-${midMin}): Group1→${act1Name}, Group2→${act2Name}`);
+                    console.log(`[SPLIT] SECOND HALF (${midMin}-${eMin}): Group1→${act2Name}, Group2→${act1Name}`);
                 }
                 console.log(`[SPLIT] ---------------------------------------------------`);
 
@@ -2571,38 +2543,56 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     });
                 };
 
-                if (splitChangeMin > 0 && seg1End > sMin) {
-                    // ★ 5-SEGMENT SWIM-SPLIT ROUTING ★
-                    // Seg 1: Pre-change — swim-first group changes IN, other group starts activity
-                    console.log(`[SPLIT] \n>>> SEG1 PRE-CHANGE (${sMin}-${seg1End}) <<<`);
-                    routeSplitActivity(swimFirstGroup, 'Change', sMin, seg1End, "SwimFirst", "pre-change");
-                    routeSplitActivity(swimSecondGroup, otherActName, sMin, seg1End, "SwimSecond", "activity-start");
+                if (splitChangeMin > 0) {
+                    // ★ SWIM-SPLIT WITH CHANGE ★
+                    // Each half = T/2. Within the swim half: [Change][Swim][Change]
+                    // Sports half stays as one continuous tile.
+                    const halfDur = midMin - sMin; // = (eMin - sMin) / 2
+                    const C = splitChangeMin;
+                    const swimDur = halfDur - 2 * C;
 
-                    // Seg 2: First swim half — swim-first does swim, other continues activity
-                    console.log(`[SPLIT] \n>>> SEG2 SWIM HALF 1 (${seg1End}-${seg2End}) <<<`);
-                    routeSplitActivity(swimFirstGroup, swimActName, seg1End, seg2End, "SwimFirst", "swim");
-                    routeSplitActivity(swimSecondGroup, otherActName, seg1End, seg2End, "SwimSecond", "activity-cont");
+                    if (swimDur <= 0) {
+                        console.warn(`[SPLIT] Change time too large (${C}*2 >= ${halfDur}). Falling back to no-change.`);
+                        routeSplitActivity(groupA, act1Name, sMin, midMin, "Group 1", "main 1");
+                        routeSplitActivity(groupB, act2Name, sMin, midMin, "Group 2", "main 2");
+                        routeSplitActivity(groupA, act2Name, midMin, eMin, "Group 1", "main 2");
+                        routeSplitActivity(groupB, act1Name, midMin, eMin, "Group 2", "main 1");
+                    } else {
+                        // FIRST HALF: swim-first gets Change→Swim→Change, swim-second gets continuous sports
+                        const h1PreEnd = sMin + C;
+                        const h1SwimEnd = h1PreEnd + swimDur;
+                        // h1PostEnd = midMin (= h1SwimEnd + C)
 
-                    // Seg 3: Mid-change — ALL bunks change (swim-first out, swim-second in)
-                    console.log(`[SPLIT] \n>>> SEG3 MID-CHANGE (${seg2End}-${seg3End}) — All bunks <<<`);
-                    routeSplitActivity(sortedBunks, 'Change', seg2End, seg3End, "All", "mid-change");
+                        console.log(`[SPLIT] \n>>> FIRST HALF (${sMin}-${midMin}) <<<`);
+                        console.log(`[SPLIT] Swim-first: Change(${sMin}-${h1PreEnd}) → Swim(${h1PreEnd}-${h1SwimEnd}) → Change(${h1SwimEnd}-${midMin})`);
+                        console.log(`[SPLIT] Swim-second: ${otherActName}(${sMin}-${midMin})`);
 
-                    // Seg 4: Second swim half — swim-second does swim, first does activity
-                    console.log(`[SPLIT] \n>>> SEG4 SWIM HALF 2 (${seg3End}-${seg4End}) <<<`);
-                    routeSplitActivity(swimFirstGroup, otherActName, seg3End, seg4End, "SwimFirst", "activity-start");
-                    routeSplitActivity(swimSecondGroup, swimActName, seg3End, seg4End, "SwimSecond", "swim");
+                        routeSplitActivity(swimFirstGroup, 'Change', sMin, h1PreEnd, "SwimFirst", "pre-change");
+                        routeSplitActivity(swimFirstGroup, swimActName, h1PreEnd, h1SwimEnd, "SwimFirst", "swim");
+                        routeSplitActivity(swimFirstGroup, 'Change', h1SwimEnd, midMin, "SwimFirst", "post-change");
+                        routeSplitActivity(swimSecondGroup, otherActName, sMin, midMin, "SwimSecond", "activity");
 
-                    // Seg 5: Post-change — swim-second changes OUT, first continues activity
-                    console.log(`[SPLIT] \n>>> SEG5 POST-CHANGE (${seg4End}-${eMin}) <<<`);
-                    routeSplitActivity(swimFirstGroup, otherActName, seg4End, eMin, "SwimFirst", "activity-cont");
-                    routeSplitActivity(swimSecondGroup, 'Change', seg4End, eMin, "SwimSecond", "post-change");
+                        // SECOND HALF: swim-second gets Change→Swim→Change, swim-first gets continuous sports
+                        const h2PreEnd = midMin + C;
+                        const h2SwimEnd = h2PreEnd + swimDur;
+                        // h2PostEnd = eMin (= h2SwimEnd + C)
+
+                        console.log(`[SPLIT] \n>>> SECOND HALF (${midMin}-${eMin}) <<<`);
+                        console.log(`[SPLIT] Swim-first: ${otherActName}(${midMin}-${eMin})`);
+                        console.log(`[SPLIT] Swim-second: Change(${midMin}-${h2PreEnd}) → Swim(${h2PreEnd}-${h2SwimEnd}) → Change(${h2SwimEnd}-${eMin})`);
+
+                        routeSplitActivity(swimFirstGroup, otherActName, midMin, eMin, "SwimFirst", "activity");
+                        routeSplitActivity(swimSecondGroup, 'Change', midMin, h2PreEnd, "SwimSecond", "pre-change");
+                        routeSplitActivity(swimSecondGroup, swimActName, h2PreEnd, h2SwimEnd, "SwimSecond", "swim");
+                        routeSplitActivity(swimSecondGroup, 'Change', h2SwimEnd, eMin, "SwimSecond", "post-change");
+                    }
                 } else {
                     // Standard no-change split: two halves, groups swap
-                    console.log(`[SPLIT] \n>>> EXECUTING FIRST HALF (${sMin}-${midMin}) <<<`);
+                    console.log(`[SPLIT] \n>>> FIRST HALF (${sMin}-${midMin}) <<<`);
                     routeSplitActivity(groupA, act1Name, sMin, midMin, "Group 1", "main 1");
                     routeSplitActivity(groupB, act2Name, sMin, midMin, "Group 2", "main 2");
 
-                    console.log(`[SPLIT] \n>>> EXECUTING SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
+                    console.log(`[SPLIT] \n>>> SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
                     routeSplitActivity(groupA, act2Name, midMin, eMin, "Group 1", "main 2");
                     routeSplitActivity(groupB, act1Name, midMin, eMin, "Group 2", "main 1");
                 }
