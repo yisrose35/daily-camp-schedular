@@ -2410,8 +2410,14 @@ divBlocks.forEach((block, blockIdx) => {
             const acts = block.electiveActivities || [];
             const swimLoc = block.swimLocation || 'Pool';
             const label = swimLoc + ' + ' + (acts.join(', ') || 'Electives');
-            td.style.cssText = 'padding: 10px 16px; background: linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%); border-left: 4px solid #7c3aed; vertical-align: middle; text-align: center;';
-            td.innerHTML = `<span style="font-weight:600;color:#155e75;font-size:0.95rem;">${escapeHtml(label)}</span>`;
+            const pre = parseInt(block._preChangeMin) || 0;
+            const post = parseInt(block._postChangeMin) || 0;
+            td.style.cssText = 'padding: 0; vertical-align: middle; text-align: center;';
+            let inner = '';
+            if (pre > 0) inner += `<div style="background:#FEF3C7;color:#92400E;padding:4px 12px;font-size:11px;font-weight:600;border-bottom:1px solid #F59E0B;">Change ${pre}m</div>`;
+            inner += `<div style="background:linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%);border-left: 4px solid #7c3aed;padding:10px 16px;"><span style="font-weight:600;color:#155e75;font-size:0.95rem;">${escapeHtml(label)}</span></div>`;
+            if (post > 0) inner += `<div style="background:#FEF3C7;color:#92400E;padding:4px 12px;font-size:11px;font-weight:600;border-top:1px solid #F59E0B;">Change ${post}m</div>`;
+            td.innerHTML = inner;
         } else if (block.type === 'elective') {
             const acts = block.electiveActivities || block.reservedFields || [];
             const label = acts.join(', ') || block.event || 'Elective';
@@ -2447,8 +2453,19 @@ divBlocks.forEach((block, blockIdx) => {
             const acts = block.electiveActivities || [];
             const swimLoc = block.swimLocation || 'Pool';
             const label = swimLoc + ' + ' + (acts.join(', ') || 'Electives');
-            htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#155e75;">${escapeHtml(label)}</div>`;
-            bgColor = 'linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%)';
+            const pre = parseInt(block._preChangeMin) || 0;
+            const post = parseInt(block._postChangeMin) || 0;
+            if (pre > 0 || post > 0) {
+                let inner = '';
+                if (pre > 0) inner += `<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;font-size:10px;font-weight:600;border-bottom:1px solid #F59E0B;">Change ${pre}m</div>`;
+                inner += `<div style="background:linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%);padding:6px;font-size:0.85rem;font-weight:600;color:#155e75;">${escapeHtml(label)}</div>`;
+                if (post > 0) inner += `<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;font-size:10px;font-weight:600;border-top:1px solid #F59E0B;">Change ${post}m</div>`;
+                htmlContent = inner;
+                bgColor = 'transparent';
+            } else {
+                htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#155e75;">${escapeHtml(label)}</div>`;
+                bgColor = 'linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%)';
+            }
         } else if (block.type === 'elective') {
             const acts = block.electiveActivities || block.reservedFields || [];
             const displayName = acts.join(', ') || block.event || 'Elective';

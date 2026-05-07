@@ -2241,6 +2241,39 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // STEP 2.5: Process Elective Tiles
         // =========================================================================
 
+        // ★ Cleanup: drop orphan _swimChange tiles whose adjacent Swim has been
+        //   removed (e.g. user merged Swim + Elective into a hybrid, or moved the swim).
+        //   A _swimChange tile is orphan if no swim/swim_elective in the same division
+        //   touches it (pre = ends at swim's start, post = starts at swim's end).
+        const _origLen = manualSkeleton.length;
+        manualSkeleton = manualSkeleton.filter(item => {
+            if (!item || !item._swimChange) return true;
+            const itemStart = Utils.parseTimeToMinutes(item.startTime);
+            const itemEnd = Utils.parseTimeToMinutes(item.endTime);
+            if (itemStart === null || itemEnd === null) return true;
+            const hasMate = manualSkeleton.some(other => {
+                if (!other || other === item) return false;
+                if (other.division !== item.division) return false;
+                const otherIsSwim = (other.type === 'pinned' && /^swim$/i.test(other.event || '')) ||
+                                    other.type === 'swim_elective';
+                if (!otherIsSwim) return false;
+                const otherStart = Utils.parseTimeToMinutes(other.startTime);
+                const otherEnd = Utils.parseTimeToMinutes(other.endTime);
+                if (otherStart === null || otherEnd === null) return false;
+                if (item._swimChange === 'pre' && Math.abs(itemEnd - otherStart) <= 30) return true;
+                if (item._swimChange === 'post' && Math.abs(itemStart - otherEnd) <= 30) return true;
+                return false;
+            });
+            if (!hasMate) {
+                console.log(`[CLEANUP] Removing orphan _swimChange tile: ${item.event} ${item.startTime}-${item.endTime} (${item.division})`);
+                return false;
+            }
+            return true;
+        });
+        if (manualSkeleton.length !== _origLen) {
+            console.log(`[CLEANUP] Removed ${_origLen - manualSkeleton.length} orphan Change tile(s)`);
+        }
+
         console.log("\n[STEP 2.5] Processing elective tiles (incl. swim+elective hybrids)...");
         // ★ Hybrid 'swim_elective' tiles are processed alongside electives:
         //   they reserve the pool AND the elective activities.
@@ -2363,13 +2396,18 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const eventName = item.event || item.type || 'Pinned Event';
 
                     // ★ Hybrid extras stamped onto each bunk's entry so renderers can
-                    //   show the combined "Pool + Activities" label.
+                    //   show the combined "Pool + Activities" label and Change subdivision.
+                    //   _splitPreChange/_splitPostChange use the same metadata as split-swim
+                    //   so the existing print-center / unified renderers already know how
+                    //   to draw Change → Hybrid → Change strips.
                     const hybridExtras = isHybridSE ? {
                         _swimElective: true,
                         _swimLocation: item.swimLocation,
                         _electiveActivities: item.electiveActivities || [],
                         _preChangeMin: item._preChangeMin,
-                        _postChangeMin: item._postChangeMin
+                        _postChangeMin: item._postChangeMin,
+                        _splitPreChange: parseInt(item._preChangeMin) || 0,
+                        _splitPostChange: parseInt(item._postChangeMin) || 0
                     } : null;
 
                     bunkList.forEach(bunk => {
