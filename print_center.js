@@ -256,6 +256,12 @@ function formatEntry(entry) {
     if (!entry) return '';
     if (entry.continuation) return '';
     if (entry._isTransition) return entry.sport || 'Transition';
+    // ★ Swim + Elective hybrid: show pool + activities on one line
+    if (entry._swimElective) {
+        var seActs = entry._electiveActivities || [];
+        var sePool = entry._swimLocation || 'Pool';
+        return seActs.length ? (sePool + ' + ' + seActs.join(', ')) : (sePool + ' + Electives');
+    }
     var parts = [];
     var act = entry._activity || entry.sport || '';
     var field = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
@@ -1042,7 +1048,7 @@ function renderAutoDivisionTable(divName, bunks) {
     // The bell schedule defines layer windows — each layer has a type, startMin, endMin.
     // Variable layers (sport, special, activity, elective) = the "Periods" where bunks
     // have different activities. Pinned layers (swim, lunch, custom, etc.) are NOT periods.
-    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1, 'smart': 1, 'split': 1, 'league': 1, 'specialty_league': 1 };
+    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1, 'swim_elective': 1, 'smart': 1, 'split': 1, 'league': 1, 'specialty_league': 1 };
     var activityRanges = []; // [ { startMin, endMin } ]
 
     // Method 1: Read from DAW layer templates (bell schedule) — authoritative
@@ -1547,7 +1553,7 @@ function matchesLocation(entry, loc) {
 // ── COMBINED AUTO TABLE: all bunks from all divisions in one grid ──
 function renderCombinedAutoTable(divBunks) {
     var inc = _timeIncrement;
-    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1, 'smart': 1, 'split': 1, 'league': 1, 'specialty_league': 1 };
+    var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1, 'swim_elective': 1, 'smart': 1, 'split': 1, 'league': 1, 'specialty_league': 1 };
 
     // Build unified bunkActs and day range from all bunks
     var bunkActs = {};

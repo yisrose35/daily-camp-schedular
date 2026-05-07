@@ -301,6 +301,9 @@ if (hasBunkSpecificBlocks) {
             electiveActivities: meta?.electiveActivities,
             reservedFields: meta?.reservedFields,
             location: meta?.location,
+            swimLocation: meta?.swimLocation,
+            _preChangeMin: meta?._preChangeMin,
+            _postChangeMin: meta?._postChangeMin,
             start: minutesToDate(s),
             end: minutesToDate(e)
         });
@@ -364,6 +367,9 @@ if (hasBunkSpecificBlocks) {
         electiveActivities: block.electiveActivities,
         reservedFields: block.reservedFields,
         location: block.location,
+        swimLocation: block.swimLocation,
+        _preChangeMin: block._preChangeMin,
+        _postChangeMin: block._postChangeMin,
         start: minutesToDate(block.startMin),
         end: minutesToDate(block.endMin)
     }));

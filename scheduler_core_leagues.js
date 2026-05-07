@@ -162,11 +162,12 @@
         console.log(`[RegularLeagues] Found ${futureDates.length} future date(s) to check: ${futureDates.join(', ')}`);
         
         let updatedAny = false;
-        
+        const modifiedDates = new Set(); // ★ Track which dates actually changed
+
         for (const futureDate of futureDates) {
             const dayData = allDailyData[futureDate];
             if (!dayData) continue;
-            
+
             const assignments = dayData.scheduleAssignments || {};
             const leagueAssignments = dayData.leagueAssignments || {};
             let dayUpdated = false;
@@ -317,27 +318,25 @@
                 allDailyData[futureDate].scheduleAssignments = assignments;
                 allDailyData[futureDate].leagueAssignments = leagueAssignments;
                 updatedAny = true;
+                modifiedDates.add(futureDate); // ★ Only track actually-changed dates
                 console.log(`[RegularLeagues] ✅ Updated schedule for ${futureDate}`);
             }
         }
-        
+
         // Save all updated daily data
         if (updatedAny) {
             try {
                 const DAILY_DATA_KEY = "campDailyData_v1";
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDailyData));
-                
-                // Also sync to cloud
-                if (typeof window.saveGlobalSettings === 'function') {
-                    // ★★★ FIX: Cloud-sync EACH modified future date individually ★★★
-for (const futureDate of Object.keys(allDailyData)) {
-    if (futureDate.match(/^\d{4}-\d{2}-\d{2}$/) && allDailyData[futureDate]?.scheduleAssignments) {
-        window.ScheduleDB?.saveSchedule?.(futureDate, allDailyData[futureDate], { skipFilter: true });
-    }
-}
+
+                // ★★★ FIX: Cloud-sync ONLY the dates that actually changed ★★★
+                for (const changedDate of modifiedDates) {
+                    if (allDailyData[changedDate]?.scheduleAssignments) {
+                        window.ScheduleDB?.saveSchedule?.(changedDate, allDailyData[changedDate], { skipFilter: true });
+                    }
                 }
-                
-                console.log(`[RegularLeagues] ✅ Saved updated future schedules to storage`);
+
+                console.log(`[RegularLeagues] ✅ Saved ${modifiedDates.size} updated future schedule(s) to storage`);
             } catch (e) {
                 console.error("[RegularLeagues] Failed to save updated future schedules:", e);
             }

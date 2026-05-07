@@ -1129,8 +1129,9 @@
         const rotRefresh = document.getElementById('rotation-refresh-btn');
         if (rotRefresh) rotRefresh.onclick = () => {
             loadMasterData();
+            if (window.RotationCloud?.invalidateCache) window.RotationCloud.invalidateCache();
             const cur = divSelect.value;
-            if (cur) renderRotationTable(cur);
+            if (cur) renderRotationTable(cur, true); // ★ force cloud refresh
         };
     }
 
@@ -1142,7 +1143,7 @@
         (divisionsDat[divName]?.bunks || []).forEach(b => { sel.innerHTML += `<option value="${b}">${b}</option>`; });
     }
 
-    function renderRotationTable(divName) {
+    function renderRotationTable(divName, forceRefresh) {
         const cont = document.getElementById('rotation-table-container');
         if (!divName) {
             cont.innerHTML = `<div style="padding:30px;text-align:center;color:#6b7280;background:#f9fafb;border-radius:12px;border:1px dashed #d1d5db;">
@@ -1153,7 +1154,7 @@
 
         // Try cloud-first: if RotationCloud is available, load from Supabase
         if (window.RotationCloud?.load) {
-            window.RotationCloud.load().then(function(cloudData) {
+            window.RotationCloud.load(!!forceRefresh).then(function(cloudData) {
                 _renderRotationTableWithData(divName, cloudData);
             }).catch(function() {
                 _renderRotationTableWithData(divName, null);
@@ -1204,18 +1205,33 @@
         const lastDone   = {};
         const usedActivityNames = new Set();
 
-        // Step 1: Seed counts — prefer cloud data, fall back to historicalCounts
-        if (cloudData && cloudData.counts && Object.keys(cloudData.counts).length) {
+        // Step 1: Seed counts from cloud or localStorage.
+        //   When cloud data is available we use cloud counts for ALL historical
+        //   dates EXCEPT today — today always comes from the live schedule so
+        //   post-save edits are reflected immediately and double-counting is
+        //   impossible (even on a fresh browser where historicalCountedDates
+        //   is empty but the cloud already has today's saved data).
+        const hasCloud = cloudData && cloudData.counts && Object.keys(cloudData.counts).length;
+        const cloudToday = (hasCloud && liveDate && cloudData.countsByDate)
+            ? (cloudData.countsByDate[liveDate] || {})
+            : {};
+
+        if (hasCloud) {
             bunks.forEach(bunk => {
                 const cBunk = cloudData.counts[bunk] || {};
+                const todayBunk = cloudToday[bunk] || {};
                 Object.keys(cBunk).forEach(act => {
                     if (!cBunk[act]) return;
-                    liveCounts[bunk] = liveCounts[bunk] || {};
-                    liveCounts[bunk][act] = cBunk[act];
+                    // Subtract today's cloud contribution — we add the live schedule below
+                    const historical = cBunk[act] - (todayBunk[act] || 0);
+                    if (historical > 0) {
+                        liveCounts[bunk] = liveCounts[bunk] || {};
+                        liveCounts[bunk][act] = historical;
+                    }
                     usedActivityNames.add(act);
                 });
             });
-            // Seed lastDone from cloud
+            // Seed lastDone from cloud (excluding today — Step 3 will pick it up from live)
             if (cloudData.lastDone) {
                 bunks.forEach(bunk => {
                     const cLD = cloudData.lastDone[bunk] || {};
@@ -1228,6 +1244,7 @@
                 });
             }
         } else {
+            // Fallback: no cloud → use localStorage historicalCounts
             bunks.forEach(bunk => {
                 const hBunk = hCounts[bunk] || {};
                 Object.keys(hBunk).forEach(act => {
@@ -1239,23 +1256,26 @@
             });
         }
 
-        // Step 2: Scan current day's live schedule for unsaved changes.
-        // If today hasn't been counted yet in historicalCounts, add its
-        // activities on top. If it has been counted, the counts are already
-        // included via historicalCounts above.
+        // Step 2: ALWAYS add today's live schedule.
+        //   When cloud was used above, today's cloud contribution was already
+        //   subtracted, so adding the live schedule here replaces it with the
+        //   most current data (captures post-save edits).
+        //   When falling back to localStorage, we still only add today if it
+        //   hasn't been counted into historicalCounts yet.
         const todaySched = (liveDate && window.scheduleAssignments &&
             Object.keys(window.scheduleAssignments).length)
             ? window.scheduleAssignments
             : (allDaily[liveDate]?.scheduleAssignments || {});
         const todayCounted = !!(liveDate && countedDates[liveDate]);
+        const shouldAddToday = hasCloud ? !!liveDate : (!todayCounted && !!liveDate);
 
-        if (!todayCounted && liveDate) {
+        if (shouldAddToday) {
             bunks.forEach(bunk => {
                 (todaySched[bunk] || []).forEach(entry => {
                     if (!entry || entry.continuation || entry._isTransition) return;
-                    let rawAct = entry._activity || entry.activity || entry.sport || '';
-                    if (typeof rawAct === 'string' && rawAct.trim() && entry.sport &&
-                        rawAct !== entry.sport && !masterNames.has(rawAct.trim()) && masterNames.has(entry.sport)) {
+                    let rawAct = entry._activity || entry.sport || '';
+                    if (!rawAct) return;
+                    if (!masterNames.has(rawAct) && entry.sport && masterNames.has(entry.sport)) {
                         rawAct = entry.sport;
                     }
                     const act = (typeof rawAct === 'string' ? rawAct : '').trim();
@@ -1277,9 +1297,9 @@
                 bunks.forEach(bunk => {
                     (sched[bunk] || []).forEach(entry => {
                         if (!entry || entry.continuation || entry._isTransition) return;
-                        let rawAct = entry._activity || entry.activity || entry.sport || '';
-                        if (typeof rawAct === 'string' && rawAct.trim() && entry.sport &&
-                            rawAct !== entry.sport && !masterNames.has(rawAct.trim()) && masterNames.has(entry.sport)) {
+                        let rawAct = entry._activity || entry.sport || '';
+                        if (!rawAct) return;
+                        if (!masterNames.has(rawAct) && entry.sport && masterNames.has(entry.sport)) {
                             rawAct = entry.sport;
                         }
                         const act = (typeof rawAct === 'string' ? rawAct : '').trim();

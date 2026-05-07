@@ -2241,27 +2241,35 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // STEP 2.5: Process Elective Tiles
         // =========================================================================
 
-        console.log("\n[STEP 2.5] Processing elective tiles...");
-        const electiveTiles = manualSkeleton.filter(item => item.type === 'elective');
+        console.log("\n[STEP 2.5] Processing elective tiles (incl. swim+elective hybrids)...");
+        // ★ Hybrid 'swim_elective' tiles are processed alongside electives:
+        //   they reserve the pool AND the elective activities.
+        const electiveTiles = manualSkeleton.filter(item =>
+            item.type === 'elective' || item.type === 'swim_elective'
+        );
 
         electiveTiles.forEach(elective => {
             const electiveDivision = elective.division;
-            
+
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(electiveDivision))) {
                 return;
             }
-            
-            const activities = elective.electiveActivities || [];
+
+            // For hybrid tiles, fold the swim location into the activity list so
+            // it gets locked too (acts like swim).
+            const baseActivities = elective.electiveActivities || [];
+            const hybridSwimLoc = (elective.type === 'swim_elective' && elective.swimLocation) ? [elective.swimLocation] : [];
+            const activities = Array.from(new Set([...baseActivities, ...hybridSwimLoc]));
             const startMin = Utils.parseTimeToMinutes(elective.startTime);
             const endMin = Utils.parseTimeToMinutes(elective.endTime);
             const slots = Utils.findSlotsForRange(startMin, endMin, electiveDivision);
 
             if (activities.length === 0 || slots.length === 0) {
-                console.warn(`[Elective] Skipping elective for ${electiveDivision} - no activities or slots`);
+                console.warn(`[Elective] Skipping ${elective.type} for ${electiveDivision} - no activities or slots`);
                 return;
             }
 
-            console.log(`[Elective] ${electiveDivision}: Reserving ${activities.join(', ')} @ ${elective.startTime}-${elective.endTime}`);
+            console.log(`[${elective.type === 'swim_elective' ? 'Swim+Elective' : 'Elective'}] ${electiveDivision}: Reserving ${activities.join(', ')} @ ${elective.startTime}-${elective.endTime}`);
 
             activities.forEach(activityName => {
                 let resolvedName = activityName;
@@ -2336,20 +2344,34 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const eMin = Utils.parseTimeToMinutes(item.endTime);
 
             // ★★★ v17.5 FIX: Process PINNED events FIRST (before overlap check) ★★★
-            const isPinnedType = item.type === 'pinned' || 
+            // ★ Hybrid swim_elective is treated like a pinned fill (every bunk gets
+            //   the same "Swim + Elective" entry so per-bunk views show the option).
+            const isHybridSE = item.type === 'swim_elective';
+            const isPinnedType = isHybridSE ||
+                                 item.type === 'pinned' ||
                                  item.pinned === true ||
                                  ['lunch', 'snacks', 'dismissal', 'regroup', 'swim'].some(
                                      pt => (item.type || '').toLowerCase() === pt ||
                                            (item.event || '').toLowerCase().includes(pt)
                                  );
-            
+
             if (isPinnedType && item.type !== 'split' && item.type !== 'smart') {
                 // ★★★ v17.9 FIX: Use exact slot matching for pinned events too ★★★
                 const exactSlot = findExactSlotForTimeRange(divName, sMin, eMin);
                 const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
                 if (slots.length > 0) {
                     const eventName = item.event || item.type || 'Pinned Event';
-                    
+
+                    // ★ Hybrid extras stamped onto each bunk's entry so renderers can
+                    //   show the combined "🏊 Pool + 🎯 Activities" label.
+                    const hybridExtras = isHybridSE ? {
+                        _swimElective: true,
+                        _swimLocation: item.swimLocation,
+                        _electiveActivities: item.electiveActivities || [],
+                        _preChangeMin: item._preChangeMin,
+                        _postChangeMin: item._postChangeMin
+                    } : null;
+
                     bunkList.forEach(bunk => {
                         const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                         if (existing && existing._bunkOverride) return;
@@ -2367,7 +2389,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             _pinned: true,
                             _activity: eventName
                         }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                        
+
+                        // Stamp hybrid metadata onto the freshly-written assignment so
+                        // renderers can show the combined Swim + Elective label.
+                        if (hybridExtras) {
+                            const a = window.scheduleAssignments?.[bunk]?.[slots[0]];
+                            if (a) Object.assign(a, hybridExtras);
+                        }
+
                         pinnedEventCount++;
                     });
                     

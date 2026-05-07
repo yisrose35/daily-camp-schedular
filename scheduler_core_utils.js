@@ -2508,6 +2508,20 @@ const validActivities = Utils.getValidActivityNames();
             });
             window.saveRotationHistory?.(_rotHist);
         } catch (e) { console.error('[PostEditCounts] rotationHistory rebuild failed:', e); }
+
+        // ── Sync rotation counts to cloud (debounced) ────────────────
+        //    Multiple bunks may be edited in quick succession (proposals,
+        //    conflict resolution).  Debounce so only one cloud save fires.
+        clearTimeout(Utils._postEditCloudTimer);
+        Utils._postEditCloudTimer = setTimeout(() => {
+            try {
+                const _dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                if (_dateKey && window.RotationCloud?.save) {
+                    window.RotationCloud.save(_dateKey, window.scheduleAssignments || {});
+                    console.log('[PostEditCounts] ☁️ Synced rotation counts to cloud');
+                }
+            } catch (e) { console.error('[PostEditCounts] RotationCloud sync failed:', e); }
+        }, 500);
     };
     window.applyPostEditCounts = Utils.applyPostEditCounts;
 

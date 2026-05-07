@@ -846,9 +846,15 @@ all[date].updated_at = new Date().toISOString();
             
             // Clear from window globals
             clearMyBunksFromGlobals();
-            
+
             // Reload remaining data from other schedulers
             await reloadRemainingData(dateKey);
+
+            // ★ Re-save rotation counts from the remaining schedule
+            //   (other schedulers' bunks are still present)
+            if (window.RotationCloud?.save) {
+                window.RotationCloud.save(dateKey, window.scheduleAssignments || {});
+            }
         }
         // ═══════════════════════════════════════════════════════════════
         // OWNER/ADMIN: Delete everything
@@ -895,6 +901,11 @@ all[date].updated_at = new Date().toISOString();
             // Clear ALL window globals
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
+
+            // ★ Delete this date's rotation counts from cloud
+            if (window.RotationCloud?.deleteDate) {
+                window.RotationCloud.deleteDate(dateKey);
+            }
         }
         // ═══════════════════════════════════════════════════════════════
         // VIEWER: No permission
@@ -909,6 +920,14 @@ all[date].updated_at = new Date().toISOString();
         // ═══════════════════════════════════════════════════════════════
         window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
         window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
+
+        // ═══════════════════════════════════════════════════════════════
+        // REBUILD ROTATION COUNTS after delete
+        // ═══════════════════════════════════════════════════════════════
+        if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+            window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+            console.log('🗑️ Rebuilt historicalCounts after date deletion');
+        }
 
         // ═══════════════════════════════════════════════════════════════
         // REFRESH UI

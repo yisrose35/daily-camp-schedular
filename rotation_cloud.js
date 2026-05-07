@@ -54,7 +54,7 @@
         Object.keys(sched).forEach(function(bunk) {
             (sched[bunk] || []).forEach(function(entry) {
                 if (!entry || entry.continuation || entry._isTransition) return;
-                var actName = entry._activity || entry.activityName || entry.sport || '';
+                var actName = entry._activity || entry.sport || '';
                 if (!actName) return;
                 if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {
                     actName = entry.sport;
@@ -138,6 +138,7 @@
 
                 var counts = {};
                 var lastDone = {};
+                var countsByDate = {}; // ★ Per-date breakdown for smart merging
                 (result.data || []).forEach(function(row) {
                     counts[row.bunk] = counts[row.bunk] || {};
                     counts[row.bunk][row.activity] = (counts[row.bunk][row.activity] || 0) + row.count;
@@ -147,9 +148,15 @@
                     if (!lastDone[row.bunk][row.activity] || dateStr > lastDone[row.bunk][row.activity]) {
                         lastDone[row.bunk][row.activity] = dateStr;
                     }
+
+                    // ★ Track per-date counts so consumers can exclude/replace a specific date
+                    if (!countsByDate[dateStr]) countsByDate[dateStr] = {};
+                    if (!countsByDate[dateStr][row.bunk]) countsByDate[dateStr][row.bunk] = {};
+                    countsByDate[dateStr][row.bunk][row.activity] =
+                        (countsByDate[dateStr][row.bunk][row.activity] || 0) + row.count;
                 });
 
-                _cache = { counts: counts, lastDone: lastDone };
+                _cache = { counts: counts, lastDone: lastDone, countsByDate: countsByDate };
                 _cacheTime = Date.now();
                 console.log('[RotationCloud] Loaded rotation data:', (result.data || []).length, 'rows');
                 return _cache;

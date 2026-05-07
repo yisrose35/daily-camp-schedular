@@ -840,6 +840,12 @@ function shouldHighlightBunk(bunkName) {
         if (entry._isDismissal) return 'Dismissal';
         if (entry._isSnack) return 'Snacks';
         if (entry._isTransition || entry.continuation) return '';
+        // ★ Swim + Elective hybrid: show pool + activities
+        if (entry._swimElective) {
+            const acts = entry._electiveActivities || [];
+            const pool = entry._swimLocation || 'Pool';
+            return acts.length ? (pool + ' + ' + acts.join(', ')) : (pool + ' + Electives');
+        }
         const activity = entry._activity || '';
         const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
@@ -2140,7 +2146,10 @@ const isAutoSchedule = currentBuilderMode === 'auto';
                 _isSplitTile: !!slot._splitHalf,
                 electiveActivities: slot.electiveActivities,
                 reservedFields: slot.reservedFields,
-                location: slot.location
+                location: slot.location,
+                swimLocation: slot.swimLocation,
+                _preChangeMin: slot._preChangeMin,
+                _postChangeMin: slot._postChangeMin
             }));
             // Enrich from skeleton for elective/pinned blocks that may be missing data (cached divisionTimes)
             divBlocks.forEach(block => {
@@ -2264,7 +2273,7 @@ divBlocks.forEach((block, blockIdx) => {
         return;
     }
 
-    if (block.type === 'elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
+    if (block.type === 'elective' || block.type === 'swim_elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
         tr.appendChild(renderFixedBlockCell(block, bunks));
         tbody.appendChild(tr);
         return;
@@ -2397,7 +2406,13 @@ divBlocks.forEach((block, blockIdx) => {
     function renderFixedBlockCell(block, bunks) {
         const td = document.createElement('td');
         td.colSpan = bunks.length;
-        if (block.type === 'elective') {
+        if (block.type === 'swim_elective') {
+            const acts = block.electiveActivities || [];
+            const swimLoc = block.swimLocation || 'Pool';
+            const label = '🏊 ' + swimLoc + ' + 🎯 ' + (acts.join(', ') || 'Electives');
+            td.style.cssText = 'padding: 10px 16px; background: linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%); border-left: 4px solid #7c3aed; vertical-align: middle; text-align: center;';
+            td.innerHTML = `<span style="font-weight:600;color:#155e75;font-size:0.95rem;">${escapeHtml(label)}</span>`;
+        } else if (block.type === 'elective') {
             const acts = block.electiveActivities || block.reservedFields || [];
             const label = acts.join(', ') || block.event || 'Elective';
             td.style.cssText = 'padding: 10px 16px; background: linear-gradient(135deg, #ede9fe, #ddd6fe); border-left: 4px solid #7c3aed; vertical-align: middle; text-align: center;';
@@ -2428,7 +2443,13 @@ divBlocks.forEach((block, blockIdx) => {
         let displayText = '', bgColor = '#fff', htmlContent = null;
 
         // Elective and pinned (custom) blocks always show their own skeleton data
-        if (block.type === 'elective') {
+        if (block.type === 'swim_elective') {
+            const acts = block.electiveActivities || [];
+            const swimLoc = block.swimLocation || 'Pool';
+            const label = '🏊 ' + swimLoc + ' + 🎯 ' + (acts.join(', ') || 'Electives');
+            htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#155e75;">${escapeHtml(label)}</div>`;
+            bgColor = 'linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%)';
+        } else if (block.type === 'elective') {
             const acts = block.electiveActivities || block.reservedFields || [];
             const displayName = acts.join(', ') || block.event || 'Elective';
             htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#5b21b6;">${escapeHtml(displayName)}</div>`;
