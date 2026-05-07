@@ -202,6 +202,40 @@
                         timestamp: Date.now()
                     };
                 }
+                // Lock-table scan — catches league locks etc. that aren't in scheduleAssignments
+                const exclusives = (window.FieldCombos.getExclusiveFields ? window.FieldCombos.getExclusiveFields(fieldName) : []) || [];
+                if (exclusives.length) {
+                    const exSet = new Set(exclusives.map(function (f) { return String(f).toLowerCase().trim(); }));
+                    for (const slotIdx in this._locks) {
+                        const slotLocks = this._locks[slotIdx];
+                        for (const lockedFieldKey in slotLocks) {
+                            if (!exSet.has(lockedFieldKey)) continue;
+                            const lock = slotLocks[lockedFieldKey];
+                            if (lock.lockType === 'division' && lock.allowedDivision &&
+                                divisionContext && divisionContext === lock.allowedDivision) continue;
+                            let lStart = lock.startMin, lEnd = lock.endMin;
+                            if (lStart == null || lEnd == null) {
+                                const lockDiv = lock.division || lock.allowedDivision;
+                                if (lockDiv) {
+                                    const firstDiv = String(lockDiv).split(',')[0].trim();
+                                    const dts = window.divisionTimes?.[firstDiv] || [];
+                                    const slot = dts[parseInt(slotIdx, 10)];
+                                    if (slot) { lStart = slot.startMin; lEnd = slot.endMin; }
+                                }
+                            }
+                            if (lStart == null || lEnd == null) continue;
+                            if (lStart < cEndMin && lEnd > cStartMin) {
+                                return {
+                                    lockedBy: 'combined_field_lock', lockType: 'global', fieldName: fieldName,
+                                    blockedBy: lock.fieldName || lockedFieldKey,
+                                    leagueName: lock.leagueName || lock.activity,
+                                    reason: '"' + fieldName + '" blocked because "' + (lock.fieldName || lockedFieldKey) + '" is locked (combined field)',
+                                    timestamp: Date.now()
+                                };
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -279,6 +313,7 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
 
    // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
     if (window.FieldCombos?.isInCombo?.(fieldName)) {
+        // (a) Per-bunk scan (existing): checks scheduleAssignments
         const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, queryStartMin, queryEndMin, null);
         if (comboCheck.blocked) {
             return {
@@ -287,6 +322,45 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
                 reason: '"' + fieldName + '" blocked because "' + comboCheck.blocker + '" is in use (combined field)',
                 timestamp: Date.now()
             };
+        }
+        // (b) Lock-table scan (new): catches combo conflicts that live in
+        // _locks but NOT in scheduleAssignments — e.g. leagues that lock
+        // "Full Gym" but write team matchups to leagueAssignments instead
+        // of per-bunk slots, so the (a) scan can't see them.
+        const exclusives = (window.FieldCombos.getExclusiveFields ? window.FieldCombos.getExclusiveFields(fieldName) : []) || [];
+        if (exclusives.length) {
+            const exSet = new Set(exclusives.map(function (f) { return String(f).toLowerCase().trim(); }));
+            for (const slotIdx in this._locks) {
+                const slotLocks = this._locks[slotIdx];
+                for (const lockedFieldKey in slotLocks) {
+                    if (!exSet.has(lockedFieldKey)) continue;
+                    const lock = slotLocks[lockedFieldKey];
+                    // Skip division locks the caller is allowed for
+                    if (lock.lockType === 'division' && lock.allowedDivision &&
+                        divisionContext && divisionContext === lock.allowedDivision) continue;
+                    // Resolve lock time range
+                    let lStart = lock.startMin, lEnd = lock.endMin;
+                    if (lStart == null || lEnd == null) {
+                        const lockDiv = lock.division || lock.allowedDivision;
+                        if (lockDiv) {
+                            const firstDiv = String(lockDiv).split(',')[0].trim();
+                            const dts = window.divisionTimes?.[firstDiv] || [];
+                            const slot = dts[parseInt(slotIdx, 10)];
+                            if (slot) { lStart = slot.startMin; lEnd = slot.endMin; }
+                        }
+                    }
+                    if (lStart == null || lEnd == null) continue;
+                    if (lStart < queryEndMin && lEnd > queryStartMin) {
+                        return {
+                            lockedBy: 'combined_field_lock', lockType: 'global', fieldName: fieldName,
+                            blockedBy: lock.fieldName || lockedFieldKey,
+                            leagueName: lock.leagueName || lock.activity,
+                            reason: '"' + fieldName + '" blocked because "' + (lock.fieldName || lockedFieldKey) + '" is locked (combined field)',
+                            timestamp: Date.now()
+                        };
+                    }
+                }
+            }
         }
     }
 
