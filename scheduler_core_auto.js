@@ -3496,7 +3496,11 @@
 // =====================================================================
         // PHASE 2B: GLOBAL PLANNER (replaces old runDraft call)
         // =====================================================================
-        function runGlobalPlanner(shoppingLists) {
+        // ★ Renamed to avoid duplicate declaration with the active
+        // runGlobalPlanner at line 2861. This block sits inside `if (false)`
+        // and never runs, but in strict mode the function declaration is
+        // still hoisted to the enclosing scope and conflicts with the real one.
+        function _legacyRunGlobalPlannerDead(shoppingLists) {
             const GP = '[GlobalPlanner]';
             log(GP + ' Starting...');
 
