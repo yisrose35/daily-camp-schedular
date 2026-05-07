@@ -90,6 +90,76 @@ var _advancedOpen = false;
 var _inspectMode = false;
 var _openPopover = null;
 var _activePreset = 'classic';
+var _activePack = null;
+
+// ─────────────────────────────────────────────────────────────────────────
+// PRINT PACKS — outcome-oriented one-click workflows.
+// A pack is a bundle: preset + view + layout flags + selection rule.
+// Click a pack and the print center configures itself for that workflow.
+// ─────────────────────────────────────────────────────────────────────────
+var PRINT_PACKS = [
+    {
+        id: 'director',
+        name: "Director's Pack",
+        tagline: 'Master view of every division on one stack of pages.',
+        icon: 'grid',
+        preset: 'classic',
+        view: 'division',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape' },
+        selection: 'all'
+    },
+    {
+        id: 'parent-handout',
+        name: 'Parent Handout',
+        tagline: 'One clean page per division. No matchups, minimal styling.',
+        icon: 'user',
+        preset: 'minimal',
+        view: 'division',
+        layout: { tableOrientation: 'time-top', layoutMode: 'per-division', hideLeagueMatchups: true, orientation: 'portrait' },
+        selection: 'all'
+    },
+    {
+        id: 'per-bunk',
+        name: 'Per-Bunk Sheets',
+        tagline: 'One slip per bunk. Hand them out at line-up.',
+        icon: 'user',
+        preset: 'classic',
+        view: 'bunk',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'portrait' },
+        selection: 'all'
+    },
+    {
+        id: 'location-roster',
+        name: 'Location Rosters',
+        tagline: 'Who is on each field, court, or location, all day.',
+        icon: 'mapPin',
+        preset: 'classic',
+        view: 'location',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape' },
+        selection: 'all'
+    },
+    {
+        id: 'office-tv',
+        name: 'Office TV',
+        tagline: 'Dark theme, Live view, fullscreen.',
+        icon: 'monitor',
+        preset: 'dark',
+        view: 'division',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'all-bunks', hideLeagueMatchups: false, orientation: 'landscape' },
+        selection: 'all',
+        afterApply: function () { try { window._pc3OpenLive && window._pc3OpenLive(); } catch (e) {} }
+    },
+    {
+        id: 'leagues-only',
+        name: 'Leagues Only',
+        tagline: 'Just the leagues — for league directors and refs.',
+        icon: 'grid',
+        preset: 'bold',
+        view: 'division',
+        layout: { tableOrientation: 'time-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape' },
+        selection: 'all'
+    }
+];
 
 // Style presets — Classic (default), Bold, Minimal, Dark.
 // Each preset is a partial overlay applied on top of DEFAULT_TEMPLATE.
@@ -748,6 +818,26 @@ function getStyles() {
     '.pc3-popover-link{font-size:12px;color:#147D91;text-decoration:none;font-weight:600;padding:6px 10px;cursor:pointer;display:inline-block;}' +
     '.pc3-popover-link:hover{text-decoration:underline;}' +
 
+    /* Print pack cards (empty state + popover) */
+    '.pc3-packs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:18px;}' +
+    '.pc3-pack-card{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:14px 16px;border:1px solid #e7e5e4;border-radius:12px;background:#fff;cursor:pointer;font-family:inherit;text-align:left;transition:transform .08s,border-color .15s,box-shadow .15s;color:inherit;}' +
+    '.pc3-pack-card:hover{border-color:#147D91;box-shadow:0 4px 14px -4px rgba(20,125,145,.18),0 1px 3px rgba(15,23,42,.06);transform:translateY(-1px);}' +
+    '.pc3-pack-card:active{transform:translateY(0);}' +
+    '.pc3-pack-card.active{border-color:#147D91;background:#ecfeff;box-shadow:0 0 0 1px #147D91 inset;}' +
+    '.pc3-pack-icon{width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;background:#ecfeff;color:#147D91;border-radius:8px;}' +
+    '.pc3-pack-name{font-size:14px;font-weight:700;color:#1c1917;line-height:1.2;}' +
+    '.pc3-pack-tagline{font-size:12px;color:#78716c;line-height:1.4;}' +
+    '.pc3-pack-applied{font-size:10px;font-weight:600;color:#147D91;background:#ecfeff;padding:2px 8px;border-radius:99px;text-transform:uppercase;letter-spacing:.4px;margin-top:auto;}' +
+
+    /* Packs popover variant: single-column compact list */
+    '.pc3-packs-list{display:flex;flex-direction:column;gap:2px;}' +
+    '.pc3-packs-list .pc3-pack-row{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;text-align:left;font-family:inherit;color:inherit;}' +
+    '.pc3-packs-list .pc3-pack-row:hover{background:#f5f5f4;}' +
+    '.pc3-packs-list .pc3-pack-row.active{border-color:#147D91;background:#ecfeff;}' +
+    '.pc3-packs-list .pc3-pack-row-text{flex:1;min-width:0;}' +
+    '.pc3-packs-list .pc3-pack-row-name{font-size:13px;font-weight:600;color:#1c1917;}' +
+    '.pc3-packs-list .pc3-pack-row-tagline{font-size:11px;color:#78716c;line-height:1.3;margin-top:1px;}' +
+
     /* Style preset rows */
     '.pc3-preset-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;text-align:left;font-family:inherit;color:inherit;}' +
     '.pc3-preset-item:hover{background:#f5f5f4;}' +
@@ -946,6 +1036,27 @@ function buildMainUI() {
             '</div>' +
         '</div>' +
         '<div class="pc3-hero-actions">' +
+            '<div class="pc3-popover-wrap">' +
+                '<button class="pc3-hero-btn" id="pc3-packs-btn" title="Print packs — opinionated one-click setups">' + ICO.grid + ' Packs <span style="opacity:.6;font-size:9px;">▼</span></button>' +
+                '<div class="pc3-popover" id="pc3-packs-menu" style="min-width:340px;left:0;right:auto;">' +
+                    '<div class="pc3-popover-section">' +
+                        '<div class="pc3-popover-label">One-click setups</div>' +
+                        '<div class="pc3-packs-list">' +
+                            PRINT_PACKS.map(function (p) {
+                                var active = _activePack === p.id;
+                                return '<button class="pc3-pack-row' + (active ? ' active' : '') + '" data-pack="' + p.id + '">' +
+                                    '<span class="pc3-pack-icon">' + (ICO[p.icon] || ICO.grid) + '</span>' +
+                                    '<div class="pc3-pack-row-text">' +
+                                        '<div class="pc3-pack-row-name">' + escHtml(p.name) + '</div>' +
+                                        '<div class="pc3-pack-row-tagline">' + escHtml(p.tagline) + '</div>' +
+                                    '</div>' +
+                                    (active ? '<span class="pc3-popover-icon" style="color:#147D91;">' + ICO.check + '</span>' : '') +
+                                '</button>';
+                            }).join('') +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+            '</div>' +
             '<button class="pc3-hero-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="' + (liveOpen ? 'Live View is open' : 'Open Live View in a new window') + '">' +
                 (liveOpen ? '<span class="pc3-live-dot"></span>Live · On' : ICO.monitor + ' Live View') +
             '</button>' +
@@ -1064,24 +1175,19 @@ function buildMainUI() {
 
         /* Grid Area */
         '<div class="pc3-grid-area" id="pc3-grid-area">' +
-            '<div id="pc3-preview-empty" style="display:flex;align-items:center;justify-content:center;height:100%;">' +
-                '<div style="text-align:center;max-width:380px;">' +
+            '<div id="pc3-preview-empty" style="display:flex;align-items:center;justify-content:center;height:100%;padding:40px 28px;">' +
+                '<div style="text-align:center;max-width:760px;width:100%;">' +
                     '<div style="font-size:36px;margin-bottom:10px;opacity:.35;color:#a8a29e;">' + ICO.grid + '</div>' +
-                    '<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1c1917;">Pick what you want to print</p>' +
-                    '<p style="margin:0 0 18px;font-size:12px;color:#78716c;line-height:1.5;">Use the sidebar, or jump in with one of these:</p>' +
-                    '<div class="pc3-quickpick">' +
-                        '<button class="pc3-quickpick-btn" onclick="window._pc3Quickpick(\'all-divisions\')">' +
-                            '<span class="pc3-quickpick-icon">' + ICO.grid + '</span>' +
-                            '<span class="pc3-quickpick-text">All divisions<span class="pc3-quickpick-sub">One sheet per division</span></span>' +
-                        '</button>' +
-                        '<button class="pc3-quickpick-btn" onclick="window._pc3Quickpick(\'all-bunks\')">' +
-                            '<span class="pc3-quickpick-icon">' + ICO.user + '</span>' +
-                            '<span class="pc3-quickpick-text">Every bunk’s day<span class="pc3-quickpick-sub">One sheet per bunk</span></span>' +
-                        '</button>' +
-                        '<button class="pc3-quickpick-btn" onclick="window._pc3Quickpick(\'all-locations\')">' +
-                            '<span class="pc3-quickpick-icon">' + ICO.mapPin + '</span>' +
-                            '<span class="pc3-quickpick-text">Every location’s day<span class="pc3-quickpick-sub">Who is at each field/court when</span></span>' +
-                        '</button>' +
+                    '<p style="margin:0 0 6px;font-size:18px;font-weight:700;color:#1c1917;letter-spacing:-.005em;">Print Packs</p>' +
+                    '<p style="margin:0 0 8px;font-size:13px;color:#78716c;line-height:1.5;max-width:480px;margin-left:auto;margin-right:auto;">Pick a pack and the print center configures itself for that workflow. Style, layout, and selection — set in one click.</p>' +
+                    '<div class="pc3-packs-grid">' +
+                        PRINT_PACKS.map(function (p) {
+                            return '<button class="pc3-pack-card" data-pack="' + p.id + '">' +
+                                '<span class="pc3-pack-icon">' + (ICO[p.icon] || ICO.grid) + '</span>' +
+                                '<span class="pc3-pack-name">' + escHtml(p.name) + '</span>' +
+                                '<span class="pc3-pack-tagline">' + escHtml(p.tagline) + '</span>' +
+                            '</button>';
+                        }).join('') +
                     '</div>' +
                 '</div>' +
             '</div>' +
@@ -3173,8 +3279,9 @@ function bindAll() {
         });
     });
 
-    // Popovers — Output / Style / Layout / Zoom
+    // Popovers — Packs / Output / Style / Layout / Zoom
     var popoverPairs = [
+        ['pc3-packs-btn', 'pc3-packs-menu'],
         ['pc3-output-btn', 'pc3-output-menu'],
         ['pc3-style-btn', 'pc3-style-menu'],
         ['pc3-layout-btn', 'pc3-layout-menu'],
@@ -3223,6 +3330,14 @@ function bindAll() {
         btn.addEventListener('click', function () {
             var pid = this.getAttribute('data-preset');
             window._pc3ApplyPreset && window._pc3ApplyPreset(pid);
+        });
+    });
+
+    // Print pack clicks (cards in empty state + rows in popover)
+    document.querySelectorAll('[data-pack]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var packId = this.getAttribute('data-pack');
+            window._pc3ApplyPack && window._pc3ApplyPack(packId);
         });
     });
 
@@ -3417,6 +3532,47 @@ window._pc3ZoomReset = function () {
     var delta = 100 - _zoomLevel;
     if (delta !== 0) window._pc3Zoom(delta);
 };
+window._pc3ApplyPack = function (packId) {
+    var pack = PRINT_PACKS.filter(function (p) { return p.id === packId; })[0];
+    if (!pack) return;
+    _activePack = pack.id;
+    // 1. Apply preset (color scheme)
+    if (pack.preset) window._pc3ApplyPreset(pack.preset);
+    // 2. Apply layout flags
+    if (pack.layout) {
+        Object.keys(pack.layout).forEach(function (k) { _currentTemplate[k] = pack.layout[k]; });
+    }
+    // 3. Switch view
+    if (pack.view && pack.view !== _activeView) {
+        _activeView = pack.view;
+        document.querySelectorAll('[data-view]').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-view') === pack.view);
+        });
+        populateSidebar();
+    }
+    // 4. Apply selection
+    if (pack.selection === 'all') {
+        document.querySelectorAll('.pc3-item-cb').forEach(function (cb) { cb.checked = true; });
+    } else if (pack.selection === 'none') {
+        document.querySelectorAll('.pc3-item-cb').forEach(function (cb) { cb.checked = false; });
+    }
+    updateSidebarSelectionUI && updateSidebarSelectionUI();
+    // 5. Sync layout popover checkboxes (so the user sees what changed)
+    var tr = el('pc3-transpose'); if (tr) tr.checked = (_currentTemplate.tableOrientation === 'time-top');
+    var cb = el('pc3-combined'); if (cb) cb.checked = (_currentTemplate.layoutMode === 'all-bunks');
+    var hm = el('pc3-hide-matchups'); if (hm) hm.checked = !!_currentTemplate.hideLeagueMatchups;
+    // 6. Reflect active state in popover and pack cards
+    document.querySelectorAll('[data-pack]').forEach(function (c) {
+        c.classList.toggle('active', c.getAttribute('data-pack') === packId);
+    });
+    try { localStorage.setItem('campistry_pc3_pack', packId); } catch (e) {}
+    liveRefresh();
+    // 7. Optional after-apply (e.g. open Live View for Office TV pack)
+    if (typeof pack.afterApply === 'function') {
+        try { pack.afterApply(); } catch (e) { console.warn('[PrintCenter] pack.afterApply failed', e); }
+    }
+};
+
 window._pc3ApplyPreset = function (presetId) {
     var preset = STYLE_PRESETS.filter(function (p) { return p.id === presetId; })[0];
     if (!preset) return;
