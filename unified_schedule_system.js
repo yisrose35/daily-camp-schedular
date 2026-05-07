@@ -2486,15 +2486,24 @@ divBlocks.forEach((block, blockIdx) => {
         const td = document.createElement('td');
         td.colSpan = bunks.length;
         if (block.type === 'swim_elective') {
-            const acts = block.electiveActivities || [];
-            const swimLoc = block.swimLocation || 'Pool';
-            // List "Swim" + each reserved elective field as a comma-separated list,
-            //   e.g. "Swim, Black Top, Field A". Drop the swim location itself if
-            //   it appears in the elective list to avoid duplication.
+            // Sample any stamped bunk entry at this slot — that's the most reliable
+            // source of hybrid metadata; the block itself may have older / partial data.
+            let stamped = null;
+            if (Array.isArray(bunks)) {
+                for (let i = 0; i < bunks.length; i++) {
+                    const e = window.scheduleAssignments?.[bunks[i]]?.[block.slotIndex];
+                    if (e && e._swimElective) { stamped = e; break; }
+                }
+            }
+            const swimLoc = block.swimLocation || (stamped && stamped._swimLocation) || 'Pool';
             const _swimLocLc = (swimLoc || '').toLowerCase().trim();
-            // Fall back to reservedFields when electiveActivities is empty (older saved tiles)
-            let _seSrc = (block.electiveActivities && block.electiveActivities.length) ? block.electiveActivities :
-                         (block.reservedFields || []);
+            // Try multiple sources in order of trustworthiness
+            let _seSrc =
+                (block.electiveActivities && block.electiveActivities.length) ? block.electiveActivities :
+                (stamped && stamped._electiveActivities && stamped._electiveActivities.length) ? stamped._electiveActivities :
+                (block.reservedFields && block.reservedFields.length) ? block.reservedFields :
+                (stamped && stamped._reservedFields && stamped._reservedFields.length) ? stamped._reservedFields :
+                [];
             const _seActsClean = _seSrc.filter(function (a) { return (a || '').toLowerCase().trim() !== _swimLocLc; });
             const label = ['Swim'].concat(_seActsClean).join(', ');
             const pre = parseInt(block._preChangeMin) || 0;
@@ -2537,15 +2546,16 @@ divBlocks.forEach((block, blockIdx) => {
 
         // Elective and pinned (custom) blocks always show their own skeleton data
         if (block.type === 'swim_elective') {
-            const acts = block.electiveActivities || [];
-            const swimLoc = block.swimLocation || 'Pool';
-            // List "Swim" + each reserved elective field as a comma-separated list,
-            //   e.g. "Swim, Black Top, Field A". Drop the swim location itself if
-            //   it appears in the elective list to avoid duplication.
+            // Prefer the stamped per-bunk entry for hybrid metadata
+            const stampedRBC = (entry && entry._swimElective) ? entry : null;
+            const swimLoc = block.swimLocation || (stampedRBC && stampedRBC._swimLocation) || 'Pool';
             const _swimLocLc = (swimLoc || '').toLowerCase().trim();
-            // Fall back to reservedFields when electiveActivities is empty (older saved tiles)
-            let _seSrc = (block.electiveActivities && block.electiveActivities.length) ? block.electiveActivities :
-                         (block.reservedFields || []);
+            let _seSrc =
+                (block.electiveActivities && block.electiveActivities.length) ? block.electiveActivities :
+                (stampedRBC && stampedRBC._electiveActivities && stampedRBC._electiveActivities.length) ? stampedRBC._electiveActivities :
+                (block.reservedFields && block.reservedFields.length) ? block.reservedFields :
+                (stampedRBC && stampedRBC._reservedFields && stampedRBC._reservedFields.length) ? stampedRBC._reservedFields :
+                [];
             const _seActsClean = _seSrc.filter(function (a) { return (a || '').toLowerCase().trim() !== _swimLocLc; });
             const label = ['Swim'].concat(_seActsClean).join(', ');
             const pre = parseInt(block._preChangeMin) || 0;

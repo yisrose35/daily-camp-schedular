@@ -237,7 +237,9 @@ function daBuildSwimElectiveHybrid(newEvent, existingEvent, divName) {
   const electiveEv = daIsElectiveEvent(newEvent) ? newEvent : existingEvent;
   const swimLoc = swimEv.location ||
     (Array.isArray(swimEv.reservedFields) && swimEv.reservedFields[0]) || null;
-  const electiveActs = electiveEv.electiveActivities || [];
+  // Prefer electiveActivities; fall back to reservedFields when missing.
+  let electiveActs = electiveEv.electiveActivities;
+  if (!Array.isArray(electiveActs) || !electiveActs.length) electiveActs = electiveEv.reservedFields || [];
   const electiveFields = electiveEv.reservedFields || electiveActs;
   const combinedFields = Array.from(new Set([
     ...(swimLoc ? [swimLoc] : []),

@@ -132,7 +132,9 @@ function buildSwimElectiveHybrid(newEvent, existingEvent, divName) {
   // Use the new event's time range as the hybrid's window.
   const swimLoc = swimEv.location ||
     (Array.isArray(swimEv.reservedFields) && swimEv.reservedFields[0]) || null;
-  const electiveActs = electiveEv.electiveActivities || [];
+  // Prefer electiveActivities; fall back to reservedFields when missing.
+  let electiveActs = electiveEv.electiveActivities;
+  if (!Array.isArray(electiveActs) || !electiveActs.length) electiveActs = electiveEv.reservedFields || [];
   const electiveFields = electiveEv.reservedFields || [];
   const combinedFields = Array.from(new Set([
     ...(swimLoc ? [swimLoc] : []),
