@@ -2444,12 +2444,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const splitSwimIs1 = isSwimOrPool(act1Name);
                 const splitSwimIs2 = isSwimOrPool(act2Name);
                 const splitHasSwim = splitSwimIs1 || splitSwimIs2;
-                const splitChangeMin = splitHasSwim ? (parseInt(item._midChangeMin) || 0) : 0;
+                const splitPreChange = splitHasSwim ? (parseInt(item._preChangeMin) || 0) : 0;
+                const splitPostChange = splitHasSwim ? (parseInt(item._postChangeMin) || 0) : 0;
+                const splitChangeMin = splitPreChange + splitPostChange; // total change per half
 
                 // Split block in half. Within each group's swim half, change is carved:
-                // Swim half = [Change][Swim][Change] — sports half stays as one continuous tile.
-                // Group A (swim first): Change→Swim→Change | Sports
-                // Group B (swim second): Sports | Change→Swim→Change
+                // Swim half = [PreChange][Swim][PostChange] — sports half stays as one continuous tile.
+                // Group A (swim first): PreChange→Swim→PostChange | Sports
+                // Group B (swim second): Sports | PreChange→Swim→PostChange
                 const midMin = Math.floor(sMin + (eMin - sMin) / 2);
 
                 // Determine which activity is swim and which is the other
@@ -2461,14 +2463,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
                 console.log(`[SPLIT] Main 1 (act1Name): "${act1Name}"`);
                 console.log(`[SPLIT] Main 2 (act2Name): "${act2Name}"`);
-                console.log(`[SPLIT] Time block: ${sMin} to ${eMin} (mid: ${midMin})${splitChangeMin ? ' change: ' + splitChangeMin + 'min' : ''}`);
+                console.log(`[SPLIT] Time block: ${sMin} to ${eMin} (mid: ${midMin})${splitChangeMin ? ' change: ' + splitPreChange + 'pre/' + splitPostChange + 'post' : ''}`);
                 console.log(`[SPLIT] Group 1 (${groupA.length} bunks): ${groupA.join(', ')}`);
                 console.log(`[SPLIT] Group 2 (${groupB.length} bunks): ${groupB.join(', ')}`);
                 console.log(`[SPLIT] ---------------------------------------------------`);
                 if (splitChangeMin > 0) {
-                    const swimTime = Math.floor((eMin - sMin) / 2) - 2 * splitChangeMin;
-                    console.log(`[SPLIT] Swim-first group: Change(${splitChangeMin}m) → Swim(${swimTime}m) → Change(${splitChangeMin}m) | ${otherActName}`);
-                    console.log(`[SPLIT] Swim-second group: ${otherActName} | Change(${splitChangeMin}m) → Swim(${swimTime}m) → Change(${splitChangeMin}m)`);
+                    const swimTime = Math.floor((eMin - sMin) / 2) - splitPreChange - splitPostChange;
+                    console.log(`[SPLIT] Swim-first group: Change(${splitPreChange}m) → Swim(${swimTime}m) → Change(${splitPostChange}m) | ${otherActName}`);
+                    console.log(`[SPLIT] Swim-second group: ${otherActName} | Change(${splitPreChange}m) → Swim(${swimTime}m) → Change(${splitPostChange}m)`);
                 } else {
                     console.log(`[SPLIT] FIRST HALF (${sMin}-${midMin}): Group1→${act1Name}, Group2→${act2Name}`);
                     console.log(`[SPLIT] SECOND HALF (${midMin}-${eMin}): Group1→${act2Name}, Group2→${act1Name}`);
@@ -2545,23 +2547,22 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
                 if (splitChangeMin > 0) {
                     // ★ SWIM-SPLIT WITH CHANGE ★
-                    // Each half = T/2. Within the swim half: [Change][Swim][Change]
+                    // Each half = T/2. Within the swim half: [PreChange][Swim][PostChange]
                     // Sports half stays as one continuous tile.
                     const halfDur = midMin - sMin; // = (eMin - sMin) / 2
-                    const C = splitChangeMin;
-                    const swimDur = halfDur - 2 * C;
+                    const swimDur = halfDur - splitPreChange - splitPostChange;
 
                     if (swimDur <= 0) {
-                        console.warn(`[SPLIT] Change time too large (${C}*2 >= ${halfDur}). Falling back to no-change.`);
+                        console.warn(`[SPLIT] Change time too large (${splitPreChange}+${splitPostChange} >= ${halfDur}). Falling back to no-change.`);
                         routeSplitActivity(groupA, act1Name, sMin, midMin, "Group 1", "main 1");
                         routeSplitActivity(groupB, act2Name, sMin, midMin, "Group 2", "main 2");
                         routeSplitActivity(groupA, act2Name, midMin, eMin, "Group 1", "main 2");
                         routeSplitActivity(groupB, act1Name, midMin, eMin, "Group 2", "main 1");
                     } else {
-                        // FIRST HALF: swim-first gets Change→Swim→Change, swim-second gets continuous sports
-                        const h1PreEnd = sMin + C;
+                        // FIRST HALF: swim-first gets PreChange→Swim→PostChange, swim-second gets continuous sports
+                        const h1PreEnd = sMin + splitPreChange;
                         const h1SwimEnd = h1PreEnd + swimDur;
-                        // h1PostEnd = midMin (= h1SwimEnd + C)
+                        // h1PostEnd = midMin (= h1SwimEnd + splitPostChange)
 
                         console.log(`[SPLIT] \n>>> FIRST HALF (${sMin}-${midMin}) <<<`);
                         console.log(`[SPLIT] Swim-first: Change(${sMin}-${h1PreEnd}) → Swim(${h1PreEnd}-${h1SwimEnd}) → Change(${h1SwimEnd}-${midMin})`);
@@ -2572,10 +2573,10 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         routeSplitActivity(swimFirstGroup, 'Change', h1SwimEnd, midMin, "SwimFirst", "post-change");
                         routeSplitActivity(swimSecondGroup, otherActName, sMin, midMin, "SwimSecond", "activity");
 
-                        // SECOND HALF: swim-second gets Change→Swim→Change, swim-first gets continuous sports
-                        const h2PreEnd = midMin + C;
+                        // SECOND HALF: swim-second gets PreChange→Swim→PostChange, swim-first gets continuous sports
+                        const h2PreEnd = midMin + splitPreChange;
                         const h2SwimEnd = h2PreEnd + swimDur;
-                        // h2PostEnd = eMin (= h2SwimEnd + C)
+                        // h2PostEnd = eMin (= h2SwimEnd + splitPostChange)
 
                         console.log(`[SPLIT] \n>>> SECOND HALF (${midMin}-${eMin}) <<<`);
                         console.log(`[SPLIT] Swim-first: ${otherActName}(${midMin}-${eMin})`);

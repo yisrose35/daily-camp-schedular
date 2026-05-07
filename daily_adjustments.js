@@ -2127,8 +2127,11 @@ function renderEventTile(ev, top, height) {
       content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
     }
     // Split tile with swim → show change badge
-    if (ev.type === 'split' && ev._midChangeMin) {
-      content += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${ev._midChangeMin}m</div>`;
+    if (ev.type === 'split' && (ev._preChangeMin || ev._postChangeMin)) {
+      const _pre = ev._preChangeMin || 0;
+      const _post = ev._postChangeMin || 0;
+      const _lbl = _pre === _post ? _pre + 'm' : _pre + 'm / ' + _post + 'm';
+      content += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${_lbl}</div>`;
     }
   }
 
@@ -2533,13 +2536,38 @@ function addDropListeners(gridEl) {
           { name: 'startTime', label: 'Start Time (full block)', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
           { name: 'endTime', label: 'End Time (full block)', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
           { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
-          { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' },
-          { name: 'changeMin', label: 'Swim Change Time (minutes, optional)', type: 'text', placeholder: 'e.g., 5' }
+          { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
         ];
         const result = await daShowModal({
           title: 'Split Activity for ' + divName,
-          description: 'Splits division into two groups. Group 1 does Main 1 first, Group 2 does Main 2 first. Midway through, they SWAP.\n\nIf one activity is Swim, enter the change time. Each group gets change directly before and after their swim.',
-          fields: splitFields
+          description: 'Splits division into two groups. Group 1 does Main 1 first, Group 2 does Main 2 first. Midway through, they SWAP.',
+          fields: splitFields,
+          postRender: function(overlay) {
+            // Dynamically show pre/post change fields when swim is detected
+            const main1Input = overlay.querySelector('[data-field="main1"]');
+            const main2Input = overlay.querySelector('[data-field="main2"]');
+            const changeWrap = document.createElement('div');
+            changeWrap.id = 'split-change-fields';
+            changeWrap.style.cssText = 'display:none;margin-top:12px;padding:12px;background:#ecfeff;border:1px solid #a5f3fc;border-radius:8px;';
+            changeWrap.innerHTML = '<div style="font-size:11px;font-weight:600;color:#155e75;margin-bottom:8px;">Swim Change Time</div>'
+              + '<div style="display:flex;gap:12px;">'
+              + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Pre-Change (minutes)</label><input type="text" data-field="preChangeMin" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+              + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Post-Change (minutes)</label><input type="text" data-field="postChangeMin" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+              + '</div>';
+            // Insert after main2's parent field wrapper
+            const fieldsContainer = main2Input ? main2Input.closest('.me-field, [style]')?.parentElement || overlay.querySelector('.me-modal-body, [class*="body"]') : null;
+            if (fieldsContainer) fieldsContainer.appendChild(changeWrap);
+
+            function checkSwim() {
+              const v1 = (main1Input?.value || '').toLowerCase().trim();
+              const v2 = (main2Input?.value || '').toLowerCase().trim();
+              const hasSwim = v1 === 'swim' || v2 === 'swim' || v1.includes('swim') || v2.includes('swim');
+              changeWrap.style.display = hasSwim ? 'block' : 'none';
+            }
+            if (main1Input) main1Input.addEventListener('input', checkSwim);
+            if (main2Input) main2Input.addEventListener('input', checkSwim);
+            checkSwim();
+          }
         });
         if (!result || !result.startTime || !result.endTime || !result.main1 || !result.main2) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
@@ -2548,10 +2576,10 @@ function addDropListeners(gridEl) {
         const event1 = mapEventNameForOptimizer(result.main1);
         const event2 = mapEventNameForOptimizer(result.main2);
 
-        // Detect if either activity is swim → store change time on the tile
-        // The solver handles all change routing per-group (pre, mid, post)
-        const splitHasSwim = result.main1.toLowerCase().trim() === 'swim' || result.main2.toLowerCase().trim() === 'swim';
-        const splitChangeMin = splitHasSwim ? (parseInt(result.changeMin) || 0) : 0;
+        // Detect if either activity is swim → store change times on the tile
+        const splitHasSwim = result.main1.toLowerCase().trim().includes('swim') || result.main2.toLowerCase().trim().includes('swim');
+        const splitPreChange = splitHasSwim ? (parseInt(result.preChangeMin) || 0) : 0;
+        const splitPostChange = splitHasSwim ? (parseInt(result.postChangeMin) || 0) : 0;
 
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
@@ -2562,10 +2590,11 @@ function addDropListeners(gridEl) {
             { ...event2, event: event2.event || result.main2 }
           ],
           isNightActivity: isNightActivity,
-          _midChangeMin: splitChangeMin || undefined
+          _preChangeMin: splitPreChange || undefined,
+          _postChangeMin: splitPostChange || undefined
         };
 
-        console.log('[SPLIT TILE] Created split tile for ' + divName + ':', newEvent.subEvents, splitChangeMin ? '(with ' + splitChangeMin + 'min swim change)' : '');
+        console.log('[SPLIT TILE] Created split tile for ' + divName + ':', newEvent.subEvents, (splitPreChange || splitPostChange) ? '(change: ' + splitPreChange + 'pre/' + splitPostChange + 'post)' : '');
       }
       // ===== ELECTIVE =====
       else if (tileData.type === 'elective') {
@@ -3086,9 +3115,32 @@ async function editTile(id) {
         { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
         { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
-        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() },
-        { name: 'changeMin', label: 'Swim Change Time (minutes, optional)', type: 'text', default: ev._midChangeMin ? String(ev._midChangeMin) : '' }
-      ]
+        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
+      ],
+      postRender: function(overlay) {
+        const main1Input = overlay.querySelector('[data-field="main1"]');
+        const main2Input = overlay.querySelector('[data-field="main2"]');
+        const changeWrap = document.createElement('div');
+        changeWrap.id = 'split-change-fields';
+        changeWrap.style.cssText = 'display:none;margin-top:12px;padding:12px;background:#ecfeff;border:1px solid #a5f3fc;border-radius:8px;';
+        changeWrap.innerHTML = '<div style="font-size:11px;font-weight:600;color:#155e75;margin-bottom:8px;">Swim Change Time</div>'
+          + '<div style="display:flex;gap:12px;">'
+          + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Pre-Change (minutes)</label><input type="text" data-field="preChangeMin" value="' + (ev._preChangeMin || '') + '" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+          + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Post-Change (minutes)</label><input type="text" data-field="postChangeMin" value="' + (ev._postChangeMin || '') + '" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+          + '</div>';
+        const fieldsContainer = main2Input ? main2Input.closest('.me-field, [style]')?.parentElement || overlay.querySelector('.me-modal-body, [class*="body"]') : null;
+        if (fieldsContainer) fieldsContainer.appendChild(changeWrap);
+
+        function checkSwim() {
+          const v1 = (main1Input?.value || '').toLowerCase().trim();
+          const v2 = (main2Input?.value || '').toLowerCase().trim();
+          const hasSwim = v1 === 'swim' || v2 === 'swim' || v1.includes('swim') || v2.includes('swim');
+          changeWrap.style.display = hasSwim ? 'block' : 'none';
+        }
+        if (main1Input) main1Input.addEventListener('input', checkSwim);
+        if (main2Input) main2Input.addEventListener('input', checkSwim);
+        checkSwim();
+      }
     });
     if (!result || !result.main1 || !result.main2) return;
     const event1 = mapEventNameForOptimizer(result.main1);
@@ -3097,10 +3149,10 @@ async function editTile(id) {
     ev.event = `${result.main1} / ${result.main2}`;
     ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
 
-    // Update swim change for split tiles (solver handles all change routing)
-    const editSplitHasSwim = result.main1.toLowerCase().trim() === 'swim' || result.main2.toLowerCase().trim() === 'swim';
-    const editSplitChange = editSplitHasSwim ? (parseInt(result.changeMin) || 0) : 0;
-    ev._midChangeMin = editSplitChange || undefined;
+    // Update swim change for split tiles
+    const editSplitHasSwim = result.main1.toLowerCase().trim().includes('swim') || result.main2.toLowerCase().trim().includes('swim');
+    ev._preChangeMin = editSplitHasSwim ? (parseInt(result.preChangeMin) || 0) || undefined : undefined;
+    ev._postChangeMin = editSplitHasSwim ? (parseInt(result.postChangeMin) || 0) || undefined : undefined;
 
   } else if (ev.type === 'elective') {
     const allFields = (masterSettings.app1?.fields || []).map(f => f.name);

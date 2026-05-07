@@ -2838,8 +2838,11 @@ function renderEventTile(ev, top, height) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
   }
   // Split tile with swim → show change badge
-  if (ev.type === 'split' && ev._midChangeMin) {
-    innerHtml += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${ev._midChangeMin}m</div>`;
+  if (ev.type === 'split' && (ev._preChangeMin || ev._postChangeMin)) {
+    const _pre = ev._preChangeMin || 0;
+    const _post = ev._postChangeMin || 0;
+    const _lbl = _pre === _post ? _pre + 'm' : _pre + 'm / ' + _post + 'm';
+    innerHtml += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${_lbl}</div>`;
   }
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
 
@@ -2955,14 +2958,37 @@ function addDropListeners(selector) {
       else if (tileData.type === 'split') {
         const result = await showModal({
           title: 'Split Activity Setup',
-          description: 'Splits division into two groups. Midway through the time block, groups SWAP.\n\nIf one activity is Swim, enter the change time. Each group gets change directly before and after their swim.',
+          description: 'Splits division into two groups. Midway through the time block, groups SWAP.',
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
             { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
-            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' },
-            { name: 'changeMin', label: 'Swim Change Time (minutes, optional)', type: 'text', placeholder: 'e.g., 5' }
-          ]
+            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
+          ],
+          postRender: function(overlay) {
+            const main1Input = overlay.querySelector('[data-field="main1"]');
+            const main2Input = overlay.querySelector('[data-field="main2"]');
+            const changeWrap = document.createElement('div');
+            changeWrap.id = 'split-change-fields';
+            changeWrap.style.cssText = 'display:none;margin-top:12px;padding:12px;background:#ecfeff;border:1px solid #a5f3fc;border-radius:8px;';
+            changeWrap.innerHTML = '<div style="font-size:11px;font-weight:600;color:#155e75;margin-bottom:8px;">Swim Change Time</div>'
+              + '<div style="display:flex;gap:12px;">'
+              + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Pre-Change (minutes)</label><input type="text" data-field="preChangeMin" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+              + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Post-Change (minutes)</label><input type="text" data-field="postChangeMin" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+              + '</div>';
+            const fieldsContainer = main2Input ? main2Input.closest('.me-field, [style]')?.parentElement || overlay.querySelector('.me-modal-body, [class*="body"]') : null;
+            if (fieldsContainer) fieldsContainer.appendChild(changeWrap);
+
+            function checkSwim() {
+              const v1 = (main1Input?.value || '').toLowerCase().trim();
+              const v2 = (main2Input?.value || '').toLowerCase().trim();
+              const hasSwim = v1 === 'swim' || v2 === 'swim' || v1.includes('swim') || v2.includes('swim');
+              changeWrap.style.display = hasSwim ? 'block' : 'none';
+            }
+            if (main1Input) main1Input.addEventListener('input', checkSwim);
+            if (main2Input) main2Input.addEventListener('input', checkSwim);
+            checkSwim();
+          }
         });
         if (!result || !result.main1 || !result.main2) return;
 
@@ -2970,16 +2996,16 @@ function addDropListeners(selector) {
         const event1 = mapEventNameForOptimizer(result.main1);
         const event2 = mapEventNameForOptimizer(result.main2);
 
-        // Detect if either activity is swim → store change time on the tile
-        // The solver handles all change routing per-group (pre, mid, post)
-        const splitHasSwim = result.main1.toLowerCase().trim() === 'swim' || result.main2.toLowerCase().trim() === 'swim';
-        const mbSplitChange = splitHasSwim ? (parseInt(result.changeMin) || 0) : 0;
+        // Detect if either activity is swim → store change times
+        const splitHasSwim = result.main1.toLowerCase().trim().includes('swim') || result.main2.toLowerCase().trim().includes('swim');
+        const mbSplitPre = splitHasSwim ? (parseInt(result.preChangeMin) || 0) : 0;
+        const mbSplitPost = splitHasSwim ? (parseInt(result.postChangeMin) || 0) : 0;
         const mbSplitStart = parseTimeToMinutes(result.startTime);
         const mbSplitEnd = parseTimeToMinutes(result.endTime);
+        const halfDur = Math.floor((mbSplitEnd - mbSplitStart) / 2);
 
-        // Validate: change time (pre + mid + post = 3x) must fit in the block
-        if (mbSplitChange > 0 && (mbSplitChange * 3) >= (mbSplitEnd - mbSplitStart)) {
-          await showAlert('Change time too large — needs at least ' + (mbSplitChange * 3) + ' min but block is only ' + (mbSplitEnd - mbSplitStart) + ' min.');
+        if ((mbSplitPre + mbSplitPost) >= halfDur) {
+          await showAlert('Change time (' + (mbSplitPre + mbSplitPost) + ' min) must be less than each half (' + halfDur + ' min).');
           return;
         }
 
@@ -2994,10 +3020,11 @@ function addDropListeners(selector) {
             { ...event1, event: event1.event || result.main1 },
             { ...event2, event: event2.event || result.main2 }
           ],
-          _midChangeMin: mbSplitChange || undefined
+          _preChangeMin: mbSplitPre || undefined,
+          _postChangeMin: mbSplitPost || undefined
         };
 
-        console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents, mbSplitChange ? '(with ' + mbSplitChange + 'min swim change)' : '');
+        console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents, (mbSplitPre || mbSplitPost) ? '(change: ' + mbSplitPre + 'pre/' + mbSplitPost + 'post)' : '');
       }
       // ELECTIVE
       else if (tileData.type === 'elective') {
