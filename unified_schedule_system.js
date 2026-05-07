@@ -864,7 +864,9 @@ function shouldHighlightBunk(bunkName) {
         const _myField = (typeof myEntry.field === 'string' ? myEntry.field
             : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();
         const NON_SPORTS = ['swim', 'pool', 'swimming', 'lunch', 'snacks', 'snack',
-                            'dismissal', 'change', 'free', 'free play', 'free time', 'rest'];
+                            'dismissal', 'change', 'free', 'free play', 'free time', 'rest',
+                            'regroup', 'flagpole', 'assembly', 'davening', 'shacharis', 'mincha',
+                            'maariv', 'tefillah', 'learning', 'shiur'];
         if (NON_SPORTS.some(n => _myAct === n || _myAct.includes(n))) return [];
         // Skip if either the activity or the field is a configured special activity.
         const _specials = _specialNamesSet();

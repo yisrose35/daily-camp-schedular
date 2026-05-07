@@ -431,7 +431,9 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
     var _myField = (typeof myEntry.field === 'string' ? myEntry.field
         : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();
     var NON_SPORTS = ['swim', 'pool', 'swimming', 'lunch', 'snacks', 'snack',
-                      'dismissal', 'change', 'free', 'free play', 'free time', 'rest'];
+                      'dismissal', 'change', 'free', 'free play', 'free time', 'rest',
+                      'regroup', 'flagpole', 'assembly', 'davening', 'shacharis', 'mincha',
+                      'maariv', 'tefillah', 'learning', 'shiur'];
     for (var ni = 0; ni < NON_SPORTS.length; ni++) {
         if (_myAct === NON_SPORTS[ni] || _myAct.indexOf(NON_SPORTS[ni]) !== -1) return [];
     }
@@ -862,9 +864,8 @@ function getStyles() {
     '.pc3-celltip-row b{color:#fff;font-weight:600;}' +
     '.pc3-celltip-label{color:#94a3b8;text-transform:uppercase;font-size:10px;font-weight:600;letter-spacing:.4px;min-width:48px;}' +
     '.pc3-celltip-hint{margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.1);font-size:10px;color:#94a3b8;font-style:italic;}' +
-    /* Make cells visibly clickable when in interactive mode */
-    '.pc3-tbl td[data-bunk][data-slot]{cursor:pointer;}' +
-    '.pc3-tbl td[data-bunk][data-slot]:hover{outline:1.5px solid #147D91;outline-offset:-1.5px;}' +
+    /* Subtle hover affordance on data cells (hover only — no click action) */
+    '.pc3-tbl td[data-bunk][data-slot]{cursor:default;}' +
     '.pc3.inspect-mode .pc3-tbl td[data-bunk][data-slot]{cursor:cell;}' +
     '.pc3.inspect-mode .pc3-tbl td[data-bunk][data-slot]:hover{outline:2px solid #147D91;outline-offset:-1px;}' +
 
@@ -2480,7 +2481,6 @@ function _pcBuildCellTipHtml(bunk, slotIdx, divName) {
     else if (entry._fixed) tag = 'Fixed';
     if (tag) rows.push('<div class="pc3-celltip-row"><span class="pc3-celltip-label">Type</span><span>' + tag + '</span></div>');
 
-    rows.push('<div class="pc3-celltip-hint">Click to open in Daily Adjustments</div>');
     return rows.join('');
 }
 
@@ -2519,12 +2519,6 @@ function attachCellInteractivity(pc) {
         td.addEventListener('mousemove', function (ev) { if (tip.classList.contains('show')) _pcPositionCellTip(tip, ev); });
         td.addEventListener('mouseleave', function () {
             hideTimer = setTimeout(function () { tip.classList.remove('show'); }, 80);
-        });
-        td.addEventListener('click', function () {
-            // Don't hijack click when in inspect mode (cell selection takes over).
-            if (_inspectMode) return;
-            tip.classList.remove('show');
-            window._pc3OpenInDA && window._pc3OpenInDA(bunk, slotIdx, divName);
         });
     });
 }
