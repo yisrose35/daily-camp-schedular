@@ -2762,8 +2762,42 @@ function saveColumnOrder(order) {
 }
 
 // --- RENDER GRID ---
+// Remove _swimChange skeleton tiles whose adjacent Swim / Swim+Elective is gone.
+// Called from renderGrid so stale Change strips disappear automatically.
+function msbCleanupOrphanChangeTiles() {
+  if (!Array.isArray(dailySkeleton)) return;
+  const before = dailySkeleton.length;
+  dailySkeleton = dailySkeleton.filter(item => {
+    if (!item || !item._swimChange) return true;
+    const itemStart = parseTimeToMinutes(item.startTime);
+    const itemEnd = parseTimeToMinutes(item.endTime);
+    if (itemStart === null || itemEnd === null) return true;
+    const hasMate = dailySkeleton.some(other => {
+      if (!other || other === item) return false;
+      if (other.division !== item.division) return false;
+      const otherIsSwim = (other.type === 'pinned' && /^swim$/i.test(other.event || '')) ||
+                          other.type === 'swim_elective';
+      if (!otherIsSwim) return false;
+      const os = parseTimeToMinutes(other.startTime);
+      const oe = parseTimeToMinutes(other.endTime);
+      if (os === null || oe === null) return false;
+      if (item._swimChange === 'pre' && Math.abs(itemEnd - os) <= 30) return true;
+      if (item._swimChange === 'post' && Math.abs(itemStart - oe) <= 30) return true;
+      return false;
+    });
+    return hasMate;
+  });
+  if (dailySkeleton.length !== before) {
+    console.log(`[MSB-CLEANUP] Removed ${before - dailySkeleton.length} orphan Change tile(s)`);
+    if (typeof saveDraftToLocalStorage === 'function') saveDraftToLocalStorage();
+  }
+}
+
 function renderGrid() {
   if (!grid) return;
+
+  // Drop stale Change tiles before painting
+  msbCleanupOrphanChangeTiles();
 
   // AUTO MODE: render DAW layer timeline instead of stacking grid
   if (builderMode === 'auto') {
