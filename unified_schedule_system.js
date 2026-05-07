@@ -835,6 +835,55 @@ function shouldHighlightBunk(bunkName) {
         return assignments[bunk][slotIndex] || null;
     }
 
+    // ★ Find OTHER bunks (any division) that share this bunk's field at this time.
+    //   Returns sorted array of bunk names. Empty when no one is sharing.
+    function findFieldSharers(bunk, slotIdx, divName) {
+        const myEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
+        if (!myEntry) return [];
+        // Don't compute sharers for hybrids/electives/leagues/transitions/pinned-events
+        if (myEntry._swimElective || myEntry._isTransition || myEntry.continuation) return [];
+        if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
+        if (myEntry._isDismissal || myEntry._isSnack) return [];
+        const myField = (typeof myEntry.field === 'string') ? myEntry.field
+            : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
+        if (!myField) return [];
+        const myFieldKey = myField.toLowerCase().trim();
+        const mySlot = window.divisionTimes?.[divName]?.[slotIdx];
+        if (!mySlot || mySlot.startMin == null) return [];
+        const myStart = mySlot.startMin, myEnd = mySlot.endMin;
+        const sharers = [];
+        const seen = new Set();
+        const allBunks = window.scheduleAssignments || {};
+        for (const otherBunk in allBunks) {
+            if (otherBunk === bunk || seen.has(otherBunk)) continue;
+            const otherDiv = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDivisionForBunk
+                ? window.SchedulerCoreUtils.getDivisionForBunk(otherBunk)
+                : (window.DivisionTimesSystem && window.DivisionTimesSystem.getDivisionForBunk
+                    ? window.DivisionTimesSystem.getDivisionForBunk(otherBunk) : null));
+            const otherSlots = window.divisionTimes?.[otherDiv] || [];
+            const otherEntries = allBunks[otherBunk] || [];
+            for (let si = 0; si < otherSlots.length; si++) {
+                const oslot = otherSlots[si];
+                if (!oslot || oslot.startMin == null) continue;
+                if (oslot.startMin >= myEnd || oslot.endMin <= myStart) continue;
+                const oentry = otherEntries[si];
+                if (!oentry || oentry.continuation) continue;
+                const ofield = (typeof oentry.field === 'string') ? oentry.field
+                    : (oentry.field && oentry.field.name ? oentry.field.name : '');
+                if (!ofield) continue;
+                if (ofield.toLowerCase().trim() === myFieldKey) {
+                    sharers.push(otherBunk);
+                    seen.add(otherBunk);
+                    break;
+                }
+            }
+        }
+        // Natural sort if available, else default
+        if (typeof window.naturalSort === 'function') sharers.sort(window.naturalSort);
+        else sharers.sort();
+        return sharers;
+    }
+
     function formatEntry(entry) {
         if (!entry) return '';
         if (entry._isDismissal) return 'Dismissal';
@@ -2478,6 +2527,10 @@ divBlocks.forEach((block, blockIdx) => {
             bgColor = '#fff8e1';
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
+            // ★ If other bunks share this same field at this time, append them.
+            //   Format: "<existing text> – Bunk 2, Bunk 3"
+            const _sharers = findFieldSharers(bunk, slotIdx, divName);
+            if (_sharers.length) displayText += ' – ' + _sharers.join(', ');
             bgColor = getEntryBackground(entry, block.event);
             // pinned state tracked internally, no visual prefix needed
         }

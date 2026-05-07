@@ -252,6 +252,53 @@ function getBellScheduleLayers(divName) {
     }
 }
 
+// ★ Find OTHER bunks (any division) that share this bunk's field at this time.
+//   Returns sorted array of bunk names. Empty when no one is sharing.
+function pcFindFieldSharers(bunk, slotIdx, divName) {
+    var myEntry = window.scheduleAssignments && window.scheduleAssignments[bunk] && window.scheduleAssignments[bunk][slotIdx];
+    if (!myEntry) return [];
+    if (myEntry._swimElective || myEntry._isTransition || myEntry.continuation) return [];
+    if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
+    if (myEntry._isDismissal || myEntry._isSnack) return [];
+    var myField = (typeof myEntry.field === 'string') ? myEntry.field
+        : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
+    if (!myField) return [];
+    var myFieldKey = myField.toLowerCase().trim();
+    var mySlot = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx];
+    if (!mySlot || mySlot.startMin == null) return [];
+    var myStart = mySlot.startMin, myEnd = mySlot.endMin;
+    var sharers = [];
+    var seen = {};
+    var allBunks = window.scheduleAssignments || {};
+    for (var otherBunk in allBunks) {
+        if (otherBunk === bunk || seen[otherBunk]) continue;
+        var otherDiv = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDivisionForBunk)
+            ? window.SchedulerCoreUtils.getDivisionForBunk(otherBunk)
+            : ((window.DivisionTimesSystem && window.DivisionTimesSystem.getDivisionForBunk)
+                ? window.DivisionTimesSystem.getDivisionForBunk(otherBunk) : null);
+        var otherSlots = (window.divisionTimes && window.divisionTimes[otherDiv]) || [];
+        var otherEntries = allBunks[otherBunk] || [];
+        for (var si = 0; si < otherSlots.length; si++) {
+            var oslot = otherSlots[si];
+            if (!oslot || oslot.startMin == null) continue;
+            if (oslot.startMin >= myEnd || oslot.endMin <= myStart) continue;
+            var oentry = otherEntries[si];
+            if (!oentry || oentry.continuation) continue;
+            var ofield = (typeof oentry.field === 'string') ? oentry.field
+                : (oentry.field && oentry.field.name ? oentry.field.name : '');
+            if (!ofield) continue;
+            if (ofield.toLowerCase().trim() === myFieldKey) {
+                sharers.push(otherBunk);
+                seen[otherBunk] = true;
+                break;
+            }
+        }
+    }
+    if (typeof naturalSort === 'function') sharers.sort(naturalSort);
+    else sharers.sort();
+    return sharers;
+}
+
 function formatEntry(entry) {
     if (!entry) return '';
     if (entry.continuation) return '';
@@ -1228,6 +1275,11 @@ function renderAutoDivisionTable(divName, bunks) {
                 }
                 var displayText = actText || '\u2014';
                 if (locText) displayText += ' \u2013 ' + locText;
+                // \u2605 Append sharing bunks (other bunks at the same field at this time)
+                if (matchAct.entry && matchAct.slotIdx != null && displayText !== '\u2014') {
+                    var _autoSh = pcFindFieldSharers(bunk, matchAct.slotIdx, divName);
+                    if (_autoSh.length) displayText += ' \u2013 ' + _autoSh.join(', ');
+                }
                 var durMin = matchAct.endMin - matchAct.startMin;
 
                 html += '<td';
@@ -1311,6 +1363,10 @@ function renderManualBunksTop(divName, bunks, blocks) {
                 var entry = si >= 0 ? getEntry(b, si) : null;
                 var type = getEntryType(entry);
                 var text = entry ? formatEntry(entry) : '';
+                if (text && si >= 0) {
+                    var _sh = pcFindFieldSharers(b, si, divName);
+                    if (_sh.length) text += ' \u2013 ' + _sh.join(', ');
+                }
                 if (!text && type === 'free') text = '\u2014';
                 var inner = pcCellInnerHtml(text, type, {
                     preChange: entry ? (entry._splitPreChange || 0) : 0,
@@ -1355,6 +1411,10 @@ function renderManualTimeTop(divName, bunks, blocks) {
             var entry = si >= 0 ? getEntry(b, si) : null;
             var type = getEntryType(entry);
             var text = entry ? formatEntry(entry) : '';
+            if (text && si >= 0 && !eb.isLeague) {
+                var _sh = pcFindFieldSharers(b, si, divName);
+                if (_sh.length) text += ' \u2013 ' + _sh.join(', ');
+            }
             if (!text && type === 'free') text = '\u2014';
             if (eb.isLeague) {
                 type = 'league';
@@ -1421,6 +1481,11 @@ function renderBunkSheet(bunk) {
             if (!act && loc) { act = loc; loc = ''; }
         }
         var actDisplay = act || '\u2014';
+        var locDisplay = loc;
+        if (entry && slotIdx >= 0 && !isAutoMode()) {
+            var _sh = pcFindFieldSharers(bunk, slotIdx, dn);
+            if (_sh.length) locDisplay = (loc ? loc + ' \u2013 ' : '') + _sh.join(', ');
+        }
         var actInner = pcCellInnerHtml(actDisplay, type, {
             preChange: entry ? (entry._splitPreChange || 0) : 0,
             postChange: entry ? (entry._splitPostChange || 0) : 0
@@ -1429,7 +1494,7 @@ function renderBunkSheet(bunk) {
         html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
         html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(actDisplay) + '">' + actInner + '</td>';
-        html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(loc) + '">' + escHtml(loc) + '</td>';
+        html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(locDisplay) + '">' + escHtml(locDisplay) + '</td>';
         html += '</tr>';
     });
 
@@ -2355,6 +2420,10 @@ function renderLiveContent() {
                     var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
                     var type = getEntryType(entry);
                     var text = entry ? formatEntry(entry) : '\u2014';
+                    if (entry && text !== '\u2014' && slotIdx >= 0) {
+                        var _sh = pcFindFieldSharers(bunk, slotIdx, divName);
+                        if (_sh.length) text += ' \u2013 ' + _sh.join(', ');
+                    }
                     var cls = 'cell-' + type;
                     if (isCurrent) cls += ' cell-current';
                     if (isPast) cls += ' cell-past';
