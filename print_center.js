@@ -818,6 +818,14 @@ function getStyles() {
     '.pc3-popover-link{font-size:12px;color:#147D91;text-decoration:none;font-weight:600;padding:6px 10px;cursor:pointer;display:inline-block;}' +
     '.pc3-popover-link:hover{text-decoration:underline;}' +
 
+    /* Page-break preview — thin dashed lines + 'page N' label */
+    '.pc3-pagebreak{position:absolute;left:0;right:0;height:0;border-top:2px dashed #f97316;pointer-events:none;z-index:5;}' +
+    '.pc3-pagebreak::after{content:attr(data-page);position:absolute;right:8px;top:-10px;background:#f97316;color:#fff;font-size:10px;font-weight:700;padding:1px 8px;border-radius:99px;letter-spacing:.4px;white-space:nowrap;}' +
+    '.pc3-pages-badge{font-size:10px;font-weight:600;padding:3px 9px;border-radius:99px;background:#fff7ed;color:#9a3412;text-transform:uppercase;letter-spacing:.4px;display:inline-flex;align-items:center;gap:4px;}' +
+    '.pc3-pages-badge::before{content:"";width:6px;height:6px;border-radius:50%;background:#f97316;}' +
+    /* Hide page break overlay during printing — the browser handles real page breaks */
+    '@media print{.pc3-pagebreak{display:none !important;}}' +
+
     /* Print pack cards (empty state + popover) */
     '.pc3-packs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:18px;}' +
     '.pc3-pack-card{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:14px 16px;border:1px solid #e7e5e4;border-radius:12px;background:#fff;cursor:pointer;font-family:inherit;text-align:left;transition:transform .08s,border-color .15s,box-shadow .15s;color:inherit;}' +
@@ -2347,6 +2355,57 @@ function liveRefresh() {
             setSelection(firstSheet.id, fr, fc, fr, fc);
         }
     }
+
+    // ★ Overlay simulated page-break lines + tag each sheet with its page count.
+    //   Done after layout so we can read each sheet's actual rendered height.
+    requestAnimationFrame(function () { decoratePageBreaks(pc); });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PAGE-BREAK PREVIEW
+// Overlays a thin dashed orange line on each sheet at every paper-page
+// boundary, plus a 'fits on N pages' badge in the sheet header.
+// ─────────────────────────────────────────────────────────────────────────
+function decoratePageBreaks(pc) {
+    if (!pc) return;
+    // Clean up any prior overlays + badges
+    pc.querySelectorAll('.pc3-pagebreak').forEach(function (n) { n.remove(); });
+    pc.querySelectorAll('.pc3-pages-badge').forEach(function (n) { n.remove(); });
+
+    // Approximate paper sizes at 96dpi (CSS px), with ~0.5" margins.
+    // Letter portrait: 8.5x11 → 816x1056 px (about 60px margin → ~936 usable height).
+    var paper = (_currentTemplate && _currentTemplate.paperSize) || 'letter';
+    var orient = (_currentTemplate && _currentTemplate.orientation) || 'landscape';
+    var dims = { letter: { w: 816, h: 1056 }, a4: { w: 794, h: 1123 }, legal: { w: 816, h: 1344 } }[paper] || { w: 816, h: 1056 };
+    var paperHeightPx = (orient === 'portrait' ? dims.h : dims.w);
+    var marginPx = 60; // top + bottom
+    var usable = Math.max(200, paperHeightPx - marginPx);
+
+    pc.querySelectorAll('.pc3-sheet').forEach(function (sheet) {
+        var rect = sheet.getBoundingClientRect();
+        // The sheet's height is what matters for the break overlay.
+        // We draw lines every `usable` px from the top of the sheet content.
+        var sheetHeight = sheet.offsetHeight;
+        var pages = Math.max(1, Math.ceil(sheetHeight / usable));
+
+        // Draw dashed line + page label for each break
+        for (var i = 1; i < pages; i++) {
+            var line = document.createElement('div');
+            line.className = 'pc3-pagebreak';
+            line.style.top = (i * usable) + 'px';
+            line.setAttribute('data-page', 'Page ' + (i + 1));
+            sheet.appendChild(line);
+        }
+
+        // Add a "N pages" badge to the sheet header if a header exists
+        var head = sheet.querySelector('.pc3-sheet-head');
+        if (head) {
+            var badge = document.createElement('span');
+            badge.className = 'pc3-pages-badge';
+            badge.textContent = pages === 1 ? '1 page' : pages + ' pages';
+            head.appendChild(badge);
+        }
+    });
 }
 
 // =========================================================================
