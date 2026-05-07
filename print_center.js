@@ -661,6 +661,45 @@ function buildDivisionBlocks(divName) {
 // =========================================================================
 // LEAGUE MATCHUP BUILDER
 // =========================================================================
+// Returns { label, matchups: [string] } for a league happening at divName/startMin,
+// or null if no league. Looks at leagueAssignments first, then falls back to a per-bunk entry probe.
+function pcLeagueInfoAt(divName, startMin) {
+    if (!divName || startMin == null) return null;
+    var la = window.leagueAssignments || {};
+    var divLA = la[divName] || {};
+    var slotIdx = findFirstSlotForTime(startMin, divName);
+    var entry = null;
+    var keys = [slotIdx, String(slotIdx), startMin, String(startMin)];
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (k != null && divLA[k]) { entry = divLA[k]; break; }
+    }
+    // Also try +/- 2 slot tolerance (some pipelines store at slightly different keys)
+    if (!entry && slotIdx >= 0) {
+        for (var off = 1; off <= 2; off++) {
+            if (divLA[slotIdx + off]) { entry = divLA[slotIdx + off]; break; }
+            if (divLA[slotIdx - off]) { entry = divLA[slotIdx - off]; break; }
+        }
+    }
+    if (!entry) return null;
+    var label = entry.gameLabel || entry.leagueName || 'League Game';
+    var matchups = [];
+    (entry.matchups || []).forEach(function (m) {
+        if (typeof m === 'string') matchups.push(m);
+        else if (m.display) matchups.push(m.display);
+        else {
+            var tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
+            if (tA && tB) {
+                var s = tA + ' vs ' + tB;
+                if (m.sport) s += ' – ' + (m.sport.charAt(0).toUpperCase() + m.sport.slice(1));
+                if (m.field) s += ' (' + m.field + ')';
+                matchups.push(s);
+            }
+        }
+    });
+    return { label: label, matchups: matchups };
+}
+
 function buildLeagueMatchups(eventBlock, divName) {
     var matchups = [];
     var la = window.leagueAssignments || {};
@@ -3052,24 +3091,57 @@ function renderLiveContent() {
                         while (nextCi < lTimeCols.length && lTimeCols[nextCi].startMin < mAct.endMin) { span++; nextCi++; }
                         var isCur = nowMin >= mAct.startMin && nowMin < mAct.endMin;
                         var isPast = nowMin >= mAct.endMin;
-                        // Use full formatEntry (activity + location + change time + hybrid label) and append sharers
-                        var txt = mAct.entry ? formatEntry(mAct.entry) : '\u2014';
-                        if (mAct.entry && txt && txt !== '\u2014' && mAct.slotIdx != null) {
-                            var _liveSh = pcFindFieldSharers(bunk, mAct.slotIdx, divName);
-                            if (_liveSh.length) {
-                                var _liveNames = _liveSh.map(function (x) { return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                                txt += ' vs ' + _liveNames.join(', ');
+
+                        // \u2605 League detection: if this entry is a league or this slot is a league slot,
+                        //   show "League Name | TeamA vs TeamB ..."
+                        var isLeagueAct = !!(mAct.entry && (mAct.entry._h2h || mAct.entry._league || mAct.entry._isSpecialtyLeague || mAct.entry._allMatchups));
+                        var leagueInfo = (isLeagueAct || !mAct.entry) ? pcLeagueInfoAt(divName, mAct.startMin) : null;
+                        var txt;
+                        if (isLeagueAct || leagueInfo) {
+                            var lbl = (mAct.entry && (mAct.entry._gameLabel || mAct.entry._leagueName)) ||
+                                      (leagueInfo && leagueInfo.label) || 'League Game';
+                            var ms = (leagueInfo && leagueInfo.matchups) || [];
+                            txt = lbl + (ms.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + ms.join(', ') : '');
+                        } else {
+                            // Use full formatEntry (activity + location + change time + hybrid label) and append sharers
+                            txt = mAct.entry ? formatEntry(mAct.entry) : '\u2014';
+                            if (mAct.entry && txt && txt !== '\u2014' && mAct.slotIdx != null) {
+                                var _liveSh = pcFindFieldSharers(bunk, mAct.slotIdx, divName);
+                                if (_liveSh.length) {
+                                    var _liveNames = _liveSh.map(function (x) { return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
+                                    txt += ' vs ' + _liveNames.join(', ');
+                                }
                             }
                         }
-                        var cls = 'cell-' + mAct.type;
+                        var cls = (isLeagueAct || leagueInfo) ? 'cell-league' : 'cell-' + mAct.type;
                         if (isCur) cls += ' cell-current';
                         if (isPast) cls += ' cell-past';
                         html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
                         ci = nextCi;
                     } else {
+                        // Empty slot \u2014 but it might be a league period without per-bunk entries.
+                        var emptyLeague = pcLeagueInfoAt(divName, cStart);
                         var isCC = nowMin >= cStart && nowMin < cEnd;
-                        html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">\u2014</td>';
-                        ci++;
+                        if (emptyLeague) {
+                            // Span this league across as many subsequent free columns as possible
+                            var lspan = 1;
+                            var lnext = ci + 1;
+                            while (lnext < lTimeCols.length) {
+                                var nAct = null;
+                                acts.forEach(function (a) { if (a.startMin < lTimeCols[lnext].endMin && a.endMin > lTimeCols[lnext].startMin) nAct = a; });
+                                if (nAct) break;
+                                var nLeague = pcLeagueInfoAt(divName, lTimeCols[lnext].startMin);
+                                if (!nLeague || nLeague.label !== emptyLeague.label) break;
+                                lspan++; lnext++;
+                            }
+                            var lTxt = emptyLeague.label + (emptyLeague.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + emptyLeague.matchups.join(', ') : '');
+                            var lCls = 'cell-league' + (isCC ? ' cell-current' : '');
+                            html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
+                            ci = lnext;
+                        } else {
+                            html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">\u2014</td>';
+                            ci++;
+                        }
                     }
                 }
                 html += '</tr>';
@@ -3089,6 +3161,22 @@ function renderLiveContent() {
                 var isPast = nowMin >= ts.endMin;
                 html += '<tr data-block-start="' + ts.startMin + '" data-block-end="' + ts.endMin + '">';
                 html += '<th class="row-head' + (isCurrent ? ' cell-current' : '') + (isPast ? ' cell-past' : '') + '">' + ts.label + '</th>';
+
+                // \u2605 League rows span all bunk columns
+                if (ts.isLeague) {
+                    var leagueText = ts.event;
+                    if (!_currentTemplate.hideLeagueMatchups) {
+                        var matchups = buildLeagueMatchups(ts, divName);
+                        if (matchups.length) leagueText += ' | ' + matchups.join(', ');
+                    }
+                    var lcls = 'cell-league';
+                    if (isCurrent) lcls += ' cell-current';
+                    if (isPast) lcls += ' cell-past';
+                    html += '<td colspan="' + bunks.length + '" class="' + lcls + '" style="text-align:center;white-space:normal;word-break:break-word;"><strong>' + escHtml(leagueText) + '</strong></td>';
+                    html += '</tr>';
+                    return;
+                }
+
                 bunks.forEach(function (bunk) {
                     var slotIdx = findFirstSlotForTime(ts.startMin, divName);
                     var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
