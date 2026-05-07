@@ -2716,14 +2716,13 @@ function addDropListeners(gridEl) {
         const result = await daShowModal({
           title: 'Swim + Elective for ' + divName,
           description: 'Hybrid: pool reserved + listed activities reserved at the same time. Campers choose individually.',
-          wide: true,
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr },
             { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 5' },
             { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 5' },
             ...(_seSportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: _seSportOptions }] : []),
-            { name: 'activities', label: 'Reserve Activities (electives)', type: 'checkbox-group', options: _seLocOptions }
+            { name: 'activities', label: 'Reserve Locations (electives)', type: 'checkbox-group', options: _seLocOptions }
           ],
           postRender: function(overlay) {
             var sportSel = overlay.querySelector('[data-field="sport"]');
