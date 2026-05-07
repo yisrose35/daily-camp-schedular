@@ -185,6 +185,10 @@
             const parsed = raw ? JSON.parse(raw) : {};
             _dailyDataCacheRaw = raw;
             _dailyDataCacheParsed = parsed;
+            // ★ Seed secondary-save hashes for all dates loaded from disk so
+            // the next saveGlobalSettings call can compare against this
+            // baseline and skip cloud writes for unchanged dates.
+            try { window._seedSecondarySaveHashes?.(parsed); } catch (_) {}
             return parsed;
         } catch {
             return {};

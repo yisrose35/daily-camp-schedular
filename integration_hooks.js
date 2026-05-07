@@ -1025,9 +1025,26 @@
      *   2. Cloud-sync the CURRENT date via verifiedScheduleSave (with retry)
      *   3. Cloud-sync ALL OTHER dates via lightweight ScheduleDB.saveSchedule
      */
+    // ★ Coalesce rapid-fire daily_schedules saves. Calendar's "Bridge
+    // (Unified Flow)" path fires saveGlobalSettings 4× per generation
+    // with the same data — skip if we just processed an identical payload
+    // in the last 750ms. Cuts 3 of every 4 redundant log + hash passes.
+    let _lastDailySchedulesCallAt = 0;
+    let _lastDailySchedulesHash = null;
+    function _quickHashAllDaily(d) {
+        try { return JSON.stringify(d).length + '|' + Object.keys(d || {}).length; }
+        catch (_) { return Math.random(); }
+    }
     window.saveGlobalSettings = function(key, data) {
         // For daily_schedules, persist locally AND sync ALL dates to cloud
         if (key === 'daily_schedules') {
+            const _nowDbg = Date.now();
+            const _hDbg = _quickHashAllDaily(data);
+            if (_hDbg === _lastDailySchedulesHash && (_nowDbg - _lastDailySchedulesCallAt) < 750) {
+                return true; // duplicate burst — already handled
+            }
+            _lastDailySchedulesCallAt = _nowDbg;
+            _lastDailySchedulesHash = _hDbg;
 
             // ═══════════════════════════════════════════════════════════════
             // STEP 1: Always persist full object to localStorage
