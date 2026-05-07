@@ -2409,7 +2409,7 @@ divBlocks.forEach((block, blockIdx) => {
         if (block.type === 'swim_elective') {
             const acts = block.electiveActivities || [];
             const swimLoc = block.swimLocation || 'Pool';
-            const label = '🏊 ' + swimLoc + ' + 🎯 ' + (acts.join(', ') || 'Electives');
+            const label = swimLoc + ' + ' + (acts.join(', ') || 'Electives');
             td.style.cssText = 'padding: 10px 16px; background: linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%); border-left: 4px solid #7c3aed; vertical-align: middle; text-align: center;';
             td.innerHTML = `<span style="font-weight:600;color:#155e75;font-size:0.95rem;">${escapeHtml(label)}</span>`;
         } else if (block.type === 'elective') {
@@ -2446,7 +2446,7 @@ divBlocks.forEach((block, blockIdx) => {
         if (block.type === 'swim_elective') {
             const acts = block.electiveActivities || [];
             const swimLoc = block.swimLocation || 'Pool';
-            const label = '🏊 ' + swimLoc + ' + 🎯 ' + (acts.join(', ') || 'Electives');
+            const label = swimLoc + ' + ' + (acts.join(', ') || 'Electives');
             htmlContent = `<div style="font-size:0.85rem;font-weight:600;color:#155e75;">${escapeHtml(label)}</div>`;
             bgColor = 'linear-gradient(to right, #cffafe 0%, #cffafe 50%, #fae8ff 50%, #fae8ff 100%)';
         } else if (block.type === 'elective') {

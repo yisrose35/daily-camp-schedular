@@ -2363,7 +2363,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const eventName = item.event || item.type || 'Pinned Event';
 
                     // ★ Hybrid extras stamped onto each bunk's entry so renderers can
-                    //   show the combined "🏊 Pool + 🎯 Activities" label.
+                    //   show the combined "Pool + Activities" label.
                     const hybridExtras = isHybridSE ? {
                         _swimElective: true,
                         _swimLocation: item.swimLocation,

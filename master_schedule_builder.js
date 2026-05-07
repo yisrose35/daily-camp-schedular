@@ -2917,9 +2917,9 @@ function renderEventTile(ev, top, height) {
     if (_seActs.length > 0) {
       const _seList = _seActs.slice(0, 3).join(', ');
       const _seMore = _seActs.length > 3 ? ` +${_seActs.length - 3}` : '';
-      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏊 ${ev.swimLocation || 'Pool'} · 🎯 ${_seList}${_seMore}</div>`;
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.swimLocation || 'Pool'} + ${_seList}${_seMore}</div>`;
     } else {
-      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🏊 ${ev.swimLocation || 'Pool'} · Elective</div>`;
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.swimLocation || 'Pool'} + Elective</div>`;
     }
     if (ev._preChangeMin || ev._postChangeMin) {
       const _sePre = ev._preChangeMin || 0;
