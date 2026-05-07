@@ -524,17 +524,22 @@
         }
 
         // ★★★ FILTER OUT FIELDS BLOCKED BY TIME RULES ★★★
+        // Per-grade scoping: skip rules whose `divisions` list doesn't
+        // intersect this league's active divisions. Empty/missing list = all.
         if (slots && slots.length > 0) {
             const _divSlots = window.divisionTimes?.[Object.keys(window.divisionTimes || {})[0]] || [];
             const _slotStart = _divSlots[slots[0]]?.startMin;
             const _slotEnd = _divSlots[slots[slots.length - 1]]?.endMin;
             if (_slotStart != null && _slotEnd != null) {
                 const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                const _curDivs = (Array.isArray(league.divisions) ? league.divisions : []).map(String);
                 availableFields = availableFields.filter(fName => {
                     const rules = window.activityProperties?.[fName]?.timeRules;
                     if (!rules || rules.length === 0) return true;
                     let hasAvail = false, inAvail = false;
                     for (const r of rules) {
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && _curDivs.length > 0 && !rDivs.some(d => _curDivs.includes(d))) continue;
                         const rS = r.startMin ?? (_parseMin ? _parseMin(r.start || r.startTime) : null);
                         const rE = r.endMin ?? (_parseMin ? _parseMin(r.end || r.endTime) : null);
                         if (rS == null || rE == null) continue;

@@ -525,20 +525,31 @@
     // 7. MAIN FIT LOGIC (WITH DIVISION-AWARE LOCK CHECK)
     // =================================================================
 
-    Utils.isTimeAvailable = function (slotIndex, props) {
+    Utils.isTimeAvailable = function (slotIndex, props, divName) {
        if (!window.unifiedTimes?.[slotIndex]) return props.available !== false;
         const slot = window.unifiedTimes[slotIndex];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
         const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
 
-        const rules = (props.timeRules || []).map(r => {
-            if (typeof r.startMin === "number") return r;
-            return {
-                ...r,
-                startMin: Utils.parseTimeToMinutes(r.start),
-                endMin: Utils.parseTimeToMinutes(r.end)
-            };
-        });
+        // ★ Optional per-grade scoping. Most callers pre-filter timeRules by
+        //   division before passing props in (see v7.7 callers); this is a
+        //   safety net for any caller that hasn't.
+        const myDiv = divName != null ? String(divName) : null;
+        const rules = (props.timeRules || [])
+            .filter(r => {
+                const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                if (rDivs.length === 0) return true;
+                if (!myDiv) return true;
+                return rDivs.includes(myDiv);
+            })
+            .map(r => {
+                if (typeof r.startMin === "number") return r;
+                return {
+                    ...r,
+                    startMin: Utils.parseTimeToMinutes(r.start),
+                    endMin: Utils.parseTimeToMinutes(r.end)
+                };
+            });
 
         if (rules.length === 0) return props.available !== false;
         if (!props.available) return false;

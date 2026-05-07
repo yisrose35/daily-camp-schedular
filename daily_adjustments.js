@@ -5121,12 +5121,17 @@ function renderOverrideDetailPane() {
     if (globalRules.length === 0) {
       globalRulesEl.innerHTML = '<p style="color:#94a3b8;font-size:12px;margin:4px 0;">Available all day (no restrictions)</p>';
     } else {
-      globalRulesEl.innerHTML = globalRules.map(rule => `
+      globalRulesEl.innerHTML = globalRules.map(rule => {
+        const divs = Array.isArray(rule.divisions) ? rule.divisions : [];
+        const tag = divs.length > 0
+          ? ` <span style="font-size:11px;background:#e6f4f7;color:#0A4A56;border-radius:4px;padding:1px 6px;margin-left:6px;">grade ${divs.join(', ')}</span>`
+          : ' <span style="font-size:11px;color:#94a3b8;margin-left:6px;">(all grades)</span>';
+        return `
         <div class="da-rule-item da-rule-${rule.type.toLowerCase()}">
           <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
-          <span class="da-rule-time">${rule.start} - ${rule.end}</span>
-        </div>
-      `).join('');
+          <span class="da-rule-time">${rule.start} - ${rule.end}</span>${tag}
+        </div>`;
+      }).join('');
     }
     
     // Render daily rules

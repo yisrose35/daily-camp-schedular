@@ -301,7 +301,7 @@
             const effectiveRules = dailyRules.length > 0 ? dailyRules : (props.timeRules || []);
             
             if (effectiveRules.length > 0 && !bypassTimeRules) {
-                const isOpen = checkTimeRulesForBlock(startMin, endMin, effectiveRules, slots);
+                const isOpen = checkTimeRulesForBlock(startMin, endMin, effectiveRules, slots, divisionName);
                 
                 if (!isOpen) {
                     log(`    ❌ ${specialName}: closed during ${startMin}-${endMin} (time rules)`);
@@ -353,8 +353,17 @@
     /**
      * Check if a time block passes time rules
      */
-    function checkTimeRulesForBlock(startMin, endMin, rules, slots) {
-        const parsedRules = rules.map(r => ({
+    function checkTimeRulesForBlock(startMin, endMin, rules, slots, divisionName) {
+        const myDiv = divisionName != null ? String(divisionName) : null;
+        // Per-grade scoping: skip rules whose `divisions` list doesn't
+        // include the current division. Empty/missing list = applies to all.
+        const scoped = rules.filter(r => {
+            const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+            if (rDivs.length === 0) return true;
+            if (!myDiv) return true;
+            return rDivs.includes(myDiv);
+        });
+        const parsedRules = scoped.map(r => ({
             ...r,
             startMin: parseTime(r.start) ?? r.startMin,
             endMin: parseTime(r.end) ?? r.endMin
@@ -362,7 +371,7 @@
 
         const availableRules = parsedRules.filter(r => r.type === "Available");
         if (availableRules.length > 0) {
-            const inAvailable = availableRules.some(r => 
+            const inAvailable = availableRules.some(r =>
                 startMin >= r.startMin && endMin <= r.endMin
             );
             if (!inAvailable) return false;
