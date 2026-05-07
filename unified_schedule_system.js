@@ -835,10 +835,24 @@ function shouldHighlightBunk(bunkName) {
         return assignments[bunk][slotIndex] || null;
     }
 
+    // ★ Build a Set of "special activity" names (e.g. Gameroom, Canteen, Arts & Crafts)
+    //   so we can exclude them from the sharers display. Re-read each call so updates
+    //   in settings appear immediately.
+    function _specialNamesSet() {
+        const out = new Set();
+        try {
+            const g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            const specials = (g.app1 && g.app1.specialActivities) || [];
+            specials.forEach(s => {
+                if (s && s.name) out.add(String(s.name).toLowerCase().trim());
+            });
+        } catch (e) { /* ignore */ }
+        return out;
+    }
+
     // ★ Find OTHER bunks (any division) that share this bunk's field at this time.
-    //   Returns sorted array of bunk names. Empty when no one is sharing.
-    //   Sports only — pinned events (Swim, Lunch, Snacks, Pool, Change, Dismissal),
-    //   leagues, transitions, electives are skipped.
+    //   Sports only — pinned events, electives, leagues, transitions, and special
+    //   activities (Gameroom, Canteen, Arts & Crafts, etc.) are skipped.
     function findFieldSharers(bunk, slotIdx, divName) {
         const myEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
         if (!myEntry) return [];
@@ -847,9 +861,14 @@ function shouldHighlightBunk(bunkName) {
         if (myEntry._isDismissal || myEntry._isSnack) return [];
         if (myEntry._pinned) return [];
         const _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
+        const _myField = (typeof myEntry.field === 'string' ? myEntry.field
+            : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();
         const NON_SPORTS = ['swim', 'pool', 'swimming', 'lunch', 'snacks', 'snack',
                             'dismissal', 'change', 'free', 'free play', 'free time', 'rest'];
         if (NON_SPORTS.some(n => _myAct === n || _myAct.includes(n))) return [];
+        // Skip if either the activity or the field is a configured special activity.
+        const _specials = _specialNamesSet();
+        if (_specials.has(_myAct) || _specials.has(_myField)) return [];
         const myField = (typeof myEntry.field === 'string') ? myEntry.field
             : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
         if (!myField) return [];

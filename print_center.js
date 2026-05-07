@@ -252,8 +252,24 @@ function getBellScheduleLayers(divName) {
     }
 }
 
+// ★ Build a Set of special activity names so we can exclude them from sharers.
+function _pcSpecialNamesSet() {
+    var out = {};
+    try {
+        var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        var specials = (g.app1 && g.app1.specialActivities) || [];
+        for (var i = 0; i < specials.length; i++) {
+            if (specials[i] && specials[i].name) {
+                out[String(specials[i].name).toLowerCase().trim()] = true;
+            }
+        }
+    } catch (e) { /* ignore */ }
+    return out;
+}
+
 // ★ Find OTHER bunks (any division) that share this bunk's field at this time.
-//   Sports only — pinned events / non-sport activities are skipped.
+//   Sports only — pinned events, electives, leagues, transitions, and configured
+//   special activities (Gameroom, Canteen, Arts & Crafts, etc.) are skipped.
 function pcFindFieldSharers(bunk, slotIdx, divName) {
     var myEntry = window.scheduleAssignments && window.scheduleAssignments[bunk] && window.scheduleAssignments[bunk][slotIdx];
     if (!myEntry) return [];
@@ -262,11 +278,15 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
     if (myEntry._isDismissal || myEntry._isSnack) return [];
     if (myEntry._pinned) return [];
     var _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
+    var _myField = (typeof myEntry.field === 'string' ? myEntry.field
+        : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();
     var NON_SPORTS = ['swim', 'pool', 'swimming', 'lunch', 'snacks', 'snack',
                       'dismissal', 'change', 'free', 'free play', 'free time', 'rest'];
     for (var ni = 0; ni < NON_SPORTS.length; ni++) {
         if (_myAct === NON_SPORTS[ni] || _myAct.indexOf(NON_SPORTS[ni]) !== -1) return [];
     }
+    var _specials = _pcSpecialNamesSet();
+    if (_specials[_myAct] || _specials[_myField]) return [];
     var myField = (typeof myEntry.field === 'string') ? myEntry.field
         : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
     if (!myField) return [];
