@@ -777,21 +777,40 @@ function getStyles() {
     '.pc3-workspace{flex:1;display:flex;min-height:0;overflow:hidden;position:relative;}' +
 
     /* ── Sidebar ── */
-    '.pc3-sidebar{width:220px;background:#fff;border-right:1px solid #e2e8f0;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;transition:width .2s;}' +
+    '.pc3-sidebar{width:260px;background:#fff;border-right:1px solid #e7e5e4;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;transition:width .2s;}' +
     '.pc3-sidebar.collapsed{width:0;border-right:none;}' +
-    '.pc3-sidebar-header{padding:8px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;font-size:12px;color:#475569;display:flex;align-items:center;justify-content:space-between;}' +
-    '.pc3-sidebar-scroll{flex:1;overflow-y:auto;padding:6px 8px;}' +
+    '.pc3-sidebar-header{padding:14px 16px 8px;font-weight:700;font-size:12px;color:#1c1917;display:flex;align-items:center;justify-content:space-between;text-transform:uppercase;letter-spacing:.5px;}' +
+    '.pc3-sidebar-count{font-size:10px;font-weight:600;color:#147D91;background:#ecfeff;padding:2px 8px;border-radius:99px;text-transform:none;letter-spacing:0;}' +
+    '.pc3-sidebar-search{padding:0 12px 8px;}' +
+    '.pc3-sidebar-search-input{width:100%;padding:7px 10px;border:1px solid #e7e5e4;border-radius:8px;font-size:12px;font-family:inherit;background:#fafaf9;color:#1c1917;transition:background .15s,border-color .15s;}' +
+    '.pc3-sidebar-search-input:focus{outline:none;background:#fff;border-color:#147D91;box-shadow:0 0 0 3px rgba(20,125,145,.12);}' +
+    '.pc3-sidebar-search-input::placeholder{color:#a8a29e;}' +
+    '.pc3-sidebar-scroll{flex:1;overflow-y:auto;padding:0 8px 12px;}' +
     '.pc3-sidebar-group{margin-bottom:10px;}' +
-    '.pc3-sidebar-group-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin-bottom:4px;padding:0 4px;}' +
-    '.pc3-item{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:12px;transition:background .1s;}' +
-    '.pc3-item:hover{background:#f1f5f9;}' +
-    '.pc3-item.selected{background:#e0f2fe;color:#0369a1;}' +
-    '.pc3-item input[type="checkbox"]{accent-color:#147D91;margin:0;cursor:pointer;}' +
-    '.pc3-item-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
-    '.pc3-item-count{font-size:10px;color:#94a3b8;font-weight:600;}' +
-    '.pc3-sidebar-actions{padding:6px 8px;border-top:1px solid #e2e8f0;display:flex;gap:4px;}' +
-    '.pc3-sidebar-actions button{flex:1;font-size:10px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:4px;background:#fff;cursor:pointer;font-family:inherit;color:#475569;}' +
-    '.pc3-sidebar-actions button:hover{background:#f1f5f9;}' +
+    '.pc3-sidebar-group-head{display:flex;align-items:center;gap:6px;padding:6px 8px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#a8a29e;}' +
+    '.pc3-sidebar-group-name{flex:1;}' +
+    '.pc3-sidebar-group-toggle{font-size:10px;font-weight:600;color:#147D91;background:transparent;border:none;cursor:pointer;text-transform:uppercase;letter-spacing:.4px;padding:2px 4px;border-radius:4px;font-family:inherit;}' +
+    '.pc3-sidebar-group-toggle:hover{background:#ecfeff;}' +
+    '.pc3-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;cursor:pointer;font-size:13px;color:#1c1917;transition:background .12s;border:1px solid transparent;}' +
+    '.pc3-item:hover{background:#fafaf9;}' +
+    '.pc3-item.selected{background:#ecfeff;border-color:rgba(20,125,145,.15);}' +
+    '.pc3-item input[type="checkbox"]{accent-color:#147D91;margin:0;cursor:pointer;width:14px;height:14px;}' +
+    '.pc3-item-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}' +
+    '.pc3-item-count{font-size:10px;color:#a8a29e;font-weight:600;font-variant-numeric:tabular-nums;}' +
+    '.pc3-sidebar-empty{padding:20px 12px;text-align:center;color:#a8a29e;font-size:12px;}' +
+    '.pc3-sidebar-actions{padding:8px 12px;border-top:1px solid #e7e5e4;display:flex;gap:6px;background:#fafaf9;}' +
+    '.pc3-sidebar-actions button{flex:1;font-size:11px;padding:6px 8px;border:1px solid #e7e5e4;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;color:#44403c;font-weight:600;transition:background .12s,border-color .12s;}' +
+    '.pc3-sidebar-actions button:hover{background:#fafaf9;border-color:#d6d3d1;}' +
+    '.pc3-sidebar-actions button.primary{background:#147D91;color:#fff;border-color:#0F6E80;}' +
+    '.pc3-sidebar-actions button.primary:hover{background:#0F6E80;}' +
+    /* Empty-state suggestion chips */
+    '.pc3-quickpick{display:flex;flex-direction:column;gap:8px;margin-top:18px;}' +
+    '.pc3-quickpick-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;border:1px solid #e7e5e4;border-radius:8px;background:#fff;color:#1c1917;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;text-align:left;transition:background .12s,border-color .12s,transform .05s;}' +
+    '.pc3-quickpick-btn:hover{background:#fafaf9;border-color:#147D91;}' +
+    '.pc3-quickpick-btn:active{transform:translateY(1px);}' +
+    '.pc3-quickpick-btn .pc3-quickpick-icon{width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;background:#ecfeff;color:#147D91;border-radius:6px;flex-shrink:0;}' +
+    '.pc3-quickpick-btn .pc3-quickpick-text{flex:1;line-height:1.3;}' +
+    '.pc3-quickpick-btn .pc3-quickpick-sub{display:block;font-size:11px;font-weight:500;color:#78716c;margin-top:1px;}' +
 
     /* ── Grid Preview ── */
     '.pc3-grid-area{flex:1;overflow:auto;background:#e8ecf0;padding:16px;min-height:0;}' +
@@ -1024,18 +1043,35 @@ function buildMainUI() {
     '<div class="pc3-workspace">' +
         /* Sidebar */
         '<div class="pc3-sidebar" id="pc3-sidebar">' +
-            '<div class="pc3-sidebar-header"><span id="pc3-sidebar-title">Divisions</span></div>' +
+            '<div class="pc3-sidebar-header"><span id="pc3-sidebar-title">Divisions</span><span class="pc3-sidebar-count" id="pc3-sidebar-count">0 selected</span></div>' +
+            '<div class="pc3-sidebar-search">' +
+                '<input type="text" id="pc3-sidebar-search" class="pc3-sidebar-search-input" placeholder="Search…">' +
+            '</div>' +
             '<div class="pc3-sidebar-scroll" id="pc3-sidebar-scroll"></div>' +
-            '<div class="pc3-sidebar-actions"><button onclick="window._pc3SelectAll()">Select All</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
+            '<div class="pc3-sidebar-actions"><button onclick="window._pc3SelectAll()">Select all</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
         '</div>' +
 
         /* Grid Area */
         '<div class="pc3-grid-area" id="pc3-grid-area">' +
             '<div id="pc3-preview-empty" style="display:flex;align-items:center;justify-content:center;height:100%;">' +
-                '<div style="text-align:center;max-width:340px;">' +
+                '<div style="text-align:center;max-width:380px;">' +
                     '<div style="font-size:36px;margin-bottom:10px;opacity:.35;color:#a8a29e;">' + ICO.grid + '</div>' +
-                    '<p style="margin:0 0 6px;font-size:15px;font-weight:600;color:#1c1917;">Pick what you want to print</p>' +
-                    '<p style="margin:0;font-size:12px;color:#78716c;line-height:1.5;">Choose divisions, bunks, or locations from the left and they will appear here. Then hit <strong>Output</strong> to print, share, or export.</p>' +
+                    '<p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#1c1917;">Pick what you want to print</p>' +
+                    '<p style="margin:0 0 18px;font-size:12px;color:#78716c;line-height:1.5;">Use the sidebar, or jump in with one of these:</p>' +
+                    '<div class="pc3-quickpick">' +
+                        '<button class="pc3-quickpick-btn" onclick="window._pc3Quickpick(\'all-divisions\')">' +
+                            '<span class="pc3-quickpick-icon">' + ICO.grid + '</span>' +
+                            '<span class="pc3-quickpick-text">All divisions<span class="pc3-quickpick-sub">One sheet per division</span></span>' +
+                        '</button>' +
+                        '<button class="pc3-quickpick-btn" onclick="window._pc3Quickpick(\'all-bunks\')">' +
+                            '<span class="pc3-quickpick-icon">' + ICO.user + '</span>' +
+                            '<span class="pc3-quickpick-text">Every bunk’s day<span class="pc3-quickpick-sub">One sheet per bunk</span></span>' +
+                        '</button>' +
+                        '<button class="pc3-quickpick-btn" onclick="window._pc3Quickpick(\'all-locations\')">' +
+                            '<span class="pc3-quickpick-icon">' + ICO.mapPin + '</span>' +
+                            '<span class="pc3-quickpick-text">Every location’s day<span class="pc3-quickpick-sub">Who is at each field/court when</span></span>' +
+                        '</button>' +
+                    '</div>' +
                 '</div>' +
             '</div>' +
             '<div id="pc3-preview-content" style="display:none;"></div>' +
@@ -1143,33 +1179,38 @@ function readDesignValues() {
 function populateSidebar() {
     var container = el('pc3-sidebar-scroll');
     var titleEl = el('pc3-sidebar-title');
+    var searchEl = el('pc3-sidebar-search');
     if (!container) return;
-    var html = '';
     var divs = getDivisions();
+    // Build a flat array of items, optionally grouped by division
+    // Each item: { id, label, group?, count?, sub? }
+    var items = [];
+    var groups = []; // [{ name, items: [item, ...] }]
 
     if (_activeView === 'division') {
         if (titleEl) titleEl.textContent = 'Divisions';
+        if (searchEl) searchEl.placeholder = 'Search divisions…';
         var available = getAvailableDivisions();
         available.sort(naturalSort);
         available.forEach(function (d) {
             var bunkCount = divs[d] && divs[d].bunks ? divs[d].bunks.length : 0;
-            html += '<div class="pc3-item"><input type="checkbox" class="pc3-item-cb" data-item="' + escHtml(d) + '" checked><span class="pc3-item-label">' + escHtml(d) + '</span><span class="pc3-item-count">' + bunkCount + ' bunks</span></div>';
+            items.push({ id: d, label: d, count: bunkCount + ' bunks' });
         });
     } else if (_activeView === 'bunk') {
         if (titleEl) titleEl.textContent = 'Bunks';
+        if (searchEl) searchEl.placeholder = 'Search bunks…';
         var available2 = getAvailableDivisions();
         available2.sort(naturalSort);
         available2.forEach(function (d) {
             var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).sort(naturalSort);
             if (!bunks.length) return;
-            html += '<div class="pc3-sidebar-group"><div class="pc3-sidebar-group-title">' + escHtml(d) + '</div>';
-            bunks.forEach(function (b) {
-                html += '<div class="pc3-item"><input type="checkbox" class="pc3-item-cb" data-item="' + escHtml(b) + '" checked><span class="pc3-item-label">' + escHtml(b) + '</span></div>';
-            });
-            html += '</div>';
+            var grp = { name: d, items: [] };
+            bunks.forEach(function (b) { grp.items.push({ id: b, label: b }); });
+            groups.push(grp);
         });
     } else if (_activeView === 'location') {
         if (titleEl) titleEl.textContent = 'Locations';
+        if (searchEl) searchEl.placeholder = 'Search locations…';
         var allLocs = {};
         var aa = getAssignments();
         Object.keys(aa).forEach(function (bk) {
@@ -1180,13 +1221,89 @@ function populateSidebar() {
             });
         });
         Object.keys(allLocs).sort(naturalSort).forEach(function (loc) {
-            html += '<div class="pc3-item"><input type="checkbox" class="pc3-item-cb" data-item="' + escHtml(loc) + '" checked><span class="pc3-item-label">' + escHtml(loc) + '</span></div>';
+            items.push({ id: loc, label: loc });
         });
+    }
+
+    function renderItem(it) {
+        var checkedAttr = ' checked';
+        return '<label class="pc3-item" data-search="' + escHtml(it.label.toLowerCase()) + '">' +
+            '<input type="checkbox" class="pc3-item-cb" data-item="' + escHtml(it.id) + '"' + checkedAttr + '>' +
+            '<span class="pc3-item-label">' + escHtml(it.label) + '</span>' +
+            (it.count ? '<span class="pc3-item-count">' + escHtml(it.count) + '</span>' : '') +
+        '</label>';
+    }
+
+    var html = '';
+    if (groups.length) {
+        groups.forEach(function (g, gi) {
+            html += '<div class="pc3-sidebar-group" data-group="' + escHtml(g.name) + '">' +
+                '<div class="pc3-sidebar-group-head">' +
+                    '<span class="pc3-sidebar-group-name">' + escHtml(g.name) + '</span>' +
+                    '<button class="pc3-sidebar-group-toggle" data-group-toggle="' + escHtml(g.name) + '" data-state="all">All</button>' +
+                '</div>' +
+                g.items.map(renderItem).join('') +
+            '</div>';
+        });
+    } else if (items.length) {
+        html += items.map(renderItem).join('');
+    } else {
+        html += '<div class="pc3-sidebar-empty">Nothing to show. Generate a schedule first.</div>';
     }
     container.innerHTML = html;
     container.querySelectorAll('.pc3-item-cb').forEach(function (cb) {
-        cb.addEventListener('change', function () { liveRefresh(); });
+        cb.addEventListener('change', function () { updateSidebarSelectionUI(); liveRefresh(); });
     });
+    container.querySelectorAll('.pc3-sidebar-group-toggle').forEach(function (btn) {
+        btn.addEventListener('click', function (ev) {
+            ev.preventDefault(); ev.stopPropagation();
+            var groupName = this.getAttribute('data-group-toggle');
+            var groupEl = document.querySelector('.pc3-sidebar-group[data-group="' + (CSS && CSS.escape ? CSS.escape(groupName) : groupName) + '"]') ||
+                          this.closest('.pc3-sidebar-group');
+            if (!groupEl) return;
+            var anyChecked = !!groupEl.querySelector('.pc3-item-cb:checked');
+            var newState = !anyChecked; // if any are checked, uncheck all; otherwise check all
+            groupEl.querySelectorAll('.pc3-item-cb').forEach(function (cb) { cb.checked = newState; });
+            updateSidebarSelectionUI();
+            liveRefresh();
+        });
+    });
+
+    // Search-as-you-type
+    if (searchEl) {
+        searchEl.value = '';
+        searchEl.oninput = function () {
+            var q = (this.value || '').toLowerCase().trim();
+            container.querySelectorAll('.pc3-item').forEach(function (it) {
+                var match = !q || (it.getAttribute('data-search') || '').indexOf(q) !== -1;
+                it.style.display = match ? '' : 'none';
+            });
+            // Hide groups whose items are all hidden
+            container.querySelectorAll('.pc3-sidebar-group').forEach(function (g) {
+                var visible = g.querySelectorAll('.pc3-item:not([style*="display: none"])');
+                g.style.display = visible.length ? '' : 'none';
+            });
+        };
+    }
+
+    updateSidebarSelectionUI();
+}
+
+// Reflect selection count + per-row "selected" highlight
+function updateSidebarSelectionUI() {
+    var count = 0, total = 0;
+    document.querySelectorAll('.pc3-item-cb').forEach(function (cb) {
+        total++;
+        var item = cb.closest('.pc3-item');
+        if (cb.checked) {
+            count++;
+            if (item) item.classList.add('selected');
+        } else if (item) {
+            item.classList.remove('selected');
+        }
+    });
+    var countEl = el('pc3-sidebar-count');
+    if (countEl) countEl.textContent = total ? count + ' of ' + total + ' selected' : '0 selected';
 }
 
 function getSelectedItems() {
@@ -3330,10 +3447,29 @@ window._pc3ToggleAdvanced = function () {
 };
 window._pc3SelectAll = function () {
     document.querySelectorAll('.pc3-item-cb').forEach(function (cb) { cb.checked = true; });
+    updateSidebarSelectionUI();
     liveRefresh();
 };
 window._pc3SelectNone = function () {
     document.querySelectorAll('.pc3-item-cb').forEach(function (cb) { cb.checked = false; });
+    updateSidebarSelectionUI();
+    liveRefresh();
+};
+window._pc3Quickpick = function (kind) {
+    // Switch view, then auto-select all + refresh
+    var targetView = kind === 'all-bunks' ? 'bunk' :
+                     kind === 'all-locations' ? 'location' :
+                     'division';
+    if (_activeView !== targetView) {
+        _activeView = targetView;
+        // Re-render the tab "active" state
+        document.querySelectorAll('[data-view]').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-view') === targetView);
+        });
+        populateSidebar();
+    }
+    // Sidebar's checkboxes default to checked already, just refresh preview
+    updateSidebarSelectionUI();
     liveRefresh();
 };
 window._pc3Print = triggerPrint;
