@@ -1366,7 +1366,13 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     window._postEditTimestamp = Date.now();
     
     await bypassSaveAllBunks(modifiedBunks);
-    
+
+    // ★ Sync rotation counts to cloud after conflict bypass
+    try {
+        const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
+    } catch (_e) { console.warn('[ConflictBypass] RotationCloud sync failed:', _e); }
+
     // Track specific cells for temporary highlight
     const bypassedCellKeys = [];
     result.reassigned.forEach(r => {
@@ -2460,7 +2466,38 @@ divBlocks.forEach((block, blockIdx) => {
                 subDiv.title = subText + ' (' + subDur + 'min)';
                 td.appendChild(subDiv);
             });
-        } else if (htmlContent) {
+        }
+        // *** Split-swim Change → Swim → Change subdivision ***
+        else if (entry && !entry.continuation && (entry._splitPreChange > 0 || entry._splitPostChange > 0)) {
+            const preMin = entry._splitPreChange || 0;
+            const postMin = entry._splitPostChange || 0;
+            td.innerHTML = '';
+            td.style.padding = '2px';
+            td.style.background = bgColor;
+            // Pre-Change row
+            if (preMin > 0) {
+                const preDiv = document.createElement('div');
+                preDiv.style.cssText = 'padding:2px 4px;font-size:0.7rem;font-weight:600;color:#92400E;background:#FEF3C7;border:1px solid #F59E0B;border-radius:3px;margin-bottom:2px;text-align:center;';
+                preDiv.textContent = 'Change ' + preMin + 'm';
+                preDiv.title = 'Pre-change ' + preMin + ' min';
+                td.appendChild(preDiv);
+            }
+            // Swim row
+            const swimDiv = document.createElement('div');
+            const swimBg = getEntryBackground(entry, block.event);
+            swimDiv.style.cssText = 'padding:3px 4px;font-size:0.85rem;font-weight:500;background:' + swimBg + ';border-radius:3px;text-align:center;';
+            swimDiv.textContent = formatEntry(entry);
+            td.appendChild(swimDiv);
+            // Post-Change row
+            if (postMin > 0) {
+                const postDiv = document.createElement('div');
+                postDiv.style.cssText = 'padding:2px 4px;font-size:0.7rem;font-weight:600;color:#92400E;background:#FEF3C7;border:1px solid #F59E0B;border-radius:3px;margin-top:2px;text-align:center;';
+                postDiv.textContent = 'Change ' + postMin + 'm';
+                postDiv.title = 'Post-change ' + postMin + ' min';
+                td.appendChild(postDiv);
+            }
+        }
+        else if (htmlContent) {
             td.innerHTML = htmlContent;
             td.style.background = bgColor;
             td.style.textAlign = 'left';
@@ -3266,6 +3303,13 @@ if (bypassStatus.highlight) {
 
                 window.saveGlobalSettings?.('historicalCounts', _hc);
                 if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
+
+                // ★ Sync rotation counts to cloud after displacement
+                try {
+                    const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
+                } catch (_e) { console.warn('[Displacement] RotationCloud sync failed:', _e); }
+
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
 
@@ -4870,6 +4914,11 @@ if (softBlocks.length > 0) {
             }
             window.saveGlobalSettings?.('historicalCounts', _hc);
             setTimeout(() => window.forceSyncToCloud?.(), 200);
+            // ★ Sync rotation counts to cloud after multi-bunk edit
+            try {
+                const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
+            } catch (_e) { console.warn('[MultiBunkEdit] RotationCloud sync failed:', _e); }
             console.log('[applyMultiBunkEdit] Rotation counts updated for', bunks.length, 'bunks');
         } catch (rcErr) { console.error('[applyMultiBunkEdit] Rotation count update failed:', rcErr); }
 
@@ -5033,6 +5082,13 @@ if (softBlocks.length > 0) {
                 }
                 window.saveGlobalSettings?.('historicalCounts', _hc);
                 if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
+
+                // ★ Sync rotation counts to cloud after rebalance
+                try {
+                    const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
+                } catch (_e) { console.warn('[AutoRebalance] RotationCloud sync failed:', _e); }
+
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
                 const rebalSummary = suggestions.filter(s => s.alt).map(s => `${s.bunk} → ${s.alt.activityName}${s.alt.field ? ' @ ' + s.alt.field : ''}`).join('\n');
