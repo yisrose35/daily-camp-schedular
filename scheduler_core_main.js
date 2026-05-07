@@ -2404,6 +2404,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         _swimElective: true,
                         _swimLocation: item.swimLocation,
                         _electiveActivities: item.electiveActivities || [],
+                        _reservedFields: item.reservedFields || [],
                         _preChangeMin: item._preChangeMin,
                         _postChangeMin: item._postChangeMin,
                         _splitPreChange: parseInt(item._preChangeMin) || 0,

@@ -918,8 +918,10 @@ function shouldHighlightBunk(bunkName) {
         if (entry._isTransition || entry.continuation) return '';
         // ★ Swim + Elective hybrid: list "Swim" + each reserved elective field.
         if (entry._swimElective) {
-            const acts = entry._electiveActivities || [];
             const poolLc = (entry._swimLocation || '').toLowerCase().trim();
+            // Try _electiveActivities first; fall back to _reservedFields (minus the pool)
+            let acts = entry._electiveActivities || entry._reservedFields || entry.reservedFields || [];
+            if (!acts.length && Array.isArray(entry._allReservedFields)) acts = entry._allReservedFields;
             const filtered = acts.filter(function (a) { return (a || '').toLowerCase().trim() !== poolLc; });
             return ['Swim'].concat(filtered).join(', ');
         }
@@ -2490,7 +2492,10 @@ divBlocks.forEach((block, blockIdx) => {
             //   e.g. "Swim, Black Top, Field A". Drop the swim location itself if
             //   it appears in the elective list to avoid duplication.
             const _swimLocLc = (swimLoc || '').toLowerCase().trim();
-            const _seActsClean = acts.filter(function (a) { return (a || '').toLowerCase().trim() !== _swimLocLc; });
+            // Fall back to reservedFields when electiveActivities is empty (older saved tiles)
+            let _seSrc = (block.electiveActivities && block.electiveActivities.length) ? block.electiveActivities :
+                         (block.reservedFields || []);
+            const _seActsClean = _seSrc.filter(function (a) { return (a || '').toLowerCase().trim() !== _swimLocLc; });
             const label = ['Swim'].concat(_seActsClean).join(', ');
             const pre = parseInt(block._preChangeMin) || 0;
             const post = parseInt(block._postChangeMin) || 0;
@@ -2538,7 +2543,10 @@ divBlocks.forEach((block, blockIdx) => {
             //   e.g. "Swim, Black Top, Field A". Drop the swim location itself if
             //   it appears in the elective list to avoid duplication.
             const _swimLocLc = (swimLoc || '').toLowerCase().trim();
-            const _seActsClean = acts.filter(function (a) { return (a || '').toLowerCase().trim() !== _swimLocLc; });
+            // Fall back to reservedFields when electiveActivities is empty (older saved tiles)
+            let _seSrc = (block.electiveActivities && block.electiveActivities.length) ? block.electiveActivities :
+                         (block.reservedFields || []);
+            const _seActsClean = _seSrc.filter(function (a) { return (a || '').toLowerCase().trim() !== _swimLocLc; });
             const label = ['Swim'].concat(_seActsClean).join(', ');
             const pre = parseInt(block._preChangeMin) || 0;
             const post = parseInt(block._postChangeMin) || 0;

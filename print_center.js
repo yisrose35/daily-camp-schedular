@@ -484,8 +484,10 @@ function formatEntry(entry) {
     if (entry._isTransition) return entry.sport || 'Transition';
     // ★ Swim + Elective hybrid: list "Swim" + each reserved elective field.
     if (entry._swimElective) {
-        var seActs = entry._electiveActivities || [];
         var sePoolLc = (entry._swimLocation || '').toLowerCase().trim();
+        var seActs = (entry._electiveActivities && entry._electiveActivities.length)
+            ? entry._electiveActivities
+            : (entry._reservedFields || entry.reservedFields || []);
         var seFiltered = seActs.filter(function (a) { return (a || '').toLowerCase().trim() !== sePoolLc; });
         return ['Swim'].concat(seFiltered).join(', ');
     }
