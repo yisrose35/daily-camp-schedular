@@ -506,6 +506,7 @@ const TILES = [
   { type: 'smart', name: 'Smart Tile', style: 'background:#7dd3fc;color:#0c4a6e;border:2px dashed #0284c7;', description: 'Balances 2 activities with a fallback.' },
   { type: 'split', name: 'Split Activity', style: 'background:#fdba74;color:#7c2d12;', description: 'Two activities share the block (Switch halfway).' },
   { type: 'elective', name: 'Elective', style: 'background:#f0abfc;color:#701a75;', description: 'Reserve multiple activities for this division only.' },
+  { type: 'swim_elective', name: 'Swim + Elective', style: 'background:linear-gradient(to right, #67e8f9 0%, #67e8f9 50%, #f0abfc 50%, #f0abfc 100%);color:#155e75;', description: 'Hybrid: pool reserved + activities reserved. Drop a Swim onto an Elective (or vice versa) to merge.' },
   { type: 'league', name: 'League Game', style: 'background:#a5b4fc;color:#312e81;', description: 'Regular League slot (Full Buyout).' },
   { type: 'specialty_league', name: 'Specialty League', style: 'background:#d8b4fe;color:#581c87;', description: 'Specialty League slot (Full Buyout).' },
   { type: 'swim', name: 'Swim', style: 'background:#67e8f9;color:#155e75;', description: 'Pinned swim time.' },
