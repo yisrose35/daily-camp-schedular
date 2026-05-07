@@ -2429,11 +2429,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             _activity: eventName
                         }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
 
-                        // Stamp hybrid metadata onto the freshly-written assignment so
-                        // renderers can show the combined Swim + Elective label.
+                        // Stamp hybrid metadata onto every slot of this bunk that
+                        // got a 'Swim + Elective' fill. fillBlock can write to a
+                        // different slot index than slots[0] (it derives mainSlots
+                        // from findSlotsForRange + transition rules), so scan the
+                        // bunk's full slot array and stamp anywhere matching the
+                        // event name and time range.
                         if (hybridExtras) {
-                            const a = window.scheduleAssignments?.[bunk]?.[slots[0]];
-                            if (a) Object.assign(a, hybridExtras);
+                            const ba = window.scheduleAssignments?.[bunk];
+                            if (Array.isArray(ba)) {
+                                for (let _si = 0; _si < ba.length; _si++) {
+                                    const a = ba[_si];
+                                    if (!a) continue;
+                                    const matchesEvent = (a.field === eventName) || (a._activity === eventName);
+                                    const matchesTime = (a._startMin === sMin) || (a._startMin == null);
+                                    if (matchesEvent && matchesTime) {
+                                        Object.assign(a, hybridExtras);
+                                    }
+                                }
+                            }
                         }
 
                         pinnedEventCount++;
