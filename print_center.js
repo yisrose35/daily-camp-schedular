@@ -313,6 +313,33 @@ function getPerBunkSchedule(bunk, divName) {
 }
 
 // =========================================================================
+// ★★★ Helper: render a cell with optional Change → Swim → Change subdivision
+// Returns just the inner HTML (without <td>...</td>); caller wraps it.
+// =========================================================================
+function pcCellInnerHtml(text, type, opts) {
+    opts = opts || {};
+    var preMin = opts.preChange || 0;
+    var postMin = opts.postChange || 0;
+    var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
+    var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
+    if (preMin > 0 || postMin > 0) {
+        var html = '<div style="border-radius:5px;overflow:hidden;display:flex;flex-direction:column;">';
+        if (preMin > 0) {
+            html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-bottom:1px solid #F59E0B;">Change ' + preMin + 'm</div>';
+        }
+        html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;text-align:center;flex:1;">';
+        html += '<span style="font-size:11px;font-weight:500;">' + escHtml(text) + '</span>';
+        html += '</div>';
+        if (postMin > 0) {
+            html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-top:1px solid #F59E0B;">Change ' + postMin + 'm</div>';
+        }
+        html += '</div>';
+        return html;
+    }
+    return escHtml(text);
+}
+
+// =========================================================================
 // ★★★ MANUAL MODE: Division Block Builder ★★★
 // In manual mode, all bunks in a division share the same time slots
 // =========================================================================
@@ -353,11 +380,34 @@ function buildDivisionBlocks(divName) {
             if (foundLabel) { ev = foundLabel; }
             else { if (isSpecialty) { sc2++; ev = 'Specialty League ' + sc2; } else { lc++; ev = 'League Game ' + lc; } }
         }
-        blocks.push({
-            label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin),
-            startMin: bl.startMin, endMin: bl.endMin,
-            event: ev, type: bl.item.type, isLeague: isLeagueBlock
-        });
+        // \u2605 Split-tile expansion: split items become TWO half-blocks so each
+        // half renders its own per-bunk activity. Each half-block carries
+        // _splitHalf so render code can find the correct slot.
+        if (bl.item.type === 'split') {
+            var midMin = Math.floor((bl.startMin + bl.endMin) / 2);
+            blocks.push({
+                label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(midMin),
+                startMin: bl.startMin, endMin: midMin,
+                event: ev, type: 'split_half', isLeague: false,
+                _splitHalf: 1, _splitParent: ev,
+                _preChangeMin: bl.item._preChangeMin || 0,
+                _postChangeMin: bl.item._postChangeMin || 0
+            });
+            blocks.push({
+                label: minutesToTimeLabel(midMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin),
+                startMin: midMin, endMin: bl.endMin,
+                event: ev, type: 'split_half', isLeague: false,
+                _splitHalf: 2, _splitParent: ev,
+                _preChangeMin: bl.item._preChangeMin || 0,
+                _postChangeMin: bl.item._postChangeMin || 0
+            });
+        } else {
+            blocks.push({
+                label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin),
+                startMin: bl.startMin, endMin: bl.endMin,
+                event: ev, type: bl.item.type, isLeague: isLeagueBlock
+            });
+        }
     });
 
     // Dedup by startMin
@@ -1256,7 +1306,11 @@ function renderManualBunksTop(divName, bunks, blocks) {
                 var type = getEntryType(entry);
                 var text = entry ? formatEntry(entry) : '';
                 if (!text && type === 'free') text = '\u2014';
-                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
+                var inner = pcCellInnerHtml(text, type, {
+                    preChange: entry ? (entry._splitPreChange || 0) : 0,
+                    postChange: entry ? (entry._splitPostChange || 0) : 0
+                });
+                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + bi) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + inner + '</td>';
             });
         }
         html += '</tr>';
@@ -1303,8 +1357,14 @@ function renderManualTimeTop(divName, bunks, blocks) {
                     var matchups = buildLeagueMatchups(eb, divName);
                     if (matchups.length) text += ' | ' + matchups.join(', ');
                 }
+                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
+            } else {
+                var inner = pcCellInnerHtml(text, type, {
+                    preChange: entry ? (entry._splitPreChange || 0) : 0,
+                    postChange: entry ? (entry._splitPostChange || 0) : 0
+                });
+                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + inner + '</td>';
             }
-            html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
         });
         html += '</tr>';
     });
@@ -1355,10 +1415,14 @@ function renderBunkSheet(bunk) {
             if (!act && loc) { act = loc; loc = ''; }
         }
         var actDisplay = act || '\u2014';
+        var actInner = pcCellInnerHtml(actDisplay, type, {
+            preChange: entry ? (entry._splitPreChange || 0) : 0,
+            postChange: entry ? (entry._splitPostChange || 0) : 0
+        });
         html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
         html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
-        html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(actDisplay) + '">' + escHtml(actDisplay) + '</td>';
+        html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(actDisplay) + '">' + actInner + '</td>';
         html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(loc) + '">' + escHtml(loc) + '</td>';
         html += '</tr>';
     });
