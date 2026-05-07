@@ -818,6 +818,20 @@ function getStyles() {
     '.pc3-popover-link{font-size:12px;color:#147D91;text-decoration:none;font-weight:600;padding:6px 10px;cursor:pointer;display:inline-block;}' +
     '.pc3-popover-link:hover{text-decoration:underline;}' +
 
+    /* Hover-tooltip card */
+    '.pc3-celltip{position:fixed;z-index:200;pointer-events:none;background:#0f172a;color:#f8fafc;font-size:12px;line-height:1.45;padding:10px 12px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.1);max-width:280px;opacity:0;transform:translateY(2px);transition:opacity .12s,transform .12s;font-family:inherit;}' +
+    '.pc3-celltip.show{opacity:1;transform:none;}' +
+    '.pc3-celltip-title{font-size:13px;font-weight:700;margin-bottom:4px;color:#fff;}' +
+    '.pc3-celltip-row{display:flex;gap:6px;align-items:flex-start;color:#cbd5e1;}' +
+    '.pc3-celltip-row b{color:#fff;font-weight:600;}' +
+    '.pc3-celltip-label{color:#94a3b8;text-transform:uppercase;font-size:10px;font-weight:600;letter-spacing:.4px;min-width:48px;}' +
+    '.pc3-celltip-hint{margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.1);font-size:10px;color:#94a3b8;font-style:italic;}' +
+    /* Make cells visibly clickable when in interactive mode */
+    '.pc3-tbl td[data-bunk][data-slot]{cursor:pointer;}' +
+    '.pc3-tbl td[data-bunk][data-slot]:hover{outline:1.5px solid #147D91;outline-offset:-1.5px;}' +
+    '.pc3.inspect-mode .pc3-tbl td[data-bunk][data-slot]{cursor:cell;}' +
+    '.pc3.inspect-mode .pc3-tbl td[data-bunk][data-slot]:hover{outline:2px solid #147D91;outline-offset:-1px;}' +
+
     /* Page-break preview — thin dashed lines + 'page N' label */
     '.pc3-pagebreak{position:absolute;left:0;right:0;height:0;border-top:2px dashed #f97316;pointer-events:none;z-index:5;}' +
     '.pc3-pagebreak::after{content:attr(data-page);position:absolute;right:8px;top:-10px;background:#f97316;color:#fff;font-size:10px;font-weight:700;padding:1px 8px;border-radius:99px;letter-spacing:.4px;white-space:nowrap;}' +
@@ -2359,6 +2373,118 @@ function liveRefresh() {
     // ★ Overlay simulated page-break lines + tag each sheet with its page count.
     //   Done after layout so we can read each sheet's actual rendered height.
     requestAnimationFrame(function () { decoratePageBreaks(pc); });
+
+    // ★ Wire up rich hover tooltips and click-to-jump-to-DA on every data cell.
+    attachCellInteractivity(pc);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CELL INTERACTIVITY
+// Hover → rich tooltip (activity, location, sharers, change times).
+// Click → jump to Daily Adjustments, scrolled to the matching tile.
+// ─────────────────────────────────────────────────────────────────────────
+function _pcCellTipEl() {
+    var t = document.getElementById('pc3-celltip');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = 'pc3-celltip';
+        t.className = 'pc3-celltip';
+        document.body.appendChild(t);
+    }
+    return t;
+}
+
+function _pcBuildCellTipHtml(bunk, slotIdx, divName) {
+    var entry = window.scheduleAssignments && window.scheduleAssignments[bunk] && window.scheduleAssignments[bunk][slotIdx];
+    var slot = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx];
+    if (!entry) return '';
+    var act = entry._activity || entry.sport || '';
+    var field = (typeof entry.field === 'string') ? entry.field
+        : (entry.field && entry.field.name ? entry.field.name : '');
+    var title = act || field || 'Free';
+    if (act && field && act !== field) title = act;
+
+    var rows = [];
+    rows.push('<div class="pc3-celltip-title">' + escHtml(title) + '</div>');
+    if (field && field !== act) rows.push('<div class="pc3-celltip-row"><span class="pc3-celltip-label">Where</span><span>' + escHtml(field) + '</span></div>');
+    if (slot && slot.startMin != null) {
+        rows.push('<div class="pc3-celltip-row"><span class="pc3-celltip-label">When</span><span>' + minutesToTimeLabel(slot.startMin) + ' – ' + minutesToTimeLabel(slot.endMin) + ' (' + (slot.endMin - slot.startMin) + ' min)</span></div>');
+    }
+    rows.push('<div class="pc3-celltip-row"><span class="pc3-celltip-label">Bunk</span><span>' + escHtml(bunk) + ' &middot; ' + escHtml(divName) + '</span></div>');
+
+    // Sharers (sports only — same rule as the cell-label sharers)
+    var sharers = (typeof pcFindFieldSharers === 'function') ? pcFindFieldSharers(bunk, slotIdx, divName) : [];
+    if (sharers.length) {
+        var names = sharers.map(function (b) { return /^\d/.test(String(b)) ? 'Bunk ' + b : b; });
+        rows.push('<div class="pc3-celltip-row"><span class="pc3-celltip-label">With</span><span>' + escHtml(names.join(', ')) + '</span></div>');
+    }
+    // Change subdivision (split-swim or hybrid)
+    var pre = entry._splitPreChange || entry._preChangeMin || 0;
+    var post = entry._splitPostChange || entry._postChangeMin || 0;
+    if (pre || post) {
+        var ch = pre === post ? (pre + 'm') : (pre + 'm pre / ' + post + 'm post');
+        rows.push('<div class="pc3-celltip-row"><span class="pc3-celltip-label">Change</span><span>' + ch + '</span></div>');
+    }
+    // Hybrid pool + electives
+    if (entry._swimElective) {
+        var acts = entry._electiveActivities || [];
+        if (acts.length) rows.push('<div class="pc3-celltip-row"><span class="pc3-celltip-label">Electives</span><span>' + escHtml(acts.join(', ')) + '</span></div>');
+    }
+    // Tags
+    var tag = '';
+    if (entry._h2h || entry._isSpecialtyLeague || entry._allMatchups) tag = 'League';
+    else if (entry._pinned) tag = 'Pinned';
+    else if (entry._fromBackground) tag = 'Background';
+    else if (entry._fixed) tag = 'Fixed';
+    if (tag) rows.push('<div class="pc3-celltip-row"><span class="pc3-celltip-label">Type</span><span>' + tag + '</span></div>');
+
+    rows.push('<div class="pc3-celltip-hint">Click to open in Daily Adjustments</div>');
+    return rows.join('');
+}
+
+function _pcPositionCellTip(tipEl, mouseEvent) {
+    var x = mouseEvent.clientX, y = mouseEvent.clientY;
+    var pad = 14;
+    tipEl.style.left = (x + pad) + 'px';
+    tipEl.style.top = (y + pad) + 'px';
+    // After append, nudge into viewport if overflowing
+    requestAnimationFrame(function () {
+        var r = tipEl.getBoundingClientRect();
+        if (r.right > window.innerWidth - 8) tipEl.style.left = Math.max(8, x - r.width - pad) + 'px';
+        if (r.bottom > window.innerHeight - 8) tipEl.style.top = Math.max(8, y - r.height - pad) + 'px';
+    });
+}
+
+function attachCellInteractivity(pc) {
+    if (!pc) return;
+    var tip = _pcCellTipEl();
+    var hideTimer = null;
+
+    pc.querySelectorAll('td[data-bunk][data-slot]').forEach(function (td) {
+        var bunk = td.getAttribute('data-bunk');
+        var slotIdx = parseInt(td.getAttribute('data-slot'));
+        var divName = td.getAttribute('data-div');
+        if (!bunk || isNaN(slotIdx) || !divName) return;
+
+        td.addEventListener('mouseenter', function (ev) {
+            if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+            var html = _pcBuildCellTipHtml(bunk, slotIdx, divName);
+            if (!html) return;
+            tip.innerHTML = html;
+            _pcPositionCellTip(tip, ev);
+            tip.classList.add('show');
+        });
+        td.addEventListener('mousemove', function (ev) { if (tip.classList.contains('show')) _pcPositionCellTip(tip, ev); });
+        td.addEventListener('mouseleave', function () {
+            hideTimer = setTimeout(function () { tip.classList.remove('show'); }, 80);
+        });
+        td.addEventListener('click', function () {
+            // Don't hijack click when in inspect mode (cell selection takes over).
+            if (_inspectMode) return;
+            tip.classList.remove('show');
+            window._pc3OpenInDA && window._pc3OpenInDA(bunk, slotIdx, divName);
+        });
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -3591,6 +3717,33 @@ window._pc3ZoomReset = function () {
     var delta = 100 - _zoomLevel;
     if (delta !== 0) window._pc3Zoom(delta);
 };
+window._pc3OpenInDA = function (bunk, slotIdx, divName) {
+    // Best-effort: switch to the Daily Adjustments tab and surface a hint.
+    try {
+        // The app uses tab buttons with onclick="showTab('daily')" — try a few common patterns.
+        var daTab = document.querySelector('[data-tab="daily"], [onclick*="showTab(\'daily\')"], #tab-daily, button[data-target="daily"]');
+        if (daTab && typeof daTab.click === 'function') daTab.click();
+        else if (typeof window.showTab === 'function') window.showTab('daily');
+    } catch (e) { console.warn('[PrintCenter] could not switch tab', e); }
+
+    // Scroll to the bunk row in DA after the tab is visible.
+    setTimeout(function () {
+        try {
+            // Try to scroll the bunk's row into view (DA renders rows with data-bunk).
+            var bunkRow = document.querySelector('#daily [data-bunk="' + (window.CSS && CSS.escape ? CSS.escape(bunk) : bunk) + '"]') ||
+                          document.querySelector('[data-bunk="' + bunk + '"][data-slot]');
+            if (bunkRow && bunkRow.scrollIntoView) bunkRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Brief flash
+            if (bunkRow) {
+                bunkRow.style.transition = 'box-shadow .3s';
+                bunkRow.style.boxShadow = '0 0 0 3px rgba(20,125,145,.45)';
+                setTimeout(function () { bunkRow.style.boxShadow = ''; }, 1400);
+            }
+            if (window.showToast) window.showToast('Jumped to ' + bunk + ' (' + divName + ')', 'info');
+        } catch (e) { console.warn('[PrintCenter] DA jump scroll failed', e); }
+    }, 200);
+};
+
 window._pc3ApplyPack = function (packId) {
     var pack = PRINT_PACKS.filter(function (p) { return p.id === packId; })[0];
     if (!pack) return;
