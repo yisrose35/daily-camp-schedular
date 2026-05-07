@@ -2983,7 +2983,7 @@ function addDropListeners(selector) {
               + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Pre-Change (minutes)</label><input type="text" data-field="preChangeMin" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
               + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Post-Change (minutes)</label><input type="text" data-field="postChangeMin" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
               + '</div>';
-            const fieldsContainer = main2Input ? main2Input.closest('.me-field, [style]')?.parentElement || overlay.querySelector('.me-modal-body, [class*="body"]') : null;
+            const fieldsContainer = overlay.querySelector('.ms-modal-fields') || overlay.querySelector('[class*="fields"]') || overlay.querySelector('[class*="body"]');
             if (fieldsContainer) fieldsContainer.appendChild(changeWrap);
 
             function checkSwim() {
