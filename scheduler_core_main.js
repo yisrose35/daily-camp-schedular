@@ -496,11 +496,11 @@
                     // ★★★ v17.7: Store time range AND split tile flag for proper tracking ★★★
                     _startMin: block.startTime,
                     _endMin: block.endTime,
-                    _fromSplitTile: isSplitTileBlock || pick._fromSplitTile || false,
-                    // ★★★ Split-swim change metadata (for print center rendering) ★★★
-                    _splitPreChange: pick._splitPreChange || 0,
-                    _splitPostChange: pick._splitPostChange || 0
+                    _fromSplitTile: isSplitTileBlock || pick._fromSplitTile || false
                 };
+                // ★★★ Split-swim change metadata (for print center rendering) ★★★
+                if (pick._splitPreChange > 0) window.scheduleAssignments[bunk][slotIndex]._splitPreChange = pick._splitPreChange;
+                if (pick._splitPostChange > 0) window.scheduleAssignments[bunk][slotIndex]._splitPostChange = pick._splitPostChange;
                 window.registerSingleSlotUsage(slotIndex, fName, block.divName, bunk, pick._activity || fName, fieldUsageBySlot, activityProperties);
             } else {
                 console.log(`[fillBlock] ⚠️ Skipped write for ${bunk} slot ${slotIndex} - existing: ${existing?._activity}`);
