@@ -97,6 +97,51 @@
     // applies sharing/capacity rules, returns true if field has room.
     // ========================================================================
 
+    // Returns true if the field's activityProperties.timeRules block [slotStart, slotEnd]
+    function isFieldBlockedByTimeRules(fieldName, slotStart, slotEnd, actProps) {
+        const rules = actProps?.[fieldName]?.timeRules;
+        if (!Array.isArray(rules) || rules.length === 0) return false;
+        const parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        let hasAvail = false, inAvail = false;
+        for (const tr of rules) {
+            const tStart = tr.startMin ?? (parseMin ? parseMin(tr.start || tr.startTime) : null);
+            const tEnd   = tr.endMin   ?? (parseMin ? parseMin(tr.end   || tr.endTime)   : null);
+            if (tStart == null || tEnd == null) continue;
+            const type = String(tr.type || '').toLowerCase();
+            const isUnavail = type === 'unavailable' || tr.available === false;
+            const isAvail   = type === 'available'   || tr.available === true;
+            if (isUnavail && tStart < slotEnd && tEnd > slotStart) return true;
+            if (isAvail) {
+                hasAvail = true;
+                if (slotStart >= tStart && slotEnd <= tEnd) inAvail = true;
+            }
+        }
+        if (hasAvail && !inAvail) return true;
+        return false;
+    }
+
+    // Returns true if GlobalFieldLocks blocks this field/time/division
+    function isFieldGloballyLocked(fieldName, slotStart, slotEnd, divName) {
+        try {
+            if (!window.GlobalFieldLocks) return false;
+            if (typeof window.GlobalFieldLocks.isFieldLockedByTime === 'function') {
+                const info = window.GlobalFieldLocks.isFieldLockedByTime(fieldName, slotStart, slotEnd, divName);
+                return !!info;
+            }
+        } catch (_) {}
+        return false;
+    }
+
+    // Build the set of field names blocked by combos (e.g. Full Gym blocks Gym 1)
+    function getComboBlockedFields(usedFieldName) {
+        const out = new Set();
+        try {
+            const partners = window.FieldCombos?.getExclusiveFields?.(usedFieldName) || [];
+            partners.forEach(p => out.add(String(p)));
+        } catch (_) {}
+        return out;
+    }
+
     function isFieldAvailable(fieldName, myBunk, myDiv, slotStart, slotEnd, actProps) {
         const ap = actProps[fieldName] || {};
         const sharing = ap.sharableWith || ap.sharing || {};
@@ -105,15 +150,14 @@
 
         let usageCount = 0;
         const sa = window.scheduleAssignments || {};
-        const dt = window.divisionTimes || {};
 
         for (const [otherBunk, slots] of Object.entries(sa)) {
             if (!Array.isArray(slots) || otherBunk === myBunk) continue;
             const otherDiv = getDivision(otherBunk);
-            const otherSlots = dt[otherDiv] || [];
+            if (!otherDiv) continue;
 
             for (let i = 0; i < slots.length; i++) {
-                const ot = otherSlots[i];
+                const ot = getSlotInfo(otherDiv, i, otherBunk);
                 if (!ot) continue;
                 const otStart = ot.startMin ?? 0;
                 const otEnd   = ot.endMin   ?? 0;
@@ -130,7 +174,14 @@
                               : oe.field.includes(' - ') ? oe.field.split(' - ')[0].trim()
                               : oe.field;
                 }
-                if (usedField !== fieldName) continue;
+                if (!usedField) continue;
+
+                // Combo exclusion: if a sibling bunk grabbed a combo partner, this field is taken
+                if (usedField !== fieldName) {
+                    const combos = getComboBlockedFields(usedField);
+                    if (combos.has(fieldName)) return false;
+                    continue;
+                }
 
                 // Apply sharing rules
                 if (sharingType === 'not_sharable') return false;
@@ -161,6 +212,11 @@
         (gs.app1?.fields || []).forEach(f => {
             if (!isRainy && (f.rainyOnly || f.rainyDayOnly)) return;
             if (isRainy && (f.dryOnly || f.dryDayOnly)) return;
+            // ★ Time rules — skip if [slotStart, slotEnd] is unavailable
+            if (isFieldBlockedByTimeRules(f.name, slotStart, slotEnd, actProps)) return;
+            // ★ GlobalFieldLocks — skip if locked by another league/event
+            if (isFieldGloballyLocked(f.name, slotStart, slotEnd, divName)) return;
+            // ★ Cross-bunk capacity (incl. combo partners)
             if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps)) return;
             (f.activities || []).forEach(actName => {
                 candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0 });
@@ -172,7 +228,11 @@
             if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
             if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
             const loc = s.location || null;
-            if (loc && !isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
+            if (loc) {
+                if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps)) return;
+                if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
+                if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
+            }
             candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0 });
         });
 
