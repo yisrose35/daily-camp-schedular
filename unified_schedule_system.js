@@ -761,7 +761,25 @@ function shouldHighlightBunk(bunkName) {
     
     function expandBlocksForSplitTiles(divBlocks, divName) {
         const expandedBlocks = [];
-        const divSlots = window.divisionTimes?.[divName] || [];
+        // ★ divisionTimes[div] can be either an Array (normal mode) OR an
+        // object with _isPerBunk/_perBunkSlots (auto-mode). Coerce to a flat
+        // array of slot objects so .find() works in both shapes.
+        let divSlots = window.divisionTimes?.[divName];
+        if (!Array.isArray(divSlots)) {
+            if (divSlots && divSlots._isPerBunk && divSlots._perBunkSlots) {
+                // Use the first bunk's slot list as a representative timeline
+                const anyBunk = Object.keys(divSlots._perBunkSlots)[0];
+                divSlots = anyBunk ? (divSlots._perBunkSlots[anyBunk] || []) : [];
+            } else if (divSlots && typeof divSlots === 'object') {
+                // Numeric-keyed object → array
+                divSlots = Object.keys(divSlots)
+                    .filter(k => /^\d+$/.test(k))
+                    .sort((a, b) => Number(a) - Number(b))
+                    .map(k => divSlots[k]);
+            } else {
+                divSlots = [];
+            }
+        }
         
         divBlocks.forEach(block => {
             // Already expanded

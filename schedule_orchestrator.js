@@ -341,6 +341,33 @@
                 }
             }
             if (hydrated > 0) {
+                // Slim past-date entries before persisting — rotation history
+                // only needs _activity/sport/field per slot, so strip the rest.
+                // This keeps 14 days of allDaily under the localStorage quota.
+                try {
+                    for (const dk of Object.keys(allDaily)) {
+                        if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) continue;
+                        if (dk === todayKey) continue;
+                        const d = allDaily[dk];
+                        if (!d || !d.scheduleAssignments) continue;
+                        const slim = {};
+                        for (const bunk of Object.keys(d.scheduleAssignments)) {
+                            const slots = d.scheduleAssignments[bunk];
+                            if (!Array.isArray(slots)) continue;
+                            slim[bunk] = slots.map(e => {
+                                if (!e) return null;
+                                const out = {};
+                                if (e._activity) out._activity = e._activity;
+                                else if (e.sport) out.sport = e.sport;
+                                else if (e.field) out.field = e.field;
+                                if (e.continuation) out.continuation = true;
+                                if (e._isTransition) out._isTransition = true;
+                                return out;
+                            });
+                        }
+                        allDaily[dk] = { scheduleAssignments: slim };
+                    }
+                } catch (_) {}
                 // Seed save hashes BEFORE writing to localStorage. This way
                 // when something later triggers saveGlobalSettings on the full
                 // allDaily object, hydrated past dates compare equal and skip
@@ -349,8 +376,8 @@
                 try {
                     localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(allDaily));
                     window.invalidateDailyDataCache?.();
-                } catch (_) { /* quota — already handled elsewhere */ }
-                log('✅ Hydrated', hydrated, 'past date(s) for rotation history');
+                } catch (_) { /* quota — memory fallback handled elsewhere */ }
+                log('✅ Hydrated', hydrated, 'past date(s) for rotation history (slimmed)');
             }
         } catch (e) {
             logWarn('Rotation history hydration failed:', e);

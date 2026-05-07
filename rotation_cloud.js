@@ -86,19 +86,16 @@
             return Promise.resolve(true);
         }
 
+        // ★ Use upsert with onConflict on the composite PK so concurrent
+        // saves (or a regen-then-save race) don't fail with 409.
+        // The previous delete-then-insert sequence was racing with itself
+        // when two RotationCloud.save calls overlapped during one generation.
         return client
             .from(TABLE)
-            .delete()
-            .eq('camp_id', campId)
-            .eq('date_key', dateKey)
-            .then(function() {
-                return client
-                    .from(TABLE)
-                    .insert(rows);
-            })
+            .upsert(rows, { onConflict: 'camp_id,date_key,bunk,activity' })
             .then(function(result) {
                 if (result.error) {
-                    console.error('[RotationCloud] Insert error:', result.error.message);
+                    console.error('[RotationCloud] Upsert error:', result.error.message);
                     return false;
                 }
                 console.log('[RotationCloud] Saved', rows.length, 'rotation rows for', dateKey);

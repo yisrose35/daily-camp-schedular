@@ -1378,13 +1378,43 @@
                         while (allDateKeys.length > 14) {
                             delete allDaily[allDateKeys.shift()];
                         }
+                        // ★ Slim past-date entries: rotation history only reads
+                        // _activity / sport / field per slot, so we strip
+                        // everything else (zones, time ranges, league pairings,
+                        // hybrid metadata, divisionTimes, etc) before persisting.
+                        // This shrinks 14 days of allDaily by ~80–90%.
+                        const _slimPastDate = (d) => {
+                            if (!d || typeof d !== 'object') return d;
+                            const slimSched = {};
+                            const sa = d.scheduleAssignments || {};
+                            for (const bunk of Object.keys(sa)) {
+                                const slots = sa[bunk];
+                                if (!Array.isArray(slots)) continue;
+                                slimSched[bunk] = slots.map(e => {
+                                    if (!e) return null;
+                                    const out = {};
+                                    if (e._activity) out._activity = e._activity;
+                                    else if (e.sport) out.sport = e.sport;
+                                    else if (e.field) out.field = e.field;
+                                    if (e.continuation) out.continuation = true;
+                                    if (e._isTransition) out._isTransition = true;
+                                    return out;
+                                });
+                            }
+                            return { scheduleAssignments: slimSched };
+                        };
+                        for (const dk of Object.keys(allDaily)) {
+                            if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) continue;
+                            if (dk === today) continue; // never slim today
+                            allDaily[dk] = _slimPastDate(allDaily[dk]);
+                        }
                         // ★ Seed secondary-save hashes so the next saveGlobalSettings
                         // call doesn't fan out cloud saves for these unchanged dates.
                         try { window._seedSecondarySaveHashes?.(allDaily); } catch (_) {}
                         try {
                             localStorage.setItem('campDailyData_v1', JSON.stringify(allDaily));
                             window.invalidateDailyDataCache?.();
-                            console.log(`[STEP 0f] ✅ Hydrated ${hydrated} past date(s) from cloud (${records.length} records)`);
+                            console.log(`[STEP 0f] ✅ Hydrated ${hydrated} past date(s) from cloud (${records.length} records, slimmed)`);
                         } catch (quotaErr) {
                             console.warn('[STEP 0f] localStorage quota exceeded, using in-memory fallback');
                             if (window.setDailyDataMemoryOverride) {
