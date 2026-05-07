@@ -203,6 +203,13 @@ function daShowModal(config) {
     overlay.querySelector('.da-modal-confirm-x').onclick = function() {
       var result = {};
       Object.keys(inputs).forEach(function(key) { result[key] = inputs[key](); });
+      // Also collect values from dynamically added fields (e.g. postRender injections)
+      overlay.querySelectorAll('[data-field]').forEach(function(el) {
+        var key = el.getAttribute('data-field');
+        if (!(key in result)) {
+          result[key] = (el.value || '').trim();
+        }
+      });
       close(result);
     };
 

@@ -265,6 +265,13 @@ function showModal(config) {
       Object.keys(inputs).forEach(key => {
         result[key] = inputs[key]();
       });
+      // Also collect values from dynamically added fields (e.g. postRender injections)
+      overlay.querySelectorAll('[data-field]').forEach(el => {
+        const key = el.getAttribute('data-field');
+        if (!(key in result)) {
+          result[key] = (el.value || '').trim();
+        }
+      });
       close(result);
     };
     
