@@ -104,6 +104,40 @@
     }
 
     // =========================================================================
+    // SECONDARY-SAVE HASH HELPERS (module-scoped so hydration paths can seed
+    // the baseline before any saveGlobalSettings call). Without seeding, the
+    // very first save after page load fans out one cloud save per hydrated
+    // past date.
+    // =========================================================================
+    function _hashDateDataModule(d) {
+        try {
+            const sa = d?.scheduleAssignments || {};
+            const la = d?.leagueAssignments || {};
+            const s = JSON.stringify(sa) + '|' + JSON.stringify(la);
+            let h = 0;
+            for (let i = 0; i < s.length; i++) {
+                h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+            }
+            return h;
+        } catch (_) { return Math.random(); }
+    }
+    window._seedSecondarySaveHashes = function (allDaily) {
+        if (!window._secondarySaveHash) window._secondarySaveHash = {};
+        if (!allDaily || typeof allDaily !== 'object') return 0;
+        let seeded = 0;
+        Object.keys(allDaily).forEach(dk => {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) return;
+            const d = allDaily[dk];
+            if (!d || !d.scheduleAssignments) return;
+            if (window._secondarySaveHash[dk] === undefined) {
+                window._secondarySaveHash[dk] = _hashDateDataModule(d);
+                seeded++;
+            }
+        });
+        return seeded;
+    };
+
+    // =========================================================================
     // ★★★ v6.8: ROLE HELPER (available before CloudPermissions freeze) ★★★
     // =========================================================================
     

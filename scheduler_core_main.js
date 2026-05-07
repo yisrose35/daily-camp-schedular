@@ -1378,6 +1378,9 @@
                         while (allDateKeys.length > 14) {
                             delete allDaily[allDateKeys.shift()];
                         }
+                        // ★ Seed secondary-save hashes so the next saveGlobalSettings
+                        // call doesn't fan out cloud saves for these unchanged dates.
+                        try { window._seedSecondarySaveHashes?.(allDaily); } catch (_) {}
                         try {
                             localStorage.setItem('campDailyData_v1', JSON.stringify(allDaily));
                             window.invalidateDailyDataCache?.();

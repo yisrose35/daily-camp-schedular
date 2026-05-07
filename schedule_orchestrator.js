@@ -341,8 +341,15 @@
                 }
             }
             if (hydrated > 0) {
-                localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(allDaily));
-                window.invalidateDailyDataCache?.();
+                // Seed save hashes BEFORE writing to localStorage. This way
+                // when something later triggers saveGlobalSettings on the full
+                // allDaily object, hydrated past dates compare equal and skip
+                // the cloud round-trip.
+                try { window._seedSecondarySaveHashes?.(allDaily); } catch (_) {}
+                try {
+                    localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(allDaily));
+                    window.invalidateDailyDataCache?.();
+                } catch (_) { /* quota — already handled elsewhere */ }
                 log('✅ Hydrated', hydrated, 'past date(s) for rotation history');
             }
         } catch (e) {
