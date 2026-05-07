@@ -3373,6 +3373,58 @@ async function editTile(id) {
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = 'Elective'; ev.electiveActivities = chosen2;
 
+  } else if (ev.type === 'swim_elective') {
+    const _seFields3 = (masterSettings.app1?.fields || []).map(f => f.name);
+    const _seSpecials3 = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
+    const _seAllLocs3 = [...new Set([..._seFields3, ..._seSpecials3])].sort();
+    let _seDefaultPool3 = ev.swimLocation || window.getPinnedTileDefaultLocation?.('swim') || null;
+    if (!_seDefaultPool3) {
+      const _f = (masterSettings.app1?.fields || []).find(f => /\b(swim|pool)\b/i.test(f.name));
+      if (_f) _seDefaultPool3 = _f.name;
+    }
+    const _seTaken3 = daGetConflictingFacilities(ev.startTime, ev.endTime, ev.id);
+    const _seSportMap3 = daGetSportFacilitiesMap();
+    const _seSportOpts3 = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(_seSportMap3).sort().map(s => ({ value: s, label: s }))];
+    const _seLocOpts3 = _seAllLocs3
+      .filter(l => l !== _seDefaultPool3)
+      .map(l => (_seTaken3.has(l) && !(ev.electiveActivities || []).includes(l)) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
+    const result = await daShowModal({
+      title: 'Edit Swim + Elective',
+      description: 'Hybrid: pool reserved + listed activities reserved at the same time. Campers choose individually.',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', default: ev._preChangeMin || '' },
+        { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', default: ev._postChangeMin || '' },
+        ...(_seSportOpts3.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: _seSportOpts3 }] : []),
+        { name: 'activities', label: 'Reserve Locations (electives)', type: 'checkbox-group', options: _seLocOpts3, default: ev.electiveActivities || [] }
+      ],
+      postRender: function(overlay) {
+        var sportSel = overlay.querySelector('[data-field="sport"]');
+        if (!sportSel) return;
+        sportSel.addEventListener('change', function() {
+          var s = sportSel.value;
+          var matching = s ? (_seSportMap3[s] || []) : [];
+          overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+            cb.checked = matching.indexOf(cb.value) !== -1;
+          });
+        });
+      }
+    });
+    if (!result) return;
+    let _seChosen3 = result.activities || [];
+    if (result.sport && _seChosen3.length === 0) _seChosen3 = (_seSportMap3[result.sport] || []).filter(f => !_seTaken3.has(f) && f !== _seDefaultPool3);
+    if (!_seChosen3.length) { await daShowAlert('Pick at least one elective activity to reserve.'); return; }
+    const _sePre3 = parseInt(result.preChangeMin) || 0;
+    const _sePost3 = parseInt(result.postChangeMin) || 0;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = 'Swim + Elective';
+    ev._preChangeMin = _sePre3 || undefined;
+    ev._postChangeMin = _sePost3 || undefined;
+    ev.swimLocation = _seDefaultPool3;
+    ev.electiveActivities = _seChosen3;
+    ev.reservedFields = Array.from(new Set([...(_seDefaultPool3 ? [_seDefaultPool3] : []), ..._seChosen3]));
+
   } else {
     const _eAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
     const _eAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);

@@ -947,6 +947,60 @@ async function editTile(id) {
     ev.event = 'Elective';
     ev.electiveActivities = chosen; ev.reservedFields = chosen;
 
+  } else if (ev.type === 'swim_elective') {
+    const seLocations = getAllLocations();
+    let seDefaultPool = ev.swimLocation || window.getPinnedTileDefaultLocation?.('swim') || null;
+    if (!seDefaultPool) {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _f = (_gs.app1?.fields || []).find(f => /\b(swim|pool)\b/i.test(f.name));
+      if (_f) seDefaultPool = _f.name;
+    }
+    const seTaken = getConflictingFacilities(ev.startTime, ev.endTime, ev.id);
+    const seSportMap = getSportFacilitiesMap();
+    const seSportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(seSportMap).sort().map(s => ({ value: s, label: s }))];
+    const seLocOptions = seLocations
+      .filter(l => l !== seDefaultPool)
+      .map(l => (seTaken.has(l) && !(ev.electiveActivities || []).includes(l)) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
+    const result = await showModal({
+      title: 'Edit Swim + Elective',
+      description: 'Hybrid: pool reserved + listed activities reserved at the same time. Campers choose individually.',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', default: ev._preChangeMin || '' },
+        { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', default: ev._postChangeMin || '' },
+        ...(seSportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: seSportOptions }] : []),
+        { name: 'activities', label: 'Reserve Locations (electives)', type: 'checkbox-group', options: seLocOptions, default: ev.electiveActivities || [] }
+      ],
+      postRender: (overlay) => {
+        const sportSel = overlay.querySelector('[data-field="sport"]');
+        if (!sportSel) return;
+        sportSel.addEventListener('change', () => {
+          const s = sportSel.value;
+          const matching = s ? (seSportMap[s] || []) : [];
+          overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(cb => {
+            cb.checked = matching.includes(cb.value);
+          });
+        });
+      }
+    });
+    if (!result) return;
+    let seChosen = result.activities || [];
+    if (result.sport && seChosen.length === 0) seChosen = (seSportMap[result.sport] || []).filter(f => !seTaken.has(f) && f !== seDefaultPool);
+    if (!seChosen.length) {
+      await showAlert('Pick at least one elective activity to reserve.');
+      return;
+    }
+    const sePre = parseInt(result.preChangeMin) || 0;
+    const sePost = parseInt(result.postChangeMin) || 0;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = 'Swim + Elective';
+    ev._preChangeMin = sePre || undefined;
+    ev._postChangeMin = sePost || undefined;
+    ev.swimLocation = seDefaultPool;
+    ev.electiveActivities = seChosen;
+    ev.reservedFields = Array.from(new Set([...(seDefaultPool ? [seDefaultPool] : []), ...seChosen]));
+
   } else {
     const { groups: locationGroups, hasAny: hasLocations } = getGroupedLocationOptions();
     const modalFields = [
