@@ -837,13 +837,19 @@ function shouldHighlightBunk(bunkName) {
 
     // ★ Find OTHER bunks (any division) that share this bunk's field at this time.
     //   Returns sorted array of bunk names. Empty when no one is sharing.
+    //   Sports only — pinned events (Swim, Lunch, Snacks, Pool, Change, Dismissal),
+    //   leagues, transitions, electives are skipped.
     function findFieldSharers(bunk, slotIdx, divName) {
         const myEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
         if (!myEntry) return [];
-        // Don't compute sharers for hybrids/electives/leagues/transitions/pinned-events
         if (myEntry._swimElective || myEntry._isTransition || myEntry.continuation) return [];
         if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
         if (myEntry._isDismissal || myEntry._isSnack) return [];
+        if (myEntry._pinned) return [];
+        const _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
+        const NON_SPORTS = ['swim', 'pool', 'swimming', 'lunch', 'snacks', 'snack',
+                            'dismissal', 'change', 'free', 'free play', 'free time', 'rest'];
+        if (NON_SPORTS.some(n => _myAct === n || _myAct.includes(n))) return [];
         const myField = (typeof myEntry.field === 'string') ? myEntry.field
             : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
         if (!myField) return [];
@@ -2527,10 +2533,13 @@ divBlocks.forEach((block, blockIdx) => {
             bgColor = '#fff8e1';
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
-            // ★ If other bunks share this same field at this time, append them.
-            //   Format: "<existing text> – Bunk 2, Bunk 3"
+            // ★ Sports only: if other bunks share this field at this time, show
+            //   "vs Bunk 2, Bunk 3" (no extra dash).
             const _sharers = findFieldSharers(bunk, slotIdx, divName);
-            if (_sharers.length) displayText += ' – ' + _sharers.join(', ');
+            if (_sharers.length) {
+                const _names = _sharers.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : b);
+                displayText += ' vs ' + _names.join(', ');
+            }
             bgColor = getEntryBackground(entry, block.event);
             // pinned state tracked internally, no visual prefix needed
         }

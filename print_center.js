@@ -253,13 +253,20 @@ function getBellScheduleLayers(divName) {
 }
 
 // ★ Find OTHER bunks (any division) that share this bunk's field at this time.
-//   Returns sorted array of bunk names. Empty when no one is sharing.
+//   Sports only — pinned events / non-sport activities are skipped.
 function pcFindFieldSharers(bunk, slotIdx, divName) {
     var myEntry = window.scheduleAssignments && window.scheduleAssignments[bunk] && window.scheduleAssignments[bunk][slotIdx];
     if (!myEntry) return [];
     if (myEntry._swimElective || myEntry._isTransition || myEntry.continuation) return [];
     if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
     if (myEntry._isDismissal || myEntry._isSnack) return [];
+    if (myEntry._pinned) return [];
+    var _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
+    var NON_SPORTS = ['swim', 'pool', 'swimming', 'lunch', 'snacks', 'snack',
+                      'dismissal', 'change', 'free', 'free play', 'free time', 'rest'];
+    for (var ni = 0; ni < NON_SPORTS.length; ni++) {
+        if (_myAct === NON_SPORTS[ni] || _myAct.indexOf(NON_SPORTS[ni]) !== -1) return [];
+    }
     var myField = (typeof myEntry.field === 'string') ? myEntry.field
         : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
     if (!myField) return [];
@@ -1275,10 +1282,13 @@ function renderAutoDivisionTable(divName, bunks) {
                 }
                 var displayText = actText || '\u2014';
                 if (locText) displayText += ' \u2013 ' + locText;
-                // \u2605 Append sharing bunks (other bunks at the same field at this time)
+                // \u2605 Append sharing bunks (other bunks at the same sports field at this time)
                 if (matchAct.entry && matchAct.slotIdx != null && displayText !== '\u2014') {
                     var _autoSh = pcFindFieldSharers(bunk, matchAct.slotIdx, divName);
-                    if (_autoSh.length) displayText += ' \u2013 ' + _autoSh.join(', ');
+                    if (_autoSh.length) {
+                        var _autoNames = _autoSh.map(function(b){ return /^\d/.test(String(b)) ? 'Bunk ' + b : b; });
+                        displayText += ' vs ' + _autoNames.join(', ');
+                    }
                 }
                 var durMin = matchAct.endMin - matchAct.startMin;
 
@@ -1365,7 +1375,10 @@ function renderManualBunksTop(divName, bunks, blocks) {
                 var text = entry ? formatEntry(entry) : '';
                 if (text && si >= 0) {
                     var _sh = pcFindFieldSharers(b, si, divName);
-                    if (_sh.length) text += ' \u2013 ' + _sh.join(', ');
+                    if (_sh.length) {
+                        var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
+                        text += ' vs ' + _names.join(', ');
+                    }
                 }
                 if (!text && type === 'free') text = '\u2014';
                 var inner = pcCellInnerHtml(text, type, {
@@ -1413,7 +1426,10 @@ function renderManualTimeTop(divName, bunks, blocks) {
             var text = entry ? formatEntry(entry) : '';
             if (text && si >= 0 && !eb.isLeague) {
                 var _sh = pcFindFieldSharers(b, si, divName);
-                if (_sh.length) text += ' \u2013 ' + _sh.join(', ');
+                if (_sh.length) {
+                    var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
+                    text += ' vs ' + _names.join(', ');
+                }
             }
             if (!text && type === 'free') text = '\u2014';
             if (eb.isLeague) {
@@ -1484,7 +1500,10 @@ function renderBunkSheet(bunk) {
         var locDisplay = loc;
         if (entry && slotIdx >= 0 && !isAutoMode()) {
             var _sh = pcFindFieldSharers(bunk, slotIdx, dn);
-            if (_sh.length) locDisplay = (loc ? loc + ' \u2013 ' : '') + _sh.join(', ');
+            if (_sh.length) {
+                var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
+                locDisplay = (loc ? loc + ' ' : '') + 'vs ' + _names.join(', ');
+            }
         }
         var actInner = pcCellInnerHtml(actDisplay, type, {
             preChange: entry ? (entry._splitPreChange || 0) : 0,
@@ -2422,7 +2441,10 @@ function renderLiveContent() {
                     var text = entry ? formatEntry(entry) : '\u2014';
                     if (entry && text !== '\u2014' && slotIdx >= 0) {
                         var _sh = pcFindFieldSharers(bunk, slotIdx, divName);
-                        if (_sh.length) text += ' \u2013 ' + _sh.join(', ');
+                        if (_sh.length) {
+                            var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
+                            text += ' vs ' + _names.join(', ');
+                        }
                     }
                     var cls = 'cell-' + type;
                     if (isCurrent) cls += ' cell-current';
