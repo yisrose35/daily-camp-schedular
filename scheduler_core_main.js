@@ -3191,16 +3191,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
-        // STEP 7.5: Last-ditch Free-slot fill (uses AutoFillSlot's looser rules)
+        // STEP 7.5: Last-ditch Free-slot fill (silent batched version)
         // The solver's deepFreeResolution + sameDayDuplicateSweep can leave some
-        // blocks as Free even when activities are still available — typically
-        // when the candidate's penalty cost > 900000 or when canBlockFit
-        // / activityProperties checks reject it. AutoFillSlot uses simpler
-        // rules and finds a valid pick. Run it on every leftover Free slot so
-        // generation matches "click Auto Fill on each cell" behavior.
+        // blocks as Free even when activities are still available. Use
+        // AutoFillSlot.autoFillSlotSilent — same picking logic as the per-cell
+        // '⚡ Auto Fill' button (rainy-day-aware, rotation-aware, max-usage
+        // aware), but writes to memory only. The optimizer saves once at the
+        // end, so we avoid 75 sequential per-cell saves.
         // =========================================================================
         try {
-            if (window.AutoFillSlot && typeof window.AutoFillSlot.autoFillSlot === 'function') {
+            if (window.AutoFillSlot && typeof window.AutoFillSlot.autoFillSlotSilent === 'function') {
                 const _freeFills = [];
                 Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
                     const arr = window.scheduleAssignments[bunk] || [];
@@ -3215,25 +3215,20 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     }
                 });
                 if (_freeFills.length) {
-                    console.log(`[STEP 7.5] AutoFillSlot fallback: ${_freeFills.length} leftover Free slots`);
+                    console.log(`[STEP 7.5] Silent fallback: ${_freeFills.length} leftover Free slots`);
                     let _ffOk = 0, _ffSkip = 0;
                     for (const ff of _freeFills) {
                         try {
-                            // autoFillSlot is async — fire and forget without awaiting
-                            // (each call writes its own assignment + saves). We sequence
-                            // them with await to avoid stomping on each other's writes.
-                            await window.AutoFillSlot.autoFillSlot(ff.bunk, ff.si);
-                            const after = window.scheduleAssignments?.[ff.bunk]?.[ff.si];
-                            const okAct = after && (after._activity || after.field || '').toLowerCase().trim();
-                            if (okAct && okAct !== 'free' && okAct !== '') _ffOk++; else _ffSkip++;
+                            const ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si);
+                            if (ok) _ffOk++; else _ffSkip++;
                         } catch (e) {
                             _ffSkip++;
                         }
                     }
-                    console.log(`[STEP 7.5] AutoFillSlot fallback: filled ${_ffOk} / ${_freeFills.length} (skipped ${_ffSkip})`);
+                    console.log(`[STEP 7.5] Silent fallback: filled ${_ffOk} / ${_freeFills.length} (skipped ${_ffSkip})`);
                 }
             } else {
-                console.log('[STEP 7.5] AutoFillSlot module not available — skipping fallback fill');
+                console.log('[STEP 7.5] AutoFillSlot.autoFillSlotSilent not available — skipping fallback fill');
             }
         } catch (_e) {
             console.warn('[STEP 7.5] Free-slot fallback failed:', _e);

@@ -154,9 +154,13 @@
     function buildCandidates(bunk, slotStart, slotEnd, divName, actProps) {
         const gs = getGlobalSettings();
         const candidates = [];
+        // ★ Respect rainy day: when not raining, skip rainyOnly activities/specials.
+        const isRainy = !!window.isRainyDay;
 
         // Sports / field activities
         (gs.app1?.fields || []).forEach(f => {
+            if (!isRainy && (f.rainyOnly || f.rainyDayOnly)) return;
+            if (isRainy && (f.dryOnly || f.dryDayOnly)) return;
             if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps)) return;
             (f.activities || []).forEach(actName => {
                 candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0 });
@@ -165,6 +169,8 @@
 
         // Special activities
         (gs.app1?.specialActivities || []).forEach(s => {
+            if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
+            if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
             const loc = s.location || null;
             if (loc && !isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
             candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0 });
@@ -415,7 +421,48 @@
     // EXPORTS + INIT
     // ========================================================================
 
-    window.AutoFillSlot = { autoFillSlot, injectButtons };
+    // ─────────────────────────────────────────────────────────────────────
+    // SILENT FILL — write the pick directly to scheduleAssignments without
+    // toasts, without per-cell saves, without UI updates. The caller is
+    // expected to save once at the end. Returns true if a pick was applied.
+    // ─────────────────────────────────────────────────────────────────────
+    function autoFillSlotSilent(bunk, slotIdx) {
+        const divName = getDivision(bunk);
+        if (!divName) return false;
+        const slot = getSlotInfo(divName, slotIdx, bunk);
+        if (!slot) return false;
+        const slotStart = slot.startMin, slotEnd = slot.endMin;
+
+        const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
+        if (entry && entry._fixed && entry._pinned) return false;
+        if (entry && !isFreeEntry(entry) && entry._fixed) return false;
+
+        const actProps = getActivityProperties();
+        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps);
+        if (!candidates.length) return false;
+
+        const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
+        const best = scoreAndPick(bunk, candidates, today);
+        if (!best) return false;
+
+        // Write straight to memory — no save, no toast, no updateTable.
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
+        const fieldVal = best.field ? `${best.field} – ${best.activity}` : best.activity;
+        window.scheduleAssignments[bunk][slotIdx] = {
+            field: fieldVal,
+            sport: best.activity,
+            _activity: best.activity,
+            _location: best.field || null,
+            continuation: false,
+            _fixed: true,
+            _autoFilled: true,
+            _editedAt: Date.now(),
+        };
+        return true;
+    }
+
+    window.AutoFillSlot = { autoFillSlot, autoFillSlotSilent, injectButtons };
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', setupInjection);
