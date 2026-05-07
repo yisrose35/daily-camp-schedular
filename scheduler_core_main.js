@@ -496,7 +496,10 @@
                     // ★★★ v17.7: Store time range AND split tile flag for proper tracking ★★★
                     _startMin: block.startTime,
                     _endMin: block.endTime,
-                    _fromSplitTile: isSplitTileBlock || pick._fromSplitTile || false
+                    _fromSplitTile: isSplitTileBlock || pick._fromSplitTile || false,
+                    // ★★★ Split-swim change metadata (for print center rendering) ★★★
+                    _splitPreChange: pick._splitPreChange || 0,
+                    _splitPostChange: pick._splitPostChange || 0
                 };
                 window.registerSingleSlotUsage(slotIndex, fName, block.divName, bunk, pick._activity || fName, fieldUsageBySlot, activityProperties);
             } else {
@@ -2477,17 +2480,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 console.log(`[SPLIT] ---------------------------------------------------`);
 
-                const routeSplitActivity = (bunks, actName, start, end, groupLabel, actLabel) => {
+                const routeSplitActivity = (bunks, actName, start, end, groupLabel, actLabel, extraPick) => {
                     // ★★★ FIXED: Find exact slot for this time range ★★★
                     const exactSlot = findExactSlotForTimeRange(divName, start, end);
                     const fallbackSlots = Utils.findSlotsForRange(start, end, divName);
                     const targetSlots = exactSlot !== -1 ? [exactSlot] : fallbackSlots;
-                    
+
                     if (targetSlots.length === 0) {
                         console.warn(`[SPLIT] WARNING: No slots found for range ${start}-${end} in ${divName}`);
                         return;
                     }
-                    
+
                     console.log(`[SPLIT] Using slot ${targetSlots[0]} for time range ${start}-${end}`);
                     const normName = normalizeGA(actName) || actName;
                     const isGen = isGeneratedType(normName);
@@ -2516,7 +2519,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                 endTime: end,
                                 slots: targetSlots,
                                 fromSplitTile: true,
-                                _fromSplitTile: true,  // ★★★ ADD: Redundant flag for fillBlock compatibility ★★★
+                                _fromSplitTile: true,
                                 _splitTimeStart: start,
                                 _splitTimeEnd: end,
                                 _splitHalf: start < midMin ? 1 : 2
@@ -2524,14 +2527,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             console.log(`[SPLIT]    📋 ${b} → QUEUED for "${normName}" (${start}-${end}) @ slot ${targetSlots[0]}`);
                         } else {
                             // Direct fill into correct slot
-                            fillBlock({
-                                divName,
-                                bunk: b,
-                                startTime: start,
-                                endTime: end,
-                                slots: targetSlots,
-                                fromSplitTile: true  // ★★★ ADD: Mark block as split tile ★★★
-                            }, {
+                            const pickObj = {
                                 field: actName,
                                 sport: null,
                                 _fixed: true,
@@ -2539,7 +2535,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                 _fromSplitTile: true,
                                 _startMin: start,
                                 _endMin: end
-                            }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            };
+                            // Merge any extra pick properties (e.g. _splitPreChange, _splitPostChange)
+                            if (extraPick) Object.assign(pickObj, extraPick);
+                            fillBlock({
+                                divName,
+                                bunk: b,
+                                startTime: start,
+                                endTime: end,
+                                slots: targetSlots,
+                                fromSplitTile: true
+                            }, pickObj, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                             console.log(`[SPLIT]    ✅ ${b} → FILLED with "${actName}" (${start}-${end}) @ slot ${targetSlots[0]}`);
                         }
                     });
@@ -2548,44 +2554,20 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (splitChangeMin > 0) {
                     // ★ SWIM-SPLIT WITH CHANGE ★
                     // Fill each group's swim half with the swim activity (one slot),
-                    // then stamp _splitPreChange/_splitPostChange metadata so the
-                    // print center can render: Change → Swim → Change.
+                    // passing _splitPreChange/_splitPostChange directly so fillBlock stores them.
+                    // Print center reads these to render: Change → Swim → Change.
                     // Sports half stays as one continuous tile — no metadata needed.
+                    const swimChangeExtra = { _splitPreChange: splitPreChange, _splitPostChange: splitPostChange };
 
                     console.log(`[SPLIT] \n>>> FIRST HALF (${sMin}-${midMin}) <<<`);
-                    // Swim-first group gets swim for first half, tagged with change info
-                    routeSplitActivity(swimFirstGroup, swimActName, sMin, midMin, "SwimFirst", "swim+change");
-                    // Stamp change metadata on those assignments
-                    swimFirstGroup.forEach(b => {
-                        const slots = window.divisionTimes?.[divName] || [];
-                        for (let si = 0; si < slots.length; si++) {
-                            const a = window.scheduleAssignments?.[b]?.[si];
-                            if (a && (a.field === swimActName || a._activity === swimActName) && a._fromSplitTile) {
-                                a._splitPreChange = splitPreChange;
-                                a._splitPostChange = splitPostChange;
-                            }
-                        }
-                    });
-                    // Other group gets continuous activity
+                    routeSplitActivity(swimFirstGroup, swimActName, sMin, midMin, "SwimFirst", "swim+change", swimChangeExtra);
                     routeSplitActivity(swimSecondGroup, otherActName, sMin, midMin, "SwimSecond", "activity");
 
                     console.log(`[SPLIT] \n>>> SECOND HALF (${midMin}-${eMin}) <<<`);
-                    // Swim-first group gets continuous activity
                     routeSplitActivity(swimFirstGroup, otherActName, midMin, eMin, "SwimFirst", "activity");
-                    // Swim-second group gets swim for second half, tagged with change info
-                    routeSplitActivity(swimSecondGroup, swimActName, midMin, eMin, "SwimSecond", "swim+change");
-                    swimSecondGroup.forEach(b => {
-                        const slots = window.divisionTimes?.[divName] || [];
-                        for (let si = 0; si < slots.length; si++) {
-                            const a = window.scheduleAssignments?.[b]?.[si];
-                            if (a && (a.field === swimActName || a._activity === swimActName) && a._fromSplitTile) {
-                                a._splitPreChange = splitPreChange;
-                                a._splitPostChange = splitPostChange;
-                            }
-                        }
-                    });
+                    routeSplitActivity(swimSecondGroup, swimActName, midMin, eMin, "SwimSecond", "swim+change", swimChangeExtra);
 
-                    console.log(`[SPLIT] Stamped change metadata: ${splitPreChange}m pre / ${splitPostChange}m post`);
+                    console.log(`[SPLIT] Change metadata passed to fillBlock: ${splitPreChange}m pre / ${splitPostChange}m post`);
                 } else {
                     // Standard no-change split: two halves, groups swap
                     console.log(`[SPLIT] \n>>> FIRST HALF (${sMin}-${midMin}) <<<`);
