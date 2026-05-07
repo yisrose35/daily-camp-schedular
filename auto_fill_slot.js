@@ -98,6 +98,15 @@
     // ========================================================================
 
     // Returns true if the field's activityProperties.timeRules block [slotStart, slotEnd]
+    // Returns true if access restrictions exclude `divName` from this field/special
+    function isDivisionRestricted(item, divName) {
+        const ar = item?.accessRestrictions;
+        if (!ar || !ar.enabled) return false;
+        const allowed = ar.divisions ? Object.keys(ar.divisions) : [];
+        if (!allowed.length) return true; // restricted but no grades selected → blocked for all
+        return !allowed.includes(divName);
+    }
+
     function isFieldBlockedByTimeRules(fieldName, slotStart, slotEnd, actProps) {
         const rules = actProps?.[fieldName]?.timeRules;
         if (!Array.isArray(rules) || rules.length === 0) return false;
@@ -212,6 +221,8 @@
         (gs.app1?.fields || []).forEach(f => {
             if (!isRainy && (f.rainyOnly || f.rainyDayOnly)) return;
             if (isRainy && (f.dryOnly || f.dryDayOnly)) return;
+            // ★ Grade restriction — skip if this field excludes our division
+            if (isDivisionRestricted(f, divName)) return;
             // ★ Time rules — skip if [slotStart, slotEnd] is unavailable
             if (isFieldBlockedByTimeRules(f.name, slotStart, slotEnd, actProps)) return;
             // ★ GlobalFieldLocks — skip if locked by another league/event
@@ -227,6 +238,8 @@
         (gs.app1?.specialActivities || []).forEach(s => {
             if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
             if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
+            // ★ Grade restriction
+            if (isDivisionRestricted(s, divName)) return;
             const loc = s.location || null;
             if (loc) {
                 if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps)) return;
@@ -334,9 +347,8 @@
         } else {
             if (!window.scheduleAssignments)       window.scheduleAssignments = {};
             if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
-            const fieldVal = pick.field ? `${pick.field} – ${pick.activity}` : pick.activity;
             window.scheduleAssignments[bunk][slotIdx] = {
-                field: fieldVal,
+                field: pick.field || pick.activity,
                 sport: pick.activity,
                 _activity: pick.activity,
                 _location: pick.field || null,
@@ -508,9 +520,8 @@
         // Write straight to memory — no save, no toast, no updateTable.
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
-        const fieldVal = best.field ? `${best.field} – ${best.activity}` : best.activity;
         window.scheduleAssignments[bunk][slotIdx] = {
-            field: fieldVal,
+            field: best.field || best.activity,
             sport: best.activity,
             _activity: best.activity,
             _location: best.field || null,
