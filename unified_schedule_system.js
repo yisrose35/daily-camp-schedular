@@ -916,11 +916,12 @@ function shouldHighlightBunk(bunkName) {
         if (entry._isDismissal) return 'Dismissal';
         if (entry._isSnack) return 'Snacks';
         if (entry._isTransition || entry.continuation) return '';
-        // ★ Swim + Elective hybrid: show pool + activities
+        // ★ Swim + Elective hybrid: list "Swim" + each reserved elective field.
         if (entry._swimElective) {
             const acts = entry._electiveActivities || [];
-            const pool = entry._swimLocation || 'Pool';
-            return acts.length ? (pool + ' + ' + acts.join(', ')) : (pool + ' + Electives');
+            const poolLc = (entry._swimLocation || '').toLowerCase().trim();
+            const filtered = acts.filter(function (a) { return (a || '').toLowerCase().trim() !== poolLc; });
+            return ['Swim'].concat(filtered).join(', ');
         }
         const activity = entry._activity || '';
         const field = fieldLabel(entry.field);
@@ -2485,7 +2486,12 @@ divBlocks.forEach((block, blockIdx) => {
         if (block.type === 'swim_elective') {
             const acts = block.electiveActivities || [];
             const swimLoc = block.swimLocation || 'Pool';
-            const label = swimLoc + ' + ' + (acts.join(', ') || 'Electives');
+            // List "Swim" + each reserved elective field as a comma-separated list,
+            //   e.g. "Swim, Black Top, Field A". Drop the swim location itself if
+            //   it appears in the elective list to avoid duplication.
+            const _swimLocLc = (swimLoc || '').toLowerCase().trim();
+            const _seActsClean = acts.filter(function (a) { return (a || '').toLowerCase().trim() !== _swimLocLc; });
+            const label = ['Swim'].concat(_seActsClean).join(', ');
             const pre = parseInt(block._preChangeMin) || 0;
             const post = parseInt(block._postChangeMin) || 0;
             td.style.cssText = 'padding: 0; vertical-align: middle; text-align: center;';
@@ -2528,7 +2534,12 @@ divBlocks.forEach((block, blockIdx) => {
         if (block.type === 'swim_elective') {
             const acts = block.electiveActivities || [];
             const swimLoc = block.swimLocation || 'Pool';
-            const label = swimLoc + ' + ' + (acts.join(', ') || 'Electives');
+            // List "Swim" + each reserved elective field as a comma-separated list,
+            //   e.g. "Swim, Black Top, Field A". Drop the swim location itself if
+            //   it appears in the elective list to avoid duplication.
+            const _swimLocLc = (swimLoc || '').toLowerCase().trim();
+            const _seActsClean = acts.filter(function (a) { return (a || '').toLowerCase().trim() !== _swimLocLc; });
+            const label = ['Swim'].concat(_seActsClean).join(', ');
             const pre = parseInt(block._preChangeMin) || 0;
             const post = parseInt(block._postChangeMin) || 0;
             if (pre > 0 || post > 0) {

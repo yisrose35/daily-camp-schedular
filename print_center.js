@@ -482,11 +482,12 @@ function formatEntry(entry) {
     if (!entry) return '';
     if (entry.continuation) return '';
     if (entry._isTransition) return entry.sport || 'Transition';
-    // ★ Swim + Elective hybrid: show pool + activities on one line
+    // ★ Swim + Elective hybrid: list "Swim" + each reserved elective field.
     if (entry._swimElective) {
         var seActs = entry._electiveActivities || [];
-        var sePool = entry._swimLocation || 'Pool';
-        return seActs.length ? (sePool + ' + ' + seActs.join(', ')) : (sePool + ' + Electives');
+        var sePoolLc = (entry._swimLocation || '').toLowerCase().trim();
+        var seFiltered = seActs.filter(function (a) { return (a || '').toLowerCase().trim() !== sePoolLc; });
+        return ['Swim'].concat(seFiltered).join(', ');
     }
     var parts = [];
     var act = entry._activity || entry.sport || '';
