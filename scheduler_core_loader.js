@@ -280,13 +280,16 @@
                 usePriority: f.accessRestrictions.usePriority === true
             } : null;
             
-            // ★ Parse timeRules to include startMin/endMin
+            // ★ Parse timeRules to include startMin/endMin AND preserve
+            // per-grade `divisions` so the scheduler can scope rules
+            // ("Available 11-12 for grade 1") to the matching division.
             const parsedTimeRules = Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
                 type: r.type || 'Available',
                 start: r.start || '',
                 end: r.end || '',
                 startMin: r.startMin ?? parseTimeString(r.start),
-                endMin: r.endMin ?? parseTimeString(r.end)
+                endMin: r.endMin ?? parseTimeString(r.end),
+                divisions: Array.isArray(r.divisions) ? [...r.divisions] : []
             })) : [];
 
             const fieldEntry = base({

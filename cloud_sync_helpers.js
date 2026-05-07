@@ -77,13 +77,16 @@
                 usePriority: f.accessRestrictions?.usePriority === true
             },
             
-            // ★ Time rules - ensure array with parsed times
+            // ★ Time rules - ensure array with parsed times.
+            // Preserve `divisions` so per-grade scoping survives cloud round-trips
+            // (e.g. "Available 11-12 for grade 1, 12-1 for grade 2").
             timeRules: Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
                 type: r.type || 'Available',
                 start: r.start || '',
                 end: r.end || '',
                 startMin: r.startMin ?? parseTimeToMinutes(r.start),
-                endMin: r.endMin ?? parseTimeToMinutes(r.end)
+                endMin: r.endMin ?? parseTimeToMinutes(r.end),
+                divisions: Array.isArray(r.divisions) ? [...r.divisions] : []
             })) : [],
             
             // ★ Indoor/Outdoor for rainy day

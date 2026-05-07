@@ -107,12 +107,18 @@
         return !allowed.includes(divName);
     }
 
-    function isFieldBlockedByTimeRules(fieldName, slotStart, slotEnd, actProps) {
+    function isFieldBlockedByTimeRules(fieldName, slotStart, slotEnd, actProps, divName) {
         const rules = actProps?.[fieldName]?.timeRules;
         if (!Array.isArray(rules) || rules.length === 0) return false;
         const parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        const myDiv = divName != null ? String(divName) : null;
         let hasAvail = false, inAvail = false;
         for (const tr of rules) {
+            // Skip rules scoped to other grades. A rule with `divisions: ['1']`
+            // only applies to bunks in grade 1; an empty/missing list = all grades.
+            const trDivs = Array.isArray(tr.divisions) ? tr.divisions.map(String) : [];
+            if (trDivs.length > 0 && myDiv && !trDivs.includes(myDiv)) continue;
+
             const tStart = tr.startMin ?? (parseMin ? parseMin(tr.start || tr.startTime) : null);
             const tEnd   = tr.endMin   ?? (parseMin ? parseMin(tr.end   || tr.endTime)   : null);
             if (tStart == null || tEnd == null) continue;
@@ -224,7 +230,7 @@
             // ★ Grade restriction — skip if this field excludes our division
             if (isDivisionRestricted(f, divName)) return;
             // ★ Time rules — skip if [slotStart, slotEnd] is unavailable
-            if (isFieldBlockedByTimeRules(f.name, slotStart, slotEnd, actProps)) return;
+            if (isFieldBlockedByTimeRules(f.name, slotStart, slotEnd, actProps, divName)) return;
             // ★ GlobalFieldLocks — skip if locked by another league/event
             if (isFieldGloballyLocked(f.name, slotStart, slotEnd, divName)) return;
             // ★ Cross-bunk capacity (incl. combo partners)
@@ -242,7 +248,7 @@
             if (isDivisionRestricted(s, divName)) return;
             const loc = s.location || null;
             if (loc) {
-                if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps)) return;
+                if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
                 if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
                 if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
             }

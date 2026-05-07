@@ -438,13 +438,21 @@
             }
 
             // ★★★ CHECK FIELD TIME RULES (available/unavailable windows) ★★★
+            // ★ Per-grade scoping: a rule with `divisions: ['1']` only applies
+            //   when the current league touches grade 1. Rules with empty/missing
+            //   `divisions` apply to all grades.
             const _fieldTimeRules = activityProperties?.[field.name]?.timeRules;
             if (_fieldTimeRules && _fieldTimeRules.length > 0 && _poolStartMin != null && _poolEndMin != null) {
                 const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                const _curDivs = (divisionNames || []).map(String);
                 let _blocked = false;
                 let _hasAvailRules = false;
                 let _inAvailWindow = false;
                 for (const _tr of _fieldTimeRules) {
+                    // Skip rules scoped to grades we're not currently scheduling for
+                    const _trDivs = Array.isArray(_tr.divisions) ? _tr.divisions.map(String) : [];
+                    if (_trDivs.length > 0 && !_trDivs.some(d => _curDivs.includes(d))) continue;
+
                     const _trStart = _tr.startMin ?? (_parseMin ? _parseMin(_tr.start || _tr.startTime) : null);
                     const _trEnd = _tr.endMin ?? (_parseMin ? _parseMin(_tr.end || _tr.endTime) : null);
                     if (_trStart == null || _trEnd == null) continue;
@@ -458,7 +466,7 @@
                     }
                 }
                 if (_blocked || (_hasAvailRules && !_inAvailWindow)) {
-                    console.log(`[RegularLeagues] ⚠️ Field "${field.name}" blocked by time rules (${_poolStartMin}-${_poolEndMin})`);
+                    console.log(`[RegularLeagues] ⚠️ Field "${field.name}" blocked by time rules (${_poolStartMin}-${_poolEndMin}) for divisions [${_curDivs.join(',')}]`);
                     continue;
                 }
             }
