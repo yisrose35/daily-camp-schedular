@@ -813,20 +813,31 @@ function getStyles() {
     '.pc3-quickpick-btn .pc3-quickpick-sub{display:block;font-size:11px;font-weight:500;color:#78716c;margin-top:1px;}' +
 
     /* ── Grid Preview ── */
-    '.pc3-grid-area{flex:1;overflow:auto;background:#e8ecf0;padding:16px;min-height:0;}' +
-    '.pc3-grid-area.live-bg{background:#111827;padding:0;}' +
-    '.pc3-sheet{background:#fff;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.08),0 0 0 1px rgba(0,0,0,.04);margin-bottom:16px;overflow:auto;position:relative;}' +
+    '.pc3-grid-area{flex:1;overflow:auto;background:#f5f5f4;padding:32px 28px 80px;min-height:0;position:relative;background-image:radial-gradient(rgba(168,162,158,.18) 1px, transparent 1px);background-size:18px 18px;background-position:0 0;}' +
+    '.pc3-grid-area.live-bg{background:#111827;padding:0;background-image:none;}' +
+    /* Paper-like sheet card */
+    '.pc3-sheet{background:#fff;border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 12px 32px -8px rgba(15,23,42,.08),0 0 0 1px rgba(15,23,42,.04);margin:0 auto 28px;overflow:hidden;position:relative;max-width:1180px;}' +
+    /* Sticky sheet header at the top of each card */
+    '.pc3-sheet-head{position:sticky;top:0;z-index:4;background:rgba(255,255,255,.94);backdrop-filter:saturate(140%) blur(8px);-webkit-backdrop-filter:saturate(140%) blur(8px);}' +
+    /* Floating zoom dock */
+    '.pc3-zoom-dock{position:fixed;right:24px;bottom:24px;display:flex;align-items:center;gap:4px;padding:6px;background:rgba(255,255,255,.96);border:1px solid #e7e5e4;border-radius:99px;box-shadow:0 4px 12px rgba(15,23,42,.08),0 1px 3px rgba(15,23,42,.06);z-index:30;backdrop-filter:saturate(140%) blur(8px);-webkit-backdrop-filter:saturate(140%) blur(8px);}' +
+    '.pc3-zoom-dock button{width:30px;height:30px;border:none;background:transparent;border-radius:50%;cursor:pointer;color:#44403c;display:inline-flex;align-items:center;justify-content:center;transition:background .12s;}' +
+    '.pc3-zoom-dock button:hover{background:#f5f5f4;color:#1c1917;}' +
+    '.pc3-zoom-dock .pc3-zoom-dock-label{min-width:46px;text-align:center;font-size:11px;font-weight:600;color:#44403c;cursor:pointer;font-variant-numeric:tabular-nums;padding:0 6px;}' +
+    '.pc3-zoom-dock .pc3-zoom-dock-label:hover{color:#147D91;}' +
+    '.pc3-zoom-dock-sep{width:1px;height:18px;background:#e7e5e4;margin:0 2px;}' +
 
     /* ── Spreadsheet Table ── */
-    '.pc3-tbl{border-collapse:collapse;width:100%;table-layout:auto;user-select:none;}' +
-    '.pc3-tbl th,.pc3-tbl td{border:1px solid #e2e8f0;padding:5px 8px;text-align:left;white-space:nowrap;position:relative;transition:background .1s;}' +
-    '.pc3-tbl th{background:#f1f5f9;font-weight:600;position:sticky;z-index:2;font-size:11px;color:#475569;}' +
+    '.pc3-tbl{border-collapse:separate;border-spacing:0;width:100%;table-layout:auto;user-select:none;}' +
+    '.pc3-tbl th,.pc3-tbl td{border-right:1px solid #f1f5f9;border-bottom:1px solid #f1f5f9;padding:8px 12px;text-align:left;white-space:nowrap;position:relative;transition:background .1s;font-size:13px;}' +
+    '.pc3-tbl tr:last-child td,.pc3-tbl tr:last-child th{border-bottom:none;}' +
+    '.pc3-tbl th:last-child,.pc3-tbl td:last-child{border-right:none;}' +
+    '.pc3-tbl th{background:#fafaf9;font-weight:600;position:sticky;z-index:2;font-size:11px;color:#44403c;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #e7e5e4;}' +
     '.pc3-tbl thead th{top:0;}' +
-    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#e8ecf0;}' +
-    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#f8fafc;font-weight:600;}' +
-    '.pc3-tbl td:hover{outline:2px solid #147D91;outline-offset:-1px;z-index:1;}' +
-    '.pc3-tbl tr:nth-child(even) td{background:#fafbfd;}' +
-    '.pc3-tbl .cell-free{color:#94a3b8;font-style:italic;}' +
+    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#fafaf9;}' +
+    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#fafaf9;font-weight:600;text-transform:none;letter-spacing:0;color:#1c1917;font-size:12px;}' +
+    '.pc3-tbl tr:nth-child(even) td{background:#fdfdfc;}' +
+    '.pc3-tbl .cell-free{color:#a8a29e;font-style:italic;}' +
     '.pc3-tbl .cell-pinned{background:#fff8e1;color:#92400e;font-weight:500;}' +
     '.pc3-tbl .cell-league{background:#eff6ff;color:#1e40af;font-weight:500;}' +
     '.pc3-tbl .cell-transition{background:#f5f3ff;color:#6d28d9;font-size:10px;font-style:italic;}' +
@@ -844,10 +855,10 @@ function getStyles() {
     '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
     /* ── Sheet Header ── */
-    '.pc3-sheet-head{padding:10px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e2e8f0;}' +
-    '.pc3-sheet-title{font-size:15px;font-weight:700;color:#1e293b;}' +
-    '.pc3-sheet-subtitle{font-size:11px;color:#94a3b8;}' +
-    '.pc3-sheet-badge{font-size:10px;font-weight:600;padding:2px 8px;border-radius:4px;background:#f0fdf4;color:#166534;}' +
+    '.pc3-sheet-head{padding:14px 20px;display:flex;align-items:center;gap:14px;border-bottom:1px solid #e7e5e4;}' +
+    '.pc3-sheet-title{font-size:16px;font-weight:700;color:#1c1917;letter-spacing:-.005em;}' +
+    '.pc3-sheet-subtitle{font-size:12px;color:#78716c;font-weight:500;}' +
+    '.pc3-sheet-badge{font-size:10px;font-weight:600;padding:3px 9px;border-radius:99px;background:#ecfeff;color:#147D91;text-transform:uppercase;letter-spacing:.4px;}' +
 
     /* ── League Matchups ── */
     '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 6px;background:rgba(30,64,175,.06);border:1px solid rgba(30,64,175,.1);border-radius:3px;font-size:10px;white-space:nowrap;}' +
@@ -1075,6 +1086,14 @@ function buildMainUI() {
                 '</div>' +
             '</div>' +
             '<div id="pc3-preview-content" style="display:none;"></div>' +
+            /* Floating zoom dock — bottom-right of preview */
+            '<div class="pc3-zoom-dock no-print" id="pc3-zoom-dock">' +
+                '<button onclick="window._pc3Zoom(-10)" title="Zoom out">' + ICO.zoomOut + '</button>' +
+                '<span class="pc3-zoom-dock-label" id="pc3-zoom-dock-label" onclick="window._pc3ZoomReset && window._pc3ZoomReset()" title="Reset to 100%">' + _zoomLevel + '%</span>' +
+                '<button onclick="window._pc3Zoom(10)" title="Zoom in">' + ICO.zoomIn + '</button>' +
+                '<span class="pc3-zoom-dock-sep"></span>' +
+                '<button onclick="window._pc3ToggleFullscreen()" title="Toggle fullscreen">' + ICO.expand + '</button>' +
+            '</div>' +
         '</div>' +
 
         /* Advanced Drawer */
@@ -3387,11 +3406,16 @@ window._pc3Zoom = function (delta) {
     if (pc) { pc.style.transform = 'scale(' + (_zoomLevel / 100) + ')'; pc.style.transformOrigin = 'top left'; }
     var zr = el('pc3-zoom-range'); if (zr) zr.value = _zoomLevel;
     var zl = el('pc3-zoom-label'); if (zl) zl.textContent = _zoomLevel + '%';
+    var zdl = el('pc3-zoom-dock-label'); if (zdl) zdl.textContent = _zoomLevel + '%';
     var zb = el('pc3-zoom-btn');
     if (zb) {
         // Update the inline zoom % in the tab-bar button label
         zb.innerHTML = 'Zoom <span style="font-variant-numeric:tabular-nums;">' + _zoomLevel + '%</span> <span class="caret">▼</span>';
     }
+};
+window._pc3ZoomReset = function () {
+    var delta = 100 - _zoomLevel;
+    if (delta !== 0) window._pc3Zoom(delta);
 };
 window._pc3ApplyPreset = function (presetId) {
     var preset = STYLE_PRESETS.filter(function (p) { return p.id === presetId; })[0];
