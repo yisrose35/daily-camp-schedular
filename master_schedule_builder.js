@@ -2837,6 +2837,10 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'split' && ev.subEvents?.length === 2) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
   }
+  // Split tile with swim → show change badge
+  if (ev.type === 'split' && ev._midChangeMin) {
+    innerHtml += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${ev._midChangeMin}m</div>`;
+  }
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
 
   // Travel strips (off-campus). Prefer stamped values; fall back to live zone lookup (manual = deduct mode).
@@ -2951,20 +2955,34 @@ function addDropListeners(selector) {
       else if (tileData.type === 'split') {
         const result = await showModal({
           title: 'Split Activity Setup',
-          description: 'Splits division into two groups. Midway through the time block, groups SWAP.\n\nExamples: Swim, Sports, Art, Special, Activity',
+          description: 'Splits division into two groups. Midway through the time block, groups SWAP.\n\nIf one activity is Swim, enter the change time. Each group gets change directly before and after their swim.',
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
             { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
-            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
+            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' },
+            { name: 'changeMin', label: 'Swim Change Time (minutes, optional)', type: 'text', placeholder: 'e.g., 5' }
           ]
         });
         if (!result || !result.main1 || !result.main2) return;
-        
+
         // Map through optimizer (same as daily adjustments) to get proper type+event structure
         const event1 = mapEventNameForOptimizer(result.main1);
         const event2 = mapEventNameForOptimizer(result.main2);
-        
+
+        // Detect if either activity is swim → store change time on the tile
+        // The solver handles all change routing per-group (pre, mid, post)
+        const splitHasSwim = result.main1.toLowerCase().trim() === 'swim' || result.main2.toLowerCase().trim() === 'swim';
+        const mbSplitChange = splitHasSwim ? (parseInt(result.changeMin) || 0) : 0;
+        const mbSplitStart = parseTimeToMinutes(result.startTime);
+        const mbSplitEnd = parseTimeToMinutes(result.endTime);
+
+        // Validate: change time (pre + mid + post = 3x) must fit in the block
+        if (mbSplitChange > 0 && (mbSplitChange * 3) >= (mbSplitEnd - mbSplitStart)) {
+          await showAlert('Change time too large — needs at least ' + (mbSplitChange * 3) + ' min but block is only ' + (mbSplitEnd - mbSplitStart) + ' min.');
+          return;
+        }
+
         newEvent = {
           id: Date.now().toString(),
           type: 'split',
@@ -2972,14 +2990,14 @@ function addDropListeners(selector) {
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
-          // CRITICAL: Ensure .event property is always present in subEvents (matches DA)
           subEvents: [
             { ...event1, event: event1.event || result.main1 },
             { ...event2, event: event2.event || result.main2 }
-          ]
+          ],
+          _midChangeMin: mbSplitChange || undefined
         };
-        
-        console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents);
+
+        console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents, mbSplitChange ? '(with ' + mbSplitChange + 'min swim change)' : '');
       }
       // ELECTIVE
       else if (tileData.type === 'elective') {
