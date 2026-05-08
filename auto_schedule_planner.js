@@ -810,7 +810,9 @@ function openPopover(layerId, bandEl) {
     '<div class="al-pop-hint">How long each block lasts</div>' +
     '</div>';
 
-  html += '<div class="al-pop-field">' +
+  // ★ Skip the legacy single-quantity field for Special layers — they use
+  //   the per-subcategory grid below.
+  if (layer.type !== 'special') html += '<div class="al-pop-field">' +
     '<label class="al-pop-label">Blocks Per Day</label>' +
     '<div class="al-pop-row">' +
       '<div class="al-pop-ops" id="al-pop-ops-daily">' +
@@ -823,23 +825,45 @@ function openPopover(layerId, bandEl) {
     '<div class="al-pop-hint">\u2265 at least \u00B7 \u2264 at most \u00B7 = exactly this many per day</div>' +
     '</div>';
 
-  // ── Subcategory picker (Special Activity only) ──
+  // ★ Per-subcategory quantity grid for Special layers (Facilities registry +
+  //   implicit "Regular" row for untagged activities). Replaces the legacy
+  //   single-tag dropdown and adds per-row quantities (0 = skip).
   if (layer.type === 'special') {
-    const _subOptions = (typeof window.getSpecialSubcategories === 'function')
+    var _regSubs = (typeof window.getSpecialSubcategories === 'function')
       ? window.getSpecialSubcategories() : [];
-    const _curSub = (typeof layer.subcategory === 'string') ? layer.subcategory : '';
-    let _subOpts = '<option value="" ' + (_curSub === '' ? 'selected' : '') + '>— Any —</option>';
-    _subOptions.forEach(function(s) {
-      var sel = (s === _curSub) ? ' selected' : '';
-      _subOpts += '<option value="' + s.replace(/"/g, '&quot;') + '"' + sel + '>' + s + '</option>';
-    });
-    _subOpts += '<option value="__add_new__">+ New subcategory…</option>';
+    var _hasRegular = _regSubs.some(function(s){ return s.toLowerCase() === 'regular'; });
+    var _subs = _hasRegular ? _regSubs : ['Regular'].concat(_regSubs);
+    var _existing = (layer.subQuantities && typeof layer.subQuantities === 'object') ? layer.subQuantities : null;
+    var _legacySub = (typeof layer.subcategory === 'string') ? layer.subcategory.trim() : '';
+    var _legacyQty = parseInt(layer.quantity, 10) || 0;
+    var _seed = function(name) {
+      if (_existing) {
+        var key = Object.keys(_existing).find(function(k){ return k.toLowerCase() === name.toLowerCase(); });
+        return key ? (parseInt(_existing[key], 10) || 0) : 0;
+      }
+      if (_legacySub && _legacySub.toLowerCase() === name.toLowerCase()) {
+        return _legacyQty || 1;
+      }
+      return 0;
+    };
+    var _rowsHtml = _subs.map(function(name){
+      var v = _seed(name);
+      return '<div class="al-pop-subq-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;">' +
+               '<span style="font-size:12px;color:#cbd5e1;">' + name + '</span>' +
+               '<input type="number" class="al-pop-subq-input al-pop-input-sm" data-subname="' + name.replace(/"/g, '&quot;') + '" value="' + v + '" min="0" max="10" style="width:60px;">' +
+             '</div>';
+    }).join('');
+    var _totalSeed = _subs.reduce(function(s, name){ return s + _seed(name); }, 0);
     html += '<div class="al-pop-field">' +
-      '<label class="al-pop-label">Subcategory</label>' +
-      '<div class="al-pop-row">' +
-        '<select class="al-pop-input" id="al-pop-subcategory" style="min-width:160px;">' + _subOpts + '</select>' +
+      '<label class="al-pop-label">Quantity by Subcategory</label>' +
+      '<div style="display:flex;flex-direction:column;gap:2px;border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:6px 10px;background:rgba(255,255,255,0.03);">' +
+        _rowsHtml +
+        '<div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.08);font-size:11px;color:#94a3b8;">' +
+          '<span>Total</span>' +
+          '<span id="al-pop-subq-total" style="font-weight:600;color:#e2e8f0;">' + _totalSeed + '</span>' +
+        '</div>' +
       '</div>' +
-      '<div class="al-pop-hint">Restrict this layer to specials in one bucket (e.g. "Food"). Leave blank for any.</div>' +
+      '<div class="al-pop-hint">0 = skip. Untagged specials count toward "Regular". Manage subcategories in Facilities.</div>' +
       '</div>';
   }
 
@@ -1002,12 +1026,25 @@ function openPopover(layerId, bandEl) {
   // Delete
   popoverEl.querySelector('#al-pop-delete').onclick = function() { deleteLayer(layerId); };
 
+  // ★ Live total for the Special-layer per-subcategory grid.
+  var _subqInputs = popoverEl.querySelectorAll('.al-pop-subq-input');
+  var _subqTotalEl = popoverEl.querySelector('#al-pop-subq-total');
+  if (_subqInputs.length && _subqTotalEl) {
+    var _recalcSubqTotal = function() {
+      var t = 0;
+      _subqInputs.forEach(function(i){ t += Math.max(0, parseInt(i.value, 10) || 0); });
+      _subqTotalEl.textContent = String(t);
+    };
+    _subqInputs.forEach(function(i){ i.addEventListener('input', _recalcSubqTotal); });
+  }
+
   // Done — save all values
   popoverEl.querySelector('#al-pop-done').onclick = function() {
     var sVal = parseTime(popoverEl.querySelector('#al-pop-start').value);
     var eVal = parseTime(popoverEl.querySelector('#al-pop-end').value);
     var dVal = parseInt(popoverEl.querySelector('#al-pop-dur').value) || null;
-    var qVal = parseInt(popoverEl.querySelector('#al-pop-qty').value) || 1;
+    var _qtyEl = popoverEl.querySelector('#al-pop-qty');
+    var qVal = _qtyEl ? (parseInt(_qtyEl.value) || 1) : 1;
     var activeOp = popoverEl.querySelector('.al-pop-op[data-op].active');
     var opVal = activeOp ? activeOp.dataset.op : '\u2265';
     var pinned = popoverEl.querySelector('#al-pop-pin').classList.contains('active');
@@ -1025,17 +1062,32 @@ function openPopover(layerId, bandEl) {
     if (sVal != null) layer.startMin = snap(sVal);
     if (eVal != null) layer.endMin = snap(eVal);
     if (dVal) layer.periodMin = dVal;
-    layer.quantity = qVal;
-    layer.operator = opVal;
     layer.pinExact = pinned;
     layer.timesPerWeek = weekQtyVal;
     layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
     layer.bunksPerDay = bpdVal;
 
-    // \u2605 Subcategory tag for Special layers
+    // \u2605 Special layer: collect per-subcategory grid into subQuantities,
+    //   set quantity = sum (so legacy code paths still get a meaningful total),
+    //   force operator '=' (per-row exact-N semantics), and drop the legacy
+    //   single-tag subcategory field. Other layer types use the simple qty/op.
     if (layer.type === 'special') {
-      var subEl = popoverEl.querySelector('#al-pop-subcategory');
-      layer.subcategory = subEl ? String(subEl.value || '').trim() : '';
+      var _siInputs = popoverEl.querySelectorAll('.al-pop-subq-input');
+      var _subQ = {};
+      var _total = 0;
+      _siInputs.forEach(function(inp){
+        var n = inp.dataset.subname || '';
+        var v = Math.max(0, parseInt(inp.value, 10) || 0);
+        if (!n) return;
+        if (v > 0) { _subQ[n] = v; _total += v; }
+      });
+      layer.subQuantities = _subQ;
+      layer.quantity = Math.max(1, _total);
+      layer.operator = '=';
+      delete layer.subcategory;
+    } else {
+      layer.quantity = qVal;
+      layer.operator = opVal;
     }
 
     // Grade Mode
