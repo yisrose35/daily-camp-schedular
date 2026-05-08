@@ -238,12 +238,18 @@
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
             games: Array.isArray(league.games) ? league.games : [],
             enabled: league.enabled !== false,
-          schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority) 
-                ? league.schedulingPriority 
+          schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority)
+                ? league.schedulingPriority
                 : 'sport_variety',
             offCampus: (league.offCampus && typeof league.offCampus === 'object')
                 ? { enabled: league.offCampus.enabled === true, zone: typeof league.offCampus.zone === 'string' ? league.offCampus.zone : '', teamsPerDay: parseInt(league.offCampus.teamsPerDay) || 0 }
-                : { enabled: false, zone: '', teamsPerDay: 0 }
+                : { enabled: false, zone: '', teamsPerDay: 0 },
+            // ★ Preserve the playoff sub-object verbatim. Earlier this field
+            //   was dropped, so any cloud-sync echo or background re-validation
+            //   that ran right after a save (e.g. saving from the Playoff Hub)
+            //   wiped enable/style/seeds/rounds and made the bracket appear
+            //   to "shut off" until the user re-toggled it.
+            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined
         };
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
@@ -641,17 +647,12 @@
         contentWrapper.innerHTML = `
             <div class="setup-grid">
               <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
-                <div class="setup-card-header" style="margin-bottom:20px; display:flex; align-items:flex-start; gap:12px;">
+                <div class="setup-card-header" style="margin-bottom:20px;">
                   <span class="setup-step-pill">Leagues</span>
-                  <div class="setup-card-text" style="flex:1;">
+                  <div class="setup-card-text">
                     <h3>Manage Leagues</h3>
                     <p>Configure leagues, teams, standings, and game results.</p>
                   </div>
-                  <button id="leagues-playoff-hub-btn" type="button" title="Open the dedicated Playoff Hub"
-                    style="background:#0F172A; color:#fff; border:none; border-radius:8px;
-                           padding:10px 18px; font-size:0.85rem; font-weight:700; cursor:pointer; white-space:nowrap;">
-                    Playoff Hub
-                  </button>
                 </div>
 
                 <div style="display:flex; flex-wrap:wrap; gap:24px;">
@@ -681,18 +682,6 @@
 
         // ★ FIX: Null check all DOM elements
         listEl = document.getElementById('leagues-master-list');
-
-        // Wire the Playoff Hub button to launch the dedicated overlay UI.
-        var _hubBtn = document.getElementById('leagues-playoff-hub-btn');
-        if (_hubBtn) {
-            _hubBtn.onclick = function () {
-                if (window.PlayoffHub && typeof window.PlayoffHub.open === 'function') {
-                    window.PlayoffHub.open();
-                } else {
-                    alert('Playoff Hub not loaded.');
-                }
-            };
-        }
         detailPaneEl = document.getElementById('leagues-detail-pane');
         const addInput = document.getElementById('league-add-input');
         const addBtn = document.getElementById('league-add-btn');
@@ -891,32 +880,16 @@
             }
         };
 
-        // --- PLAYOFF CONTAINER (collapsible) ---
-        const playoffContainer = document.createElement('div');
-        playoffContainer.className = 'league-playoff-container';
-        playoffContainer.style.cssText = 'display:none;margin-top:8px;';
-        const _playoffMount = document.createElement('div');
-        playoffContainer.appendChild(_playoffMount);
-        detailPaneEl.appendChild(playoffContainer);
-
-        // Auto-expand if playoff already enabled
-        if (_playoffActive) {
-            playoffContainer.style.display = 'block';
-            playoffBtn.classList.add('active');
-            mountPlayoffUI(_playoffMount, league);
-        }
-
+        // ★ Playoff button now opens the dedicated per-league Playoff Hub
+        //   overlay (window.PlayoffHub.open). The old collapsible inline panel
+        //   was replaced because users asked for one focused, shared UI per
+        //   league. The hub still saves through the same league.playoff
+        //   sub-object, so any state set there is read by the scheduler.
         playoffBtn.onclick = function () {
-            const isOpen = playoffContainer.style.display !== 'none';
-            if (isOpen) {
-                playoffContainer.style.display = 'none';
-                playoffBtn.classList.remove('active');
-                playoffBtn.textContent = (league.playoff && league.playoff.enabled) ? 'Playoff: ON' : 'Playoff Mode';
+            if (window.PlayoffHub && typeof window.PlayoffHub.open === 'function') {
+                window.PlayoffHub.open(league, 'regular');
             } else {
-                playoffContainer.style.display = 'block';
-                playoffBtn.classList.add('active');
-                playoffBtn.textContent = 'Close Playoff';
-                mountPlayoffUI(_playoffMount, league);
+                alert('Playoff Hub module not loaded.');
             }
         };
 

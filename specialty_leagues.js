@@ -453,7 +453,9 @@
             teams: Array.isArray(league.teams) ? league.teams.filter(t => typeof t === 'string') : [],
             enabled: league.enabled !== false,
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
-            games: Array.isArray(league.games) ? league.games : []
+            games: Array.isArray(league.games) ? league.games : [],
+            // ★ Preserve playoff sub-object — see leagues.js for the same fix.
+            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined
         };
 
         // ★ Filter out orphaned divisions (divisions that no longer exist)
@@ -911,31 +913,13 @@
                 }
             };
 
-            // --- PLAYOFF CONTAINER ---
-            const playoffContainer = document.createElement('div');
-            playoffContainer.className = 'league-playoff-container';
-            playoffContainer.style.cssText = 'display:none;margin-top:8px;';
-            const _playoffMount = document.createElement('div');
-            playoffContainer.appendChild(_playoffMount);
-            detailPaneEl.appendChild(playoffContainer);
-
-            if (_playoffActive) {
-                playoffContainer.style.display = 'block';
-                playoffBtn.classList.add('active');
-                mountSpecialtyPlayoffUI(_playoffMount, league);
-            }
-
-            playoffBtn.onclick = () => {
-                const isOpen = playoffContainer.style.display !== 'none';
-                if (isOpen) {
-                    playoffContainer.style.display = 'none';
-                    playoffBtn.classList.remove('active');
-                    playoffBtn.textContent = (league.playoff && league.playoff.enabled) ? 'Playoff: ON' : 'Playoff Mode';
+            // ★ Specialty league playoff button now opens the per-league
+            //   PlayoffHub overlay — same shared UI as regular leagues.
+            playoffBtn.onclick = function () {
+                if (window.PlayoffHub && typeof window.PlayoffHub.open === 'function') {
+                    window.PlayoffHub.open(league, 'specialty');
                 } else {
-                    playoffContainer.style.display = 'block';
-                    playoffBtn.classList.add('active');
-                    playoffBtn.textContent = 'Close Playoff';
-                    mountSpecialtyPlayoffUI(_playoffMount, league);
+                    alert('Playoff Hub module not loaded.');
                 }
             };
 
