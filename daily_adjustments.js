@@ -3010,7 +3010,8 @@ function addDropListeners(gridEl) {
       // ===== LEAGUE =====
      else if (tileData.type === 'league') {
         // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker ★★★
-        // Filter to leagues assigned to THIS grade and require selection.
+        // Filter to leagues assigned to THIS grade. Skip the picker
+        // entirely when there's exactly one match (auto-fill silently).
         const globalSettings = window.loadGlobalSettings?.() || {};
         const leaguesByName = globalSettings.leaguesByName || {};
         const gradeLeagues = Object.keys(leaguesByName).filter(ln => {
@@ -3021,15 +3022,21 @@ function addDropListeners(gridEl) {
           await daShowAlert('No leagues are assigned to ' + divName + '. Add this grade to a league in League Setup before dropping a league tile here.');
           return;
         }
-        const leaguePickerField = [{
-          name: 'leagueName',
-          label: 'Which League? (required)',
-          type: 'select',
-          options: [{ value: '', label: '— Choose a league —' }].concat(
-            gradeLeagues.map(ln => ({ value: ln, label: ln }))
-          ),
-          default: gradeLeagues.length === 1 ? gradeLeagues[0] : ''
-        }];
+        let _autoLeagueName = null;
+        let leaguePickerField = [];
+        if (gradeLeagues.length === 1) {
+          _autoLeagueName = gradeLeagues[0];
+        } else {
+          leaguePickerField = [{
+            name: 'leagueName',
+            label: 'Which League? (required)',
+            type: 'select',
+            options: [{ value: '', label: '— Choose a league —' }].concat(
+              gradeLeagues.map(ln => ({ value: ln, label: ln }))
+            ),
+            default: ''
+          }];
+        }
 
         const result = await daShowModal({
           title: 'League Game for ' + divName,
@@ -3040,7 +3047,9 @@ function addDropListeners(gridEl) {
           ]
         });
         if (!result || !result.startTime || !result.endTime) return;
-        if (!result.leagueName) {
+        if (_autoLeagueName) {
+          result.leagueName = _autoLeagueName;
+        } else if (!result.leagueName) {
           await daShowAlert('Please choose a league before dropping the tile.');
           return;
         }
@@ -3552,17 +3561,23 @@ async function editTile(id) {
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
       const _lbn = _gs.leaguesByName || {};
-      // Filter to leagues assigned to this event's grade. No auto-pick.
+      // Filter to leagues assigned to this event's grade.
       const _gradeLeagues = Object.keys(_lbn).filter(ln =>
         _lbn[ln] && _lbn[ln].enabled !== false &&
         Array.isArray(_lbn[ln].divisions) &&
         _lbn[ln].divisions.includes(String(ev.division))
       );
-      if (_gradeLeagues.length > 0) {
+      if (_gradeLeagues.length === 1) {
+        // Single league for this grade → assign silently, no picker.
+        if (ev.leagueName !== _gradeLeagues[0]) {
+          ev.leagueName = _gradeLeagues[0];
+          if (ev.event && (ev.event === 'League Game' || _lbn[ev.event])) ev.event = _gradeLeagues[0];
+        }
+      } else if (_gradeLeagues.length > 1) {
         modalFields.splice(1, 0, {
           name: 'leagueName', label: 'Which League? (required)', type: 'select',
           options: [{ value: '', label: '— Choose a league —' }].concat(_gradeLeagues.map(ln => ({ value: ln, label: ln }))),
-          default: _gradeLeagues.includes(ev.leagueName) ? ev.leagueName : (_gradeLeagues.length === 1 ? _gradeLeagues[0] : '')
+          default: _gradeLeagues.includes(ev.leagueName) ? ev.leagueName : ''
         });
       }
     }
