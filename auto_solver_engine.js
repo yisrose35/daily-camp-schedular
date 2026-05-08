@@ -893,44 +893,44 @@
     // =========================================================================
 
     // ── HARD WRITE GUARD ────────────────────────────────────────────────
-    // Re-read field rules from live globalSettings on every commit. Each
-    // repair phase has its own pre-parsed candidate and its own validation
-    // path; any one of them being subtly wrong (stale cache, dropped rule
-    // during parse, mismatched division key) lets a rule-violating
-    // placement through. This guard is the single source of truth that
-    // every sa[bunk][slotIdx] = {...} write must pass. It mirrors what the
-    // Step 4.95 safety net checks, so nothing can bypass it.
-    let _writeGuardCache = null;
-    function _getWriteGuardFields() {
-        if (_writeGuardCache) return _writeGuardCache;
-        const gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : {};
-        const map = {};
-        (gs.app1?.fields || []).forEach(f => { if (f && f.name) map[f.name] = f; });
-        _writeGuardCache = map;
-        return map;
-    }
+    // Reads field rules from live globalSettings on every call — no
+    // caching. Caching kept producing stale data because gs.app1.fields
+    // can be reassigned by cloud-sync/facilities edits between auto runs,
+    // and the cached map then pointed at old field objects whose
+    // timeRules array no longer contained the rules the safety net sees.
     function commitWriteIfLegal(bunk, slotIdx, fieldName, sport, grade, startMin, endMin, entry) {
         if (!window.scheduleAssignments) return false;
         if (fieldName && fieldName !== 'Free') {
-            const fld = _getWriteGuardFields()[fieldName];
+            // Always read live — safe and cheap (small array, runs only on writes)
+            const gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : {};
+            const fields = gs.app1?.fields || [];
+            const fld = fields.find(f => f && f.name === fieldName);
             if (fld) {
                 // Field-level access restriction
-                if (fld.accessRestrictions && fld.accessRestrictions.enabled === true) {
+                if (fld.accessRestrictions && fld.accessRestrictions.enabled) {
                     const divs = fld.accessRestrictions.divisions || {};
-                    if (!(grade in divs)) {
+                    const gradeKey = String(grade);
+                    if (!(gradeKey in divs) && !(grade in divs)) {
                         log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — access');
                         return false;
                     }
-                    const bunkList = divs[grade];
+                    const bunkList = divs[gradeKey] || divs[grade];
                     if (Array.isArray(bunkList) && bunkList.length > 0
                         && !bunkList.map(String).includes(String(bunk))) {
                         log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — bunk-access');
                         return false;
                     }
                 }
-                // Field-level grade-scoped time rules
+                // Field-level grade-scoped time rules — REQUIRE valid times.
+                // If startMin/endMin are missing we fall back to the entry's
+                // _startMin/_endMin so we never silently skip the check.
+                let sMin = startMin, eMin = endMin;
+                if ((sMin == null || eMin == null) && entry) {
+                    if (entry._startMin != null) sMin = entry._startMin;
+                    if (entry._endMin != null) eMin = entry._endMin;
+                }
                 if (Array.isArray(fld.timeRules) && fld.timeRules.length > 0
-                    && startMin != null && endMin != null) {
+                    && sMin != null && eMin != null) {
                     const myG = grade != null ? String(grade) : null;
                     const _parseTM = window.SchedulerCoreUtils?.parseTimeToMinutes;
                     let hasGradeAvail = false, insideAvail = false;
@@ -945,17 +945,17 @@
                         if (rs == null || re == null || (!isUn && !isAv)) continue;
                         const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
                         if (rDivs.length > 0 && myG && rDivs.indexOf(myG) === -1) continue;
-                        if (isUn && rs < endMin && re > startMin) {
-                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — Unavailable ' + rs + '-' + re);
+                        if (isUn && rs < eMin && re > sMin) {
+                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — Unavailable ' + rs + '-' + re + ' (slot ' + sMin + '-' + eMin + ')');
                             return false;
                         }
                         if (isAv) {
                             hasGradeAvail = true;
-                            if (startMin >= rs && endMin <= re) insideAvail = true;
+                            if (sMin >= rs && eMin <= re) insideAvail = true;
                         }
                     }
                     if (hasGradeAvail && !insideAvail) {
-                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — outside Available');
+                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — outside Available (slot ' + sMin + '-' + eMin + ')');
                         return false;
                     }
                 }
