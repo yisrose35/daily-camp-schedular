@@ -78,28 +78,66 @@
         const ap = config.activityProperties || window.activityProperties || {};
         const fields = config.masterFields || [];
         const disabled = new Set(config.disabledFields || []);
+        const dailyDisabledSports = config.dailyDisabledSports || {};
+        const parseTimeMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
         const candidates = [];
+
+        // Parse a field's timeRules into a normalized form once per field so
+        // isFieldAvailableByTime can run cheap per-call. Each rule is split into
+        // type (available/unavailable), [startMin, endMin], and grade scope.
+        function parseRules(rawRules) {
+            if (!Array.isArray(rawRules)) return [];
+            return rawRules.map(r => {
+                const t = String(r.type || '').toLowerCase();
+                const isUnavail = t === 'unavailable' || r.available === false;
+                const isAvail = t === 'available' || r.available === true;
+                const sMin = r.startMin ?? (parseTimeMin ? parseTimeMin(r.start || r.startTime) : null);
+                const eMin = r.endMin ?? (parseTimeMin ? parseTimeMin(r.end || r.endTime) : null);
+                return {
+                    available: isAvail,
+                    unavailable: isUnavail,
+                    startMin: sMin,
+                    endMin: eMin,
+                    divisions: Array.isArray(r.divisions) ? r.divisions.map(String) : []
+                };
+            }).filter(r => r.startMin != null && r.endMin != null && (r.available || r.unavailable));
+        }
 
         const fieldsBySport = {};
         fields.forEach(f => {
             if (disabled.has(f.name)) return;
+            const rawType = f.sharableWith?.type || 'same_division';
+            const divs = f.sharableWith?.divisions || [];
+            let shareType = rawType;
+            if (shareType === 'custom' && divs.length === 0) shareType = 'same_division';
+            // ★ Per-field rule data — same source the manual builder's
+            //   isFieldAvailable consumes, so the auto solver finally agrees
+            //   with the manual one on grade access + grade-scoped time rules.
+            const accessRestrictions = (f.accessRestrictions && f.accessRestrictions.enabled === true)
+                ? {
+                    enabled: true,
+                    divisions: (f.accessRestrictions.divisions && typeof f.accessRestrictions.divisions === 'object')
+                        ? f.accessRestrictions.divisions
+                        : {}
+                }
+                : null;
+            const timeRules = parseRules(f.timeRules);
+            // dailyDisabledSports map: { fieldName: ['Hockey', ...] }
+            const fieldDisabledSports = new Set(
+                (dailyDisabledSports[f.name] || []).map(s => normName(s))
+            );
+
             (f.activities || []).forEach(sportName => {
                 if (!fieldsBySport[sportName]) fieldsBySport[sportName] = [];
-                const rawType = f.sharableWith?.type || 'same_division';
-                const divs = f.sharableWith?.divisions || [];
-                // Normalize: custom with empty divisions = same_division.
-                // ★ v12.1: 'all' was incorrectly collapsed to 'same_division', which
-                // silently blocked cross-grade sharing even when the field was configured
-                // to allow it.  Keep 'all' as-is so the capacity check at line ~214
-                // applies without the cross-grade block at line ~202.
-                let shareType = rawType;
-                if (shareType === 'custom' && divs.length === 0) shareType = 'same_division';
                 fieldsBySport[sportName].push({
                     name: f.name,
                     capacity: parseInt(f.sharableWith?.capacity) || parseInt(f.capacity) || 2,
                     shareType,
                     allowedDivisions: shareType === 'custom' ? divs : [],
-                    isIndoor: !!f.isIndoor
+                    isIndoor: !!f.isIndoor,
+                    accessRestrictions,
+                    timeRules,
+                    disabledSports: fieldDisabledSports
                 });
             });
         });
@@ -115,6 +153,9 @@
                     shareType: field.shareType,
                     allowedDivisions: field.allowedDivisions,
                     isIndoor: field.isIndoor,
+                    accessRestrictions: field.accessRestrictions,
+                    timeRules: field.timeRules,
+                    disabledSports: field.disabledSports,
                     _activity: sport  // for scheduleAssignments compatibility
                 });
             });
@@ -191,6 +232,55 @@
 
         // 2. Rainy day: no outdoor fields
         if (window.isRainyDay && candidate && !candidate.isIndoor) return false;
+
+        // 2a. ★ GRADE ACCESS RESTRICTION
+        //     Mirrors scheduler_core_auto.js:isFieldAvailable. The auto solver was
+        //     placing sports on fields whose accessRestrictions excluded the bunk's
+        //     grade — e.g. Hockey on a gym restricted to grades 4-6 was getting
+        //     assigned to a grade-1 bunk. With this gate the candidate is rejected
+        //     up front.
+        if (candidate?.accessRestrictions?.enabled) {
+            const divRules = candidate.accessRestrictions.divisions || {};
+            if (!(grade in divRules)) return false;
+            // Per-bunk filter inside the grade entry: empty array = "all bunks
+            // in this grade", non-empty = only the listed bunks.
+            const bunkList = divRules[grade];
+            if (Array.isArray(bunkList) && bunkList.length > 0
+                && !bunkList.map(String).includes(String(bunk))) {
+                return false;
+            }
+        }
+
+        // 2b. ★ TIME RULES (per-grade)
+        //     A field can declare Available/Unavailable windows, optionally
+        //     scoped to specific grades. If the field has any Available rule
+        //     applicable to this grade, [startMin, endMin] must lie inside one
+        //     of them. Any overlapping Unavailable rule rejects outright.
+        const rules = candidate?.timeRules;
+        if (Array.isArray(rules) && rules.length > 0) {
+            const myGrade = grade != null ? String(grade) : null;
+            let hasGradeAvailRule = false;
+            let insideGradeAvailRule = false;
+            for (const r of rules) {
+                // Skip rules scoped to other grades (empty divisions = all grades)
+                if (r.divisions.length > 0 && myGrade && !r.divisions.includes(myGrade)) continue;
+                if (r.unavailable) {
+                    if (r.startMin < endMin && r.endMin > startMin) return false;
+                } else if (r.available) {
+                    hasGradeAvailRule = true;
+                    if (startMin >= r.startMin && endMin <= r.endMin) insideGradeAvailRule = true;
+                }
+            }
+            if (hasGradeAvailRule && !insideGradeAvailRule) return false;
+        }
+
+        // 2c. ★ DAILY DISABLED SPORTS — per-field daily override
+        //     Lets the user disable a specific sport on a specific field for
+        //     today only without touching base config.
+        if (candidate?.disabledSports && candidate.sportNorm
+            && candidate.disabledSports.has(candidate.sportNorm)) {
+            return false;
+        }
 
        // 3. Time index: capacity + cross-division sharing (THE critical check)
         const fn = normName(fieldName);

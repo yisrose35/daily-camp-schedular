@@ -13880,6 +13880,23 @@
             masterFields.forEach(f => { (f.activities || []).forEach(a => { if (!fbs[a]) fbs[a] = []; fbs[a].push(f.name); }); });
             window.fieldsBySport = fbs;
 
+            // ★ Daily sport-on-field overrides (e.g. "Hockey is disabled on
+            //   #2 gym today only"). Mirrors the source buildFieldLedger reads
+            //   so AutoSolverEngine.buildCandidates can apply the same gate.
+            let dailyDisabledSports = {};
+            try {
+                const _dd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+                const _ov = (gs.app1?.dailyOverrides || {})[currentDate || ''] || {};
+                dailyDisabledSports = _dd.dailyDisabledSportsByField || _ov.dailyDisabledSportsByField || {};
+                if (!Object.keys(dailyDisabledSports).length && currentDate) {
+                    const _stored = localStorage.getItem('campResourceOverrides_' + currentDate);
+                    if (_stored) {
+                        const _parsed = JSON.parse(_stored);
+                        if (_parsed?.dailyDisabledSportsByField) dailyDisabledSports = _parsed.dailyDisabledSportsByField;
+                    }
+                }
+            } catch (_e) { dailyDisabledSports = {}; }
+
             return {
                 activityProperties: window.activityProperties || {},
                 masterFields,
@@ -13889,6 +13906,7 @@
                 disabledFields: (window.currentDisabledFields && window.currentDisabledFields.length)
                     ? window.currentDisabledFields
                     : (gs.app1?.disabledFields || []),
+                dailyDisabledSports,
                 dateStr: currentDate || '',
                 yesterdayHistory,
                 isRainy,
