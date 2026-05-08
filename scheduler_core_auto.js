@@ -2944,10 +2944,18 @@
             //   this bunk. Returns true when no subcategory enforcement is on
             //   for this bunk (legacy / no tags), or when there is remaining
             //   demand for this special's subcategory.
+            // ★ Untagged activities → "regular" bucket (matches
+            //   getDisplaySubcategory in special_activities.js). Inlined here
+            //   because the equivalent helper in the per-grade loop is in a
+            //   different scope and not visible to runGlobalPlanner.
+            const _gpCanonSub = (s) => {
+                const v = (typeof s === 'string') ? s.trim().toLowerCase() : '';
+                return v || 'regular';
+            };
             function _canPickSpecialBySubcategory(special, sl, result) {
                 if (!sl?.specials?.subcategoryEnforced) return true;
                 const caps = sl.specials.subcategoryCap || {};
-                const subKey = _canonSub(special.subcategory); // '' → 'regular'
+                const subKey = _gpCanonSub(special.subcategory);
                 const cap = caps[subKey];
                 if (cap == null) return false; // subcategory not demanded by any layer
                 if (cap === Infinity) return true;
@@ -2955,7 +2963,7 @@
                 return used < cap;
             }
             function _markSpecialSubcategoryAssigned(special, result) {
-                const subKey = _canonSub(special.subcategory);
+                const subKey = _gpCanonSub(special.subcategory);
                 if (!result.subcategoryAssigned) result.subcategoryAssigned = {};
                 result.subcategoryAssigned[subKey] = (result.subcategoryAssigned[subKey] || 0) + 1;
             }
