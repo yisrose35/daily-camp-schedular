@@ -112,11 +112,15 @@
     // =========================================================================
 
     function getGlobalSettings() { return window.loadGlobalSettings ? window.loadGlobalSettings() : {}; }
+    // ★ Symbol key so the cache CAN'T be serialized into localStorage / cloud.
+    //   Earlier code attached `gs._cachedSpecialsList` directly. Because `gs`
+    //   gets persisted, a stale (or polluted) list from one session survived
+    //   forever and the early-return prevented the merge from ever picking up
+    //   newly-configured specials. Symbols are non-enumerable in JSON, so a
+    //   Symbol-keyed cache stays per-run and dies with the page session.
+    const _CACHED_SPECIALS = Symbol('cachedSpecialsList');
     function getSpecialActivitiesList(gs) {
-        // Cache on the gs object so the three external calls happen ONCE per
-        // scheduler run, not once per getSpecialConfig call (which is called
-        // thousands of times and would flood the console / trigger side-effects).
-        if (gs && gs._cachedSpecialsList) return gs._cachedSpecialsList;
+        if (gs && gs[_CACHED_SPECIALS]) return gs[_CACHED_SPECIALS];
 
         // Merge ALL known sources so the scheduler sees every configured special.
         // Priority (last write wins): getAll → global → app1
@@ -129,7 +133,12 @@
             if (s && s.name) merged.set(s.name, s);
         });
         const result = Array.from(merged.values());
-        if (gs) gs._cachedSpecialsList = result;
+        if (gs) gs[_CACHED_SPECIALS] = result;
+        // Defensive: if a legacy persisted `_cachedSpecialsList` is still on
+        //   the gs object, evict it so subsequent code paths can't read stale.
+        if (gs && '_cachedSpecialsList' in gs) {
+            try { delete gs._cachedSpecialsList; } catch (_) {}
+        }
         return result;
     }
 
