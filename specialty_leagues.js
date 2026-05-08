@@ -502,11 +502,31 @@
                 return; // Don't wipe existing data
             }
             
+            // ★ Snapshot in-memory playoff state before clearing so a stale
+            //   cloud echo (loaded copy has rounds=[]) can't wipe a freshly
+            //   generated bracket that hasn't synced yet.
+            const _playoffBackup = {};
+            Object.keys(specialtyLeagues).forEach(k => {
+                const p = specialtyLeagues[k] && specialtyLeagues[k].playoff;
+                if (p && Array.isArray(p.rounds) && p.rounds.length > 0) {
+                    _playoffBackup[k] = p;
+                }
+            });
+
             // Clear and fill with validated data
             Object.keys(specialtyLeagues).forEach(k => delete specialtyLeagues[k]);
-            
+
             Object.keys(loaded).forEach(leagueId => {
-                specialtyLeagues[leagueId] = validateLeague(loaded[leagueId], leagueId);
+                const validated = validateLeague(loaded[leagueId], leagueId);
+                const backup = _playoffBackup[leagueId];
+                const loadedRoundsEmpty = !validated.playoff
+                    || !Array.isArray(validated.playoff.rounds)
+                    || validated.playoff.rounds.length === 0;
+                if (backup && loadedRoundsEmpty) {
+                    validated.playoff = backup;
+                    console.log('[SPECIALTY_LEAGUES] Preserved in-memory playoff bracket for "' + leagueId + '" (loaded copy had empty rounds)');
+                }
+                specialtyLeagues[leagueId] = validated;
             });
 
             console.log("[SPECIALTY_LEAGUES] Data loaded:", {
