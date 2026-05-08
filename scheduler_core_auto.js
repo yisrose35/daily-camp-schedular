@@ -14541,6 +14541,54 @@
                 (de[1].bunks || []).forEach(function(b) { perfBunkGrade[String(b)] = de[0]; });
             });
 
+            // ★ Rules check used by Step 4.9 extensions: a Free slot can only
+            //   absorb a neighbouring sport block if THAT block's field still
+            //   allows this bunk's grade at the Free slot's actual time. Without
+            //   this check the perfection pass routinely created the violations
+            //   that Step 4.95 then had to clear to Free (e.g. extending a
+            //   pre-Unavailable block into the Unavailable window).
+            var _perfRulesGS = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var _perfRulesFields = _perfRulesGS.app1?.fields || [];
+            var _perfRulesByField = {};
+            _perfRulesFields.forEach(function(f) { if (f && f.name) _perfRulesByField[f.name] = f; });
+            function perfRulesPass(fieldName, freeSlot, grade) {
+                if (!fieldName || fieldName === 'Free') return true;
+                var fld = _perfRulesByField[fieldName];
+                if (!fld) return true;
+                var sMin = freeSlot && freeSlot.startMin;
+                var eMin = freeSlot && freeSlot.endMin;
+                if (sMin == null || eMin == null) return true;
+
+                // Field-level access restriction
+                if (fld.accessRestrictions && fld.accessRestrictions.enabled === true) {
+                    var divs = fld.accessRestrictions.divisions || {};
+                    if (!(grade in divs)) return false;
+                }
+                // Field-level grade-scoped time rules
+                if (Array.isArray(fld.timeRules) && fld.timeRules.length > 0) {
+                    var myG = grade != null ? String(grade) : null;
+                    var hasGradeAvail = false, insideAvail = false;
+                    for (var ri = 0; ri < fld.timeRules.length; ri++) {
+                        var r = fld.timeRules[ri];
+                        var rt = String(r.type || '').toLowerCase();
+                        var isUnavail = rt === 'unavailable' || r.available === false;
+                        var isAvail   = rt === 'available'   || r.available === true;
+                        var rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.start || r.startTime);
+                        var re = r.endMin   != null ? r.endMin   : parseTimeToMinutes(r.end   || r.endTime);
+                        if (rs == null || re == null || (!isAvail && !isUnavail)) continue;
+                        var rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && myG && rDivs.indexOf(myG) === -1) continue;
+                        if (isUnavail && rs < eMin && re > sMin) return false;
+                        if (isAvail) {
+                            hasGradeAvail = true;
+                            if (sMin >= rs && eMin <= re) insideAvail = true;
+                        }
+                    }
+                    if (hasGradeAvail && !insideAvail) return false;
+                }
+                return true;
+            }
+
             // ★ FIX v10.3: Calculate the resulting duration of extending a sport
             // block that contains anchorIdx to also cover freeIdx.
             // Walks back through continuations to find the true block start, then
@@ -14576,12 +14624,15 @@
                     var slot = pbs[idx];
                     if (!slot) return;
 
+                    var _perfGrade = grade;
+
                     // Strategy 1: Extend previous SPORT slot to absorb this Free
                     if (idx > 0 && perfCanExtend(slots[idx - 1])) {
                         var prevField = slots[idx - 1].field;
-                        // ★ dMax guard + field-conflict guard
+                        // ★ dMax guard + field-conflict guard + RULE guard
                         if (perfExtendedDur(slots, pbs, idx - 1, idx) <= GAP_MAX_DUR &&
-                            perfFieldFreeAt(prevField, idx, bunk, pbs)) {
+                            perfFieldFreeAt(prevField, idx, bunk, pbs) &&
+                            perfRulesPass(prevField, slot, _perfGrade)) {
                             slots[idx] = {
                                 field: prevField,
                                 sport: slots[idx - 1].sport,
@@ -14598,7 +14649,8 @@
                     if (idx < slots.length - 1 && perfCanExtend(slots[idx + 1])) {
                         var nextField = slots[idx + 1].field;
                         if (perfExtendedDur(slots, pbs, idx + 1, idx) <= GAP_MAX_DUR &&
-                            perfFieldFreeAt(nextField, idx, bunk, pbs)) {
+                            perfFieldFreeAt(nextField, idx, bunk, pbs) &&
+                            perfRulesPass(nextField, slot, _perfGrade)) {
                             slots[idx] = {
                                 field: nextField,
                                 sport: slots[idx + 1].sport,
@@ -14616,12 +14668,14 @@
                         if (!perfCanExtend(slots[si])) continue;
                         if (perfExtendedDur(slots, pbs, si, idx) > GAP_MAX_DUR) continue;
                         // All intermediate slots must be Free/continuation AND field must be free at each
+                        // AND the field must satisfy access/timeRules at every bridged slot
                         var s3field = slots[si].field;
                         var canBridge = true;
                         for (var ci = si + 1; ci <= idx; ci++) {
                             var cs = slots[ci];
                             if (cs && cs.field !== 'Free' && !cs.continuation) { canBridge = false; break; }
                             if (!perfFieldFreeAt(s3field, ci, bunk, pbs)) { canBridge = false; break; }
+                            if (!perfRulesPass(s3field, pbs[ci], _perfGrade)) { canBridge = false; break; }
                         }
                         if (!canBridge) continue;
                         for (var fi = si + 1; fi <= idx; fi++) {
@@ -14645,6 +14699,7 @@
                             var cs2 = slots[ci2];
                             if (cs2 && cs2.field !== 'Free' && !cs2.continuation) { canBridge2 = false; break; }
                             if (!perfFieldFreeAt(s3bfield, ci2, bunk, pbs)) { canBridge2 = false; break; }
+                            if (!perfRulesPass(s3bfield, pbs[ci2], _perfGrade)) { canBridge2 = false; break; }
                         }
                         if (!canBridge2) continue;
                         for (var fi2 = idx; fi2 < si2; fi2++) {
