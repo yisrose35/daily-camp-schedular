@@ -1602,12 +1602,21 @@
             try {
                 const rotData = await window.RotationCloud.load(true); // force refresh
                 if (rotData?.counts && Object.keys(rotData.counts).length > 0) {
-                    // 1. Merge cloud counts into config.historicalCounts
+                    // 1. Merge cloud counts into config.historicalCounts.
+                    //    Subtract today's row so a regenerate isn't biased against
+                    //    the activities the previous draft happened to use.
+                    //    (Today's contribution is re-added after generation
+                    //    completes via the post-gen rebuild.)
                     if (!config.historicalCounts) config.historicalCounts = {};
+                    const _today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    const _todayCloud = (rotData.countsByDate && rotData.countsByDate[_today]) || {};
                     for (const [bunk, activities] of Object.entries(rotData.counts)) {
                         if (!config.historicalCounts[bunk]) config.historicalCounts[bunk] = {};
+                        const _todayBunk = _todayCloud[bunk] || {};
                         for (const [act, count] of Object.entries(activities)) {
-                            config.historicalCounts[bunk][act] = count;
+                            const _historical = count - (_todayBunk[act] || 0);
+                            if (_historical > 0) config.historicalCounts[bunk][act] = _historical;
+                            else delete config.historicalCounts[bunk][act];
                         }
                     }
 
