@@ -14558,6 +14558,15 @@
                 log('[5] ☁️ Rotation counts saved to cloud');
             } catch (e) { warn('[5] RotationCloud save: ' + e.message); }
         }
+        // ★ Also keep local historicalCounts in sync so the rotation tab works
+        //   when cloud is unavailable (offline, missing campId, partial sync).
+        //   Rebuild scans the freshly-saved allDaily and is deterministic.
+        if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+            try {
+                window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+                log('[5] 🧮 Rebuilt local historicalCounts');
+            } catch (e) { warn('[5] historicalCounts rebuild: ' + e.message); }
+        }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         log('\n═══════════════════════════════════════════════════════════');

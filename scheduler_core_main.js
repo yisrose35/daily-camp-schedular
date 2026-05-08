@@ -3296,25 +3296,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             window.saveRotationHistory?.(newHistory);
 
             // ★★★ REBUILD HISTORICAL COUNTS FROM ALL SCHEDULES ★★★
-            // This ensures counts are accurate even after regeneration (no double-counting)
+            // saveSchedule (below) writes localStorage synchronously, so a rebuild
+            // immediately after that picks up today's new contribution correctly.
+            // We deliberately use rebuildHistoricalCounts (full re-scan) instead of
+            // reIncrement: a delayed reIncrement reads the post-save allDaily and
+            // treats the new schedule as the "old" snapshot, which silently shifts
+            // counts by (newToday − oldToday) every time a date is regenerated.
             const schedDateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-                setTimeout(() => {
-                    window.SchedulerCoreUtils.reIncrementHistoricalCounts(
-                        schedDateKey,
-                        window.scheduleAssignments || {},
-                        true
-                    );
-                    // Sync rotation counts to cloud after rebuild
+            const _runCountsRebuild = () => {
+                try {
+                    if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                        window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+                    }
                     if (window.RotationCloud?.save) {
                         window.RotationCloud.save(schedDateKey, window.scheduleAssignments || {});
                     }
-                }, 200);
-            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-                setTimeout(() => {
-                    window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
-                }, 200);
-            }
+                } catch (e) { console.warn('[Optimizer] post-gen counts rebuild failed:', e); }
+            };
+            // Defer just past saveSchedule (called below) so allDaily has today.
+            setTimeout(_runCountsRebuild, 0);
 
             console.log('📊 Rotation history updated, historical counts rebuild scheduled');
 

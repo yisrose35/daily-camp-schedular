@@ -1732,18 +1732,6 @@
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
             console.log('🔗 Generation complete for', dateKey, '-', bunkCount, 'bunks');
 
-            // ★★★ Capture old schedule BEFORE overwriting localStorage ★★★
-            // reIncrementHistoricalCounts needs the pre-generation schedule to subtract old
-            // counts. If we capture it here (while localStorage still has the old data) and
-            // pass it as oldScheduleAssignments, the subtraction step uses correct data even
-            // after localStorage has been overwritten.
-            let oldScheduleSnapshot = null;
-            try {
-                const DAILY_KEY = 'campDailyData_v1';
-                const preSave = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                oldScheduleSnapshot = preSave[dateKey]?.scheduleAssignments || null;
-            } catch (_) {}
-
             // ★★★ v6.9 FIX: Save to localStorage IMMEDIATELY — no delay! ★★★
             // The old 1000ms "wait for data to settle" caused data loss on quick reload.
             // Data is already in window.scheduleAssignments when this event fires.
@@ -1796,18 +1784,20 @@
                 console.error('🔗 Rotation history update failed:', rhErr);
             }
 
-            // ★★★ Update historicalCounts using pre-generation snapshot ★★★
-            // Pass oldScheduleSnapshot so reIncrement subtracts the correct old data
-            // rather than reading from localStorage (which now has the new schedule).
-            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-                window.SchedulerCoreUtils.reIncrementHistoricalCounts(
-                    dateKey,
-                    window.scheduleAssignments || {},
-                    true,
-                    oldScheduleSnapshot
-                );
-            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-                window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+            // ★★★ Rebuild historicalCounts from the freshly-saved allDaily ★★★
+            // The previous reIncrement-with-snapshot approach was unreliable here:
+            // by the time this listener fires, the underlying generators
+            // (scheduler_core_main / scheduler_core_auto) have already written the
+            // new schedule to localStorage, so any "pre-save" snapshot we try to
+            // capture is actually the new data — leading to silent drift on regen.
+            // Rebuild scans allDaily once and is fully deterministic.
+            if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                try { window.SchedulerCoreUtils.rebuildHistoricalCounts(true); }
+                catch (e) { console.warn('🔗 historicalCounts rebuild failed:', e); }
+            }
+            if (window.RotationCloud?.save) {
+                try { window.RotationCloud.save(dateKey, window.scheduleAssignments || {}); }
+                catch (e) { console.warn('🔗 RotationCloud sync failed:', e); }
             }
         }, { once: false });
         // Intercept generateSchedule if it exists

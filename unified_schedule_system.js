@@ -2782,12 +2782,14 @@ if (bypassStatus.highlight) {
             const serialized = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
             window.saveCurrentDailyData('divisionTimes', serialized, { silent });
         }
-        // Update historicalCounts so rotation tracking works across all dates
+        // Update historicalCounts so rotation tracking works across all dates.
+        // Use rebuildHistoricalCounts (full re-scan of allDaily): saveCurrentDailyData
+        // above has already written the new schedule, so reIncrement-with-snapshot
+        // would treat the new data as the "old" snapshot and silently lose today's
+        // contribution on every save. Rebuild is deterministic and self-healing.
         const dateKey = window.currentScheduleDate;
-        if (dateKey && window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-            window.SchedulerCoreUtils.reIncrementHistoricalCounts(
-                dateKey, window.scheduleAssignments || {}, true
-            );
+        if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+            window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
         }
         // Sync rotation counts to cloud
         if (dateKey && window.RotationCloud?.save) {
