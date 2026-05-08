@@ -1448,6 +1448,13 @@
         const fbFn = fbCand.fieldNorm;
         const fbCap = fbCand.capacity || 2;
 
+        // ★ Rule guard: refuse to build a chain whose endpoint puts fb on a
+        //   field its grade isn't allowed at, or during a grade-scoped
+        //   Unavailable window, or for a sport the field has disabled today.
+        //   Without this the chain happily evicted occupants and dropped fb
+        //   into a forbidden slot — the failure surfaced later in Step 4.95.
+        if (!bfsRulesPass(fbCand, fb.grade, fb.startMin, fb.endMin)) return null;
+
         // Only attempt when field is exactly at capacity (single-eviction chains)
         const initialOverlap = (fieldIndex.get(fbFn) || []).filter(e =>
             e.startMin < fb.endMin && e.endMin > fb.startMin && e.bunk !== fb.bunk
