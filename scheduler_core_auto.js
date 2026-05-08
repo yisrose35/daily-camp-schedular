@@ -13329,6 +13329,72 @@
             return null;
         }
         const _stepRulesBlocked = []; // diagnostic accumulator
+        const _stepRulesRescued = []; // diagnostic for write-site rescues
+
+        // Find another field that can host `activityName` for this bunk's grade
+        // at this time, passing every gate (access, timeRules, sharing,
+        // capacity). Returns the field name or null. Used both at write sites
+        // (Step 2.7) and by the safety net (Step 4.95) so a rule-blocked
+        // placement gets relocated rather than dropped to Free whenever
+        // possible.
+        function _findValidAlternativeField(activityName, grade, bunk, startMin, endMin, excludeField) {
+            if (!activityName || activityName === 'Free') return null;
+            const sa = window.scheduleAssignments || {};
+            const wantLower = String(activityName).toLowerCase();
+            const candidates = [];
+            for (const f of _stepRules_fields) {
+                if (!f || !f.name) continue;
+                if (excludeField && f.name === excludeField) continue;
+                if (!Array.isArray(f.activities)) continue;
+                if (!f.activities.some(a => String(a).toLowerCase() === wantLower)) continue;
+                if (_validateWritePlacement(f.name, activityName, grade, bunk, startMin, endMin)) continue;
+
+                // Capacity check against current scheduleAssignments
+                let overlapCount = 0;
+                let crossGradeOverlap = false;
+                let misalignedShare = false;
+                for (const [otherBunk, otherSlots] of Object.entries(sa)) {
+                    if (String(otherBunk) === String(bunk)) continue;
+                    if (!Array.isArray(otherSlots)) continue;
+                    const otherGrade = Object.entries(divisions).find(([g, d]) =>
+                        (d.bunks || []).map(String).includes(String(otherBunk))
+                    )?.[0];
+                    const otherPbs = otherGrade ? (window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
+                    for (let oi = 0; oi < otherSlots.length; oi++) {
+                        const oe = otherSlots[oi];
+                        if (!oe || oe.continuation) continue;
+                        const oField = typeof oe.field === 'object' ? oe.field?.name : oe.field;
+                        if (oField !== f.name) continue;
+                        const oslot = otherPbs[oi];
+                        const oStart = oe._startMin ?? oslot?.startMin;
+                        const oEnd   = oe._endMin   ?? oslot?.endMin;
+                        if (oStart == null || oEnd == null) continue;
+                        if (oEnd <= startMin || oStart >= endMin) continue;
+                        overlapCount++;
+                        if (otherGrade !== grade) crossGradeOverlap = true;
+                        if (oStart !== startMin || oEnd !== endMin) misalignedShare = true;
+                    }
+                }
+
+                const sharing = f.sharableWith?.type || 'not_sharable';
+                const cap = parseInt(f.sharableWith?.capacity) || (sharing === 'not_sharable' ? 1 : 2);
+                if (sharing === 'not_sharable' && overlapCount >= 1) continue;
+                if (sharing === 'same_division' && crossGradeOverlap) continue;
+                if (sharing === 'custom') {
+                    const allowed = f.sharableWith?.divisions || [];
+                    if (allowed.length > 0 && !allowed.includes(grade)) continue;
+                }
+                if (overlapCount >= cap) continue;
+                if (overlapCount > 0 && misalignedShare) continue; // shared field needs exact time match
+
+                candidates.push({ name: f.name, used: overlapCount });
+            }
+            if (candidates.length === 0) return null;
+            // Prefer fields with existing same-time same-activity occupants
+            // (better field utilisation) over empty alternatives.
+            candidates.sort((a, b) => b.used - a.used);
+            return candidates[0].name;
+        }
 
         // Initialize scheduleAssignments
         allGrades.forEach(grade => {
@@ -13623,21 +13689,32 @@
                 ).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1 || !window.scheduleAssignments[String(bunk)] || window.scheduleAssignments[String(bunk)][idx]) return;
-                    const _why = _validateWritePlacement(block.field, block._assignedSport, grade, bunk, block.startMin, block.endMin);
+                    let _useField = block.field;
+                    const _why = _validateWritePlacement(_useField, block._assignedSport, grade, bunk, block.startMin, block.endMin);
                     if (_why) {
-                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: block.field, activity: block._assignedSport, reason: 'capacity-checked-write: ' + _why });
-                        return;
+                        // Try to rescue: find another field that hosts the same
+                        // sport, allows this grade/bunk, isn't blocked by time
+                        // rules, and has free capacity. Falls back to skip
+                        // (Free) only when no alternative exists.
+                        const _alt = _findValidAlternativeField(block._assignedSport, grade, bunk, block.startMin, block.endMin, _useField);
+                        if (_alt) {
+                            _stepRulesRescued.push({ bunk, grade, idx, from: _useField, to: _alt, activity: block._assignedSport, reason: 'capacity-checked-write: ' + _why });
+                            _useField = _alt;
+                        } else {
+                            _stepRulesBlocked.push({ bunk, grade, idx, fieldName: _useField, activity: block._assignedSport, reason: 'capacity-checked-write: ' + _why });
+                            return;
+                        }
                     }
                     window.scheduleAssignments[String(bunk)][idx] = {
-                        field: block.field, sport: block._assignedSport,
+                        field: _useField, sport: block._assignedSport,
                         _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
                         _activityLocked: false, _autoMode: true, _capacityChecked: true, continuation: false,
                         _startMin: block.startMin, _endMin: block.endMin
                     };
                     if (!fieldUsageBySlot[idx]) fieldUsageBySlot[idx] = {};
-                    if (!fieldUsageBySlot[idx][block.field]) fieldUsageBySlot[idx][block.field] = { count: 0, bunks: {} };
-                    fieldUsageBySlot[idx][block.field].count++;
-                    fieldUsageBySlot[idx][block.field].bunks[String(bunk)] = block._assignedSport;
+                    if (!fieldUsageBySlot[idx][_useField]) fieldUsageBySlot[idx][_useField] = { count: 0, bunks: {} };
+                    fieldUsageBySlot[idx][_useField].count++;
+                    fieldUsageBySlot[idx][_useField].bunks[String(bunk)] = block._assignedSport;
                     sportWriteCount++;
                 });
             });
@@ -13676,8 +13753,16 @@
         window._preGenClearActive = false;
 
         log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom, ' + rotationEventWriteCount + ' rotation events');
+        if (_stepRulesRescued.length > 0) {
+            log('[2.7] ↪ Relocated ' + _stepRulesRescued.length + ' rule-violating write(s) to valid alternative field(s):');
+            _stepRulesRescued.forEach(r => {
+                log('  ↪ ' + r.bunk + ' (' + r.grade + ') slot ' + r.idx + ': '
+                    + r.activity + ' moved ' + r.from + ' → ' + r.to + ' (was: ' + r.reason + ')');
+            });
+            warnings.push({ type: 'write_relocated', count: _stepRulesRescued.length, items: _stepRulesRescued });
+        }
         if (_stepRulesBlocked.length > 0) {
-            warn('[2.7] 🚫 Blocked ' + _stepRulesBlocked.length + ' rule-violating write(s) at the source:');
+            warn('[2.7] 🚫 Blocked ' + _stepRulesBlocked.length + ' rule-violating write(s) at the source (no alternative found):');
             _stepRulesBlocked.forEach(v => {
                 warn('  - ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
                     + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason);
@@ -14705,25 +14790,57 @@
                 });
 
                 if (violations.length > 0) {
-                    warn('[STEP 4.95] 🚫 Rule-safety net cleared ' + violations.length + ' bad placement(s):');
+                    let rescuedCount = 0;
+                    let clearedCount = 0;
+                    warn('[STEP 4.95] 🚫 Rule-safety net found ' + violations.length + ' bad placement(s):');
                     violations.forEach(v => {
-                        warn('  - ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
-                            + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason);
-                        // Replace with Free so the user sees the gap rather than a violation.
-                        // _fixed:true keeps the cleaning durable across saves — without it,
-                        // saveCurrentDailyData strips Free entries to null, which can let
-                        // downstream code (pinned restore, post-edit fillers) re-fill them
-                        // with the same bad placement that just got cleared.
-                        if (window.scheduleAssignments[String(v.bunk)]) {
-                            window.scheduleAssignments[String(v.bunk)][v.idx] = {
+                        const slotsArr = window.scheduleAssignments[String(v.bunk)];
+                        if (!slotsArr) return;
+                        const original = slotsArr[v.idx] || {};
+                        const sMin = original._startMin;
+                        const eMin = original._endMin;
+                        const isSportPlacement = v.activity && !_bySpecial[v.activity];
+
+                        // For real sports we try to relocate to a valid field
+                        // before clearing. Specials/anchors keep their original
+                        // semantics (location is part of the activity), so they
+                        // fall through to the clear branch.
+                        let resolved = null;
+                        if (isSportPlacement && sMin != null && eMin != null) {
+                            resolved = _findValidAlternativeField(v.activity, v.grade, v.bunk, sMin, eMin, v.fieldName);
+                        }
+
+                        if (resolved) {
+                            slotsArr[v.idx] = {
+                                ...original,
+                                field: resolved,
+                                _ruleViolationReassigned: true,
+                                _violationReason: v.reason,
+                                _originalField: v.fieldName
+                            };
+                            rescuedCount++;
+                            warn('  ↪ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                                + v.activity + ' relocated ' + v.fieldName + ' → ' + resolved);
+                        } else {
+                            // Replace with Free. _fixed:true keeps the cleaning
+                            // durable: saveCurrentDailyData strips non-_fixed
+                            // Free entries to null, which lets downstream
+                            // restorers (pinned, post-edit fillers) refill the
+                            // slot with the same bad placement we just cleared.
+                            slotsArr[v.idx] = {
                                 field: 'Free', sport: null, _activity: 'Free',
                                 _autoMode: true, _fixed: true, _ruleViolationCleared: true,
                                 _violationReason: v.reason,
                                 continuation: false
                             };
+                            clearedCount++;
+                            warn('  ✗ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                                + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason
+                                + ' (no valid alternative — cleared)');
                         }
                     });
-                    warnings.push({ type: 'rule_violations', count: violations.length, items: violations });
+                    log('[STEP 4.95] Rescued ' + rescuedCount + ', cleared ' + clearedCount);
+                    warnings.push({ type: 'rule_violations', count: violations.length, rescued: rescuedCount, cleared: clearedCount, items: violations });
                     // Force a render so the user sees the cleaned grid right away
                     try { if (typeof window.updateTable === 'function') window.updateTable(); } catch (_e) {}
                 } else {
