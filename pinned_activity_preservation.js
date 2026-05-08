@@ -89,7 +89,65 @@
                 ['lunch','Swim','Change','Lineup','Snacks','Snack','Dismissal','Free'].forEach(n => _validNames.add(n));
             } catch (_) {}
 
+            // Grade for this bunk — used to check the field/special
+            // accessRestrictions below. If we can't determine the grade we
+            // fall through to the ghost-only checks (no accessRestrictions
+            // gate applied) rather than risk dropping a valid pin.
+            const _bunkGrade = Object.keys(divisions).find(d =>
+                (divisions[d]?.bunks || []).map(String).includes(String(bunkName))
+            ) || null;
+            const _gsForCheck = (typeof window.loadGlobalSettings === 'function')
+                ? (window.loadGlobalSettings() || {})
+                : (window.globalSettings || {});
+            const _allFields = _gsForCheck.app1?.fields || [];
+            const _allSpecials = _gsForCheck.app1?.specialActivities
+                || (window.getAllSpecialActivities ? window.getAllSpecialActivities() : []);
+
+            // Returns true if this pinned entry is still legal under the
+            // current field/special accessRestrictions for this bunk. The
+            // gate mirrors AutoSolverEngine's grade-access check and the
+            // smart-logic-adapter's canBunkAccessSpecial check, so a
+            // schedule-time edit pinned BEFORE you tightened a restriction
+            // does not get carried forward into the new build.
+            const _isPinnedEntryStillAllowed = (entry) => {
+                if (!_bunkGrade) return true;
+                const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                const actName = entry._activity || entry.event || '';
+
+                // 1. Field-level access restriction
+                if (fieldName && fieldName !== 'Free') {
+                    const fld = _allFields.find(f => f && f.name === fieldName);
+                    if (fld?.accessRestrictions?.enabled) {
+                        const divRules = fld.accessRestrictions.divisions || {};
+                        if (!(_bunkGrade in divRules)) return false;
+                        const bunkList = divRules[_bunkGrade];
+                        if (Array.isArray(bunkList) && bunkList.length > 0
+                            && !bunkList.map(String).includes(String(bunkName))) {
+                            return false;
+                        }
+                    }
+                }
+
+                // 2. Special-level access restriction (when the pinned
+                //    activity is a configured special)
+                if (actName) {
+                    const sp = _allSpecials.find(s => s && s.name === actName);
+                    if (sp?.accessRestrictions?.enabled) {
+                        const divRules = sp.accessRestrictions.divisions || {};
+                        if (!(_bunkGrade in divRules)) return false;
+                        const bunkList = divRules[_bunkGrade];
+                        if (Array.isArray(bunkList) && bunkList.length > 0
+                            && !bunkList.map(String).includes(String(bunkName))) {
+                            return false;
+                        }
+                    }
+                }
+
+                return true;
+            };
+
             let droppedGhosts = 0;
+            let droppedDisallowed = 0;
             for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
                 const entry = slots[slotIdx];
 
@@ -99,6 +157,15 @@
                     const actName = entry._activity || entry.field || entry.event;
                     if (actName && _validNames.size > 0 && !_validNames.has(String(actName))) {
                         droppedGhosts++;
+                        continue;
+                    }
+
+                    // Drop pin if the field/special no longer allows this
+                    // bunk's grade. Without this gate, a sport pinned to a
+                    // field BEFORE the user tightened the field's
+                    // accessRestrictions would survive every regen.
+                    if (!_isPinnedEntryStillAllowed(entry)) {
+                        droppedDisallowed++;
                         continue;
                     }
 
@@ -127,6 +194,9 @@
             }
             if (droppedGhosts > 0) {
                 console.warn('[PinnedPreserve] 👻 Dropped ' + droppedGhosts + ' pinned ghost slot(s) for bunk ' + bunkName + ' (activity not in current registry)');
+            }
+            if (droppedDisallowed > 0) {
+                console.warn('[PinnedPreserve] 🚫 Dropped ' + droppedDisallowed + ' pinned slot(s) for bunk ' + bunkName + ' (field/special no longer allows this grade)');
             }
         }
         
