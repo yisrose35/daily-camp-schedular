@@ -1211,7 +1211,7 @@
                     availablePool.forEach(function (p) {
                         if (_seenFields.has(p.field)) return;
                         _seenFields.add(p.field);
-                        _openList.push(p.sport + ' @ ' + p.field);
+                        _openList.push(p.field);
                     });
                     const _tbdLabel = 'Playoff R' + playoffRoundNum + ' TBD';
                     const _tbdRows = ['Round ' + playoffRoundNum + ' — winners TBD']
