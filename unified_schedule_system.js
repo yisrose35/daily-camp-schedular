@@ -1470,11 +1470,30 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     await bypassSaveAllBunks(modifiedBunks);
 
-    // ★ Sync rotation counts to cloud after conflict bypass
+    // ★ Update rotation counts (historicalCounts + rotationHistory + cloud) for
+    //   every bunk the bypass touched. applyPostEditCounts is the single source
+    //   of truth — it counts non-continuation slots, rebuilds rotationHistory
+    //   timestamps, and debounces the RotationCloud.save so a single batched
+    //   cloud sync fires for the whole bypass.
+    try {
+        const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+        if (_ape) {
+            (result.reassigned || []).forEach(r => {
+                _ape(r.bunk, r.from ? [r.from] : [], r.to || null, r.slots || []);
+            });
+            (result.failed || []).forEach(f => {
+                _ape(f.bunk, f.originalActivity ? [f.originalActivity] : [], null, f.slots || []);
+            });
+        }
+    } catch (_e) { console.warn('[ConflictBypass] post-edit counts failed:', _e); }
+
+    // Notify the rotation tab so it refreshes after the bypass.
     try {
         const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
-    } catch (_e) { console.warn('[ConflictBypass] RotationCloud sync failed:', _e); }
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+            detail: { bunks: modifiedBunks, date: _rcDate, source: 'conflict-bypass' }
+        }));
+    } catch (_e) { /* non-fatal */ }
 
     // Track specific cells for temporary highlight
     const bypassedCellKeys = [];
@@ -2782,16 +2801,16 @@ if (bypassStatus.highlight) {
             const serialized = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
             window.saveCurrentDailyData('divisionTimes', serialized, { silent });
         }
-        // Update historicalCounts so rotation tracking works across all dates.
-        // Use rebuildHistoricalCounts (full re-scan of allDaily): saveCurrentDailyData
-        // above has already written the new schedule, so reIncrement-with-snapshot
-        // would treat the new data as the "old" snapshot and silently lose today's
-        // contribution on every save. Rebuild is deterministic and self-healing.
+        // NOTE: saveSchedule does NOT touch historicalCounts.
+        //   - Post-edit callers run applyPostEditCounts (per-bunk delta) and
+        //     rely on its debounced RotationCloud.save.
+        //   - Generation callers (scheduler_core_main / scheduler_core_auto /
+        //     integration_hooks) run rebuildHistoricalCounts(true) themselves
+        //     after this save lands.
+        //   The previous reIncrement here was running with a post-save
+        //   "old" snapshot (= the new schedule) and silently shifted counts
+        //   by (newToday − oldToday) on every save. Removed.
         const dateKey = window.currentScheduleDate;
-        if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-            window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
-        }
-        // Sync rotation counts to cloud
         if (dateKey && window.RotationCloud?.save) {
             window.RotationCloud.save(dateKey, window.scheduleAssignments || {});
         }
@@ -3446,10 +3465,11 @@ if (bypassStatus.highlight) {
                 const plan = actionable[pi];
                 overlay.remove();
 
-                // Displace the blocking bunks to their alternatives
+                // Displace the blocking bunks to their alternatives.
+                // Track each bunk's old activity + slots so applyPostEditCounts
+                // (called after the save) can compute the correct delta per bunk.
                 const modifiedBunks = new Set([bunk]);
-                const _gs = window.loadGlobalSettings?.() || {};
-                const _hc = _gs.historicalCounts || {};
+                const _displacedDeltas = [];
 
                 for (const { bunk: cb, alt, editable } of plan.alts) {
                     if (!alt || !editable) continue;
@@ -3465,20 +3485,28 @@ if (bypassStatus.highlight) {
                         };
                     });
                     modifiedBunks.add(cb);
-                    // Rotation counts
-                    if (!_hc[cb]) _hc[cb] = {};
-                    oldAct.forEach(a => { _hc[cb][a] = Math.max(0, (_hc[cb][a] || 0) - 1); });
-                    _hc[cb][alt.activityName] = (_hc[cb][alt.activityName] || 0) + 1;
+                    _displacedDeltas.push({ bunk: cb, oldAct, newAct: alt.activityName, slots: cbSlots });
                 }
 
-                window.saveGlobalSettings?.('historicalCounts', _hc);
                 if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
-                // ★ Sync rotation counts to cloud after displacement
+                // ★ Update counts (historicalCounts + rotationHistory) per bunk
+                //   via the shared applyPostEditCounts. It handles slot counting,
+                //   timestamps, and a debounced cloud sync.
+                try {
+                    const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+                    if (_ape) {
+                        _displacedDeltas.forEach(d => _ape(d.bunk, d.oldAct, d.newAct, d.slots));
+                    }
+                } catch (_e) { console.warn('[Displacement] post-edit counts failed:', _e); }
+
+                // Notify the rotation tab so it refreshes after the displacement.
                 try {
                     const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                    if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
-                } catch (_e) { console.warn('[Displacement] RotationCloud sync failed:', _e); }
+                    document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                        detail: { bunks: [...modifiedBunks], date: _rcDate, source: 'displacement' }
+                    }));
+                } catch (_e) { /* non-fatal */ }
 
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
@@ -5064,32 +5092,40 @@ if (softBlocks.length > 0) {
             }
         }
 
-        // *** FIX: Update rotation counts for each edited bunk (delta: decrement old, increment new) ***
+        // *** Update rotation counts via shared applyPostEditCounts ***
+        //   Per-bunk delta: handles slot counting, rotationHistory timestamps,
+        //   and a debounced RotationCloud.save (single batched cloud sync).
         try {
-            const _gs = window.loadGlobalSettings?.() || {};
-            const _hc = _gs.historicalCounts || {};
-            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
-            for (const bunk of bunks) {
-                if (!_hc[bunk]) _hc[bunk] = {};
-                // Decrement each old activity (de-duplicate: each unique activity counts once)
-                const oldUnique = {};
-                (oldActivitiesByBunk[bunk] || []).forEach(a => { oldUnique[a] = (oldUnique[a] || 0) + 1; });
-                for (const [act, cnt] of Object.entries(oldUnique)) {
-                    _hc[bunk][act] = Math.max(0, (_hc[bunk][act] || 0) - cnt);
+            const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+            if (_ape) {
+                // Primary edited bunks: each gets the new activity at its own
+                // resolved slot indices in this division.
+                for (const bunk of bunks) {
+                    let bunkSlots;
+                    if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
+                        bunkSlots = findSlotsForRange(result.timeStartMin, result.timeEndMin, divName, bunk);
+                    } else if (perBunkSlotMap?.[String(bunk)]) {
+                        bunkSlots = perBunkSlotMap[String(bunk)];
+                    } else {
+                        bunkSlots = slots || [];
+                    }
+                    _ape(bunk, oldActivitiesByBunk[bunk] || [], activity || null, bunkSlots);
                 }
-                // Increment new activity
-                if (activity && (_validActs.size === 0 || _validActs.has(activity))) {
-                    _hc[bunk][activity] = (_hc[bunk][activity] || 0) + 1;
+                // Cascade-reassigned bunks (the `plan` array): one slot each.
+                for (const move of plan) {
+                    const _moveOld = (move.from && move.from.activity) ? [move.from.activity] : [];
+                    _ape(move.bunk, _moveOld, move.to?.activity || null, [move.slot]);
                 }
             }
-            window.saveGlobalSettings?.('historicalCounts', _hc);
-            setTimeout(() => window.forceSyncToCloud?.(), 200);
-            // ★ Sync rotation counts to cloud after multi-bunk edit
+            console.log('[applyMultiBunkEdit] Rotation counts updated for', bunks.length, 'bunks');
+
+            // Notify the rotation tab so it refreshes after the multi-bunk edit.
             try {
                 const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
-            } catch (_e) { console.warn('[MultiBunkEdit] RotationCloud sync failed:', _e); }
-            console.log('[applyMultiBunkEdit] Rotation counts updated for', bunks.length, 'bunks');
+                document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                    detail: { bunks: [...modifiedBunks], date: _rcDate, source: 'multi-bunk-edit' }
+                }));
+            } catch (_e) { /* non-fatal */ }
         } catch (rcErr) { console.error('[applyMultiBunkEdit] Rotation count update failed:', rcErr); }
 
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
@@ -5224,16 +5260,15 @@ if (softBlocks.length > 0) {
         document.getElementById('ar-apply').onclick = async () => {
             closeRebalance();
             try {
-                const _gs = window.loadGlobalSettings?.() || {};
-                const _hc = _gs.historicalCounts || {};
                 const modifiedBunks = new Set();
+                const _rebalDeltas = [];
                 for (const { bunk, alt } of suggestions) {
                     if (!alt) continue;
                     const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
                     const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
                     const slotCount = perBunk ? perBunk.length : 50;
                     if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(slotCount);
-                    // Capture old for rotation count
+                    // Capture old activities for the post-edit count delta
                     const oldAct = bunkSlots.filter(i => window.scheduleAssignments[bunk]?.[i] && !window.scheduleAssignments[bunk][i].continuation)
                         .map(i => window.scheduleAssignments[bunk][i]._activity).filter(Boolean);
                     // Write alternative
@@ -5245,19 +5280,26 @@ if (softBlocks.length > 0) {
                         };
                     }
                     modifiedBunks.add(bunk);
-                    // Update rotation counts
-                    if (!_hc[bunk]) _hc[bunk] = {};
-                    oldAct.forEach(a => { _hc[bunk][a] = Math.max(0, (_hc[bunk][a] || 0) - 1); });
-                    _hc[bunk][alt.activityName] = (_hc[bunk][alt.activityName] || 0) + 1;
+                    _rebalDeltas.push({ bunk, oldAct, newAct: alt.activityName, slots: bunkSlots });
                 }
-                window.saveGlobalSettings?.('historicalCounts', _hc);
                 if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
-                // ★ Sync rotation counts to cloud after rebalance
+                // ★ Update rotation counts (historicalCounts + rotationHistory +
+                //   debounced cloud save) via the shared applyPostEditCounts.
+                try {
+                    const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+                    if (_ape) {
+                        _rebalDeltas.forEach(d => _ape(d.bunk, d.oldAct, d.newAct, d.slots));
+                    }
+                } catch (_e) { console.warn('[AutoRebalance] post-edit counts failed:', _e); }
+
+                // Notify the rotation tab so it refreshes after the rebalance.
                 try {
                     const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                    if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
-                } catch (_e) { console.warn('[AutoRebalance] RotationCloud sync failed:', _e); }
+                    document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                        detail: { bunks: [...modifiedBunks], date: _rcDate, source: 'auto-rebalance' }
+                    }));
+                } catch (_e) { /* non-fatal */ }
 
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
@@ -5567,6 +5609,14 @@ if (softBlocks.length > 0) {
                 window.SchedulerCoreUtils.applyPostEditCounts(move.bunk, planOldActivities.get(move.bunk) || [], move.to.activity, [move.slot]);
             }
         }
+
+        // Notify the rotation tab so it refreshes after a proposal is applied.
+        try {
+            const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                detail: { bunks: [...modifiedBunks], date: _rcDate, source: 'proposal-applied' }
+            }));
+        } catch (_e) { /* non-fatal */ }
 
         if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
 
