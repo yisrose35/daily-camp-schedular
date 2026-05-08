@@ -2204,8 +2204,13 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         </div>
       </div>`;
         }
-        const subs = (typeof window.getSpecialSubcategories === 'function')
+        const _regSubs = (typeof window.getSpecialSubcategories === 'function')
           ? window.getSpecialSubcategories() : [];
+        // ★ "Regular" is always present, even if the user never explicitly added
+        //   it to the registry. Untagged specials map here (see _canonSub in
+        //   scheduler_core_auto.js), so the grid always exposes a row for them.
+        const _hasRegular = _regSubs.some(s => s.toLowerCase() === 'regular');
+        const subs = _hasRegular ? _regSubs : ['Regular', ..._regSubs];
         if (subs.length === 0) {
           return `
       <div class="ms-daw-pop-field">

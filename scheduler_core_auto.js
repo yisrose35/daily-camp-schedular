@@ -2708,11 +2708,19 @@
             //   ('') = "Regular". Subcategories normalized to lowercase here so
             //   case-insensitive matching at pick time is one lookup.
             //   _hasSubcategoryTags = true means subcategory enforcement is on.
+            // ★ Untagged activities map to the conventional "regular" bucket
+            //   (matches getDisplaySubcategory in special_activities.js). This
+            //   way "Regular=1" in the per-subcategory grid pulls any untagged
+            //   special — without forcing the user to tag every existing one.
+            const _canonSub = (s) => {
+                const v = (typeof s === 'string') ? s.trim().toLowerCase() : '';
+                return v || 'regular';
+            };
             const specialSubcategoryCap = {};
             let _hasSubcategoryTags = false;
             specialNeeds.forEach(n => {
                 const subRaw = (n.layer && typeof n.layer.subcategory === 'string') ? n.layer.subcategory.trim() : '';
-                const subKey = subRaw.toLowerCase();
+                const subKey = _canonSub(subRaw);
                 if (subRaw) _hasSubcategoryTags = true;
                 const c = (n.cap === Infinity) ? Infinity : (n.cap || 0);
                 specialSubcategoryCap[subKey] = (specialSubcategoryCap[subKey] === Infinity || c === Infinity)
@@ -2939,7 +2947,7 @@
             function _canPickSpecialBySubcategory(special, sl, result) {
                 if (!sl?.specials?.subcategoryEnforced) return true;
                 const caps = sl.specials.subcategoryCap || {};
-                const subKey = (typeof special.subcategory === 'string' ? special.subcategory : '').trim().toLowerCase();
+                const subKey = _canonSub(special.subcategory); // '' → 'regular'
                 const cap = caps[subKey];
                 if (cap == null) return false; // subcategory not demanded by any layer
                 if (cap === Infinity) return true;
@@ -2947,7 +2955,7 @@
                 return used < cap;
             }
             function _markSpecialSubcategoryAssigned(special, result) {
-                const subKey = (typeof special.subcategory === 'string' ? special.subcategory : '').trim().toLowerCase();
+                const subKey = _canonSub(special.subcategory);
                 if (!result.subcategoryAssigned) result.subcategoryAssigned = {};
                 result.subcategoryAssigned[subKey] = (result.subcategoryAssigned[subKey] || 0) + 1;
             }
