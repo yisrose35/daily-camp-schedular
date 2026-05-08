@@ -342,9 +342,22 @@ function loadData() {
     try {
         const settings = window.loadGlobalSettings?.() || {};
         const allActivities = settings.specialActivities || settings.app1?.specialActivities || [];
-        console.log(`[SPECIAL_ACTIVITIES] loadData: Found ${allActivities.length} total activities`);
+        // ★ Defensive dedupe on load. Cloud-sync races have produced storage
+        //   payloads with thousands of duplicate rows for the same name. Heal
+        //   on read so the rest of the app sees a clean registry; first
+        //   occurrence wins (it's the one users created interactively).
+        const _seenNames = new Map();
+        for (const s of allActivities) {
+            if (!s || !s.name) continue;
+            if (!_seenNames.has(s.name)) _seenNames.set(s.name, s);
+        }
+        const dedupedActivities = [..._seenNames.values()];
+        if (dedupedActivities.length !== allActivities.length) {
+            console.warn(`[SPECIAL_ACTIVITIES] loadData: dropped ${allActivities.length - dedupedActivities.length} duplicate rows (${allActivities.length} → ${dedupedActivities.length})`);
+        }
+        console.log(`[SPECIAL_ACTIVITIES] loadData: Found ${dedupedActivities.length} unique activities`);
         specialActivities = []; rainyDayActivities = [];
-        allActivities.forEach(s => {
+        dedupedActivities.forEach(s => {
             const validated = validateSpecialActivity(s, s?.name);
             if (validated.rainyDayOnly === true) validated.rainyDayExclusive = true;
             if (validated.rainyDayExclusive) rainyDayActivities.push(validated);

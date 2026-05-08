@@ -1230,16 +1230,31 @@
     };
     
     window.saveGlobalSpecialActivities = (updatedActivities) => {
-        state.specialActivities = updatedActivities;
+        // ★ Defensive dedupe. Previously cloud-sync races could produce
+        //   thousands of duplicate rows for the same special (one user hit
+        //   216× per rainy-only entry). De-dup by name here so corruption
+        //   can't survive a save round-trip. First occurrence wins.
+        const _input = Array.isArray(updatedActivities) ? updatedActivities : [];
+        const _seen = new Map();
+        for (const a of _input) {
+            if (!a || !a.name) continue;
+            if (!_seen.has(a.name)) _seen.set(a.name, a);
+        }
+        const cleaned = [..._seen.values()];
+        if (cleaned.length !== _input.length) {
+            console.warn('[saveGlobalSpecialActivities] de-duplicated', _input.length - cleaned.length, 'rows');
+        }
+
+        state.specialActivities = cleaned;
         saveData();
         // Also write the root-level key that all readers check first —
         // without this, the cloud_sync_helpers version's dual-write is lost
         // once app1 initialises and replaces that function.
-        window.saveGlobalSettings?.('specialActivities', updatedActivities);
+        window.saveGlobalSettings?.('specialActivities', cleaned);
         // Sync special_activities.js in-memory cache so getAllSpecialActivities()
         // returns the fresh list immediately without needing a storage reload.
         // The setter defined in special_activities.js accepts an array directly.
-        try { window.specialActivities = updatedActivities; } catch(_) {}
+        try { window.specialActivities = cleaned; } catch(_) {}
         window.refreshSpecialActivitiesFromStorage?.();
     };
     
