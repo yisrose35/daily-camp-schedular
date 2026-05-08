@@ -1914,26 +1914,68 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       if (dawSelectedBand) band.classList.add('selected');
     });
 
-    // Drag existing band to reposition (vertical)
+    // Drag existing band to reposition (vertical) — with smooth ghost +
+    // live drop-preview rectangle (parity with manual-builder skeleton tiles).
     band.addEventListener('dragstart', (e) => {
       if (e.target.classList.contains('band-resize')) { e.preventDefault(); return; }
       const id = band.dataset.id;
       const grade = band.dataset.grade;
       const layer = (layerSource[grade] || []).find(l => l.id === id);
       if (!layer) return;
-      dawDragData = { source: 'band', id, grade, layer, offsetMin: 0 };
 
       const rect = band.getBoundingClientRect();
       const clickY = e.clientY - rect.top;
-      dawDragData.offsetMin = Math.round(clickY / DAW_PIXELS_PER_MINUTE);
+      const offsetMin = Math.round(clickY / DAW_PIXELS_PER_MINUTE);
+      dawDragData = { source: 'band', id, grade, layer, offsetMin };
 
       e.dataTransfer.setData('text/daw-band-move', id);
       e.dataTransfer.effectAllowed = 'copyMove';
-      band.style.opacity = '0.4';
+
+      // Hide the browser's native drag preview — we draw our own ghost.
+      const _blank = new Image();
+      _blank.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      e.dataTransfer.setDragImage(_blank, 0, 0);
+
+      // Create / reuse a floating ghost tooltip on body.
+      let ghost = document.getElementById('daw-drag-ghost');
+      if (!ghost) {
+        ghost = document.createElement('div');
+        ghost.id = 'daw-drag-ghost';
+        ghost.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;'
+          + 'background:#1e293b;color:#f1f5f9;border:1px solid #334155;'
+          + 'border-radius:6px;padding:6px 10px;font-size:11px;font-weight:600;'
+          + 'box-shadow:0 8px 24px rgba(0,0,0,0.35);display:none;white-space:nowrap;';
+        document.body.appendChild(ghost);
+      }
+      const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
+      ghost.innerHTML = '<div>' + (typeDef?.name || layer.type) + '</div>'
+        + '<div id="daw-drag-ghost-time" style="font-weight:400;color:#94a3b8;margin-top:2px;">'
+        + minutesToTime(layer.startMin) + ' – ' + minutesToTime(layer.endMin) + '</div>';
+      ghost.style.display = 'block';
+      ghost.style.left = (e.clientX + 12) + 'px';
+      ghost.style.top = (e.clientY + 12) + 'px';
+
+      band.style.opacity = '0.35';
+    });
+
+    band.addEventListener('drag', (e) => {
+      // The terminal (0,0) drag event fires once when the user releases —
+      // ignore it so the ghost doesn't snap to the corner.
+      if (e.clientX === 0 && e.clientY === 0) return;
+      const ghost = document.getElementById('daw-drag-ghost');
+      if (ghost && ghost.style.display === 'block') {
+        ghost.style.left = (e.clientX + 12) + 'px';
+        ghost.style.top = (e.clientY + 12) + 'px';
+      }
     });
 
     band.addEventListener('dragend', () => {
       band.style.opacity = '1';
+      const ghost = document.getElementById('daw-drag-ghost');
+      if (ghost) ghost.style.display = 'none';
+      // Clean up any lingering preview rectangles in tracks.
+      gridEl.querySelectorAll('.ms-daw-drop-preview').forEach(el => el.remove());
+      gridEl.querySelectorAll('.ms-daw-track.drop-target').forEach(t => t.classList.remove('drop-target'));
       dawDragData = null;
     });
 
@@ -2005,15 +2047,55 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         e.dataTransfer.dropEffect = 'copy';
       }
       track.classList.add('drop-target');
+
+      // ★ Live drop preview — shows where the band will land at this moment.
+      //   Reuses one preview element per track so we don't spam the DOM.
+      if (dawDragData?.source === 'band' && dawDragData.layer) {
+        const trackRect = track.getBoundingClientRect();
+        const y = e.clientY - trackRect.top;
+        const dropMin = Math.round((y / DAW_PIXELS_PER_MINUTE + globalStart) / SNAP_MINS) * SNAP_MINS;
+        const duration = dawDragData.layer.endMin - dawDragData.layer.startMin;
+        let newStart = dropMin - dawDragData.offsetMin;
+        newStart = Math.max(globalStart, Math.min(globalEnd - duration, newStart));
+        const newEnd = newStart + duration;
+
+        let preview = track.querySelector('.ms-daw-drop-preview');
+        if (!preview) {
+          preview = document.createElement('div');
+          preview.className = 'ms-daw-drop-preview';
+          preview.style.cssText = 'position:absolute;left:0;right:0;'
+            + 'background:rgba(59,130,246,0.18);border:2px dashed #3b82f6;'
+            + 'border-radius:4px;pointer-events:none;z-index:7;'
+            + 'display:flex;align-items:flex-start;justify-content:center;padding-top:3px;';
+          track.appendChild(preview);
+        }
+        preview.style.top = ((newStart - globalStart) * DAW_PIXELS_PER_MINUTE) + 'px';
+        preview.style.height = (duration * DAW_PIXELS_PER_MINUTE) + 'px';
+        preview.innerHTML = '<span style="background:#3b82f6;color:#fff;'
+          + 'padding:2px 6px;border-radius:3px;font-size:9px;font-weight:700;'
+          + 'white-space:nowrap;">'
+          + minutesToTime(newStart) + ' – ' + minutesToTime(newEnd) + '</span>';
+
+        // Update the floating ghost's time line too.
+        const ghostTime = document.getElementById('daw-drag-ghost-time');
+        if (ghostTime) ghostTime.textContent = minutesToTime(newStart) + ' – ' + minutesToTime(newEnd);
+      }
     });
 
     track.addEventListener('dragleave', (e) => {
-      if (!track.contains(e.relatedTarget)) track.classList.remove('drop-target');
+      if (!track.contains(e.relatedTarget)) {
+        track.classList.remove('drop-target');
+        const preview = track.querySelector('.ms-daw-drop-preview');
+        if (preview) preview.remove();
+      }
     });
 
     track.addEventListener('drop', (e) => {
       e.preventDefault();
       track.classList.remove('drop-target');
+      // Remove any drop-preview rectangles so they don't briefly persist
+      // before the upcoming re-render replaces the track HTML.
+      gridEl.querySelectorAll('.ms-daw-drop-preview').forEach(el => el.remove());
 
       const grade = track.dataset.grade;
       const rect = track.getBoundingClientRect();
