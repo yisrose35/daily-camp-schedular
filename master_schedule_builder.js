@@ -1876,6 +1876,15 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
   // Bind events (chips + bands + tracks)
   bindDAWEvents(gridEl, globalStart, globalEnd, { layerSource, onSave, onRender, isExternal });
+
+  // ★ Notify external decorators (e.g. daily_adjustments overlays trips on
+  //   top of this grid). innerHTML replacement above wipes their DOM — they
+  //   listen for this event to re-apply after every render, including
+  //   internal redraws triggered by drag/resize that don't go through
+  //   onLayersChanged.
+  try {
+    gridEl.dispatchEvent(new CustomEvent('campistry-daw-rendered', { bubbles: true }));
+  } catch (_) {}
 }
 
 function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {

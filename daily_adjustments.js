@@ -2051,8 +2051,25 @@ function renderDAWTimeline(gridEl) {
     }
   });
 
-  // ★ Overlay daily trips on the DAW grid — use requestAnimationFrame
-  // to ensure the DOM is painted before looking for track elements
+  // ★ Re-apply our overlays every time the DAW grid finishes rendering.
+  //   Master scheduler rebuilds gridEl.innerHTML on every drag/resize,
+  //   which wipes trip + period overlays. The custom event fires after
+  //   each render (including internal redraws), so we re-add them.
+  //   Using a single listener for the lifetime of this gridEl — innerHTML
+  //   replacement preserves the parent element's listeners.
+  if (!gridEl._campistryDawRenderedHooked) {
+    gridEl._campistryDawRenderedHooked = true;
+    gridEl.addEventListener('campistry-daw-rendered', function() {
+      overlayTripsOnDAW(gridEl);
+      if (typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+        window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+      }
+    });
+  }
+
+  // ★ Initial overlay — the event-driven re-render handles subsequent
+  //   updates, but the first render also fires the event so this is now
+  //   handled by the listener above. Keep a paint-time fallback for safety.
   overlayTripsOnDAW(gridEl);
   requestAnimationFrame(function() { overlayTripsOnDAW(gridEl); });
   setTimeout(function() { overlayTripsOnDAW(gridEl); }, 200);
