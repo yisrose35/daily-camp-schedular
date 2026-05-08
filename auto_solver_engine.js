@@ -1753,7 +1753,41 @@
     // ── BFS field-compatibility helper ───────────────────────────────────────
     // Returns true if fb (grade, startMin, endMin) can be placed on cand's field
     // given the CURRENT fieldIndex entries MINUS any bunks in evictedBunks.
+    // Centralised access/time-rule check used by the BFS helpers below.
+    // The original BFS helpers only enforced capacity + sharing, which let
+    // them slip past the accessRestrictions / per-grade timeRules / disabled-
+    // sport gates that isFieldAvailableByTime applies during the main solve.
+    // That's how grade-restricted fields ended up filled by BFS repair.
+    function bfsRulesPass(cand, grade, startMin, endMin) {
+        // Grade access restriction
+        if (cand?.accessRestrictions?.enabled) {
+            const divRules = cand.accessRestrictions.divisions || {};
+            if (!(grade in divRules)) return false;
+        }
+        // Per-grade time rules
+        const rules = cand?.timeRules;
+        if (Array.isArray(rules) && rules.length > 0) {
+            const myG = grade != null ? String(grade) : null;
+            let hasGradeAvail = false;
+            let insideAvail = false;
+            for (const r of rules) {
+                if (r.divisions.length > 0 && myG && !r.divisions.includes(myG)) continue;
+                if (r.unavailable && r.startMin < endMin && r.endMin > startMin) return false;
+                if (r.available) {
+                    hasGradeAvail = true;
+                    if (startMin >= r.startMin && endMin <= r.endMin) insideAvail = true;
+                }
+            }
+            if (hasGradeAvail && !insideAvail) return false;
+        }
+        // Daily disabled sport for this field
+        if (cand?.disabledSports && cand.sportNorm
+            && cand.disabledSports.has(cand.sportNorm)) return false;
+        return true;
+    }
+
     function bfsCanPlace(fb, cand, fieldIndex, evictedBunks) {
+        if (!bfsRulesPass(cand, fb.grade, fb.startMin, fb.endMin)) return false;
         const fn = cand.fieldNorm;
         const entries = (fieldIndex.get(fn) || []).filter(e =>
             e.bunk !== fb.bunk &&
@@ -1773,6 +1807,7 @@
 
     // Returns true if victim can move to newCand's field (cross-grade + cap check)
     function bfsCanMoveTo(victim, newCand, fieldIndex, evictedBunks) {
+        if (!bfsRulesPass(newCand, victim.grade, victim.startMin, victim.endMin)) return false;
         const nfn = newCand.fieldNorm;
         const entries = (fieldIndex.get(nfn) || []).filter(e =>
             e.bunk !== victim.bunk &&
