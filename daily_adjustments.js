@@ -484,12 +484,17 @@ function daShowCopyGradeModal(skeleton, onApply) {
     // Remove existing events for target divisions
     var updated = skeleton.filter(function(ev) { return !selectedTargets[ev.division]; });
 
-    // Copy source events to each target
+    // Copy source events to each target. Remap league references so a
+    // league tile copied into a new grade lands on a league assigned to
+    // THAT grade — not the source grade's league.
     targets.forEach(function(targetDiv) {
       sourceEvents.forEach(function(ev) {
         var copy = JSON.parse(JSON.stringify(ev));
         copy.division = targetDiv;
         copy.id = 'evt_' + Math.random().toString(36).slice(2, 9);
+        if (typeof window._mbRemapLeagueForGrade === 'function') {
+          window._mbRemapLeagueForGrade(copy, targetDiv);
+        }
         updated.push(copy);
       });
     });
@@ -2571,7 +2576,12 @@ function addDragToRepositionListeners(gridEl) {
         const newEnd = minutesToTime(cellStartMin + snapMin + duration);
 
         if (divName !== event.division) {
+          // Cross-grade drop. Remap league reference so the copy points
+          // at a league assigned to the new grade (not the source's).
           const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd };
+          if (typeof window._mbRemapLeagueForGrade === 'function') {
+            window._mbRemapLeagueForGrade(copy, divName);
+          }
           dailyOverrideSkeleton.push(copy);
           bumpOverlappingTiles(copy, divName);
         } else {
@@ -3000,24 +3010,26 @@ function addDropListeners(gridEl) {
       // ===== LEAGUE =====
      else if (tileData.type === 'league') {
         // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker ★★★
+        // Filter to leagues assigned to THIS grade and require selection.
         const globalSettings = window.loadGlobalSettings?.() || {};
         const leaguesByName = globalSettings.leaguesByName || {};
-        const leagueNames = Object.keys(leaguesByName).filter(ln => {
+        const gradeLeagues = Object.keys(leaguesByName).filter(ln => {
           const l = leaguesByName[ln];
-          return l && l.enabled !== false;
+          return l && l.enabled !== false && Array.isArray(l.divisions) && l.divisions.includes(String(divName));
         });
-        let leaguePickerField = [];
-        if (leagueNames.length > 0) {
-          leaguePickerField = [{
-            name: 'leagueName',
-            label: 'Which League?',
-            type: 'select',
-            options: [{ value: '', label: '— Any League (auto) —' }].concat(
-              leagueNames.map(ln => ({ value: ln, label: ln }))
-            ),
-            default: ''
-          }];
+        if (gradeLeagues.length === 0) {
+          await daShowAlert('No leagues are assigned to ' + divName + '. Add this grade to a league in League Setup before dropping a league tile here.');
+          return;
         }
+        const leaguePickerField = [{
+          name: 'leagueName',
+          label: 'Which League? (required)',
+          type: 'select',
+          options: [{ value: '', label: '— Choose a league —' }].concat(
+            gradeLeagues.map(ln => ({ value: ln, label: ln }))
+          ),
+          default: gradeLeagues.length === 1 ? gradeLeagues[0] : ''
+        }];
 
         const result = await daShowModal({
           title: 'League Game for ' + divName,
@@ -3028,13 +3040,17 @@ function addDropListeners(gridEl) {
           ]
         });
         if (!result || !result.startTime || !result.endTime) return;
+        if (!result.leagueName) {
+          await daShowAlert('Please choose a league before dropping the tile.');
+          return;
+        }
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
           type: 'league',
-          event: result.leagueName || 'League Game',
+          event: result.leagueName,
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
@@ -3535,12 +3551,18 @@ async function editTile(id) {
     }
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
-      const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
-      if (_leagueNames.length > 0) {
+      const _lbn = _gs.leaguesByName || {};
+      // Filter to leagues assigned to this event's grade. No auto-pick.
+      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
+        _lbn[ln] && _lbn[ln].enabled !== false &&
+        Array.isArray(_lbn[ln].divisions) &&
+        _lbn[ln].divisions.includes(String(ev.division))
+      );
+      if (_gradeLeagues.length > 0) {
         modalFields.splice(1, 0, {
-          name: 'leagueName', label: 'Which League?', type: 'select',
-          options: [{ value: '', label: '— Any League (auto) —' }].concat(_leagueNames.map(ln => ({ value: ln, label: ln }))),
-          default: ev.leagueName || ''
+          name: 'leagueName', label: 'Which League? (required)', type: 'select',
+          options: [{ value: '', label: '— Choose a league —' }].concat(_gradeLeagues.map(ln => ({ value: ln, label: ln }))),
+          default: _gradeLeagues.includes(ev.leagueName) ? ev.leagueName : (_gradeLeagues.length === 1 ? _gradeLeagues[0] : '')
         });
       }
     }

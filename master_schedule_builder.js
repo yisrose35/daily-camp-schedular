@@ -52,6 +52,10 @@ function _mbRemapLeagueForGrade(ev, newGrade) {
   }
   return ev;
 }
+// Expose so daily_adjustments.js (and any other consumer) can reuse the
+// same remap logic without duplicating it.
+try { window._mbRemapLeagueForGrade = _mbRemapLeagueForGrade; } catch (_) {}
+try { window._mbFirstLeagueForGrade = _mbFirstLeagueForGrade; } catch (_) {}
 
 function _mbIsBackToBack(ev) {
   if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
@@ -2186,14 +2190,19 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         const newEnd = newStart + duration;
 
         if (fromGrade !== grade) {
-          // Cross-grade drop → COPY the layer to the target grade
+          // Cross-grade drop → COPY the layer to the target grade. For
+          //   league layers, remap leagueName to a league assigned to the
+          //   target grade so the copy doesn't keep referencing the source
+          //   grade's league.
           if (!layerSource[grade]) layerSource[grade] = [];
-          layerSource[grade].push({
+          const _copyLayer = {
             ...JSON.parse(JSON.stringify(layer)),
             id: 'daw_' + Math.random().toString(36).slice(2, 9),
             startMin: Math.max(globalStart, newStart),
             endMin: Math.min(globalEnd, newEnd),
-          });
+          };
+          _mbRemapLeagueForGrade(_copyLayer, grade);
+          layerSource[grade].push(_copyLayer);
         } else {
           // Same grade → move in place
           layer.startMin = Math.max(globalStart, newStart);
