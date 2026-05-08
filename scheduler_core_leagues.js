@@ -1233,6 +1233,20 @@
                                 ' is unavailable (in use or doesn\'t support ' + wantedSport + ') — falling back to auto-pick');
                         }
                         if (candidates.length === 0) {
+                            // For TBD placeholders, the "wanted" sport is just a
+                            // forecast — the actual round 2 sport isn't known yet.
+                            // Fall back to any available pool entry so the slot
+                            // still gets reserved with a TBD label.
+                            if (playoffIsTBD) {
+                                const fallback = availablePool.filter(function (p) { return !_poolUsed.has(p.field); });
+                                if (fallback.length > 0) {
+                                    const pickF = fallback[0];
+                                    _poolUsed.add(pickF.field);
+                                    assignments.push({ team1: teamA, team2: teamB, field: pickF.field, sport: pickF.sport });
+                                    console.log('   🏆 PLAYOFF TBD: using fallback ' + pickF.sport + ' @ ' + pickF.field + ' (preferred sport "' + wantedSport + '" unavailable)');
+                                    return;
+                                }
+                            }
                             console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')');
                             return;
                         }
