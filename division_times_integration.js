@@ -113,8 +113,22 @@
       window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
 
             // ★★★ AUTO MODE: full bypass — scheduler_core_auto.js owns the entire pipeline
-            if (window._daBuilderMode === 'auto' || window._divisionTimesLocked) {
-                console.log('[DivTimesIntegration] ⏭️ Auto mode — full bypass');
+            // Only bypass when there's NO manual skeleton to schedule. A non-empty
+            // skeleton parameter means the caller (manual builder, daily adjustments
+            // manual mode, etc.) is explicitly asking for the manual path even if the
+            // global UI mode flipped to "auto" between the caller's mode-check and
+            // this call (e.g. a focus-refresh re-init firing mid-flow). Without this
+            // guard, the manual click "wipe + generate" sequence would silently no-op
+            // and surface as "Error generating schedule" with 0 bunks saved.
+            const _hasManualSkeleton = Array.isArray(manualSkeleton) && manualSkeleton.length > 0;
+            if (!_hasManualSkeleton && (window._daBuilderMode === 'auto' || window._divisionTimesLocked)) {
+                console.log('[DivTimesIntegration] ⏭️ Auto mode — full bypass (no manual skeleton)');
+                return false;
+            }
+            if (window._divisionTimesLocked && _hasManualSkeleton) {
+                // Defensive: never trample a locked divisionTimes even if a manual
+                // skeleton snuck in. Tell the caller and abort.
+                console.warn('[DivTimesIntegration] ⏭️ divisionTimes locked — skipping manual run');
                 return false;
             }
 
