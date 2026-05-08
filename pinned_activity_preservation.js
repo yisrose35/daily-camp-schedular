@@ -63,23 +63,56 @@
             }
             
             if (!slots || !Array.isArray(slots)) continue;
-            
+
+            // ★ Build a set of every name that's currently a real activity in
+            //   the camp's registries. Anything pinned that doesn't appear in
+            //   this set is a ghost left behind by deleted-but-not-cleaned
+            //   data; we drop those pins so each generation can place fresh.
+            //   Without this, a special you removed from the registry months
+            //   ago can still be carried forward via _pinned indefinitely.
+            const _validNames = new Set();
+            const _addNames = (arr, key) => {
+                if (!Array.isArray(arr)) return;
+                arr.forEach(o => { if (o && o[key]) _validNames.add(String(o[key])); });
+            };
+            try {
+                const _gs = window.loadGlobalSettings?.() || {};
+                _addNames(window.getAllSpecialActivities?.() || [], 'name');
+                _addNames(_gs.app1?.specialActivities, 'name');
+                _addNames(_gs.app1?.allSports, 'name');
+                if (Array.isArray(_gs.app1?.allSports)) {
+                    _gs.app1.allSports.forEach(s => { if (typeof s === 'string') _validNames.add(s); });
+                }
+                _addNames(_gs.app1?.fields, 'name');
+                _addNames(_gs.app1?.facilities, 'name');
+                // Always-OK names: structural slots that aren't user-managed
+                ['lunch','Swim','Change','Lineup','Snacks','Snack','Dismissal','Free'].forEach(n => _validNames.add(n));
+            } catch (_) {}
+
+            let droppedGhosts = 0;
             for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
                 const entry = slots[slotIdx];
-                
+
                 // Check if this is a pinned entry
                 if (entry && entry._pinned === true) {
+                    // Drop pin if its activity isn't in any current registry.
+                    const actName = entry._activity || entry.field || entry.event;
+                    if (actName && _validNames.size > 0 && !_validNames.has(String(actName))) {
+                        droppedGhosts++;
+                        continue;
+                    }
+
                     if (!_pinnedSnapshot[bunkName]) {
                         _pinnedSnapshot[bunkName] = {};
                     }
-                    
+
                     _pinnedSnapshot[bunkName][slotIdx] = {
                         ...entry,
                         _preservedAt: Date.now()
                     };
-                    
+
                     capturedCount++;
-                    
+
                     // Track field lock info
                     const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
                     if (fieldName && fieldName !== 'Free') {
@@ -91,6 +124,9 @@
                         });
                     }
                 }
+            }
+            if (droppedGhosts > 0) {
+                console.warn('[PinnedPreserve] 👻 Dropped ' + droppedGhosts + ' pinned ghost slot(s) for bunk ' + bunkName + ' (activity not in current registry)');
             }
         }
         
