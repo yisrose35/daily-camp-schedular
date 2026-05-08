@@ -1199,6 +1199,70 @@
                     continue;
                 }
 
+                // ★★★ PLAYOFF TBD: information-only mode ★★★
+                // For game 2+ in playoff mode, winners aren't decided yet so we
+                // don't pick fields automatically — just list the open fields at
+                // this time so the user can assign them once results are in.
+                // No field locks, no per-matchup assignments.
+                if (playoffIsTBD) {
+                    leagueGameCounters[league.name]++;
+                    const _seenFields = new Set();
+                    const _openList = [];
+                    availablePool.forEach(function (p) {
+                        if (_seenFields.has(p.field)) return;
+                        _seenFields.add(p.field);
+                        _openList.push(p.sport + ' @ ' + p.field);
+                    });
+                    const _tbdLabel = 'Playoff R' + playoffRoundNum + ' TBD';
+                    const _tbdRows = ['Round ' + playoffRoundNum + ' — winners TBD']
+                        .concat(_openList.length > 0
+                            ? ['Open fields:'].concat(_openList.map(function (s) { return '  • ' + s; }))
+                            : ['(no open fields at this time)']);
+                    console.log('   🏆 PLAYOFF TBD info-only: ' + _openList.length + ' open field(s) listed');
+                    leagueDivisions.forEach(function (divName) {
+                        const blocksForDiv = timeData.byDivision[divName];
+                        if (!blocksForDiv) return;
+                        blocksForDiv.forEach(function (block) {
+                            const _Utils = window.SchedulerCoreUtils;
+                            const _blockKey = (typeof block.startTime === 'number')
+                                ? block.startTime
+                                : (_Utils?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
+                            if (Number(_blockKey) !== Number(timeKey)) return;
+                            const pick = {
+                                field: 'League: ' + league.name,
+                                sport: _tbdLabel,
+                                _activity: 'League: ' + league.name,
+                                _leagueName: league.name,
+                                _h2h: true,
+                                _fixed: true,
+                                _allMatchups: _tbdRows,
+                                _gameLabel: _tbdLabel,
+                                _playoffRound: playoffRoundNum,
+                                _playoffTBD: true
+                            };
+                            fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                            block.processed = true;
+                        });
+                    });
+                    // Reserved-activity locks still apply so non-playing bunks
+                    // get routed away from these activities even though we don't
+                    // know which kids will be playing yet.
+                    if (window.GlobalFieldLocks && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
+                        const reservedReason = 'Playoff reserve (' + league.name + ' R' + playoffRoundNum + ' TBD)';
+                        leagueDivisions.forEach(function (divName) {
+                            league.playoff.reservedActivities.forEach(function (act) {
+                                try {
+                                    window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
+                                } catch (e) {
+                                    console.warn('[PLAYOFF TBD] failed to reserve "' + act + '" for ' + divName + ':', e);
+                                }
+                            });
+                        });
+                    }
+                    console.log('   📈 Game #' + gameNumber + ' (TBD info) complete for "' + league.name + '"');
+                    continue;
+                }
+
                 // ★★★ PASS SCHEDULING PRIORITY TO ASSIGNMENT FUNCTION ★★★
                 // For playoff mode: each matchup has its own fixed sport — bypass
                 // the variety logic and assign per-matchup directly.
