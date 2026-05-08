@@ -2590,6 +2590,38 @@
                 //   while priorityList + free time allow.
                 if (stillAllowed === 0) return;
 
+                // ★ Special layer with per-subcategory grid: emit one need per
+                //   subcategory with positive qty so the cap-summing loop and
+                //   the per-subcategory gate (_canPickSpecialBySubcategory) see
+                //   demand for each tag independently. Each row is "exactly N".
+                //   Falls through to single-need emission if grid is empty.
+                if (t === 'special' && layer.subQuantities && typeof layer.subQuantities === 'object') {
+                    const entries = Object.keys(layer.subQuantities)
+                        .map(k => [k, parseInt(layer.subQuantities[k], 10) || 0])
+                        .filter(([, v]) => v > 0);
+                    if (entries.length > 0) {
+                        // Distribute alreadyPlaced proportionally across entries
+                        // is overkill — placedTypes is shared across the whole
+                        // 'special' type, so just pass per-row floor=cap=qty
+                        // and let _canPickSpecialBySubcategory enforce per-tag.
+                        entries.forEach(([subName, subQty]) => {
+                            const layerForSub = Object.assign({}, layer, {
+                                subcategory: subName,
+                                qty: subQty,
+                                op: '='
+                            });
+                            remainingNeeds.push({
+                                layer: layerForSub,
+                                type: 'special',
+                                count: subQty,
+                                cap: subQty,
+                                op: '='
+                            });
+                        });
+                        return;
+                    }
+                }
+
                 remainingNeeds.push({ layer, type: t, count: stillNeeded, cap: stillAllowed, op });
             });
 

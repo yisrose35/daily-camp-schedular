@@ -973,6 +973,9 @@ function renderSpecialConfig(container, fac) {
         const saBody = document.createElement("div");
         saBody.style.cssText = "padding:12px;";
 
+        saBody.appendChild(section("Subcategory", summarySpecialSubcategory(saData),
+            () => renderSpecialSubcategory(saData)));
+
         saBody.appendChild(section("Access", summarySpecialAccess(saData),
             () => renderSpecialAccess(saData)));
 
@@ -1905,6 +1908,10 @@ function summarySpecialMultiPart(s) {
     var _nStr = _hasN ? " (" + s.multiPart.parts.map(function(p,i){return p.name||('Part '+(i+1));}).join(', ') + ")" : "";
     return s.multiPart.totalParts + " parts, " + s.multiPart.daysBetween + "d apart" + _nStr;
 }
+function summarySpecialSubcategory(s) {
+    var v = (typeof s.subcategory === 'string') ? s.subcategory.trim() : '';
+    return v ? v : 'Uncategorized';
+}
 
 function saveSpecialData(saData) {
     const allSpecials = window.getAllSpecialActivities?.() || [];
@@ -2156,6 +2163,113 @@ function renderSpecialDayAvailability(saData) {
     });
 
     container.appendChild(chipWrap);
+    return container;
+}
+
+// -- Subcategory --
+// Tags this special with one of the user-defined subcategories ("Food",
+// "Theme", etc). The Master Schedule Builder reads this to fill per-
+// subcategory quantities in special-activity layers.
+function renderSpecialSubcategory(saData) {
+    const container = document.createElement("div");
+    container.style.cssText = "display:flex; flex-direction:column; gap:10px;";
+
+    const refreshSummary = () => {
+        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summarySpecialSubcategory(saData);
+    };
+
+    const renderChips = () => {
+        container.innerHTML = '';
+        const existing = (typeof window.getSpecialSubcategories === 'function')
+            ? window.getSpecialSubcategories() : [];
+        const current = (typeof saData.subcategory === 'string') ? saData.subcategory.trim() : '';
+
+        const chipWrap = document.createElement("div");
+        chipWrap.style.cssText = "display:flex; flex-wrap:wrap; gap:6px; align-items:center;";
+
+        // "Uncategorized" chip clears the tag.
+        const noneChip = document.createElement("span");
+        const isNone = current === '';
+        noneChip.className = "chip " + (isNone ? "active" : "inactive");
+        noneChip.textContent = "Uncategorized";
+        noneChip.onclick = () => {
+            saData.subcategory = '';
+            saveSpecialData(saData);
+            renderChips();
+            refreshSummary();
+        };
+        chipWrap.appendChild(noneChip);
+
+        existing.forEach(name => {
+            const isCur = current.toLowerCase() === name.toLowerCase();
+            const chip = document.createElement("span");
+            chip.className = "chip " + (isCur ? "active" : "inactive");
+            chip.textContent = name;
+            chip.title = "Click to assign · Shift-click to remove from registry";
+            chip.onclick = (e) => {
+                if (e.shiftKey) {
+                    if (!confirm(`Remove subcategory "${name}" from the list? Activities tagged with it will become Uncategorized.`)) return;
+                    if (typeof window.removeSpecialSubcategory === 'function') {
+                        window.removeSpecialSubcategory(name);
+                    }
+                    if (current.toLowerCase() === name.toLowerCase()) {
+                        saData.subcategory = '';
+                        saveSpecialData(saData);
+                    }
+                    renderChips();
+                    refreshSummary();
+                    return;
+                }
+                saData.subcategory = isCur ? '' : name; // toggle off if already set
+                saveSpecialData(saData);
+                renderChips();
+                refreshSummary();
+            };
+            chipWrap.appendChild(chip);
+        });
+
+        container.appendChild(chipWrap);
+
+        // Add new subcategory inline.
+        const addRow = document.createElement("div");
+        addRow.style.cssText = "display:flex; gap:6px; align-items:center; margin-top:4px;";
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = "New subcategory (e.g. Food, Theme)";
+        input.style.cssText = "flex:1; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; outline:none;";
+
+        const btn = document.createElement("button");
+        btn.textContent = "+ Add";
+        btn.style.cssText = "background:#7C3AED; color:white; border:none; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:0.8rem; font-weight:500;";
+
+        const doAdd = () => {
+            const v = input.value.trim();
+            if (!v) return;
+            if (typeof window.addSpecialSubcategory === 'function') {
+                window.addSpecialSubcategory(v);
+            }
+            saData.subcategory = v;
+            saveSpecialData(saData);
+            input.value = '';
+            renderChips();
+            refreshSummary();
+        };
+        btn.onclick = doAdd;
+        input.onkeyup = (e) => { if (e.key === 'Enter') doAdd(); };
+
+        addRow.appendChild(input);
+        addRow.appendChild(btn);
+        container.appendChild(addRow);
+
+        const hint = document.createElement("div");
+        hint.style.cssText = "font-size:0.75rem; color:#6B7280;";
+        hint.textContent = "Tip: shift-click a chip to remove it from the list everywhere.";
+        container.appendChild(hint);
+    };
+
+    renderChips();
     return container;
 }
 

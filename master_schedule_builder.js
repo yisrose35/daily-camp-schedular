@@ -2186,6 +2186,12 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           <span style="font-size:11px;color:#94a3b8;">min</span>
         </div>
       </div>
+      ${(() => {
+        // ★ Special-activity layers use a per-subcategory quantity grid driven
+        //   by the registry the user manages in Facilities. Each row's value
+        //   is "exactly N from this subcategory" (0 = skip). Total is the sum.
+        if (layer.type !== 'special') {
+          return `
       <div class="ms-daw-pop-field">
         <label>Quantity</label>
         <div class="ms-daw-pop-row">
@@ -2196,7 +2202,57 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           </div>
           <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:60px;">
         </div>
-      </div>
+      </div>`;
+        }
+        const subs = (typeof window.getSpecialSubcategories === 'function')
+          ? window.getSpecialSubcategories() : [];
+        if (subs.length === 0) {
+          return `
+      <div class="ms-daw-pop-field">
+        <label>Quantity</label>
+        <div class="ms-daw-pop-row">
+          <input type="number" id="daw-pop-qty" value="${layer.qty}" min="0" max="10" style="width:60px;">
+        </div>
+        <div class="ms-daw-pop-hint" style="color:#fbbf24;">No subcategories defined yet. Add them in Facilities → Special Activities → Subcategory.</div>
+      </div>`;
+        }
+        // Seed subQuantities. Priority: existing subQuantities → legacy
+        // {subcategory + qty} → all-zero defaults.
+        const existing = (layer.subQuantities && typeof layer.subQuantities === 'object') ? layer.subQuantities : null;
+        const legacySub = (typeof layer.subcategory === 'string') ? layer.subcategory.trim() : '';
+        const getSeeded = (name) => {
+          if (existing) {
+            // Case-insensitive lookup so renames in registry don't lose data.
+            const key = Object.keys(existing).find(k => k.toLowerCase() === name.toLowerCase());
+            return key ? (parseInt(existing[key], 10) || 0) : 0;
+          }
+          if (legacySub && legacySub.toLowerCase() === name.toLowerCase()) {
+            return parseInt(layer.qty, 10) || 1;
+          }
+          return 0;
+        };
+        const rows = subs.map(name => {
+          const v = getSeeded(name);
+          return `
+          <div class="ms-daw-subq-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;">
+            <span style="font-size:12px;color:#cbd5e1;">${name}</span>
+            <input type="number" class="ms-daw-subq-input" data-subname="${name.replace(/"/g, '&quot;')}" value="${v}" min="0" max="10" style="width:60px;">
+          </div>`;
+        }).join('');
+        const total = subs.reduce((s, name) => s + getSeeded(name), 0);
+        return `
+      <div class="ms-daw-pop-field">
+        <label>Quantity by Subcategory</label>
+        <div style="display:flex;flex-direction:column;gap:2px;border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:6px 10px;background:rgba(255,255,255,0.03);">
+          ${rows}
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.08);font-size:11px;color:#94a3b8;">
+            <span>Total</span>
+            <span id="daw-pop-subq-total" style="font-weight:600;color:#e2e8f0;">${total}</span>
+          </div>
+        </div>
+        <div class="ms-daw-pop-hint">0 = skip that subcategory. List comes from Facilities → Special Activities → Subcategory.</div>
+      </div>`;
+      })()}
       <div class="ms-daw-pop-divider"></div>
       <div class="ms-daw-pop-section">Rotation <span style="font-weight:400;font-size:10px;letter-spacing:0;text-transform:none;color:#cbd5e1;">optional</span></div>
       <div class="ms-daw-pop-field">
@@ -2320,6 +2376,18 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       btn.classList.add('active');
     };
   });
+
+  // Live total for special-layer per-subcategory grid.
+  const subqInputs = popover.querySelectorAll('.ms-daw-subq-input');
+  const subqTotalEl = popover.querySelector('#daw-pop-subq-total');
+  if (subqInputs.length && subqTotalEl) {
+    const recalcTotal = () => {
+      let t = 0;
+      subqInputs.forEach(i => { t += Math.max(0, parseInt(i.value, 10) || 0); });
+      subqTotalEl.textContent = String(t);
+    };
+    subqInputs.forEach(i => i.addEventListener('input', recalcTotal));
+  }
   
   // Grade Mode toggle (swim / lunch / snacks)
   popover.querySelectorAll('.ms-daw-grademode[data-gmode]').forEach(btn => {
@@ -2373,9 +2441,30 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     layer.durationMin = parseInt(popover.querySelector('#daw-pop-dur-min').value) || 30;
     layer.durationMax = parseInt(popover.querySelector('#daw-pop-dur-max').value) || 50;
     layer.periodMin = layer.durationMin; // backward compat
-    layer.qty = parseInt(popover.querySelector('#daw-pop-qty').value) || 1;
-    const activeOp = popover.querySelector('.ms-daw-pop-op[data-op].active');
-    if (activeOp) layer.op = activeOp.dataset.op;
+
+    // ★ Special-layer per-subcategory grid: collect values, drop the legacy
+    //   single-tag `subcategory` field, and set qty=sum so downstream code
+    //   that hasn't been migrated still sees the right total.
+    const _subqInputs = popover.querySelectorAll('.ms-daw-subq-input');
+    if (layer.type === 'special' && _subqInputs.length > 0) {
+      const subQ = {};
+      let total = 0;
+      _subqInputs.forEach(inp => {
+        const name = inp.dataset.subname || '';
+        const v = Math.max(0, parseInt(inp.value, 10) || 0);
+        if (!name) return;
+        if (v > 0) { subQ[name] = v; total += v; }
+      });
+      layer.subQuantities = subQ;
+      layer.qty = Math.max(1, total); // keep ≥1 so legacy paths don't no-op
+      layer.op = '=';                  // exact-N semantics per subcategory
+      delete layer.subcategory;        // superseded by subQuantities
+    } else {
+      const qtyEl = popover.querySelector('#daw-pop-qty');
+      if (qtyEl) layer.qty = parseInt(qtyEl.value) || 1;
+      const activeOp = popover.querySelector('.ms-daw-pop-op[data-op].active');
+      if (activeOp) layer.op = activeOp.dataset.op;
+    }
 
    // Rotation: Bunks Per Day + Times Per Week (all layer types)
     const bpdRaw = (popover.querySelector('#daw-pop-bpd')?.value || '').trim();
