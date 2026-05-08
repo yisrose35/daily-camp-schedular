@@ -1108,16 +1108,39 @@
                 let playoffMatchupSports = null;     // null when not in playoff mode
                 let playoffMatchupFields = null;     // user-chosen field per matchup ('' = auto)
                 let playoffRoundNum = null;
+                let playoffIsTBD = false;            // true when emitting placeholder for an undecided future round
                 const _PM = window.PlayoffMode;
 
                 if (_PM && _PM.isLeagueInPlayoff(league)) {
                     const liveMatchups = _PM.getActiveMatchups(league);
                     if (liveMatchups.length > 0) {
-                        playoffRoundNum = league.playoff.currentRound;
-                        matchups = liveMatchups.map(function (m) { return [m.teamA, m.teamB]; });
-                        playoffMatchupSports = liveMatchups.map(function (m) { return m.sport || null; });
-                        playoffMatchupFields = liveMatchups.map(function (m) { return m.field || ''; });
-                        console.log('   🏆 PLAYOFF Round ' + playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                        if (todayGameIndex === 0) {
+                            playoffRoundNum = league.playoff.currentRound;
+                            matchups = liveMatchups.map(function (m) { return [m.teamA, m.teamB]; });
+                            playoffMatchupSports = liveMatchups.map(function (m) { return m.sport || null; });
+                            playoffMatchupFields = liveMatchups.map(function (m) { return m.field || ''; });
+                            console.log('   🏆 PLAYOFF Round ' + playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                        } else {
+                            // Game 2+ same day: winners not yet known — emit
+                            // placeholder TBD matchups for the forecast next round.
+                            const tbdRoundNum = league.playoff.currentRound + todayGameIndex;
+                            const tbdCount = Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
+                            const sportsPool = liveMatchups
+                                .map(function (m) { return m.sport || null; })
+                                .filter(Boolean);
+                            const fallbackSport = (league.sports && league.sports[0]) || null;
+                            playoffRoundNum = tbdRoundNum;
+                            playoffIsTBD = true;
+                            matchups = [];
+                            playoffMatchupSports = [];
+                            playoffMatchupFields = [];
+                            for (let k = 0; k < tbdCount; k++) {
+                                matchups.push(['TBD', 'TBD']);
+                                playoffMatchupSports.push(sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport);
+                                playoffMatchupFields.push('');
+                            }
+                            console.log('   🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
+                        }
                     } else {
                         console.log('   🏆 PLAYOFF: no active matchups in current round (all decided or all byes) — skipping');
                         continue;
@@ -1252,7 +1275,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
     leagueName: league.name,
     division: leagueDivisions.join(', '),
     activity: playoffRoundNum
-        ? (`${league.name} Playoff R${playoffRoundNum}`)
+        ? (`${league.name} Playoff R${playoffRoundNum}` + (playoffIsTBD ? ' TBD' : ''))
         : (`${league.name} League Game`),
     startMin: _lockStartMin,
     endMin: _lockEndMin
@@ -1263,7 +1286,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
 // exclusively for this league's divisions during the playoff slot, so the
 // auto-scheduler routes the not-playing bunks into them.
 if (playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
-    const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum})`;
+    const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum}` + (playoffIsTBD ? ' TBD)' : ')');
     leagueDivisions.forEach(function (divName) {
         league.playoff.reservedActivities.forEach(function (act) {
             try {
