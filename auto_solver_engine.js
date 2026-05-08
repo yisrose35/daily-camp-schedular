@@ -892,9 +892,83 @@
     // WRITE HELPERS
     // =========================================================================
 
+    // ── HARD WRITE GUARD ────────────────────────────────────────────────
+    // Re-read field rules from live globalSettings on every commit. Each
+    // repair phase has its own pre-parsed candidate and its own validation
+    // path; any one of them being subtly wrong (stale cache, dropped rule
+    // during parse, mismatched division key) lets a rule-violating
+    // placement through. This guard is the single source of truth that
+    // every sa[bunk][slotIdx] = {...} write must pass. It mirrors what the
+    // Step 4.95 safety net checks, so nothing can bypass it.
+    let _writeGuardCache = null;
+    function _getWriteGuardFields() {
+        if (_writeGuardCache) return _writeGuardCache;
+        const gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : {};
+        const map = {};
+        (gs.app1?.fields || []).forEach(f => { if (f && f.name) map[f.name] = f; });
+        _writeGuardCache = map;
+        return map;
+    }
+    function commitWriteIfLegal(bunk, slotIdx, fieldName, sport, grade, startMin, endMin, entry) {
+        if (!window.scheduleAssignments) return false;
+        if (fieldName && fieldName !== 'Free') {
+            const fld = _getWriteGuardFields()[fieldName];
+            if (fld) {
+                // Field-level access restriction
+                if (fld.accessRestrictions && fld.accessRestrictions.enabled === true) {
+                    const divs = fld.accessRestrictions.divisions || {};
+                    if (!(grade in divs)) {
+                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — access');
+                        return false;
+                    }
+                    const bunkList = divs[grade];
+                    if (Array.isArray(bunkList) && bunkList.length > 0
+                        && !bunkList.map(String).includes(String(bunk))) {
+                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — bunk-access');
+                        return false;
+                    }
+                }
+                // Field-level grade-scoped time rules
+                if (Array.isArray(fld.timeRules) && fld.timeRules.length > 0
+                    && startMin != null && endMin != null) {
+                    const myG = grade != null ? String(grade) : null;
+                    const _parseTM = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                    let hasGradeAvail = false, insideAvail = false;
+                    for (const r of fld.timeRules) {
+                        const t = String(r.type || '').toLowerCase();
+                        const isUn = t === 'unavailable' || r.available === false;
+                        const isAv = t === 'available' || r.available === true;
+                        const rs = r.startMin != null ? r.startMin
+                                  : (_parseTM ? _parseTM(r.start || r.startTime) : null);
+                        const re = r.endMin != null ? r.endMin
+                                  : (_parseTM ? _parseTM(r.end || r.endTime) : null);
+                        if (rs == null || re == null || (!isUn && !isAv)) continue;
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && myG && rDivs.indexOf(myG) === -1) continue;
+                        if (isUn && rs < endMin && re > startMin) {
+                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — Unavailable ' + rs + '-' + re);
+                            return false;
+                        }
+                        if (isAv) {
+                            hasGradeAvail = true;
+                            if (startMin >= rs && endMin <= re) insideAvail = true;
+                        }
+                    }
+                    if (hasGradeAvail && !insideAvail) {
+                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + fieldName + ' — outside Available');
+                        return false;
+                    }
+                }
+            }
+        }
+        if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
+        window.scheduleAssignments[bunk][slotIdx] = entry;
+        return true;
+    }
+
     function writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx) {
         if (!window.scheduleAssignments?.[bunk]) return;
-        window.scheduleAssignments[bunk][slotIdx] = {
+        const entry = {
             field: pick.field,
             sport: pick.sport,
             _activity: pick.sport,
@@ -906,6 +980,7 @@
             _division: grade,
             continuation: false
         };
+        if (!commitWriteIfLegal(bunk, slotIdx, pick.field, pick.sport, grade, startMin, endMin, entry)) return;
 
         // Register in fieldUsageBySlot for compatibility with fillers/utils/canBlockFit
         const fubs = window.fieldUsageBySlot || {};
@@ -1162,11 +1237,12 @@
             if (doneToday.has(cand.sportNorm)) continue;
             if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
 
-            sa[fb.bunk][fb.slotIdx] = {
+            const _entry = {
                 field: cand.field, sport: cand.sport, _activity: cand.sport,
                 _autoMode: true, _autoSolved: true, _lnsRepaired: true, continuation: false,
                 _startMin: fb.startMin, _endMin: fb.endMin
             };
+            if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _entry)) continue;
             const fn = normName(cand.field);
             if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
             fieldIndex.get(fn).push({
@@ -1253,12 +1329,16 @@
 
                     // ── Commit the swap ──────────────────────────────────────
                     // 1. Move victim to its new field/sport
-                    sa[victim.bunk][victim.slotIdx] = {
+                    const _vEntry = {
                         field: victimNewCand.field, sport: victimNewCand.sport,
                         _activity: victimNewCand.sport,
                         _autoMode: true, _autoSolved: true, _lnsSwapped: true, continuation: false,
                         _startMin: victim.startMin, _endMin: victim.endMin
                     };
+                    if (!commitWriteIfLegal(victim.bunk, victim.slotIdx, victimNewCand.field, victimNewCand.sport, victim.grade, victim.startMin, victim.endMin, _vEntry)) {
+                        fieldIndex.set(fn, origEntries);
+                        continue;
+                    }
                     const vcFn = normName(victimNewCand.field);
                     if (!fieldIndex.has(vcFn)) fieldIndex.set(vcFn, []);
                     fieldIndex.get(vcFn).push({
@@ -1268,11 +1348,16 @@
                     });
 
                     // 2. Place FB in the now-vacated spot on cand's field
-                    sa[fb.bunk][fb.slotIdx] = {
+                    const _fbEntry = {
                         field: cand.field, sport: cand.sport, _activity: cand.sport,
                         _autoMode: true, _autoSolved: true, _lnsRepaired: true, continuation: false,
                         _startMin: fb.startMin, _endMin: fb.endMin
                     };
+                    if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _fbEntry)) {
+                        // Roll back victim move (unlikely path — both sides validated upstream)
+                        fieldIndex.set(fn, origEntries);
+                        continue;
+                    }
                     if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
                     fieldIndex.get(fn).push({
                         startMin: fb.startMin, endMin: fb.endMin,
@@ -1355,11 +1440,12 @@
                 if (doneToday.has(cand.sportNorm)) continue;
 
                 // Place it — co-locate with the existing occupant(s)
-                sa[fb.bunk][fb.slotIdx] = {
+                const _coEntry = {
                     field: cand.field, sport: cand.sport, _activity: cand.sport,
                     _autoMode: true, _autoSolved: true, _colocated: true, continuation: false,
                     _startMin: fb.startMin, _endMin: fb.endMin
                 };
+                if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _coEntry)) continue;
                 if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
                 fieldIndex.get(fn).push({
                     startMin: fb.startMin, endMin: fb.endMin,
@@ -1574,11 +1660,12 @@
             const { victim, newCand, sourceFn } = chain[i];
 
             if (sa[victim.bunk]) {
-                sa[victim.bunk][victim.slotIdx] = {
+                const _vEntry = {
                     field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
                     _autoMode: true, _autoSolved: true, _ejected: true, continuation: false,
                     _startMin: victim.startMin, _endMin: victim.endMin
                 };
+                commitWriteIfLegal(victim.bunk, victim.slotIdx, newCand.field, newCand.sport, victim.grade, victim.startMin, victim.endMin, _vEntry);
             }
 
             // Remove victim from source field in index
@@ -1600,11 +1687,12 @@
 
         // Place FB in the now-vacated field
         if (sa[fb.bunk]) {
-            sa[fb.bunk][fb.slotIdx] = {
+            const _fbEntry = {
                 field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
                 _autoMode: true, _autoSolved: true, _ejectionChainFilled: true, continuation: false,
                 _startMin: fb.startMin, _endMin: fb.endMin
             };
+            commitWriteIfLegal(fb.bunk, fb.slotIdx, fbCand.field, fbCand.sport, fb.grade, fb.startMin, fb.endMin, _fbEntry);
         }
         const fbFn = fbCand.fieldNorm;
         if (!fieldIndex.has(fbFn)) fieldIndex.set(fbFn, []);
@@ -1878,11 +1966,12 @@
 
                     // Commit
                     if (!sa[fb.bunk]) sa[fb.bunk] = [];
-                    sa[fb.bunk][fb.slotIdx] = {
+                    const _bfsEntry = {
                         field: cand.field, sport: cand.sport, _activity: cand.sport,
                         _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
                         _startMin: fb.startMin, _endMin: fb.endMin
                     };
+                    if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _bfsEntry)) continue;
                     const fn = cand.fieldNorm;
                     if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
                     fieldIndex.get(fn).push({ startMin: fb.startMin, endMin: fb.endMin, bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx, activity: cand.sportNorm });
@@ -1997,11 +2086,14 @@
 
                             // Move victim to newCand
                             if (sa[victim.bunk]) {
-                                sa[victim.bunk][victim.slotIdx] = {
+                                const _bvEntry = {
                                     field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
                                     _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
                                     _startMin: victim.startMin, _endMin: victim.endMin
                                 };
+                                if (!commitWriteIfLegal(victim.bunk, victim.slotIdx, newCand.field, newCand.sport, victim.grade, victim.startMin, victim.endMin, _bvEntry)) {
+                                    continue;
+                                }
                             }
 
                             // Update field index: remove victim from old field, add to new
@@ -2031,11 +2123,12 @@
 
                             // Fill FB
                             if (!sa[fb.bunk]) sa[fb.bunk] = [];
-                            sa[fb.bunk][fb.slotIdx] = {
+                            const _bfsAugEntry = {
                                 field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
                                 _autoMode: true, _autoSolved: true, _bfsRepaired: true, continuation: false,
                                 _startMin: fb.startMin, _endMin: fb.endMin
                             };
+                            if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, fbCand.field, fbCand.sport, fb.grade, fb.startMin, fb.endMin, _bfsAugEntry)) continue;
                             const fbFn = fbCand.fieldNorm;
                             if (!fieldIndex.has(fbFn)) fieldIndex.set(fbFn, []);
                             fieldIndex.get(fbFn).push({ startMin: fb.startMin, endMin: fb.endMin, bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx, activity: fbCand.sportNorm });
