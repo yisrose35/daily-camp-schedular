@@ -648,10 +648,9 @@
                     <p>Configure leagues, teams, standings, and game results.</p>
                   </div>
                   <button id="leagues-playoff-hub-btn" type="button" title="Open the dedicated Playoff Hub"
-                    style="background:linear-gradient(135deg,#147D91,#0F6E80); color:#fff; border:none; border-radius:8px;
-                           padding:10px 16px; font-size:0.85rem; font-weight:700; cursor:pointer; white-space:nowrap;
-                           box-shadow:0 4px 12px rgba(20,125,145,0.25);">
-                    🏆 Playoff Hub
+                    style="background:#0F172A; color:#fff; border:none; border-radius:8px;
+                           padding:10px 18px; font-size:0.85rem; font-weight:700; cursor:pointer; white-space:nowrap;">
+                    Playoff Hub
                   </button>
                 </div>
 
