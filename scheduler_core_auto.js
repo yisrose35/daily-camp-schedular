@@ -13266,6 +13266,70 @@
         // Refresh debug exposure with final post-2.78 state.
         try { window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines)); } catch (_e) {}
 
+        // ★ Shared placement validator used by all Step 2.7 writers.
+        //   Returns null if the placement is allowed, otherwise a short
+        //   reason string. Mirrors the Step 4.95 safety net so the same
+        //   rules apply at write time too — bad placements never reach
+        //   scheduleAssignments in the first place.
+        const _stepRules_gs = getGlobalSettings();
+        const _stepRules_fields = (_stepRules_gs.app1?.fields || []);
+        const _stepRules_specials = (_stepRules_gs.app1?.specialActivities || []);
+        const _stepRules_byField = {};
+        _stepRules_fields.forEach(f => { if (f && f.name) _stepRules_byField[f.name] = f; });
+        const _stepRules_bySpecial = {};
+        _stepRules_specials.forEach(s => { if (s && s.name) _stepRules_bySpecial[s.name] = s; });
+        function _validateWritePlacement(fieldName, activityName, grade, bunk, startMin, endMin) {
+            if (!fieldName || fieldName === 'Free') return null;
+
+            // Field-level access restriction
+            const fld = _stepRules_byField[fieldName];
+            if (fld?.accessRestrictions?.enabled === true) {
+                const divs = fld.accessRestrictions.divisions || {};
+                if (!(grade in divs)) return 'field access: grade not allowed';
+                const bunkList = divs[grade];
+                if (Array.isArray(bunkList) && bunkList.length > 0
+                    && !bunkList.map(String).includes(String(bunk))) return 'field access: bunk not in allowed list';
+            }
+
+            // Field-level grade-scoped time rules
+            if (fld && Array.isArray(fld.timeRules) && fld.timeRules.length > 0
+                && startMin != null && endMin != null) {
+                const myG = grade != null ? String(grade) : null;
+                let hasGradeAvail = false, insideAvail = false;
+                for (const r of fld.timeRules) {
+                    const t = String(r.type || '').toLowerCase();
+                    const isUnavail = t === 'unavailable' || r.available === false;
+                    const isAvail = t === 'available' || r.available === true;
+                    const rs = r.startMin ?? parseTimeToMinutes(r.start || r.startTime);
+                    const re = r.endMin ?? parseTimeToMinutes(r.end || r.endTime);
+                    if (rs == null || re == null || (!isAvail && !isUnavail)) continue;
+                    const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                    if (rDivs.length > 0 && myG && !rDivs.includes(myG)) continue;
+                    if (isUnavail && rs < endMin && re > startMin) return 'field timeRules: overlapping Unavailable rule';
+                    if (isAvail) {
+                        hasGradeAvail = true;
+                        if (startMin >= rs && endMin <= re) insideAvail = true;
+                    }
+                }
+                if (hasGradeAvail && !insideAvail) return 'field timeRules: outside Available windows';
+            }
+
+            // Special-level access restriction
+            if (activityName && _stepRules_bySpecial[activityName]) {
+                const sp = _stepRules_bySpecial[activityName];
+                if (sp?.accessRestrictions?.enabled === true) {
+                    const divs = sp.accessRestrictions.divisions || {};
+                    if (!(grade in divs)) return 'special access: grade not allowed';
+                    const bunkList = divs[grade];
+                    if (Array.isArray(bunkList) && bunkList.length > 0
+                        && !bunkList.map(String).includes(String(bunk))) return 'special access: bunk not in allowed list';
+                }
+            }
+
+            return null;
+        }
+        const _stepRulesBlocked = []; // diagnostic accumulator
+
         // Initialize scheduleAssignments
         allGrades.forEach(grade => {
             const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
@@ -13286,6 +13350,11 @@
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1) return;
                     const fn = block._specialLocation || block._assignedSpecial;
+                    const _why = _validateWritePlacement(fn, block._assignedSpecial, grade, bunk, block.startMin, block.endMin);
+                    if (_why) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _why });
+                        return;
+                    }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: fn, sport: null, _activity: block._assignedSpecial,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
@@ -13400,6 +13469,12 @@
                 (bunkTimelines[bunk] || []).filter(b => b && b._rotationEventId).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1) return;
+                    const _reFn = block._rotationEventLocation || block.event;
+                    const _why = _validateWritePlacement(_reFn, block.event, grade, bunk, block.startMin, block.endMin);
+                    if (_why) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: _reFn, activity: block.event, reason: 'rotation-event-write: ' + _why });
+                        return;
+                    }
                    window.scheduleAssignments[String(bunk)][idx] = {
                         field: block._rotationEventLocation || block.event,
                         sport: null,
@@ -13494,10 +13569,16 @@
                             }
                         }
 
+                        const _pcAct = isCustom ? (block._customActivity || block.event) : block.event;
+                        const _pcWhy = _validateWritePlacement(resolvedField, _pcAct, grade, bunk, block.startMin, block.endMin);
+                        if (_pcWhy) {
+                            _stepRulesBlocked.push({ bunk, grade, idx, fieldName: resolvedField, activity: _pcAct, reason: (isCustom ? 'custom-write: ' : 'pinned-write: ') + _pcWhy });
+                            return;
+                        }
                         window.scheduleAssignments[String(bunk)][idx] = {
                             field: resolvedField,
                             sport: resolvedSport,
-                            _activity: isCustom ? (block._customActivity || block.event) : block.event,
+                            _activity: _pcAct,
                             _fixed: true, _pinned: block._classification === 'pinned',
                             _bunkOverride: true, _activityLocked: isCustom || false,
                             _customActivity: block._customActivity || null,
@@ -13542,6 +13623,11 @@
                 ).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1 || !window.scheduleAssignments[String(bunk)] || window.scheduleAssignments[String(bunk)][idx]) return;
+                    const _why = _validateWritePlacement(block.field, block._assignedSport, grade, bunk, block.startMin, block.endMin);
+                    if (_why) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: block.field, activity: block._assignedSport, reason: 'capacity-checked-write: ' + _why });
+                        return;
+                    }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: block.field, sport: block._assignedSport,
                         _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
@@ -13567,6 +13653,13 @@
                 (bunkTimelines[bunk] || []).filter(b => b._activityLocked && b._committed && !b._assignedSpecial && !(b._fixed || b._classification === 'pinned')).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
+                    // For anchor blocks the "field" is the event name itself (Lunch, Swim, …);
+                    // only validate when it really is a configured field/special location.
+                    const _aWhy = _validateWritePlacement(block.event, block.event, grade, bunk, block.startMin, block.endMin);
+                    if (_aWhy) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: block.event, activity: block.event, reason: 'anchor-write: ' + _aWhy });
+                        return;
+                    }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: block.event, sport: null, _activity: block.event,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
@@ -13583,6 +13676,14 @@
         window._preGenClearActive = false;
 
         log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom, ' + rotationEventWriteCount + ' rotation events');
+        if (_stepRulesBlocked.length > 0) {
+            warn('[2.7] 🚫 Blocked ' + _stepRulesBlocked.length + ' rule-violating write(s) at the source:');
+            _stepRulesBlocked.forEach(v => {
+                warn('  - ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                    + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason);
+            });
+            warnings.push({ type: 'write_blocked', count: _stepRulesBlocked.length, items: _stepRulesBlocked });
+        }
 
         // ★ v4.0: Sync auto locks → GlobalFieldLocks so downstream code (fillers, post-edit, canBlockFit) sees them
         if (window.AutoFieldLocks?.syncToGlobalFieldLocks) {
@@ -14608,17 +14709,23 @@
                     violations.forEach(v => {
                         warn('  - ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
                             + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason);
-                        // Replace with Free so the user sees the gap rather than a violation
+                        // Replace with Free so the user sees the gap rather than a violation.
+                        // _fixed:true keeps the cleaning durable across saves — without it,
+                        // saveCurrentDailyData strips Free entries to null, which can let
+                        // downstream code (pinned restore, post-edit fillers) re-fill them
+                        // with the same bad placement that just got cleared.
                         if (window.scheduleAssignments[String(v.bunk)]) {
                             window.scheduleAssignments[String(v.bunk)][v.idx] = {
                                 field: 'Free', sport: null, _activity: 'Free',
-                                _autoMode: true, _ruleViolationCleared: true,
+                                _autoMode: true, _fixed: true, _ruleViolationCleared: true,
                                 _violationReason: v.reason,
                                 continuation: false
                             };
                         }
                     });
                     warnings.push({ type: 'rule_violations', count: violations.length, items: violations });
+                    // Force a render so the user sees the cleaned grid right away
+                    try { if (typeof window.updateTable === 'function') window.updateTable(); } catch (_e) {}
                 } else {
                     log('[STEP 4.95] ✅ All placements pass field/special access + time rules');
                 }
