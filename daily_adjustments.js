@@ -3064,9 +3064,9 @@ function addDropListeners(gridEl) {
             name: 'subcategory',
             label: 'Subcategory',
             type: 'select',
-            options: [{ value: '', label: '— Any —' }].concat(
-              _subOptions.map(s => ({ value: s, label: s }))
-            ),
+            options: [{ value: '', label: '— Any —' }]
+              .concat(_subOptions.map(s => ({ value: s, label: s })))
+              .concat([{ value: '__add_new__', label: '+ New subcategory…' }]),
             default: ''
           }];
         }
@@ -3077,7 +3077,25 @@ function addDropListeners(gridEl) {
             ...subcategoryField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
-          ]
+          ],
+          postRender: (overlay) => {
+            const sel = overlay.querySelector('select[data-field="subcategory"]');
+            if (!sel) return;
+            sel.addEventListener('change', () => {
+              if (sel.value !== '__add_new__') return;
+              const newName = (window.prompt('New subcategory name (e.g. Food, Theme):') || '').trim();
+              if (!newName) { sel.value = ''; return; }
+              if (typeof window.addSpecialSubcategory === 'function') window.addSpecialSubcategory(newName);
+              const addOpt = sel.querySelector('option[value="__add_new__"]');
+              const exists = Array.from(sel.options).some(o => o.value.toLowerCase() === newName.toLowerCase());
+              if (!exists) {
+                const opt = document.createElement('option');
+                opt.value = newName; opt.textContent = newName;
+                sel.insertBefore(opt, addOpt);
+              }
+              sel.value = newName;
+            });
+          }
         });
         if (!result || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
@@ -3087,7 +3105,7 @@ function addDropListeners(gridEl) {
           id: Date.now().toString(), type: finalType, event: name, division: divName,
           startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
-        if (tileData.type === 'special' && result.subcategory) {
+        if (tileData.type === 'special' && result.subcategory && result.subcategory !== '__add_new__') {
           newEvent.subcategory = String(result.subcategory).trim();
         }
       }

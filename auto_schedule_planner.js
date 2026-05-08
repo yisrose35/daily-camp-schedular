@@ -833,6 +833,7 @@ function openPopover(layerId, bandEl) {
       var sel = (s === _curSub) ? ' selected' : '';
       _subOpts += '<option value="' + s.replace(/"/g, '&quot;') + '"' + sel + '>' + s + '</option>';
     });
+    _subOpts += '<option value="__add_new__">+ New subcategory…</option>';
     html += '<div class="al-pop-field">' +
       '<label class="al-pop-label">Subcategory</label>' +
       '<div class="al-pop-row">' +
@@ -976,6 +977,27 @@ function openPopover(layerId, bandEl) {
     this.querySelector('#al-pin-label').textContent = this.classList.contains('active')
       ? 'Pinned \u2014 Exact Time' : 'Flexible \u2014 Scheduler Places';
   };
+
+  // Subcategory: handle "+ New subcategory…" inline-add option
+  var subSel = popoverEl.querySelector('#al-pop-subcategory');
+  if (subSel) {
+    subSel.addEventListener('change', function() {
+      if (this.value !== '__add_new__') return;
+      var name = (window.prompt('New subcategory name (e.g. Food, Theme):') || '').trim();
+      if (!name) { this.value = layer.subcategory || ''; return; }
+      if (typeof window.addSpecialSubcategory === 'function') window.addSpecialSubcategory(name);
+      // Insert option just before the "+ New" entry, then select it.
+      var addOpt = this.querySelector('option[value="__add_new__"]');
+      var existing = Array.from(this.options).find(function(o){ return o.value.toLowerCase() === name.toLowerCase(); });
+      if (!existing) {
+        var opt = document.createElement('option');
+        opt.value = name; opt.textContent = name;
+        this.insertBefore(opt, addOpt);
+      }
+      this.value = name;
+      layer.subcategory = name;
+    });
+  }
 
   // Delete
   popoverEl.querySelector('#al-pop-delete').onclick = function() { deleteLayer(layerId); };

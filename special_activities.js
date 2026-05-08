@@ -548,6 +548,35 @@ function renderDetailPane() {
 // =========================================================================
 // Subcategories let the user split "Special Activity" into named buckets
 // (e.g. "Food", "Theme") so a layer can demand 1-of-each. Empty = "Regular".
+// Persistent user-defined subcategories (so a name stays even if no special
+// is tagged with it yet). Merged with tags found on existing specials.
+const SUBCAT_REGISTRY_KEY = 'specialSubcategoryRegistry_v1';
+function loadSubcategoryRegistry() {
+    try {
+        const raw = localStorage.getItem(SUBCAT_REGISTRY_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
+    } catch { return []; }
+}
+function saveSubcategoryRegistry(list) {
+    try { localStorage.setItem(SUBCAT_REGISTRY_KEY, JSON.stringify(list || [])); } catch {}
+}
+function addSubcategory(name) {
+    const v = (typeof name === 'string') ? name.trim() : '';
+    if (!v) return false;
+    const reg = loadSubcategoryRegistry();
+    if (reg.some(r => r.toLowerCase() === v.toLowerCase())) return false;
+    reg.push(v);
+    saveSubcategoryRegistry(reg);
+    return true;
+}
+function removeSubcategory(name) {
+    const v = (typeof name === 'string') ? name.trim().toLowerCase() : '';
+    if (!v) return;
+    const reg = loadSubcategoryRegistry().filter(r => r.toLowerCase() !== v);
+    saveSubcategoryRegistry(reg);
+}
+
 function getAllSubcategories() {
     const seen = new Set();
     const out = [];
@@ -559,11 +588,14 @@ function getAllSubcategories() {
         seen.add(key);
         out.push(v);
     };
+    loadSubcategoryRegistry().forEach(push);
     (specialActivities || []).forEach(a => push(a?.subcategory));
     (rainyDayActivities || []).forEach(a => push(a?.subcategory));
     return out.sort((a, b) => a.localeCompare(b));
 }
 window.getSpecialSubcategories = getAllSubcategories;
+window.addSpecialSubcategory = addSubcategory;
+window.removeSpecialSubcategory = removeSubcategory;
 
 function summarySubcategory(item) {
     const v = (typeof item.subcategory === 'string') ? item.subcategory.trim() : '';
