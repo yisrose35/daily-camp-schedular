@@ -23,6 +23,36 @@ let selectedTileId = null;
 let builderMode = 'manual';
 let hasUnsavedChanges = false;
 
+// Returns the first enabled league assigned to `grade`, or null. Used to
+// auto-remap league/specialty_league tiles when copied/dragged into a
+// different grade so they don't keep referencing the source grade's league.
+function _mbFirstLeagueForGrade(grade) {
+  const _gs = window.loadGlobalSettings?.() || {};
+  const lbn = _gs.leaguesByName || {};
+  const matches = Object.keys(lbn).filter(n =>
+    lbn[n] && lbn[n].enabled !== false &&
+    Array.isArray(lbn[n].divisions) &&
+    lbn[n].divisions.includes(String(grade))
+  );
+  return matches[0] || null;
+}
+
+// Mutates a copied event so its league reference matches the new grade.
+// No-op for non-league events. If the target grade has no league, clears
+// leagueName + reverts event label so the schedule remains valid.
+function _mbRemapLeagueForGrade(ev, newGrade) {
+  if (!ev || (ev.type !== 'league' && ev.type !== 'specialty_league')) return ev;
+  const newLeague = _mbFirstLeagueForGrade(newGrade);
+  if (newLeague) {
+    if (ev.leagueName && ev.event === ev.leagueName) ev.event = newLeague;
+    ev.leagueName = newLeague;
+  } else {
+    delete ev.leagueName;
+    if (ev.event && ev.event !== 'League Game') ev.event = 'League Game';
+  }
+  return ev;
+}
+
 function _mbIsBackToBack(ev) {
   if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
   const parseT = typeof parseTimeToMinutes === 'function' ? parseTimeToMinutes : window.SchedulerCoreUtils?.parseTimeToMinutes;
@@ -543,14 +573,18 @@ function showCopyGradeModal(skeleton, onApply) {
     // Remove existing events for target divisions
     let updated = skeleton.filter(ev => !selectedTargets.has(ev.division));
 
-    // Copy source events to each target
+    // Copy source events to each target. Remap league references so a
+    // league tile copied into a new grade lands on a league assigned to
+    // THAT grade — not the source grade's league.
     selectedTargets.forEach(targetDiv => {
       sourceEvents.forEach(ev => {
-        updated.push({
+        const _copy = {
           ...JSON.parse(JSON.stringify(ev)),
           division: targetDiv,
           id: 'evt_' + Math.random().toString(36).slice(2, 9)
-        });
+        };
+        _mbRemapLeagueForGrade(_copy, targetDiv);
+        updated.push(_copy);
       });
     });
 
@@ -1012,12 +1046,18 @@ async function editTile(id) {
     ];
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
-      const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
-      if (_leagueNames.length > 0) {
+      const _lbn = _gs.leaguesByName || {};
+      // Only show leagues assigned to this event's grade. No auto-pick.
+      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
+        _lbn[ln] && _lbn[ln].enabled !== false &&
+        Array.isArray(_lbn[ln].divisions) &&
+        _lbn[ln].divisions.includes(String(ev.division))
+      );
+      if (_gradeLeagues.length > 0) {
         modalFields.splice(1, 0, {
-          name: 'leagueName', label: 'Which League?', type: 'select',
-          options: [{ value: '', label: '— Any League (auto) —' }].concat(_leagueNames.map(ln => ({ value: ln, label: ln }))),
-          default: ev.leagueName || ''
+          name: 'leagueName', label: 'Which League? (required)', type: 'select',
+          options: [{ value: '', label: '— Choose a league —' }].concat(_gradeLeagues.map(ln => ({ value: ln, label: ln }))),
+          default: _gradeLeagues.includes(ev.leagueName) ? ev.leagueName : (_gradeLeagues.length === 1 ? _gradeLeagues[0] : '')
         });
       }
     }
@@ -3281,7 +3321,12 @@ function addDropListeners(selector) {
         const newEnd = minutesToTime(cellStartMin + snapMin + duration);
 
         if (divName !== event.division) {
-          dailySkeleton.push({ ...event, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: divName, startTime: newStart, endTime: newEnd });
+          // Cross-grade drop. Clone the event, retarget the division, and
+          // remap any league reference to one assigned to the new grade so
+          // it doesn't keep pointing at the source grade's league.
+          const _crossEv = { ...event, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: divName, startTime: newStart, endTime: newEnd };
+          _mbRemapLeagueForGrade(_crossEv, divName);
+          dailySkeleton.push(_crossEv);
         } else {
           event.startTime = newStart;
           event.endTime = newEnd;
@@ -3682,21 +3727,32 @@ function addDropListeners(selector) {
         else if (tileData.type === 'specialty_league') { name = "Specialty League"; finalType = 'specialty_league'; }
         
         // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker for league tiles ★★★
+        // ★ Filter to leagues assigned to THIS grade only and require an
+        //   explicit selection — auto-pick was removed per spec.
         let leaguePickerField = [];
         if (tileData.type === 'league') {
           const _gs = window.loadGlobalSettings?.() || {};
           const _lbn = _gs.leaguesByName || {};
-          const _leagueNames = Object.keys(_lbn).filter(ln => _lbn[ln] && _lbn[ln].enabled !== false);
-          if (_leagueNames.length > 0) {
+          const _gradeLeagues = Object.keys(_lbn).filter(ln =>
+            _lbn[ln] && _lbn[ln].enabled !== false &&
+            Array.isArray(_lbn[ln].divisions) &&
+            _lbn[ln].divisions.includes(String(divName))
+          );
+          if (_gradeLeagues.length > 0) {
             leaguePickerField = [{
               name: 'leagueName',
-              label: 'Which League?',
+              label: 'Which League? (required)',
               type: 'select',
-              options: [{ value: '', label: '— Any League (auto) —' }].concat(
-                _leagueNames.map(ln => ({ value: ln, label: ln }))
+              options: [{ value: '', label: '— Choose a league —' }].concat(
+                _gradeLeagues.map(ln => ({ value: ln, label: ln }))
               ),
-              default: ''
+              default: _gradeLeagues.length === 1 ? _gradeLeagues[0] : ''
             }];
+          } else {
+            // No leagues configured for this grade — block the drop with a
+            // visible alert rather than creating an unresolvable league tile.
+            await showAlert('No leagues are assigned to ' + divName + '. Add this grade to a league in League Setup before dropping a league tile here.');
+            return;
           }
         }
 
@@ -3746,6 +3802,12 @@ function addDropListeners(selector) {
           }
         });
         if (!result) return;
+
+        // ★ Require an explicit league selection for league tiles.
+        if (finalType === 'league' && leaguePickerField.length > 0 && !result.leagueName) {
+          await showAlert('Please choose a league before dropping the tile.');
+          return;
+        }
 
         newEvent = {
           id: Date.now().toString(),
