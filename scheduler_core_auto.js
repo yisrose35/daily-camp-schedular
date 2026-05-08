@@ -14856,6 +14856,28 @@
                         const eMin = original._endMin;
                         const isSportPlacement = v.activity && !_bySpecial[v.activity];
 
+                        // ★ DIAGNOSTIC: which writer left this violation behind?
+                        //   Each writer stamps a different flag on the entry; surfacing
+                        //   them here points at the path that bypassed the rule gates.
+                        const _srcFlags = [];
+                        if (original._autoSolved) _srcFlags.push('autoSolved');
+                        if (original._bfsRepaired) _srcFlags.push('bfsRepaired');
+                        if (original._lnsRepaired) _srcFlags.push('lnsRepaired');
+                        if (original._lnsSwapped) _srcFlags.push('lnsSwapped');
+                        if (original._ejected) _srcFlags.push('ejected');
+                        if (original._ejectionChainFilled) _srcFlags.push('ejectionChainFilled');
+                        if (original._colocated) _srcFlags.push('colocated');
+                        if (original._capacityChecked) _srcFlags.push('capacityChecked');
+                        if (original._perfectionExtend) _srcFlags.push('perfectionExtend');
+                        if (original._bunkOverride) _srcFlags.push('bunkOverride');
+                        if (original._pinned) _srcFlags.push('pinned');
+                        if (original._restoredAt) _srcFlags.push('pinRestored');
+                        if (original._activityLocked) _srcFlags.push('activityLocked');
+                        if (original._fixed) _srcFlags.push('fixed');
+                        if (original.continuation) _srcFlags.push('continuation');
+                        if (original._fromSplitTile) _srcFlags.push('fromSplitTile');
+                        v._srcFlags = _srcFlags.length ? _srcFlags.join('+') : '(no flags)';
+
                         // For real sports we try to relocate to a valid field
                         // before clearing. Specials/anchors keep their original
                         // semantics (location is part of the activity), so they
@@ -14875,7 +14897,8 @@
                             };
                             rescuedCount++;
                             warn('  ↪ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
-                                + v.activity + ' relocated ' + v.fieldName + ' → ' + resolved);
+                                + v.activity + ' relocated ' + v.fieldName + ' → ' + resolved
+                                + ' [src: ' + v._srcFlags + ']');
                         } else {
                             // Replace with Free. _fixed:true keeps the cleaning
                             // durable: saveCurrentDailyData strips non-_fixed
@@ -14891,7 +14914,7 @@
                             clearedCount++;
                             warn('  ✗ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
                                 + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason
-                                + ' (no valid alternative — cleared)');
+                                + ' (no valid alternative — cleared) [src: ' + v._srcFlags + ']');
                         }
                     });
                     log('[STEP 4.95] Rescued ' + rescuedCount + ', cleared ' + clearedCount);
