@@ -14505,6 +14505,128 @@
             }
         }
 
+        // =====================================================================
+        // STEP 4.95 — RULES SAFETY NET (final pass)
+        // =====================================================================
+        // Belt-and-suspenders: scan every written assignment one more time
+        // against the current field/special accessRestrictions and per-grade
+        // timeRules. Any placement that violates a rule is cleared to Free
+        // and logged. This catches every code path we may have missed (older
+        // pre-allocators, cached pinned blocks, third-party patchers) so the
+        // schedule the user sees never contains a known violation.
+        (function rulesSafetyNet() {
+            try {
+                const _gs = getGlobalSettings();
+                const _allFields = _gs.app1?.fields || [];
+                const _allSpecials = _gs.app1?.specialActivities || [];
+                const _byField = {};
+                _allFields.forEach(f => { if (f && f.name) _byField[f.name] = f; });
+                const _bySpecial = {};
+                _allSpecials.forEach(s => { if (s && s.name) _bySpecial[s.name] = s; });
+
+                const violations = [];
+
+                function checkAccess(rules, grade, bunk) {
+                    if (!rules || rules.enabled !== true) return null;
+                    const divs = rules.divisions || {};
+                    if (!(grade in divs)) return 'grade not allowed';
+                    const bunkList = divs[grade];
+                    if (Array.isArray(bunkList) && bunkList.length > 0
+                        && !bunkList.map(String).includes(String(bunk))) return 'bunk not in allowed list';
+                    return null;
+                }
+
+                function checkTimeRules(rawRules, grade, sMin, eMin) {
+                    if (!Array.isArray(rawRules) || rawRules.length === 0) return null;
+                    const myG = grade != null ? String(grade) : null;
+                    let hasGradeAvail = false, insideAvail = false;
+                    for (const r of rawRules) {
+                        const t = String(r.type || '').toLowerCase();
+                        const isUnavail = t === 'unavailable' || r.available === false;
+                        const isAvail = t === 'available' || r.available === true;
+                        const rs = r.startMin ?? parseTimeToMinutes(r.start || r.startTime);
+                        const re = r.endMin ?? parseTimeToMinutes(r.end || r.endTime);
+                        if (rs == null || re == null || (!isAvail && !isUnavail)) continue;
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && myG && !rDivs.includes(myG)) continue;
+                        if (isUnavail && rs < eMin && re > sMin) return 'overlapping Unavailable rule';
+                        if (isAvail) {
+                            hasGradeAvail = true;
+                            if (sMin >= rs && eMin <= re) insideAvail = true;
+                        }
+                    }
+                    if (hasGradeAvail && !insideAvail) return 'outside Available windows';
+                    return null;
+                }
+
+                allGrades.forEach(grade => {
+                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const slotsArr = window.scheduleAssignments?.[String(bunk)] || [];
+                        const pbsArr = pbs?.[String(bunk)] || [];
+                        slotsArr.forEach((entry, idx) => {
+                            if (!entry || entry.continuation || entry._isTransition) return;
+                            const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                            if (!fieldName || fieldName === 'Free') return;
+                            const slotMeta = pbsArr[idx] || {};
+                            const sMin = entry._startMin ?? slotMeta.startMin;
+                            const eMin = entry._endMin ?? slotMeta.endMin;
+
+                            // Field-level accessRestrictions + timeRules
+                            const fld = _byField[fieldName];
+                            if (fld) {
+                                const r1 = checkAccess(fld.accessRestrictions, grade, bunk);
+                                if (r1) {
+                                    violations.push({ bunk, grade, idx, fieldName, activity: entry._activity, reason: 'field access: ' + r1 });
+                                    return;
+                                }
+                                if (sMin != null && eMin != null) {
+                                    const r2 = checkTimeRules(fld.timeRules, grade, sMin, eMin);
+                                    if (r2) {
+                                        violations.push({ bunk, grade, idx, fieldName, activity: entry._activity, reason: 'field timeRules: ' + r2 });
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // Special-level accessRestrictions (when activity is a configured special)
+                            const actName = entry._activity;
+                            if (actName && _bySpecial[actName]) {
+                                const sp = _bySpecial[actName];
+                                const r3 = checkAccess(sp.accessRestrictions, grade, bunk);
+                                if (r3) {
+                                    violations.push({ bunk, grade, idx, fieldName, activity: actName, reason: 'special access: ' + r3 });
+                                    return;
+                                }
+                            }
+                        });
+                    });
+                });
+
+                if (violations.length > 0) {
+                    warn('[STEP 4.95] 🚫 Rule-safety net cleared ' + violations.length + ' bad placement(s):');
+                    violations.forEach(v => {
+                        warn('  - ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                            + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason);
+                        // Replace with Free so the user sees the gap rather than a violation
+                        if (window.scheduleAssignments[String(v.bunk)]) {
+                            window.scheduleAssignments[String(v.bunk)][v.idx] = {
+                                field: 'Free', sport: null, _activity: 'Free',
+                                _autoMode: true, _ruleViolationCleared: true,
+                                _violationReason: v.reason,
+                                continuation: false
+                            };
+                        }
+                    });
+                    warnings.push({ type: 'rule_violations', count: violations.length, items: violations });
+                } else {
+                    log('[STEP 4.95] ✅ All placements pass field/special access + time rules');
+                }
+            } catch (sErr) {
+                warn('[STEP 4.95] safety net error: ' + sErr.message);
+            }
+        })();
+
         // STEP 5 — SAVE
         // =====================================================================
         saveSwimHistory();
