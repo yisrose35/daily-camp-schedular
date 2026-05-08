@@ -125,12 +125,9 @@
                 console.log('[DivTimesIntegration] ⏭️ Auto mode — full bypass (no manual skeleton)');
                 return false;
             }
-            if (window._divisionTimesLocked && _hasManualSkeleton) {
-                // Defensive: never trample a locked divisionTimes even if a manual
-                // skeleton snuck in. Tell the caller and abort.
-                console.warn('[DivTimesIntegration] ⏭️ divisionTimes locked — skipping manual run');
-                return false;
-            }
+            // Note: a non-empty manual skeleton always proceeds — even if
+            // _divisionTimesLocked is set from a prior auto run. The lock flag
+            // can persist across runs and would otherwise wedge the manual path.
 
             // ★ AUTO BUILD: divisionTimes already built by AutoBuildPrep — skip rebuild
             if (window._autoBuildRunActive) {
