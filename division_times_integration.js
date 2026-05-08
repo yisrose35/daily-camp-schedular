@@ -255,13 +255,48 @@
         const originalSaveCurrentDailyData = window.saveCurrentDailyData;
 
         if (typeof originalSaveCurrentDailyData === 'function') {
+            // ★ v4.1: Debounced auto-persist of _perBunkSlotsData on every edit so
+            // post-build resizes / daily adjustments / post-edits keep their geometry
+            // across reload (Step 5 build save isn't the only path that can change it).
+            let _pbsPersistTimer = null;
+            function _schedulePerBunkSlotsPersist() {
+                if (_pbsPersistTimer) return; // already queued
+                _pbsPersistTimer = setTimeout(function() {
+                    _pbsPersistTimer = null;
+                    try {
+                        const dt = window.divisionTimes || {};
+                        const hasLivePerBunk = Object.values(dt).some(function(d) { return d && d._isPerBunk && d._perBunkSlots; });
+                        if (!hasLivePerBunk) return;
+                        const spbs = {};
+                        Object.keys(dt).forEach(function(g) {
+                            if (dt[g]?._perBunkSlots) spbs[g] = dt[g]._perBunkSlots;
+                        });
+                        originalSaveCurrentDailyData.call(window, '_perBunkSlotsData', spbs);
+                    } catch (e) {
+                        console.warn('[DivTimesIntegration] _perBunkSlotsData persist failed:', e);
+                    }
+                }, 250);
+            }
+
             window.saveCurrentDailyData = function(key, value) {
                 // If saving full data, include divisionTimes
                 if (key === undefined && typeof value === 'object') {
                     value.divisionTimes = window.DivisionTimesSystem?.serialize(window.divisionTimes) || {};
+                    // Also include _perBunkSlotsData so geometry survives reload
+                    const dt = window.divisionTimes || {};
+                    const spbs = {};
+                    Object.keys(dt).forEach(function(g) {
+                        if (dt[g]?._perBunkSlots) spbs[g] = dt[g]._perBunkSlots;
+                    });
+                    if (Object.keys(spbs).length > 0) value._perBunkSlotsData = spbs;
                 }
-                
-                return originalSaveCurrentDailyData.call(this, key, value);
+
+                const ret = originalSaveCurrentDailyData.call(this, key, value);
+
+                // Don't recurse when we're the ones writing _perBunkSlotsData
+                if (key !== '_perBunkSlotsData') _schedulePerBunkSlotsPersist();
+
+                return ret;
             };
         }
 
