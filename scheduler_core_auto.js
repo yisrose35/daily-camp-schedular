@@ -2669,6 +2669,25 @@
             const specialLayer = specialNeeds[0]?.layer || null;
             const specialConstraints = specialLayer ? resolveConstraints(specialLayer, 'special') : { dMin: 20, dMax: 60, dIdeal: 35 };
 
+            // ★ Per-subcategory caps. Each special layer can be tagged with a
+            //   subcategory ("Food", "Theme", etc); specials carry the same tag.
+            //   Sum demand per subcategory so the planner can fill exactly the
+            //   requested mix (e.g. 1 Regular + 1 Food + 1 Theme). Empty key
+            //   ('') = "Regular". Subcategories normalized to lowercase here so
+            //   case-insensitive matching at pick time is one lookup.
+            //   _hasSubcategoryTags = true means subcategory enforcement is on.
+            const specialSubcategoryCap = {};
+            let _hasSubcategoryTags = false;
+            specialNeeds.forEach(n => {
+                const subRaw = (n.layer && typeof n.layer.subcategory === 'string') ? n.layer.subcategory.trim() : '';
+                const subKey = subRaw.toLowerCase();
+                if (subRaw) _hasSubcategoryTags = true;
+                const c = (n.cap === Infinity) ? Infinity : (n.cap || 0);
+                specialSubcategoryCap[subKey] = (specialSubcategoryCap[subKey] === Infinity || c === Infinity)
+                    ? Infinity
+                    : ((specialSubcategoryCap[subKey] || 0) + c);
+            });
+
             const specialPriorityList = [];
             todaysSpecials.forEach(s => {
                 if (!isSpecialAvailableForBunk(s.name, grade, bunk, globalSettings)) return;
@@ -2794,7 +2813,10 @@
                     totalDuration: (specificDuration || specialConstraints.dIdeal) + effectivePrepDur,
                     timeWindow, _linkedPair: prepAttached && prepDuration > 0,
                     _flexPrep: (!prepAttached && prepDuration > 0) ? { duration: prepDuration, location: prepCfgEntry.location || null, sync: prepCfgEntry.sync || 'staggered' } : null,
-                    _layer: specialLayer
+                    _layer: specialLayer,
+                    // ★ Subcategory tag (e.g. "Food", "Theme"). Empty = "Regular".
+                    //   Used to filter against per-layer subcategory restrictions.
+                    subcategory: (typeof s.subcategory === 'string' ? s.subcategory.trim() : '')
                 });
             });
            specialPriorityList.sort((a, b) => { if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1; return a.rotationScore - b.rotationScore; });
@@ -2839,7 +2861,7 @@
             return {
                 bunk, grade, bunkSize, freeWindows, totalFree: freeWindows.reduce((s, w) => s + w.duration, 0),
                 sports: { required: sportCount, cap: sportCap, priorityList: sportPriorityList, layer: sportLayer, constraints: sportConstraints },
-                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints },
+                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints, subcategoryCap: specialSubcategoryCap, subcategoryEnforced: _hasSubcategoryTags },
                 snack: snackOptions, elective: electiveInfo, genericNeeds, adjacentBunk
             };
         }
@@ -2870,9 +2892,33 @@
             allBunkList.forEach(list => {
                 draftResults[list.bunk] = {
                     sports: [], specials: [], elective: [], generic: [],
-                    usedActivities: new Set(), grade: list.grade
+                    usedActivities: new Set(), grade: list.grade,
+                    // ★ Per-subcategory tally for special activities.
+                    //   Mirrors sl.specials.subcategoryCap structure.
+                    subcategoryAssigned: {}
                 };
             });
+
+            // ★ Gate: returns false if `special` belongs to a subcategory that
+            //   is either not demanded by any layer or already at its cap on
+            //   this bunk. Returns true when no subcategory enforcement is on
+            //   for this bunk (legacy / no tags), or when there is remaining
+            //   demand for this special's subcategory.
+            function _canPickSpecialBySubcategory(special, sl, result) {
+                if (!sl?.specials?.subcategoryEnforced) return true;
+                const caps = sl.specials.subcategoryCap || {};
+                const subKey = (typeof special.subcategory === 'string' ? special.subcategory : '').trim().toLowerCase();
+                const cap = caps[subKey];
+                if (cap == null) return false; // subcategory not demanded by any layer
+                if (cap === Infinity) return true;
+                const used = (result.subcategoryAssigned && result.subcategoryAssigned[subKey]) || 0;
+                return used < cap;
+            }
+            function _markSpecialSubcategoryAssigned(special, result) {
+                const subKey = (typeof special.subcategory === 'string' ? special.subcategory : '').trim().toLowerCase();
+                if (!result.subcategoryAssigned) result.subcategoryAssigned = {};
+                result.subcategoryAssigned[subKey] = (result.subcategoryAssigned[subKey] || 0) + 1;
+            }
 
             const globalSpecialUsage = {};
             const globalFieldClaims = [];
@@ -3097,6 +3143,11 @@
                             if (result.usedActivities.has(specialInfo.name)) {
                                 queue.shift(); continue;
                             }
+                            // ★ Subcategory gate: skip when this special's
+                            //   subcategory has no remaining demand.
+                            if (!_canPickSpecialBySubcategory(specialInfo, sl, result)) {
+                                queue.shift(); continue;
+                            }
 
                             var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                             var dur = specialInfo.duration;
@@ -3134,9 +3185,11 @@
                                 isIndoor: fullItem.isIndoor, prepDuration: fullItem.prepDuration,
                                 totalDuration: fullItem.totalDuration, timeWindow: fullItem.timeWindow,
                                 _linkedPair: fullItem._linkedPair, _layer: fullItem._layer,
+                                subcategory: fullItem.subcategory || '',
                                 claimedTime: time, claimedField: specialInfo.location
                             });
                             result.usedActivities.add(specialInfo.name);
+                            _markSpecialSubcategoryAssigned(fullItem, result);
                             anyLeft = true;
                             break; // next grade (round-robin)
                         }
@@ -3158,6 +3211,8 @@
                     if (result.specials.length >= cap) break;
                     var special = priorityList[i];
                     if (result.usedActivities.has(special.name)) continue;
+                    // ★ Subcategory gate (fallback path)
+                    if (!_canPickSpecialBySubcategory(special, sl, result)) continue;
 
                     var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     var dur = special.totalDuration || special.dMin || 30;
@@ -3175,9 +3230,11 @@
                         isIndoor: special.isIndoor, prepDuration: special.prepDuration,
                         totalDuration: special.totalDuration, timeWindow: special.timeWindow,
                         _linkedPair: special._linkedPair, _layer: special._layer,
+                        subcategory: special.subcategory || '',
                         claimedTime: time, claimedField: special.location
                     });
                     result.usedActivities.add(special.name);
+                    _markSpecialSubcategoryAssigned(special, result);
                 }
             });
 

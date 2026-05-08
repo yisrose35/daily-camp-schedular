@@ -3515,16 +3515,35 @@ function addDropListeners(selector) {
           }
         }
 
+        // ★ Subcategory picker for Special Activity blocks. Lets the user
+        //   tag this block "Food" / "Theme" / etc so the scheduler will only
+        //   fill it with a matching special. Empty = any special.
+        let subcategoryField = [];
+        if (tileData.type === 'special') {
+          const _subOptions = (typeof window.getSpecialSubcategories === 'function')
+            ? window.getSpecialSubcategories() : [];
+          subcategoryField = [{
+            name: 'subcategory',
+            label: 'Subcategory',
+            type: 'select',
+            options: [{ value: '', label: '— Any —' }].concat(
+              _subOptions.map(s => ({ value: s, label: s }))
+            ),
+            default: ''
+          }];
+        }
+
         const result = await showModal({
           title: name,
           fields: [
             ...leaguePickerField,
+            ...subcategoryField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
           ]
         });
         if (!result) return;
-        
+
         newEvent = {
           id: Date.now().toString(),
           type: finalType,
@@ -3533,6 +3552,11 @@ function addDropListeners(selector) {
           startTime: result.startTime,
           endTime: result.endTime
         };
+
+        // ★ Persist subcategory tag so the scheduler can filter specials.
+        if (tileData.type === 'special' && result.subcategory) {
+          newEvent.subcategory = String(result.subcategory).trim();
+        }
 
         // ★★★ MULTIPLE LEAGUE SUPPORT: Store selected league name ★★★
         if (finalType === 'league' && result.leagueName) {

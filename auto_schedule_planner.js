@@ -229,6 +229,8 @@ function importSkeletonFromMasterBuilder() {
       operator: isPinned ? '=' : '\u2265', quantity: 1,
       grade: block.division, pinExact: isPinned,
       timesPerWeek: null, weeklyOp: '\u2265', bunksPerDay: null,
+      // \u2605 Carry block subcategory tag (Special Activity blocks only)
+      ...(block.subcategory ? { subcategory: String(block.subcategory).trim() } : {}),
       _importedFrom: tmplName
     });
   });
@@ -597,7 +599,9 @@ function setupDropZones(dayStart) {
         pinExact: tile.fixed || false,
         timesPerWeek: null,
         weeklyOp: '\u2265',
-        bunksPerDay: null
+        bunksPerDay: null,
+        // \u2605 Special layers may carry a subcategory tag (set in popover).
+        subcategory: tile.type === 'special' ? '' : undefined
       });
       hasChanges = true; selectedLayerId = layers[layers.length - 1].id;
       saveDraftLayers(); render();
@@ -819,6 +823,25 @@ function openPopover(layerId, bandEl) {
     '<div class="al-pop-hint">\u2265 at least \u00B7 \u2264 at most \u00B7 = exactly this many per day</div>' +
     '</div>';
 
+  // ── Subcategory picker (Special Activity only) ──
+  if (layer.type === 'special') {
+    const _subOptions = (typeof window.getSpecialSubcategories === 'function')
+      ? window.getSpecialSubcategories() : [];
+    const _curSub = (typeof layer.subcategory === 'string') ? layer.subcategory : '';
+    let _subOpts = '<option value="" ' + (_curSub === '' ? 'selected' : '') + '>— Any —</option>';
+    _subOptions.forEach(function(s) {
+      var sel = (s === _curSub) ? ' selected' : '';
+      _subOpts += '<option value="' + s.replace(/"/g, '&quot;') + '"' + sel + '>' + s + '</option>';
+    });
+    html += '<div class="al-pop-field">' +
+      '<label class="al-pop-label">Subcategory</label>' +
+      '<div class="al-pop-row">' +
+        '<select class="al-pop-input" id="al-pop-subcategory" style="min-width:160px;">' + _subOpts + '</select>' +
+      '</div>' +
+      '<div class="al-pop-hint">Restrict this layer to specials in one bucket (e.g. "Food"). Leave blank for any.</div>' +
+      '</div>';
+  }
+
   html += '<div class="al-pop-field">' +
     '<label class="al-pop-label">Pin Time</label>' +
     '<div class="al-pop-row">' +
@@ -986,6 +1009,12 @@ function openPopover(layerId, bandEl) {
     layer.timesPerWeek = weekQtyVal;
     layer.weeklyOp = weekQtyVal != null ? wopVal : '\u2265';
     layer.bunksPerDay = bpdVal;
+
+    // \u2605 Subcategory tag for Special layers
+    if (layer.type === 'special') {
+      var subEl = popoverEl.querySelector('#al-pop-subcategory');
+      layer.subcategory = subEl ? String(subEl.value || '').trim() : '';
+    }
 
     // Grade Mode
     var activeGmode = popoverEl.querySelector('.al-pop-toggle[data-gmode].active');

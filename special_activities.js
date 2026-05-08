@@ -153,8 +153,14 @@ function validateSpecialActivity(activity, activityName) {
         else isIndoor = true;
     }
 
+    // ★ Subcategory: user-defined grouping inside "Special Activity" type
+    //   (e.g. "Food", "Theme"). Empty string = "Regular" (default bucket).
+    //   Trimmed; canonical case preserved as the user typed it.
+    const _subcategoryRaw = (typeof activity.subcategory === 'string') ? activity.subcategory.trim() : '';
+
     return {
         name: activity.name || activityName || 'Unknown', type: 'Special', available: activity.available !== false,
+        subcategory: _subcategoryRaw,
         sharableWith, accessRestrictions, timeRules,
         maxUsage: (() => { if (activity.maxUsage == null || activity.maxUsage === "") return null; const p = parseInt(activity.maxUsage, 10); return (!isNaN(p) && p > 0) ? p : null; })(),
         maxUsagePeriod: activity.maxUsagePeriod || 'half',
@@ -225,7 +231,7 @@ function validateSpecialActivity(activity, activityName) {
 }
 
 function createDefaultActivity(name) {
-    return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+    return { name, type: 'Special', subcategory: '', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
@@ -502,6 +508,7 @@ function renderDetailPane() {
 
     // ── WHO ───────────────────────────────────────────────────────────────────
     detailPaneEl.appendChild(sectionGroup('Who', [
+        section('Subcategory', summarySubcategory(item), () => renderSubcategory(item)),
         section('Grade Access', summaryAccess(item), () => renderAccess(item))
     ]));
 
@@ -535,6 +542,104 @@ function renderDetailPane() {
 }
    
 
+
+// =========================================================================
+// SUBCATEGORY HELPERS
+// =========================================================================
+// Subcategories let the user split "Special Activity" into named buckets
+// (e.g. "Food", "Theme") so a layer can demand 1-of-each. Empty = "Regular".
+function getAllSubcategories() {
+    const seen = new Set();
+    const out = [];
+    const push = (s) => {
+        const v = (typeof s === 'string') ? s.trim() : '';
+        if (!v) return;
+        const key = v.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(v);
+    };
+    (specialActivities || []).forEach(a => push(a?.subcategory));
+    (rainyDayActivities || []).forEach(a => push(a?.subcategory));
+    return out.sort((a, b) => a.localeCompare(b));
+}
+window.getSpecialSubcategories = getAllSubcategories;
+
+function summarySubcategory(item) {
+    const v = (typeof item.subcategory === 'string') ? item.subcategory.trim() : '';
+    return v ? v : 'Regular';
+}
+
+function renderSubcategory(item) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:4px;';
+    desc.textContent = 'Group this special into a bucket (e.g. "Food", "Theme"). Layers can then demand a specific count per bucket. Leave blank = "Regular".';
+    wrap.appendChild(desc);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+
+    const dl = document.createElement('datalist');
+    const dlId = 'sa-subcat-list';
+    dl.id = dlId;
+    getAllSubcategories().forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        dl.appendChild(opt);
+    });
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Regular';
+    input.value = (typeof item.subcategory === 'string') ? item.subcategory : '';
+    input.setAttribute('list', dlId);
+    input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; min-width:200px;';
+    input.addEventListener('change', () => {
+        const v = (input.value || '').trim();
+        if ((item.subcategory || '') === v) return;
+        item.subcategory = v;
+        saveData();
+        renderMasterList();
+        renderRainyDayList();
+        renderDetailPane();
+    });
+
+    row.appendChild(input);
+    row.appendChild(dl);
+    wrap.appendChild(row);
+
+    // Existing buckets (clickable to select)
+    const existing = getAllSubcategories();
+    if (existing.length > 0) {
+        const chips = document.createElement('div');
+        chips.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;';
+        const label = document.createElement('span');
+        label.style.cssText = 'font-size:0.75rem; color:#6B7280; margin-right:4px;';
+        label.textContent = 'Existing:';
+        chips.appendChild(label);
+        existing.forEach(name => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.textContent = name;
+            const isCur = (item.subcategory || '').trim().toLowerCase() === name.toLowerCase();
+            chip.style.cssText = 'padding:3px 10px; border-radius:12px; border:1px solid ' + (isCur ? '#147D91' : '#D1D5DB') + '; background:' + (isCur ? '#e6f4f7' : '#fff') + '; color:' + (isCur ? '#0A4A56' : '#111827') + '; font-size:0.78rem; cursor:pointer;';
+            chip.onclick = () => {
+                item.subcategory = isCur ? '' : name; // toggle off if already set
+                saveData();
+                renderMasterList();
+                renderRainyDayList();
+                renderDetailPane();
+            };
+            chips.appendChild(chip);
+        });
+        wrap.appendChild(chips);
+    }
+
+    return wrap;
+}
 
 // =========================================================================
 // SUMMARY HELPERS

@@ -2164,7 +2164,10 @@ function daConvertSkeletonToLayers(skeleton) {
           operator: isPinned ? '=' : '\u2265',
           quantity: 1,
           grade: block.division,
-          pinExact: isPinned
+          pinExact: isPinned,
+          // \u2605 Pass the block's subcategory tag through so the auto-builder
+          //   can filter the priority list to matching specials.
+          ...(block.subcategory ? { subcategory: String(block.subcategory).trim() } : {})
       });
   });
 
@@ -3051,9 +3054,27 @@ function addDropListeners(gridEl) {
         else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
         else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
         if (!name) return;
+
+        // ★ Subcategory picker for Special Activity blocks
+        let subcategoryField = [];
+        if (tileData.type === 'special') {
+          const _subOptions = (typeof window.getSpecialSubcategories === 'function')
+            ? window.getSpecialSubcategories() : [];
+          subcategoryField = [{
+            name: 'subcategory',
+            label: 'Subcategory',
+            type: 'select',
+            options: [{ value: '', label: '— Any —' }].concat(
+              _subOptions.map(s => ({ value: s, label: s }))
+            ),
+            default: ''
+          }];
+        }
+
         const result = await daShowModal({
           title: name + ' for ' + divName,
           fields: [
+            ...subcategoryField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
           ]
@@ -3066,6 +3087,9 @@ function addDropListeners(gridEl) {
           id: Date.now().toString(), type: finalType, event: name, division: divName,
           startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
+        if (tileData.type === 'special' && result.subcategory) {
+          newEvent.subcategory = String(result.subcategory).trim();
+        }
       }
       
       if (newEvent) {
