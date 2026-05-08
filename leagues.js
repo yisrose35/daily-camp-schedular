@@ -641,12 +641,18 @@
         contentWrapper.innerHTML = `
             <div class="setup-grid">
               <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
-                <div class="setup-card-header" style="margin-bottom:20px;">
+                <div class="setup-card-header" style="margin-bottom:20px; display:flex; align-items:flex-start; gap:12px;">
                   <span class="setup-step-pill">Leagues</span>
-                  <div class="setup-card-text">
+                  <div class="setup-card-text" style="flex:1;">
                     <h3>Manage Leagues</h3>
                     <p>Configure leagues, teams, standings, and game results.</p>
                   </div>
+                  <button id="leagues-playoff-hub-btn" type="button" title="Open the dedicated Playoff Hub"
+                    style="background:linear-gradient(135deg,#147D91,#0F6E80); color:#fff; border:none; border-radius:8px;
+                           padding:10px 16px; font-size:0.85rem; font-weight:700; cursor:pointer; white-space:nowrap;
+                           box-shadow:0 4px 12px rgba(20,125,145,0.25);">
+                    🏆 Playoff Hub
+                  </button>
                 </div>
 
                 <div style="display:flex; flex-wrap:wrap; gap:24px;">
@@ -676,6 +682,18 @@
 
         // ★ FIX: Null check all DOM elements
         listEl = document.getElementById('leagues-master-list');
+
+        // Wire the Playoff Hub button to launch the dedicated overlay UI.
+        var _hubBtn = document.getElementById('leagues-playoff-hub-btn');
+        if (_hubBtn) {
+            _hubBtn.onclick = function () {
+                if (window.PlayoffHub && typeof window.PlayoffHub.open === 'function') {
+                    window.PlayoffHub.open();
+                } else {
+                    alert('Playoff Hub not loaded.');
+                }
+            };
+        }
         detailPaneEl = document.getElementById('leagues-detail-pane');
         const addInput = document.getElementById('league-add-input');
         const addBtn = document.getElementById('league-add-btn');
