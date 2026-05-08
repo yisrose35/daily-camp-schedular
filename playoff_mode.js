@@ -100,6 +100,7 @@
                 seedA: seedA,
                 seedB: seedB,
                 sport: '',
+                field: '',
                 winner: winner,
                 isBye: (teamA === 'BYE' || teamB === 'BYE')
             });
@@ -131,6 +132,7 @@
                 seedA: seedA,
                 seedB: seedB,
                 sport: '',
+                field: '',
                 winner: winner,
                 isBye: (!a || !b)
             });
@@ -169,6 +171,7 @@
                 seedA: seedRank[teamA] || null,
                 seedB: seedRank[teamB] || null,
                 sport: '',
+                field: '',
                 winner: null,
                 isBye: false
             });
@@ -183,6 +186,7 @@
                 seedA: seedRank[sorted[lo]] || null,
                 seedB: null,
                 sport: '',
+                field: '',
                 winner: sorted[lo],
                 isBye: true
             });
@@ -756,7 +760,12 @@
         });
         sportSel.onchange = function () {
             m.sport = sportSel.value;
+            // Field is sport-specific — clear it when sport changes so a
+            // stale incompatible field doesn't get scheduled.
+            if (m.field && !_fieldSupportsSport(m.field, m.sport, opts)) m.field = '';
             save();
+            var mount = box.closest('.playoff-mount');
+            if (mount && mount._reRender) mount._reRender();
         };
         sportRow.appendChild(sportSel);
 
@@ -766,9 +775,72 @@
             byeNote.textContent = 'auto-advance';
             sportRow.appendChild(byeNote);
         }
-
         box.appendChild(sportRow);
+
+        // Field dropdown — only fields whose `activities` list includes the
+        // chosen sport. Empty = scheduler auto-picks any compatible field.
+        if (!m.isBye) {
+            var fieldRow = document.createElement('div');
+            fieldRow.className = 'playoff-sport-row';
+
+            var fieldLabel = document.createElement('span');
+            fieldLabel.className = 'playoff-sport-label';
+            fieldLabel.textContent = 'Field:';
+            fieldRow.appendChild(fieldLabel);
+
+            var fieldSel = document.createElement('select');
+            fieldSel.disabled = opts.readOnly || m.isBye || !m.sport;
+
+            var fAuto = document.createElement('option');
+            fAuto.value = '';
+            fAuto.textContent = m.sport ? 'Auto (any compatible field)' : '-- pick sport first --';
+            fieldSel.appendChild(fAuto);
+
+            if (m.sport) {
+                var compat = _fieldsForSport(m.sport, opts);
+                compat.forEach(function (fName) {
+                    var o = document.createElement('option');
+                    o.value = fName;
+                    o.textContent = fName;
+                    if (m.field === fName) o.selected = true;
+                    fieldSel.appendChild(o);
+                });
+                if (compat.length === 0) {
+                    fAuto.textContent = 'No fields support "' + m.sport + '"';
+                }
+            }
+            fieldSel.onchange = function () {
+                m.field = fieldSel.value || '';
+                save();
+            };
+            fieldRow.appendChild(fieldSel);
+
+            box.appendChild(fieldRow);
+        }
+
         return box;
+    }
+
+    // Returns array of field names whose activities include `sport`. Pulls
+    // from opts.getFieldsForSport when provided, otherwise reads
+    // gs.app1.fields. Used by the per-matchup field dropdown.
+    function _fieldsForSport(sport, opts) {
+        if (!sport) return [];
+        if (opts && typeof opts.getFieldsForSport === 'function') {
+            return opts.getFieldsForSport(sport) || [];
+        }
+        try {
+            var gs = (typeof window !== 'undefined' && window.loadGlobalSettings)
+                ? window.loadGlobalSettings() : {};
+            var fields = (gs.app1 && gs.app1.fields) || gs.fields || [];
+            return fields
+                .filter(function (f) { return f && Array.isArray(f.activities) && f.activities.indexOf(sport) >= 0; })
+                .map(function (f) { return f.name; });
+        } catch (_) { return []; }
+    }
+    function _fieldSupportsSport(field, sport, opts) {
+        if (!field || !sport) return false;
+        return _fieldsForSport(sport, opts).indexOf(field) >= 0;
     }
 
     // -------------------------------------------------------------------------

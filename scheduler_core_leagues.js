@@ -1106,6 +1106,7 @@
                 // ★★★ Get matchups — playoff > round-robin ★★★
                 let matchups;
                 let playoffMatchupSports = null;     // null when not in playoff mode
+                let playoffMatchupFields = null;     // user-chosen field per matchup ('' = auto)
                 let playoffRoundNum = null;
                 const _PM = window.PlayoffMode;
 
@@ -1115,6 +1116,7 @@
                         playoffRoundNum = league.playoff.currentRound;
                         matchups = liveMatchups.map(function (m) { return [m.teamA, m.teamB]; });
                         playoffMatchupSports = liveMatchups.map(function (m) { return m.sport || null; });
+                        playoffMatchupFields = liveMatchups.map(function (m) { return m.field || ''; });
                         console.log('   🏆 PLAYOFF Round ' + playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
                     } else {
                         console.log('   🏆 PLAYOFF: no active matchups in current round (all decided or all byes) — skipping');
@@ -1185,14 +1187,28 @@
                         const teamA = Array.isArray(mu) ? mu[0] : mu;
                         const teamB = Array.isArray(mu) ? mu[1] : null;
                         const wantedSport = playoffMatchupSports[i];
+                        const wantedField = (playoffMatchupFields && playoffMatchupFields[i]) || '';
                         if (!teamA || !teamB) return;
                         if (!wantedSport) {
                             console.log('   ⚠️ PLAYOFF: matchup ' + teamA + ' vs ' + teamB + ' has no sport set — skipping');
                             return;
                         }
-                        const candidates = availablePool.filter(function (p) {
+                        // Filter the pool to (sport-matching, field not yet used).
+                        let candidates = availablePool.filter(function (p) {
                             return p.sport === wantedSport && !_poolUsed.has(p.field);
                         });
+                        // ★ If the user chose a specific field for this matchup, prefer it.
+                        //   Fall back to any compatible field if the chosen one is unavailable.
+                        if (wantedField) {
+                            const chosen = candidates.find(function (p) { return p.field === wantedField; });
+                            if (chosen) {
+                                _poolUsed.add(chosen.field);
+                                assignments.push({ team1: teamA, team2: teamB, field: chosen.field, sport: chosen.sport });
+                                return;
+                            }
+                            console.log('   ⚠️ PLAYOFF: chosen field "' + wantedField + '" for ' + teamA + ' vs ' + teamB +
+                                ' is unavailable (in use or doesn\'t support ' + wantedSport + ') — falling back to auto-pick');
+                        }
                         if (candidates.length === 0) {
                             console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')');
                             return;

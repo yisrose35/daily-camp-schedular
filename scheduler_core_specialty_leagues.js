@@ -609,7 +609,18 @@
             let bestField = null;
             let minGames = Infinity;
 
-            for (const field of availableFields) {
+            // ★ Playoff: if this matchup has a user-chosen field, prefer it
+            //   when still under the per-field game cap. Falls through to
+            //   the normal rotation-aware pick if it's not available.
+            if (matchup._playoffField && availableFields.includes(matchup._playoffField)) {
+                const cur = _effectiveGames(matchup._playoffField);
+                if (cur < (gamesPerFieldSlot || 3)) {
+                    bestField = matchup._playoffField;
+                    minGames = cur;
+                }
+            }
+
+            if (!bestField) for (const field of availableFields) {
                 const currentGames = _effectiveGames(field);
                 const maxGames = gamesPerFieldSlot || 3;
 
@@ -794,7 +805,8 @@
                             teamB: m.teamB,
                             conference: null,
                             isInterConference: false,
-                            _playoffSport: m.sport || null
+                            _playoffSport: m.sport || null,
+                            _playoffField: m.field || null
                         };
                     });
                     console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + _playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
