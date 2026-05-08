@@ -3123,6 +3123,13 @@
                             location: special.location,
                             duration: special.totalDuration || special.dMin || 30,
                             isScarce: special.isScarce,
+                            // ★ Carry the subcategory tag so the per-subcategory
+                            //   gate (_canPickSpecialBySubcategory) can match it
+                            //   against the layer's subQuantities cap dict.
+                            //   Without this, every special looks untagged →
+                            //   the gate routes everything into the "regular"
+                            //   bucket, stops after one fill, blocks the rest.
+                            subcategory: special.subcategory || '',
                             specialItem: special
                         };
                     }
