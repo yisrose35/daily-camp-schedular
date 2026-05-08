@@ -33,13 +33,37 @@
     // Persistence
     // -------------------------------------------------------------------------
     function _save() {
+        // ★ Re-bind _league to the LIVE entry in the registry. loadLeaguesData
+        //   creates fresh objects via validateLeague on every focus/sync, so a
+        //   reference held since open() is stale and our mutations on it never
+        //   reach the registry. Look the league back up by name/id and mirror
+        //   the playoff state onto the live object before saving.
         if (_kind === 'specialty') {
             var sl = window.specialtyLeagues || {};
+            var liveS = _league && (sl[_league.id] || sl[_league.name]);
+            if (!liveS) {
+                var keys = Object.keys(sl);
+                for (var i = 0; i < keys.length; i++) {
+                    var cand = sl[keys[i]];
+                    if (cand && (cand.id === (_league && _league.id) || cand.name === (_league && _league.name))) {
+                        liveS = cand; break;
+                    }
+                }
+            }
+            if (liveS && _league && _league.playoff) {
+                liveS.playoff = _league.playoff;
+                _league = liveS;
+            }
             if (typeof window.saveGlobalSettings === 'function') {
                 try { window.saveGlobalSettings('specialtyLeagues', sl); } catch (_) {}
             }
         } else {
             var lbn = window.leaguesByName || {};
+            var liveR = _league && lbn[_league.name];
+            if (liveR && _league.playoff) {
+                liveR.playoff = _league.playoff;
+                _league = liveR;
+            }
             if (typeof window.saveGlobalSettings === 'function') {
                 try { window.saveGlobalSettings('leaguesByName', lbn); } catch (_) {}
             }
