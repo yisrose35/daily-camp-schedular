@@ -2158,10 +2158,281 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
     }
 
     // =========================================================================
+    // TRANSPOSED VIEW (bunks down Y-axis, time across X-axis)
+    // =========================================================================
+
+    var TRANSPOSED_INCREMENT_OPTIONS = [10, 15, 20, 30, 40, 45, 60];
+
+    function _getTransposedIncrement() {
+        try {
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var v = parseInt(gs.scheduleViewIncrement, 10);
+            if (TRANSPOSED_INCREMENT_OPTIONS.indexOf(v) >= 0) return v;
+        } catch (_) {}
+        return 30;
+    }
+
+    function _setTransposedIncrement(val) {
+        try { window.saveGlobalSettings && window.saveGlobalSettings('scheduleViewIncrement', val); }
+        catch (_) {}
+    }
+
+    function _renderIncrementPicker() {
+        var bar = document.createElement('div');
+        bar.className = 'schedule-toolbar';
+        bar.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:12px;font-size:0.85rem;color:#374151;';
+        var label = document.createElement('span');
+        label.textContent = 'Time increment:';
+        label.style.fontWeight = '600';
+        bar.appendChild(label);
+        var sel = document.createElement('select');
+        sel.style.cssText = 'padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;background:#fff;font-family:inherit;';
+        var current = _getTransposedIncrement();
+        TRANSPOSED_INCREMENT_OPTIONS.forEach(function (v) {
+            var opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v + ' min';
+            if (v === current) opt.selected = true;
+            sel.appendChild(opt);
+        });
+        sel.onchange = function () {
+            _setTransposedIncrement(parseInt(sel.value, 10));
+            updateTable();
+        };
+        bar.appendChild(sel);
+        return bar;
+    }
+
+    function _buildTimeColumns(increment) {
+        var allTimes = [];
+        var dt = window.divisionTimes || {};
+        Object.keys(dt).forEach(function (divName) {
+            (dt[divName] || []).forEach(function (s) {
+                if (typeof s.startMin === 'number') allTimes.push(s.startMin);
+                if (typeof s.endMin === 'number') allTimes.push(s.endMin);
+            });
+        });
+        if (allTimes.length === 0) return [];
+        var dayStart = Math.min.apply(null, allTimes);
+        var dayEnd = Math.max.apply(null, allTimes);
+        // Snap dayStart down to a clean increment boundary so columns align nicely.
+        dayStart = Math.floor(dayStart / increment) * increment;
+        var cols = [];
+        for (var t = dayStart; t < dayEnd; t += increment) {
+            cols.push({ startMin: t, endMin: t + increment });
+        }
+        return cols;
+    }
+
+    function _findSlotIndexAtTime(divSlots, colStartMin) {
+        if (!divSlots || divSlots.length === 0) return -1;
+        for (var i = 0; i < divSlots.length; i++) {
+            var s = divSlots[i];
+            if (s.startMin <= colStartMin && s.endMin > colStartMin) return i;
+        }
+        return -1;
+    }
+
+    function renderTransposedView(container) {
+        if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
+        var dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        if (!window._postEditInProgress) loadScheduleForDate(dateKey);
+
+        var skeleton = getSkeleton(dateKey);
+        var divisions = window.divisions || {};
+        var divisionTimes = window.divisionTimes || {};
+
+        console.log('[UnifiedSchedule] RENDER STATE:', {
+            dateKey: dateKey,
+            skeletonBlocks: skeleton.length,
+            divisionTimesCount: Object.keys(divisionTimes).length,
+            scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length,
+            divisionsCount: Object.keys(divisions).length,
+            mode: 'transposed'
+        });
+
+        container.innerHTML = '';
+
+        // Empty-state (mirrors the legacy view's check)
+        if ((!skeleton || skeleton.length === 0) && Object.keys(divisionTimes).length === 0) {
+            container.innerHTML = '<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No daily schedule structure found for this date.</p><p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p></div>';
+            return;
+        }
+
+        // Toolbar with increment picker
+        container.appendChild(_renderIncrementPicker());
+
+        // Resolve & sort divisions
+        var divisionsToShow = Object.keys(divisions);
+        if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
+        var customOrder = (window.loadGlobalSettings ? window.loadGlobalSettings() : {});
+        customOrder = customOrder && customOrder.app1 && customOrder.app1.manualColumnOrder;
+        if (Array.isArray(customOrder) && customOrder.length > 0) {
+            divisionsToShow.sort(function (a, b) {
+                var ai = customOrder.indexOf(a); if (ai < 0) ai = 9999;
+                var bi = customOrder.indexOf(b); if (bi < 0) bi = 9999;
+                return ai - bi;
+            });
+        } else {
+            divisionsToShow.sort(function (a, b) {
+                var na = parseInt(a), nb = parseInt(b);
+                if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                return String(a).localeCompare(String(b));
+            });
+        }
+
+        if (divisionsToShow.length === 0) {
+            container.innerHTML += '<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No divisions configured.</p></div>';
+            return;
+        }
+
+        var increment = _getTransposedIncrement();
+        var timeColumns = _buildTimeColumns(increment);
+        if (timeColumns.length === 0) {
+            container.innerHTML += '<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No time slots available for this date.</p></div>';
+            return;
+        }
+
+        var editableDivisions = (window.AccessControl && window.AccessControl.getEditableDivisions && window.AccessControl.getEditableDivisions()) || divisionsToShow;
+
+        // Build a single big table: columns = bunk + time slots; rows = bunks grouped by division
+        var table = document.createElement('table');
+        table.className = 'schedule-flat-table';
+        table.style.cssText = 'border-collapse: collapse; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; background: #fff; font-size: 0.85rem;';
+
+        // Header
+        var thead = document.createElement('thead');
+        var thr = document.createElement('tr');
+        thr.style.background = '#f3f4f6';
+        var thBunk = document.createElement('th');
+        thBunk.textContent = 'Bunk';
+        thBunk.style.cssText = 'position: sticky; left: 0; z-index: 2; background: #f3f4f6; padding: 10px 12px; font-weight: 700; color: #111827; border-bottom: 2px solid #e5e7eb; min-width: 110px; text-align: left;';
+        thr.appendChild(thBunk);
+        timeColumns.forEach(function (col) {
+            var th = document.createElement('th');
+            th.textContent = minutesToTimeLabel(col.startMin);
+            th.style.cssText = 'padding: 8px 6px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; border-left: 1px solid #e5e7eb; white-space: nowrap; min-width: 78px; font-size: 0.78rem;';
+            thr.appendChild(th);
+        });
+        thead.appendChild(thr);
+        table.appendChild(thead);
+
+        var tbody = document.createElement('tbody');
+
+        divisionsToShow.forEach(function (divName) {
+            if (!shouldShowDivision(divName)) return;
+            var divInfo = divisions[divName];
+            if (!divInfo) return;
+            var bunks = (divInfo.bunks || []).slice().sort(function (a, b) {
+                return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+            });
+            if (bunks.length === 0) return;
+            var divSlots = divisionTimes[divName] || [];
+            var divColor = divInfo.color || '#4b5563';
+            var isEditable = editableDivisions.indexOf(divName) >= 0;
+
+            // Division group header row
+            var ghTr = document.createElement('tr');
+            var ghTd = document.createElement('td');
+            ghTd.colSpan = 1 + timeColumns.length;
+            ghTd.style.cssText = 'background: ' + divColor + '; color: #fff; padding: 8px 12px; font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em;';
+            ghTd.textContent = divName + (isEditable ? '' : ' [LOCKED]');
+            ghTr.appendChild(ghTd);
+            tbody.appendChild(ghTr);
+
+            bunks.forEach(function (bunk, bi) {
+                var tr = document.createElement('tr');
+                tr.style.background = bi % 2 === 0 ? '#fff' : '#fafafa';
+
+                var tdBunk = document.createElement('td');
+                tdBunk.textContent = bunk;
+                tdBunk.style.cssText = 'position: sticky; left: 0; z-index: 1; background: ' + (bi % 2 === 0 ? '#fff' : '#fafafa') + '; padding: 8px 12px; font-weight: 600; color: #1f2937; border-right: 2px solid #e5e7eb; white-space: nowrap;';
+                tr.appendChild(tdBunk);
+
+                // For each time column, find which division slot covers it.
+                // Render once per slot with colspan = number of columns inside that slot.
+                var ci = 0;
+                while (ci < timeColumns.length) {
+                    var col = timeColumns[ci];
+                    var slotIdx = _findSlotIndexAtTime(divSlots, col.startMin);
+                    if (slotIdx < 0) {
+                        // No slot in this division at this time — empty cell.
+                        var emptyTd = document.createElement('td');
+                        emptyTd.style.cssText = 'padding: 6px; border: 1px solid #f1f5f9; background: #fafafa;';
+                        emptyTd.textContent = '';
+                        tr.appendChild(emptyTd);
+                        ci++;
+                        continue;
+                    }
+                    var slot = divSlots[slotIdx];
+                    // Count subsequent columns that fall inside the same slot.
+                    var span = 1;
+                    while (ci + span < timeColumns.length && timeColumns[ci + span].startMin < slot.endMin && timeColumns[ci + span].startMin >= slot.startMin) {
+                        span++;
+                    }
+                    // Build a block object compatible with renderBunkCell.
+                    var blockObj = {
+                        slotIndex: slotIdx,
+                        startMin: slot.startMin,
+                        endMin: slot.endMin,
+                        event: slot.event || 'GA',
+                        type: slot.type || 'slot',
+                        division: divName,
+                        _splitHalf: slot._splitHalf,
+                        _splitParentEvent: slot._splitParentEvent,
+                        _isSplitTile: !!slot._splitHalf,
+                        electiveActivities: slot.electiveActivities,
+                        reservedFields: slot.reservedFields,
+                        location: slot.location,
+                        swimLocation: slot.swimLocation,
+                        _preChangeMin: slot._preChangeMin,
+                        _postChangeMin: slot._postChangeMin
+                    };
+                    var td;
+                    // For league blocks, just show the league name in the bunk's cell —
+                    // the full matchup list can still be seen via the league panel.
+                    if (isLeagueBlockType(blockObj.event, blockObj.type)) {
+                        td = document.createElement('td');
+                        td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb; background: #FEF3C7; font-weight: 600; color: #92400E; font-size: 0.82rem;';
+                        td.innerHTML = '🏆 ' + escapeHtml(blockObj.event || 'League');
+                    } else {
+                        td = renderBunkCell(blockObj, bunk, divName, isEditable);
+                    }
+                    if (span > 1) td.colSpan = span;
+                    tr.appendChild(td);
+                    ci += span;
+                }
+
+                tbody.appendChild(tr);
+            });
+        });
+
+        table.appendChild(tbody);
+
+        var scrollWrap = document.createElement('div');
+        scrollWrap.style.cssText = 'overflow-x: auto; border: 1px solid #e5e7eb; border-radius: 8px;';
+        scrollWrap.appendChild(table);
+        container.appendChild(scrollWrap);
+
+        if (window.MultiSchedulerAutonomous && window.MultiSchedulerAutonomous.applyBlockingToGrid) {
+            setTimeout(function () { window.MultiSchedulerAutonomous.applyBlockingToGrid(); }, 50);
+        }
+        window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey: dateKey } }));
+    }
+
+    // =========================================================================
     // MAIN RENDER FUNCTION
     // =========================================================================
 
+    // Legacy per-division stacked view, retained as fallback. The default
+    // entry point now delegates to renderTransposedView (bunks down Y-axis,
+    // time across X-axis). To force the legacy layout, call _renderStaggeredView.
     function renderStaggeredView(container) {
+        if (!container) container = document.getElementById('scheduleTable');
+        return renderTransposedView(container);
+    }
+
+    function _renderStaggeredViewLegacy(container) {
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         if (!window._postEditInProgress) loadScheduleForDate(dateKey);
@@ -2823,7 +3094,7 @@ if (bypassStatus.highlight) {
             _renderQueued = false; 
             if (_renderTimeout) { clearTimeout(_renderTimeout); _renderTimeout = null; }
             const container = document.getElementById('scheduleTable');
-            if (container) renderStaggeredView(container);
+            if (container) renderTransposedView(container);
             return;
         }
         if (now - _lastRenderTime < RENDER_DEBOUNCE_MS) {
@@ -2834,14 +3105,14 @@ if (bypassStatus.highlight) {
                     _renderQueued = false; 
                     _lastRenderTime = Date.now(); 
                     const container = document.getElementById('scheduleTable'); 
-                    if (container) renderStaggeredView(container); 
+                    if (container) renderTransposedView(container); 
                 }, RENDER_DEBOUNCE_MS); 
             }
             return;
         }
         _lastRenderTime = now;
         const container = document.getElementById('scheduleTable');
-        if (container) renderStaggeredView(container);
+        if (container) renderTransposedView(container);
     }
 
     // =========================================================================
