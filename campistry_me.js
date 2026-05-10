@@ -850,30 +850,58 @@ function moveDivision(name,dir){
     _saveDivisionOrder(keys);
     render(curPage);
 }
+function _commitStructureReorder(){
+    // Read DOM and rebuild structure objects in the new order.
+    var listEl=document.getElementById('meDivList');
+    if(!listEl)return;
+    listEl.querySelectorAll('.me-div-card').forEach(function(card){
+        var divName=card.getAttribute('data-div');
+        if(!divName||!structure[divName])return;
+        var divColor=structure[divName].color;
+        var newGrades={};
+        card.querySelectorAll('.me-grade-block').forEach(function(gBlock){
+            var gn=gBlock.getAttribute('data-grade');
+            if(!gn||!structure[divName].grades||!structure[divName].grades[gn])return;
+            var newBunks=Array.prototype.map.call(gBlock.querySelectorAll('.me-card-bunk'),function(c){return c.getAttribute('data-bunk')||c.textContent.trim()}).filter(Boolean);
+            newGrades[gn]={bunks:newBunks};
+        });
+        structure[divName]={color:divColor,grades:newGrades};
+    });
+    save();
+}
+
 function renderStructure(){
     var c=document.getElementById('page-structure'),divs=_sortedDivisions();
     var h='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
     if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure.</p></div>'}
     else{
-        h+='<div id="meDivList">';
+        h+='<div id="meDivList"><div style="font-size:.72rem;color:var(--s400);margin-bottom:8px">Drag the ⋮⋮ handles or any chip to reorder divisions, grades, and bunks in place.</div>';
         divs.forEach(function([dn,dd],ix){
-            var grades=Object.entries(dd.grades||{}).sort(function(a,b){return a[0].localeCompare(b[0],undefined,{numeric:true})});
+            // Honor stored insertion order (drag-reorders preserve it).
+            var grades=Object.entries(dd.grades||{});
             var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
             var col=dd.color||'#94A3B8';
             var upDis=ix===0?' disabled':'';
             var dnDis=ix===divs.length-1?' disabled':'';
             h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px">'
-                +'<span class="me-grip" title="Drag to reorder" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
+                +'<span class="me-grip me-div-grip" title="Drag to reorder division" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
                 +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px;align-items:center">'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move up"'+upDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',-1)" style="padding:4px 8px">↑</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+dnDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',1)" style="padding:4px 8px">↓</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
                 +'</div></div>';
-            h+='<div style="padding:14px 18px">';
+            h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
             grades.forEach(function([gn,gd]){
-                h+='<div style="margin-bottom:10px"><div style="font-size:.8rem;font-weight:600;color:var(--s700);margin-bottom:4px">'+esc(gn)+'</div><div style="display:flex;flex-wrap:wrap;gap:4px">';
-                (gd.bunks||[]).forEach(function(b){h+='<span style="padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600)">'+esc(b)+'</span>'});
+                h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:10px;padding:6px 8px;border:1px dashed transparent;border-radius:6px">'
+                    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+                        +'<span class="me-grip me-grade-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:.85rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
+                        +'<div style="font-size:.8rem;font-weight:600;color:var(--s700)">'+esc(gn)+'</div>'
+                    +'</div>'
+                    +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:4px;padding-left:18px">';
+                (gd.bunks||[]).forEach(function(b){
+                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'+esc(b)+'</span>';
+                });
                 h+='</div></div>';
             });
             h+='</div></div>';
@@ -890,21 +918,47 @@ function renderStructure(){
             card.addEventListener('dragend',function(){
                 var newOrder=Array.prototype.map.call(listEl.querySelectorAll('.me-div-card'),function(el){return el.getAttribute('data-div')});
                 _saveDivisionOrder(newOrder);
+                _commitStructureReorder();
                 render(curPage);
+            });
+        });
+        // Wire drag-drop on grade blocks within each division card
+        listEl.querySelectorAll('.me-grade-list').forEach(function(gradeList){
+            _meReorderInit(gradeList,'.me-grade-block');
+            gradeList.querySelectorAll('.me-grade-block').forEach(function(gBlock){
+                _meAttachItemDrag(gBlock);
+                gBlock.addEventListener('dragend',function(){
+                    _commitStructureReorder();
+                    render(curPage);
+                });
+            });
+        });
+        // Wire drag-drop on bunk chips within each grade block
+        listEl.querySelectorAll('.me-card-bunks').forEach(function(bunkRow){
+            _meHorizontalReorderInit(bunkRow,'.me-card-bunk');
+            bunkRow.querySelectorAll('.me-card-bunk').forEach(function(chip){
+                _meAttachItemDrag(chip);
+                chip.addEventListener('dragend',function(){
+                    _commitStructureReorder();
+                    render(curPage);
+                });
             });
         });
     }
 }
 
-// ── Drag-drop helper for grade & bunk lists in the division modal ──
+// ── Drag-drop helpers ──
+// Containers scope dragover handling to direct children matching childSelector,
+// so nested draggables (e.g. bunk chip inside a grade block inside a division
+// card) reorder within their own list without bubbling up to the parent list.
 function _meReorderInit(containerEl,childSelector){
     if(!containerEl||containerEl._meDragInit)return;
     containerEl._meDragInit=true;
     containerEl.addEventListener('dragover',function(e){
+        var dragging=containerEl.querySelector(':scope > .me-dragging');
+        if(!dragging||!dragging.matches(childSelector))return;
         e.preventDefault();e.dataTransfer.dropEffect='move';
-        var dragging=containerEl.querySelector('.me-dragging');
-        if(!dragging)return;
-        var siblings=Array.prototype.slice.call(containerEl.querySelectorAll(childSelector)).filter(function(el){return el!==dragging});
+        var siblings=Array.prototype.slice.call(containerEl.children).filter(function(el){return el!==dragging&&el.matches(childSelector)});
         var nextSibling=siblings.find(function(sib){
             var box=sib.getBoundingClientRect();
             return e.clientY<box.top+box.height/2;
@@ -916,10 +970,10 @@ function _meHorizontalReorderInit(containerEl,childSelector){
     if(!containerEl||containerEl._meDragInit)return;
     containerEl._meDragInit=true;
     containerEl.addEventListener('dragover',function(e){
+        var dragging=containerEl.querySelector(':scope > .me-dragging');
+        if(!dragging||!dragging.matches(childSelector))return;
         e.preventDefault();e.dataTransfer.dropEffect='move';
-        var dragging=containerEl.querySelector('.me-dragging');
-        if(!dragging)return;
-        var siblings=Array.prototype.slice.call(containerEl.querySelectorAll(childSelector)).filter(function(el){return el!==dragging});
+        var siblings=Array.prototype.slice.call(containerEl.children).filter(function(el){return el!==dragging&&el.matches(childSelector)});
         var nextSibling=siblings.find(function(sib){
             var box=sib.getBoundingClientRect();
             return e.clientX<box.left+box.width/2;
@@ -931,8 +985,15 @@ function _meAttachItemDrag(itemEl){
     if(!itemEl||itemEl._meItemDragInit)return;
     itemEl._meItemDragInit=true;
     itemEl.draggable=true;
-    itemEl.addEventListener('dragstart',function(){itemEl.classList.add('me-dragging')});
-    itemEl.addEventListener('dragend',function(){itemEl.classList.remove('me-dragging')});
+    itemEl.addEventListener('dragstart',function(e){
+        e.stopPropagation();
+        itemEl.classList.add('me-dragging');
+        try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','reorder')}catch(_){}
+    });
+    itemEl.addEventListener('dragend',function(e){
+        e.stopPropagation();
+        itemEl.classList.remove('me-dragging');
+    });
 }
 
 function _renderBunkChipsHTML(bunks){
