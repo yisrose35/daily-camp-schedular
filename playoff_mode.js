@@ -74,10 +74,66 @@
     // From a seedOrder array (1-indexed by position), produce Round-1 matchups
     // for the given style. Handles non-power-of-2 by padding with BYE entries
     // (top seeds get the byes).
-    function generateRound1(seedOrder, style) {
+    //
+    // Optional `adjust` parameter (object) supports user-driven shaping:
+    //   { mode:'eliminate', eliminated:[...] }   – drop teams before bracketing
+    //   { mode:'bye', byes:{ teamName:1 } }      – give selected teams a R1 bye
+    //   { mode:'playin', playIn:[...] }          – return only play-in matchups
+    //                                              (callers route winners into R1)
+    //   { mode:'none' } / undefined              – legacy behavior
+    function generateRound1(seedOrder, style, adjust) {
         var teams = (seedOrder || []).slice();
+        adjust = adjust || { mode: 'none' };
+
+        // ELIMINATE: remove selected teams up-front
+        if (adjust.mode === 'eliminate' && Array.isArray(adjust.eliminated)) {
+            var dropSet = {};
+            adjust.eliminated.forEach(function (t) { dropSet[t] = true; });
+            teams = teams.filter(function (t) { return !dropSet[t]; });
+        }
+
+        // PLAY-IN: emit only the play-in matchups (round 0). The hub creates
+        // a separate round entry so winners are decided before generateRound1
+        // is called again to build the real R1.
+        if (adjust.mode === 'playin' && Array.isArray(adjust.playIn) && adjust.playIn.length >= 2) {
+            var pi = adjust.playIn.slice();
+            // Pair sequentially: 1st vs 2nd, 3rd vs 4th, ...
+            var out = [];
+            for (var i = 0; i < pi.length - 1; i += 2) {
+                var teamA = pi[i], teamB = pi[i + 1];
+                if (!teamA || !teamB) continue;
+                out.push({
+                    id: uid(),
+                    teamA: teamA,
+                    teamB: teamB,
+                    seedA: null,
+                    seedB: null,
+                    sport: '',
+                    field: '',
+                    winner: null,
+                    isBye: false,
+                    isPlayIn: true
+                });
+            }
+            return out;
+        }
+
         var n = teams.length;
         if (n < 2) return [];
+
+        // BYE: explicitly chosen teams get a BYE opponent in R1.
+        // Reorder so bye teams occupy top seed slots (which standard bracket
+        // pairing matches against the lowest-seed BYE pad).
+        if (adjust.mode === 'bye' && adjust.byes && typeof adjust.byes === 'object') {
+            var byeNames = Object.keys(adjust.byes).filter(function (k) { return adjust.byes[k] >= 1; });
+            if (byeNames.length > 0) {
+                var byeSet = {};
+                byeNames.forEach(function (n2) { byeSet[n2] = true; });
+                var byeFirst = teams.filter(function (t) { return byeSet[t]; });
+                var rest = teams.filter(function (t) { return !byeSet[t]; });
+                teams = byeFirst.concat(rest);
+            }
+        }
 
         var size = nextPowerOf2(n);
         // Pad with BYEs so the high-seed positions face byes
@@ -217,6 +273,14 @@
         if (!Array.isArray(p.rounds)) p.rounds = [];
         if (!Array.isArray(p.reservedActivities)) p.reservedActivities = [];
         if (typeof p.currentRound !== 'number' || p.currentRound < 1) p.currentRound = 1;
+        // Bracket adjustments (eliminate / bye / playin) for non-power-of-2 fields
+        if (!p.bracketAdjust || typeof p.bracketAdjust !== 'object') {
+            p.bracketAdjust = { mode: 'none', eliminated: [], byes: {}, playIn: [] };
+        }
+        if (['none', 'eliminate', 'bye', 'playin'].indexOf(p.bracketAdjust.mode) < 0) p.bracketAdjust.mode = 'none';
+        if (!Array.isArray(p.bracketAdjust.eliminated)) p.bracketAdjust.eliminated = [];
+        if (!p.bracketAdjust.byes || typeof p.bracketAdjust.byes !== 'object') p.bracketAdjust.byes = {};
+        if (!Array.isArray(p.bracketAdjust.playIn)) p.bracketAdjust.playIn = [];
         return p;
     }
 

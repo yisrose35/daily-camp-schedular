@@ -241,19 +241,35 @@
         card.appendChild(seedsLabel);
         card.appendChild(_renderSeedList(p));
 
+        // Adjustments (only relevant before Round 1 is generated)
+        if (!hasRounds) {
+            card.appendChild(_renderBracketAdjust(p));
+        }
+
         // Generate Round 1 / Regenerate button (only when no rounds OR seeds changed since)
         if (!hasRounds) {
             var actions = document.createElement('div');
             actions.className = 'ph-actions-row center';
+
+            // Play-in mode: clicking Generate creates a Round 0 (play-in) first
+            var inPlayIn = p.bracketAdjust && p.bracketAdjust.mode === 'playin';
+            var hasValidPlayIn = inPlayIn && (p.bracketAdjust.playIn || []).length >= 2 && (p.bracketAdjust.playIn || []).length % 2 === 0;
+
             var genBtn = document.createElement('button');
             genBtn.type = 'button';
             genBtn.className = 'ph-btn primary big';
-            genBtn.textContent = 'Generate Round 1';
-            genBtn.disabled = (p.seedOrder || []).length < 2;
+            genBtn.textContent = inPlayIn ? 'Generate Play-In Round' : 'Generate Round 1';
+            genBtn.disabled = (p.seedOrder || []).length < 2 || (inPlayIn && !hasValidPlayIn);
             genBtn.onclick = function () {
-                var r1 = window.PlayoffMode.generateRound1(p.seedOrder, p.style);
-                p.rounds = [{ number: 1, matchups: r1 }];
-                p.currentRound = 1;
+                if (inPlayIn) {
+                    var r0 = window.PlayoffMode.generateRound1(p.seedOrder, p.style, { mode: 'playin', playIn: p.bracketAdjust.playIn });
+                    p.rounds = [{ number: 0, matchups: r0, isPlayIn: true }];
+                    p.currentRound = 1;
+                } else {
+                    var r1 = window.PlayoffMode.generateRound1(p.seedOrder, p.style, p.bracketAdjust || { mode: 'none' });
+                    p.rounds = [{ number: 1, matchups: r1 }];
+                    p.currentRound = 1;
+                }
                 _save();
                 _render();
             };
@@ -285,16 +301,35 @@
                 var advBtn = document.createElement('button');
                 advBtn.type = 'button';
                 advBtn.className = 'ph-btn primary big';
-                advBtn.textContent = 'Generate Round ' + (lastRound.number + 1);
-                advBtn.onclick = function () {
-                    var nextMatchups = (p.style === 'reseed')
-                        ? window.PlayoffMode.advanceReseed(lastRound, p.seedOrder)
-                        : window.PlayoffMode.advanceFixed(lastRound);
-                    p.rounds.push({ number: lastRound.number + 1, matchups: nextMatchups });
-                    p.currentRound = lastRound.number + 1;
-                    _save();
-                    _render();
-                };
+                // After a play-in round, the next button generates the real R1
+                // using the play-in winners in place of the play-in teams.
+                if (lastRound.isPlayIn) {
+                    advBtn.textContent = 'Generate Round 1';
+                    advBtn.onclick = function () {
+                        var winners = lastRound.matchups.map(function (m) { return m.winner; }).filter(Boolean);
+                        var playInTeams = (p.bracketAdjust && p.bracketAdjust.playIn) || [];
+                        // Replace play-in teams in seedOrder with winners (preserving seed positions of survivors)
+                        var loserSet = {};
+                        playInTeams.forEach(function (t) { if (winners.indexOf(t) < 0) loserSet[t] = true; });
+                        var effectiveSeeds = (p.seedOrder || []).filter(function (t) { return !loserSet[t]; });
+                        var r1 = window.PlayoffMode.generateRound1(effectiveSeeds, p.style, { mode: 'none' });
+                        p.rounds.push({ number: 1, matchups: r1 });
+                        p.currentRound = 1;
+                        _save();
+                        _render();
+                    };
+                } else {
+                    advBtn.textContent = 'Generate Round ' + (lastRound.number + 1);
+                    advBtn.onclick = function () {
+                        var nextMatchups = (p.style === 'reseed')
+                            ? window.PlayoffMode.advanceReseed(lastRound, p.seedOrder)
+                            : window.PlayoffMode.advanceFixed(lastRound);
+                        p.rounds.push({ number: lastRound.number + 1, matchups: nextMatchups });
+                        p.currentRound = lastRound.number + 1;
+                        _save();
+                        _render();
+                    };
+                }
                 advRow.appendChild(advBtn);
                 card.appendChild(advRow);
             } else if (lastRound.matchups && lastRound.matchups.length > 0) {
@@ -445,6 +480,138 @@
             }
             wrap.appendChild(addRow);
         }
+        return wrap;
+    }
+
+    function _renderBracketAdjust(p) {
+        var wrap = document.createElement('div');
+        wrap.className = 'ph-adjust-wrap';
+
+        var label = document.createElement('div');
+        label.className = 'ph-step-section-label';
+        var teamCount = (p.seedOrder || []).length;
+        label.textContent = 'Bracket adjustments (' + teamCount + ' teams)';
+        wrap.appendChild(label);
+
+        // Mode picker
+        var modes = [
+            { id: 'none',      title: 'Standard',       hint: 'Top seeds get auto-byes if needed' },
+            { id: 'eliminate', title: 'Eliminate',      hint: 'Remove teams before the bracket' },
+            { id: 'bye',       title: 'Byes',           hint: 'Pick teams that skip Round 1' },
+            { id: 'playin',    title: 'Play-in round',  hint: 'Selected teams play first; winners enter R1' }
+        ];
+        var modeRow = document.createElement('div');
+        modeRow.className = 'ph-adjust-modes';
+        modes.forEach(function (mode) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'ph-adjust-mode' + (p.bracketAdjust.mode === mode.id ? ' active' : '');
+            btn.innerHTML = '<span class="ph-adjust-mode-title">' + escHtml(mode.title) + '</span>'
+                          + '<span class="ph-adjust-mode-hint">' + escHtml(mode.hint) + '</span>';
+            btn.onclick = function () {
+                p.bracketAdjust.mode = mode.id;
+                _save();
+                _render();
+            };
+            modeRow.appendChild(btn);
+        });
+        wrap.appendChild(modeRow);
+
+        // Per-mode config
+        var cfg = document.createElement('div');
+        cfg.className = 'ph-adjust-cfg';
+        var seeds = (p.seedOrder || []).slice();
+
+        if (p.bracketAdjust.mode === 'eliminate') {
+            var info = document.createElement('div');
+            info.className = 'ph-adjust-info';
+            info.textContent = 'Click a team to drop them from the bracket.';
+            cfg.appendChild(info);
+            var elimList = document.createElement('div');
+            elimList.className = 'ph-adjust-chips';
+            seeds.forEach(function (team) {
+                var isElim = (p.bracketAdjust.eliminated || []).indexOf(team) >= 0;
+                var chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'ph-adjust-chip' + (isElim ? ' eliminated' : '');
+                chip.textContent = team;
+                chip.onclick = function () {
+                    var arr = p.bracketAdjust.eliminated || [];
+                    if (isElim) {
+                        p.bracketAdjust.eliminated = arr.filter(function (t) { return t !== team; });
+                    } else {
+                        p.bracketAdjust.eliminated = arr.concat([team]);
+                    }
+                    _save();
+                    _render();
+                };
+                elimList.appendChild(chip);
+            });
+            cfg.appendChild(elimList);
+            var remaining = seeds.length - (p.bracketAdjust.eliminated || []).length;
+            var summary = document.createElement('div');
+            summary.className = 'ph-adjust-summary';
+            summary.textContent = remaining + ' team(s) will enter the bracket.';
+            cfg.appendChild(summary);
+        } else if (p.bracketAdjust.mode === 'bye') {
+            var info2 = document.createElement('div');
+            info2.className = 'ph-adjust-info';
+            info2.textContent = 'Click a team to give them a Round 1 bye (auto-advance).';
+            cfg.appendChild(info2);
+            var byeList = document.createElement('div');
+            byeList.className = 'ph-adjust-chips';
+            seeds.forEach(function (team) {
+                var hasBye = (p.bracketAdjust.byes || {})[team] >= 1;
+                var chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'ph-adjust-chip' + (hasBye ? ' bye' : '');
+                chip.textContent = team + (hasBye ? ' • bye' : '');
+                chip.onclick = function () {
+                    if (!p.bracketAdjust.byes) p.bracketAdjust.byes = {};
+                    if (hasBye) delete p.bracketAdjust.byes[team];
+                    else p.bracketAdjust.byes[team] = 1;
+                    _save();
+                    _render();
+                };
+                byeList.appendChild(chip);
+            });
+            cfg.appendChild(byeList);
+        } else if (p.bracketAdjust.mode === 'playin') {
+            var info3 = document.createElement('div');
+            info3.className = 'ph-adjust-info';
+            info3.textContent = 'Pick an even number of teams to play first. Winners enter Round 1, the rest stay seeded.';
+            cfg.appendChild(info3);
+            var playList = document.createElement('div');
+            playList.className = 'ph-adjust-chips';
+            seeds.forEach(function (team) {
+                var inPlay = (p.bracketAdjust.playIn || []).indexOf(team) >= 0;
+                var chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'ph-adjust-chip' + (inPlay ? ' playin' : '');
+                chip.textContent = team;
+                chip.onclick = function () {
+                    var arr = p.bracketAdjust.playIn || [];
+                    if (inPlay) {
+                        p.bracketAdjust.playIn = arr.filter(function (t) { return t !== team; });
+                    } else {
+                        p.bracketAdjust.playIn = arr.concat([team]);
+                    }
+                    _save();
+                    _render();
+                };
+                playList.appendChild(chip);
+            });
+            cfg.appendChild(playList);
+            var piCount = (p.bracketAdjust.playIn || []).length;
+            var summary2 = document.createElement('div');
+            summary2.className = 'ph-adjust-summary';
+            if (piCount === 0) summary2.textContent = 'No play-in teams selected.';
+            else if (piCount % 2 !== 0) summary2.textContent = '⚠️ Pick an even number — currently ' + piCount + '.';
+            else summary2.textContent = piCount + ' team(s) will play in. Generates ' + (piCount / 2) + ' play-in matchup(s).';
+            cfg.appendChild(summary2);
+        }
+        wrap.appendChild(cfg);
+
         return wrap;
     }
 
@@ -831,6 +998,24 @@
             '@media (max-width:720px){.ph-champion{margin-left:0;}}',
             '.ph-champion-label{font-size:0.7rem;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:#A5F3FC;}',
             '.ph-champion-name{font-size:1.6rem;font-weight:800;margin-top:6px;}',
+
+            // Bracket adjustments
+            '.ph-adjust-wrap{margin-left:42px;margin-top:14px;padding:12px;background:#F9FAFB;border:1px solid #E5E7EB;border-radius:10px;}',
+            '@media (max-width:720px){.ph-adjust-wrap{margin-left:0;}}',
+            '.ph-adjust-modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-bottom:12px;}',
+            '.ph-adjust-mode{padding:10px 12px;background:#fff;border:1px solid #CBD5E1;border-radius:8px;cursor:pointer;font-family:inherit;text-align:left;display:flex;flex-direction:column;gap:3px;}',
+            '.ph-adjust-mode:hover{border-color:#147D91;}',
+            '.ph-adjust-mode.active{background:#147D91;color:#fff;border-color:#147D91;}',
+            '.ph-adjust-mode-title{font-size:0.85rem;font-weight:700;}',
+            '.ph-adjust-mode-hint{font-size:0.72rem;opacity:0.85;}',
+            '.ph-adjust-info{font-size:0.78rem;color:#475569;margin-bottom:8px;}',
+            '.ph-adjust-summary{font-size:0.75rem;color:#475569;margin-top:8px;font-style:italic;}',
+            '.ph-adjust-chips{display:flex;flex-wrap:wrap;gap:6px;}',
+            '.ph-adjust-chip{padding:6px 12px;background:#fff;border:1px solid #CBD5E1;border-radius:999px;font-size:0.78rem;color:#0A4A56;cursor:pointer;font-family:inherit;}',
+            '.ph-adjust-chip:hover{border-color:#147D91;}',
+            '.ph-adjust-chip.eliminated{background:#FEE2E2;color:#991B1B;border-color:#FCA5A5;text-decoration:line-through;}',
+            '.ph-adjust-chip.bye{background:#DBEAFE;color:#1E40AF;border-color:#93C5FD;}',
+            '.ph-adjust-chip.playin{background:#FEF3C7;color:#92400E;border-color:#FCD34D;}',
 
             // Reservations
             '.ph-chips{display:flex;flex-wrap:wrap;gap:6px;margin-left:42px;}',
