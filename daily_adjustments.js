@@ -4126,7 +4126,22 @@ async function runOptimizer() {
         try {
             window.invalidateSmartLogicSpecialsCache?.();
             const success = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
-            if (!success) await daShowAlert("Auto scheduler did not complete successfully.");
+            if (success) {
+                // Match the manual builder's completion flow: confirm popup,
+                // then jump to the schedule view with a clean re-render.
+                try {
+                    document.dispatchEvent(new CustomEvent('campistry-schedule-generated', {
+                        detail: { date: window.currentScheduleDate || new Date().toISOString().split('T')[0], mode: 'auto' }
+                    }));
+                } catch (_) { /* non-fatal */ }
+                await daShowAlert("✅ Schedule Generated!");
+                window.showTab?.('schedule');
+                const schedEl = document.getElementById('scheduleTable');
+                if (schedEl) schedEl.innerHTML = '';
+                window.renderStaggeredView?.();
+            } else {
+                await daShowAlert("Auto scheduler did not complete successfully.");
+            }
         } catch (e) {
             console.error('[AutoScheduler] CRASH:', e.message, '\nStack:', e.stack);
             await daShowAlert("Auto scheduler error: " + e.message);
